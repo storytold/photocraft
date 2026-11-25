@@ -12,7 +12,7 @@ pub(crate) fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
     let id = st
         .active_layer
         .filter(|id| text_layer(&st.doc, *id).is_some())
-        .or_else(|| st.selected_layers().into_iter().find(|id| text_layer(&st.doc, *id).is_some()))?;
+        .or_else(|| st.selected_layers().iter().copied().find(|id| text_layer(&st.doc, *id).is_some()))?;
     Some((id.0, None))
 }
 
@@ -26,7 +26,7 @@ pub(crate) fn target_text(app: &PhotocraftApp) -> Option<&TextLayer> {
 /// document where the same layer id may name another layer, else the active one.
 pub(super) fn target_doc(app: &PhotocraftApp) -> Option<&photocraft_engine::DocState> {
     match &app.ui.text_edit {
-        Some(ed) => app.session.documents().get(edit_home(app, ed)?),
+        Some(ed) => app.session.documents().get(edit_home(app, ed)?).map(|st| &**st),
         None => app.session.active(),
     }
 }
@@ -43,7 +43,7 @@ pub(crate) fn formatting_params(app: &PhotocraftApp) -> Option<serde_json::Value
         return Some(params);
     }
     let st = app.session.active()?;
-    let layers: Vec<u64> = st.selected_layers().into_iter().filter(|id| text_layer(&st.doc, *id).is_some()).map(|id| id.0).collect();
+    let layers: Vec<u64> = st.selected_layers().iter().copied().filter(|id| text_layer(&st.doc, *id).is_some()).map(|id| id.0).collect();
     (!layers.is_empty()).then(|| json!({"layers": layers}))
 }
 
@@ -57,30 +57,12 @@ pub(super) fn shown_scale(app: &PhotocraftApp) -> f32 {
     if k.is_finite() && k > 1e-3 { k } else { 1.0 }
 }
 
-/// The display unit for type metrics (Preferences ▸ Units & Rulers ▸ Type): the multiplier from
-/// the model's points to the unit, and its label. Pixels follow the document's resolution.
-pub(crate) fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
-    let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
-    match app.session.prefs().units_and_rulers.type_units {
-        photocraft_engine::prefs::TypeUnit::Points => (1.0, "pt"),
-        photocraft_engine::prefs::TypeUnit::Pixels => (dpi / 72.0, "px"),
-        photocraft_engine::prefs::TypeUnit::Millimeters => (25.4 / 72.0, "mm"),
-    }
-}
-
-/// Coalesce key while a field is being scrubbed: every step of one drag shares one history step
-/// (Photoshop's single step per scrub, #124). Unique per press, so two drags are two steps.
-fn drag_key(ctx: &egui::Context) -> Option<String> {
-    let id = ctx.dragged_id()?;
-    let t = ctx.input(|i| i.pointer.press_start_time())?;
-    Some(format!("type-drag-{}-{}", id.value(), t.to_bits()))
-}
-
 /// The styles a new Type-tool layer will receive. Use the same command parameters for the
 /// panels and creation so defaults also survive action recording/replay. The older options-bar
-/// fields remain authoritative, and text colour continues to follow the foreground colour.
-pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
-    let o = &app.ui.tool_options;
+/// fields remain authoritative, and text colour continues to follow the foreground colour. `o` is
+/// the options-bar state to read: today's live one for a panel or a plain gesture, a snapshot taken
+/// when the Paragraph Text Size dialog opened for its OK (#12044).
+pub(super) fn default_style_params(app: &PhotocraftApp, o: &crate::state::ToolOptions) -> serde_json::Value {
     let mut p = json!({});
     // Settings are editable JSON: only recognized formatting keys may reach type.create.
     // In particular a stray `text`, `box`, or `coalesce` key must not become a create parameter.
@@ -111,6 +93,45 @@ pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
     p
 }
 
+/// The `type.create` keys a new Type Mask takes from the document's active text layer (#12077):
+/// the font, style and size the options bar shows for that layer, so the mask starts in the same
+/// type settings instead of the tool's fresh defaults. Measured is only a click (not a paragraph
+/// box) with the Horizontal Type Mask over a horizontal text layer, so any other active layer
+/// gives `None` and today's tool options apply. The colour stays the foreground colour, as the
+/// rest of the create parameters do.
+pub(super) fn mask_style_from_active_layer(app: &PhotocraftApp) -> Option<serde_json::Value> {
+    let st = app.session.active()?;
+    let t = text_layer(&st.doc, st.active_layer?)?;
+    if t.orientation != photocraft_doc::text::Orientation::Horizontal {
+        return None;
+    }
+    // The same first run the options bar names the layer by (`bar_character_values`), at the same
+    // shown size: a 12 pt layer scaled 200 % shows 24 pt. Only reached with no type session open,
+    // where `shown_scale` reads this very layer.
+    let c = t.char_runs().into_iter().next()?.style;
+    let mut p = json!({});
+    // An empty name is the layer's placeholder for the default family, not a name to hand to
+    // `type.create`: the key is only taken when the layer names one.
+    if !c.font_family.is_empty() {
+        p["font"] = json!(c.font_family);
+    }
+    if !c.font_style.is_empty() {
+        p["fontStyle"] = json!(c.font_style);
+    }
+    let size = c.size_pt * shown_scale(app);
+    // Only inherit a size `type.create` would itself accept, asked through the engine's own
+    // `check_size_tracking` so the range stays single-sourced (0.1-1296 pt today). `json!` turns
+    // a non-finite product into `null`, which the check refuses; a FINITE shown size can leave
+    // the range too: an 800 pt layer under a 2x transform shows 1600 pt, and a corrupt document
+    // can carry a 0 pt run. A refused parameter fails the whole create, and the click would make
+    // no mask at all - so such a size stays out of the parameters and the tool's own applies, as
+    // it does for a family or style the layer does not name.
+    if photocraft_engine::type_cmds::check_size_tracking(&json!({ "size": size })).is_ok() {
+        p["size"] = json!(size);
+    }
+    Some(p)
+}
+
 /// Style numbers become f32 in the engine. JSON itself permits finite f64 values too large
 /// for that conversion; a hand-edited setting must not inject infinity into a new layer.
 /// Style collections (features, axes, colour) contain only scalar values, so no recursion.
@@ -129,7 +150,7 @@ fn finite_style_value(value: &serde_json::Value) -> bool {
 
 pub(super) fn default_styles(app: &PhotocraftApp) -> (photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle) {
     let (mut c, mut para) = app.session.type_defaults.clone().unwrap_or_default();
-    let mut p = default_style_params(app);
+    let mut p = default_style_params(app, &app.ui.tool_options);
     // The saved panels can appear on the very first frame. Style parsing resolves the named
     // font through shared(), which waits for the font scan; display the saved names meanwhile,
     // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready.
@@ -203,8 +224,9 @@ pub(super) fn apply_defaults(app: &mut PhotocraftApp, props: &serde_json::Value)
 }
 
 /// Apply only the supplied properties to the text-edit scope or selected type layers; without
-/// a type target, prepare the defaults for the next layer instead.
-pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
+/// a type target, prepare the defaults for the next layer instead. `coalesce` is the gesture's history key
+/// (`history_keys::coalesce`); a running type session's key wins.
+pub(super) fn apply(app: &mut PhotocraftApp, props: serde_json::Value, coalesce: Option<String>) {
     if insertion_style::set_font(app, &props) {
         return;
     }
@@ -218,7 +240,7 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_j
             p[key] = value.clone();
         }
     }
-    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
+    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or(coalesce) {
         p["coalesce"] = json!(key);
     }
     let _ = app.run("type.setStyle", p);
@@ -226,7 +248,7 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_j
 
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling
 /// the dialog never changes the text selection, tool colours, or document history.
-pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
+pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> craft::ui::dialog::DialogId {
     if let Some(params) = formatting_params(app) {
         crate::color_picker_ui::open_for_command(app, "Color Picker (Text Color)", rgb, "type.setStyle", params)
     } else {

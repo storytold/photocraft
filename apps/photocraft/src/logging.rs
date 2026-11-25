@@ -219,7 +219,7 @@ fn prune_instance_logs(dir: &Path) {
         // A missing lock file means nobody holds it; an unknown lock state counts as running.
         let running = match OpenOptions::new().read(true).write(true).open(instance_lock(dir, pid)) {
             Ok(lock) => !try_hold(&lock).unwrap_or(false),
-            Err(_) => false,
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
         };
         if !running {
             let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
@@ -244,6 +244,17 @@ pub struct LogFile {
 /// One formatted log line: `<timestamp> <LEVEL> [<thread>] <target>: <message>\n`.
 pub fn format_line(ts: &str, level: log::Level, thread: &str, target: &str, message: &str) -> String {
     let message = message.strip_suffix('\n').unwrap_or(message);
+    // A message cannot forge a record or inject terminal controls: continuation lines are
+    // indented (a record starts with a timestamp) and other control characters are escaped.
+    let message: String = message
+        .chars()
+        .flat_map(|c| match c {
+            '\n' => "\n    ".chars().collect::<Vec<_>>(),
+            '\r' => vec!['\\', 'r'],
+            c if c.is_control() && c != '\t' => c.escape_default().collect(),
+            c => vec![c],
+        })
+        .collect();
     format!("{ts} {level:<5} [{thread}] {target}: {message}\n")
 }
 
@@ -531,6 +542,15 @@ mod tests {
         let held = File::create(instance_lock(&dir, 5)).expect("lock file");
         held.try_lock().expect("hold");
 
+        // An older log whose lock cannot be opened has an unknown owner, so keep it too.
+        let unknown = instance_log(&dir, 6);
+        std::fs::write(&unknown, "unknown owner").expect("write");
+        File::options().write(true).open(&unknown).expect("open").set_modified(now - Duration::from_secs(1000)).expect("mtime");
+        let unknown_lock = instance_lock(&dir, 6);
+        std::fs::create_dir(&unknown_lock).expect("unusable lock path");
+        let error = OpenOptions::new().read(true).write(true).open(&unknown_lock).expect_err("a directory is not a lock file");
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+
         let second = rotate(&dir).expect("second start");
         assert_eq!(second.path, instance_log(&dir, std::process::id()));
         // The newest KEEP finished ones stay, the rest go with their lock files.
@@ -538,6 +558,8 @@ mod tests {
         assert!(!instance_log(&dir, 2).exists() && !instance_log(&dir, 1).exists());
         assert!(!instance_lock(&dir, 2).exists());
         assert_eq!(read(&live), "live");
+        assert_eq!(read(&unknown), "unknown owner");
+        assert!(unknown_lock.is_dir());
         drop((first, second, held));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -560,8 +582,10 @@ mod tests {
             format_line("2026-10-08T07:59:17.728Z", log::Level::Warn, "main", "photocraft::gpu_startup", "GPU startup marker: denied"),
             "2026-10-08T07:59:17.728Z WARN  [main] photocraft::gpu_startup: GPU startup marker: denied\n"
         );
-        // A multi-line message (a panic with a backtrace) keeps its lines; the record still ends in one newline.
-        assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\nb\n"));
+        // A multi-line message (a panic with a backtrace) keeps its lines, indented; the record still ends in one newline.
+        assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\n    b\n"));
+        let forged = format_line("t", log::Level::Error, "w", "x", "a\r\n2026 INFO forged\x1b[2J");
+        assert!(forged.lines().all(|l| !l.starts_with("2026")) && !forged.contains('\x1b') && !forged.contains('\r'));
     }
 
     #[test]

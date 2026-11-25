@@ -317,3 +317,208 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+#[test]
+fn group_key_tracks_uncached_shape_alignment() {
+    use photocraft_doc::ShapeLayer;
+    let mut group = Layer::group("g", vec![Layer::new("shape", LayerContent::Shape(ShapeLayer::default()))]);
+    let light = GlobalLight::default();
+    let before = group_key(&group, &light, &mut |_| {});
+    let LayerContent::Group(g) = &mut group.content else { unreachable!() };
+    let LayerContent::Shape(sh) = &mut g.children[0].content else { unreachable!() };
+    sh.use_aligned_rendering = true;
+    assert_ne!(before, group_key(&group, &light, &mut |_| {}));
+}
+
+/// #14933: the Size 1 Inner Shadow program convolves the ¼–½–¼ taps the CPU's `shadow_map`
+/// applies, instead of dropping the identity width-1 blur, so both compositors build the same map.
+/// A Size 6 inner shadow still takes the tent of its own size, untouched.
+#[test]
+fn size_one_inner_shadow_convolves_the_cpus_kernel() {
+    use crate::plan::Kernel;
+    let light = GlobalLight::default();
+    let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+    s.distance = 0.0;
+    s.spread = 0.0;
+    let mut blurs = |size: f32| {
+        s.size = size;
+        program(&Effect::InnerShadow(s.clone()), &light, false)
+            .stages
+            .into_iter()
+            .filter(|st| st.kernel == Kernel::MBlur)
+            .map(|st| (st.radius, st.lut.map(|l| (*l).clone()).unwrap_or_default()))
+            .collect::<Vec<_>>()
+    };
+    let one = blurs(1.0);
+    assert_eq!(one.len(), 2, "two separable passes over the Size 1 inner shadow map");
+    let (r1, w1) = photocraft_compose::effects::size_one_kernel();
+    for (radius, lut) in &one {
+        assert_eq!(*radius, r1, "the Size 1 kernel radius");
+        assert_eq!(lut.as_slice(), w1.as_slice(), "the taps the CPU map applies");
+    }
+    let (r6, w6) = photocraft_compose::effects::tent_kernel(6.0);
+    let six = blurs(6.0);
+    assert_eq!(six.len(), 2, "a Size 6 inner shadow still blurs twice");
+    for (radius, lut) in &six {
+        assert_eq!(*radius, r6);
+        assert_eq!(lut.as_slice(), w6.as_slice(), "Size 6 stays on the tent");
+    }
+}
+
+/// #14934: the GPU's Inner Shadow program takes the same sub-pixel source offset as the CPU's
+/// `shadow_map` - without a device, by asking what stages the effect builds. The measured gate
+/// (Anti-aliased on, Gaussian contour, the inner branch) is what adds the stage; a Linear contour
+/// or a Drop Shadow keeps the program, and the program key, exactly as it was.
+#[test]
+fn anti_aliased_inner_shadow_shifts_the_map_stage() {
+    use photocraft_doc::{Contour, FxCommon, Shadow};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let shadow = |anti_aliased: bool, contour: Contour| Shadow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: photocraft_color::Color::BLACK,
+        angle: 0.0,
+        use_global_light: false,
+        distance: 0.0,
+        spread: 0.0,
+        size: 10.0,
+        contour,
+        anti_alias: anti_aliased,
+        noise: 0.0,
+        knocks_out: false,
+    };
+    fn shift_stages(p: &MapProgram) -> Vec<&Stage> {
+        p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect()
+    }
+    let light = GlobalLight::default();
+    let aa = photocraft_compose::effects::aa_shift(true, &gaussian, 10.0, 0.0);
+    assert_eq!(aa, -1.0 / 3.0, "the CPU offset the GPU has to copy at the measured Size 10, Choke 0");
+    // The inner branch always takes one shift stage: it is where `1 - alpha` happens. At Distance 0
+    // without Anti-aliased that stage is the identity, and that is what must change.
+    let off = program(&Effect::InnerShadow(shadow(false, gaussian.clone())), &light, false);
+    assert_eq!(shift_stages(&off).len(), 1, "the inner branch keeps its one (identity) shift stage");
+    assert_eq!(shift_stages(&off)[0].p0, [0.0, 0.0, 1.0, 1.0], "p0 = (dx, dy, outside, invert) at Distance 0, Anti-aliased off");
+    let on = program(&Effect::InnerShadow(shadow(true, gaussian.clone())), &light, false);
+    assert_eq!(shift_stages(&on).len(), 1, "the Anti-aliased inner shadow still builds one shift stage, not two");
+    assert_eq!(shift_stages(&on)[0].p0, [aa, aa, 1.0, 1.0], "the shift stage must carry the CPU's sub-pixel source offset");
+    assert!(
+        shift_stages(&on)[0].radius >= 1,
+        "a sub-pixel shift reads the tap beyond its base, so the stage radius must cover it: {}",
+        shift_stages(&on)[0].radius
+    );
+    assert_ne!(on.key, off.key, "the flag has to invalidate the cached program");
+    // Unmeasured cases keep today's stage: the contour gate is the CPU's.
+    let linear = program(&Effect::InnerShadow(shadow(true, Contour::Linear)), &light, false);
+    assert_eq!(shift_stages(&linear)[0].p0, [0.0, 0.0, 1.0, 1.0], "a Linear inner shadow still ignores Anti-aliased (#14934 leaves that contour unmeasured)");
+    // A Drop Shadow (its own item is #14881) keeps its whole-pixel program either way.
+    let drop_on = program(&Effect::DropShadow(shadow(true, gaussian.clone())), &light, false);
+    let drop_off = program(&Effect::DropShadow(shadow(false, gaussian)), &light, false);
+    assert_eq!(shift_stages(&drop_on).len(), 0, "a Drop Shadow at Distance 0 takes no shift stage");
+    assert_eq!(drop_on.key, drop_off.key, "the Drop Shadow still ignores Anti-aliased (#14881 is its own item)");
+}
+
+/// #14934 review: the GPU's gate is the CPU's rule, including its two degenerate neighbours. At
+/// Size 1, and at Size 2 with Choke 50 %, the blur the map gets has width 1, which is the
+/// identity, so a sub-pixel source offset would be the entire map; at any Choke that dilates the
+/// CPU recomputes its distance field on the offset map while this builder shifts a whole-pixel
+/// field of the unshifted shape. In every one of those the program must be the Anti-aliased-off
+/// program, stage for stage and key for key. Away from the degeneracies the offset follows the
+/// inputs, not the measured Size 10.
+#[test]
+fn anti_aliased_inner_shadow_stage_follows_the_measured_geometry() {
+    use photocraft_doc::{Contour, FxCommon, Shadow};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = || Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let shadow = |size: f32, spread: f32, distance: f32, anti_aliased: bool| Shadow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: photocraft_color::Color::BLACK,
+        angle: 0.0,
+        use_global_light: false,
+        distance,
+        spread,
+        size,
+        contour: gaussian(),
+        anti_alias: anti_aliased,
+        noise: 0.0,
+        knocks_out: false,
+    };
+    // The inner branch always builds its source shift stage (it is where `1 - alpha` happens); a
+    // Choke that dilates at a Distance other than 0 adds a second one for the distance field.
+    let shift_key = |e: &Effect| -> (Vec<[f32; 4]>, u64) {
+        let p = program(e, &GlobalLight::default(), false);
+        (p.stages.iter().filter(|s| s.kernel == Kernel::MShift).map(|s| s.p0).collect(), p.key)
+    };
+    let source_shift = |e: &Effect| -> [f32; 4] {
+        let (stages, _) = shift_key(e);
+        assert!(!stages.is_empty(), "the inner branch builds its source shift stage for {e:?}");
+        stages[0]
+    };
+    for (size, spread, what) in [
+        (1.0, 0.0, "Size 1 (blur width 1: the identity)"),
+        (2.0, 0.5, "Size 2 Choke 50 % (blur width 1)"),
+        (10.0, 0.5, "Size 10 Choke 50 % (the CPU dilates an offset map, the GPU a whole-pixel field)"),
+        (10.0, 0.05, "Size 10 Choke 5 % (dilates 1 px too)"),
+    ] {
+        let on = shift_key(&Effect::InnerShadow(shadow(size, spread, 0.0, true)));
+        let off = shift_key(&Effect::InnerShadow(shadow(size, spread, 0.0, false)));
+        assert_eq!(on, off, "the {what} inner shadow program moved with Anti-aliased: on {:?}, off {:?}", on.0, off.0);
+    }
+    // Away from the degeneracies the rule is in the inputs: Size 1.5 and Size 20 take the offset
+    // exactly as the measured Size 10 does, and so does a Choke that dilates nothing.
+    let aa = -1.0f32 / 3.0;
+    for size in [1.5, 2.0, 3.0, 20.0] {
+        let p0 = source_shift(&Effect::InnerShadow(shadow(size, 0.0, 0.0, true)));
+        assert_eq!(p0, [aa, aa, 1.0, 1.0], "Size {size} at Choke 0 must carry the CPU's sub-pixel offset");
+    }
+    let thin = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, 0.0, true)));
+    assert_eq!(thin.0, vec![[aa, aa, 1.0, 1.0]], "Choke 4 % dilates nothing (round(0.4) = 0), so the map shape is the measured one");
+    let thin_off = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, 0.0, false)));
+    assert_ne!(thin.1, thin_off.1, "and the flag still invalidates that program's key");
+    // The gate reads the Size and Choke, not the measured Distance 0: at Distance 5 (angle 0, so a
+    // whole-pixel light offset of -5, 0) the Choke 0 program carries that offset plus the third of
+    // a pixel, exactly as `shadow_map` shifts by `dx + aa`; the Choke 50 % program at the same
+    // Distance stays whole-pixel, gated like every other dilating Choke, and keeps its second
+    // (distance field) shift stage exactly as it does with the flag off.
+    let far_on = source_shift(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, true)));
+    assert_eq!(far_on, [-5.0 + aa, 0.0 + aa, 1.0, 1.0], "Size 10 Choke 0 at Distance 5 must carry the light offset plus the sub-pixel offset");
+    let far_off = source_shift(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, false)));
+    assert_eq!(far_off, [-5.0, 0.0, 1.0, 1.0], "with the flag off the shift stays the whole-pixel light offset");
+    let far_on_key = shift_key(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, true))).1;
+    assert_ne!(far_on_key, shift_key(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, false))).1, "and the flag invalidates the Distance 5 program key");
+    let far_choke_on = shift_key(&Effect::InnerShadow(shadow(10.0, 0.5, 5.0, true)));
+    let far_choke_off = shift_key(&Effect::InnerShadow(shadow(10.0, 0.5, 5.0, false)));
+    assert_eq!(far_choke_on.0.len(), 2, "Choke 50 % at Distance 5 shifts the source and the distance field");
+    assert_eq!(far_choke_on, far_choke_off, "the Choke 50 % program at Distance 5 stayed whole-pixel: on {:?}, off {:?}", far_choke_on.0, far_choke_off.0);
+}

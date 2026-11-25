@@ -11,12 +11,13 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use craft::color_ui::ui::{ColorPickerDialog, PickedColor};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::PhotocraftApp;
-use crate::color_picker_ui::{hex, parse_hex};
+use crate::color_picker_ui::{PickTarget, hex};
 
 /// The commands previewed: the text colour (`type_tool::open_color_picker`) and a gradient fill
 /// layer's colour stop (`gradient_ui::edit_stop_color`). Only commands that edit the active
@@ -42,31 +43,27 @@ pub(crate) struct Preview {
     areas: VecDeque<(u64, Rect)>,
 }
 
-/// The previewed command whose Color Picker these `fields` belong to, if any.
-fn command_of(fields: &Map<String, Value>) -> Option<&'static str> {
-    if fields.get("__colorPicker").and_then(Value::as_str) != Some("command") {
-        return None;
-    }
-    let command = fields.get("__command").and_then(Value::as_str)?;
-    COMMANDS.into_iter().find(|c| *c == command)
+/// The previewed command a Color Picker opened for `target` runs, if any.
+fn command_of(target: &PickTarget) -> Option<&'static str> {
+    let PickTarget::Command { command, .. } = target else { return None };
+    COMMANDS.into_iter().find(|c| *c == command.as_str())
 }
 
-/// Whether `fields` belong to a Color Picker this module previews.
-pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
-    command_of(fields).is_some()
+/// Whether a picker opened for `target` is one this module previews.
+pub(crate) fn owns(target: &PickTarget) -> bool {
+    command_of(target).is_some()
 }
 
-/// The command and params OK would run for these picker fields, or `None` when the picker
-/// still shows its opening colour (nothing to preview), its colour is not valid or its params
-/// name no target layer.
-fn preview_params(fields: &Map<String, Value>) -> Option<(&'static str, Value)> {
-    let command = command_of(fields)?;
-    let color = fields.get("color").and_then(Value::as_str).and_then(parse_hex).map(hex)?;
-    let orig = fields.get("__orig").and_then(Value::as_str).and_then(parse_hex).map(hex);
-    if orig.as_deref() == Some(color.as_str()) {
+/// The command and params OK would run for a picker of `target` showing `picked`, or `None` when the
+/// picker still shows its `opening` colour (nothing to preview) or its params name no target layer.
+fn preview_params(target: &PickTarget, picked: &PickedColor, opening: Option<&PickedColor>) -> Option<(&'static str, Value)> {
+    let command = command_of(target)?;
+    let color = hex(picked.color.to_rgb_array());
+    if opening.is_some_and(|o| hex(o.color.to_rgb_array()) == color) {
         return None;
     }
-    let mut params = fields.get("__params")?.as_object()?.clone();
+    let PickTarget::Command { params, .. } = target else { return None };
+    let mut params = params.as_object()?.clone();
     // Without named layers the command falls back to the session's selected layers, which the
     // throwaway preview session doesn't share: it would show another layer than OK recolours.
     if target_layers(&Value::Object(params.clone())).is_empty() {
@@ -107,7 +104,9 @@ fn layer_area(doc: &Document, layers: &[LayerId]) -> Rect {
 pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
     // Under Free Transform the canvas shows the transform's preview, with the layer drawn where
     // the box puts it: a copy of the document would show it at its old place as well.
-    let Some(d) = app.ui.dialogs.last().filter(|d| owns(&d.fields) && app.ui.transform.is_none()) else {
+    let picker = crate::color_picker_ui::top(app).filter(|_| app.ui.transform.is_none());
+    let found = picker.and_then(|id| Some((id, crate::color_picker_ui::target(app, id)?.clone()))).filter(|(_, t)| owns(t));
+    let Some((dialog, target)) = found else {
         forget_shown(app);
         return None;
     };
@@ -115,15 +114,22 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if app.session.active_index() != Some(idx) {
         return None;
     }
-    let Some((command, params)) = preview_params(&d.fields) else {
+    let shown = app.framework.dialogs.get_by_id::<ColorPickerDialog>(dialog).and_then(|d| Some((d.current()?, d.opening())));
+    let Some((current, opening)) = shown else {
         forget_shown(app);
         return None;
     };
-    let dialog = d.id;
-    let opened_on = d.fields.get("__document").and_then(Value::as_u64);
+    let Some((command, params)) = preview_params(&target, &current, opening.as_ref()) else {
+        forget_shown(app);
+        return None;
+    };
+    let opened_on = match &target {
+        PickTarget::Command { document, .. } => *document,
+        _ => None,
+    };
     let st = app.session.documents().get(idx)?;
     // Another document became active while the picker was open: its layer ids mean nothing here.
-    if opened_on.is_some_and(|id| id != st.doc.id.0) {
+    if opened_on.is_some_and(|id| id != st.doc.id) {
         forget_shown(app);
         return None;
     }
@@ -180,8 +186,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
 /// The active document and the preview key on screen when that preview is exactly what OK
 /// commits for these picker `fields`. OK then counts the canvas as showing the document, so the
 /// commit refreshes only the target layers instead of the whole canvas.
-pub(crate) fn shown_for(app: &PhotocraftApp, fields: &Map<String, Value>) -> Option<(DocId, u64)> {
-    let (_, params) = preview_params(fields)?;
+pub(crate) fn shown_for(app: &PhotocraftApp, target: &PickTarget, picked: &PickedColor) -> Option<(DocId, u64)> {
+    let (_, params) = preview_params(target, picked, None)?;
     let st = app.session.active()?;
     let (p, params) = (app.color_picker_preview.as_ref()?, params.to_string());
     let same = p.document == st.doc.id && p.revision == st.revision && p.shown.is_some() && p.params == params;

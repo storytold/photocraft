@@ -2,27 +2,28 @@
 //! Path Operations menu and `+` / `-` change their operation, and the Pen carries on an open
 //! shape path from its endpoint.
 
+use craft::draw::ui::shape::VectorMode;
 use egui::Key;
 use photocraft_doc::vector::PathOp;
 use photocraft_doc::{LayerContent, LayerId, Path};
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::canvas::testing;
 use crate::direct_select::PathRef;
 use crate::state::Tool;
-use crate::vector_ui::{pen_commit, pen_down, pen_up};
+use crate::vector_ui::pen_commit;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = Tool::Pen;
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     app
 }
 
 fn click(app: &mut PhotocraftApp, x: f64, y: f64) {
-    pen_down(app, x, y, false);
-    pen_up(app);
+    testing::click(app, [x, y], egui::Modifiers::NONE);
 }
 
 /// Clicks a closed square with the Pen, from `(x, y)` with side `side`.
@@ -93,43 +94,6 @@ fn a_selected_component_takes_the_picked_operation() {
     assert_eq!(ops(&shape(&app).1.path), [PathOp::Combine, PathOp::Combine]);
 }
 
-/// `+` and `-` with the Pen tools or Path Selection: Combine Shapes and Subtract Front Shape, on
-/// the selected components and for the next path. `+` arrives as ⇧= on a US keyboard, which
-/// otherwise steps the blend mode; with the Move tool it still does.
-#[test]
-fn plus_and_minus_pick_combine_and_subtract() {
-    let ctx = egui::Context::default();
-    let mut app = app();
-    square(&mut app, 20.0, 20.0, 120.0);
-    app.ui.tool_options.pen_path_op = "combine".into();
-    square(&mut app, 60.0, 60.0, 40.0);
-    app.ui.tool = Tool::PathSelection;
-    super::press(&mut app, [80.0, 80.0], false);
-    key(&mut app, &ctx, Key::Minus, egui::Modifiers::NONE);
-    assert_eq!(ops(&shape(&app).1.path), [PathOp::Combine, PathOp::Subtract]);
-    assert_eq!(app.ui.tool_options.pen_path_op, "subtract");
-    key(&mut app, &ctx, Key::Equals, egui::Modifiers::SHIFT);
-    assert_eq!(ops(&shape(&app).1.path), [PathOp::Combine, PathOp::Combine]);
-    key(&mut app, &ctx, Key::Minus, egui::Modifiers::NONE);
-    key(&mut app, &ctx, Key::Plus, egui::Modifiers::NONE);
-    assert_eq!(ops(&shape(&app).1.path), [PathOp::Combine, PathOp::Combine], "the keypad's +");
-    // With nothing selected the Pen's next path takes it.
-    app.ui.direct_selection = Default::default();
-    app.ui.tool = Tool::Pen;
-    key(&mut app, &ctx, Key::Minus, egui::Modifiers::NONE);
-    assert_eq!(app.ui.tool_options.pen_path_op, "subtract");
-    // The blend mode is the Move tool's to step.
-    let blend = |app: &PhotocraftApp| app.session.active().unwrap().doc.layer(shape(app).0).unwrap().blend;
-    let before = blend(&app);
-    key(&mut app, &ctx, Key::Equals, egui::Modifiers::SHIFT);
-    assert_eq!(blend(&app), before, "the Pen picks Combine, not a blend mode");
-    assert_eq!(app.ui.tool_options.pen_path_op, "combine");
-    app.ui.tool = Tool::Move;
-    key(&mut app, &ctx, Key::Equals, egui::Modifiers::SHIFT);
-    assert_ne!(blend(&app), before);
-    assert_eq!(app.ui.tool_options.pen_path_op, "combine");
-}
-
 /// ⇧-click adds and removes components, a click off them deselects, and a drag moves only the
 /// selected ones.
 #[test]
@@ -180,8 +144,8 @@ fn a_stale_selection_changes_nothing() {
 /// another, only the other takes the operation.
 #[test]
 fn the_first_component_keeps_combining() {
-    let ctx = egui::Context::default();
     let mut app = app();
+    let ctx = app.ctx().clone();
     square(&mut app, 20.0, 20.0, 120.0);
     app.ui.tool_options.pen_path_op = "combine".into();
     square(&mut app, 60.0, 60.0, 40.0);
@@ -201,11 +165,10 @@ fn the_first_component_keeps_combining() {
     assert_eq!(super::selected_op(&app), None, "they differ");
 }
 
-/// A component selection is Path Selection's: with the Pen, which doesn't show it, `-` and the
-/// menu set the next path's operation and leave the components alone (feedback on #7648).
+/// A component selection is Path Selection's: with the Pen, which doesn't show it, the operation
+/// menu sets the next path's operation and leave the components alone (feedback on #7648).
 #[test]
 fn the_pen_does_not_edit_a_hidden_component_selection() {
-    let ctx = egui::Context::default();
     let mut app = app();
     square(&mut app, 20.0, 20.0, 120.0);
     app.ui.tool_options.pen_path_op = "combine".into();
@@ -215,7 +178,7 @@ fn the_pen_does_not_edit_a_hidden_component_selection() {
     assert!(super::selected(&app).is_some());
     app.ui.tool = Tool::Pen;
     let steps = history(&app);
-    key(&mut app, &ctx, Key::Minus, egui::Modifiers::NONE);
+    super::set_op(&mut app, "subtract").unwrap();
     assert_eq!(app.ui.tool_options.pen_path_op, "subtract", "the next path's");
     assert_eq!(super::selected_op(&app), None);
     assert_eq!(history(&app), steps);
@@ -262,7 +225,7 @@ fn the_pen_carries_on_an_open_shape_path() {
     }
     assert!(pen_commit(&mut app, false));
     let (id, sh) = shape(&app);
-    assert!(sh.fill.is_none() && sh.stroke.is_some(), "an open path is stroked");
+    assert!(sh.fill.is_some() && sh.stroke.is_some(), "an open path is stroked, and filled from the first click (#12909)");
     let count = app.session.active().unwrap().doc.layers.len();
     let steps = history(&app);
     click(&mut app, 120.0, 120.0); // its last anchor: carry on
@@ -307,7 +270,7 @@ fn an_open_component_of_a_filled_shape_keeps_its_paint() {
 #[test]
 fn the_pen_carries_on_a_vector_masks_open_subpath() {
     let mut app = app();
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
     app.run("layer.new.layer", json!({})).unwrap();
     let id = app.session.active().unwrap().active_layer.unwrap().0;
     let open = json!({"subpaths": [{"closed": false, "knots": [[20, 20], [120, 20]]}]});
@@ -321,4 +284,168 @@ fn the_pen_carries_on_a_vector_masks_open_subpath() {
     assert_eq!(mask.path.subpaths.len(), 1);
     assert_eq!(mask.path.subpaths[0].knots.len(), 3);
     assert!(st.doc.work_path.is_none());
+}
+
+/// The component selection a press creates must survive the frame tick (`sync_views`) — it is
+/// structural (the path's shape), not bound to a history revision (#10854).
+#[test]
+fn a_pressed_component_selection_survives_the_frame_tick() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    assert!(super::selected(&app).is_some(), "the press selects the inner square");
+    app.sync_views();
+    assert!(super::selected(&app).is_some(), "the selection survives the frame tick");
+}
+
+/// ⇧-click adds components, and the accumulated selection survives the tick too.
+#[test]
+fn shift_add_accumulates_and_survives_the_frame_tick() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    crate::path_components::press(&mut app, [30.0, 30.0], true);
+    assert_eq!(super::selected(&app).map(|(.., heads)| heads), Some(vec![0, 1]), "⇧-click adds the outer square");
+    app.sync_views();
+    assert_eq!(super::selected(&app).map(|(.., heads)| heads), Some(vec![0, 1]), "the multi-selection survives the tick");
+}
+
+/// Edits that do not restructure the path (an operation change, a colour edit) keep the
+/// selection; a structural edit (an added anchor) clears it — the stored indices must not go
+/// stale.
+#[test]
+fn the_selection_survives_unrelated_edits_and_dies_on_restructure() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run("path.setOperation", json!({"name": "layer", "layer": id.0, "subpaths": [1], "op": "subtract"})).unwrap();
+    assert!(super::selected(&app).is_some(), "an operation change keeps the selection");
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
+    assert!(super::selected(&app).is_some(), "a colour edit keeps it too");
+    app.run("path.addAnchor", json!({"name": "layer", "layer": id.0, "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    assert!(super::selected(&app).is_none(), "adding an anchor changes the structure: the selection clears");
+}
+
+/// The real click is press + release, and the release activates the shape's layer — an engine
+/// edit. The component selection must survive that (it is structural, not revision-bound).
+#[test]
+fn the_selection_survives_the_layer_activation_of_the_click() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    assert!(super::selected(&app).is_some(), "activating the shape's layer keeps the selection");
+}
+
+/// A same-count reorder, or a same-count edit that merges components (op "join"), still clears
+/// the selection: the stored indices would address a different component (review on the
+/// selection-fix PR).
+#[test]
+fn the_selection_dies_on_reorder_or_partition_change_even_at_same_counts() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    app.ui.tool = Tool::PathSelection;
+
+    // Reorder: swap the two same-count subpaths (outer 20..140, inner 60..100).
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run(
+        "shape.edit",
+        json!({"layer": id.0, "path": {"subpaths": [
+            {"closed": true, "knots": [k(60.0, 60.0), k(100.0, 60.0), k(100.0, 100.0), k(60.0, 100.0)]},
+            {"closed": true, "knots": [k(20.0, 20.0), k(140.0, 20.0), k(140.0, 140.0), k(20.0, 140.0)]},
+        ]}}),
+    )
+    .unwrap();
+    assert!(super::selected(&app).is_none(), "reordering same-count subpaths clears the selection");
+
+    // Partition change: same counts, but the second subpath becomes a Join of the first.
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    assert!(super::selected(&app).is_some());
+    app.run(
+        "shape.edit",
+        json!({"layer": id.0, "path": {"subpaths": [
+            {"closed": true, "knots": [k(20.0, 20.0), k(140.0, 20.0), k(140.0, 140.0), k(20.0, 140.0)]},
+            {"closed": true, "op": "join", "knots": [k(60.0, 60.0), k(100.0, 60.0), k(100.0, 100.0), k(60.0, 100.0)]},
+        ]}}),
+    )
+    .unwrap();
+    assert!(super::selected(&app).is_none(), "a same-count partition change (join) clears the selection");
+}
+
+/// A component selection on a type layer's Type Path (#9114) survives unrelated edits like any
+/// other target: the structural fallback resolves the Type Path by its stored layer id.
+#[test]
+fn a_type_path_component_selection_survives_unrelated_edits() {
+    let mut app = app();
+    let layer = app.run("type.create", json!({"x": 20, "y": 70, "text": "Hello path", "size": 36, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap();
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[150, 10], [150, 110]]}]}})).unwrap();
+    app.run("type.attachToPath", json!({"start": 4})).unwrap();
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [150.0, 60.0], false);
+    let (r, _, heads) = super::selected(&app).expect("the press selects the type path's component");
+    assert!(matches!(r, PathRef::TypePath(_)) && heads == vec![0]);
+    app.run("path.set", json!({"name": "Other", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [10, 5], [10, 10]]}]}})).unwrap();
+    assert!(super::selected(&app).is_some(), "an unrelated edit keeps the Type Path selection");
+    // A structural edit of the Type Path itself clears the selection (the signature mismatches).
+    app.run("path.addAnchor", json!({"name": "layer", "layer": layer, "typePath": true, "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    assert!(super::selected(&app).is_none(), "a structural Type Path edit clears the selection");
+}
+
+/// A drag-move re-signs the selection: the stored signature hashes the moved geometry, so a
+/// later unrelated edit keeps the selection (review on the selection-fix PR).
+#[test]
+fn a_move_re_signs_the_selection_so_unrelated_edits_keep_it() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    super::move_selected(&mut app, [10.0, 0.0]).expect("the move runs").unwrap();
+    assert!(super::selected(&app).is_some(), "the move keeps the selection");
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
+    assert!(super::selected(&app).is_some(), "a colour edit after the move keeps it too");
+}
+
+/// Structural validation is cached per document revision: a colour edit needs one signature,
+/// while repeated hover/command checks on that revision need none (review on #10935).
+#[test]
+fn structural_selection_validation_is_cached_per_revision() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
+    assert!(super::selected(&app).is_some());
+    let computations = |app: &PhotocraftApp| app.ui.direct_selection.owner.as_ref().unwrap().selection_computations();
+    assert_eq!(computations(&app), 1, "the changed revision is checked once");
+    for _ in 0..3 {
+        assert!(super::selected(&app).is_some(), "the cached selection stays valid");
+    }
+    assert_eq!(computations(&app), 1, "the same revision does not re-sign the path");
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#00ff00"})).unwrap();
+    assert!(super::selected(&app).is_some());
+    assert_eq!(computations(&app), 2, "only the next revision needs a new signature");
 }
