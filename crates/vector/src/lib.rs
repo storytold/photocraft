@@ -709,10 +709,14 @@ impl CompiledShape {
                 || self.stroke.as_ref().is_some_and(|(_, paint, _)| matches!(paint, Paint::Cmyk(..))));
         render_bands(&mut s, area, &|band| {
             if native_cmyk {
-                let cmyka = self.render_components(band, Paint::cmyka_at);
-                return band_tiles(band, &cmyka.iter().flat_map(|p| p[..ch].iter().copied()).collect::<Vec<_>>(), ch, |px| {
-                    if format.alpha { px[4] > 0.0 } else { px.iter().any(|v| *v != 0.0) }
-                });
+                let mut cmyka = self.render_components(band, Paint::cmyka_at);
+                for pixel in &mut cmyka {
+                    if pixel[4] <= 0.0 {
+                        *pixel = [0.0; 5];
+                    }
+                }
+                let vals: Vec<_> = cmyka.iter().flat_map(|p| p[..ch].iter().copied()).collect();
+                return band_tiles(band, &vals, ch, |px| if format.alpha { px[4] > 0.0 } else { px.iter().any(|v| *v != 0.0) });
             }
             let rgba = self.render_rgba(band);
             let mut vals = vec![0.0f32; rgba.len() * ch];
