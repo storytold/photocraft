@@ -488,6 +488,72 @@ fn press_save(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     h.into_state()
 }
 
+/// An already-open Save for Web must write the document it previews, not the newly focused one.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_for_web_uses_the_opening_document_after_focus_changes() {
+    use craft::draw::ui::crop::CropFill;
+    use craft::host::{PickKind, Picked, ScriptedFiles};
+
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    let other_dir = dir.path().join("other");
+    std::fs::create_dir_all(&origin).unwrap();
+    std::fs::create_dir_all(&other_dir).unwrap();
+    let path = dir.path().join("export.png");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files.clone()), ..Default::default() });
+    app.run("file.new", json!({"width": 120, "height": 80, "name": "blue"})).unwrap();
+    app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    app.session.active_mut().unwrap().path = Some(origin.join("blue.png").to_string_lossy().into_owned());
+    let id = open_web(&mut app).expect("an open document");
+    set_option(&mut app, id, "format", json!(WebFormat::Png24));
+
+    app.run("file.new", json!({"width": 19, "height": 11, "name": "red"})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.active_mut().unwrap().path = Some(other_dir.join("red.png").to_string_lossy().into_owned());
+    let other = app.active_doc_id().unwrap();
+    app.ui.tool_options.crop.fill = CropFill::ContentAware;
+    let mut app = press_save(app);
+    let ctx = app.ctx().clone();
+    take(&mut app, &ctx);
+    app.poll_file_dialog();
+    pass(&mut app);
+    confirm(&mut app, id);
+
+    let bytes = std::fs::read(&path).unwrap();
+    let written = photocraft_io::import("export.png", &bytes).unwrap().document;
+    assert_eq!(photocraft_compose::flatten(&written).px[0], [0.0, 0.0, 1.0, 1.0], "export should match the blue preview, not the focused red document");
+    assert_eq!((written.size.width, written.size.height), (120, 80));
+    assert_eq!(app.active_doc_id().unwrap(), other, "export should not steal focus");
+    assert_eq!(app.ui.tool_options.crop.fill, CropFill::ContentAware, "export shouldn't reconcile views against temporary focus");
+    let asked = files.requests();
+    assert!(
+        matches!(asked.as_slice(), [request] if request.kind == PickKind::Save
+        && request.directory.as_deref() == Some(origin.as_path())
+        && request.file_name.as_deref() == Some("blue.png")),
+        "{asked:?}"
+    );
+}
+
+/// A closed source cannot be replaced silently by whatever document is still open.
+#[test]
+fn save_for_web_does_not_export_a_different_document_if_the_source_closes() {
+    let mut app = app();
+    let id = open_web(&mut app).expect("an open document");
+    set_option(&mut app, id, "format", json!(WebFormat::Png24));
+    app.run("file.new", json!({"width": 19, "height": 11, "name": "other"})).unwrap();
+    let other = app.active_doc_id().unwrap();
+    app.session.close(0).expect("close the original document");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("export.png").to_string_lossy().into_owned();
+    answer_path(&mut app, id, &path);
+    confirm(&mut app, id);
+    assert!(!std::path::Path::new(&path).exists(), "an export must not write a fallback document");
+    assert!(app.ui.status_error);
+    assert_eq!(app.active_doc_id().unwrap(), other);
+}
+
 /// The export policy judges the parameters when Save… asks for a path: a denied export opens no picker and writes nothing.
 #[test]
 fn save_for_web_authorizes_before_opening_a_picker() {

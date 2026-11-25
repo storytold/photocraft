@@ -6,6 +6,17 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_with_target(id, params, None)
+    }
+
+    /// Save for Web's picker can finish while a different document is being edited. Scope only
+    /// the engine command to the source; the app must reconcile views with the actual focused tab.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn run_web_export_for(&mut self, source: DocId, params: Value) -> Result<Value, String> {
+        self.run_with_target(crate::transform_tool::SAVE_FOR_WEB, params, Some(source))
+    }
+
+    fn run_with_target(&mut self, id: &str, params: Value, target: Option<DocId>) -> Result<Value, String> {
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         let library_change = matches!(id, "actions.clearAll" | "actions.reset" | "actions.replace" | "actions.undoLibrary");
         if library_change && let Err(error) = actions::library::idle(self, id) {
@@ -24,7 +35,7 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
-        let result = self.run_command(id, params);
+        let result = self.run_command_with_target(id, params, target);
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -52,13 +63,17 @@ impl PhotocraftApp {
     }
 
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_command_with_target(id, params, None)
+    }
+
+    fn run_command_with_target(&mut self, id: &str, params: Value, target: Option<DocId>) -> Result<Value, String> {
         self.run_depth += 1;
-        let r = self.run_command_at_depth(id, params);
+        let r = self.run_command_at_depth(id, params, target);
         self.run_depth -= 1;
         r
     }
 
-    fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+    fn run_command_at_depth(&mut self, id: &str, params: Value, target: Option<DocId>) -> Result<Value, String> {
         // Commands never see Apply Data Set's Preview: it is not the document (a Save would write
         // it). The dialog shows it again on the next frame.
         crate::panels::apply_data_set_ui::end_preview(self);
@@ -195,6 +210,8 @@ impl PhotocraftApp {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
             actions::runner::run_view(self, id, params)
+        } else if let Some(target) = target {
+            self.with_document(target, |app| jobs_ui::run(app, id, params))
         } else {
             jobs_ui::run(self, id, params)
         };

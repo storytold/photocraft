@@ -12,6 +12,7 @@ use craft::ui::patterns::form_dialogs::{
 };
 use craft::ui::runtime::env::Label;
 use egui::load::SizedTexture;
+use photocraft_doc::DocId;
 use photocraft_engine::web_cmds::{self, WebSettings};
 use serde_json::{Value, json};
 
@@ -68,13 +69,15 @@ pub(super) fn parse_hex(text: &str) -> Option<[u8; 3]> {
     Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
-/// The colour table of the open Save for Web dialog: each shifted colour with the colour it becomes. The dialog names
+/// State of the open Save for Web dialog: its source document and colour-table edits. The dialog names
 /// colours by value; the engine edits palette entries by index, so the shifts become `colorTableEdits` over the palette
 /// each encode indexes with.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WebTable {
     /// The dialog the shifts belong to.
     dialog: Option<DialogId>,
+    /// The document the user opened Save for Web for, independent of the focused window.
+    source: Option<DocId>,
     /// Each shifted colour and the colour it becomes, in the order they were shifted.
     shifted: Vec<([u8; 3], [u8; 3])>,
 }
@@ -85,7 +88,7 @@ impl WebTable {
     /// change nothing.
     pub(super) fn apply(&mut self, id: DialogId, edits: impl IntoIterator<Item = (ColorTableEdit, Vec<[u8; 3]>)>) -> bool {
         if self.dialog != Some(id) {
-            *self = WebTable { dialog: Some(id), shifted: Vec::new() };
+            *self = WebTable { dialog: Some(id), ..Default::default() };
         }
         let before = self.shifted.clone();
         for (edit, colors) in edits {
@@ -288,6 +291,11 @@ fn original_texture(ctx: &egui::Context, doc: &photocraft_doc::Document) -> Size
 ///
 /// `None` without a document.
 pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
+    if let Some(id) = app.ui.web_table.dialog
+        && app.framework.dialogs.get_by_id::<HostedSaveForWeb>(id).is_some()
+    {
+        return Some(id);
+    }
     let ctx = app.ctx().clone();
     let doc = app.session.active()?.doc.clone();
     let mut seed = app.session.prefs().dialogs.get(WEB_COMMAND).cloned().unwrap_or_else(|| json!({}));
@@ -325,7 +333,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
         dialog = dialog.animation(Animation::new(t.duration as u32, t.fps));
     }
     let id = app.framework.dialogs.open(dialog);
-    app.ui.web_table = WebTable { dialog: Some(id), shifted: Vec::new() };
+    app.ui.web_table = WebTable { dialog: Some(id), source: Some(doc.id), shifted: Vec::new() };
     Some(id)
 }
 
@@ -351,10 +359,10 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
 
 /// The picture of one wanted pane: the options' encode of the document's `frame`, reduced to a proxy of at most
 /// 2048 px, with the size and palette the dialog shows and the table's `shifted` colours.
-fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, frame: Option<usize>, shifted: &[([u8; 3], [u8; 3])]) -> WebVariant {
+fn encode(ctx: &egui::Context, app: &PhotocraftApp, source: DocId, wanted: &WantedVariant, frame: Option<usize>, shifted: &[([u8; 3], [u8; 3])]) -> WebVariant {
     let (index, revision) = (wanted.index, wanted.request.revision);
     let fail = |message: String| WebVariant::failed(index, revision, message);
-    let Some(st) = app.session.active() else { return fail("no document".into()) };
+    let Some(st) = app.session.documents().iter().find(|st| st.doc.id == source) else { return fail("no document".into()) };
     let (doc, rev) = (st.doc.clone(), st.revision);
     let p = params_of(&wanted.request.options, false);
     let (fw, fh) = match web_preview::dimensions(&doc, &p) {
@@ -388,10 +396,6 @@ fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, fram
     variant
 }
 
-fn has_slices(app: &PhotocraftApp) -> bool {
-    app.session.active().is_some_and(|st| !st.doc.slices.is_empty())
-}
-
 fn report(app: &mut PhotocraftApp, error: String) {
     app.ui.status = error;
     app.ui.status_error = true;
@@ -406,14 +410,15 @@ fn engine_ext(options: &SaveForWebOptions) -> String {
 /// pick (the matte and the colour-table cells), the save path, and OK. Each request is taken once, so a second
 /// pass in the same frame finds nothing left.
 pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if let Some(result) = app.framework.dialogs.take::<HostedSaveForWeb>() {
+    let WebTable { dialog: Some(id), source: Some(source), .. } = app.ui.web_table else { return };
+    if let Some(result) = app.framework.dialogs.take_by_id::<HostedSaveForWeb>(id) {
+        let shifted = std::mem::take(&mut app.ui.web_table).shifted;
         if let DialogResult::Ok(result) = result {
-            finish(app, ctx, result);
+            finish(app, ctx, source, result, &shifted);
         }
         return;
     }
-    let Some(dialog) = app.framework.dialogs.get_mut::<HostedSaveForWeb>() else { return };
-    let id = dialog.id();
+    let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) else { return };
     let events = dialog.take_table_events();
     if app.ui.web_table.apply(id, events.into_iter().map(|event| (event.edit, event.colors))) {
         let marks = app.ui.web_table.marks();
@@ -434,14 +439,14 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         dialog.answer_color(&key, color);
     }
     if let Some(request) = path {
-        pick_save(app, id, request.key, &current);
+        pick_save(app, id, source, request.key, &current);
     }
     if wanted.is_empty() {
         return;
     }
-    let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2));
+    let animated = app.session.documents().iter().find(|st| st.doc.id == source).is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2));
     let shifted = app.ui.web_table.of(id);
-    let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, w, animated.then_some(frame as usize), shifted)).collect();
+    let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, source, w, animated.then_some(frame as usize), shifted)).collect();
     if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
         for variant in variants {
             dialog.set_variant(variant);
@@ -451,30 +456,34 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Save… was pressed: the export policy judges the parameters (with the generated palette) before any picker
 /// opens, then the save picker answers the dialog's path request `key`.
-fn pick_save(app: &mut PhotocraftApp, id: DialogId, key: String, current: &SaveForWebOptions) {
-    let slices = has_slices(app);
-    let shifted = app.ui.web_table.of(id).to_vec();
-    let checked = web_params(current, slices).and_then(|p| checked_params(app, &p, &shifted));
+fn pick_save(app: &mut PhotocraftApp, id: DialogId, source: DocId, key: String, current: &SaveForWebOptions) {
     let refuse = |app: &mut PhotocraftApp, error: String| {
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
             dialog.cancel_requests();
         }
         report(app, error);
     };
-    if let Err(error) = checked {
-        return refuse(app, error);
-    }
-    let Some(doc) = app.session.active().map(|st| st.doc.clone()) else { return refuse(app, "no document".into()) };
-    let base = photocraft_doc::slices::base_name(&doc);
-    let suggested = if slices && current.html { format!("{base}.html") } else { format!("{base}.{}", engine_ext(current)) };
-    let doc_id = doc.id;
-    // PLAN: `pick_export` has no cancel hook, so a cancelled picker leaves Save… waiting until `cancel_requests`; the owner of file_dialog.rs adds the hook.
-    let asked = app.pick_export(&suggested, move |app, path| {
-        app.refocus(doc_id)?;
-        if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
-            dialog.answer_path(key, std::path::PathBuf::from(path));
-        }
-        Ok(Value::Null)
+    let shifted = app.ui.web_table.of(id).to_vec();
+    let asked = app.with_document(source, |app| {
+        let doc = &app.session.active().ok_or("no document")?.doc;
+        let slices = !doc.slices.is_empty();
+        let p = web_params(current, slices)?;
+        checked_params(app, &p, &shifted)?;
+        let base = photocraft_doc::slices::base_name(doc);
+        let suggested = if slices && current.html { format!("{base}.html") } else { format!("{base}.{}", engine_ext(current)) };
+        // The picker also derives its initial directory from the active document.
+        // PLAN: `pick_export` has no cancel hook, so a cancelled picker leaves Save… waiting until `cancel_requests`.
+        app.pick_export(&suggested, move |app, path| {
+            let source_open = app.session.documents().iter().any(|st| st.doc.id == source);
+            if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
+                if !source_open {
+                    dialog.cancel_requests();
+                    return Err("no document".into());
+                }
+                dialog.answer_path(key, std::path::PathBuf::from(path));
+            }
+            Ok(Value::Null)
+        })
     });
     if let Err(error) = asked {
         refuse(app, error);
@@ -483,26 +492,29 @@ fn pick_save(app: &mut PhotocraftApp, id: DialogId, key: String, current: &SaveF
 
 /// OK: the export runs with the confirmed options and the picked path; the settings are remembered once it succeeded.
 /// Done writes nothing and remembers the settings.
-fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: SaveForWebResult) {
-    let shifted = std::mem::take(&mut app.ui.web_table).shifted;
+fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, source: DocId, result: SaveForWebResult, shifted: &[([u8; 3], [u8; 3])]) {
     let Some(picked) = result.path.as_deref() else { return result.remember(ctx) };
-    let slices = has_slices(app);
-    let outcome = web_params(&result.options, slices).and_then(|mut p| {
-        let path = picked.to_string_lossy().into_owned();
-        if slices {
-            p["dir"] = json!(picked.parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty()).unwrap_or_else(|| ".".into()));
-        } else {
-            // The suggested name kept: only the folder, so a recorded action saves each document under its own
-            // name, as in Photoshop (#5305). A document renamed since the picker opened no longer matches the
-            // picked name, so the whole path is used.
-            let base = app.session.active().map(|st| photocraft_doc::slices::base_name(&st.doc)).ok_or("no document")?;
-            match kept_name_folder(&path, &base, &engine_ext(&result.options)) {
-                Some(folder) => p["folder"] = json!(folder),
-                None => p["path"] = json!(path),
+    let outcome = app
+        .with_document(source, |app| {
+            let doc = &app.session.active().ok_or("no document")?.doc;
+            let slices = !doc.slices.is_empty();
+            let mut p = web_params(&result.options, slices)?;
+            let path = picked.to_string_lossy().into_owned();
+            if slices {
+                p["dir"] = json!(picked.parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty()).unwrap_or_else(|| ".".into()));
+            } else {
+                // The suggested name kept: only the folder, so a recorded action saves each document under its own
+                // name, as in Photoshop (#5305). A document renamed since the picker opened no longer matches the
+                // picked name, so the whole path is used.
+                let base = photocraft_doc::slices::base_name(doc);
+                match kept_name_folder(&path, &base, &engine_ext(&result.options)) {
+                    Some(folder) => p["folder"] = json!(folder),
+                    None => p["path"] = json!(path),
+                }
             }
-        }
-        web_confirm(app, &p, &shifted)
-    });
+            checked_params(app, &p, shifted)
+        })
+        .and_then(|p| save_for_web(app, source, p));
     match outcome {
         Ok(_) => result.remember(ctx),
         Err(error) => report(app, error),
@@ -543,12 +555,6 @@ fn checked_params(app: &PhotocraftApp, p: &Value, shifted: &[([u8; 3], [u8; 3])]
     Ok(prepared)
 }
 
-/// Runs Save for Web with the final parameters `p`, which say where to write.
-pub(super) fn web_confirm(app: &mut PhotocraftApp, p: &Value, shifted: &[([u8; 3], [u8; 3])]) -> Result<Value, String> {
-    let p = checked_params(app, p, shifted)?;
-    save_for_web(app, p)
-}
-
 /// The folder of `path` when its file is the one Save for Web suggests and writes from a folder
 /// alone: `base` (a name usable on Windows as it is) with the format's own extension `ext`.
 fn kept_name_folder(path: &str, base: &str, ext: &str) -> Option<String> {
@@ -559,11 +565,11 @@ fn kept_name_folder(path: &str, base: &str, ext: &str) -> Option<String> {
 }
 
 /// Runs Save for Web with `p`, which says where to write.
-fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
+fn save_for_web(app: &mut PhotocraftApp, source: DocId, p: Value) -> Result<Value, String> {
     #[cfg(target_arch = "wasm32")]
-    let result = download_for_web(app, p);
+    let result = app.with_document(source, |app| download_for_web(app, p));
     #[cfg(not(target_arch = "wasm32"))]
-    let result = app.run(WEB_COMMAND, p);
+    let result = app.run_web_export_for(source, p);
     let r = result.inspect_err(|error| {
         app.ui.status = error.clone();
         app.ui.status_error = true;
