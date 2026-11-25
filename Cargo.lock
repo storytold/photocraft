@@ -6598,6 +6598,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-collab-adapter"
+version = "0.23.1"
+dependencies = [
+ "photocraft-color",
+ "photocraft-doc",
+ "photocraft-geom",
+ "photocraft-raster",
+]
+
+[[package]]
 name = "photocraft-color"
 version = "0.23.1"
 dependencies = [

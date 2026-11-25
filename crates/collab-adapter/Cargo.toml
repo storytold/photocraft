@@ -1,0 +1,15 @@
+[package]
+name = "photocraft-collab-adapter"
+description = "Tile deltas and per-actor inverse undo between a PhotoCraft document and the RFC-0020 live-session contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photocraft-color = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-geom = { workspace = true }
+photocraft-raster = { workspace = true }
