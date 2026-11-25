@@ -654,9 +654,10 @@ pub(crate) fn pattern_presets(app: &PhotocraftApp, ctx: &egui::Context) -> Patte
 /// is also what the page reads an empty Pattern value from - it takes the first row that is not a folder - so a new
 /// Pattern Overlay starts on the first pattern of the first folder.
 ///
-/// A folder row's key carries its place in the folder list, so it cannot read as a pattern id and two folders that
-/// carry the same name (the preset store does not refuse that) keep their chevrons apart. A pattern listed in two
-/// folders is a row once, under the first of them, so no pattern id is ever a row twice.
+/// A folder row's key carries its place in the folder list, so two folders that carry the same name (the preset store
+/// does not refuse that) keep their chevrons apart, and a pattern id - which a file may carry verbatim - would have to
+/// be spelled like `folder/0/Name` to be mistaken for one. A pattern listed in two folders is a row once, under the
+/// first of them, so no pattern id is ever a row twice.
 fn pattern_rows(inputs: &PatternPresets, _: &Env) -> Vec<PresetRow<String>> {
     let mut rows = Vec::new();
     let mut placed = HashSet::new();
