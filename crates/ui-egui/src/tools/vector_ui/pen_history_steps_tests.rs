@@ -250,6 +250,34 @@ fn redoing_to_the_tip_of_a_live_path_puts_its_click_back_on_the_pen() {
     assert_eq!(subpaths(work(&app).as_ref().unwrap()), [(false, vec![[20.0, 20.0], [120.0, 20.0], [120.0, 120.0], [180.0, 40.0]])], "not a new path over it");
 }
 
+/// A `path.set` from outside the Pen can carry any History label the command accepts, one of the Pen's
+/// own step names included - the label is a name, not a proof of who wrote the state. So a control-channel
+/// or scripted write that replaces the Work Path the Pen is drawing, named "New Anchor Point", must not
+/// put that path back on the Pen: the draft is stale and is cancelled with the reason, the way every other
+/// command's write makes it (#6593), instead of quietly going on over the other caller's anchors (#16686
+/// review, second safeguard).
+#[test]
+fn another_caller_cannot_forge_a_pen_step_with_its_history_name() {
+    let mut app = app();
+    let before = steps(&app).len();
+    triangle(&mut app);
+    assert_eq!(draft_len(&app), Some(3), "the Pen is drawing a live Work Path");
+    // Another caller replaces that same Work Path under one of the Pen's step names.
+    app.run(
+        "path.set",
+        json!({"name": "work", "historyName": "New Anchor Point", "path": {"subpaths": [{"closed": false, "knots": [[10.0, 10.0], [10.0, 90.0]]}]}}),
+    )
+    .unwrap();
+    assert_eq!(added(&app, before), ["New Work Path", "New Anchor Point", "New Anchor Point", "New Anchor Point"], "the foreign write carries a Pen step name");
+    assert_eq!(subpaths(work(&app).as_ref().unwrap()), [(false, vec![[10.0, 10.0], [10.0, 90.0]])], "the other caller's anchors are the document's path now");
+    assert!(
+        app.ui.pen.is_none(),
+        "the Pen does not take that step over: the draft is cancelled, not rebuilt from it: {:?}",
+        app.ui.pen.as_ref().map(|p| p.draft.knots.len())
+    );
+    assert!(app.ui.status_error && app.ui.status.contains("cancelled"), "{}", app.ui.status);
+}
+
 #[test]
 fn the_make_shape_button_names_its_step_make_shape_from_path() {
     let mut app = app();

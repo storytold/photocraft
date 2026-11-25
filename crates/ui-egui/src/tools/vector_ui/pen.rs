@@ -518,14 +518,18 @@ pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) -> Option<Edit
     }
     // A live Work Path draft follows its path when the document moved to a state the Pen's own clicks made: back to an
     // earlier one (Undo, Step Backward, the History panel: a state is waiting to be redone) or forward to one of its
-    // clicks (Redo, Step Forward, the History panel at the tip). The six step names belong to those writes alone -
-    // `paths.rs` refuses them for any other `path.set` - so the step the document is on names who made it. A command
-    // from elsewhere left a newer state instead: like any other draft that carried a path on (#6593) it is stale, and
-    // `cancel_stale_pen` drops it with the reason rather than quietly going on with the newer path's anchors.
-    let pen_stepped_its_own_path = app
-        .session
-        .active()
-        .is_some_and(|st| st.history.can_redo() || photocraft_engine::vector_cmds::PEN_STEP_NAMES.iter().any(|n| st.history.undo_label() == Some(*n)));
+    // clicks (Redo, Step Forward, the History panel at the tip). What names them is not the step's label: `path.set`
+    // takes a Pen step name from ANY caller (`crates/engine-core/src/cmd/vector_cmds/paths.rs:86-97` only checks it
+    // against the list), so a control-channel, scripted or panel write can put the Work Path under "New Anchor Point"
+    // and the label would claim the Pen made it. The proof is the History state itself - the draft records the id of
+    // every state its own live writes minted (`PenPath::live_steps`, the same id `pen_resume` pins a finish by), and
+    // History mints and never reuses those ids, so no parameter can name one. A command from elsewhere left a newer
+    // state instead: like any other draft that carried a path on (#6593) it is stale, and `cancel_stale_pen` drops it
+    // with the reason rather than quietly going on with the newer path's anchors.
+    let pen_stepped_its_own_path = app.session.active().is_some_and(|st| {
+        let h = &st.history;
+        h.can_redo() || h.row_id(h.past_len()).is_some_and(|id| pen.live_steps.contains(&id))
+    });
     if pen_stepped_its_own_path { rebuild_live_draft(app) } else { None }
 }
 
@@ -533,12 +537,16 @@ pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) -> Option<Edit
 /// is gone, closed or empty.
 fn rebuild_live_draft(app: &mut PhotocraftApp) -> Option<EditSubpath> {
     let pen = app.ui.pen.as_ref().filter(|p| p.live_layer || p.live_path)?;
-    let (owner, r, live_layer, live_path, kept) = (pen.owner.clone(), pen.resumes.clone()?, pen.live_layer, pen.live_path, pen.kept);
+    let (owner, r, live_layer, live_path, kept, live_steps) =
+        (pen.owner.clone(), pen.resumes.clone()?, pen.live_layer, pen.live_path, pen.kept, pen.live_steps.clone());
     let rebuilt = app.session.active().and_then(|st| {
         let sub = resumed_path(&st.doc, &r)?.subpaths.get(r.index).filter(|s| !s.closed && !s.knots.is_empty())?;
         let mut draft = resumed(r.doc, r.path.clone(), r.layer, r.index, sub, false);
         draft.live_layer = live_layer;
         draft.live_path = live_path;
+        // The states the Pen's own clicks minted belong to the rebuilt draft too: Redo to the tip and the step after
+        // it have to stay recognizable as the Pen's own work (#16686 review).
+        draft.live_steps = live_steps;
         // A live shape layer's draft owns every anchor of its layer (#12909); a live Work Path draft keeps which of its
         // anchors the path it picked up brought, so Undo of the pick-up itself still knows it (#12890).
         if live_layer {
@@ -583,6 +591,17 @@ fn starts_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
         && draft_target(app, pen).as_deref().is_none_or(|n| n == "work")
 }
 
+/// The live write of this draft just made a History state: record the id History minted for it
+/// (`History::row_id` of the current row), which is what `sync_live_draft_from_layer` accepts as the Pen's own
+/// click. History mints these ids and never reuses them, and no command parameter names one, so a `path.set` from
+/// the control channel or a script cannot leave this mark even when it carries a Pen step name (#16686 review).
+fn record_live_step(app: &mut PhotocraftApp) {
+    let (Some(st), Some(pen)) = (app.session.active(), app.ui.pen.as_mut()) else { return };
+    if let Some(id) = st.history.row_id(st.history.past_len()) {
+        pen.live_steps.push(id);
+    }
+}
+
 /// The first anchor makes the Work Path with that one anchor in it; the draft then carries the path's new subpath
 /// (`resumes`, `live_path`), so each further click is a step of its own. With the Work Path selected in the Paths panel
 /// the click joins it, which the reference names "New Path Component"; with nothing selected it replaces it: "New Work
@@ -603,6 +622,7 @@ pub(super) fn start_live_path(app: &mut PhotocraftApp) {
         app.ui.status_error = true;
         return;
     }
+    record_live_step(app);
     let Some(mut pen) = app.ui.pen.take() else { return };
     let made: Option<(u64, photocraft_doc::vector::Subpath)> =
         app.session.active().and_then(|st| Some((st.doc.id.0, st.doc.work_path.as_ref()?.subpaths.get(index)?.clone())));
@@ -646,6 +666,7 @@ pub(super) fn pick_up_live_path(app: &mut PhotocraftApp) {
         // Only a write that went through makes the draft live: a refused one keeps today's route, with the anchors in
         // the draft and the finish taking them, and leaves no live path behind (#12890).
         Ok(_) => {
+            record_live_step(app);
             if let Some(pen) = app.ui.pen.as_mut() {
                 pen.live_path = true;
             }
@@ -696,7 +717,10 @@ pub(super) fn sync_live_path_from_draft(app: &mut PhotocraftApp) {
     let Some(label) = live_step_name(&path, drawing) else { return };
     let Some(full) = with_resumed_subpath(&st.doc, r, &path_json(&drawn)) else { return };
     match run_beside_draft(app, "path.set", json!({"name": r.path.clone(), "path": full, "historyName": label})) {
-        Ok(_) => follow_live_layer(app),
+        Ok(_) => {
+            record_live_step(app);
+            follow_live_layer(app);
+        }
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
