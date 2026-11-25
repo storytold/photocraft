@@ -37,18 +37,16 @@ fn gpu_app() -> Option<Gpu> {
     Some(Gpu { harness, observer })
 }
 
-/// A document the wgpu compositor leaves to the CPU: its top layer has a layer effect with Blend
-/// Interior Effects as Group on, and also Blend If.
+/// A document the wgpu compositor leaves to the CPU: its top layer has a Stroke and a Stroke Emboss
+/// effect, and also Blend If.
 fn cpu_only_document(app: &mut PhotocraftApp, w: u32, h: u32) -> DocId {
     app.run("file.new", json!({"width": w, "height": h, "background": "#336699"})).expect("new");
     app.run("layer.new.layer", json!({})).expect("layer");
     app.run("edit.fill", json!({"color": "#cc8844"})).expect("fill");
     app.run("layer.layerStyle.stroke", json!({"size": 2, "color": "#ff0000", "position": "inside"})).expect("stroke");
-    app.run(
-        "layer.layerStyle.blendingOptions",
-        json!({"opacity": 60, "blendInteriorEffectsAsGroup": true, "blendIf": {"channel": "gray", "underlying": [0, 10, 245, 255]}}),
-    )
-    .expect("blending options");
+    app.run("layer.layerStyle.bevelEmboss", json!({"style": "stroke", "size": 6, "depth": 200})).expect("stroke emboss");
+    app.run("layer.layerStyle.blendingOptions", json!({"opacity": 60, "blendIf": {"channel": "gray", "underlying": [0, 10, 245, 255]}}))
+        .expect("blending options");
     app.session.active().expect("document").doc.id
 }
 
@@ -105,7 +103,7 @@ fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
     settle(&mut g);
     let app = g.harness.state();
     assert_eq!(app.perf.last_refresh, "background");
-    assert!(app.perf.gpu_fallback.as_deref().is_some_and(|f| f.contains("Advanced Blending")), "{:?}", app.perf.gpu_fallback);
+    assert!(app.perf.gpu_fallback.as_deref().is_some_and(|f| f.contains("Stroke Emboss")), "{:?}", app.perf.gpu_fallback);
     assert_matches_synchronous(&mut g, doc);
 }
 
@@ -447,7 +445,7 @@ fn on_gpu_canvas(g: &Gpu) -> bool {
 }
 
 #[test]
-fn advanced_blending_fallback_is_shown_in_the_status_bar() {
+fn gpu_fallback_reason_is_shown_in_the_status_bar() {
     use egui_kittest::kittest::Queryable;
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
@@ -459,7 +457,7 @@ fn advanced_blending_fallback_is_shown_in_the_status_bar() {
     // PLAN: assumes the status bar's CPU Rendering message exposes its tooltip text to kittest after a hover (panels-w19).
     g.harness.get_by_label("CPU Rendering").hover();
     g.harness.run_steps(40);
-    assert!(g.harness.query_by_label_contains("Advanced Blending").is_some(), "the tooltip names the cause");
+    assert!(g.harness.query_by_label_contains("Stroke Emboss").is_some(), "the tooltip names the cause");
 }
 
 #[test]

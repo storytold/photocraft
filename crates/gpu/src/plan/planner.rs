@@ -1,5 +1,5 @@
 use super::lower::{
-    Paint, adjustment_on_gpu, adjustment_program, advanced_on_cpu, check_gradient_stops, clipped_on_cpu, gradient_rows, placement, shapeless_blend,
+    Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, clipped_on_cpu, gradient_rows, hard_mix_shapeless_on_cpu, placement, shapeless_blend,
     single_content_pass, stroke_widths, style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
@@ -562,22 +562,25 @@ impl<'a> Planner<'a> {
 
     /// Blending Options › Advanced Blending: knockout (shallow and deep, also of clipped layers),
     /// Transparency Shapes Layer off (`F_SHAPELESS`, and the whole-layer effect shape in
-    /// `effects`) and clipped layers blended individually (`clipped_individually`) run on the
-    /// GPU, and so do masks hiding effects (`effects_hiding`). Blend Interior Effects as Group
-    /// with effects has no GPU pass: documents using it are composited on the CPU
-    /// (`photocraft_compose::advanced`), as are Hard Mix layers with Transparency Shapes Layer off
-    /// in 16/32-bit documents. Layers at the reference editor's defaults pass this check for free.
-    fn check_advanced(&self, layer: &Layer) -> Result<(), Unsupported> {
-        if let Some(option) = advanced_on_cpu(layer, self.cx.depth) {
-            return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
+    /// `effects`), clipped layers blended individually (`clipped_individually`), masks hiding
+    /// effects (`effects_hiding`) and Blend Interior Effects as Group (`effect_layer_base`,
+    /// `effect_paints`) run on the GPU. The exception is Hard Mix with Transparency Shapes Layer
+    /// off in a 16/32-bit document, which stays on the CPU for every layer
+    /// (`hard_mix_shapeless_on_cpu`).
+    fn check_hard_mix(&self, layer: &Layer) -> Result<(), Unsupported> {
+        if hard_mix_shapeless_on_cpu(layer, self.cx.depth) {
+            return Err(Unsupported(format!(
+                "Advanced Blending on `{}`: Hard Mix with Transparency Shapes Layer off in a 16/32-bit document (composited on the CPU)",
+                layer.name
+            )));
         }
         Ok(())
     }
 
-    /// `check_advanced` for a layer drawn atop its clipping base (`composite_atop`), where
-    /// Transparency Shapes Layer off with effects or a special-eight blend stays on the CPU.
+    /// `check_hard_mix` for a layer drawn atop its clipping base (`composite_atop`), which also
+    /// stays on the CPU for Transparency Shapes Layer off with effects or a special-eight blend.
     fn check_clipped(&self, layer: &Layer) -> Result<(), Unsupported> {
-        self.check_advanced(layer)?;
+        self.check_hard_mix(layer)?;
         if let Some(option) = clipped_on_cpu(layer) {
             return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
         }
@@ -595,7 +598,7 @@ impl<'a> Planner<'a> {
         if photocraft_compose::advanced::clips_individually(layer, clipped) {
             return self.clipped_individually(layer, clipped, backdrop, ko);
         }
-        self.check_advanced(layer)?;
+        self.check_hard_mix(layer)?;
         self.restricted(layer, backdrop, |s, b| match ko {
             Some(target) => s.knocked_out(layer, target, false, b, |s, b| s.layer_any(layer, clipped, b)),
             None => s.layer_any(layer, clipped, b),
@@ -1315,7 +1318,8 @@ impl<'a> Planner<'a> {
 
         // Only exterior effects (drop shadows, outer glows): nothing is painted between the
         // layer's colour inside its shape and the shape's alpha, so the merge derives both from
-        // the shape (`F_LAYER_SHAPE`) instead of two passes building the layer.
+        // the shape (`F_LAYER_SHAPE`) instead of two passes building the layer. With no interior
+        // effect, Blend Interior Effects as Group's Fill scaling commutes with this.
         if !relative && !premerge && items.iter().all(|e| matches!(e, Effect::DropShadow(_) | Effect::OuterGlow(_))) {
             let mut p = Pass::new(Kernel::FxMerge, 0);
             p.a = Some(w);
@@ -1345,11 +1349,14 @@ impl<'a> Planner<'a> {
         let premerge = work.premerge;
         // The layer: its colour at fill opacity inside its shape; interior effects are painted
         // relative to the shape (coverage within it), then the shape's alpha applies.
+        // Blend Interior Effects as Group builds it at full fill; `effect_paints` applies the fill
+        // once the interior effects are on.
+        let fill = if photocraft_compose::effects::groups_interior(layer) { 1.0 } else { layer.fill_opacity };
         let mut l = if relative {
             let c = self.retain(content);
-            self.fx_init(clip, lay_src, Some(c), INIT_RELATIVE, layer.fill_opacity)
+            self.fx_init(clip, lay_src, Some(c), INIT_RELATIVE, fill)
         } else {
-            self.fx_init(clip, lay_src, None, INIT_INSIDE, layer.fill_opacity)
+            self.fx_init(clip, lay_src, None, INIT_INSIDE, fill)
         };
         // Blend Interior Effects as Group off: the layer merges in its mode first and the
         // interior effects paint over the result (`effects::premerges_layer`).
@@ -1403,6 +1410,11 @@ impl<'a> Planner<'a> {
                 let paint = self.glow_paint(g, anchor);
                 l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
             }
+        }
+        // Blend Interior Effects as Group: Fill applies to the layer with its interior effects,
+        // before the inner shadow (`paint_interior`).
+        if photocraft_compose::effects::groups_interior(work.layer) {
+            l = self.fx_init(clip, l, None, INIT_SCALE, work.layer.fill_opacity.max(0.0));
         }
         for &(i, e) in &rev {
             if let Effect::InnerShadow(s) = e {

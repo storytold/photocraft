@@ -341,6 +341,127 @@ fn knockout_on_a_stroked_shape_with_a_clipped_layer_matches_the_cpu() {
     }
 }
 
+/// Interior effects (and one stroke) of every kind Blend Interior Effects as Group groups under
+/// Fill, plus a set mixing them with exterior effects.
+fn interior_effects() -> Vec<(&'static str, Vec<Effect>)> {
+    use photocraft_doc::{Contour, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx, StrokePosition};
+    let overlay = |blend, opacity| Effect::ColorOverlay { common: FxCommon::new(blend, opacity), color: Color::rgb(0.9, 0.2, 0.3) };
+    let gradient = Effect::GradientOverlay {
+        common: FxCommon::new(BlendMode::Normal, 0.9),
+        gradient: Gradient {
+            stops: vec![(0.0, Color::rgb(1.0, 0.2, 0.0)), (0.5, Color::rgb(0.1, 0.9, 0.3)), (1.0, Color::rgb(0.2, 0.1, 1.0))],
+            opacity_stops: vec![(0.0, 1.0), (1.0, 0.4)],
+            style: GradientStyle::Linear,
+            angle: 30.0,
+            scale: 0.9,
+            reverse: false,
+            align: true,
+            offset: (0.1, -0.05),
+        },
+        dither: false,
+        interpolation: None,
+    };
+    let satin = Effect::Satin(Satin {
+        common: FxCommon::new(BlendMode::Multiply, 0.7),
+        color: Color::rgb(0.9, 0.4, 0.1),
+        angle: 60.0,
+        distance: 5.0,
+        size: 6.0,
+        contour: Contour::Linear,
+        anti_alias: false,
+        invert: false,
+    });
+    let glow = |blend| Glow {
+        common: FxCommon::new(blend, 0.8),
+        paint: FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)),
+        technique: GlowTechnique::Softer,
+        spread: 0.1,
+        size: 5.0,
+        contour: Contour::Linear,
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    let inner_shadow = Effect::InnerShadow(Shadow {
+        common: FxCommon::new(BlendMode::Multiply, 0.8),
+        color: Color::rgb(0.1, 0.05, 0.3),
+        angle: 120.0,
+        use_global_light: false,
+        distance: 4.0,
+        spread: 0.0,
+        size: 6.0,
+        contour: Contour::Linear,
+        anti_alias: false,
+        noise: 0.0,
+        knocks_out: true,
+    });
+    let stroke = Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 0.9),
+        size: 3.0,
+        position: StrokePosition::Inside,
+        paint: FxPaint::Color(Color::rgb(0.1, 0.7, 0.3)),
+        overprint: false,
+    });
+    let Effect::DropShadow(mut drop) = Effect::default_drop_shadow() else { unreachable!() };
+    drop.distance = 4.0;
+    drop.size = 3.0;
+    vec![
+        ("color overlay", vec![overlay(BlendMode::Normal, 0.7)]),
+        ("soft light overlay", vec![overlay(BlendMode::SoftLight, 0.8)]),
+        ("gradient overlay", vec![gradient.clone()]),
+        ("satin", vec![satin.clone()]),
+        ("inner glow", vec![Effect::InnerGlow(glow(BlendMode::Screen))]),
+        ("inner shadow", vec![inner_shadow.clone()]),
+        ("inside stroke", vec![stroke.clone()]),
+        (
+            "several with a drop shadow and an outer glow",
+            vec![
+                overlay(BlendMode::Overlay, 0.6),
+                gradient,
+                satin,
+                Effect::InnerGlow(glow(BlendMode::Screen)),
+                inner_shadow,
+                stroke,
+                Effect::DropShadow(drop),
+                Effect::OuterGlow(glow(BlendMode::Screen)),
+            ],
+        ),
+    ]
+}
+
+/// A layer with `items` under Blend Interior Effects as Group.
+fn interior_layer(d: &Document, items: &[Effect], blend: BlendMode, opacity: f32, fill: f32) -> Layer {
+    let mut l = noise_layer("interior", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 0.3);
+    l.effects.items.extend(items.iter().cloned());
+    l.blend = blend;
+    l.opacity = opacity;
+    l.fill_opacity = fill;
+    l.advanced.blend_interior = true;
+    l
+}
+
+/// Blend Interior Effects as Group applies Fill to the layer together with its interior effects
+/// (after them, before the inner shadow) instead of to the layer alone.
+#[test]
+fn interior_effects_as_group_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let modes = [BlendMode::Normal, BlendMode::Multiply, BlendMode::Color];
+    for (name, items) in interior_effects() {
+        // Every Fill and Opacity in Normal; the other modes at one combination.
+        let mut cases: Vec<(BlendMode, f32, f32)> = [(1.0, 0.5), (1.0, 0.0), (0.6, 0.5), (0.6, 0.0)].iter().map(|&(o, f)| (BlendMode::Normal, o, f)).collect();
+        cases.extend(modes[1..].iter().map(|&m| (m, 0.6, 0.5)));
+        cases.push((BlendMode::Normal, 1.0, 1.0));
+        for (blend, opacity, fill) in cases {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            d.layers.push(interior_layer(&d, &items, blend, opacity, fill));
+            check(&mut g, &d, &format!("{name}, {blend:?}, opacity {opacity}, fill {fill}"));
+        }
+    }
+}
+
 /// The CPU composites each individually blended clipped layer as an unclipped layer, so
 /// Transparency Shapes Layer off on it (the special eight's blend, the shape effects take) runs on
 /// the GPU too.
@@ -367,19 +488,80 @@ fn individually_blended_clipped_layers_without_transparency_shapes_match_the_cpu
     }
 }
 
-/// The options that stay on the CPU still make the GPU refuse the document.
+#[test]
+fn interior_effects_as_group_in_every_depth() {
+    let Some(mut g) = gpu() else { return };
+    let effects = interior_effects();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (name, items) in [&effects[1], &effects[7]] {
+            let mut d = doc(depth, true);
+            d.layers.push(underlay(&d, 2));
+            d.layers.push(interior_layer(&d, items, BlendMode::Normal, 0.9, 0.5));
+            check(&mut g, &d, &format!("{name}, {depth:?}"));
+        }
+    }
+}
+
+#[test]
+fn interior_effects_as_group_combined_with_other_options_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let effects = interior_effects();
+    let items = &effects[7].1;
+
+    // Transparency Shapes Layer off: the effects take the whole layer as their shape.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut l = interior_layer(&d, items, BlendMode::Normal, 0.8, 0.5);
+    l.advanced.transparency_shapes = false;
+    d.layers.push(l);
+    check(&mut g, &d, "Transparency Shapes Layer off");
+
+    // A knockout.
+    for knockout in KNOCKOUTS {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut l = ko_layer(&d, 3, knockout);
+        l.effects.items.extend(items.iter().cloned());
+        l.fill_opacity = 0.5;
+        l.opacity = 0.8;
+        l.advanced.blend_interior = true;
+        d.layers.push(l);
+        run(&mut g, &d, "interior group with a knockout", knockout);
+    }
+
+    // Masks hiding the effects.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut l = interior_layer(&d, items, BlendMode::Normal, 0.8, 0.5);
+    hide_with(&mut l, Hides::Both);
+    d.layers.push(l);
+    check(&mut g, &d, "masks hiding the effects");
+
+    // Inside isolated and pass-through groups.
+    for pass in [false, true] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let below = noise_layer("below", d.pixel_format(), Rect::new(0, 0, 30, 30), 6, 0.5);
+        let inner = interior_layer(&d, items, BlendMode::Normal, 0.9, 0.5);
+        d.layers.push(group("group", pass, vec![below, inner]));
+        check(&mut g, &d, &format!("inside a group, pass-through {pass}"));
+    }
+
+    // A clipping base with a clipped layer.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    d.layers.push(interior_layer(&d, items, BlendMode::Normal, 0.8, 0.5));
+    let mut c = noise_layer("clipped", d.pixel_format(), Rect::new(10, 9, 36, 30), 7, 0.4);
+    c.clipped = true;
+    c.opacity = 0.7;
+    d.layers.push(c);
+    check(&mut g, &d, "clipping base");
+}
+
+/// Transparency Shapes Layer off on a clipped layer still makes the GPU refuse the document.
 #[test]
 fn the_remaining_advanced_blending_options_are_refused() {
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(48, 40);
-    let mut l = ko_layer(&d, 3, Knockout::Deep);
-    l.effects.items.push(Effect::default_drop_shadow());
-    l.advanced.blend_interior = true;
-    d.layers.push(l);
-    let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
-        .expect_err("the GPU must refuse Blend Interior Effects as Group on a layer with effects");
-    assert!(e.to_string().contains("Blend Interior Effects as Group"), "{e}");
-
     // Transparency Shapes Layer off on a layer clipped to a base stays on the CPU (its behaviour
     // there is changing separately), for effects and for the special eight.
     for (blend, fx, what) in [(BlendMode::ColorDodge, false, "Color Dodge"), (BlendMode::Normal, true, "layer effects")] {

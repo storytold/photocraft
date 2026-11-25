@@ -115,7 +115,7 @@ id = "FILE-215-16"
 target = "Advanced Blending (knockout, blend as group, mask hides effects) end to end"
 status = "partial"
 issue = 215
-note = "doc advanced.rs + .pcraft + PSD/layered TIFF (knko infx clbl tsly lmgm vmgm), CPU compose advanced.rs (GPU falls back), blendingOptions command + dialog; 7 psd-tools knockout oracles now pass; knockout-isolated-groups (0.45 % AA edges), advanced-blending, blend-and-clipping still differ"
+note = "doc advanced.rs + .pcraft + PSD/layered TIFF (knko infx clbl tsly lmgm vmgm), CPU compose advanced.rs (the GPU compositor runs it too, except a clipped layer with Transparency Shapes Layer off plus effects or a special-eight blend, #13112), blendingOptions command + dialog; 7 psd-tools knockout oracles now pass; knockout-isolated-groups (0.45 % AA edges), advanced-blending, blend-and-clipping still differ"
 
 [[item]]
 id = "FILE-215-17"

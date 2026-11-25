@@ -394,7 +394,7 @@ fn blend_if_params_pack_every_range_exactly() {
 }
 
 #[test]
-fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
+fn advanced_blending_runs_on_the_gpu_except_clipped_shapeless_layers() {
     use photocraft_doc::Knockout;
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut l = Layer::raster("ko", d.pixel_format());
@@ -477,8 +477,7 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
     assert!(plan(&d).is_ok(), "knockout inside a group");
-    // Masks that hide the layer's effects run on the GPU, also on a layer clipped to a base; only
-    // Blend Interior Effects as Group with effects stays on the CPU.
+    // Masks that hide the layer's effects run on the GPU, also on a layer clipped to a base.
     let mut h = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut hiding = hiding_src;
     hiding.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
@@ -494,8 +493,22 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     h.layers[2].advanced.layer_mask_hides_effects = false;
     h.layers[2].advanced.vector_mask_hides_effects = true;
     assert!(plan(&h).is_ok(), "a mask whose setting does not hide the effects");
-    h.layers[1].advanced.blend_interior = true;
-    assert!(plan(&h).unwrap_err().0.contains("Blend Interior Effects as Group"), "interior effects as a group");
+    // Blend Interior Effects as Group with effects runs on the GPU too: below 100 % Fill the
+    // layer is built at full fill and a scale pass applies the Fill after the interior effects.
+    let mut i = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut interior = h.layers[1].clone();
+    interior.mask = None;
+    interior.advanced = Default::default();
+    interior.advanced.blend_interior = true;
+    interior.fill_opacity = 0.5;
+    interior.effects.items =
+        vec![photocraft_doc::Effect::ColorOverlay { common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(0.9, 0.2, 0.3) }];
+    i.layers.push(interior);
+    let p = plan(&i).expect("Blend Interior Effects as Group with an interior effect");
+    assert!(p.passes.iter().any(|p| p.kernel == Kernel::FxInit && p.adjust_kind == INIT_SCALE), "a pass applies Fill to the grouped layer");
+    i.layers[1].advanced.blend_interior = false;
+    let p = plan(&i).expect("the same layer without the option");
+    assert!(p.passes.iter().all(|p| !(p.kernel == Kernel::FxInit && p.adjust_kind == INIT_SCALE)));
 }
 
 /// A knockout builds its deep target fresh and keeps nothing live across stack units, so the

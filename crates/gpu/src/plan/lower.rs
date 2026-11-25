@@ -30,27 +30,6 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
     Placement { origin, cs: (a.cos(), a.sin()), inv_scale }
 }
 
-/// The Advanced Blending option that keeps `layer` on the CPU compositor, if any. This is
-/// everything `compose::advanced_active` rejects except knockout (`Planner::knocked_out`), Blend
-/// Clipped Layers as Group off (`Planner::clipped_individually`) and Transparency Shapes Layer
-/// off and masks hiding effects (`Planner::effects_hiding`), which the GPU runs itself: the
-/// special-eight blends take the content's own alpha as Fill (`F_SHAPELESS`) and the effects take
-/// the whole layer as their shape (`Planner::effects`). A layer drawn atop its clipping base is
-/// still refused for Transparency Shapes Layer off with effects or such a blend
-/// (`clipped_on_cpu`), and
-/// Hard Mix with it off in a 16/32-bit document is refused too (`hard_mix_shapeless_on_cpu`).
-pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'static str> {
-    let a = &layer.advanced;
-    if a.is_default() {
-        return None;
-    }
-    if hard_mix_shapeless_on_cpu(layer, depth) {
-        return Some("Hard Mix with Transparency Shapes Layer off in a 16/32-bit document");
-    }
-    let fx = photocraft_compose::effects::has_effects(layer);
-    if a.blend_interior && fx { Some("Blend Interior Effects as Group") } else { None }
-}
-
 /// Whether `layer` blends with the special eight taking its own alpha as Fill: Transparency
 /// Shapes Layer off on a non-adjustment layer in one of those modes (`F_SHAPELESS`).
 pub(super) fn shapeless_blend(layer: &Layer) -> bool {

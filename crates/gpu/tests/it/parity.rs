@@ -611,10 +611,15 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     check(&mut g, &doc, "bounded admission");
     assert!(g.comp.composite_cache_bytes() <= 1 << 20);
     assert!(diff_rect(&mut g, &doc, doc.bounds(), "bounded cache keeps its hits").unwrap().prefix_hits > 0);
-    // Blend Interior Effects as Group with effects still composites on the CPU (knockout, clipped
-    // layers blended individually and Transparency Shapes Layer off no longer do).
-    doc.layers[2].advanced.blend_interior = true;
-    doc.layers[2].effects.items.push(Effect::default_drop_shadow());
+    // Stroke Emboss still composites on the CPU (Advanced Blending options no longer do).
+    doc.layers[2].effects.items.push(Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        size: 3.0,
+        position: StrokePosition::Outside,
+        paint: FxPaint::Color(Color::rgb(0.1, 0.7, 0.3)),
+        overprint: false,
+    }));
+    doc.layers[2].effects.items.push(Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss, true, 6.0, 0.0)));
     assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
     assert_eq!(g.comp.composite_cache_bytes(), 0);
 }
