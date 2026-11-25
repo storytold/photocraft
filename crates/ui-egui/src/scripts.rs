@@ -124,15 +124,21 @@ const MAX_RUN_DOCUMENTS: u32 = 64;
 const MAX_RUN_APP_TIME: Duration = Duration::from_secs(30 * 60);
 
 impl RunBudget {
-    /// Charge command `id`, which makes `copies` layers when it duplicates them (a group with
-    /// everything in it, or a whole document), or say why the run may not run it.
-    fn charge(&mut self, id: &str, params: &Value, copies: u32) -> Result<(), String> {
+    /// Whether the run may still have the app run a command at all: commands and app time left.
+    fn open(&self) -> Result<(), String> {
         if self.commands >= MAX_RUN_COMMANDS {
             return Err(format!("a script can run at most {MAX_RUN_COMMANDS} commands"));
         }
         if self.app_time >= MAX_RUN_APP_TIME {
             return Err("the script has used all the time PhotoCraft gives a script's commands".into());
         }
+        Ok(())
+    }
+
+    /// Charge command `id`, which makes `copies` layers when it duplicates them (a group with
+    /// everything in it, or a whole document), or say why the run may not run it.
+    fn charge(&mut self, id: &str, params: &Value, copies: u32) -> Result<(), String> {
+        self.open()?;
         let layers = match id {
             "layer.new.layer" | "layer.new.group" | "type.create" => 1,
             "layer.duplicate" => copies.max(1),
@@ -185,6 +191,8 @@ impl AppCommands<'_> {
             None => session.active(),
         };
         match id {
+            // A move that copies nothing makes no layers: nothing to count.
+            "layer.moveTo" if !copying(params) => 0,
             "layer.duplicate" | "layer.moveTo" => {
                 let layer = params["layer"].as_u64().map(photocraft_doc::LayerId);
                 doc.zip(layer).and_then(|(d, id)| d.doc.layer(id)).map_or(1, count)
@@ -210,7 +218,11 @@ impl ScriptCommands for AppCommands<'_> {
             return Err("the agent link that started this script has stopped".into());
         }
         let target = params.as_object_mut().and_then(|m| m.remove(ON_DOCUMENT)).and_then(|v| v.as_u64());
+        // Counting the copies walks the layers: checked first, and its time is the app's too.
+        self.budget.open()?;
+        let started = web_time::Instant::now();
         let copies = self.copies(id, target, &params);
+        self.budget.app_time += started.elapsed();
         self.budget.charge(id, &params, copies)?;
         let started = web_time::Instant::now();
         let was = std::mem::replace(&mut self.app.automation_input, self.automation);
@@ -493,9 +505,12 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(active) = app.scripts.run.as_mut() else { return };
     // A run waiting at a dialog sends nothing, but it may still end (its host was killed), so
     // it is pumped all the same.
+    // Not for a playback that stopped meanwhile: the pump below ends that run.
+    let owned = active.resume.is_none_or(|token| app.paused_playbacks.holds(token));
     if let Some(open) = active.dialog.as_mut()
         && open.kind.picker()
         && !open.asked
+        && owned
     {
         open.asked = true;
         let (id, kind, args) = (active.id, open.kind, open.args.clone());
@@ -624,7 +639,12 @@ fn finish(app: &mut PhotocraftApp, result: Result<(), String>) {
         }
     }
     if let Some(token) = active.resume {
+        // The playback goes on as the run was started, not as the input of whatever pass the
+        // run happened to end in: an unrelated injected pass must not put an action a person
+        // played under automation's gate, nor a person's pass lift it from one automation played.
+        let was = std::mem::replace(&mut app.automation_input, active.automation);
         crate::actions::script_step_finished(app, token, &active.name, result);
+        app.automation_input = was;
     }
 }
 
@@ -667,19 +687,25 @@ fn waits_at_picker(app: &PhotocraftApp, id: u64) -> bool {
     app.scripts.run.as_ref().is_some_and(|a| a.id == id && a.dialog.as_ref().is_some_and(|d| d.kind.picker()))
 }
 
-fn ask_picker(app: &mut PhotocraftApp, id: u64, kind: ScriptDialog, args: &Value) {
+/// The file picker a script's `kind` of picker asks for, with its `filter` (Open and Save File)
+/// as the file types offered: every file without one.
+fn picker_request(kind: ScriptDialog, args: &Value) -> PickRequest {
     let multiple = args.get("multiple").and_then(Value::as_bool).unwrap_or(false);
     let request = match kind {
-        ScriptDialog::OpenFile => {
-            let request = if multiple { PickRequest::open_many("script") } else { PickRequest::open("script") };
-            match filter_extensions(args.get("filter").and_then(Value::as_str)) {
-                Some(exts) => request.filter("Files", &exts.iter().map(String::as_str).collect::<Vec<_>>()),
-                None => request,
-            }
-        }
+        ScriptDialog::OpenFile if multiple => PickRequest::open_many("script"),
+        ScriptDialog::OpenFile => PickRequest::open("script"),
         ScriptDialog::SaveFile => PickRequest::save("script").file_name("Untitled"),
-        _ => PickRequest::folder("script"),
+        _ => return PickRequest::folder("script"),
     };
+    match filter_extensions(args.get("filter").and_then(Value::as_str)) {
+        Some(exts) => request.filter("Files", &exts.iter().map(String::as_str).collect::<Vec<_>>()),
+        None => request,
+    }
+}
+
+fn ask_picker(app: &mut PhotocraftApp, id: u64, kind: ScriptDialog, args: &Value) {
+    let multiple = args.get("multiple").and_then(Value::as_bool).unwrap_or(false);
+    let request = picker_request(kind, args);
     let request = if kind == ScriptDialog::SaveFile { request } else { in_last_dir(app, request) };
     let asked = app.ask_file_answer(request, move |app, chosen| {
         // The run was stopped meanwhile (and maybe another started): the answer is nobody's.

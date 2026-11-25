@@ -2169,13 +2169,18 @@ fn a_panicking_paused_edit_restores_the_session_gate() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let token = app.paused_playbacks.pause("Scripted".into(), 1, Some(paused_gate));
     assert!(app.session.authorize.is_none());
+    // What the edit saw is checked after the unwind: an assert inside it would panic too, and
+    // the panic would be taken for the deliberate one.
+    let mut seen = None;
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = super::runner::within_paused(&mut app, token, |app| {
-            assert!(app.session.authorize.is_some(), "the edit runs under the playback's gate");
+            seen = Some(app.session.authorize);
             panic!("a command panicked");
         });
     }));
     assert!(unwound.is_err(), "the panic goes on to the app's guard");
+    let seen = seen.expect("the edit ran");
+    assert!(seen.is_some_and(|gate| std::ptr::fn_addr_eq(gate, paused_gate as Gate)), "the edit runs under the playback's gate");
     assert!(app.session.authorize.is_none(), "the session's own gate is back");
 }
 

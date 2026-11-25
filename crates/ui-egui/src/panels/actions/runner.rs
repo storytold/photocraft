@@ -455,6 +455,12 @@ impl ActionRunner for ShellRunner<'_> {
         // A JavaScript step runs in the app; the playback goes on when the script ends
         // (`script_step_finished`).
         if id == "file.scripts.run" {
+            // The direct control route answers once the playback is done, and a script needs
+            // frames to run: refused there, not left running behind a reply that says the action
+            // finished.
+            if self.app.programmatic_playback {
+                return StepOutcome::Failed("a script step can't run on this route, which plays the action to its end before it answers; play the action from the Actions panel or through the app's own input".into());
+            }
             let token = self.app.paused_playbacks.pause(action.name.clone(), i + 1, self.app.session.authorize);
             return match crate::scripts::run_step(self.app, &p, token) {
                 Ok(_) => self.pause(json!({"step": i, "id": id, "dialog": crate::scripts::PLAYBACK_WAIT})),
@@ -1105,8 +1111,17 @@ fn within_paused_history<R>(app: &mut PhotocraftApp, token: u64, edit: impl FnOn
 /// script's error.
 pub(crate) fn script_step_finished(app: &mut PhotocraftApp, token: u64, name: &str, result: Result<(), String>) {
     match result {
+        // Step by Step and Pause For wait after it, as after any step another one follows;
         // `resume` reports its own failure in the status bar.
-        Ok(()) => drop(resume(app, token)),
+        Ok(()) => {
+            let follows = app.paused_playbacks.paused.get(&token).is_some_and(|p| {
+                app.session.actions().list.actions().iter().find(|a| a.name == p.action).is_some_and(|a| a.enabled_steps().any(|(i, _)| i >= p.from))
+            });
+            match playback::step_pause(app).filter(|_| follows) {
+                Some(wait) => playback::resume_after(app, token, wait),
+                None => drop(resume(app, token)),
+            }
+        }
         Err(error) => {
             let step = app.paused_playbacks.paused.get(&token).map_or(0, |p| p.from.saturating_sub(1));
             abandoned(app, token);

@@ -276,6 +276,17 @@ fn pickers_answer_the_chosen_path_or_null() {
     assert!(!h.state().scripts.running());
 }
 
+/// A script's filter is the file types its Open File and Save File pickers offer; without one
+/// they offer every file.
+#[test]
+fn open_and_save_pickers_offer_the_scripts_filter() {
+    for kind in [ScriptDialog::OpenFile, ScriptDialog::SaveFile] {
+        let filtered = picker_request(kind, &json!({"prompt": null, "filter": "*.png"}));
+        assert_eq!(filtered.filters.iter().map(|f| f.extensions.clone()).collect::<Vec<_>>(), [vec!["png".to_string()]], "{kind:?}");
+        assert!(picker_request(kind, &json!({"prompt": null, "filter": null})).filters.is_empty(), "{kind:?}");
+    }
+}
+
 #[test]
 fn file_filters_become_extensions() {
     assert_eq!(filter_extensions(Some("Images:*.png;*.JPG")), Some(vec!["png".to_string(), "jpg".to_string()]));
@@ -386,6 +397,94 @@ fn an_action_waits_for_its_script_step_and_goes_on_after_it() {
     settle(&mut app);
     assert_eq!(layer_names(&app), ["before", "from the script", "after", "before"]);
     assert_eq!(app.session.recording.playing, 0);
+}
+
+/// Step by Step waits after a script step as after any other, before the step after it; the
+/// last step goes on at once.
+#[test]
+fn step_by_step_waits_after_a_script_step() {
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Run("layer.new.layer", json!({"name": "from the script"}))], vec![]], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("prefs.set", json!({"path": "actions.performance", "value": "step"})).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Scripted",
+            vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"})), ActionStep::new("layer.new.layer", json!({"name": "after"}))],
+        ))
+        .unwrap();
+    crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
+    settle(&mut app);
+    assert_eq!(layer_names(&app), ["from the script"], "the next step waits");
+    assert!(crate::actions::playback::pending(&app), "a paced wait holds it");
+    // A script step that is the last one ends the playback at once.
+    assert!(crate::actions::playback::stop(&mut app));
+    app.session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new("Last", vec![ActionStep::new("file.scripts.run", json!({"name": "last.jsx", "source": "1"}))]))
+        .unwrap();
+    crate::actions::play(&mut app, &json!({"action": "Last"})).unwrap();
+    settle(&mut app);
+    assert!(!crate::actions::playback::pending(&app));
+    assert_eq!(app.session.recording.playing, 0, "the playback ended");
+}
+
+/// A playback a person started goes on after its script step as the person's, even when the
+/// script ends during a pass of injected automation input: automation's gate does not reach
+/// the steps after it.
+#[test]
+fn a_persons_playback_goes_on_as_theirs_when_its_script_ends_in_an_injected_pass() {
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Run("layer.new.layer", json!({"name": "from the script"}))]], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Scripted",
+            vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"})), ActionStep::new("layer.new.layer", json!({"name": "after"}))],
+        ))
+        .unwrap();
+    let played = crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
+    assert_eq!(played["paused"]["dialog"], PLAYBACK_WAIT, "{played}");
+    // Automation refuses every command it is asked to admit.
+    app.services.automation_command = Some(Box::new(|_, _| Err("automation may not".into())));
+    app.services.automation_authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("automation may not".into())));
+    app.automation_input = true;
+    settle(&mut app);
+    app.automation_input = false;
+    assert_eq!(layer_names(&app), ["from the script", "after"], "status: {}", app.ui.status);
+}
+
+/// On the direct control route a playback finishes before it answers, so a script step, which
+/// needs frames to run, is refused there rather than left paused behind a reply that says the
+/// action is done. No script starts.
+#[test]
+fn a_script_step_is_refused_where_playback_must_finish_before_it_answers() {
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Run("layer.new.layer", json!({"name": "from the script"}))]], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Scripted",
+            vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"})), ActionStep::new("layer.new.layer", json!({"name": "after"}))],
+        ))
+        .unwrap();
+    app.programmatic_playback = true;
+    let played = app.run("actions.play", json!({"action": "Scripted"}));
+    app.programmatic_playback = false;
+    let played = played.map_or_else(|e| json!({"error": e}), |v| v);
+    assert!(played.get("paused").is_none(), "{played}");
+    assert!(played.to_string().contains("script"), "the reply says why: {played}");
+    assert!(log.starts.borrow().is_empty(), "no script started");
+    assert!(!app.scripts.running());
+    settle(&mut app);
+    assert!(layer_names(&app).is_empty(), "nothing after the step ran: {:?}", layer_names(&app));
 }
 
 #[test]
@@ -631,6 +730,7 @@ fn duplicating_a_group_counts_every_layer_it_copies() {
     assert!(err.contains("layers"), "{err}");
     // So does a move that copies the group; one that only moves it makes nothing.
     assert_eq!(commands.copies("layer.moveTo", Some(serial), &json!({"layer": group, "copy": true})), 3);
+    assert_eq!(commands.copies("layer.moveTo", Some(serial), &json!({"layer": group})), 0, "a plain move is not walked");
     let copy = json!({"layer": group, "target": group, "position": "above", "copy": true, ON_DOCUMENT: serial});
     let err = commands.execute("layer.moveTo", copy).unwrap_err();
     assert!(err.contains("layers"), "{err}");
