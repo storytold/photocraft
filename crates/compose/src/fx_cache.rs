@@ -454,38 +454,39 @@ fn anchor_follows(layer: &Layer, old: (f64, f64), new: (f64, f64), d: (i32, i32)
     })
 }
 
+/// What [`moved_maps`] found for a region.
+enum MovedMaps {
+    /// The moved-from entry's maps rebased onto the region, with the region's anchor.
+    Reused(std::sync::Arc<effects::FxMaps>, (f64, f64)),
+    /// Nothing to reuse: the maps are built afresh, from the layer's shape over the region when
+    /// the check already computed it.
+    Miss(Option<Vec<f32>>),
+}
+
 /// Maps for `layer` over `region` reused from the latest entry with the same [`move_key`]: when
 /// that entry covers an equal-size region and the layer's shape over `region` equals the one it
-/// was built from bit for bit, every map is the same array at a new origin. Returns the rebased
-/// maps with their anchor, or the shape computed for the check (a miss builds from it).
-#[allow(clippy::type_complexity)]
-fn moved_maps<A: BufferAlloc>(
-    layer: &Layer,
-    region: Rect,
-    mk: u64,
-    cx: &Ctx,
-    alloc: &A,
-) -> Result<Result<(std::sync::Arc<effects::FxMaps>, (f64, f64)), Option<Vec<f32>>>, A::Error> {
+/// was built from bit for bit, every map is the same array at a new origin.
+fn moved_maps<A: BufferAlloc>(layer: &Layer, region: Rect, mk: u64, cx: &Ctx, alloc: &A) -> Result<MovedMaps, A::Error> {
     let found = {
         let c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
         c.moves.get(&mk).and_then(|k| c.map.get(k)).and_then(|s| s.get()).map(|e| (e.maps.clone(), e.anchor))
     };
-    let Some((old, old_anchor)) = found else { return Ok(Err(None)) };
+    let Some((old, old_anchor)) = found else { return Ok(MovedMaps::Miss(None)) };
     let from = old.rect();
     if from.width() != region.width() || from.height() != region.height() {
-        return Ok(Err(None));
+        return Ok(MovedMaps::Miss(None));
     }
     let d = (region.x0.saturating_sub(from.x0), region.y0.saturating_sub(from.y0));
     let anchor = texture_ctx(layer, region, cx).anchor;
     if !anchor_follows(layer, old_anchor, anchor, d) {
-        return Ok(Err(None));
+        return Ok(MovedMaps::Miss(None));
     }
     let shape = effect_shape_with(layer, region, cx, alloc)?;
     let same = shape.len() == old.shape().len() && shape.iter().zip(old.shape()).all(|(a, b)| a.to_bits() == b.to_bits());
     if !same {
-        return Ok(Err(Some(shape)));
+        return Ok(MovedMaps::Miss(Some(shape)));
     }
-    Ok(Ok((std::sync::Arc::new(old.rebased((region.x0, region.y0))), anchor)))
+    Ok(MovedMaps::Reused(std::sync::Arc::new(old.rebased((region.x0, region.y0))), anchor))
 }
 
 fn evict_fx_cache_over_budget(key: u64) {
@@ -575,8 +576,8 @@ fn cached_effect_maps_with<A: BufferAlloc>(
                 let shape = match mk {
                     Some(mk) => match moved_maps(layer, region, mk, cx, alloc)? {
                         // The arrays are shared with the entry moved from and counted once for both.
-                        Ok((maps, anchor)) => return Ok(fill_slot(layer, maps, anchor, generation, key, cx, &slot)),
-                        Err(shape) => shape,
+                        MovedMaps::Reused(maps, anchor) => return Ok(fill_slot(layer, maps, anchor, generation, key, cx, &slot)),
+                        MovedMaps::Miss(shape) => shape,
                     },
                     None => None,
                 };
