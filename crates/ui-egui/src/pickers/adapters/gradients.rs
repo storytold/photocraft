@@ -8,7 +8,7 @@ use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
     standard_item_context_menu,
 };
-use crate::pickers::browser::browser_actions::{generic, run};
+use crate::pickers::browser::browser_actions::{expand_creation_destination, generic, run};
 use crate::pickers::browser::browser_interaction::canvas_drop_rect;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::browser::inline_rename::ItemRenameState;
@@ -40,6 +40,80 @@ fn gradient_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
         }
     }
     keys
+}
+
+fn insert_root_gradient_after(
+    state: &mut crate::pickers::state::PresetUi,
+    anchor: Option<&crate::pickers::browser::selection::SelectionTarget>,
+    existing_root_items: &[String],
+    name: &str,
+) {
+    use crate::pickers::browser::selection::SelectionTarget;
+
+    let mut root = state.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
+    let entry = HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: name.into() };
+    root.retain(|existing| existing != &entry);
+    let represented: std::collections::BTreeSet<&str> = root
+        .iter()
+        .filter_map(|entry| match entry {
+            HierarchyOrderEntry::RootItem { key, .. } => Some(key.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut missing: Vec<_> = existing_root_items
+        .iter()
+        .filter(|key| key.as_str() != name && !represented.contains(key.as_str()))
+        .map(|key| HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: key.clone() })
+        .collect();
+    missing.append(&mut root);
+    let mut root = missing;
+    let after = anchor.and_then(|target| match target {
+        SelectionTarget::Item { group, key, path } if group == ROOT_ITEMS_GROUP && path.is_empty() => {
+            let selected = HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: key.clone() };
+            root.iter().position(|existing| existing == &selected).map(|index| index + 1)
+        }
+        _ => None,
+    });
+    let at = after.unwrap_or(root.len()).min(root.len());
+    root.insert(at, entry);
+    state.set_hierarchy_order("gradients", "", root);
+}
+
+fn insert_group_gradient_after(
+    state: &mut crate::pickers::state::PresetUi,
+    group: &str,
+    anchor: Option<&crate::pickers::browser::selection::SelectionTarget>,
+    existing_items: &[String],
+    name: &str,
+) {
+    use crate::pickers::browser::selection::SelectionTarget;
+
+    let mut order = state.hierarchy_order.get("gradients").and_then(|orders| orders.get(group)).cloned().unwrap_or_default();
+    let entry = HierarchyOrderEntry::Item(name.into());
+    order.retain(|existing| existing != &entry);
+    let represented: std::collections::BTreeSet<&str> = order
+        .iter()
+        .filter_map(|entry| match entry {
+            HierarchyOrderEntry::Item(key) => Some(key.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut missing: Vec<_> = existing_items
+        .iter()
+        .filter(|key| key.as_str() != name && !represented.contains(key.as_str()))
+        .map(|key| HierarchyOrderEntry::Item(key.clone()))
+        .collect();
+    missing.append(&mut order);
+    let mut order = missing;
+    let after = anchor.and_then(|target| match target {
+        SelectionTarget::Item { group: selected_group, key, path } if selected_group == group && path.is_empty() => {
+            order.iter().position(|existing| existing == &HierarchyOrderEntry::Item(key.clone())).map(|index| index + 1)
+        }
+        _ => None,
+    });
+    let at = after.unwrap_or(order.len()).min(order.len());
+    order.insert(at, entry);
+    state.set_hierarchy_order("gradients", group, order);
 }
 
 /// Draw a gradient swatch, showing transparency over the standard checkerboard.
@@ -143,10 +217,9 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 canvas,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
-                root_item_group: Some(ROOT_ITEMS_GROUP),
+                root_item_group: Some(ROOT_ITEMS_GROUP.to_owned()),
             },
             // Cross-group membership uses the Gradient domain command; sibling/group order is saved
             // in the canonical picker layout state.
@@ -262,27 +335,71 @@ pub(crate) fn export_selected_gradients_dialog(app: &mut PhotocraftApp, names: &
 
 /// Create a gradient through the same domain-aware path from the footer or the shared panel menu.
 pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::state::PresetUi) {
-    let root_level = app.session.presets.gradients.iter().all(|group| group.name == ROOT_ITEMS_GROUP);
-    let destination_group = if root_level {
-        ROOT_ITEMS_GROUP.to_owned()
-    } else {
-        app.session
-            .presets
-            .gradients
-            .iter()
-            .find(|group| group.name != ROOT_ITEMS_GROUP)
-            .map(|group| group.name.clone())
-            .unwrap_or_else(|| ROOT_ITEMS_GROUP.to_owned())
+    use crate::pickers::browser::selection::SelectionTarget;
+    let anchor = state.browser_selection_snapshot.get("gradients").and_then(|selection| selection.targets.last().cloned()).or_else(|| {
+        if let Some(key) = state.selected.get("gradients") {
+            let group = state
+                .selected_group
+                .get("gradients")
+                .cloned()
+                .or_else(|| app.session.presets.gradients.iter().find(|g| g.items.iter().any(|item| &item.name == key)).map(|g| g.name.clone()))?;
+            Some(SelectionTarget::Item { group, path: Vec::new(), key: key.clone() })
+        } else {
+            state.selected_group.get("gradients").cloned().map(SelectionTarget::Group)
+        }
+    });
+    let root_anchor = anchor.clone();
+    let (destination_group, destination_folder, insertion_index) = match anchor {
+        Some(SelectionTarget::Group(group)) => {
+            let len = app.session.presets.gradients.iter().find(|g| g.name == group).map_or(0, |g| g.items.len());
+            (group, Vec::new(), len)
+        }
+        Some(SelectionTarget::Folder { group, path }) => {
+            let len = app.session.presets.gradients.iter().find(|g| g.name == group).map_or(0, |g| g.items.len());
+            (group, path, len)
+        }
+        Some(SelectionTarget::Item { group, key, .. }) => {
+            let index = app
+                .session
+                .presets
+                .gradients
+                .iter()
+                .find(|g| g.name == group)
+                .and_then(|g| g.items.iter().position(|item| item.name == key))
+                .map_or(0, |i| i + 1);
+            (group, Vec::new(), index)
+        }
+        None => {
+            (ROOT_ITEMS_GROUP.to_owned(), Vec::new(), app.session.presets.gradients.iter().find(|g| g.name == ROOT_ITEMS_GROUP).map_or(0, |g| g.items.len()))
+        }
     };
+    let root_level = destination_group == ROOT_ITEMS_GROUP;
     if let Some(result) = run(app, "gradient.presets.new", json!({"name": "Custom", "group": destination_group})) {
         let name = result.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
         if !name.is_empty() {
-            state.set_selected_item("gradients", &destination_group, &[], &name);
-            if root_level {
-                let mut root = state.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
-                root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: name.clone() });
-                state.set_hierarchy_order("gradients", "", root);
+            let len = app.session.presets.gradients.iter().find(|g| g.name == destination_group).map_or(0, |g| g.items.len());
+            if insertion_index < len.saturating_sub(1) {
+                let _ = run(
+                    app,
+                    "gradient.presets.edit",
+                    json!({"action":"move", "preset":name, "group":destination_group, "to":destination_group, "index":insertion_index}),
+                );
             }
+            state.clear_browser_selection("gradients");
+            state.set_selected_item("gradients", &destination_group, &[], &name);
+            let group_items = app
+                .session
+                .presets
+                .gradients
+                .iter()
+                .find(|group| group.name == destination_group)
+                .map_or_else(Vec::new, |group| group.items.iter().map(|item| item.name.clone()).collect());
+            if root_level {
+                insert_root_gradient_after(state, root_anchor.as_ref(), &group_items, &name);
+            } else {
+                insert_group_gradient_after(state, &destination_group, root_anchor.as_ref(), &group_items, &name);
+            }
+            expand_creation_destination(state, "gradients", &destination_group, &destination_folder);
             state.item_renaming = Some(ItemRenameState {
                 panel: "gradients".into(),
                 group: destination_group,
@@ -297,26 +414,68 @@ pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::
 
 /// Create a named preset after the panel's New Gradient Preset dialog is accepted.
 fn create_named_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::state::PresetUi, name: &str) {
-    let selected_group = state.selected_group.get("gradients").cloned().or_else(|| {
-        state
-            .selected
-            .get("gradients")
-            .and_then(|key| app.session.presets.gradients.iter().find(|group| group.items.iter().any(|item| &item.name == key)).map(|group| group.name.clone()))
+    use crate::pickers::browser::selection::SelectionTarget;
+    let anchor = state.browser_selection_snapshot.get("gradients").and_then(|selection| selection.targets.last().cloned()).or_else(|| {
+        if let Some(key) = state.selected.get("gradients") {
+            let group = state
+                .selected_group
+                .get("gradients")
+                .cloned()
+                .or_else(|| app.session.presets.gradients.iter().find(|g| g.items.iter().any(|item| &item.name == key)).map(|g| g.name.clone()))?;
+            Some(SelectionTarget::Item { group, path: Vec::new(), key: key.clone() })
+        } else {
+            state.selected_group.get("gradients").cloned().map(SelectionTarget::Group)
+        }
     });
-    let destination_group = selected_group
-        .filter(|group| group != ROOT_ITEMS_GROUP)
-        .or_else(|| app.session.presets.gradients.iter().find(|group| group.name != ROOT_ITEMS_GROUP).map(|group| group.name.clone()))
-        .unwrap_or_else(|| ROOT_ITEMS_GROUP.to_owned());
+    let root_anchor = anchor.clone();
+    let (destination_group, destination_folder, insertion_index) = match anchor {
+        Some(SelectionTarget::Group(group)) => {
+            (group.clone(), Vec::new(), app.session.presets.gradients.iter().find(|g| g.name.as_str() == group.as_str()).map_or(0, |g| g.items.len()))
+        }
+        Some(SelectionTarget::Folder { group, path }) => {
+            (group.clone(), path, app.session.presets.gradients.iter().find(|g| g.name.as_str() == group.as_str()).map_or(0, |g| g.items.len()))
+        }
+        Some(SelectionTarget::Item { group, key, .. }) => {
+            let index = app
+                .session
+                .presets
+                .gradients
+                .iter()
+                .find(|g| g.name.as_str() == group.as_str())
+                .and_then(|g| g.items.iter().position(|item| item.name == *key))
+                .map_or(0, |i| i + 1);
+            (group.clone(), Vec::new(), index)
+        }
+        None => {
+            (ROOT_ITEMS_GROUP.to_owned(), Vec::new(), app.session.presets.gradients.iter().find(|g| g.name == ROOT_ITEMS_GROUP).map_or(0, |g| g.items.len()))
+        }
+    };
     let root_level = destination_group == ROOT_ITEMS_GROUP;
     if let Some(result) = run(app, "gradient.presets.new", json!({"name": name, "group": destination_group})) {
         let created_name = result.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
         if !created_name.is_empty() {
-            state.set_selected_item("gradients", &destination_group, &[], &created_name);
-            if root_level {
-                let mut root = state.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
-                root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: created_name.clone() });
-                state.set_hierarchy_order("gradients", "", root);
+            if insertion_index + 1 < app.session.presets.gradients.iter().find(|g| g.name == destination_group).map_or(0, |g| g.items.len()) {
+                let _ = run(
+                    app,
+                    "gradient.presets.edit",
+                    json!({"action":"move", "preset":created_name, "group":destination_group, "to":destination_group, "index":insertion_index}),
+                );
             }
+            state.clear_browser_selection("gradients");
+            state.set_selected_item("gradients", &destination_group, &[], &created_name);
+            let group_items = app
+                .session
+                .presets
+                .gradients
+                .iter()
+                .find(|group| group.name == destination_group)
+                .map_or_else(Vec::new, |group| group.items.iter().map(|item| item.name.clone()).collect());
+            if root_level {
+                insert_root_gradient_after(state, root_anchor.as_ref(), &group_items, &created_name);
+            } else {
+                insert_group_gradient_after(state, &destination_group, root_anchor.as_ref(), &group_items, &created_name);
+            }
+            expand_creation_destination(state, "gradients", &destination_group, &destination_folder);
         }
     }
 }
@@ -349,7 +508,87 @@ mod tests {
     use super::{ROOT_ITEMS_GROUP, gradients_panel};
     use crate::PhotocraftApp;
     use crate::pickers::browser::asset_browser::last_group_headers;
+    use crate::pickers::browser::browser_actions::expand_creation_destination;
     use crate::pickers::state::HierarchyOrderEntry;
+
+    fn expand_gradient_groups(app: &mut PhotocraftApp) {
+        app.ui.presets_ui.expanded_groups.extend(
+            app.session
+                .presets
+                .gradients
+                .iter()
+                .filter(|group| group.name != ROOT_ITEMS_GROUP)
+                .map(|group| format!("gradients/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))),
+        );
+        app.ui.presets_ui.group_expansion_version = 1;
+    }
+
+    #[test]
+    fn expanding_a_nested_gradient_destination_changes_only_its_ancestor_path() {
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_hierarchy_order(
+            "gradients",
+            "",
+            vec![HierarchyOrderEntry::Group("Parent".into()), HierarchyOrderEntry::Group("Sibling".into()), HierarchyOrderEntry::Group("Other".into())],
+        );
+        state.set_hierarchy_order("gradients", "Parent", vec![HierarchyOrderEntry::Group("Child".into())]);
+        state.expanded_groups.insert("gradients/Sibling".into());
+        state.toggled.insert("gradients/Child/Folder%2FName".into());
+
+        expand_creation_destination(&mut state, "gradients", "Child", &["Folder/Name".into()]);
+
+        assert!(state.expanded_groups.contains("gradients/Parent"));
+        assert!(state.expanded_groups.contains("gradients/Child"));
+        assert!(state.expanded_groups.contains("gradients/Sibling"), "an unrelated open group remains open");
+        assert!(!state.expanded_groups.contains("gradients/Other"), "an unrelated closed group remains closed");
+        assert!(!state.toggled.contains("gradients/Child/Folder%2FName"), "the destination folder is expanded too");
+    }
+
+    #[test]
+    fn creating_a_root_gradient_inserts_its_hierarchy_token_after_the_selected_card() {
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_hierarchy_order(
+            "gradients",
+            "",
+            vec![
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Root A".into() },
+                HierarchyOrderEntry::Group("Basics".into()),
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Root B".into() },
+            ],
+        );
+        let anchor = crate::pickers::browser::selection::SelectionTarget::Item { group: ROOT_ITEMS_GROUP.into(), path: Vec::new(), key: "Root B".into() };
+
+        super::insert_root_gradient_after(&mut state, Some(&anchor), &["Root A".into(), "Root B".into()], "Created");
+
+        assert_eq!(
+            state.hierarchy_order["gradients"][""],
+            [
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Root A".into() },
+                HierarchyOrderEntry::Group("Basics".into()),
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Root B".into() },
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Created".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn creating_a_root_gradient_repairs_missing_root_tokens_before_inserting_after_the_anchor() {
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_hierarchy_order("gradients", "", vec![HierarchyOrderEntry::Group("Basics".into())]);
+        let anchor = crate::pickers::browser::selection::SelectionTarget::Item { group: ROOT_ITEMS_GROUP.into(), path: Vec::new(), key: "Root B".into() };
+
+        super::insert_root_gradient_after(&mut state, Some(&anchor), &["Root A".into(), "Root B".into()], "Created");
+
+        assert_eq!(
+            state.hierarchy_order["gradients"][""],
+            [
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Root A".into() },
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Root B".into() },
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Created".into() },
+                HierarchyOrderEntry::Group("Basics".into()),
+            ]
+        );
+    }
 
     #[test]
     fn export_selection_includes_cards_from_selected_groups_and_mixed_selections() {
@@ -390,6 +629,10 @@ mod tests {
         h.event(Event::PointerButton { pos: create, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(4);
 
+        assert!(h.query_by_label("Name").is_some(), "creating a gradient from the footer must open the name dialog");
+        h.get_by_label("OK").click();
+        h.run_steps(4);
+
         let library = &h.state().session.presets.gradients;
         assert_eq!(library.len(), 1);
         assert_eq!(library[0].name, ROOT_ITEMS_GROUP);
@@ -416,6 +659,141 @@ mod tests {
         h.run_steps(3);
         assert!(last_group_headers(&h.ctx, "gradients").is_empty(), "root placement must come from the saved gradient library, not transient UI state");
         assert!(h.query_all_by_label("Custom").next().is_some(), "the card must stay at root even when picker layout state is reset");
+    }
+
+    #[test]
+    fn creating_a_gradient_after_a_multi_selection_uses_the_last_selected_card_not_a_group() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for group in app.session.presets.gradients.clone() {
+            app.run("gradient.presets.edit", serde_json::json!({"action":"deleteGroup", "group":group.name})).unwrap();
+        }
+        app.run("gradient.presets.edit", serde_json::json!({"action":"newGroup", "name":"Basics"})).unwrap();
+        for name in ["First", "Second", "Third"] {
+            app.run("gradient.presets.new", serde_json::json!({"group":"Basics", "name":name})).unwrap();
+        }
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_selected_item("gradients", "Basics", &[], "First");
+        state.select_browser_node("gradients", crate::pickers::browser::path_identity_model::PickerId::from("old-first"), false);
+        state.select_browser_node("gradients", crate::pickers::browser::path_identity_model::PickerId::from("old-second"), true);
+        state.browser_selection_snapshot.insert(
+            "gradients".into(),
+            crate::pickers::browser::selection::BrowserSelection {
+                targets: vec![
+                    crate::pickers::browser::selection::SelectionTarget::Item { group: "Basics".into(), path: Vec::new(), key: "First".into() },
+                    crate::pickers::browser::selection::SelectionTarget::Item { group: "Basics".into(), path: Vec::new(), key: "Second".into() },
+                ],
+                ..Default::default()
+            },
+        );
+
+        super::new_gradient(&mut app, &mut state);
+
+        let names =
+            app.session.presets.gradients.iter().find(|group| group.name == "Basics").unwrap().items.iter().map(|item| item.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, ["First", "Second", "Custom", "Third"]);
+        assert_eq!(state.selected.get("gradients").map(String::as_str), Some("Custom"));
+        assert_eq!(state.selected_group.get("gradients").map(String::as_str), Some("Basics"));
+        assert!(state.selected_group_path.get("gradients").is_some_and(Vec::is_empty));
+        assert!(state.browser_selection.get("gradients").is_none_or(|selected| selected.is_empty()));
+        assert!(!state.browser_selection_snapshot.contains_key("gradients"));
+    }
+
+    #[test]
+    fn creating_a_gradient_after_a_single_selected_card_inserts_immediately_after_it() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for group in app.session.presets.gradients.clone() {
+            app.run("gradient.presets.edit", serde_json::json!({"action":"deleteGroup", "group":group.name})).unwrap();
+        }
+        app.run("gradient.presets.edit", serde_json::json!({"action":"newGroup", "name":"Basics"})).unwrap();
+        for name in ["First", "Second", "Third"] {
+            app.run("gradient.presets.new", serde_json::json!({"group":"Basics", "name":name})).unwrap();
+        }
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_selected_item("gradients", "Basics", &[], "First");
+
+        super::new_gradient(&mut app, &mut state);
+
+        let names: Vec<_> =
+            app.session.presets.gradients.iter().find(|group| group.name == "Basics").unwrap().items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, ["First", "Custom", "Second", "Third"]);
+        assert_eq!(
+            state.hierarchy_order["gradients"]["Basics"],
+            [
+                HierarchyOrderEntry::Item("First".into()),
+                HierarchyOrderEntry::Item("Custom".into()),
+                HierarchyOrderEntry::Item("Second".into()),
+                HierarchyOrderEntry::Item("Third".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn creating_a_root_gradient_after_a_selected_card_preserves_the_mixed_root_sequence() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for group in app.session.presets.gradients.clone() {
+            app.run("gradient.presets.edit", serde_json::json!({"action":"deleteGroup", "group":group.name})).unwrap();
+        }
+        for name in ["First", "Second", "Third"] {
+            app.run("gradient.presets.new", serde_json::json!({"group":ROOT_ITEMS_GROUP, "name":name})).unwrap();
+        }
+        app.run("gradient.presets.edit", serde_json::json!({"action":"newGroup", "name":"Basics"})).unwrap();
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_hierarchy_order("gradients", "", vec![HierarchyOrderEntry::Group("Basics".into())]);
+        state.set_selected_item("gradients", ROOT_ITEMS_GROUP, &[], "First");
+
+        super::new_gradient(&mut app, &mut state);
+
+        let names: Vec<_> =
+            app.session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP).unwrap().items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, ["First", "Custom", "Second", "Third"]);
+        assert_eq!(
+            state.hierarchy_order["gradients"][""],
+            [
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "First".into() },
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Custom".into() },
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Second".into() },
+                HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: "Third".into() },
+                HierarchyOrderEntry::Group("Basics".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn creating_a_named_gradient_replaces_the_previous_selection() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for group in app.session.presets.gradients.clone() {
+            app.run("gradient.presets.edit", serde_json::json!({"action":"deleteGroup", "group":group.name})).unwrap();
+        }
+        app.run("gradient.presets.edit", serde_json::json!({"action":"newGroup", "name":"Basics"})).unwrap();
+        for name in ["First", "Second"] {
+            app.run("gradient.presets.new", serde_json::json!({"group":"Basics", "name":name})).unwrap();
+        }
+        let mut state = crate::pickers::state::PresetUi::default();
+        state.set_selected_item("gradients", "Basics", &[], "First");
+        state.select_browser_node("gradients", crate::pickers::browser::path_identity_model::PickerId::from("old-first"), false);
+        state.select_browser_node("gradients", crate::pickers::browser::path_identity_model::PickerId::from("old-second"), true);
+        state.browser_selection_snapshot.insert(
+            "gradients".into(),
+            crate::pickers::browser::selection::BrowserSelection {
+                targets: vec![
+                    crate::pickers::browser::selection::SelectionTarget::Item { group: "Basics".into(), path: Vec::new(), key: "First".into() },
+                    crate::pickers::browser::selection::SelectionTarget::Item { group: "Basics".into(), path: Vec::new(), key: "Second".into() },
+                ],
+                ..Default::default()
+            },
+        );
+
+        super::create_named_gradient(&mut app, &mut state, "Named");
+
+        assert_eq!(state.selected.get("gradients").map(String::as_str), Some("Named"));
+        assert_eq!(state.selected_group.get("gradients").map(String::as_str), Some("Basics"));
+        assert!(state.selected_group_path.get("gradients").is_some_and(Vec::is_empty));
+        assert_eq!(
+            state.hierarchy_order["gradients"]["Basics"],
+            [HierarchyOrderEntry::Item("First".into()), HierarchyOrderEntry::Item("Second".into()), HierarchyOrderEntry::Item("Named".into()),]
+        );
+        assert!(state.browser_selection.get("gradients").is_none_or(|selected| selected.is_empty()));
+        assert!(!state.browser_selection_snapshot.contains_key("gradients"));
     }
 
     #[test]
@@ -474,11 +852,67 @@ mod tests {
             h.state().session.presets.gradients.iter().any(|group| group.items.iter().any(|item| item.name == "Custom")),
             "accepting the dialog creates the named gradient preset"
         );
+        assert_eq!(h.state().ui.presets_ui.selected.get("gradients").map(String::as_str), Some("Custom"));
+        assert!(h.state().ui.presets_ui.browser_selection.get("gradients").is_none_or(|selected| selected.is_empty()));
+    }
+
+    #[test]
+    fn confirming_a_gradient_in_a_collapsed_nonfirst_group_reveals_it_without_opening_others() {
+        let mut session = photocraft_engine::Session::new();
+        for group in session.presets.gradients.clone() {
+            session.execute("gradient.presets.edit", serde_json::json!({"action": "deleteGroup", "group": group.name})).unwrap();
+        }
+        session.execute("gradient.presets.edit", serde_json::json!({"action": "newGroup", "name": "Presets"})).unwrap();
+        session.execute("gradient.presets.new", serde_json::json!({"group": "Presets", "name": "First"})).unwrap();
+        session.execute("gradient.presets.edit", serde_json::json!({"action": "newGroup", "name": "Destination"})).unwrap();
+        session.execute("gradient.presets.new", serde_json::json!({"group": "Destination", "name": "Existing"})).unwrap();
+        session.execute("gradient.presets.edit", serde_json::json!({"action": "newGroup", "name": "Unrelated"})).unwrap();
+        session.execute("gradient.presets.new", serde_json::json!({"group": "Unrelated", "name": "Other"})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.ui.presets_ui.selected_group.insert("gradients".into(), "Destination".into());
+        // Open the destination before the UI click below so the test can collapse it explicitly.
+        app.ui.presets_ui.expanded_groups.insert("gradients/Destination".into());
+        let mut h = Harness::builder().with_size(vec2(420.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let headers = last_group_headers(&h.ctx, "gradients");
+        let header = headers.iter().find(|(name, _)| name == "Destination").expect("destination group is rendered").1;
+        let disclosure = egui::pos2(header.left() + 9.0, header.center().y);
+        h.event(Event::PointerMoved(disclosure));
+        h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert!(h.query_all_by_label("Existing").next().is_none(), "the destination group is genuinely collapsed in the rendered browser");
+        assert!(h.query_all_by_label("Other").next().is_none(), "the unrelated non-first group starts collapsed");
+
+        let create = h.get_by_label("Create new gradient").rect().center();
+        h.event(Event::PointerMoved(create));
+        h.event(Event::PointerButton { pos: create, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: create, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert!(h.query_by_label("Name").is_some(), "the real footer opens the new-gradient dialog");
+        h.get_by_label("OK").click();
+        h.run_steps(4);
+
+        assert!(h.query_all_by_label("Custom").next().is_some(), "the newly appended gradient card is visible without manually expanding the group");
+        assert!(h.query_all_by_label("Existing").next().is_some(), "the pre-existing card is visible after the group expands");
+        assert!(h.query_all_by_label("Other").next().is_none(), "expanding the destination must not expand unrelated groups");
     }
 
     #[test]
     fn dropping_a_gradient_before_the_first_group_moves_it_into_the_persistent_root_owner() {
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        expand_gradient_groups(&mut app);
         let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -526,7 +960,8 @@ mod tests {
     #[test]
     fn dropping_a_gradient_between_groups_or_after_the_last_group_moves_it_to_root() {
         for drop_position in ["gap_upper", "gap_lower", "root_end"] {
-            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            expand_gradient_groups(&mut app);
             let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
                 |ui, app: &mut PhotocraftApp| {
                     if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -655,7 +1090,8 @@ mod tests {
 
     #[test]
     fn dropping_a_gradient_at_the_bottom_of_a_scrolled_browser_appends_to_root() {
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        expand_gradient_groups(&mut app);
         let mut h = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -722,7 +1158,8 @@ mod tests {
 
     #[test]
     fn gradients_group_drop_before_card_persists_the_unified_order() {
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        expand_gradient_groups(&mut app);
         assert!(app.session.presets.gradients.len() >= 2, "the fixture needs two gradient groups");
         let mut h = Harness::builder().with_size(vec2(360.0, 900.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {

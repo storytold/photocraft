@@ -473,7 +473,12 @@ fn brush_menu_leading(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut cr
         requested,
     );
     if !confirmed.is_empty() {
-        let actions = crate::pickers::adapters::brushes::browser_actions_to_actions(&app.session.tools.presets, confirmed, Some(&selection));
+        let actions = crate::pickers::adapters::brushes::browser_actions_to_actions(
+            &app.session.tools.presets,
+            &app.session.tools.preset_hierarchy,
+            confirmed,
+            Some(&selection),
+        );
         crate::pickers::adapters::brushes::apply(app, actions);
         ui.close();
     }
@@ -504,8 +509,7 @@ pub(crate) fn export_selected_brushes(app: &mut PhotocraftApp, keys: &[String]) 
 
 fn brush_menu_trailing(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &crate::pickers::state::PresetUi, panel: &str) {
     if crate::menu_keys::menu_item_button(ui, tl!("Append Default Brushes…"), true).clicked() {
-        app.ui.status_error = false;
-        app.ui.status = "Built-in brush presets are already included in the library.".into();
+        crate::pickers::adapters::brush_engine_adapter::run_or_status(app, "brush.presets.appendDefault", json!({}));
         ui.close();
     }
     if crate::menu_keys::menu_item_button(ui, tl!("Import Brushes…"), true).clicked() {

@@ -158,10 +158,9 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 canvas,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
-                root_item_group: None,
+                root_item_group: groups.first().map(|group| group.name.clone()),
             },
             // Cross-group membership uses the Style domain command; sibling/group order is saved
             // in the canonical picker layout state.
@@ -240,10 +239,9 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 canvas,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
-                root_item_group: None,
+                root_item_group: groups.first().map(|group| group.name.clone()),
             },
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
@@ -402,7 +400,7 @@ pub fn select_tool_preset(app: &mut PhotocraftApp, name: &str) {
 
 /// The `tool.presets.new` params for the + button: `tool`'s own options only, so choosing the
 /// preset later leaves the other tools' settings alone.
-fn new_tool_preset_params(app: &PhotocraftApp, tool: Tool) -> Value {
+pub(crate) fn new_tool_preset_params(app: &PhotocraftApp, tool: Tool) -> Value {
     let all = serde_json::to_value(&app.ui.tool_options).unwrap_or_default();
     let own: serde_json::Map<String, Value> =
         crate::tool_reset::option_keys(tool).iter().filter_map(|k| Some(((*k).to_string(), all.get(*k)?.clone()))).collect();
@@ -677,6 +675,16 @@ mod tests {
         (app, ctx)
     }
 
+    fn expand_panel_groups(app: &mut PhotocraftApp, panel: &str, names: impl IntoIterator<Item = String>) {
+        app.ui.presets_ui.expanded_groups.extend(names.into_iter().map(|name| format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(&name))));
+        app.ui.presets_ui.group_expansion_version = 1;
+    }
+
+    fn expand_pattern_groups(app: &mut PhotocraftApp) {
+        let groups = pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups);
+        expand_panel_groups(app, "patterns", groups.into_iter().map(|group| group.name));
+    }
+
     #[test]
     fn all_preset_windows_use_shared_docking_chrome() {
         let (mut app, ctx) = app();
@@ -786,7 +794,7 @@ mod tests {
     fn nested_groups_keep_their_expansion_state_and_reject_cycles() {
         let names: Vec<String> = ["Parent", "Child", "Grandchild", "Sibling"].iter().map(|s| s.to_string()).collect();
         let mut st = PresetUi::default();
-        st.toggled.insert("gradients/Child".into()); // Child is expanded (non-default toggle).
+        st.expanded_groups.insert("gradients/Child".into());
         st.nest_group("gradients", &names, "Child", Some("Parent"));
         st.nest_group("gradients", &names, "Grandchild", Some("Child"));
         st.nest_group("gradients", &names, "Parent", Some("Grandchild")); // would create a cycle
@@ -794,7 +802,7 @@ mod tests {
         assert_eq!(st.parent_of("gradients", "Child"), Some("Parent"));
         assert_eq!(st.parent_of("gradients", "Grandchild"), Some("Child"));
         assert_eq!(st.parent_of("gradients", "Parent"), None);
-        assert!(st.toggled.contains("gradients/Child"), "moving a group must not reset its open state");
+        assert!(st.expanded_groups.contains("gradients/Child"), "moving a group must not reset its open state");
         assert_eq!(st.nested_display_order("gradients", &names), vec![(0, 0), (1, 1), (2, 2), (3, 0)]);
         let saved = serde_json::to_value(&st).unwrap();
         assert_eq!(saved["groupParent"]["gradients"]["Child"], "Parent");
@@ -803,17 +811,20 @@ mod tests {
         assert_eq!(legacy.parent_of("gradients", "Child"), Some("Parent"));
 
         st.set_hierarchy_order("gradients", "", ["Parent", "Sibling"].map(|name| HierarchyOrderEntry::Group(name.into())).to_vec());
+        st.expanded_groups.insert("gradients/Parent".into());
         st.toggled.insert("gradients/Parent/Inner".into());
         st.rename_group("gradients", "Parent", "Renamed");
         assert_eq!(st.parent_of("gradients", "Child"), Some("Renamed"));
         assert_eq!(st.hierarchy_order["gradients"][""][0], HierarchyOrderEntry::Group("Renamed".into()));
         assert!(st.toggled.contains("gradients/Renamed/Inner"));
+        assert!(st.expanded_groups.contains("gradients/Renamed"));
         assert_eq!(st.group_deletion_order("gradients", "Renamed"), ["Grandchild", "Child", "Renamed"]);
         st.delete_group("gradients", "Renamed");
         assert!(!st.hierarchy_order["gradients"].contains_key("Child"), "children of a deleted group are removed, not promoted");
         assert!(!st.hierarchy_order["gradients"].contains_key("Grandchild"));
         assert!(!st.hierarchy_order["gradients"][""].contains(&HierarchyOrderEntry::Group("Renamed".into())));
         assert!(!st.toggled.iter().any(|key| key.starts_with("gradients/Renamed")));
+        assert!(!st.expanded_groups.iter().any(|key| key.starts_with("gradients/Renamed")));
 
         // Slash-containing labels are encoded as one component so they cannot collide with a
         // group path; renaming and deleting them must preserve that distinction.
@@ -887,7 +898,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
@@ -932,7 +942,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
@@ -1014,6 +1023,7 @@ mod tests {
             items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
         }];
         let mut st = PresetUi::default();
+        st.expanded_groups.insert("compact-library/Only group".into());
         let search_calls = Rc::new(Cell::new(0));
         let search_count = Rc::clone(&search_calls);
         let mut search = move |ui: &mut egui::Ui| {
@@ -1030,7 +1040,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
@@ -1079,7 +1088,7 @@ mod tests {
         let group_path = path(&["Nested"]);
         let nested_path = path(&["Nested", "Child"]);
         let tree = hierarchy_tree(vec![(&group_path, &a), (&[], &b), (&nested_path, &c), (&group_path, &d)], 4);
-        assert!(matches!(tree.first(), Some(HierarchyNode::Group(f)) if f.path == ["Nested"] && f.count == 3));
+        assert!(matches!(tree.first(), Some(HierarchyNode::Group(f)) if f.path == ["Nested"]));
         assert!(matches!(tree.get(1), Some(HierarchyNode::Preset(item)) if item.0 == "b"));
         let Some(HierarchyNode::Group(group)) = tree.first() else { panic!("group node") };
         assert!(matches!(group.children.first(), Some(HierarchyNode::Preset(item)) if item.0 == "a"));
@@ -1103,10 +1112,10 @@ mod tests {
             ],
         };
         let tree = hierarchy_tree(group.items.iter().map(|item| (item.group_path.as_slice(), item)).collect(), 4);
-        assert!(matches!(tree.first(), Some(HierarchyNode::Group(group)) if group.path == ["Imported"] && group.count == 2));
+        assert!(matches!(tree.first(), Some(HierarchyNode::Group(group)) if group.path == ["Imported"]));
         assert!(matches!(tree.get(1), Some(HierarchyNode::Preset(item)) if item.key == "b"));
         assert!(
-            matches!(&tree[0], HierarchyNode::Group(group) if matches!(group.children.get(1), Some(HierarchyNode::Group(nested)) if nested.path == ["Imported", "Soft"] && nested.count == 1 && matches!(nested.children.first(), Some(HierarchyNode::Preset(item)) if item.key == "c")))
+            matches!(&tree[0], HierarchyNode::Group(group) if matches!(group.children.get(1), Some(HierarchyNode::Group(nested)) if nested.path == ["Imported", "Soft"] && matches!(nested.children.first(), Some(HierarchyNode::Preset(item)) if item.key == "c")))
         );
     }
 
@@ -1117,8 +1126,11 @@ mod tests {
         let (app, _) = app();
         let patterns = app.session.patterns.items.clone();
         let groups = pattern_group_views(&patterns, &app.session.presets.pattern_groups);
-        let first = groups.iter().find_map(|g| g.items.first()).expect("built-in Patterns group has an item");
+        let (first_group, first) =
+            groups.iter().find_map(|group| group.items.first().map(|item| (group.name.clone(), item))).expect("built-in Patterns group has an item");
         let (id, name) = (first.key.clone(), first.name.clone());
+        let mut initial = PresetUi::default();
+        initial.expanded_groups.insert(format!("compact-test/{}", crate::pickers::state::escape_hierarchy_key_part(&first_group)));
         let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).build_ui_state(
             move |ui, state: &mut (Option<String>, PresetUi)| {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1128,7 +1140,7 @@ mod tests {
                     state.0 = Some(id);
                 }
             },
-            (None::<String>, PresetUi::default()),
+            (None::<String>, initial),
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
@@ -1162,7 +1174,7 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
 
         h.run_steps(3);
-        assert!(h.state().1.toggled.contains(&format!("{panel}/{group}")), "later groups start collapsed");
+        assert!(!h.state().1.expanded_groups.contains(&format!("{panel}/{group}")), "groups start from explicit collapsed state");
         assert_eq!(h.state().1.display_mode(panel), crate::pickers::state::PickerDisplayMode::LargeList);
 
         let header = last_group_headers(&h.ctx, panel)
@@ -1177,16 +1189,17 @@ mod tests {
         h.run_steps(2);
 
         let key = format!("{panel}/{group}");
-        assert!(!h.state().1.toggled.contains(&key), "clicking the group expands it");
+        assert!(h.state().1.expanded_groups.contains(&key), "clicking the group expands it");
         h.run_steps(2);
-        assert!(!h.state().1.toggled.contains(&key), "the next frame must retain the expanded state");
+        assert!(h.state().1.expanded_groups.contains(&key), "the next frame must retain the expanded state");
     }
 
     #[test]
     fn patterns_panel_dispatches_selection_to_the_patterns_command() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let (app, _) = app();
+        let (mut app, _) = app();
+        expand_pattern_groups(&mut app);
         let first = pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups)
             .iter()
             .find_map(|g| g.items.first().map(|p| (p.key.clone(), p.name.clone())))
@@ -1212,10 +1225,11 @@ mod tests {
     }
 
     #[test]
-    fn patterns_panel_shows_cards_from_every_group_on_first_open() {
+    fn patterns_panel_shows_cards_from_every_explicitly_expanded_group() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let (app, _) = app();
+        let (mut app, _) = app();
+        expand_pattern_groups(&mut app);
         let groups = pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups);
         assert!(groups.len() >= 2, "the built-in pattern library has multiple groups");
         let expected: Vec<(String, String)> =
@@ -1243,7 +1257,8 @@ mod tests {
     fn patterns_panel_card_drag_updates_the_shared_card_group_sequence() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let (app, _) = app();
+        let (mut app, _) = app();
+        expand_pattern_groups(&mut app);
         let groups = pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups);
         let (group_name, first_key, first_name, second_key, second_name) = groups
             .iter()
@@ -1286,7 +1301,12 @@ mod tests {
         for (panel, draw) in
             [("styles", styles_panel as fn(&mut PhotocraftApp, &mut egui::Ui)), ("shapes", shapes_panel as fn(&mut PhotocraftApp, &mut egui::Ui))]
         {
-            let (app, _) = app();
+            let (mut app, _) = app();
+            let names = match panel {
+                "styles" => app.session.presets.styles.iter().map(|group| group.name.clone()).collect::<Vec<_>>(),
+                _ => app.session.presets.shapes.iter().map(|group| group.name.clone()).collect::<Vec<_>>(),
+            };
+            expand_panel_groups(&mut app, panel, names);
             let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
                 |ui, app: &mut PhotocraftApp| {
                     if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1377,6 +1397,7 @@ mod tests {
             items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
         }];
         let mut st = PresetUi::default();
+        st.expanded_groups.insert("consumer-actions/Only group".into());
         let mut adapter = BrowserAdapter {
             panel: "consumer-actions",
             groups: &groups,
@@ -1385,7 +1406,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
                 root_item_group: None,

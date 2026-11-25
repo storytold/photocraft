@@ -33,6 +33,9 @@ fn harness_with_state(groups: Vec<GroupView>, size: Vec2, initial_state: PresetU
 }
 
 fn harness_with_state_layout(groups: Vec<GroupView>, size: Vec2, mut initial_state: PresetUi, list: bool) -> Harness<'static, UiTestState> {
+    if initial_state.group_expansion_version == 0 && initial_state.expanded_groups.is_empty() {
+        initial_state.expanded_groups.extend(groups.iter().map(|group| format!("{PANEL}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
+    }
     initial_state.sizes.insert(PANEL.to_owned(), if list { super::MIN_THUMB } else { 40.0 });
     let mut h = Harness::builder().with_size(size).build_ui_state(
         move |ui, state: &mut UiTestState| {
@@ -53,7 +56,6 @@ fn harness_with_state_layout(groups: Vec<GroupView>, size: Vec2, mut initial_sta
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -84,6 +86,9 @@ fn harness_with_intent_capture(
     mut initial_state: PresetUi,
     list: bool,
 ) -> Harness<'static, (PresetUi, Vec<DropMoveIntent>)> {
+    if initial_state.group_expansion_version == 0 && initial_state.expanded_groups.is_empty() {
+        initial_state.expanded_groups.extend(groups.iter().map(|group| format!("{PANEL}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
+    }
     initial_state.sizes.insert(PANEL.to_owned(), if list { super::MIN_THUMB } else { 40.0 });
     let mut h = Harness::builder().with_size(size).build_ui_state(
         move |ui, state: &mut (PresetUi, Vec<DropMoveIntent>)| {
@@ -105,7 +110,6 @@ fn harness_with_intent_capture(
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -210,7 +214,7 @@ fn custom_sized_cards_flow_horizontally_even_when_list_wrapping_is_enabled() {
 fn shift_selection_spans_visible_groups_and_cards_but_skips_collapsed_group_contents() {
     let groups = vec![group("A", vec![item("a1", "Hidden card A1", &[]), item("a2", "Hidden card A2", &[])]), group("B", vec![item("b1", "Card B1", &[])])];
     let mut state = PresetUi::default();
-    state.toggled.insert(format!("{PANEL}/A"));
+    state.expanded_groups.insert(format!("{PANEL}/B"));
     let mut harness = harness_with_state(groups, vec2(520.0, 520.0), state);
     let click = |harness: &mut Harness<'static, UiTestState>, point: Pos2, modifiers: Modifiers| {
         harness.hover_at(point);
@@ -843,6 +847,7 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
     let ghost_rect = std::rc::Rc::new(std::cell::Cell::new(None::<Rect>));
     let ghost_rect_ui = ghost_rect.clone();
     let mut initial_state = PresetUi::default();
+    initial_state.expanded_groups.insert(format!("{PANEL}/A"));
     initial_state.display_modes.insert(PANEL.to_owned(), crate::pickers::state::PickerDisplayMode::SmallList);
     let mut h = Harness::builder().with_size(vec2(420.0, 420.0)).build_ui_state(
         move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
@@ -870,7 +875,6 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -932,6 +936,8 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
     let groups = vec![group("A", vec![item("a1", "A card", &[])])];
     let ghost_rect = std::rc::Rc::new(std::cell::Cell::new(None::<Rect>));
     let ghost_rect_ui = ghost_rect.clone();
+    let mut initial_state = PresetUi::default();
+    initial_state.expanded_groups.insert(format!("{PANEL}/A"));
     let mut h = Harness::builder().with_size(vec2(420.0, 420.0)).build_ui_state(
         move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
             if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -957,7 +963,6 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -976,7 +981,7 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
             let (preset_ui, actions) = state;
             actions.extend(browser(ui, preset_ui, &mut adapter, 180.0));
         },
-        (PresetUi::default(), Vec::new()),
+        (initial_state, Vec::new()),
     );
     crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
@@ -1436,6 +1441,7 @@ fn domain_active_item_does_not_select_a_card_in_a_fresh_browser() {
     let groups = vec![group("A", vec![item("a1", "A card 1", &[])])];
     let mut initial_state = PresetUi::default();
     initial_state.set_selected_item(PANEL, "A", &[], "a1");
+    initial_state.expanded_groups.insert(format!("{PANEL}/A"));
     let mut h = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
         move |ui, state: &mut (PresetUi, Vec<bool>)| {
             if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1455,7 +1461,6 @@ fn domain_active_item_does_not_select_a_card_in_a_fresh_browser() {
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -1486,6 +1491,8 @@ fn domain_active_item_does_not_select_a_card_in_a_fresh_browser() {
 #[test]
 fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
     let groups = nested_group_tree();
+    let mut initial_state = PresetUi::default();
+    initial_state.expanded_groups.extend(groups.iter().map(|group| format!("{PANEL}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
     let mut h = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
         move |ui, state: &mut UiTestState| {
             if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1503,7 +1510,6 @@ fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -1523,7 +1529,7 @@ fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
             ui.label("Shell footer");
             let _ = item_moves;
         },
-        (PresetUi::default(), Vec::new(), Vec::new()),
+        (initial_state, Vec::new(), Vec::new()),
     );
     crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
@@ -1584,6 +1590,8 @@ fn actual_root_card_selection_keeps_its_source_group_identity() {
 #[test]
 fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identity() {
     let groups = nested_group_tree();
+    let mut initial_state = with_consecutive_root_cards_from_different_groups();
+    initial_state.expanded_groups.extend(groups.iter().map(|group| format!("{PANEL}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
     let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
         move |ui, state: &mut (PresetUi, Vec<BrowserAction>, Vec<(usize, usize)>)| {
             if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1599,7 +1607,6 @@ fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identi
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    all_groups_open: true,
                     compact_context_menus: false,
                     domain_hierarchy_actions: false,
                     root_item_group: None,
@@ -1617,7 +1624,7 @@ fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identi
             };
             actions.extend(browser(ui, preset_ui, &mut adapter, 900.0));
         },
-        (with_consecutive_root_cards_from_different_groups(), Vec::new(), Vec::new()),
+        (initial_state, Vec::new(), Vec::new()),
     );
     crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
@@ -2123,7 +2130,8 @@ fn actual_open_empty_group_header_bottom_half_drops_into_the_group() {
 fn actual_closed_group_header_bottom_half_keeps_the_sibling_after_target() {
     for list in [false, true] {
         let mut initial = PresetUi::default();
-        initial.toggled.insert(format!("{PANEL}/B"));
+        initial.expanded_groups.insert(format!("{PANEL}/A"));
+        initial.expanded_groups.insert(format!("{PANEL}/C"));
         let mut h = harness_with_state_layout(vec![group("A", Vec::new()), group("B", Vec::new()), group("C", Vec::new())], vec2(520.0, 900.0), initial, list);
         let source = h.get_by_label("A").rect().center();
         let target_header = h.get_by_label("B").rect();
@@ -2917,6 +2925,10 @@ mod filter_tests {
         use egui_kittest::Harness;
 
         let groups = vec![group("A", vec![item("nested-card", "Nested item", &["Nested"])]), group("B", vec![item("root-card", "Root item", &[])])];
+        let mut initial_state = PresetUi::default();
+        initial_state
+            .expanded_groups
+            .extend(groups.iter().map(|group| format!("hierarchy-drop-test/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
         let mut h = Harness::builder().with_size(egui::vec2(420.0, 360.0)).build_ui_state(
             move |ui, state: &mut (PresetUi, Vec<CapturedMove>)| {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -2947,7 +2959,6 @@ mod filter_tests {
                         canvas: egui::Rect::NOTHING,
                         flush: false,
                         center_grid: false,
-                        all_groups_open: true,
                         compact_context_menus: false,
                         domain_hierarchy_actions: true,
                         root_item_group: None,
@@ -2965,7 +2976,7 @@ mod filter_tests {
                 };
                 let _ = browser(ui, preset_ui, &mut adapter, 300.0);
             },
-            (PresetUi::default(), Vec::new()),
+            (initial_state, Vec::new()),
         );
         crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);

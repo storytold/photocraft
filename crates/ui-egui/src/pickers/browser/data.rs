@@ -91,11 +91,14 @@ impl HierarchyOrderEntryWire {
 
 /// The complete persisted layout slice of `PresetUi`.
 ///
-/// `hierarchy_order` owns both sibling order and parentage. `toggled` stores the non-default
-/// group-open state. Parent maps and split ordering fields exist only in the serde compatibility
-/// wire format and are normalized into `hierarchy_order` when old state is read.
+/// `hierarchy_order` owns both sibling order and parentage. `expanded_groups` stores absolute
+/// group-open state; absence means collapsed. `toggled` remains the persisted collapsed-folder set
+/// and the legacy group-toggle field used only during migration. Parent maps and split ordering
+/// fields exist only in the serde compatibility wire format and are normalized on read.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PickerBrowserData {
+    pub expanded_groups: BTreeSet<String>,
+    pub group_expansion_version: u8,
     pub toggled: BTreeSet<String>,
     pub(crate) hierarchy_order: BTreeMap<String, BTreeMap<String, Vec<HierarchyOrderEntry>>>,
 }
@@ -290,9 +293,11 @@ impl Serialize for PickerBrowserData {
         let parents = normalized.parent_projection();
         let has_order = !normalized.hierarchy_order.is_empty();
         let has_parents = !parents.is_empty();
-        let field_count = 1 + (if has_order { 1 } else { 0 }) + (if has_parents { 1 } else { 0 });
+        let field_count = 3 + (if has_order { 1 } else { 0 }) + (if has_parents { 1 } else { 0 });
         let mut state = serializer.serialize_struct("PickerBrowserData", field_count)?;
         state.serialize_field("toggled", &self.toggled)?;
+        state.serialize_field("expandedGroups", &self.expanded_groups)?;
+        state.serialize_field("groupExpansionVersion", &self.group_expansion_version)?;
         if has_order {
             let wire: BTreeMap<String, BTreeMap<String, Vec<HierarchyOrderEntryWire>>> = normalized
                 .hierarchy_order
@@ -322,6 +327,10 @@ impl Serialize for PickerBrowserData {
 #[serde(default)]
 struct PickerBrowserDataWire {
     toggled: BTreeSet<String>,
+    #[serde(rename = "expandedGroups", alias = "expanded_groups")]
+    expanded_groups: BTreeSet<String>,
+    #[serde(rename = "groupExpansionVersion", alias = "group_expansion_version")]
+    group_expansion_version: u8,
     #[serde(rename = "hierarchyOrder", alias = "hierarchy_order")]
     hierarchy_order: BTreeMap<String, BTreeMap<String, Vec<HierarchyOrderEntryWire>>>,
     #[serde(rename = "groupParent", alias = "group_parent", deserialize_with = "lenient_group_parent")]
@@ -351,7 +360,8 @@ impl<'de> Deserialize<'de> for PickerBrowserData {
                 )
             })
             .collect();
-        let mut layout = Self { toggled: wire.toggled, hierarchy_order };
+        let mut layout =
+            Self { expanded_groups: wire.expanded_groups, group_expansion_version: wire.group_expansion_version, toggled: wire.toggled, hierarchy_order };
 
         // Migrate old group/item anchors first so they retain their intended position before a
         // card. Explicit hierarchyOrder membership always wins over legacy representations.

@@ -6,14 +6,14 @@ use crate::pickers::browser::context_menu::SelectionMenuModel;
 use crate::pickers::state::PresetUi;
 
 fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut PresetUi, panel: &str) {
-    let Some((asset, prefix, new_params)) = (match panel {
-        "gradients" => Some((tl!("Gradient"), "gradient.presets", serde_json::json!({"name": "Custom"}))),
-        "patterns" => Some((tl!("Pattern"), "pattern.presets", serde_json::json!({}))),
-        "swatches" => Some((tl!("Swatch"), "swatches", serde_json::json!({}))),
-        "styles" => Some((tl!("Style"), "style.presets", serde_json::json!({}))),
-        "shapes" => Some((tl!("Shape"), "shape.presets", serde_json::json!({}))),
-        "toolPresets" => Some((tl!("Tool Preset"), "tool.presets", serde_json::json!({}))),
-        "cloneSource" => Some((tl!("Clone Source"), "cloneSource", serde_json::json!({}))),
+    let Some((asset, prefix)) = (match panel {
+        "gradients" => Some((tl!("Gradient"), "gradient.presets")),
+        "patterns" => Some((tl!("Pattern"), "pattern.presets")),
+        "swatches" => Some((tl!("Swatch"), "swatches")),
+        "styles" => Some((tl!("Style"), "style.presets")),
+        "shapes" => Some((tl!("Shape"), "shape.presets")),
+        "toolPresets" => Some((tl!("Tool Preset"), "tool.presets")),
+        "cloneSource" => Some((tl!("Clone Source"), "cloneSource")),
         _ => None,
     }) else {
         return;
@@ -21,42 +21,14 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     let selection_summary = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
     let menu = SelectionMenuModel::new(&asset, &selection_summary);
 
-    let new_preset_enabled = panel != "patterns";
+    let new_preset_enabled = !matches!(panel, "patterns" | "cloneSource");
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), new_preset_enabled).clicked() {
         if panel == "gradients" {
             crate::pickers::browser::popup_dialogs::request_new_gradient_preset(ui.ctx());
         } else if panel == "swatches" {
-            if app.session.presets.swatches.iter().all(|group| group.items.is_empty()) {
-                crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, &BrowserAction::New, new_params);
-                ui.close();
-                return;
-            }
-            let selected = state.selected.get(panel).and_then(|key| {
-                let group = state
-                    .selected_group
-                    .get(panel)
-                    .or_else(|| app.session.presets.swatches.iter().find(|group| group.items.iter().any(|item| &item.name == key)).map(|group| &group.name));
-                group.map(|group| crate::pickers::browser::selection::SelectionTarget::Item {
-                    group: group.clone(),
-                    path: state.selected_group_path.get(panel).cloned().unwrap_or_default(),
-                    key: key.clone(),
-                })
-            });
-            let recent = state.recent_items.get(panel).and_then(|items| items.first()).map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
-                group: item.group.clone(),
-                path: item.group_path.clone(),
-                key: item.key.clone(),
-            });
-            let first = app.session.presets.swatches.iter().find_map(|group| {
-                group.items.first().map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
-                    group: group.name.clone(),
-                    path: Vec::new(),
-                    key: item.name.clone(),
-                })
-            });
-            crate::pickers::browser::popup_dialogs::request_copy_swatch_preset(ui.ctx(), &selection_summary, selected.or(recent).or(first));
+            crate::pickers::browser::popup_dialogs::request_new_preset(ui.ctx(), panel, &asset);
         } else {
-            crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, &BrowserAction::New, new_params);
+            crate::pickers::browser::popup_dialogs::request_new_preset(ui.ctx(), panel, &asset);
         }
         ui.close();
     }

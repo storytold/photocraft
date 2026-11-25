@@ -7,18 +7,18 @@ use photocraft_engine::paint::BrushPreset;
 use serde::{Deserialize, Serialize};
 
 pub(crate) use super::brush_engine_adapter::browser_groups;
-use super::brush_engine_adapter::brush_group_views;
 pub use super::brush_engine_adapter::{
-    Action, Renaming, UNGROUPED, apply, browser_actions_to_actions, drop_target, folder_view_key, group_key, group_view_key, grouped_presets,
-    is_ambiguous_preset_name, preset_by_identity, preview_identity, run_or_status,
+    Action, Renaming, UNGROUPED, apply, browser_actions_to_actions, browser_actions_to_actions_for_panel, drop_target, folder_view_key, group_key,
+    group_view_key, grouped_presets, is_ambiguous_preset_name, preset_by_identity, preview_identity, run_or_status,
 };
+use super::brush_engine_adapter::{active_brush_selection, project_brush_browser};
 use super::brush_engine_adapter::{
-    brush_drop_intent_to_action, brush_projection_keys, brush_root_sequence, group_label_for_key, occurrence_name, rekey_brush_hierarchy,
+    brush_drop_intent_to_actions, group_label_for_key, occurrence_name, rekey_brush_hierarchy,
 };
 use crate::PhotocraftApp;
 use crate::brush_preview;
 use crate::pickers::browser::asset_browser::{
-    self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, begin_item_rename,
+    self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, ItemPaintState, begin_item_rename,
 };
 use crate::pickers::browser::dragging_model::DropMoveIntent;
 use crate::pickers::browser::hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
@@ -52,8 +52,8 @@ pub enum BrushesView {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BrushesPanelState {
-    /// Collapsed groups: a group's label, or for a nested group the root label and its path joined
-    /// with `/` ([`crate::brushes_tab::group_view_key`]).
+    /// Compatibility projection of the shared picker's persisted collapsed paths. `PresetUi` is
+    /// authoritative; this field is never copied back into the browser's expansion state.
     pub collapsed: Vec<String>,
     /// Case-insensitive name filter.
     pub filter: String,
@@ -159,43 +159,33 @@ pub(crate) fn picker_browser_with_shell(
 
     // Keep each projection paired with its source presets. Joining by display name picks the first
     // match when two groups contain a brush with the same name, painting the wrong preview.
-    let group_views = brush_group_views(presets, hierarchy);
-    let root_sequence = brush_root_sequence(presets, hierarchy);
+    let projection = project_brush_browser(presets, hierarchy);
+    let group_views = projection.group_views;
+    let root_sequence = projection.root_sequence;
+    let groups = projection.groups;
+    let projection_keys = projection.keys;
     let view = preset_ui.brush_picker.clone();
     preset_ui.custom_item_sizes.insert(PANEL.into(), brush_picker_card_size(&view));
-    let groups: Vec<GroupView> = group_views
-        .iter()
-        .map(|group| GroupView {
-            name: group.view.name.clone(),
-            root_only: group.view.root_only,
-            items: group
-                .view
-                .items
-                .iter()
-                .map(|item| ItemView {
-                    key: item.key.clone(),
-                    // Keep the real identity label in the browser projection even when the
-                    // adapter hides its painted text; an empty label breaks card presentation.
-                    name: item.name.clone(),
-                    group_path: item.group_path.clone(),
-                })
-                .collect(),
-        })
-        .collect();
-    let projection_keys = brush_projection_keys(&groups, hierarchy);
     let mut hierarchy_actions = Vec::new();
 
+    let selected_container = preset_ui.selected_group.contains_key(PANEL)
+        && !preset_ui.selected.contains_key(PANEL)
+        && preset_ui.browser_selection.get(PANEL).is_none_or(|selection| selection.is_empty());
     match current {
         Some(name) => {
             let matching: Vec<_> = presets.iter().filter(|preset| preset.name.eq_ignore_ascii_case(name)).collect();
-            if matching.len() == 1 {
-                preset_ui.set_selected(PANEL, &preview_identity(matching[0]));
+            if selected_container {
+                // Preserve the explicit container selection made by group/folder creation.
+            } else if matching.len() == 1 {
+                preset_ui.set_selected_item(PANEL, &matching[0].group, &matching[0].folder, &preview_identity(matching[0]));
             } else {
                 preset_ui.clear_selected(PANEL);
             }
         }
         None => {
-            preset_ui.clear_selected(PANEL);
+            if !selected_container {
+                preset_ui.clear_selected(PANEL);
+            }
         }
     }
     let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
@@ -206,7 +196,6 @@ pub(crate) fn picker_browser_with_shell(
         canvas: egui::Rect::NOTHING,
         flush: false,
         center_grid: false,
-        all_groups_open: false,
         // The brush picker is an egui Area, not a parent Menu; use a normal context popup so
         // its menu actions can extend beyond the picker without being dismissed as a submenu.
         compact_context_menus: false,
@@ -218,7 +207,7 @@ pub(crate) fn picker_browser_with_shell(
             rekey_brush_hierarchy(hierarchy, projection, presets, registry);
         };
         let mut canonical_move = |intent: &DropMoveIntent, projection: &BTreeMap<PickerId, PickerNodeIdentity>| {
-            hierarchy_actions.push(brush_drop_intent_to_action(presets, hierarchy, projection, &root_sequence, intent)?);
+            hierarchy_actions.extend(brush_drop_intent_to_actions(presets, hierarchy, projection, intent)?);
             Ok(())
         };
         let mut adapter = brush_browser_adapter!(PANEL, &groups, &projection_keys, options, &mut canonical_move, &mut rekey, &mut paint_item, None);
@@ -233,7 +222,13 @@ pub(crate) fn picker_browser_with_shell(
     if browser_actions.iter().any(|action| matches!(action, BrowserAction::NewGroup)) {
         crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), PANEL);
     }
-    let mut actions = browser_actions_to_actions(presets, browser_actions, preset_ui.browser_selection_snapshot.get(PANEL));
+    let selection = preset_ui
+        .browser_selection_snapshot
+        .get(PANEL)
+        .filter(|selection| !selection.targets.is_empty())
+        .cloned()
+        .or_else(|| active_brush_selection(preset_ui, PANEL));
+    let mut actions = browser_actions_to_actions_for_panel(presets, hierarchy, PANEL, browser_actions, selection.as_ref());
     actions.extend(hierarchy_actions);
     actions
 }
@@ -354,7 +349,7 @@ fn brush_item_uses_tip_only_preview(state: ItemPaintState) -> bool {
 
 #[cfg(test)]
 mod brush_picker_presentation_tests {
-    use super::{brush_item_uses_tip_only_preview, brush_picker_card_size};
+    use super::{brush_item_uses_tip_only_preview, brush_picker_card_size, sync_brush_state_to_browser};
     use crate::pickers::browser::asset_browser::ItemPaintState;
     use crate::pickers::state::BrushPickerView;
 
@@ -389,14 +384,38 @@ mod brush_picker_presentation_tests {
         assert!(!brush_item_uses_tip_only_preview(ItemPaintState::Item { selected: true }));
         assert!(!brush_item_uses_tip_only_preview(ItemPaintState::DragGhost));
     }
+
+    #[test]
+    fn syncing_the_current_brush_does_not_overwrite_a_newly_selected_group() {
+        let presets = [photocraft_engine::paint::BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Existing brush".into(),
+            brush: Default::default(),
+            builtin: false,
+            group: "Existing group".into(),
+            folder: Vec::new(),
+            captures: Default::default(),
+        }];
+        let mut browser = crate::pickers::state::PresetUi::default();
+        browser.expanded_groups.insert("brushes/Existing group".into());
+        browser.selected_group.insert("brushes".into(), "New group".into());
+        browser.selected_group_path.insert("brushes".into(), Vec::new());
+
+        let legacy = super::BrushesPanelState { collapsed: vec!["Existing group".into()], ..Default::default() };
+        sync_brush_state_to_browser(&legacy, &mut browser, &presets, Some("Existing brush"), "brushes");
+
+        assert!(!browser.selected.contains_key("brushes"));
+        assert_eq!(browser.selected_group.get("brushes").map(String::as_str), Some("New group"));
+        assert!(browser.selected_group_path.get("brushes").is_some_and(Vec::is_empty));
+        assert!(browser.expanded_groups.contains("brushes/Existing group"), "the legacy panel projection must not overwrite restored browser expansion state");
+    }
 }
 
 /// Deepest nested group the panel draws; deeper groups show at this depth.
 pub const MAX_VIEW_DEPTH: usize = photocraft_engine::brush_preset_cmds::MAX_FOLDER_DEPTH;
 
-/// A preview slot must identify the preset occurrence, not only its display name: different groups
-/// can contain brushes with the same name and different tips/settings. The address is only a
-/// per-frame cache discriminator; the preview cache is rebuilt from the current borrowed library.
+/// A preview slot identifies the preset occurrence by its persisted ID, so duplicate display
+/// names and cloned/reordered preset vectors cannot alias one another.
 
 /// A group's content in panel order: its presets and nested groups.
 pub type Node<'a> = HierarchyNode<'a, BrushPreset>;
@@ -449,24 +468,13 @@ pub fn preset_list(
 ) -> Vec<Action> {
     const PANEL: &str = "brushes";
     sync_brush_state_to_browser(st, preset_ui, presets, current, PANEL);
-    let group_views = brush_group_views(presets, hierarchy);
-    let root_sequence = brush_root_sequence(presets, hierarchy);
+    let projection = project_brush_browser(presets, hierarchy);
+    let group_views = projection.group_views;
+    let root_sequence = projection.root_sequence;
+    let groups = projection.groups;
+    let projection_keys = projection.keys;
     let view = preset_ui.brush_picker.clone();
     preset_ui.custom_item_sizes.insert(PANEL.into(), brush_picker_card_size(&view));
-    let groups: Vec<GroupView> = group_views
-        .iter()
-        .map(|group| GroupView {
-            name: group.view.name.clone(),
-            root_only: group.view.root_only,
-            items: group
-                .view
-                .items
-                .iter()
-                .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), group_path: item.group_path.clone() })
-                .collect(),
-        })
-        .collect();
-    let projection_keys = brush_projection_keys(&groups, hierarchy);
     let mut hierarchy_actions = Vec::new();
     let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
         let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
@@ -478,7 +486,7 @@ pub fn preset_list(
             rekey_brush_hierarchy(hierarchy, projection, presets, registry);
         };
         let mut canonical_move = |intent: &DropMoveIntent, projection: &BTreeMap<PickerId, PickerNodeIdentity>| {
-            hierarchy_actions.push(brush_drop_intent_to_action(presets, hierarchy, projection, &root_sequence, intent)?);
+            hierarchy_actions.extend(brush_drop_intent_to_actions(presets, hierarchy, projection, intent)?);
             Ok(())
         };
         let mut adapter = brush_browser_adapter!(
@@ -489,7 +497,6 @@ pub fn preset_list(
                 canvas: egui::Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                all_groups_open: true,
                 compact_context_menus: false,
                 domain_hierarchy_actions: true,
                 root_item_group: None,
@@ -515,8 +522,14 @@ pub fn preset_list(
         crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), PANEL);
     }
     apply_inline_rename_actions(preset_ui, PANEL, &browser_actions);
-    sync_browser_state_to_brush_state(st, preset_ui, presets, PANEL);
-    let mut actions = browser_actions_to_actions(presets, browser_actions, preset_ui.browser_selection_snapshot.get(PANEL));
+    sync_browser_state_to_brush_state(st, preset_ui, presets, hierarchy, PANEL);
+    let selection = preset_ui
+        .browser_selection_snapshot
+        .get(PANEL)
+        .filter(|selection| !selection.targets.is_empty())
+        .cloned()
+        .or_else(|| active_brush_selection(preset_ui, PANEL));
+    let mut actions = browser_actions_to_actions_for_panel(presets, hierarchy, PANEL, browser_actions, selection.as_ref());
     actions.extend(hierarchy_actions);
     actions
 }
@@ -548,24 +561,27 @@ fn sync_brush_state_to_browser(st: &BrushesPanelState, browser: &mut PresetUi, p
         browser.sizes.insert(panel.to_string(), if st.view == BrushesView::List { asset_browser::MIN_THUMB } else { 40.0 });
     }
     browser.flatten_group_nesting(panel);
-    browser.toggled.retain(|key| !key.starts_with(&format!("{panel}/")));
-    let group_labels: Vec<String> = grouped_presets(presets).into_iter().map(|(label, _)| label).collect();
-    browser.toggled.extend(st.collapsed.iter().map(|key| {
-        let key = if group_labels.iter().any(|label| label == key) { group_view_key(key, &[]) } else { key.clone() };
-        format!("{panel}/{key}")
-    }));
+    // `PresetUi` is the persistent source of truth. The legacy `BrushesPanelState.collapsed`
+    // field is only a compatibility projection and must never overwrite restored browser state.
 
+    let selected_container = browser.selected_group.contains_key(panel)
+        && !browser.selected.contains_key(panel)
+        && browser.browser_selection.get(panel).is_none_or(|selection| selection.is_empty());
     match current {
         Some(name) => {
             let mut matching = presets.iter().filter(|preset| preset.name.eq_ignore_ascii_case(name));
-            if let Some(preset) = matching.next().filter(|_| matching.next().is_none()) {
-                browser.set_selected(panel, &preview_identity(preset));
+            if selected_container {
+                // The current tool brush is independent from the explicitly selected new group.
+            } else if let Some(preset) = matching.next().filter(|_| matching.next().is_none()) {
+                browser.set_selected_item(panel, &preset.group, &preset.folder, &preview_identity(preset));
             } else {
                 browser.clear_selected(panel);
             }
         }
         None => {
-            browser.clear_selected(panel);
+            if !selected_container {
+                browser.clear_selected(panel);
+            }
         }
     }
 
@@ -590,20 +606,34 @@ fn sync_brush_state_to_browser(st: &BrushesPanelState, browser: &mut PresetUi, p
 }
 
 /// Copy shared expansion and rename edits back into the Brushes panel's serialized state.
-fn sync_browser_state_to_brush_state(st: &mut BrushesPanelState, browser: &PresetUi, presets: &[BrushPreset], panel: &str) {
-    let group_labels: Vec<String> = grouped_presets(presets).into_iter().map(|(label, _)| label).collect();
-    let expanded_keys: Vec<String> = browser
-        .toggled
-        .iter()
-        .filter_map(|key| {
-            let key = key.strip_prefix(&format!("{panel}/"))?;
-            Some(group_labels.iter().find(|label| group_view_key(label, &[]) == key).cloned().unwrap_or_else(|| key.to_string()))
-        })
-        .collect();
-    let mut collapsed: Vec<String> = st.collapsed.iter().filter(|key| expanded_keys.contains(key)).cloned().collect();
-    for key in expanded_keys {
-        if !collapsed.contains(&key) {
-            collapsed.push(key);
+fn sync_browser_state_to_brush_state(
+    st: &mut BrushesPanelState,
+    browser: &PresetUi,
+    presets: &[BrushPreset],
+    hierarchy: &photocraft_engine::BrushPresetHierarchy,
+    panel: &str,
+) {
+    let mut collapsed = Vec::new();
+    for group in browser_groups(presets, hierarchy) {
+        let label = group.name;
+        let group_key = format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(&label));
+        if !browser.expanded_groups.contains(&group_key) {
+            collapsed.push(group_view_key(&label, &[]));
+        }
+        let mut folder_paths: Vec<Vec<String>> = hierarchy.folders.iter().filter(|folder| folder.group == label).map(|folder| folder.path.clone()).collect();
+        for item in &group.items {
+            for depth in 1..=item.group_path.len() {
+                let path = item.group_path[..depth].to_vec();
+                if !folder_paths.contains(&path) {
+                    folder_paths.push(path);
+                }
+            }
+        }
+        for folder_path in folder_paths {
+            let path = folder_path.iter().map(|part| crate::pickers::state::escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
+            if browser.toggled.contains(&format!("{group_key}/{path}")) {
+                collapsed.push(group_view_key(&label, &folder_path));
+            }
         }
     }
     st.collapsed = collapsed;
@@ -636,11 +666,21 @@ mod brush_hierarchy_identity_tests {
     use photocraft_engine::paint::BrushPreset;
     use std::collections::BTreeMap;
 
+    fn expand_brush_groups(app: &mut PhotocraftApp) {
+        let groups = super::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy);
+        app.ui
+            .presets_ui
+            .expanded_groups
+            .extend(groups.iter().map(|group| format!("brushes/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
+        app.ui.presets_ui.group_expansion_version = 1;
+    }
+
     #[test]
     fn moving_a_root_group_into_another_group_rekeys_it_as_a_folder_and_keeps_its_cards() {
         let source_group = "Source";
         let target_group = "Target";
         let preset = BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "Brush A".into(),
             brush: Default::default(),
             builtin: false,
@@ -761,7 +801,8 @@ mod brush_hierarchy_identity_tests {
         let template = app.session.tools.presets.first().cloned().expect("default brush preset template");
         app.session.tools.presets = [("Group A card", "Group A"), ("Root card", ""), ("Group B card", "Group B")]
             .into_iter()
-            .map(|(name, group)| BrushPreset { name: name.into(), group: group.into(), folder: Vec::new(), builtin: false, ..template.clone() })
+            .map(|(name, group)| BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.into(), group: group.into(), folder: Vec::new(), builtin: false, ..template.clone() })
             .collect();
         app.session.tools.preset_hierarchy = Default::default();
         let mut harness = Harness::builder().with_size(vec2(520.0, 700.0)).build_ui_state(|ui, app: &mut PhotocraftApp| brushes_tab::show(app, ui), app);
@@ -796,7 +837,8 @@ mod brush_hierarchy_identity_tests {
         let template = app.session.tools.presets.first().cloned().expect("default brush preset template");
         app.session.tools.presets = [("Root A", ""), ("Root B", ""), ("Source A", "Source"), ("Source B", "Source")]
             .into_iter()
-            .map(|(name, group)| BrushPreset { name: name.into(), group: group.into(), folder: Vec::new(), builtin: false, ..template.clone() })
+            .map(|(name, group)| BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.into(), group: group.into(), folder: Vec::new(), builtin: false, ..template.clone() })
             .collect();
         app.session.tools.preset_hierarchy = Default::default();
         let mut harness = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(|ui, app: &mut PhotocraftApp| brushes_tab::show(app, ui), app);
@@ -840,7 +882,8 @@ mod brush_hierarchy_identity_tests {
         let template = app.session.tools.presets.first().cloned().expect("default brush preset template");
         app.session.tools.presets = ["Root A", "Root B"]
             .into_iter()
-            .map(|name| BrushPreset { name: name.into(), group: String::new(), folder: Vec::new(), builtin: false, ..template.clone() })
+            .map(|name| BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.into(), group: String::new(), folder: Vec::new(), builtin: false, ..template.clone() })
             .collect();
         app.session.tools.preset_hierarchy = photocraft_engine::BrushPresetHierarchy {
             groups: vec!["Empty".into()],
@@ -915,7 +958,8 @@ mod brush_hierarchy_identity_tests {
             let template = app.session.tools.presets.first().cloned().expect("default brush preset template");
             app.session.tools.presets = ["Root A", "Root B", "Root C"]
                 .into_iter()
-                .map(|name| BrushPreset { name: name.into(), group: String::new(), folder: Vec::new(), builtin: false, ..template.clone() })
+                .map(|name| BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.into(), group: String::new(), folder: Vec::new(), builtin: false, ..template.clone() })
                 .collect();
             app.session.tools.preset_hierarchy = Default::default();
             let mut harness = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(|ui, app: &mut PhotocraftApp| brushes_tab::show(app, ui), app);
@@ -978,6 +1022,7 @@ mod brush_hierarchy_identity_tests {
             app.session.tools.presets = [("Target 1", "Target"), ("Target 2", "Target"), ("Source 1", "Source"), ("Source 2", "Source")]
                 .into_iter()
                 .map(|(name, group)| photocraft_engine::paint::BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                     name: name.into(),
                     group: group.into(),
                     folder: Vec::new(),
@@ -985,6 +1030,7 @@ mod brush_hierarchy_identity_tests {
                     ..template.clone()
                 })
                 .collect();
+            expand_brush_groups(&mut app);
 
             let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
                 |ui, app: &mut PhotocraftApp| {

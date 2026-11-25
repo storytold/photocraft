@@ -126,10 +126,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 canvas,
                 flush: true,
                 center_grid: false,
-                all_groups_open: true,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
-                root_item_group: None,
+                root_item_group: groups.first().map(|group| group.name.clone()),
             },
             // Cross-group membership uses the Swatches domain command; sibling/group order is saved
             // in the canonical picker layout state.
@@ -205,17 +204,31 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
                 app.ui.status_error = true;
             }
         }
-        BrowserAction::CopyItem { group, key, text } => match app.run("swatches.copy", json!({"group": group, "swatch": key, "name": text})) {
-            Ok(result) => {
-                if let Some(name) = result["name"].as_str() {
-                    app.ui.presets_ui.set_selected_item(PANEL, &group, &[], name);
+        BrowserAction::CopyItem { group, key, text } => {
+            let insertion_index = app
+                .session
+                .presets
+                .swatches
+                .iter()
+                .find(|g| g.name == group)
+                .and_then(|g| g.items.iter().position(|item| item.name == key))
+                .map(|index| index + 1);
+            match app.run("swatches.copy", json!({"group": group, "swatch": key, "name": text})) {
+                Ok(result) => {
+                    if let Some(name) = result["name"].as_str() {
+                        if let Some(position) = insertion_index {
+                            let _ = app.run("swatches.move", json!({"group":group, "swatch":name, "to":group, "position":position}));
+                        }
+                        app.ui.presets_ui.clear_browser_selection(PANEL);
+                        app.ui.presets_ui.set_selected_item(PANEL, &group, &[], name);
+                    }
+                }
+                Err(error) => {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
                 }
             }
-            Err(error) => {
-                app.ui.status = error;
-                app.ui.status_error = true;
-            }
-        },
+        }
         action => {
             crate::pickers::browser::browser_actions::generic(app, PANEL, "swatches", &action, json!({}));
         }
@@ -404,6 +417,15 @@ mod tests {
     /// Harness construction renders once before the test installs the app's named theme fonts.
     /// Skip only that uninitialized frame; subsequent assertions exercise the real panel.
     fn panel_after_font_setup(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+        if app.ui.presets_ui.group_expansion_version == 1 && app.ui.presets_ui.expanded_groups.is_empty() {
+            app.ui
+                .presets_ui
+                .expanded_groups
+                .extend(app.session.presets.swatches.iter().map(|group| format!("{PANEL}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))));
+            // Test-only marker: the harness calls this helper every frame, so do not reseed after
+            // a test deliberately collapses every group.
+            app.ui.presets_ui.group_expansion_version = 2;
+        }
         let installed = ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into())));
         if installed {
             panel(app, ui);
@@ -528,8 +550,69 @@ mod tests {
 
         assert!(handled);
         let group = app.session.presets.swatches.iter().find(|group| group.name == "Dark").unwrap();
-        assert_eq!(group.items.last().map(|item| item.name.as_str()), Some("Color Swatch 1"));
+        let selected = group.items.iter().position(|item| item.name == "Dark Red").unwrap();
+        assert_eq!(group.items.get(selected + 1).map(|item| item.name.as_str()), Some("Color Swatch 1"));
+        assert_eq!(app.ui.presets_ui.selected.get(PANEL).map(String::as_str), Some("Color Swatch 1"));
         assert!(app.ui.presets_ui.renaming.is_some());
+    }
+
+    #[test]
+    fn creating_a_swatch_with_a_group_selected_appends_to_that_group() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.presets_ui.browser_selection_snapshot.insert(
+            PANEL.into(),
+            crate::pickers::browser::selection::BrowserSelection {
+                targets: vec![crate::pickers::browser::selection::SelectionTarget::Group("Dark".into())],
+                ..Default::default()
+            },
+        );
+        let previous_len = app.session.presets.swatches.iter().find(|group| group.name == "Dark").unwrap().items.len();
+
+        assert!(crate::pickers::browser::browser_actions::generic(&mut app, PANEL, "swatches", &BrowserAction::New, json!({})));
+
+        let group = app.session.presets.swatches.iter().find(|group| group.name == "Dark").unwrap();
+        assert_eq!(group.items.len(), previous_len + 1);
+        assert_eq!(app.ui.presets_ui.selected_group.get(PANEL).map(String::as_str), Some("Dark"));
+        assert_eq!(app.ui.presets_ui.selected.get(PANEL).map(String::as_str), Some("Color Swatch 1"));
+    }
+
+    #[test]
+    fn creating_a_named_swatch_uses_the_confirmed_popup_name_and_selected_group() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut state = app.ui.presets_ui.clone();
+        state.browser_selection_snapshot.insert(
+            PANEL.into(),
+            crate::pickers::browser::selection::BrowserSelection {
+                targets: vec![crate::pickers::browser::selection::SelectionTarget::Group("Dark".into())],
+                ..Default::default()
+            },
+        );
+
+        assert!(crate::pickers::browser::browser_actions::generic_with_state(
+            &mut app,
+            &mut state,
+            PANEL,
+            "swatches",
+            &BrowserAction::NewNamed("Named Palette Entry".into()),
+            json!({}),
+        ));
+
+        let group = app.session.presets.swatches.iter().find(|group| group.name == "Dark").unwrap();
+        assert!(group.items.iter().any(|item| item.name == "Named Palette Entry"));
+        assert_eq!(state.selected.get(PANEL).map(String::as_str), Some("Named Palette Entry"));
+    }
+
+    #[test]
+    fn copying_a_swatch_inserts_after_its_source_and_replaces_the_selection() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.presets_ui.select_browser_node(PANEL, crate::pickers::browser::path_identity_model::PickerId::item("Dark", "Dark Red"), false);
+        handle(&mut app, BrowserAction::CopyItem { group: "Dark".into(), key: "Dark Red".into(), text: "Dark Red Copy".into() }, false);
+
+        let group = app.session.presets.swatches.iter().find(|group| group.name == "Dark").unwrap();
+        let source = group.items.iter().position(|item| item.name == "Dark Red").unwrap();
+        assert_eq!(group.items.get(source + 1).map(|item| item.name.as_str()), Some("Dark Red Copy"));
+        assert_eq!(app.ui.presets_ui.selected.get(PANEL).map(String::as_str), Some("Dark Red Copy"));
+        assert!(app.ui.presets_ui.browser_selection.get(PANEL).is_none_or(|selected| selected.is_empty()));
     }
 
     #[test]
@@ -604,8 +687,8 @@ mod tests {
         let (target_group, target_rect) = &headers[0];
         let (moving_group, moving_rect) = headers.last().unwrap();
 
-        // A group header is always a drop-onto target; sibling ordering belongs to the six-pixel gap.
-        drag(&mut h, moving_rect.center(), egui::pos2(target_rect.center().x, target_rect.top() + 1.0));
+        // The header body is the drop-onto target; its top and bottom edge bands are sibling boundaries.
+        drag(&mut h, moving_rect.center(), target_rect.center());
 
         assert_eq!(h.state().ui.presets_ui.parent_of(PANEL, moving_group), Some(target_group.as_str()));
         assert_eq!(
@@ -630,8 +713,8 @@ mod tests {
             .unwrap();
         let source_rect = h.get_by_label(&card).rect();
 
-        // A card and a group use the same drop-onto-group target semantics.
-        drag(&mut h, source_rect.center(), egui::pos2(target_rect.center().x, target_rect.top() + 1.0));
+        // A card and a group use the same drop-onto-group target semantics through the header body.
+        drag(&mut h, source_rect.center(), target_rect.center());
 
         let presets = &h.state().session.presets.swatches;
         assert!(!presets.iter().find(|group| group.name == source_group).unwrap().items.iter().any(|item| item.name == card));

@@ -44,8 +44,10 @@ fn tip16(w: u32, h: u32, seed: u32) -> GrayTile {
 }
 
 fn sampled(name: &str, group: &str, tip: GrayTile) -> BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
     let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip), ..Default::default() };
-    BrushPreset { name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
+    BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
 }
 
 fn user(s: &Session) -> Vec<BrushPreset> {
@@ -83,6 +85,7 @@ fn mixed_root_order_with_an_empty_group_round_trips_in_the_index() {
     };
     for name in ["Root A", "Root B"] {
         s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             brush: Default::default(),
             builtin: false,

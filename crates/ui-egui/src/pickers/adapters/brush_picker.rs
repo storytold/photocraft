@@ -43,7 +43,7 @@ impl Pick {
     /// Does this pick dismiss the picker? A double-click on a preset does (Photoshop), and so does
     /// anything that opens another panel or dialog.
     pub fn closes(&self) -> bool {
-        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset))
+        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset { .. }))
     }
 }
 

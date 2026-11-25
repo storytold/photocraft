@@ -220,6 +220,21 @@ fn session_subfolder_order(s: &Session, group: &str, parent: &[String]) -> Vec<S
     out
 }
 
+/// Position a child folder against direct presets in its parent. Populated folders start at
+/// their first descendant preset; empty folders use their persisted `before_item` anchor.
+fn subfolder_boundary(s: &Session, group: &str, parent: &[String], name: &str) -> usize {
+    let mut path = parent.to_vec();
+    path.push(name.to_owned());
+    if let Some(first_descendant) = s.tools.presets.iter().position(|preset| preset.group == group && preset.folder.starts_with(&path)) {
+        return first_descendant;
+    }
+    let anchor =
+        s.tools.preset_hierarchy.folders.iter().find(|folder| folder.group == group && folder.path == path).and_then(|folder| folder.before_item.as_ref());
+    anchor
+        .and_then(|name| s.tools.presets.iter().position(|preset| preset.group == group && preset.folder == parent && preset.name.eq_ignore_ascii_case(name)))
+        .unwrap_or(usize::MAX)
+}
+
 fn ensure_group_order_metadata(s: &mut Session) {
     let derived: Vec<String> = group_order(&s.tools.presets)
         .into_iter()
@@ -239,7 +254,7 @@ fn ensure_group_order_metadata(s: &mut Session) {
 
 fn ensure_folder_order_metadata(s: &mut Session, group: &str) {
     let mut derived = Vec::new();
-    for preset in s.tools.presets.iter().filter(|preset| !preset.builtin && preset.group == group) {
+    for preset in s.tools.presets.iter().filter(|preset| preset.group == group) {
         for depth in 1..=preset.folder.len().min(MAX_FOLDER_DEPTH) {
             let folder = crate::BrushPresetFolder { group: group.to_string(), path: preset.folder[..depth].to_vec(), before_item: None };
             if !derived.contains(&folder) {
@@ -373,11 +388,20 @@ pub(crate) fn rename_at(s: &mut Session, i: usize, new: &str, cmd: &str) -> Resu
 fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.move";
     let mut root_order = session_root_order(s);
-    let i = find(s, p, "name", cmd)?;
-    let before = match p.get("before") {
+    let i = p
+        .get("presetId")
+        .and_then(Value::as_str)
+        .map(|id| s.tools.presets.iter().position(|preset| preset.id == id).ok_or_else(|| bad(cmd, "no brush preset with that ID")))
+        .unwrap_or_else(|| find(s, p, "name", cmd))?;
+    let before = match p.get("beforeId").or_else(|| p.get("before")) {
         None | Some(Value::Null) => None,
         Some(_) => {
-            let b = find(s, p, "before", cmd)?;
+            let b = if p.get("beforeId").and_then(Value::as_str).is_some() {
+                let id = p["beforeId"].as_str().unwrap_or_default();
+                s.tools.presets.iter().position(|preset| preset.id == id).ok_or_else(|| bad(cmd, "no brush preset with that before ID"))?
+            } else {
+                find(s, p, "before", cmd)?
+            };
             if b == i {
                 return Err(bad(cmd, "`before` names the preset being moved"));
             }
@@ -428,7 +452,28 @@ fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`rootIndex` is only valid when moving a preset to the root, without `before`"));
     }
     let before_name = before_pr.map(|b| b.name.clone());
+    let source_group = moving.group.clone();
+    let source_folder = moving.folder.clone();
+    let source_name = moving.name.clone();
+    let leaves_source_parent = source_group != target || source_folder != target_folder;
     let mut pr = lib.remove(i);
+    if leaves_source_parent {
+        // Empty sibling folders persist their position as `before_item`. If that card leaves
+        // the parent (e.g. it is moved into a newly-created folder), retarget those folders to
+        // the next remaining direct card. Repeated moves naturally walk across a multi-selection
+        // until the anchor points at the first unselected card.
+        let next_anchor =
+            lib.iter().skip(i.min(lib.len())).find(|preset| preset.group == source_group && preset.folder == source_folder).map(|preset| preset.name.clone());
+        for folder in &mut s.tools.preset_hierarchy.folders {
+            if folder.group == source_group
+                && folder.path.len() == source_folder.len() + 1
+                && folder.path.starts_with(&source_folder)
+                && folder.before_item.as_deref().is_some_and(|anchor| anchor.eq_ignore_ascii_case(&source_name))
+            {
+                folder.before_item = next_anchor.clone();
+            }
+        }
+    }
     if pr.group != target || pr.folder != target_folder {
         pr.group = target.clone();
         pr.folder = target_folder.clone();
@@ -696,7 +741,27 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
         let leaf = new_prefix.last().cloned().unwrap_or_default();
         let mut order = session_subfolder_order(s, destination_group, destination_path);
         order.retain(|name| name != &leaf);
-        let at = before.as_ref().and_then(|anchor| order.iter().position(|name| name == anchor)).unwrap_or(order.len());
+        let at = before
+            .as_ref()
+            .and_then(|anchor| order.iter().position(|name| name == anchor))
+            .or_else(|| {
+                let anchor = before_item.as_ref()?;
+                let anchor_index =
+                    s.tools.presets.iter().position(|preset| {
+                        preset.group == *destination_group && preset.folder == *destination_path && preset.name.eq_ignore_ascii_case(anchor)
+                    })?;
+                // Existing folders whose boundary is this card (or an earlier card) already
+                // precede the card. Insert after them so a new folder occupies the card's
+                // position instead of jumping ahead of empty sibling folders anchored there.
+                order.iter().position(|name| {
+                    let boundary = subfolder_boundary(s, destination_group, destination_path, name);
+                    // A root group being placed before a card should precede folders already
+                    // anchored to that card. Moving an existing folder to the card position
+                    // retains those folders ahead of it, matching create-folder placement.
+                    if f.is_empty() { boundary >= anchor_index } else { boundary > anchor_index }
+                })
+            })
+            .unwrap_or(order.len());
         order.insert(at, leaf);
         reorder_folder_metadata(s, destination_group, destination_path, &order);
     }
@@ -739,6 +804,10 @@ fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
     if !f.is_empty() {
         if p.get("rootIndex").is_some_and(|value| !value.is_null()) {
             return Err(bad(cmd, "`rootIndex` is only valid for root groups"));
+        }
+        if p.get("beforeItem").is_some_and(|value| !value.is_null()) {
+            let parent = f[..f.len() - 1].to_vec();
+            return move_into(s, p, g.clone(), f, Some((g, parent)), cmd);
         }
         return move_folder(s, p, g, f, cmd);
     }
@@ -937,6 +1006,80 @@ fn create_group(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "group": group }))
 }
 
+/// Apply a small, validated set of hierarchy operations as one engine command. The brush browser
+/// uses this for create-folder-and-move-selection so a failed later move cannot leave a partially
+/// created group or a subset of the selection moved. Only hierarchy mutations are accepted.
+fn batch(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "brush.presets.batch";
+    let operations = p.get("operations").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`operations` must be an array"))?;
+    if operations.is_empty() || operations.len() > 256 {
+        return Err(bad(CMD, "`operations` must contain 1 to 256 operations"));
+    }
+    let original_tools = s.tools.clone();
+    let mut results = Vec::with_capacity(operations.len());
+    for (index, operation) in operations.iter().enumerate() {
+        let id = operation.get("id").and_then(Value::as_str).ok_or_else(|| bad(CMD, format!("operation {index} is missing `id`")));
+        let params = operation.get("params").filter(|value| value.is_object()).cloned().ok_or_else(|| bad(CMD, format!("operation {index} is missing object `params`")));
+        let result = match (id, params) {
+            (Ok("brush.presets.createGroup"), Ok(params)) => create_group(s, &params),
+            (Ok("brush.presets.createFolder"), Ok(params)) => create_folder(s, &params),
+            (Ok("brush.presets.move"), Ok(params)) => move_preset(s, &params),
+            (Ok("brush.presets.moveGroup"), Ok(params)) => move_group(s, &params),
+            (Ok(other), _) => Err(bad(CMD, format!("operation `{other}` is not allowed in a hierarchy batch"))),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        };
+        match result {
+            Ok(value) => results.push(value),
+            Err(error) => {
+                s.tools = original_tools;
+                return Err(bad(CMD, format!("operation {index} failed; no changes were applied: {error}")));
+            }
+        }
+    }
+    Ok(json!({ "results": results }))
+}
+
+/// Restore factory brush presets that were previously removed from the user's library.
+/// Existing presets with the same name (including edited factory presets) are left untouched.
+fn append_default(s: &mut Session, _p: &Value) -> Result<Value> {
+    let defaults = photocraft_paint::presets::builtin();
+    let mut appended = 0usize;
+    let mut hierarchy_changed = false;
+    for preset in defaults {
+        if !s.tools.presets.iter().any(|existing| existing.name.eq_ignore_ascii_case(&preset.name)) {
+            s.tools.presets.push(preset);
+            appended += 1;
+        }
+    }
+    // Factory groups must use the same persistent hierarchy representation as user-created
+    // groups. Otherwise deleting their final brush makes the group disappear, unlike a normal
+    // empty folder. Persist their folder paths as well so future factory folders behave identically.
+    for group in photocraft_paint::presets::GROUPS {
+        if !s.tools.preset_hierarchy.groups.iter().any(|existing| existing == group) {
+            s.tools.preset_hierarchy.groups.push(group.to_string());
+            hierarchy_changed = true;
+        }
+        ensure_folder_order_metadata(s, group);
+    }
+    let mut root_order = session_root_order(s);
+    // Factory brushes are presented as four groups. Treat the command as an append operation:
+    // move those groups, in factory order, after every existing root item/group.
+    for group in photocraft_paint::presets::GROUPS {
+        root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(group.to_string()));
+    }
+    for group in photocraft_paint::presets::GROUPS {
+        if has_group(s, group) {
+            root_order.push(crate::BrushPresetRootEntry::Group(group.to_string()));
+        }
+    }
+    let root_order_changed = root_order != s.tools.preset_hierarchy.root_order;
+    if appended > 0 || root_order_changed || hierarchy_changed {
+        set_root_order(s, root_order);
+        s.brush_presets_changed();
+    }
+    Ok(json!({ "appended": appended, "count": s.tools.presets.len() }))
+}
+
 macro_rules! spec {
     ($id:literal, $label:literal, $params:literal, $run:expr) => {
         CommandSpec { id: $id, label: $label, menu: &[], shortcut: None, params: $params, enabled: always, run: $run, journal: true }
@@ -946,8 +1089,10 @@ macro_rules! spec {
 /// Brush preset organisation specs.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        spec!("brush.presets.appendDefault", "Append Default Brushes", r##"{} → {appended, count}"##, append_default),
         spec!("brush.presets.createGroup", "Create Brush Group", r##"{"group":string} → {group}"##, create_group),
         spec!("brush.presets.createFolder", "Create Brush Folder", r##"{"group":string,"folder":[name] (full nested path)} → {group, folder}"##, create_folder),
+        spec!("brush.presets.batch", "Brush Hierarchy Transaction", r##"{"operations":[{ "id":brush.presets.createGroup|createFolder|move|moveGroup, "params":object }]} → {results}"##, batch),
         spec!("brush.presets.rename", "Rename Brush", r##"{"name":string,"newName":string} → {name}"##, rename),
         spec!(
             "brush.presets.move",
@@ -988,6 +1133,7 @@ mod tests {
         let mut s = Session::new();
         for (n, g) in [("A1", "Alpha"), ("A2", "Alpha"), ("A3", "Alpha"), ("B1", "Beta"), ("B2", "Beta")] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: n.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -997,6 +1143,84 @@ mod tests {
             });
         }
         s
+    }
+
+    #[test]
+    fn hierarchy_batch_rolls_back_every_prior_operation_on_failure() {
+        let mut s = with_groups();
+        let presets_before = s.tools.presets.clone();
+        let hierarchy_before = s.tools.preset_hierarchy.clone();
+        let revision_before = s.tools.presets_rev;
+
+        let result = s.execute(
+            "brush.presets.batch",
+            json!({
+                "operations": [
+                    {"id":"brush.presets.move", "params":{"name":"A1", "group":"Beta"}},
+                    {"id":"brush.presets.moveGroup", "params":{"group":"Missing group", "folder":[]}}
+                ]
+            }),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(s.tools.presets, presets_before);
+        assert_eq!(s.tools.preset_hierarchy, hierarchy_before);
+        assert_eq!(s.tools.presets_rev, revision_before);
+    }
+
+    #[test]
+    fn append_default_restores_missing_factory_presets_without_overwriting_existing_edits() {
+        let mut s = Session::new();
+        let defaults = photocraft_paint::presets::builtin();
+        let missing = defaults.last().unwrap().name.clone();
+        let edited = defaults.first().unwrap().name.clone();
+        let edited_preset = s.tools.presets.iter_mut().find(|preset| preset.name == edited).unwrap();
+        edited_preset.builtin = false;
+        edited_preset.brush.size = 123.0;
+        s.tools.presets.retain(|preset| preset.name != missing);
+
+        let result = s.execute("brush.presets.appendDefault", json!({})).unwrap();
+
+        assert_eq!(result["appended"], 1);
+        assert!(s.tools.presets.iter().any(|preset| preset.name == missing && preset.builtin));
+        let edited_preset = s.tools.presets.iter().find(|preset| preset.name == edited).unwrap();
+        assert!(!edited_preset.builtin);
+        assert_eq!(edited_preset.brush.size, 123.0);
+    }
+
+    #[test]
+    fn append_default_is_idempotent_when_all_factory_presets_are_present() {
+        let mut s = Session::new();
+        let before = s.tools.presets.len();
+
+        let result = s.execute("brush.presets.appendDefault", json!({})).unwrap();
+
+        assert_eq!(result["appended"], 0);
+        assert_eq!(s.tools.presets.len(), before);
+    }
+
+    #[test]
+    fn append_default_moves_factory_groups_to_the_end_of_the_root() {
+        let mut s = Session::new();
+        s.tools.preset_hierarchy.groups.push("User Group".into());
+        s.tools.preset_hierarchy.root_order = vec![
+            crate::BrushPresetRootEntry::Group("General".into()),
+            crate::BrushPresetRootEntry::Group("User Group".into()),
+            crate::BrushPresetRootEntry::Group("Dry Media".into()),
+        ];
+
+        s.execute("brush.presets.appendDefault", json!({})).unwrap();
+
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Group("User Group".into()),
+                crate::BrushPresetRootEntry::Group("General".into()),
+                crate::BrushPresetRootEntry::Group("Dry Media".into()),
+                crate::BrushPresetRootEntry::Group("Wet Media".into()),
+                crate::BrushPresetRootEntry::Group("Special Effects".into()),
+            ]
+        );
     }
 
     #[test]
@@ -1138,6 +1362,7 @@ mod tests {
         for (n, f) in [("S0", &[][..]), ("I1", &["Ink"][..]), ("F1", &["Ink", "Fine"][..]), ("I2", &["Ink"][..]), ("D1", &["Dry"][..])] {
             let folder = f.iter().map(|x| x.to_string()).collect();
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: n.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1245,6 +1470,7 @@ mod tests {
         for (n, f) in [("O1", &[][..]), ("B1", &["Box"][..])] {
             let folder = f.iter().map(|x| x.to_string()).collect();
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: n.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1284,6 +1510,7 @@ mod tests {
         let mut s = Session::new();
         for (name, folder) in [("A", &[][..]), ("B", &[][..]), ("C", &[][..]), ("Child item", &["Child"][..])] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1293,7 +1520,7 @@ mod tests {
             });
         }
 
-        s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Child"], "into": {"group": "Set"}, "beforeItem": "B"})).unwrap();
+        s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Child"], "beforeItem": "B"})).unwrap();
 
         let order: Vec<String> = s
             .tools
@@ -1317,6 +1544,7 @@ mod tests {
         };
         for name in ["A", "B"] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1334,6 +1562,76 @@ mod tests {
     }
 
     #[test]
+    fn moving_a_card_that_anchors_empty_folders_retargets_them_to_the_next_card() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        for name in ["A", "B", "C"] {
+            s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Parent".into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+        s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
+            groups: vec!["Parent".into()],
+            folders: vec![crate::BrushPresetFolder { group: "Parent".into(), path: vec!["Empty".into()], before_item: Some("B".into()) }],
+            root_order: vec![crate::BrushPresetRootEntry::Group("Parent".into())],
+        };
+        s.execute("brush.presets.createFolder", json!({"group":"Parent", "folder":["New"]})).unwrap();
+        s.execute("brush.presets.moveGroup", json!({"group":"Parent", "folder":["New"], "into":{"group":"Parent"}, "beforeItem":"B"})).unwrap();
+        assert_eq!(
+            s.tools.preset_hierarchy.folders.iter().map(|folder| folder.path[0].as_str()).collect::<Vec<_>>(),
+            ["Empty", "New"],
+            "new folder should occupy selected card's position after existing folders already before it"
+        );
+
+        s.execute("brush.presets.move", json!({"name":"B", "group":"Parent", "folder":["New"]})).unwrap();
+
+        assert_eq!(
+            s.tools.preset_hierarchy.folders.iter().filter(|folder| folder.group == "Parent").map(|folder| folder.before_item.as_deref()).collect::<Vec<_>>(),
+            [Some("C"), Some("C")]
+        );
+        assert_eq!(names(&s, "Parent"), ["A", "C", "B"]);
+    }
+
+    #[test]
+    fn moving_a_folder_before_a_card_inserts_it_before_other_folders_anchored_there() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
+            groups: vec!["Parent".into(), "First".into(), "Second".into()],
+            folders: vec![crate::BrushPresetFolder { group: "Parent".into(), path: vec!["Second".into()], before_item: Some("B".into()) }],
+            root_order: Vec::new(),
+        };
+        for name in ["A", "B", "C"] {
+            s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Parent".into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "First", "into": {"group": "Parent"}, "beforeItem": "B"})).unwrap();
+
+        assert_eq!(
+            s.tools.preset_hierarchy.folders.iter().filter(|folder| folder.group == "Parent").map(|folder| folder.path[0].as_str()).collect::<Vec<_>>(),
+            ["First", "Second"]
+        );
+        assert_eq!(
+            s.tools.preset_hierarchy.folders.iter().find(|folder| folder.group == "Parent" && folder.path == ["First"]).unwrap().before_item.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
     fn moving_an_empty_folder_before_another_empty_folder_reorders_folder_metadata() {
         let mut s = Session::new();
         s.tools.presets.clear();
@@ -1343,6 +1641,7 @@ mod tests {
             root_order: Vec::new(),
         };
         s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "Anchor".into(),
             brush: Default::default(),
             builtin: false,
@@ -1370,6 +1669,7 @@ mod tests {
         s.tools.preset_hierarchy = Default::default();
         for (name, group) in [("Root A", ""), ("Root B", ""), ("Grouped A", "Set"), ("Grouped B", "Set"), ("Root C", "")] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1410,6 +1710,7 @@ mod tests {
         };
         for name in ["Root A", "Root B"] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1447,6 +1748,7 @@ mod tests {
         s.tools.preset_hierarchy = Default::default();
         for name in ["Root A", "Root B", "Root C"] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1491,6 +1793,7 @@ mod tests {
         };
         for name in ["Root A", "Root B"] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1518,6 +1821,7 @@ mod tests {
         s.tools.preset_hierarchy = Default::default();
         for (name, group) in [("Root A", ""), ("Root B", ""), ("Grouped A", "Set"), ("Grouped B", "Set")] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1546,6 +1850,7 @@ mod tests {
         let mut s = Session::new();
         for (name, folder) in [("A", &[][..]), ("B", &[][..]), ("Child item", &["Child"][..])] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1572,6 +1877,7 @@ mod tests {
         let mut s = Session::new();
         for (name, folder) in [("A", &[][..]), ("Nested item", &["Nested"][..]), ("B", &[][..]), ("Child item", &["Child"][..])] {
             s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
                 name: name.into(),
                 brush: Default::default(),
                 builtin: false,
@@ -1610,6 +1916,7 @@ mod tests {
         // A chain 31 deep under Set/Deep.
         let deep: Vec<String> = std::iter::once("Deep".to_string()).chain((0..30).map(|i| format!("d{i}"))).collect();
         s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "Z".into(),
             brush: Default::default(),
             builtin: false,
@@ -1618,6 +1925,7 @@ mod tests {
             captures: Default::default(),
         });
         s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "Y".into(),
             brush: Default::default(),
             builtin: false,
@@ -1660,6 +1968,7 @@ mod tests {
         assert_eq!(folder_of(&s, "F1"), ["Fine"]);
         // An ungrouped preset's group can't move.
         s.tools.presets.push(BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "U".into(),
             brush: Default::default(),
             builtin: false,

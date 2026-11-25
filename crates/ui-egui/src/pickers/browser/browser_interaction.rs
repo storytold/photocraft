@@ -103,7 +103,6 @@ pub(super) struct NestedGroupDragGhost {
     pub(super) open: bool,
     pub(super) name: String,
     pub(super) depth: usize,
-    pub(super) count: usize,
 }
 
 pub(super) struct ItemDragGhost {
@@ -143,11 +142,11 @@ impl Painters<'_, '_> {
             if self.has_group() {
                 self.group(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
             } else {
-                crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
+                crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, GROUP_DRAG_GHOST_OPACITY);
             }
         }
         for ghost in ghosts.nested_groups {
-            let NestedGroupDragGhost { rect: ghost_rect, open, name, depth, count } = ghost;
+            let NestedGroupDragGhost { rect: ghost_rect, open, name, depth } = ghost;
             let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
             let mut ghost_ui = egui::Ui::new(
                 ui.ctx().clone(),
@@ -155,7 +154,7 @@ impl Painters<'_, '_> {
                 egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
             );
             ghost_ui.set_clip_rect(app_window_clip);
-            crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
+            crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, GROUP_DRAG_GHOST_OPACITY);
         }
         for ghost in ghosts.items {
             let ItemDragGhost { rect: ghost_rect, group_index, item_index, display_mode: ghost_mode, list_layout, selected } = ghost;

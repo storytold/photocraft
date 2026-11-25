@@ -1301,6 +1301,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
 }
 
 /// Snapshot of everything on screen, addressable by id.
+fn brush_picker_collapsed_paths(app: &PhotocraftApp) -> Vec<String> {
+    let panel = "brush-picker";
+    let mut collapsed: Vec<String> = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+        .into_iter()
+        .filter_map(|group| {
+            let key = format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name));
+            (!app.ui.presets_ui.expanded_groups.contains(&key)).then_some(group.name)
+        })
+        .collect();
+    collapsed.extend(app.ui.presets_ui.toggled.iter().filter_map(|key| key.strip_prefix("brush-picker/").filter(|path| path.contains('/')).map(str::to_owned)));
+    collapsed
+}
+
 pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let screen = ctx.content_rect();
     let mut dialogs: Vec<Value> =
@@ -1326,7 +1339,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             // The picker's content size once its corner grip was dragged (null: the default).
             "size": app.ui.brush_picker_size,
             "list": {
-                "collapsed": app.ui.presets_ui.toggled.iter().filter_map(|key| key.strip_prefix("brush-picker/").map(str::to_owned)).collect::<Vec<_>>(),
+                "collapsed": brush_picker_collapsed_paths(app),
                 "filter": app.ui.presets_ui.search.get("brush-picker").cloned().unwrap_or_default(),
                 "renaming": app.ui.presets_ui.renaming.as_ref().filter(|(panel, _, _)| panel == "brush-picker").map(|(_, key, text)| {
                     let group_name = key.strip_prefix("group:");

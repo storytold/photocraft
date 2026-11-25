@@ -20,7 +20,14 @@ pub(crate) fn show_search_bar(ui: &mut egui::Ui, state: &mut PresetUi, panel: &s
         let hint = if panel == "brush-picker" { tl!("Search Brushes").to_owned() } else { format!("Search {}{}", panel[..1].to_uppercase(), &panel[1..]) };
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("search", 14.0, tokens.text_faint));
-            ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(egui::RichText::new(hint).italics()));
+            let response = ui.add(
+                egui::TextEdit::singleline(query)
+                    .desired_width(ui.available_width())
+                    .hint_text(egui::RichText::new(hint).italics().color(tokens.text_faint.linear_multiply(0.65))),
+            );
+            if response.has_focus() {
+                ui.painter().rect_stroke(response.rect, tokens.radius_sm, egui::Stroke::new(1.0, tokens.accent_border), egui::StrokeKind::Inside);
+            }
         });
     }
 }

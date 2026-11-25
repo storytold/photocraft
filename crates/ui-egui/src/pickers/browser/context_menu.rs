@@ -179,24 +179,15 @@ fn picker_creation_actions_menu(
     ui: &mut egui::Ui,
     panel: &str,
     asset: &str,
-    groups: &[GroupView],
-    selection: &crate::pickers::state::BrowserSelectionSnapshot,
-    fallback: Option<super::selection::SelectionTarget>,
+    _groups: &[GroupView],
+    _selection: &crate::pickers::state::BrowserSelectionSnapshot,
+    _fallback: Option<super::selection::SelectionTarget>,
     events: &mut Vec<BrowserAction>,
 ) {
-    let enabled = panel != "patterns";
+    let enabled = !matches!(panel, "patterns" | "cloneSource");
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), enabled).clicked() {
         if panel == "swatches" {
-            let first = fallback.or_else(|| {
-                groups.iter().find_map(|group| {
-                    group.items.first().map(|item| super::selection::SelectionTarget::Item {
-                        group: group.name.clone(),
-                        path: item.group_path.clone(),
-                        key: item.key.clone(),
-                    })
-                })
-            });
-            crate::pickers::browser::popup_dialogs::request_copy_swatch_preset(ui.ctx(), selection, first);
+            crate::pickers::browser::popup_dialogs::request_new_preset(ui.ctx(), panel, asset);
         } else {
             events.push(BrowserAction::New);
         }
@@ -322,7 +313,11 @@ pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi
     }
     if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
         ui.separator();
+        let event_count = events.len();
         picker_creation_actions_menu(ui, panel, asset, std::slice::from_ref(group), &selection, last_selected_swatch_target(state, panel), events);
+        if events.len() > event_count && matches!(events.last(), Some(BrowserAction::New)) {
+            state.browser_selection_snapshot.insert(panel.to_owned(), selection);
+        }
     } else {
         let targets = item_context_targets(item, group, selected_items);
         let delete_label = if targets.len() > 1 { format!("{} ({})", tl!("Delete"), targets.len()) } else { tl!("Delete").to_string() };
@@ -367,7 +362,11 @@ pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetU
     }
     if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
         ui.separator();
+        let event_count = events.len();
         picker_creation_actions_menu(ui, panel, asset, std::slice::from_ref(group), &selection, last_selected_swatch_target(state, panel), events);
+        if events.len() > event_count && matches!(events.last(), Some(BrowserAction::New)) {
+            state.browser_selection_snapshot.insert(panel.to_owned(), selection);
+        }
     } else {
         match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
             Some(ContextMenuAction::Rename) => {
@@ -390,23 +389,13 @@ fn last_selected_swatch_target(state: &PresetUi, panel: &str) -> Option<super::s
     if panel != "swatches" {
         return None;
     }
-    state
-        .selected
-        .get(panel)
-        .and_then(|key| {
-            state.selected_group.get(panel).map(|group| super::selection::SelectionTarget::Item {
-                group: group.clone(),
-                path: state.selected_group_path.get(panel).cloned().unwrap_or_default(),
-                key: key.clone(),
-            })
+    state.selected.get(panel).and_then(|key| {
+        state.selected_group.get(panel).map(|group| super::selection::SelectionTarget::Item {
+            group: group.clone(),
+            path: state.selected_group_path.get(panel).cloned().unwrap_or_default(),
+            key: key.clone(),
         })
-        .or_else(|| {
-            state.recent_items.get(panel).and_then(|items| items.first()).map(|item| super::selection::SelectionTarget::Item {
-                group: item.group.clone(),
-                path: item.group_path.clone(),
-                key: item.key.clone(),
-            })
-        })
+    })
 }
 
 /// Attach a consumer-provided context menu to an egui response.

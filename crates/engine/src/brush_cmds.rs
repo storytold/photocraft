@@ -765,7 +765,11 @@ fn upsert(s: &mut Session, preset: BrushPreset) {
     let root_position =
         previous.as_ref().and_then(|previous| root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Preset(previous.name.clone())));
     match existing_index {
-        Some(index) => s.tools.presets[index] = preset.clone(),
+        Some(index) => {
+            let mut preset = preset.clone();
+            preset.id = s.tools.presets[index].id.clone();
+            s.tools.presets[index] = preset;
+        }
         None => s.tools.presets.push(preset.clone()),
     }
     if !root_order.is_empty() {
@@ -806,7 +810,8 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
     if captures.color {
         brush.color = s.tools.foreground;
     }
-    upsert(s, BrushPreset { name: name.clone(), brush, builtin: false, group: String::new(), folder: Vec::new(), captures });
+    upsert(s, BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.clone(), brush, builtin: false, group: String::new(), folder: Vec::new(), captures });
     // The saved brush is the current brush now (Photoshop selects the brush it just saved).
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
@@ -856,11 +861,20 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     for preset in &removed {
         if preset.group.is_empty() && preset.folder.is_empty() {
             s.tools.preset_hierarchy.root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Preset(preset.name.clone()));
-        } else if !preset.group.is_empty()
-            && !s.tools.presets.iter().any(|remaining| remaining.group == preset.group)
-            && !s.tools.preset_hierarchy.groups.contains(&preset.group)
-        {
-            s.tools.preset_hierarchy.root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(preset.group.clone()));
+        } else if !preset.group.is_empty() && !s.tools.presets.iter().any(|remaining| remaining.group == preset.group) {
+            let has_empty_folders = s.tools.preset_hierarchy.folders.iter().any(|folder| folder.group == preset.group);
+            if has_empty_folders {
+                // Keep the now-empty group addressable so its explicitly-created/imported folders
+                // remain visible after its last brush is deleted.
+                if !s.tools.preset_hierarchy.groups.contains(&preset.group) {
+                    s.tools.preset_hierarchy.groups.push(preset.group.clone());
+                }
+                if !s.tools.preset_hierarchy.root_order.iter().any(|entry| *entry == crate::BrushPresetRootEntry::Group(preset.group.clone())) {
+                    s.tools.preset_hierarchy.root_order.push(crate::BrushPresetRootEntry::Group(preset.group.clone()));
+                }
+            } else if !s.tools.preset_hierarchy.groups.contains(&preset.group) {
+                s.tools.preset_hierarchy.root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(preset.group.clone()));
+            }
         }
     }
     if !s.tools.presets.iter().any(|preset| !preset.builtin) && s.tools.preset_hierarchy.groups.is_empty() {
@@ -960,7 +974,8 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
-    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
+    upsert(s, BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
     s.tools.brush = brush;
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
@@ -1005,7 +1020,12 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let mut b = s.tools.brush.clone();
     let mut picked = None;
     let mut picked_color = None;
-    if let Some(name) = p.get("preset").and_then(Value::as_str) {
+    if let Some(preset_id) = p.get("presetId").and_then(Value::as_str) {
+        let preset = s.tools.presets.iter().find(|preset| preset.id == preset_id).ok_or_else(|| bad(cmd, "no brush preset with that ID"))?;
+        b = preset.picked_over(&s.tools.brush);
+        picked_color = preset.captures.color.then_some(preset.brush.color);
+        picked = Some(preset.name.clone());
+    } else if let Some(name) = p.get("preset").and_then(Value::as_str) {
         let preset = find_preset(s, name, cmd)?;
         b = preset.picked_over(&s.tools.brush);
         picked_color = preset.captures.color.then_some(preset.brush.color);
@@ -1017,7 +1037,7 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut patch = p.clone();
     if let Some(o) = patch.as_object_mut() {
-        for k in ["preset", "reset", "coalesce"] {
+        for k in ["preset", "presetId", "reset", "coalesce"] {
             o.remove(k);
         }
         if let Some(inner) = o.remove("brush") {

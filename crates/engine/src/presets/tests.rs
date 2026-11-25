@@ -737,6 +737,18 @@ fn tool_presets_save_filter_select() {
     assert!(s.execute("tool.presets.new", json!({"name": "x"})).is_err());
 }
 
+#[test]
+fn tool_presets_can_be_reordered_within_the_root_list() {
+    let mut s = Session::new();
+    s.execute("tool.presets.new", json!({"name": "First", "tool": "brush"})).unwrap();
+    s.execute("tool.presets.new", json!({"name": "Second", "tool": "brush"})).unwrap();
+
+    s.execute("tool.presets.edit", json!({"action": "move", "preset": "Second", "to": "", "index": 0})).unwrap();
+
+    let names: Vec<_> = s.presets.tool_presets.iter().map(|preset| preset.name.as_str()).collect();
+    assert!(names.iter().position(|name| *name == "Second") < names.iter().position(|name| *name == "First"));
+}
+
 /// Crop presets are `crop` tool presets: saved, listed, persisted and deleted like the others.
 #[test]
 fn crop_presets_are_tool_presets_that_persist() {

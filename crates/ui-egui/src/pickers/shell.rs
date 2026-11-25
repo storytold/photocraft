@@ -107,32 +107,7 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
                     }
                 }
                 crate::pickers::footer::FooterAction::New if panel == "swatches" => {
-                    if adapter.groups.iter().all(|group| group.items.is_empty()) {
-                        events.push(BrowserAction::New);
-                        continue;
-                    }
-                    let selected = st.selected.get(&panel).and_then(|key| {
-                        st.selected_group.get(&panel).map(|group| crate::pickers::browser::selection::SelectionTarget::Item {
-                            group: group.clone(),
-                            path: st.selected_group_path.get(&panel).cloned().unwrap_or_default(),
-                            key: key.clone(),
-                        })
-                    });
-                    let recent =
-                        st.recent_items.get(&panel).and_then(|items| items.first()).map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
-                            group: item.group.clone(),
-                            path: item.group_path.clone(),
-                            key: item.key.clone(),
-                        });
-                    let first = adapter.groups.iter().find_map(|group| {
-                        group.items.first().map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
-                            group: group.name.clone(),
-                            path: item.group_path.clone(),
-                            key: item.key.clone(),
-                        })
-                    });
-                    let selection = st.browser_selection_snapshot.get(&panel).cloned().unwrap_or_default();
-                    crate::pickers::browser::popup_dialogs::request_copy_swatch_preset(ui.ctx(), &selection, selected.or(recent).or(first));
+                    crate::pickers::browser::popup_dialogs::request_new_preset(ui.ctx(), &panel, "Swatch");
                 }
                 crate::pickers::footer::FooterAction::New => events.push(BrowserAction::New),
                 crate::pickers::footer::FooterAction::NewGroup => events.push(BrowserAction::NewGroup),
@@ -149,6 +124,14 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         events.extend(footer(ui, st));
     }
     let mut events = events;
+    if panel == "gradients" {
+        if events.iter().any(|event| matches!(event, BrowserAction::New)) {
+            events.retain(|event| !matches!(event, BrowserAction::New));
+            crate::pickers::browser::popup_dialogs::request_new_gradient_preset(ui.ctx());
+        }
+    } else if !matches!(panel.as_str(), "brushes" | "brush-picker") {
+        crate::pickers::browser::popup_dialogs::show_new_preset_dialog(ui, &panel, &mut events);
+    }
     crate::pickers::browser::popup_dialogs::show_new_group_dialog(ui, &panel, adapter.groups, &mut events);
     crate::pickers::browser::popup_dialogs::show_rename_selection_dialog(ui, &panel, adapter.groups, &mut events, adapter.paint_item);
     crate::pickers::browser::popup_dialogs::confirm_deletions(ui, &panel, adapter.groups, events)

@@ -4833,6 +4833,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
  "wat",
 ]
 
@@ -4918,6 +4919,7 @@ dependencies = [
  "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -4940,6 +4942,7 @@ dependencies = [
  "photocraft-raster",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -5069,6 +5072,7 @@ dependencies = [
  "sys-locale",
  "toml",
  "unicode-bidi",
+ "uuid",
  "winsafe",
 ]
 

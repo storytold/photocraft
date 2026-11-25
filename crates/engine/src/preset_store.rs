@@ -325,6 +325,9 @@ impl TipRefs {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredPreset {
+    /// Stable identity for this preset occurrence; absent in stores predating browser IDs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    id: String,
     name: String,
     brush: BrushSettings,
     #[serde(default)]
@@ -811,6 +814,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         let mut missing = 0;
         let mut stale = false;
         for sp in g.presets {
+            stale |= sp.id.is_empty();
             match join_tips(sp.brush, &sp.tips, &tiles) {
                 Some(brush) => {
                     for h in sp.tips.hashes() {
@@ -821,6 +825,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
                         }
                     }
                     items.push(BrushPreset {
+                        id: if sp.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { sp.id },
                         name: sp.name,
                         brush,
                         builtin: false,
@@ -1179,6 +1184,7 @@ impl PresetStore {
             let key = |r: &Option<StoredTile>| r.as_ref().map(|t| t.key.clone());
             let tips = TipRefs { tip: key(&refs[0]), dual_tip: key(&refs[1]), texture: key(&refs[2]) };
             stored.push(StoredPreset {
+                id: p.id.clone(),
                 name: p.name.clone(),
                 brush: settings_only(&mut p.brush),
                 tips,

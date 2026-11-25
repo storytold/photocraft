@@ -51,7 +51,7 @@ pub(crate) fn paint_item_name(ui: &mut egui::Ui, rename: &mut ItemRenameState, p
     None
 }
 
-/// Replace a group label with an editor while preserving its header's icons, count and hitbox.
+/// Replace a group label with an editor while preserving its header's icons and hitbox.
 pub(crate) fn paint_group_name(
     ui: &mut egui::Ui,
     rect: Rect,

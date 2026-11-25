@@ -11,7 +11,8 @@ use crate::procedural::{bristle_tip, chalk_tip, charcoal_tip, grass_tip, leaf_ti
 pub const GROUPS: [&str; 4] = ["General", "Dry Media", "Wet Media", "Special Effects"];
 
 fn preset(group: &str, name: &str, brush: BrushSettings) -> BrushPreset {
-    BrushPreset { name: name.to_string(), brush, builtin: true, group: group.to_string(), folder: Vec::new(), captures: Default::default() }
+    BrushPreset {
+            id: uuid::Uuid::new_v4().to_string(), name: name.to_string(), brush, builtin: true, group: group.to_string(), folder: Vec::new(), captures: Default::default() }
 }
 
 fn pressure() -> Dynamic {

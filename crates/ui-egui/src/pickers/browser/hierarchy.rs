@@ -23,8 +23,6 @@ pub struct HierarchyGroup<'a, T> {
     pub path: Vec<String>,
     /// Items and child groups in their original library order.
     pub children: Vec<HierarchyNode<'a, T>>,
-    /// Number of items in this group subtree, including nested groups.
-    pub count: usize,
 }
 
 /// Project ordered items and their group paths into a hierarchy, truncating paths at `max_depth`.
@@ -114,9 +112,8 @@ fn hierarchy_level<'a, T>(items: Vec<HierarchyEntry<'a, T>>, prefix: &[String]) 
             Slot::Group(i) => {
                 let (name, sub) = groups.get_mut(i)?.take()?;
                 let path: Vec<String> = prefix.iter().cloned().chain(std::iter::once(name.clone())).collect();
-                let count = sub.len();
                 let children = hierarchy_level(sub, &path);
-                Some(HierarchyNode::Group(HierarchyGroup { path, children, count }))
+                Some(HierarchyNode::Group(HierarchyGroup { path, children }))
             }
         })
         .collect()

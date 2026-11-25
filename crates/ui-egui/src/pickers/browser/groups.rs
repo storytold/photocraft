@@ -18,18 +18,19 @@ pub(crate) const ROW_INDENT: f32 = 20.0;
 pub(crate) const GROUP_HEADER_HEIGHT: f32 = 29.0;
 const TREE_LEFT_INSET: f32 = 1.0;
 
-/// Initial expansion policy for a browser group, with explicit user toggles overriding the default.
-pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, all_groups_open: bool) -> bool {
-    (index == 0 || all_groups_open) != st.toggled.contains(&format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(name)))
+/// Group expansion is explicit persisted state. No picker or group position supplies an implicit
+/// default; a group is open only when its stable key is present in `expanded_groups`.
+pub(crate) fn group_open(st: &PresetUi, panel: &str, name: &str) -> bool {
+    st.expanded_groups.contains(&format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(name)))
 }
 
 /// Shared collapsible group row. The caller owns toggle state and context actions.
-pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, count: Option<usize>, height: f32, selected: bool) -> (Rect, egui::Response) {
+pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, height: f32, selected: bool) -> (Rect, egui::Response) {
     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
     let response = ui.interact(inset_row_rect(rect, depth), allocated.id, Sense::click_and_drag());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    paint_with_selection(ui, rect, open, name, depth, false, count, selected);
+    paint_with_selection(ui, rect, open, name, depth, false, selected);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, name));
     (rect, response)
 }
@@ -52,11 +53,11 @@ pub(crate) fn nested_header(
         Rect::from_min_max(nested_header_rect.min, pos2((nested_header_rect.left() + 18.0).min(nested_header_rect.right()), nested_header_rect.bottom()));
     let disclosure = ui.interact(disclosure_rect, response.id.with("disclosure"), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.path.last().map(String::as_str).unwrap_or("")));
-    paint_with_selection(ui, rect, open, group.path.last().map(String::as_str).unwrap_or(""), row_depth, response.hovered(), Some(group.count), selected);
+    paint_with_selection(ui, rect, open, group.path.last().map(String::as_str).unwrap_or(""), row_depth, response.hovered(), selected);
     (rect, response, disclosure, row_depth)
 }
 
-fn paint_with_selection(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, _hovered: bool, count: Option<usize>, selected: bool) {
+fn paint_with_selection(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, _hovered: bool, selected: bool) {
     let tokens = Tokens::get(ui.ctx());
     let (surface_contrast, text_contrast) =
         if tokens.dark() { (DARK_SURFACE_CONTRAST, DARK_TEXT_CONTRAST) } else { (LIGHT_SURFACE_CONTRAST, LIGHT_TEXT_CONTRAST) };
@@ -67,7 +68,6 @@ fn paint_with_selection(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth
         open,
         name,
         depth,
-        count,
         if selected { tokens.picker_selection() } else { colors.background },
         colors.foreground,
         tokens.card_border,
@@ -75,23 +75,13 @@ fn paint_with_selection(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth
 }
 
 /// Paint the same header at a reduced opacity for its drag preview.
-pub(crate) fn paint_with_opacity(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, count: Option<usize>, opacity: f32) {
+pub(crate) fn paint_with_opacity(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, opacity: f32) {
     let tokens = Tokens::get(ui.ctx());
     let (surface_contrast, text_contrast) =
         if tokens.dark() { (DARK_SURFACE_CONTRAST, DARK_TEXT_CONTRAST) } else { (LIGHT_SURFACE_CONTRAST, LIGHT_TEXT_CONTRAST) };
     let colors = crate::color_utils::contrasting_surface_colors(tokens.card, tokens.dark(), surface_contrast, text_contrast);
     let with_opacity = |color| crate::color_utils::with_opacity(color, opacity);
-    paint_header_contents(
-        ui,
-        rect,
-        open,
-        name,
-        depth,
-        count,
-        with_opacity(colors.background),
-        with_opacity(colors.foreground),
-        with_opacity(tokens.card_border),
-    );
+    paint_header_contents(ui, rect, open, name, depth, with_opacity(colors.background), with_opacity(colors.foreground), with_opacity(tokens.card_border));
 }
 
 fn paint_header_contents(
@@ -100,7 +90,6 @@ fn paint_header_contents(
     open: bool,
     name: &str,
     depth: usize,
-    count: Option<usize>,
     background: egui::Color32,
     foreground: egui::Color32,
     border: egui::Color32,
@@ -132,9 +121,6 @@ fn paint_header_contents(
         foreground,
     );
     ui.painter().text(pos2(content_left + 38.0, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(11.5), foreground);
-    if let Some(count) = count {
-        ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, count.to_string(), egui::FontId::proportional(11.0), foreground);
-    }
 }
 
 pub(crate) fn row_indent(depth: usize) -> f32 {
@@ -164,24 +150,17 @@ mod tests {
     }
 
     #[test]
-    fn every_root_group_toggle_combination_overrides_each_default_independently() {
+    fn every_root_group_has_an_independent_explicit_expansion_state() {
         let names = ["Gradients", "Favorites", "Recent", "Imported", "Custom"];
-        for all_groups_open in [false, true] {
-            for toggles in 0..(1usize << names.len()) {
-                let mut state = PresetUi::default();
-                for (index, name) in names.iter().enumerate() {
-                    if toggles & (1 << index) != 0 {
-                        state.toggled.insert(format!("gradients/{name}"));
-                    }
+        for expanded in 0..(1usize << names.len()) {
+            let mut state = PresetUi::default();
+            for (index, name) in names.iter().enumerate() {
+                if expanded & (1 << index) != 0 {
+                    state.expanded_groups.insert(format!("gradients/{name}"));
                 }
-                for (index, name) in names.iter().enumerate() {
-                    let default_open = index == 0 || all_groups_open;
-                    assert_eq!(
-                        group_open(&state, "gradients", index, name, all_groups_open),
-                        default_open != (toggles & (1 << index) != 0),
-                        "all_groups_open={all_groups_open}, toggle mask={toggles:05b}, group={name}"
-                    );
-                }
+            }
+            for (index, name) in names.iter().enumerate() {
+                assert_eq!(group_open(&state, "gradients", name), expanded & (1 << index) != 0, "expansion mask={expanded:05b}, group={name}");
             }
         }
     }

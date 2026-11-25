@@ -5,6 +5,7 @@ use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemPaint
 const PENDING: &str = "picker-delete-confirmation";
 const NEW_GROUP: &str = "picker-new-group-dialog";
 const NEW_GRADIENT_PRESET: &str = "picker-new-gradient-preset-dialog";
+const NEW_PRESET: &str = "picker-new-preset-dialog";
 const RENAME_GROUP: &str = "picker-rename-group-dialog";
 const RENAME_CARD: &str = "picker-rename-card-dialog";
 const RENAME_HEADERS_AFTER_ITEMS: &str = "picker-rename-headers-after-items";
@@ -13,7 +14,14 @@ const RENAME_QUEUE: &str = "queue";
 
 /// Queue the shared New Group dialog from a picker panel menu.
 pub(crate) fn request_new_group(ctx: &egui::Context, panel: &str) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new((NEW_GROUP, panel)), true));
+    let request_id = egui::Id::new((NEW_GROUP, panel));
+    ctx.data_mut(|data| {
+        // Recompute the suggested unique name each time dialog opens. Keeping a temp name
+        // across requests can show a stale or already-used group name after library changes.
+        data.remove::<String>(request_id.with("name"));
+        data.remove::<bool>(request_id.with("name").with("focused"));
+        data.insert_temp(request_id, true);
+    });
 }
 
 /// Queue the Gradient Preset name dialog from the panel menu.
@@ -23,6 +31,65 @@ pub(crate) fn request_new_gradient_preset(ctx: &egui::Context) {
         data.insert_temp(request_id, true);
         data.insert_temp(request_id.with("name"), "Custom".to_owned());
     });
+}
+
+/// Queue the shared New Preset name dialog for a picker that creates its item through the
+/// generic browser action pipeline.
+pub(crate) fn request_new_preset(ctx: &egui::Context, panel: &str, asset: &str) {
+    let request_id = egui::Id::new((NEW_PRESET, panel));
+    ctx.data_mut(|data| {
+        data.insert_temp(request_id, true);
+        data.insert_temp(request_id.with("asset"), asset.to_owned());
+        data.insert_temp(
+            request_id.with("name"),
+            match panel {
+                "styles" => "Style",
+                "shapes" => "Shape",
+                "swatches" => "Swatch",
+                "toolPresets" => "Tool Preset",
+                _ => "Custom",
+            }
+            .to_owned(),
+        );
+    });
+}
+
+/// Show the shared New Preset dialog. The returned action is dispatched by the owning adapter,
+/// which retains its own domain-specific creation parameters and insertion policy.
+pub(crate) fn show_new_preset_dialog(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<BrowserAction>) {
+    let ctx = ui.ctx().clone();
+    let request_id = egui::Id::new((NEW_PRESET, panel));
+    if actions.iter().any(|action| matches!(action, BrowserAction::New)) {
+        actions.retain(|action| !matches!(action, BrowserAction::New));
+        if !ctx.data(|data| data.get_temp::<bool>(request_id).unwrap_or(false)) {
+            let asset = match panel {
+                "styles" => "Style",
+                "shapes" => "Shape",
+                "swatches" => "Swatch",
+                "toolPresets" => "Tool Preset",
+                _ => "Preset",
+            };
+            request_new_preset(&ctx, panel, asset);
+        }
+    }
+    if !ctx.data(|data| data.get_temp::<bool>(request_id).unwrap_or(false)) {
+        return;
+    }
+    let name_id = request_id.with("name");
+    let asset = ctx.data(|data| data.get_temp::<String>(request_id.with("asset"))).unwrap_or_else(|| "Preset".to_owned());
+    let mut name = ctx.data(|data| data.get_temp::<String>(name_id)).unwrap_or_else(|| "Custom".to_owned());
+    let mut decision = None;
+    show_group_name_editor(&ctx, request_id, &format!("New {asset} Preset"), &mut name, &mut decision);
+    match decision {
+        Some(true) if !name.trim().is_empty() => {
+            actions.push(BrowserAction::NewNamed(name.trim().to_owned()));
+            clear_group_name_dialog(&ctx, request_id, name_id);
+        }
+        Some(false) => clear_group_name_dialog(&ctx, request_id, name_id),
+        _ => {
+            ctx.data_mut(|data| data.insert_temp(name_id, name));
+        }
+    }
 }
 
 /// Show the name-only Gradient Preset dialog and return its accepted name.
@@ -58,30 +125,6 @@ pub(crate) fn request_rename_selection(ctx: &egui::Context, panel: &str, action:
     let request_id = egui::Id::new((RENAME_CARD, panel, "request"));
     ctx.data_mut(|data| {
         data.insert_temp(request_id, Some(action));
-        data.insert_temp(request_id.with("defer"), true);
-    });
-}
-
-/// Open the standard card-name editor in copy mode for the selected or fallback swatch.
-pub(crate) fn request_copy_swatch_preset(
-    ctx: &egui::Context,
-    selection: &crate::pickers::state::BrowserSelectionSnapshot,
-    fallback: Option<crate::pickers::browser::selection::SelectionTarget>,
-) {
-    let target = if selection.targets.len() == 1 && matches!(selection.targets.first(), Some(crate::pickers::browser::selection::SelectionTarget::Item { .. }))
-    {
-        selection.targets.first().cloned()
-    } else {
-        fallback
-    };
-    let Some(crate::pickers::browser::selection::SelectionTarget::Item { group, path, key }) = target else { return };
-    let request_id = egui::Id::new((RENAME_CARD, "swatches", "request"));
-    ctx.data_mut(|data| {
-        data.insert_temp(
-            request_id,
-            Some(BrowserAction::BeginRenameSelection { targets: vec![crate::pickers::browser::selection::SelectionTarget::Item { group, path, key }] }),
-        );
-        data.insert_temp(request_id.with("copy"), true);
         data.insert_temp(request_id.with("defer"), true);
     });
 }
@@ -477,8 +520,9 @@ pub(crate) fn confirm_deletions(ui: &mut egui::Ui, panel: &str, groups: &[GroupV
     let Some(pending) = ctx.data(|data| data.get_temp::<Vec<BrowserAction>>(id)) else { return passthrough };
     let (kind, name) = describe(&pending, groups, panel);
     let lang = crate::i18n::current();
-    let (one, other) = delete_confirmation_messages(&kind);
-    let message = crate::i18n::fmt(&crate::i18n::trn(lang, pending.len() as u64, one, other), &[("name", &name)]);
+    let single_group = pending.len() == 1 && groups_only(&pending);
+    let (one, other) = delete_confirmation_messages(&kind, single_group);
+    let message = crate::i18n::fmt(&crate::i18n::trn(lang, pending.len() as u64, &one, &other), &[("name", &name)]);
 
     let decision = show_confirmation_dialog(&ctx, id.with("modal"), "PhotoCraft", &message, &tl!("OK"), &tl!("Cancel"));
     match decision {
@@ -583,41 +627,6 @@ fn is_delete(action: &BrowserAction) -> bool {
 }
 
 fn describe(actions: &[BrowserAction], groups: &[GroupView], panel: &str) -> (String, String) {
-    let contains_group = actions.iter().any(|action| matches!(action, BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. }));
-    let contains_item = actions.iter().any(|action| matches!(action, BrowserAction::DeleteItem { .. }));
-    if contains_group && contains_item {
-        let kind = match panel {
-            "gradients" => "gradient",
-            "swatches" => "swatch",
-            "patterns" => "pattern",
-            "styles" => "style",
-            "shapes" => "shape",
-            "brushes" => "brush",
-            "toolPresets" => "tool preset",
-            "cloneSource" => "clone source",
-            _ => "item",
-        };
-        return (format!("{kind} and group"), String::new());
-    }
-    if groups_only(actions) {
-        let name = match actions.first() {
-            Some(BrowserAction::DeleteGroup(group)) => group.clone(),
-            Some(BrowserAction::DeleteNestedGroup { group_path, .. }) => group_path.last().cloned().unwrap_or_default(),
-            _ => String::new(),
-        };
-        let kind = match panel {
-            "gradients" => "gradient group",
-            "patterns" => "pattern group",
-            "swatches" => "swatch group",
-            "styles" => "style group",
-            "shapes" => "shape group",
-            "brushes" => "brush group",
-            "toolPresets" => "tool preset group",
-            "cloneSource" => "clone source group",
-            _ => "group",
-        };
-        return (kind.into(), name);
-    }
     let kind = match panel {
         "gradients" => "gradient",
         "swatches" => "swatch",
@@ -630,6 +639,8 @@ fn describe(actions: &[BrowserAction], groups: &[GroupView], panel: &str) -> (St
         _ => "item",
     };
     let name = match actions.first() {
+        Some(BrowserAction::DeleteGroup(group)) if actions.len() == 1 => group.clone(),
+        Some(BrowserAction::DeleteNestedGroup { group_path, .. }) if actions.len() == 1 => group_path.last().cloned().unwrap_or_default(),
         Some(BrowserAction::DeleteItem { group, key, .. }) => groups
             .iter()
             .find(|g| &g.name == group)
@@ -645,27 +656,22 @@ fn groups_only(actions: &[BrowserAction]) -> bool {
     !actions.is_empty() && actions.iter().all(|action| matches!(action, BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. }))
 }
 
-fn delete_confirmation_messages(kind: &str) -> (&'static str, &'static str) {
-    match kind {
-        "gradient and group" => ("Delete the selected gradient and group?", "Delete the selected gradients and groups?"),
-        kind if kind.ends_with(" and group") => ("Delete the selected item and group?", "Delete the selected items and groups?"),
-        "group" | "gradient group" => ("Delete group \"{name}\" and its gradients?", "Delete the selected groups and their gradients?"),
-        "pattern group" => ("Delete group \"{name}\" and its patterns?", "Delete the selected groups and their patterns?"),
-        "swatch group" => ("Delete group \"{name}\" and its swatches?", "Delete the selected groups and their swatches?"),
-        "style group" => ("Delete group \"{name}\" and its styles?", "Delete the selected groups and their styles?"),
-        "shape group" => ("Delete group \"{name}\" and its shapes?", "Delete the selected groups and their shapes?"),
-        "brush group" => ("Delete group \"{name}\" and its brushes?", "Delete the selected groups and their brushes?"),
-        "tool preset group" => ("Delete group \"{name}\" and its tool presets?", "Delete the selected groups and their tool presets?"),
-        "clone source group" => ("Delete group \"{name}\" and its clone sources?", "Delete the selected groups and their clone sources?"),
-        "gradient" => ("Delete gradient \"{name}\"?", "Delete the selected gradients?"),
-        "swatch" => ("Delete swatch \"{name}\"?", "Delete the selected swatches?"),
-        "pattern" => ("Delete pattern \"{name}\"?", "Delete the selected patterns?"),
-        "style" => ("Delete style \"{name}\"?", "Delete the selected styles?"),
-        "shape" => ("Delete shape \"{name}\"?", "Delete the selected shapes?"),
-        "brush" => ("Delete brush \"{name}\"?", "Delete the selected brushes?"),
-        "tool preset" => ("Delete tool preset \"{name}\"?", "Delete the selected tool presets?"),
-        "clone source" => ("Delete clone source \"{name}\"?", "Delete the selected clone sources?"),
-        _ => ("Delete item \"{name}\"?", "Delete the selected items?"),
+fn delete_confirmation_messages(kind: &str, single_group: bool) -> (String, String) {
+    let (singular, plural) = match kind {
+        "gradient" => ("gradient", "gradients"),
+        "swatch" => ("swatch", "swatches"),
+        "pattern" => ("pattern", "patterns"),
+        "style" => ("style", "styles"),
+        "shape" => ("shape", "shapes"),
+        "brush" => ("brush", "brushes"),
+        "tool preset" => ("tool preset", "tool presets"),
+        "clone source" => ("clone source", "clone sources"),
+        _ => ("item", "items"),
+    };
+    if single_group {
+        (format!("Delete the group \"{{name}}\" and its {plural}?"), format!("Delete the selected {plural}?"))
+    } else {
+        (format!("Delete the {singular} \"{{name}}\"?"), format!("Delete the selected {plural}?"))
     }
 }
 
@@ -675,8 +681,8 @@ mod tests {
     use egui_kittest::{Harness, kittest::Queryable};
 
     use super::{
-        delete_confirmation_messages, describe, next_copy_name, next_group_name, request_new_group, show_new_group_dialog, show_popup_dialog,
-        show_rename_selection_dialog,
+        delete_confirmation_messages, describe, next_copy_name, next_group_name, request_new_group, request_new_preset, show_new_group_dialog,
+        show_new_preset_dialog, show_popup_dialog, show_rename_selection_dialog,
     };
     use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
 
@@ -696,31 +702,31 @@ mod tests {
     }
 
     #[test]
-    fn group_delete_confirmation_uses_the_active_picker_asset_type() {
+    fn delete_confirmation_uses_the_exact_format_for_every_picker_type() {
         let cases = [
-            ("gradients", "gradient group", "Delete group \"Basics\" and its gradients?"),
-            ("patterns", "pattern group", "Delete group \"Textures\" and its patterns?"),
-            ("swatches", "swatch group", "Delete group \"Palette\" and its swatches?"),
+            ("gradients", "gradient", "gradients"),
+            ("patterns", "pattern", "patterns"),
+            ("swatches", "swatch", "swatches"),
+            ("styles", "style", "styles"),
+            ("shapes", "shape", "shapes"),
+            ("brushes", "brush", "brushes"),
+            ("toolPresets", "tool preset", "tool presets"),
+            ("cloneSource", "clone source", "clone sources"),
         ];
-        for (panel, expected_kind, expected_message) in cases {
-            let actions = vec![BrowserAction::DeleteGroup(
-                if panel == "patterns" {
-                    "Textures"
-                } else if panel == "swatches" {
-                    "Palette"
-                } else {
-                    "Basics"
-                }
-                .into(),
-            )];
-            let (kind, name) = describe(&actions, &[], panel);
+        for (panel, expected_kind, plural) in cases {
+            let group_actions = vec![BrowserAction::DeleteGroup("Basics".into())];
+            let (kind, name) = describe(&group_actions, &[], panel);
             assert_eq!(kind, expected_kind);
-            let (one, _) = delete_confirmation_messages(&kind);
-            assert_eq!(crate::i18n::fmt(one, &[("name", &name)]), expected_message);
+            let (one, many) = delete_confirmation_messages(&kind, true);
+            assert_eq!(crate::i18n::fmt(&one, &[("name", &name)]), format!("Delete the group \"Basics\" and its {plural}?"));
+            assert_eq!(many, format!("Delete the selected {plural}?"));
+
+            let item_actions = vec![BrowserAction::DeleteItem { group: "Basics".into(), group_path: Vec::new(), key: "asset".into() }];
+            let (kind, _) = describe(&item_actions, &[], panel);
+            let (one, many) = delete_confirmation_messages(&kind, false);
+            assert_eq!(crate::i18n::fmt(&one, &[("name", &"asset".to_owned())]), format!("Delete the {expected_kind} \"asset\"?"));
+            assert_eq!(many, format!("Delete the selected {plural}?"));
         }
-        let (one, many) = delete_confirmation_messages("pattern group");
-        assert_eq!(many, "Delete the selected groups and their patterns?");
-        assert_eq!(one, "Delete group \"{name}\" and its patterns?");
     }
 
     #[test]
@@ -773,6 +779,70 @@ mod tests {
             .expect("new group title bar");
         assert!((card.height() - 120.0).abs() < 1.0, "new group popup is 120 px high: {card:?}");
         assert!(name.top() - title.bottom() >= 11.0, "new group content is inset below its title bar: title={title:?}, name={name:?}");
+    }
+
+    #[test]
+    fn reopening_new_group_dialog_recomputes_unique_default_name() {
+        let groups = [
+            GroupView { name: "Group 1".into(), root_only: false, items: Vec::new() },
+            GroupView { name: "Group 4".into(), root_only: false, items: Vec::new() },
+        ];
+        let mut harness = Harness::builder()
+            .with_size(vec2(640.0, 480.0))
+            .build_ui_state(|ui, actions: &mut Vec<super::BrowserAction>| show_new_group_dialog(ui, "test-panel", &groups, actions), Vec::new());
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        let request_id = egui::Id::new((super::NEW_GROUP, "test-panel"));
+        harness.ctx.data_mut(|data| data.insert_temp(request_id.with("name"), "Group 1".to_owned()));
+        request_new_group(&harness.ctx, "test-panel");
+        harness.run_steps(3);
+
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+
+        assert!(harness.state().iter().any(|action| matches!(action, super::BrowserAction::CreateGroup(name) if name == "Group 5")));
+    }
+
+    #[test]
+    fn new_preset_dialog_emits_a_named_creation_action_only_after_confirmation() {
+        let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(
+            |ui, actions: &mut Vec<super::BrowserAction>| {
+                show_new_preset_dialog(ui, "styles", actions);
+            },
+            Vec::new(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        request_new_preset(&harness.ctx, "styles", "Style");
+        harness.run_steps(3);
+
+        assert!(harness.query_by_label("Name").is_some());
+        assert!(
+            harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "New Style Preset"))
+        );
+        assert!(harness.state().is_empty(), "opening the dialog must not create an item");
+
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+        assert!(matches!(harness.state().as_slice(), [super::BrowserAction::NewNamed(name)] if name == "Style"));
+    }
+
+    #[test]
+    fn new_group_dialog_emits_creation_only_after_confirmation() {
+        let groups = [GroupView { name: "Group 4".into(), root_only: false, items: Vec::new() }];
+        let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(
+            |ui, actions: &mut Vec<super::BrowserAction>| {
+                show_new_group_dialog(ui, "test-panel", &groups, actions);
+            },
+            Vec::new(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        request_new_group(&harness.ctx, "test-panel");
+        harness.run_steps(3);
+
+        assert!(harness.query_by_label("Name").is_some());
+        assert!(harness.state().is_empty(), "opening the dialog must not create a group");
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+        assert!(matches!(harness.state().as_slice(), [super::BrowserAction::CreateGroup(name)] if !name.trim().is_empty()));
     }
 
     #[test]

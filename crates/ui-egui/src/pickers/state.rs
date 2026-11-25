@@ -96,7 +96,7 @@ pub struct PresetUi {
     /// Whether list modes use fixed-width, column-major wrapping. Missing preferences default to on.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) wrap_list: BTreeMap<String, bool>,
-    /// Compact browser instances whose initial group disclosure state has been seeded.
+    /// Legacy compact-picker initialization markers, retained only to migrate old disclosure defaults.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) initialized_browsers: BTreeSet<String>,
     /// Selected preset per panel (by name / pattern id).
@@ -232,12 +232,16 @@ pub(crate) fn persist(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
 /// excluded by `PresetUi`'s serde contract.
 pub(crate) fn restore(app: &mut crate::PhotocraftApp) {
     let mut has_saved_brush_view = false;
+    let mut has_saved_picker_state = false;
     if let Some(saved) = app.session.prefs().dialogs.get(PERSISTED_PICKER_UI)
         && let Ok(state) = serde_json::from_value(saved.clone())
     {
+        has_saved_picker_state = true;
         has_saved_brush_view = saved.get("brushPicker").is_some();
         app.ui.presets_ui = state;
     }
+
+    migrate_group_expansion(app, has_saved_picker_state);
 
     // Migrate the former standalone brush-picker preference into the common picker state once.
     let legacy = app.session.prefs().brush_picker.clone();
@@ -266,6 +270,80 @@ pub(crate) fn restore(app: &mut crate::PhotocraftApp) {
     view.scale = if view.scale.is_finite() { view.scale.clamp(0.15, 2.0) } else { 1.0 };
     if ![view.show_name, view.show_stroke, view.show_tip].into_iter().any(|shown| shown) {
         view.show_tip = true;
+    }
+}
+
+/// Convert the old picker-specific toggle defaults into absolute expanded-group identities once.
+/// The legacy policy is used only to interpret preferences written by older versions; all current
+/// browser rendering and interactions use `expanded_groups` directly, with no picker defaults.
+fn migrate_group_expansion(app: &mut crate::PhotocraftApp, has_saved_picker_state: bool) {
+    const CURRENT_VERSION: u8 = 1;
+    let state = &mut app.ui.presets_ui;
+    if state.group_expansion_version >= CURRENT_VERSION {
+        return;
+    }
+
+    if has_saved_picker_state {
+        let groups = vec![
+            ("gradients".to_owned(), app.session.presets.gradients.iter().map(|group| group.name.clone()).collect::<Vec<_>>(), false),
+            (
+                "patterns".to_owned(),
+                crate::pickers::adapters::patterns::pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups)
+                    .into_iter()
+                    .map(|group| group.name)
+                    .collect(),
+                true,
+            ),
+            ("styles".to_owned(), app.session.presets.styles.iter().map(|group| group.name.clone()).collect(), false),
+            ("shapes".to_owned(), app.session.presets.shapes.iter().map(|group| group.name.clone()).collect(), false),
+            ("swatches".to_owned(), app.session.presets.swatches.iter().map(|group| group.name.clone()).collect(), true),
+            (
+                "brushes".to_owned(),
+                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+                    .into_iter()
+                    .map(|group| group.name)
+                    .collect(),
+                false,
+            ),
+            (
+                "brush-picker".to_owned(),
+                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+                    .into_iter()
+                    .map(|group| group.name)
+                    .collect(),
+                true,
+            ),
+        ];
+
+        for (panel, names, legacy_all_open) in groups {
+            migrate_panel_group_expansion(state, &panel, &names, legacy_all_open);
+        }
+
+        // Compact pattern browsers shared the old first-group-open policy and persisted their
+        // collapsed overrides under their own panel identity.
+        let compact_panels: Vec<String> = state.initialized_browsers.iter().filter(|panel| panel.as_str() != "patterns").cloned().collect();
+        let pattern_names: Vec<String> =
+            crate::pickers::adapters::patterns::pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups)
+                .into_iter()
+                .map(|group| group.name)
+                .collect();
+        for panel in compact_panels {
+            migrate_panel_group_expansion(state, &panel, &pattern_names, false);
+        }
+    }
+
+    state.group_expansion_version = CURRENT_VERSION;
+}
+
+fn migrate_panel_group_expansion(state: &mut PresetUi, panel: &str, group_names: &[String], legacy_all_open: bool) {
+    for (index, group) in group_names.iter().enumerate() {
+        let key = format!("{panel}/{}", escape_hierarchy_key_part(group));
+        let legacy_toggle = state.toggled.remove(&key);
+        if (index == 0 || legacy_all_open) != legacy_toggle {
+            state.expanded_groups.insert(key);
+        } else {
+            state.expanded_groups.remove(&key);
+        }
     }
 }
 
@@ -815,6 +893,13 @@ impl PresetUi {
             .collect();
         self.toggled.retain(|key| !key.strip_prefix(&old_prefix).is_some_and(|tail| tail.is_empty() || tail.starts_with('/')));
         self.toggled.extend(renamed);
+        let renamed_expanded: Vec<String> = self
+            .expanded_groups
+            .iter()
+            .filter_map(|key| key.strip_prefix(&old_prefix).filter(|tail| tail.is_empty() || tail.starts_with('/')).map(|tail| format!("{new_prefix}{tail}")))
+            .collect();
+        self.expanded_groups.retain(|key| !key.strip_prefix(&old_prefix).is_some_and(|tail| tail.is_empty() || tail.starts_with('/')));
+        self.expanded_groups.extend(renamed_expanded);
     }
 
     /// Return a group's descendants followed by the group itself, so domain deletion can remove
@@ -855,6 +940,7 @@ impl PresetUi {
         }
         let prefixes: Vec<String> = removed_groups.iter().map(|group| format!("{panel}/{}", escape_hierarchy_key_part(group))).collect();
         self.toggled.retain(|key| !prefixes.iter().any(|prefix| key.strip_prefix(prefix).is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))));
+        self.expanded_groups.retain(|key| !prefixes.iter().any(|prefix| key.strip_prefix(prefix).is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))));
     }
 
     /// Apply the Brushes panel's header-drop convention to asset groups: the upper third inserts
@@ -980,7 +1066,7 @@ pub(crate) fn escape_hierarchy_key_part(part: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{HierarchyOrderEntry, PresetUi};
+    use super::{HierarchyOrderEntry, PresetUi, escape_hierarchy_key_part};
 
     #[test]
     fn picker_hierarchy_order_survives_preferences_restart() {
@@ -995,6 +1081,131 @@ mod tests {
         super::restore(&mut restarted);
 
         assert_eq!(restarted.ui.presets_ui.hierarchy_order, app.ui.presets_ui.hierarchy_order);
+    }
+
+    #[test]
+    fn explicit_group_and_folder_disclosure_state_survives_preferences_restart() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.presets_ui.group_expansion_version = 1;
+        app.ui.presets_ui.expanded_groups.extend(["patterns/Open group".into(), "brushes/Pens".into(), "brush-picker/Pens".into()]);
+        app.ui.presets_ui.toggled.extend(["patterns/Open group/Closed folder".into(), "brushes/Pens/Fine".into()]);
+
+        super::persist(&mut app, &egui::Context::default());
+        let saved = app.session.prefs_to_json();
+        let mut restarted = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        restarted.session.load_prefs_json(&saved).unwrap();
+        super::restore(&mut restarted);
+
+        assert_eq!(restarted.ui.presets_ui.expanded_groups, app.ui.presets_ui.expanded_groups);
+        assert_eq!(restarted.ui.presets_ui.toggled, app.ui.presets_ui.toggled);
+        assert!(crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "patterns", "Open group"));
+        assert!(!crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "patterns", "Closed group"));
+        assert!(crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "brushes", "Pens"));
+        assert!(crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "brush-picker", "Pens"));
+    }
+
+    #[test]
+    fn new_picker_state_uses_no_picker_specific_group_expansion_defaults() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        super::restore(&mut app);
+
+        assert_eq!(app.ui.presets_ui.group_expansion_version, 1);
+        assert!(app.ui.presets_ui.expanded_groups.is_empty());
+        for (panel, names) in [
+            ("gradients", app.session.presets.gradients.iter().map(|group| group.name.clone()).collect::<Vec<_>>()),
+            ("patterns", app.session.presets.pattern_groups.iter().map(|group| group.name.clone()).collect()),
+            ("styles", app.session.presets.styles.iter().map(|group| group.name.clone()).collect()),
+            ("shapes", app.session.presets.shapes.iter().map(|group| group.name.clone()).collect()),
+            ("swatches", app.session.presets.swatches.iter().map(|group| group.name.clone()).collect()),
+            (
+                "brushes",
+                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+                    .into_iter()
+                    .map(|group| group.name)
+                    .collect(),
+            ),
+        ] {
+            for group in names {
+                assert!(
+                    !crate::pickers::browser::groups::group_open(&app.ui.presets_ui, panel, &group),
+                    "{panel}/{group} must use the persisted collapsed state"
+                );
+                if panel == "brushes" {
+                    assert!(
+                        !crate::pickers::browser::groups::group_open(&app.ui.presets_ui, "brush-picker", &group),
+                        "brush-picker/{group} must use the persisted collapsed state"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_picker_defaults_migrate_to_explicit_state_once_and_keep_folder_collapses() {
+        use serde_json::json;
+
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for group in app.session.presets.gradients.clone() {
+            app.run("gradient.presets.edit", json!({"action":"deleteGroup", "group":group.name})).unwrap();
+        }
+        for name in ["First", "Second"] {
+            app.run("gradient.presets.edit", json!({"action":"newGroup", "name":name})).unwrap();
+        }
+        let first_pattern = app.session.presets.pattern_groups.first().expect("built-in pattern group").name.clone();
+        let first_swatch = app.session.presets.swatches.first().expect("built-in swatch group").name.clone();
+        let first_brush = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+            .first()
+            .expect("built-in brush group")
+            .name
+            .clone();
+        let legacy_toggles = [
+            "gradients/First".to_owned(),
+            "gradients/Second".to_owned(),
+            "gradients/Second/Closed folder".to_owned(),
+            format!("patterns/{}", escape_hierarchy_key_part(&first_pattern)),
+            format!("swatches/{}", escape_hierarchy_key_part(&first_swatch)),
+            format!("brushes/{}", escape_hierarchy_key_part(&first_brush)),
+            format!("brush-picker/{}", escape_hierarchy_key_part(&first_brush)),
+        ];
+        app.session.prefs.edit(|prefs| {
+            prefs.dialogs.insert("pickerBrowserUi".into(), json!({"toggled":legacy_toggles}));
+        });
+
+        super::restore(&mut app);
+
+        assert_eq!(app.ui.presets_ui.group_expansion_version, 1);
+        assert!(!app.ui.presets_ui.expanded_groups.contains("gradients/First"), "the old first-group default plus toggle meant closed");
+        assert!(app.ui.presets_ui.expanded_groups.contains("gradients/Second"), "the old later-group toggle meant open");
+        assert_eq!(
+            app.ui.presets_ui.toggled.iter().cloned().collect::<Vec<_>>(),
+            ["gradients/Second/Closed folder".to_owned()],
+            "folder collapse state is not reinterpreted as a group toggle"
+        );
+        for (panel, group) in [("patterns", first_pattern), ("swatches", first_swatch), ("brushes", first_brush.clone()), ("brush-picker", first_brush)] {
+            assert!(
+                !app.ui.presets_ui.expanded_groups.contains(&format!("{panel}/{}", escape_hierarchy_key_part(&group))),
+                "legacy all-open/first-open toggles migrate closed for {panel}"
+            );
+        }
+        if let Some(group) = app.session.presets.pattern_groups.get(1) {
+            assert!(app.ui.presets_ui.expanded_groups.contains(&format!("patterns/{}", escape_hierarchy_key_part(&group.name))));
+        }
+        if let Some(group) = app.session.presets.swatches.get(1) {
+            assert!(app.ui.presets_ui.expanded_groups.contains(&format!("swatches/{}", escape_hierarchy_key_part(&group.name))));
+        }
+        if let Some(group) = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy).get(1) {
+            let key = escape_hierarchy_key_part(&group.name);
+            assert!(!app.ui.presets_ui.expanded_groups.contains(&format!("brushes/{key}")), "the docked Brushes panel used first-group-open defaults");
+            assert!(app.ui.presets_ui.expanded_groups.contains(&format!("brush-picker/{key}")), "the floating brush picker used all-groups-open defaults");
+        }
+
+        super::persist(&mut app, &egui::Context::default());
+        let saved = app.session.prefs_to_json();
+        let mut restarted = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        restarted.session.load_prefs_json(&saved).unwrap();
+        super::restore(&mut restarted);
+        assert_eq!(restarted.ui.presets_ui.expanded_groups, app.ui.presets_ui.expanded_groups);
+        assert_eq!(restarted.ui.presets_ui.toggled, app.ui.presets_ui.toggled);
     }
 
     fn names(values: &[&str]) -> Vec<String> {
@@ -1023,6 +1234,29 @@ mod tests {
         assert!(!state.is_selected_item("panel", "Root", &["Folder B".into()], "same"));
         state.set_selected("panel", "same");
         assert!(!state.selected_group_path.contains_key("panel"));
+    }
+
+    #[test]
+    fn clearing_browser_selection_removes_nodes_anchor_and_snapshot_without_changing_active_item() {
+        use crate::pickers::browser::{
+            path_identity_model::PickerId,
+            selection::{BrowserSelection, SelectionTarget},
+        };
+
+        let mut state = PresetUi::default();
+        state.set_selected_item("panel", "Group", &["Nested".into()], "Active");
+        state.select_browser_node("panel", PickerId::from("first"), false);
+        state.select_browser_node("panel", PickerId::from("second"), true);
+        state
+            .browser_selection_snapshot
+            .insert("panel".into(), BrowserSelection { targets: vec![SelectionTarget::Group("Group".into())], ..Default::default() });
+
+        state.clear_browser_selection("panel");
+
+        assert!(state.browser_selection.get("panel").is_some_and(|selection| selection.is_empty()));
+        assert!(!state.browser_selection_anchor.contains_key("panel"));
+        assert!(!state.browser_selection_snapshot.contains_key("panel"));
+        assert!(state.is_selected_item("panel", "Group", &["Nested".into()], "Active"));
     }
 
     #[test]

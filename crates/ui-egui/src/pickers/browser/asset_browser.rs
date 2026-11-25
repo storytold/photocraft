@@ -191,6 +191,8 @@ pub(crate) enum BrowserAction {
     CreateGroup(String),
     /// Request creation of a new item.
     New,
+    /// Create a new item after the shared New Preset dialog has accepted its name.
+    NewNamed(String),
     /// Append the picker's built-in defaults to its current library.
     AppendDefault,
     /// Open the picker-specific import flow.
@@ -208,7 +210,7 @@ pub(crate) enum BrowserAction {
 pub(super) struct BrowserSink<'a> {
     pub(super) state: &'a mut PresetUi,
     pub(super) actions: Vec<BrowserAction>,
-    pending_group_toggles: Vec<String>,
+    pending_folder_toggles: Vec<String>,
 }
 
 pub(super) struct CanonicalDropViewport {
@@ -232,19 +234,34 @@ pub(super) struct HierarchyCommit<'a, 'cb> {
 
 impl<'a> BrowserSink<'a> {
     fn new(state: &'a mut PresetUi, actions: Vec<BrowserAction>) -> Self {
-        Self { state, actions, pending_group_toggles: Vec::new() }
+        Self { state, actions, pending_folder_toggles: Vec::new() }
     }
 
     pub(super) fn is_node_selected(&self, panel: &str, id: &PickerId) -> bool {
         self.state.browser_node_selected(panel, id)
     }
 
-    fn is_group_toggled(&self, key: &str) -> bool {
+    fn has_browser_selection(&self, panel: &str) -> bool {
+        self.state.browser_selection.get(panel).is_some_and(|selection| !selection.is_empty())
+    }
+
+    fn is_legacy_group_selected(&self, panel: &str, group: &str, path: &[String]) -> bool {
+        !self.has_browser_selection(panel)
+            && self.state.selected_group.get(panel).is_some_and(|selected| selected == group)
+            && self.state.selected_group_path.get(panel).is_some_and(|selected| selected == path)
+            && !self.state.selected.contains_key(panel)
+    }
+
+    fn is_legacy_item_selected(&self, panel: &str, group: &str, path: &[String], key: &str) -> bool {
+        !self.has_browser_selection(panel) && self.state.is_selected_item(panel, group, path, key)
+    }
+
+    fn is_folder_collapsed(&self, key: &str) -> bool {
         self.state.toggled.contains(key)
     }
 
-    fn is_group_open(&self, panel: &str, group_index: usize, group_name: &str, all_groups_open: bool) -> bool {
-        group_open(self.state, panel, group_index, group_name, all_groups_open)
+    fn is_group_open(&self, panel: &str, group_name: &str) -> bool {
+        group_open(self.state, panel, group_name)
     }
 
     pub(super) fn select_node(&mut self, panel: &str, id: PickerId, toggle: bool) {
@@ -255,14 +272,14 @@ impl<'a> BrowserSink<'a> {
         self.state.select_browser_range(panel, order, id);
     }
 
-    fn toggle_group(&mut self, key: String) {
-        if !self.state.toggled.remove(&key) {
-            self.state.toggled.insert(key);
+    fn toggle_root_group(&mut self, key: String) {
+        if !self.state.expanded_groups.remove(&key) {
+            self.state.expanded_groups.insert(key);
         }
     }
 
-    fn queue_group_toggle(&mut self, key: String) {
-        self.pending_group_toggles.push(key);
+    fn queue_folder_toggle(&mut self, key: String) {
+        self.pending_folder_toggles.push(key);
     }
 
     pub(super) fn emit(&mut self, action: BrowserAction) {
@@ -396,7 +413,6 @@ impl BrowserProjection {
         ctx: &BrowserCtx<'_>,
         state: &PresetUi,
         query: &str,
-        all_groups_open: bool,
         domain_root_sequence: Option<&[HierarchyOrderEntry]>,
         picker_ids: &mut PickerIdRegistry,
     ) -> Option<Self> {
@@ -473,7 +489,7 @@ impl BrowserProjection {
                     hidden_groups.insert(group.name.clone());
                     continue;
                 }
-                let open = !query.is_empty() || group_open(state, panel, segment.group_index, &group.name, all_groups_open);
+                let open = !query.is_empty() || group_open(state, panel, &group.name);
                 visible_selection_order.push(picker_group_id(picker_ids, segment.group_index, projection_keys));
                 if !open {
                     hidden_groups.insert(group.name.clone());
@@ -518,7 +534,7 @@ use crate::pickers::browser::groups::{header as asset_browser_header, inset_row_
 
 /// Browser-specific layout and presentation, supplied by each asset consumer.
 /// Cards use a consistent border and two-pixel inter-card spacing across picker consumers.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct BrowserOptions {
     /// Canvas hit region used to distinguish drops onto the canvas from drops into the browser.
     pub(crate) canvas: Rect,
@@ -527,15 +543,13 @@ pub(crate) struct BrowserOptions {
     pub(crate) flush: bool,
     /// Centre a partially filled grid row in the available item area.
     pub(crate) center_grid: bool,
-    /// Start every group expanded rather than only the first group.
-    pub(crate) all_groups_open: bool,
     /// Use nested menu submenus for context actions inside a parent popup.
     pub(crate) compact_context_menus: bool,
     /// Emit group moves as domain actions instead of applying transient browser ordering.
     pub(crate) domain_hierarchy_actions: bool,
     /// Optional domain-owned destination for cards dropped into the implicit root sequence.
     /// Consumers without a persistent root owner keep root placement in picker layout state.
-    pub(crate) root_item_group: Option<&'static str>,
+    pub(crate) root_item_group: Option<String>,
 }
 
 /// Features that can be enabled independently for a particular browser consumer.
@@ -714,7 +728,7 @@ fn draw_browser_group_header(
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &group.name));
         (rect, response)
     } else {
-        asset_browser_header(ui, &group.name, open, depth, None, GROUP_HEADER_HEIGHT, selected)
+        asset_browser_header(ui, &group.name, open, depth, GROUP_HEADER_HEIGHT, selected)
     }
 }
 
@@ -742,7 +756,7 @@ fn draw_nested_folder_row(
         ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
     }
     let Some(node_id) = folder_node_for_identity(&root_group.name, &group.path, hierarchy.hierarchy_identities) else { return };
-    let selected = sink.is_node_selected(panel, &node_id);
+    let selected = sink.is_node_selected(panel, &node_id) || sink.is_legacy_group_selected(panel, &root_group.name, &group.path);
     let (rect, response, disclosure, row_depth) = draw_nested_folder_header(ui, group, group_open, group_depth, parent_depth, selected);
     let name = group.path.last().map(String::as_str).unwrap_or("");
     if response.double_clicked() {
@@ -751,13 +765,7 @@ fn draw_nested_folder_row(
     if capabilities.group_drag
         && let Some(ghost_rect) = browser_drag_ghost_rect(ui, panel, BrowserDragGhostSource::Group(node_id.clone()), response.dragged(), rect, browser_bounds)
     {
-        drag.ghosts.nested_groups.push(NestedGroupDragGhost {
-            rect: ghost_rect,
-            open: group_open,
-            name: name.to_owned(),
-            depth: row_depth,
-            count: group.count,
-        });
+        drag.ghosts.nested_groups.push(NestedGroupDragGhost { rect: ghost_rect, open: group_open, name: name.to_owned(), depth: row_depth });
     }
     if capabilities.selection {
         let disclosure_clicked = asset_browser_selection_clicked(&disclosure);
@@ -766,7 +774,7 @@ fn draw_nested_folder_row(
         apply_browser_node_selection(ui, selected, secondary, panel, &node_id, hierarchy.visible_selection_order, sink);
     }
     if asset_browser_selection_clicked(&disclosure) {
-        sink.queue_group_toggle(format!(
+        sink.queue_folder_toggle(format!(
             "{panel}/{}/{}",
             escape_hierarchy_key_part(&root_group.name),
             group.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/")
@@ -1011,7 +1019,8 @@ fn prepare_browser_item_cell<'a>(
     };
     let node_id = item_node_for_identity(&item_group.name, &item.group_path, &item.key, &projection.hierarchy_identities);
     let item_depth = depth + item.group_path.len() + usize::from(!root_level);
-    let selected = node_id.as_ref().is_some_and(|id| sink.is_node_selected(ctx.panel, id));
+    let selected = node_id.as_ref().is_some_and(|id| sink.is_node_selected(ctx.panel, id))
+        || sink.is_legacy_item_selected(ctx.panel, &item_group.name, &item.group_path, &item.key);
     PaintedCell { item: item_ref, rect, response, node_id, depth: item_depth, selected }
 }
 
@@ -1063,7 +1072,7 @@ pub(crate) fn browser_with_root_sequence(
     let projection_keys = adapter.projection_keys.unwrap_or(&fallback_projection_keys);
     #[cfg(not(test))]
     let Some(projection_keys) = adapter.projection_keys else { return Vec::new() };
-    let BrowserOptions { canvas, center_grid, all_groups_open, compact_context_menus, domain_hierarchy_actions, root_item_group, .. } = adapter.options;
+    let BrowserOptions { canvas, center_grid, compact_context_menus, domain_hierarchy_actions, root_item_group, .. } = adapter.options.clone();
     let capabilities = adapter.capabilities;
     // Canonical hierarchy drag/drop is opt-in: each adapter enables it only after its projected
     // tree and domain commit callback can represent every hierarchy operation it exposes.
@@ -1086,7 +1095,7 @@ pub(crate) fn browser_with_root_sequence(
     let scroll_height = allocated_height;
     let mut drag_state = BrowserDragState::default();
     let mut expanded_groups = BTreeSet::new();
-    let Some(mut projection) = BrowserProjection::build(&browser_ctx, st, &query, all_groups_open, domain_root_sequence, &mut picker_ids) else {
+    let Some(mut projection) = BrowserProjection::build(&browser_ctx, st, &query, domain_root_sequence, &mut picker_ids) else {
         st.browser_selection_snapshot.remove(panel);
         return Vec::new();
     };
@@ -1162,11 +1171,7 @@ pub(crate) fn browser_with_root_sequence(
                 let show_folder_header = segment.show_folder_header;
                 let Some(g) = groups.get(gi) else { continue };
                 let parent_hidden = projection.parents.get(&g.name).is_some_and(|parent| segment_visibility.hidden_groups.contains(parent));
-                let group_is_open = if segment.root_items || !segment.show_header || !query.is_empty() {
-                    true
-                } else {
-                    sink.is_group_open(panel, gi, &g.name, all_groups_open)
-                };
+                let group_is_open = if segment.root_items || !segment.show_header || !query.is_empty() { true } else { sink.is_group_open(panel, &g.name) };
                 let Some(open) = browser_segment_open(segment, g, groups, &query, parent_hidden, group_is_open, &mut segment_visibility) else {
                     continue;
                 };
@@ -1176,7 +1181,7 @@ pub(crate) fn browser_with_root_sequence(
                         ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
                     }
                     let group_id = picker_group_id(&mut picker_ids, gi, projection_keys);
-                    let selected_group = sink.is_node_selected(panel, &group_id);
+                    let selected_group = sink.is_node_selected(panel, &group_id) || sink.is_legacy_group_selected(panel, &g.name, &[]);
                     let (header_rect, response) = draw_browser_group_header(ui, g, open, depth, selected_group, &mut painters);
                     if response.double_clicked() {
                         sink.emit(BrowserAction::BeginInlineRenameGroup { group: g.name.clone(), group_path: Vec::new() });
@@ -1209,7 +1214,7 @@ pub(crate) fn browser_with_root_sequence(
                     }
                     if asset_browser_selection_clicked(&disclosure) {
                         let key = format!("{panel}/{}", escape_hierarchy_key_part(&g.name));
-                        sink.toggle_group(key);
+                        sink.toggle_root_group(key);
                     }
                     if let Some(menu) = context_menus.group {
                         let delete_context = BrowserDeleteContext { hierarchy: &projection.hierarchy, identities: &projection.hierarchy_identities };
@@ -1246,14 +1251,10 @@ pub(crate) fn browser_with_root_sequence(
                 // Keep each group's assets directly beneath its header. The previous separate
                 // content pass placed every swatch after every group header, so expanding a group
                 // could not reveal its assets in the expected place.
-                let folder_group = HierarchyGroup {
-                    path: folder_path.to_vec(),
-                    children: Vec::new(),
-                    count: g.items.iter().filter(|item| item.group_path.starts_with(folder_path)).count(),
-                };
+                let folder_group = HierarchyGroup { path: folder_path.to_vec(), children: Vec::new() };
                 let folder_open = folder_path.is_empty() || {
                     let path = folder_path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
-                    !sink.is_group_toggled(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), path))
+                    !sink.is_folder_collapsed(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), path))
                 };
                 if open {
                     {
@@ -1429,8 +1430,8 @@ pub(crate) fn browser_with_root_sequence(
                             draw_items(ui, &mut sink, &segment_items, folder_path);
                         }
                     }
-                    let group_toggles = std::mem::take(&mut sink.pending_group_toggles);
-                    for key in group_toggles {
+                    let folder_toggles = std::mem::take(&mut sink.pending_folder_toggles);
+                    for key in folder_toggles {
                         if !sink.state.toggled.remove(&key) {
                             sink.state.toggled.insert(key);
                         }
@@ -1467,7 +1468,7 @@ pub(crate) fn browser_with_root_sequence(
         HierarchyCommit {
             state: st,
             picker_ids: &mut picker_ids,
-            root_item_group,
+            root_item_group: root_item_group.as_deref(),
             callbacks: CanonicalDropCallbacks {
                 hierarchy_move: canonical_hierarchy_move,
                 rekey_after_move: rekey_hierarchy_after_move,
@@ -1485,6 +1486,40 @@ pub(crate) fn browser_with_root_sequence(
     }
     ui.ctx().data_mut(|data| data.insert_temp(picker_registry_id, picker_ids));
     ev
+}
+
+#[cfg(test)]
+mod legacy_selection_tests {
+    use super::BrowserSink;
+    use crate::pickers::state::PresetUi;
+
+    #[test]
+    fn legacy_created_group_and_card_selections_are_visible_in_the_shared_browser() {
+        let mut state = PresetUi::default();
+        state.selected_group.insert("gradients".into(), "New group".into());
+        state.selected_group_path.insert("gradients".into(), Vec::new());
+        {
+            let sink = BrowserSink::new(&mut state, Vec::new());
+            assert!(sink.is_legacy_group_selected("gradients", "New group", &[]));
+            assert!(!sink.is_legacy_group_selected("gradients", "Other", &[]));
+        }
+
+        state.set_selected_item("brushes", "Ink", &["Fine".into()], "new-brush-key");
+        let sink = BrowserSink::new(&mut state, Vec::new());
+        assert!(sink.is_legacy_item_selected("brushes", "Ink", &["Fine".into()], "new-brush-key"));
+        assert!(!sink.is_legacy_item_selected("brushes", "Ink", &[], "new-brush-key"));
+    }
+
+    #[test]
+    fn browser_multi_selection_takes_precedence_over_legacy_active_selection() {
+        let mut state = PresetUi::default();
+        state.set_selected_item("gradients", "Basics", &[], "Created");
+        state.select_browser_node("gradients", crate::pickers::browser::path_identity_model::PickerId::from("other-node"), false);
+        let sink = BrowserSink::new(&mut state, Vec::new());
+
+        assert!(!sink.is_legacy_item_selected("gradients", "Basics", &[], "Created"));
+        assert!(!sink.is_legacy_group_selected("gradients", "Basics", &[]));
+    }
 }
 
 #[cfg(test)]

@@ -171,11 +171,20 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "tool.presets.edit";
     let action = req_str(p, "action", CMD)?.to_string();
-    if !matches!(action.as_str(), "rename" | "delete") {
-        return Err(bad(CMD, "tool presets support rename and delete"));
+    if !matches!(action.as_str(), "rename" | "delete" | "move") {
+        return Err(bad(CMD, "tool presets support rename, delete and move"));
     }
     if action == "rename" {
         checked_name(req_str(p, "name", CMD)?, CMD)?;
+    }
+    if action == "move" {
+        let name = req_str(p, "preset", CMD)?;
+        let index = s.presets.tool_presets.iter().position(|preset| preset.name == name).ok_or_else(|| bad(CMD, format!("no preset \"{name}\"")))?;
+        let preset = s.presets.tool_presets.remove(index);
+        let at = p.get("index").and_then(Value::as_u64).map_or(s.presets.tool_presets.len(), |index| (index as usize).min(s.presets.tool_presets.len()));
+        s.presets.tool_presets.insert(at, preset);
+        s.presets_changed();
+        return Ok(json!({"group": "", "index": at}));
     }
     let mut groups = vec![Group::new("", std::mem::take(&mut s.presets.tool_presets))];
     let r = edit_groups(&mut groups, &action, p, CMD);
@@ -228,7 +237,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Tool Presets",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":"rename|delete","preset":name|[names],"name":str (rename)}"##,
+            params: r##"{"action":"rename|delete|move","preset":name|[names],"name":str (rename),"index":n (move)}"##,
             enabled: always,
             run: edit,
             journal: true,

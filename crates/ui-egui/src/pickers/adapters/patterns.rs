@@ -158,10 +158,9 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 center_grid: false,
                 // Patterns is a visual asset library: expose the cards in every group on first
                 // open, matching the Swatches browser. Users can still collapse individual groups.
-                all_groups_open: true,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
-                root_item_group: None,
+                root_item_group: groups.first().map(|group| group.name.clone()),
             },
             // Cross-group membership uses the Pattern domain command; sibling/group order is saved
             // in the canonical picker layout state.
@@ -335,13 +334,8 @@ pub(crate) fn compact_pattern_browser(
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
     let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
-    // Popup contents are rebuilt every frame; use the app's persisted picker preferences rather
-    // than a temporary popup-local state so display mode and Wrap List survive a restart.
-    if state.initialized_browsers.insert(panel.to_owned()) {
-        // Compact pickers replace the old ungrouped swatch grid. Keep every group's items
-        // immediately reachable on first open, while allowing users to collapse groups afterward.
-        state.toggled.extend(groups.iter().skip(1).map(|g| format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(&g.name))));
-    }
+    // Popup contents are rebuilt every frame; the persisted browser state owns disclosure for
+    // compact and docked pickers alike. No picker seeds a private initial expansion policy.
     state.set_selected(panel, selected);
     let browser_h = max_h.min(ui.available_height());
     let projection_keys = pattern_projection_keys(groups);
@@ -353,10 +347,9 @@ pub(crate) fn compact_pattern_browser(
             canvas: Rect::NOTHING,
             flush: false,
             center_grid: false,
-            all_groups_open: false,
             compact_context_menus: true,
             domain_hierarchy_actions: false,
-            root_item_group: None,
+            root_item_group: groups.first().map(|group| group.name.clone()),
         },
         // Compact pickers have no domain-command context for committing item or group moves.
         // Keep selection/activation available, but do not expose drag semantics that could only
