@@ -347,6 +347,14 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let mut options = serde_json::Map::new();
     // The File Naming rows, the starting serial and the compatibility flags are stored as the
     // batch command takes them (#13712); Batch's own checks run when the droplet runs.
+    if let Some(rows) = p.get("namingComponents").filter(|value| !value.is_null()) {
+        // Batch checks these rows when the droplet runs; checking them here keeps a droplet that
+        // could never name an output from being saved at all. The refusal names this command.
+        crate::file_cmds::check_batch_naming_components(&json!({ "namingComponents": rows })).map_err(|err| match err {
+            EngineError::BadParams { msg, .. } => bad(cmd, msg),
+            other => other,
+        })?;
+    }
     for k in ["output", "format", "quality", "suffix", "overrideOpen", "namingComponents", "startingSerial", "compatibility"] {
         if let Some(v) = p.get(k) {
             options.insert(k.into(), v.clone());

@@ -173,3 +173,24 @@ fn a_droplet_with_only_compatibility_flags_still_keeps_each_input_name() {
     assert!(std::path::Path::new(&format!("{dir}/out/a.png")).exists(), "a.png keeps its name");
     assert!(std::path::Path::new(&format!("{dir}/out/b.jpg")).exists(), "b.jpg keeps its name");
 }
+
+
+/// A droplet whose literal File Naming text is longer than Batch accepts is refused where it is
+/// written, not on every run (#13712 review round): Batch's rule is 255 UTF-8 BYTES per component,
+/// so 128 precomposed accents (256 bytes, 128 characters) must fail where a 128-character ASCII
+/// name passes.
+#[test]
+fn create_droplet_refuses_a_literal_name_batch_could_never_write() {
+    let dir = tmp("long-literal");
+    let long = "\u{e9}".repeat(128);
+    assert_eq!(long.len(), 256, "the rule counts bytes: 128 characters in 256 bytes");
+    let mut s = crate::session();
+    let e = s
+        .execute(
+            "file.automate.createDroplet",
+            json!({"path": format!("{dir}/Rotate"), "steps": [["image.imageRotation.90cw", {}]], "namingComponents": [{"text": long}]}),
+        )
+        .expect_err("a name Batch would refuse is refused at the droplet");
+    assert!(e.to_string().contains("255"), "{e}");
+    assert!(!std::path::Path::new(&format!("{dir}/Rotate.pcdroplet")).exists(), "nothing was written");
+}

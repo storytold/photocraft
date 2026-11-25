@@ -95,7 +95,10 @@ pub(crate) const COMPONENTS: &[(&str, &str)] = &[
     ("upperCaseExtension", "EXTENSION"),
 ];
 
-/// Bound structured fields before file processing; literals never pass through the legacy template parser.
+/// Bound structured fields before file processing; literals never pass through the legacy template
+/// parser. `pub(crate)` because `file.automate.createDroplet` checks the same rule where it stores
+/// the rows: a droplet whose naming Batch would refuse could never name an output (#13712 review).
+pub(crate)
 fn components(params: &Value) -> Result<Option<&[Value]>> {
     let Some(value) = params.get("namingComponents").filter(|v| !v.is_null()) else { return Ok(None) };
     let list = value.as_array().filter(|a| (1..=6).contains(&a.len())).ok_or_else(|| bad("namingComponents needs one to six components"))?;
