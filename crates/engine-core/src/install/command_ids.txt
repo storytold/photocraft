@@ -445,6 +445,7 @@ edit.transform.rotate90Ccw
 edit.transform.flipHorizontal
 edit.transform.flipVertical
 edit.pasteSpecial.pasteInto
+edit.pasteSpecial.pasteIntoEach
 edit.pasteSpecial.pasteOutside
 select.reselect
 image.adjustments.equalize
