@@ -117,8 +117,12 @@ pub(crate) struct MenusDraft {
     /// `Darkroom.MNU` `menu_sets::path_of` would name (#14450).
     pub(crate) file_paths: BTreeMap<String, PathBuf>,
     /// Set by Yes of the Delete question: OK takes that set's `.mnu` file away too, so the folder does
-    /// not offer the set back on the next open (#14450).
-    pub(crate) file_delete: BTreeSet<String>,
+    /// not offer the set back on the next open (#14450). The value is the set's file as the draft knew
+    /// it at that moment - the one its Save dialog had chosen, or the one the folder scan found it in,
+    /// or `None` for the menu-sets folder's own name for the set - taken there so the delete answers
+    /// for that path: a later Save of the same name to a different file cannot spare the file the
+    /// Delete was made for, and the folder would read the deleted set back from it.
+    pub(crate) file_delete: BTreeMap<String, Option<PathBuf>>,
 }
 
 impl MenusDraft {
@@ -235,12 +239,24 @@ impl MenusDraft {
         }
     }
 
+    /// The file of a set, as the draft knows it at this moment: the one its Save dialog answered
+    /// with, or the one the folder scan found it in. `None` leaves it to the folder's own name for
+    /// the set.
+    fn set_file_of(&self, name: &str) -> Option<PathBuf> {
+        match self.file_write.get(name) {
+            Some(Some(path)) => Some(PathBuf::from(path)),
+            _ => self.file_paths.get(name).cloned(),
+        }
+    }
+
     /// Yes of the Delete question: the set it named, if that is still the set in use. The set's file
-    /// goes with it, since the folder is where a saved set lives (#14450).
+    /// goes with it, since the folder is where a saved set lives (#14450). The file is taken here,
+    /// at the moment the Delete was confirmed: a later Save of the same name can send that name to
+    /// another file, and the delete still answers for the file it was made for.
     fn delete_named(&mut self, name: &str) {
         if self.set == name {
             self.delete();
-            self.file_delete.insert(name.to_owned());
+            self.file_delete.insert(name.to_owned(), self.set_file_of(name));
         }
     }
 }
@@ -605,28 +621,27 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
 /// said together: five broken files are five sets, not one (#14450).
 fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     let Some(dir) = sets_folder(app) else { return };
-    // The file of a set, as the draft knows it: the one its Save dialog answered with, or the one the
-    // folder scan found it in. `None` leaves it to the folder's own name for the set.
-    let own_file = |name: &str| -> Option<PathBuf> {
-        match menus.file_write.get(name) {
-            Some(Some(path)) => Some(PathBuf::from(path)),
-            _ => menus.file_paths.get(name).cloned(),
-        }
-    };
     let mut refused_write = Vec::new();
-    // The two queues are keyed by set name and carry no order of their own, so they are resolved per
-    // name on what the draft ends with: a name whose set is there again at OK - deleted, and made
-    // again under that name before the dialog closed - is written, and its queued delete is skipped.
-    // A name whose set is gone keeps its write skipped, since there is no set left to write, and its
-    // delete runs. Writing every queued file and then deleting every queued file took away the file of
-    // a set the user had just made again (#14450).
-    let mut set_still_there: BTreeSet<&str> = BTreeSet::new();
+    // The two queues carry no order of their own, so they are resolved at OK. The writes are
+    // resolved on what the draft ends with: a name whose set is gone - deleted, and not made again
+    // before the dialog closed - keeps its write skipped, since there is no set left to write. Each
+    // write the draft attempts records the path it lands in, and the queued deletes below step aside
+    // only for that very path.
+    let mut written_at: BTreeMap<&str, PathBuf> = BTreeMap::new();
     for name in menus.file_write.keys() {
         let Some(set) = menus.sets.get(name) else { continue };
-        set_still_there.insert(name.as_str());
-        let wrote = match own_file(name) {
-            Some(path) => menu_sets::write_set_at(&path, name, set),
-            None => menu_sets::write_set(&dir, name, set),
+        // Where the write goes: the set's own file, or - spelling out what `write_set` would do -
+        // the menu-sets folder's own name for the set.
+        let to = match menus.set_file_of(name) {
+            Some(path) => Ok(path),
+            None => menu_sets::path_of(&dir, name),
+        };
+        if let Ok(path) = &to {
+            written_at.insert(name.as_str(), path.clone());
+        }
+        let wrote = match &to {
+            Ok(path) => menu_sets::write_set_at(path, name, set),
+            Err(e) => Err(e.clone()),
         };
         if let Err(e) = wrote {
             refused_write.push(e);
@@ -634,17 +649,27 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     }
     set_lines(app, tl!("The menu set was not saved: {error}"), &refused_write);
     let mut refused_delete = Vec::new();
-    for name in &menus.file_delete {
-        if set_still_there.contains(name.as_str()) {
+    // A delete is skipped only when a later Save of that name wrote the very file the delete was
+    // made for - the file it stood in when the Delete question was answered, taken then and not
+    // here. Making the same name again at a different path sends the set there; the old file stays
+    // in the folder, and the next open reads the deleted set back from it (#14450). Writing every
+    // queued file and then deleting every queued file took away the file of a set the user had just
+    // made again; skipping by name spared a file the save never wrote.
+    for (name, target) in &menus.file_delete {
+        let path = match target {
+            Some(path) => path.clone(),
+            None => match menu_sets::path_of(&dir, name) {
+                Ok(path) => path,
+                Err(e) => {
+                    refused_delete.push(e);
+                    continue;
+                }
+            },
+        };
+        if written_at.get(name.as_str()).is_some_and(|written| *written == path) {
             continue;
         }
-        // A set's own file is the one to take away, wherever it stands: the file the Save dialog sent
-        // it to, or the one the folder scan found it in. Looking only in the menu-sets folder can find
-        // no file at all, and the set comes back from the folder on the next open.
-        let taken = match own_file(name) {
-            Some(path) => menu_sets::delete_set_at(&path),
-            None => menu_sets::delete_set(&dir, name),
-        };
+        let taken = menu_sets::delete_set_at(&path);
         if let Err(e) = taken {
             refused_delete.push(e);
         }
