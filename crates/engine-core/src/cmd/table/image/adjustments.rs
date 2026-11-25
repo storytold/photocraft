@@ -115,9 +115,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Brightness/Contrast also refuses a hidden pixel layer (#14359).
+            enabled: match kind {
+                "brightnessContrast" => crate::adjust_cmds::brightness_contrast_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "brightnessContrast" {
+                    crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?;
+                }
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }

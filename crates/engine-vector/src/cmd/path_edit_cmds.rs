@@ -48,7 +48,7 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
 
 /// The History step name: `default`, or one of `named` when `stepName` asks for it (the Convert
 /// Point tool names its steps as the reference does, #12736; Direct Selection names a one-anchor
-/// drag, #13205). Any other value is refused.
+/// drag, #13205, and its arrow-key nudges, #13204). Any other value is refused.
 fn step_name(cmd: &str, p: &Value, default: &'static str, named: &[&'static str]) -> Result<&'static str> {
     match p.get("stepName") {
         None | Some(Value::Null) => Ok(default),
@@ -134,7 +134,7 @@ fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
     if duplicate && p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
         return Err(bad(CMD, "`duplicate` and `curvature` can't be combined"));
     }
-    let label = step_name(CMD, p, if duplicate { "Drag Path" } else { "Drag Anchor Points" }, &["Drag Path", "Drag Anchor Point"])?;
+    let label = step_name(CMD, p, if duplicate { "Drag Path" } else { "Drag Anchor Points" }, &["Drag Path", "Drag Anchor Point", "Nudge Path"])?;
     let curvature = p.get("curvature").and_then(Value::as_bool).unwrap_or(false);
     edit_path(s, CMD, p, label, |path| {
         if duplicate {
@@ -361,7 +361,7 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (anchors = all of one subpath's; that subpath is copied, with its operation (a joined subpath's copy takes its component's), as the path's last subpath, and the copy's anchors move instead; the source stays; Direct Selection's ⌥-drag on a segment, Add Anchor Point's ⌥-drag; not with curvature),"stepName":"Drag Path"|"Drag Anchor Point"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor, Add Anchor Point "Drag Path" when it duplicates a subpath; default "Drag Anchor Points", "Drag Path" with duplicate; any other value is refused)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (anchors = all of one subpath's; that subpath is copied, with its operation (a joined subpath's copy takes its component's), as the path's last subpath, and the copy's anchors move instead; the source stays; Direct Selection's ⌥-drag on a segment, Add Anchor Point's ⌥-drag; not with curvature),"stepName":"Drag Path"|"Drag Anchor Point"|"Nudge Path"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor and "Nudge Path" for its arrow-key nudges, Add Anchor Point "Drag Path" when it duplicates a subpath; default "Drag Anchor Points", "Drag Path" with duplicate; any other value is refused)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Control Point",

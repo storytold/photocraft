@@ -6,7 +6,7 @@
 //! [`open_prompt`] (a second open is refused, not replaced) and tags its prompt with its own type.
 //! [`prompt_tagged`] and [`prompt_tag`] find the open prompt by that tag.
 
-use craft::ui::dialog::{Alert, DialogId, DialogResult, DialogStack, HostedAlert, PromptAnswer, PromptChoice, StackDialog, StandardPrompt, dialog_id};
+use craft::ui::dialog::{Alert, DialogId, HostedAlert, PromptAnswer, PromptChoice, StackDialog, StandardPrompt};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -36,33 +36,6 @@ pub fn show(app: &mut PhotocraftApp, alert: Alert<'static>) -> DialogId {
 /// An alert titled "PhotoCraft" with `message` and OK; see [`show`] for the one-per-message rule.
 pub fn alert(app: &mut PhotocraftApp, message: impl Into<String>) -> DialogId {
     show(app, Alert::new(TITLE, message.into()))
-}
-
-/// An options bar's own alert can coexist with a generic range alert from another field.
-pub(crate) fn tool_options_alert(app: &mut PhotocraftApp, message: String) -> DialogId {
-    app.framework.dialogs.open(ToolOptionsAlert(HostedAlert::new(Alert::new(TITLE, message))))
-}
-
-struct ToolOptionsAlert(HostedAlert);
-
-impl StackDialog for ToolOptionsAlert {
-    type Result = ();
-
-    fn id(&self) -> DialogId {
-        dialog_id("toolOptionsAlert")
-    }
-
-    fn show(&mut self, ui: &mut egui::Ui, stack: &DialogStack) -> Option<DialogResult<()>> {
-        self.0.show(ui, stack)
-    }
-
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<()> {
-        self.0.confirm(ctx)
-    }
-
-    fn json_fields(&self) -> Option<Value> {
-        self.0.json_fields()
-    }
 }
 
 /// `message` with OK and "Don't show again", as the reference shows for warnings such as the
@@ -135,7 +108,6 @@ pub(crate) fn open_prompt(app: &mut PhotocraftApp, prompt: StandardPrompt) -> Re
 /// Takes the answer of a closed alert: it carries nothing, and the host keeps one plain result per dialog type.
 pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     let _ = app.framework.dialogs.take::<HostedAlert>();
-    let _ = app.framework.dialogs.take::<ToolOptionsAlert>();
 }
 
 /// The ids of the alerts open now: the plain alert and the prompt of [`alert_once`]. For tests.

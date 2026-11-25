@@ -4,7 +4,7 @@ use craft::draw::geometry::shape::ShapeGeometry;
 use craft::draw::ui::shape_drag::{BoxConstraints, ShapeKind};
 use craft::keymap::Mods;
 
-use super::options::{draws_path, solid_paint};
+use super::options::draws_path;
 use super::{Color32, PhotocraftApp, Tool, Value, json, paint_param};
 use crate::state::ToolOptions;
 
@@ -56,26 +56,39 @@ pub(super) fn open_pen_stroke_param(app: &PhotocraftApp) -> Value {
     }
     let mut fallback = app.ui.tool_options.shape_stroke.params();
     fallback["width"] = json!(1.0);
-    fallback["color"] = json!(app.session.tools.foreground);
+    fallback["color"] = solid_paint_param(tool_solid_color(app, false));
     fallback
 }
 
 /// The paint the next shape's fill (`stroke` false) or stroke takes: the options bar's gradient,
 /// else the foreground / background colour.
 pub(super) fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
-    let (gradient, color) = tool_paint_source(app, stroke);
-    gradient.clone().unwrap_or_else(|| solid_paint(color))
+    tool_gradient(app, stroke).clone().unwrap_or_else(|| photocraft_doc::Fill::Solid(tool_solid_color(app, stroke)))
 }
 
 /// [`tool_paint`] as `shape.create` takes it.
 fn tool_paint_param(app: &PhotocraftApp, stroke: bool) -> Value {
-    let (gradient, color) = tool_paint_source(app, stroke);
-    gradient.as_ref().map_or_else(|| json!(color), paint_param)
+    tool_gradient(app, stroke).as_ref().map_or_else(|| solid_paint_param(tool_solid_color(app, stroke)), paint_param)
 }
 
-fn tool_paint_source(app: &PhotocraftApp, stroke: bool) -> (&Option<photocraft_doc::Fill>, [f32; 4]) {
-    let o = &app.ui.tool_options;
-    if stroke { (&o.shape_stroke_gradient, app.session.tools.background) } else { (&o.shape_fill_gradient, app.session.tools.foreground) }
+fn tool_gradient(app: &PhotocraftApp, stroke: bool) -> &Option<photocraft_doc::Fill> {
+    let options = &app.ui.tool_options;
+    if stroke { &options.shape_stroke_gradient } else { &options.shape_fill_gradient }
+}
+
+fn solid_paint_param(color: photocraft_color::Color) -> Value {
+    if color.mode == photocraft_color::ColorMode::Cmyk { json!(color) } else { json!([color.c[0], color.c[1], color.c[2], color.alpha]) }
+}
+
+fn tool_solid_color(app: &PhotocraftApp, stroke: bool) -> photocraft_color::Color {
+    use photocraft_color::{Color, ColorMode};
+    let [r, g, b, alpha] = if stroke { app.session.tools.background } else { app.session.tools.foreground };
+    if app.session.active().is_some_and(|st| st.doc.mode == ColorMode::Cmyk)
+        && let Some(c) = app.session.tools.picked_role_cmyk(usize::from(stroke))
+    {
+        return Color { mode: ColorMode::Cmyk, c, alpha };
+    }
+    Color::rgba(r, g, b, alpha)
 }
 
 /// A Line-tool drag snapped as Photoshop's Align Edges (on by default) does: the ends on whole

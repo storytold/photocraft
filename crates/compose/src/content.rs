@@ -85,7 +85,7 @@ pub(crate) fn render_content_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx:
 ///
 /// See also [`stroke_frame`].
 pub fn layer_shape(doc: &Document, layer: &Layer, rect: Rect) -> Vec<f32> {
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     let cx = Ctx::for_doc(doc, &patterns);
     effect_shape(layer, rect, &cx)
 }
@@ -97,7 +97,7 @@ pub fn stroke_frame(doc: &Document, layer: &Layer, st: &photocraft_doc::StrokeFx
     if !matches!(st.paint, photocraft_doc::FxPaint::Gradient(_)) || !effects::has_effects(layer) {
         return None;
     }
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     let cx = Ctx::for_doc(doc, &patterns);
     effect_maps(layer, doc.bounds(), &cx).stroke_frame(st)
 }
@@ -187,9 +187,17 @@ pub fn fill_frame(layer: &Layer, canvas: Rect) -> Rect {
 }
 
 /// A fill layer's content over `canvas`, laid out in the frame its masks give it (as the
-/// compositor does) but without applying the masks: the pixels a PSD fill layer stores.
+/// compositor does) but without applying the masks: the pixels a PSD fill layer stores. A pattern
+/// keeps its own colours; [`render_fill_content_in`] paints it as a document does.
 pub fn render_fill_content(layer: &Layer, f: &Fill, canvas: Rect, patterns: &[Pattern]) -> Buffer {
-    let prepared = pattern::PreparedPatterns::new(patterns, pattern::PREPARED_PATTERN_BYTES);
+    render_fill_content_in(layer, f, canvas, patterns, pattern::PatternSpace::Mode(photocraft_color::ColorMode::Rgb))
+}
+
+/// [`render_fill_content`] with a pattern painted in `space`. A file stores the pixels of a
+/// document's fill layers in [`pattern::PatternSpace::of_pixels`] of the document, so they are
+/// what the compositor shows for the layer.
+pub fn render_fill_content_in(layer: &Layer, f: &Fill, canvas: Rect, patterns: &[Pattern], space: pattern::PatternSpace) -> Buffer {
+    let prepared = pattern::PreparedPatterns::new(patterns, pattern::PREPARED_PATTERN_BYTES).in_space(space);
     render_fill(f, canvas, fill_frame(layer, canvas), &prepared, None)
 }
 

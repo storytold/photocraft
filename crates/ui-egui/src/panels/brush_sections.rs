@@ -5,7 +5,7 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::EditEvents;
+use craft::behavior::{EditEvents, Selection};
 use craft::draw::ui::brush_presets::{BrushCardPart, BrushCardParts};
 use craft::draw::ui::brush_settings::{BrushSizeField, DynamicControl, DynamicControlRow, TipAngle, TipEllipse};
 use craft::ui::choice::Checkbox;
@@ -202,7 +202,7 @@ impl Pane<'_> {
             .toolbar(false)
             .room_height(GRID_HEIGHT);
         if let Some(key) = selected {
-            browser = browser.selected(key);
+            browser = browser.selection(Bind::given(Selection::single(key)));
         }
         browser.show(ui).events.into_iter().find_map(|event| match event {
             PresetEvent::Select { key: BrushKey::Preset(name), .. } => Some(name),

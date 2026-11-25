@@ -2204,7 +2204,8 @@ fn ending_the_transform_brings_back_the_tools_options_bar() {
     }
 }
 
-/// #15548: Free Transform on an unturned, unskewed box shows the horizontal skew as "0", not "-0".
+/// #15548: Free Transform on an unturned, unskewed box shows the horizontal skew as "0", not "-0". The field's value
+/// reads the unit it draws after the number.
 #[test]
 fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
     use egui_kittest::kittest::Queryable as _;
@@ -2213,7 +2214,7 @@ fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
     h.run_steps(2);
-    assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0"));
+    assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0 °"));
 }
 
 #[path = "warp_remove_split_tests.rs"]
