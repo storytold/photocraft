@@ -7,7 +7,7 @@ use super::{
 use egui_kittest::Harness;
 use photocraft_doc::Layer;
 
-fn pixel_layer_app() -> Result<PhotocraftApp, String> {
+fn pixel_layer_app() -> Result<Box<PhotocraftApp>, String> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 16, "height": 16}))?;
     app.run("layer.new.layer", json!({}))?;
