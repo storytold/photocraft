@@ -1238,6 +1238,22 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
     let threads = rayon::current_num_threads().max(1) as u64;
     #[cfg(target_arch = "wasm32")]
     let threads = 1u64;
+    if matches!(params, FilterParams::HighPass { .. })
+        && let Some(boxes) = blur::box_widths(params)
+    {
+        // Wide High Pass streams bands. Charge the intermediate band, strip writeback and
+        // worker line buffers, including repeated edges, instead of halo-expanded square tiles.
+        let (w, h) = (u64::from(area.width()), u64::from(area.height()));
+        let margin = boxes.iter().map(|width| (width / 2 * 2) as u64).sum::<u64>();
+        let strip = blur::STRIP as u64;
+        let pixel = (channels as u64).saturating_mul(4);
+        let column = (2 * h + margin).saturating_mul(pixel);
+        let band = w.min((RESULT_BUDGET as u64 / h.saturating_mul(pixel).max(1)).max(strip));
+        let band_bytes = column.saturating_mul(w).min((RESULT_BUDGET as u64).max(column.saturating_mul(strip)));
+        let horizontal = (band + margin).saturating_mul(3 * threads.min(h + margin));
+        let vertical = (h + margin).saturating_mul(2 * band.min(strip * threads));
+        return band_bytes.saturating_mul(3).saturating_add(horizontal.max(vertical).saturating_mul(pixel));
+    }
     let tile = auto_tile(params, bounds).max(1) as u64;
     // Each worker holds one tile's windows at a time, so no more workers than tiles hold them
     // at once (a 24 MP image at a 1024 px tile has 24 tiles, fewer than 32 threads).
@@ -1356,9 +1372,8 @@ fn apply_tiled_with_impl(
     if let Some(result) = checked_native_filter(surface, params, area, bounds, selection, extent, ctl) {
         return result.ok();
     }
-    let mut out = surface.clone();
     if area.is_empty() {
-        return Some(out);
+        return Some(surface.clone());
     }
     if matches!(params, FilterParams::Average) {
         return average::apply(surface, extent.map_or(area, |e| area.intersect(&e)), selection, ctl);
@@ -1368,8 +1383,9 @@ fn apply_tiled_with_impl(
         return result;
     }
     if let Some(boxes) = blur::box_widths(params) {
-        return apply_box_blur(out, surface, area, extent, selection, &boxes, ctl);
+        return apply_box_blur(surface, params, area, extent, selection, &boxes, ctl);
     }
+    let mut out = surface.clone();
     if let Some(result) = blur::motion_apply::apply(surface, params, area, bounds, selection, extent, tile, ctl) {
         return result;
     }
@@ -1582,14 +1598,15 @@ fn apply_tiled_with_impl(
 /// radius is read once rather than around every tile. Pixels beyond `extent` repeat its edge, as
 /// [`Image::read_clamped`] does for tiles; without one the surface is read (transparent where empty).
 fn apply_box_blur(
-    mut out: Surface,
     surface: &Surface,
+    params: &FilterParams,
     area: Rect,
     extent: Option<Rect>,
     selection: Option<&Surface>,
     boxes: &[usize],
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
+    let mut out = surface.clone();
     let fmt = surface.format();
     let n = fmt.channels();
     let reach = i32::try_from(boxes.iter().map(|w| w / 2).sum::<usize>()).unwrap_or(i32::MAX);
@@ -1618,8 +1635,15 @@ fn apply_box_blur(
         }
         let write = |(s, v): &mut (Surface, Vec<blur::Strip>)| {
             for (t, data) in v.iter_mut() {
-                if let Some(sel) = selection {
-                    mix_selection(data, *t, sel, &Image::read(surface, *t), fmt.alpha);
+                let high_pass = matches!(params, FilterParams::HighPass { .. });
+                if high_pass || selection.is_some() {
+                    let original = Image::read(surface, *t);
+                    if high_pass {
+                        sharpen::high_pass_residual(data, &original.data, n, fmt.alpha);
+                    }
+                    if let Some(sel) = selection {
+                        mix_selection(data, *t, sel, &original, fmt.alpha);
+                    }
                 }
                 s.write_region(*t, data);
                 photocraft_raster::scratch::give(std::mem::take(data));
