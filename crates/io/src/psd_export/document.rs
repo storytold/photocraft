@@ -66,7 +66,11 @@ fn document_to_psd_sized_with_patterns(
     if doc.mode == ColorMode::Multichannel {
         return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns);
     }
-    if let Some(file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns)? {
+    if let Some(mut file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns)? {
+        // An Indexed document's RGB profile is written there too; Include ICC Profile off leaves it out.
+        if !opts.embed_icc {
+            file.0.resources.retain(|r| r.id != ids::ICC_PROFILE);
+        }
         return Ok(file);
     }
     let fmt = doc.pixel_format();

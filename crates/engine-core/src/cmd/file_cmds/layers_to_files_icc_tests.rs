@@ -159,3 +159,25 @@ fn off_keeps_a_cmyk_documents_own_profile_for_its_colours() {
         assert!(s.active().unwrap().doc.icc_profile.is_some(), "the document keeps its profile");
     }
 }
+
+/// An Indexed Color document with an RGB profile: `iccProfile: false` writes no profile in any file,
+/// the PSD included, which is written over its colour table (CodeRabbit on #16653), and the
+/// layered TIFF; `true` keeps it in the PSD.
+#[test]
+fn an_indexed_documents_files_follow_the_setting() {
+    let mut s = session("rgb", 8);
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false})).unwrap();
+    // The conversion flattens: a normal layer again (#13968).
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(doc.mode, ColorMode::Indexed);
+    assert!(doc.icc_profile.is_some(), "the document keeps its profile");
+    assert!(doc.layers.iter().any(|l| !doc.is_background(l.id)), "a layer to export");
+    for format in ["png", "jpg", "tif", "psd", "bmp"] {
+        assert!(profiles(&mut s, format, json!({"iccProfile": false})).iter().all(|(_, icc)| icc.is_none()), "indexed {format}: no profile");
+    }
+    let layered = profiles(&mut s, "tif", json!({"iccProfile": false, "tiffLayers": true}));
+    assert!(layered.iter().all(|(_, icc)| icc.is_none()), "indexed layered tif: no profile");
+    assert_eq!(one(&mut s, "psd", json!({"iccProfile": true})).1, Some("RGB".into()), "indexed psd: the profile");
+}
