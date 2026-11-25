@@ -1538,6 +1538,21 @@ fn print_one_copy(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- Package ----------
 
+/// An existing package folder (#14075): without `overwrite` an error naming it, before anything is
+/// written; with it the old folder is removed as a whole, so the new package does not merge into
+/// it. A file or a symbolic link in its place is refused, not removed.
+fn replace_package_folder(cmd: &str, folder: &str, overwrite: bool) -> Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(folder) else { return Ok(()) };
+    if !meta.is_dir() {
+        let what = if meta.file_type().is_symlink() { "a symbolic link" } else { "a file" };
+        return Err(other(format!("cannot package into {folder}: it is {what}, not a package folder")));
+    }
+    if !overwrite {
+        return Err(bad(cmd, format!("the package folder {folder} already exists: pass \"overwrite\": true to replace it")));
+    }
+    std::fs::remove_dir_all(folder).map_err(|e| other(format!("cannot replace the package folder {folder}: {e}")))
+}
+
 fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.package";
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"dir\" (where to create the package folder)"))?;
@@ -1558,7 +1573,14 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
         Some(f) => return Err(bad(cmd, format!("unknown package format `{f}` (pcraft|psd|psb)"))),
         None => "pcraft".into(),
     };
+    let overwrite = match p.get("overwrite") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, format!("`overwrite` must be true or false, got {v}")))?,
+    };
+    // `sanitize` gives one plain name (no separator, no `.` or `..`), so the package folder is
+    // always a child of `dir`: replacing it never touches `dir` or anything else in it.
     let folder = join(&dir, &crate::file_cmds::sanitize(&name));
+    replace_package_folder(cmd, &folder, overwrite)?;
     let links_dir = join(&folder, "Links");
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
@@ -1811,7 +1833,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Package…",
             &["File"],
             None,
-            r##"{"dir":folder,"format":"pcraft|psd|psb"="pcraft"} → {folder, document, links, missing} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
+            r##"{"dir":folder,"format":"pcraft|psd|psb"="pcraft","overwrite":bool=false} → {folder, document, links, missing} (copies the document and its linked files into <dir>/<name>/, relinked to Links/; an existing <dir>/<name>/ is an error unless overwrite, which replaces that folder as a whole)"##,
             native_doc,
             package
         ),
@@ -1849,3 +1871,7 @@ mod package_clash_name_tests;
 #[cfg(test)]
 #[path = "print_cmds/package_layer_rename_tests.rs"]
 mod package_layer_rename_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_overwrite_tests.rs"]
+mod package_overwrite_tests;
