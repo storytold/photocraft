@@ -68,16 +68,13 @@ fn the_blur_bar_reads_and_edits_the_same_angle_as_brush_settings() {
 #[test]
 fn entering_an_angle_past_either_limit_keeps_the_limit_and_shows_one_alert() {
     let mut h = blur_bar();
-    let format = crate::i18n::framework_i18n().format();
-    let degrees = |value| format!("{}°", format.number_ungrouped(value, 0));
-    let (low, high) = (degrees(-180.0), degrees(180.0));
     for (typed, expected) in [("200", 180.0), ("-200", -180.0)] {
         type_number(&mut h, "Angle", typed);
         assert_eq!(h.state().session.tools.brush.angle, expected);
         let dialogs = h.state().framework.dialogs.open_dialogs();
         assert_eq!(dialogs.len(), 1);
         let message = dialogs[0].fields.as_ref().unwrap()["message"].as_str().unwrap();
-        assert_eq!(message, format!("Enter a whole brush angle from {low} to {high}. The angle is now {}.", degrees(f64::from(expected))));
+        assert_eq!(message, "Invalid numeric entry. An integer between -180 ° and 180 ° is required. Restored last valid value.");
         assert_eq!(h.get_by_role(Role::AlertDialog).accesskit_node().description().as_deref(), Some(message));
 
         h.get_by_role_and_label(Role::Button, "OK").click();

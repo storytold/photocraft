@@ -7,7 +7,6 @@ use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::dialog::{Alert, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog, dialog_id};
 use craft::ui::display::Divider;
 use craft::ui::primitives::IconSpec;
-use craft::ui::runtime::env::Env;
 use craft::ui::text::RangeAlert;
 use photocraft_color::BlendMode;
 
@@ -86,8 +85,8 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     let alert = match tool {
         Tool::Blur => {
             let _ = app.framework.dialogs.take::<BlurAngleAlert>();
-            if let Some(angle) = brush_angle(ui, app) {
-                show_blur_angle_alert(ui, app, &angle);
+            if brush_angle(ui, app).is_some() {
+                show_blur_angle_alert(app);
             }
             strength
         }
@@ -119,13 +118,8 @@ fn brush_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert>
     out.out_of_range
 }
 
-fn show_blur_angle_alert(ui: &egui::Ui, app: &mut PhotocraftApp, alert: &RangeAlert) {
-    let units = Env::of(ui).units();
-    let [low, high, kept] = [*alert.range.start(), *alert.range.end(), alert.kept].map(|value| units.degrees(value));
-    let message = crate::i18n::fmt(
-        tl!("Enter a whole brush angle from {low} to {high}. The angle is now {kept}."),
-        &[("low", low.as_str()), ("high", high.as_str()), ("kept", kept.as_str())],
-    );
+fn show_blur_angle_alert(app: &mut PhotocraftApp) {
+    let message = tl!("Invalid numeric entry. An integer between -180 ° and 180 ° is required. Restored last valid value.");
     app.framework.dialogs.open(BlurAngleAlert(HostedAlert::new(Alert::new(tl!("PhotoCraft"), message))));
 }
 
