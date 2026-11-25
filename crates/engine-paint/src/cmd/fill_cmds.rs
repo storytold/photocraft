@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 
 use crate::commands::{cmyk_param, color_param, layer_param, parse_blend};
 use crate::content_sampling::{content_aware, content_aware_options};
-use crate::pixel_fill::{Blend, Source, blend_into, read_rgba};
+pub use crate::pixel_fill::greyed_modes;
+use crate::pixel_fill::{Blend, Source, blend_into, check_mode_available, read_rgba};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -75,6 +76,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let channel = crate::channel_cmds::is_channel_target(p);
     let id = if channel { None } else { Some(layer_param(s, p)?) };
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    check_mode_available(CMD, &st.doc, mode)?;
     let doc_bounds = st.doc.bounds();
     let sel = st.doc.selection.clone();
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
@@ -160,3 +162,6 @@ fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mode_by_document_tests;
