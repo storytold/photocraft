@@ -189,13 +189,16 @@ fn moved(x: f64, y: f64) -> bool {
     x != 0.0 || y != 0.0
 }
 
-/// The ⇧ Convert Point handle lock (#12739): the handle end `p` of `knot` on `r` moved onto the
-/// 45° step about its anchor that [`crate::stroke_constraint::handle_step_keep_x`] picks, x
-/// component kept. `p` stays put when that helper declines the lock (the unmeasured vertical
-/// band, a zero or non-finite offset) and when the path, subpath or anchor is gone.
-fn shift_lock(app: &PhotocraftApp, r: PathRef, knot: KnotRef, p: Point) -> Point {
+/// The ⇧ Convert Point lock (#12739): the handle end or out-point `p` of `knot` on `r` moved
+/// onto a 45° step about the anchor; `step` is the rule of the gesture measured — a handle-END
+/// drag takes the nearest band ([`crate::stroke_constraint::handle_step_nearest_band`], whose
+/// (+60,+25) gives (+60,+60)), a drag from the ANCHOR the step keeping the x component
+/// ([`crate::stroke_constraint::handle_step_keep_x`], whose (+60,+25) gives (+60,0)). `p` stays
+/// put when the helper declines the lock (the unmeasured vertical band, a zero or non-finite
+/// offset) and when the path, subpath or anchor is gone.
+fn shift_lock(app: &PhotocraftApp, r: PathRef, knot: KnotRef, p: Point, step: fn(f64, f64) -> Option<[f64; 2]>) -> Point {
     let Some(anchor) = super::path_of(app, &r).and_then(|path| path.subpaths.get(knot.subpath)?.knots.get(knot.knot).map(|k| k.anchor)) else { return p };
-    match crate::stroke_constraint::handle_step_keep_x(p.x - anchor.x, p.y - anchor.y) {
+    match step(p.x - anchor.x, p.y - anchor.y) {
         Some([dx, dy]) => Point::new(anchor.x + dx, anchor.y + dy),
         None => p,
     }
@@ -242,7 +245,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
             command(app, r, "path.moveAnchors", json!({"anchors": ids(anchors), "move": [by.x, by.y], "curvature": true}));
         }
         PathEdit::MoveHandle { knot, side, to, alone, .. } => {
-            let to = if lock { shift_lock(app, r, *knot, *to) } else { *to };
+            let to = if lock { shift_lock(app, r, *knot, *to, crate::stroke_constraint::handle_step_nearest_band) } else { *to };
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot, "handle": side_name(*side), "to": [to.x, to.y], "independent": alone});
             if convert_tool && *alone {
                 params["stepName"] = json!("Corner Drag");
@@ -255,7 +258,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
         PathEdit::Convert { knot, out, .. } => {
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot});
             if let Some(out) = out {
-                let out = if lock { shift_lock(app, r, *knot, *out) } else { *out };
+                let out = if lock { shift_lock(app, r, *knot, *out, crate::stroke_constraint::handle_step_keep_x) } else { *out };
                 params["out"] = json!([out.x, out.y]);
             }
             if convert_tool {

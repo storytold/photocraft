@@ -1,11 +1,13 @@
-//! #12739: ⇧ while dragging with the Convert Point tool locks the handle to the nearest 45°
+//! #12739: ⇧ while dragging with the Convert Point tool locks the dragged point onto a 45°
 //! step about its anchor, keeping the drag's x component (measured in the reference app on the
-//! document below: (+60,+25) gives (+60,0) and (−78,+140) gives (−78,+78)). ⇧ decides at the
-//! gesture's release: pressed during the drag it constrains from then on, released during it the
-//! drag ends as today. Without ⇧, with other tools, and for the vertical band whose component
-//! choice was not measured, the behaviour stays today's. The lock is a rule of the pointer
-//! gesture only: an arrow-key nudge of a focused handle arrives as a `Set` with nothing dragged,
-//! and ⇧ there stays the larger step (`NUDGE_FAR`).
+//! document below). The two measured gestures differ at one angle: a drag FROM THE ANCHOR
+//! prefers the horizontal step — (+60,+25) gives (+60,0) — while a handle-END drag takes the
+//! nearest band — (+60,+25) gives (+60,+60) and (−78,+140) gives (−78,+78), the table's two
+//! handle rows. ⇧ decides at the gesture's release: pressed during the drag it constrains from
+//! then on, released during it the drag ends as today. Without ⇧, with other tools, and for
+//! the vertical band whose component choice was not measured, the behaviour stays today's. The
+//! lock is a rule of the pointer gesture only: an arrow-key nudge of a focused handle arrives
+//! as a `Set` with nothing dragged, and ⇧ there stays the larger step (`NUDGE_FAR`).
 
 use egui::Modifiers;
 use photocraft_geom::Point;
@@ -16,8 +18,10 @@ use crate::canvas::testing;
 use crate::state::Tool;
 
 /// The issue's measured test document: 800×600 px, a Work Path with a closed corner square
-/// (100,300)(300,300)(300,500)(100,500) and an open S-curve (400,450) smooth with out-handle
-/// (500,350) to (700,450) smooth with in-handle (600,550).
+/// (100,300)(300,300)(300,500)(100,500), an open S-curve (400,450) smooth with out-handle
+/// (500,350) to (700,450) smooth with in-handle (600,550), and (since the table's second handle
+/// row) an open corner path (400,100) → (600,100) whose anchor (600,100) has its in-handle at
+/// (500,200) and its out handle retracted at the anchor.
 fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
@@ -26,6 +30,10 @@ fn app(tool: Tool) -> Box<PhotocraftApp> {
         {"closed": false, "knots": [
             {"anchor": [400, 450], "out": [500, 350], "smooth": true},
             {"anchor": [700, 450], "in": [600, 550], "smooth": true},
+        ]},
+        {"closed": false, "knots": [
+            [400, 100],
+            {"anchor": [600, 100], "in": [500, 200]},
         ]},
     ]});
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
@@ -97,6 +105,22 @@ fn shift_drag_of_a_handle_end_lands_on_the_diagonal_step_keeping_the_x_component
     assert!(close(k.in_ctrl, p(622.0, 528.0)), "the handle ends on the 135° ray, x kept: {k:?}");
     assert!(close(k.out_ctrl, p(700.0, 450.0)), "the opposite handle is unchanged: {k:?}");
     assert!(close(knot(&app, 1, 0).out_ctrl, p(500.0, 350.0)), "the neighbour knot is unchanged");
+    assert_eq!(steps(&app), n + 1, "one history step for the handle drag");
+}
+
+#[test]
+fn shift_drag_of_the_tables_second_handle_row_lands_on_the_diagonal_step_keeping_the_x_component() {
+    // Measured (the table's second Shift-handle-drag row): anchor (600,100) with its in-handle
+    // (500,200), dragged to (660,125), ends at (660,160) — offset (+60,+25) takes the 45° diagonal
+    // step (+60,+60), x kept. The retracted out handle stays at the anchor.
+    let mut app = app(Tool::ConvertPoint);
+    testing::click(&mut app, [600.0, 100.0], Modifiers::COMMAND);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[2, 1]], "⌘-click shows the handles");
+    let n = steps(&app);
+    drag(&mut app, [500.0, 200.0], [660.0, 125.0], Modifiers::SHIFT);
+    let k = knot(&app, 2, 1);
+    assert!(close(k.in_ctrl, p(660.0, 160.0)), "the second row's handle ends on the diagonal step, x kept: {k:?}");
+    assert!(close(k.out_ctrl, p(600.0, 100.0)), "the retracted opposite handle is unchanged: {k:?}");
     assert_eq!(steps(&app), n + 1, "one history step for the handle drag");
 }
 
