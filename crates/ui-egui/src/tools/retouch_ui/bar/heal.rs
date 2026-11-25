@@ -13,6 +13,7 @@ use serde_json::Value as Json;
 
 use crate::PhotocraftApp;
 use crate::option_cells::{hint, number};
+use crate::state::Tool;
 
 /// The tooltip of the Structure field of Content-Aware Move.
 const STRUCTURE_TIP: &str = "Adjust how strictly the source structure is preserved";
@@ -143,13 +144,14 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
 /// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let source_unset = app.session.presets().clone.active().source.is_none();
+    let clone_stamp = app.ui.tool == Tool::CloneStamp;
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
     let o = &mut app.ui.tool_options;
-    check(ui, tl!("Aligned"), &mut o.clone_aligned, true, None);
+    check(ui, tl!("Aligned"), &mut o.clone_aligned, true, clone_stamp.then(|| tl!("Keep the same source offset between strokes")));
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
-    choose(ui, tl!("Sample"), sample, &samples, !indexed, None);
+    choose(ui, tl!("Sample"), sample, &samples, !indexed, clone_stamp.then(|| tl!("Choose which layers to sample")));
     if source_unset {
         Divider::vertical().show(ui);
         hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));

@@ -335,6 +335,56 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments › Brightness/Contrast's id.
+pub(crate) const BRIGHTNESS_CONTRAST_ID: &str = "image.adjustments.brightnessContrast";
+/// The reference application's alert for Brightness/Contrast on a hidden pixel layer.
+pub const BRIGHTNESS_CONTRAST_UNAVAILABLE: &str = "The command \"Brightness/Contrast\" is not currently available.";
+/// The reference application's alert for Brightness/Contrast on an empty pixel layer.
+pub const BRIGHTNESS_CONTRAST_EMPTY: &str = "Could not complete the Brightness/Contrast command because the active layer is empty.";
+
+/// Brightness/Contrast's precondition with no params: the Channels panel's target, as
+/// [`brightness_contrast_enabled_with`] checks it, else [`has_adjustable`].
+pub(crate) fn brightness_contrast_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, BRIGHTNESS_CONTRAST_ID, Value::Null);
+    brightness_contrast_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Brightness/Contrast's precondition for a call with `p`, its target filled in from the Channels
+/// panel (#14359): [`has_adjustable`]'s, and a hidden pixel layer (the active one or the one
+/// `"layer"` names) greys the item, as in the reference application. An alpha channel or Quick
+/// Mask target keeps [`has_adjustable`] alone; `None` for a layer mask or a filter mask, which keep
+/// their own checks. A layer inside a hidden group and a hidden smart object keep today's
+/// behaviour (not measured).
+pub(crate) fn brightness_contrast_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask | Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => {
+            let d = s.active()?;
+            let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
+            let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
+            Some(if hidden { Err(BRIGHTNESS_CONTRAST_UNAVAILABLE.into()) } else { has_adjustable(s) })
+        }
+    }
+}
+
+/// Brightness/Contrast with `p` (its target filled in) stops on an empty pixel layer before it
+/// edits anything (#14359). Its other refusals are the precondition's, which `execute` checks
+/// first.
+pub(crate) fn brightness_contrast_empty_refusal(s: &Session, p: &Value) -> Result<()> {
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(());
+    }
+    let id = crate::commands::layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
+        return Err(EngineError::Other(BRIGHTNESS_CONTRAST_EMPTY.into()));
+    }
+    Ok(())
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.

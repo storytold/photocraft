@@ -70,6 +70,11 @@ impl Before {
             None => Self::default(),
         }
     }
+
+    /// Whether the command left the active document as it was: the same document, unedited.
+    pub(crate) fn kept(&self, s: &Session) -> bool {
+        matches!((&self.doc, s.active()), (Some(doc), Some(st)) if Arc::ptr_eq(doc, &st.doc))
+    }
 }
 
 /// Commands whose explicit `layer` names source content rather than a default target.

@@ -559,7 +559,7 @@ mod pattern_upload_tests {
         for y in 0..5 {
             surface.fill_rect(Rect::new(0, y, 3, y + 1), &[y as f32 / 4., 0.25, 0.75, 0.5]);
         }
-        Pattern { id: "upload".into(), name: "upload".into(), width: 3, height: 5, surface }
+        Pattern { id: "upload".into(), name: "upload".into(), width: 3, height: 5, source_mode: None, surface }
     }
 
     #[test]

@@ -555,7 +555,9 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
     };
     let mut sh = ShapeLayer { path, fill, stroke, use_aligned_rendering, ..Default::default() };
-    let id = s.edit("New Shape Layer", |doc, active| {
+    // The step the Make Shape button records is named for what it does with the path, as the reference application
+    // names it (#12890); a shape layer drawn with a Shape tool keeps "New Shape Layer" (`shape.create`).
+    let id = s.edit("Make shape from path", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
         let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);

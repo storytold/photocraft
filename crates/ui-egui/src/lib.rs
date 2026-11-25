@@ -737,7 +737,11 @@ mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod burn_bar_angle_pressure_tests;
+#[cfg(test)]
 mod cam_no_pixels_alert_tests;
+#[cfg(test)]
+mod dodge_bar_angle_pressure_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
@@ -895,6 +899,8 @@ mod artboard_from_group_label_tests;
 mod layer_props_ui_tests;
 #[cfg(test)]
 mod notice_text_tests;
+#[cfg(test)]
+mod transform_rotate90_bounds_tests;
 #[cfg(test)]
 mod transform_switch_tests;
 #[cfg(test)]

@@ -637,7 +637,8 @@ fn completed_pen_path_right_click_makes_selection() {
 fn pen_menu_finishes_in_progress_path_before_selection() {
     let mut app = app();
     pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)]);
-    assert!(app.session.active().unwrap().doc.work_path.is_none());
+    // #12890: the Work Path is in the document while the path is still being drawn.
+    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().map(|p| p.subpaths[0].knots.len()), Some(3));
     assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
     assert!(entry_enabled(&app, menu, "path.toSelection"));

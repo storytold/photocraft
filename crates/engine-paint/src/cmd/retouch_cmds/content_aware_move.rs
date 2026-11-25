@@ -15,15 +15,13 @@
 //! * **Color** 0 pastes the middle as it is. Content-Aware Move keeps that middle through Color 5.
 //!   Above 5, when every colour channel's mean shift agrees (a brightness change), the middle moves
 //!   toward the new surroundings, the whole way at Color 10. A hue change leaves the middle alone.
-//!   The edge band still blends at every Color. The Patch Tool keeps a limited gain and bias of
-//!   about `0.04 · color` ([`photocraft_algo::content_aware::color_amount`]: content 42 and 102
-//!   levels brighter shifts 32 and 31 levels at 3, and 35 and 95 at 10).
+//!   The edge band still blends at every Color.
 //!
 //! The selection moves with the content, as in Photoshop. A soft selection counts wherever it is
 //! above zero (as the Patch Tool's); the band does the blending. The fills are PatchMatch
 //! completions and can take seconds on large selections, so the command runs as a background job
 //! (#210): with progress, cancellable, and the document unchanged until it applies. The Patch
-//! Tool's Content-Aware mode lands its content through [`land`], keeping that limited fit.
+//! Tool's Content-Aware mode fills its selection from the surroundings instead (see `patch`).
 //!
 //! **Transform On Drop** (the options-bar checkbox): after the drop a transform box lets the user
 //! scale and rotate the content before the blend is computed. `scaleX` / `scaleY` (%) and
@@ -32,7 +30,7 @@
 //! transformed with it. A transformed patch may reach past the canvas edge (Photoshop lets the
 //! box go there): what lands outside is dropped.
 
-use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fill_with, level_transform};
+use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fill_with};
 use photocraft_algo::transform::{Homography, Interp};
 
 use super::patch::{coverage, offset, selection_area, target_layer};
@@ -404,8 +402,8 @@ fn channel_mean(samples: &[f32], ch: usize, c: usize) -> Option<f32> {
 /// gets gain 1 and a share of that mean difference, the whole of it at Color 10. A hue change
 /// (the channels disagree) stays a plain copy at every Color. Alpha is always copied.
 ///
-/// The means are the ring just outside the selection, the same samples the Patch fit uses. On the
-/// measured patches that ring has the same mean as the content, so the middle moves by about the
+/// The means are the ring just outside the selection. On the measured moves that ring has the
+/// same mean as the content, so the middle moves by about the
 /// difference between the new surroundings and the content.
 fn cam_core_fit(ch: usize, from: &[f32], to: &[f32], color: u8, alpha: Option<usize>) -> Vec<(f32, f32)> {
     let identity = vec![(1.0f32, 0.0f32); ch];
@@ -452,31 +450,10 @@ fn cam_core_fit(ch: usize, from: &[f32], to: &[f32], color: u8, alpha: Option<us
 
 /// Content landing at `dst_area`: the pixels of the window around it, with `selected` (the
 /// selection's shape there) to be replaced by the content found `shift` away (`content` = that
-/// window, so `content` pixel = window pixel + `shift`). The content's middle is copied and fitted
-/// with the Patch Tool's limited gain and bias; a `band_width(structure)` band inside the
-/// selection's edge is re-synthesised from the surroundings and that middle, never sampling
-/// `avoid`. Writes the result into the target and returns the rectangle it changed.
-/// Content-Aware Move calls [`land_at`] so its middle follows that tool's Color rule.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn land(
-    doc: &mut Document,
-    t: Target,
-    p: &Value,
-    win: Rect,
-    selected: &[bool],
-    content: &Region,
-    avoid: &[bool],
-    structure: u8,
-    color: u8,
-    stage: (f32, f32),
-    ctx: &crate::jobs::JobCtx,
-    label: &str,
-) -> Result<Rect> {
-    land_at(doc, t, p, win, selected, content, avoid, structure, color, stage, ctx, label, false)
-}
-
-/// [`land`], with `cam` choosing the middle's colour fit: the Patch Tool's limited gain and bias,
-/// or Content-Aware Move's brightness shift.
+/// window, so `content` pixel = window pixel + `shift`). The content's middle is copied and
+/// fitted by [`cam_core_fit`]; a `band_width(structure)` band inside the selection's edge is
+/// re-synthesised from the surroundings and that middle, never sampling `avoid`. Writes the
+/// result into the target and returns the rectangle it changed.
 #[allow(clippy::too_many_arguments)]
 fn land_at(
     doc: &mut Document,
@@ -491,7 +468,6 @@ fn land_at(
     stage: (f32, f32),
     ctx: &crate::jobs::JobCtx,
     label: &str,
-    cam: bool,
 ) -> Result<Rect> {
     let (w, h) = (win.width() as usize, win.height() as usize);
     let here = read(doc, t, p, win)?;
@@ -511,7 +487,7 @@ fn land_at(
     let alpha = alpha_index(&fmt);
     let from = pick(content);
     let to = pick(&here);
-    let gb = if cam { cam_core_fit(n, &from, &to, color, alpha) } else { level_transform(n, &from, &to, color_amount(color)) };
+    let gb = cam_core_fit(n, &from, &to, color, alpha);
     let mut buf = here;
     for (i, _) in core.iter().enumerate().filter(|(_, c)| **c) {
         for (c, &(g, b)) in gb.iter().enumerate() {
@@ -565,7 +541,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
         }
     };
     let old_place = mask(sel, win);
-    let mut damage = land_at(doc, plan.target, p, win, &moved, &content, &old_place, plan.structure, plan.color, (0.0, split), ctx, label, true)?;
+    let mut damage = land_at(doc, plan.target, p, win, &moved, &content, &old_place, plan.structure, plan.color, (0.0, split), ctx, label)?;
 
     // 2. Move: fill the place the content left (where the content didn't land on it).
     if plan.mode == Mode::Move {

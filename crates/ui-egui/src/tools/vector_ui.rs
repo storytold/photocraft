@@ -122,6 +122,15 @@ pub struct PenPath {
     /// The draft's shape layer was made on its first anchor (#12909) and takes its anchors as they are placed;
     /// `resumes` names that layer and its subpath.
     pub(crate) live_layer: bool,
+    /// The draft's Work Path was made on its first anchor (#12890) and takes each click as its own History step;
+    /// `resumes` names that path and its subpath.
+    pub(crate) live_path: bool,
+    /// The ids of the History states this draft's own live writes minted (#16686 review), oldest first.
+    /// A step's name is not proof of who wrote it - `path.set` takes a Pen step name from any caller - while a
+    /// History state id (`History::row_id`) is minted by History, never reused, and no parameter can carry one.
+    /// A live draft follows its path only onto a state it minted itself, or one whose successor is waiting to be
+    /// redone; anything else the document moved to is a step from elsewhere and makes the draft stale.
+    pub(crate) live_steps: Vec<u64>,
 }
 
 /// The subpath a Pen path carries on: where it is and what it was when drawing resumed. The
