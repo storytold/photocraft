@@ -218,3 +218,72 @@ fn a_mask_from_another_document() {
     assert_eq!(rgb(&app, 50, 50), [55, 155, 205]);
     assert_eq!(rgb(&app, 300, 50), [50, 150, 250]);
 }
+
+/// "clash" (RGB 8 bit, 400 x 300, Background 200/100/50): an alpha channel named "Red" white on the left half, and a
+/// pixel layer named "merged" white on the right half above the Background, which is targeted.
+fn names_like_the_built_in_choices() -> (Box<PhotocraftApp>, egui::Context, usize) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    run(&mut app, "file.new", json!({"width": 400, "height": 300, "background": "#c86432", "name": "clash"}));
+    run(&mut app, "select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 300}));
+    run(&mut app, "select.saveSelection", json!({"name": "Red"}));
+    run(&mut app, "select.deselect", json!({}));
+    run(&mut app, "layer.new.layer", json!({"name": "merged"}));
+    fill(&mut app, [200, 0, 200, 300], "#ffffff");
+    run(&mut app, "layer.select", json!({"name": "Background"}));
+    app.sync_views();
+    let ctx = app.ctx().clone();
+    let clash = index_of(&app, "clash");
+    (app, ctx, clash)
+}
+
+/// The option id of row `key` at `position` of its list, after checking the list's labels and that no two options
+/// share an id.
+fn option_at(app: &mut PhotocraftApp, key: &str, labels: &[&str], position: usize) -> String {
+    let list = options(app, key);
+    assert_eq!(list.iter().map(|(_, label)| label.as_str()).collect::<Vec<_>>(), labels, "{key}");
+    let mut unique: Vec<&String> = list.iter().map(|(id, _)| id).collect();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), list.len(), "{key} options share an id: {list:?}");
+    list[position].0.clone()
+}
+
+#[test]
+fn a_mask_alpha_named_like_a_colour_channel_reads_the_alpha() {
+    let (mut app, ctx, clash) = names_like_the_built_in_choices();
+    let alpha = option_at(&mut app, &mask_channel_key(clash), &["Gray", "Red", "Green", "Blue", "Red"], 4);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceInvert", json!(true));
+    set(&mut app, &ctx, d, MASK_ON, json!(true));
+    set(&mut app, &ctx, d, MASK_SOURCE, json!(clash.to_string()));
+    set(&mut app, &ctx, d, &mask_channel_key(clash), json!(alpha));
+    assert_eq!(fields(&app, d)["maskChannel"], json!({"alpha": 0}), "an explicit alpha selector");
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    // The alpha masks the left half in and the right half out; the red plane (200 everywhere) would mix both.
+    assert_eq!(rgb(&app, 50, 50), [55, 155, 205]);
+    assert_eq!(rgb(&app, 300, 50), [200, 100, 50]);
+}
+
+#[test]
+fn a_mask_layer_named_merged_is_that_layer_not_the_composite() {
+    let (mut app, ctx, clash) = names_like_the_built_in_choices();
+    let layer = option_at(&mut app, &mask_layer_key(clash), &["Merged", "merged", "Background"], 1);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceInvert", json!(true));
+    set(&mut app, &ctx, d, MASK_ON, json!(true));
+    set(&mut app, &ctx, d, MASK_SOURCE, json!(clash.to_string()));
+    set(&mut app, &ctx, d, &mask_layer_key(clash), json!(layer));
+    assert_eq!(fields(&app, d)["maskLayer"], json!({"name": "merged"}), "an explicit layer name selector");
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let through_dialog = [rgb(&app, 50, 50), rgb(&app, 300, 50)];
+    run(&mut app, "edit.undo", json!({}));
+    // The same as the command with the layer named explicitly, and not the result of the composite as mask.
+    let mask = |layer: Value| json!({"sourceInvert": true, "blending": "normal", "mask": {"document": clash, "layer": layer, "channel": "RGB"}});
+    run(&mut app, APPLY, mask(json!({"name": "merged"})));
+    assert_eq!([rgb(&app, 50, 50), rgb(&app, 300, 50)], through_dialog);
+    run(&mut app, "edit.undo", json!({}));
+    run(&mut app, APPLY, mask(json!("merged")));
+    assert_ne!([rgb(&app, 50, 50), rgb(&app, 300, 50)], through_dialog, "the composite masks differently");
+}
