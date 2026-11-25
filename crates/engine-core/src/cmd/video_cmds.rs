@@ -932,23 +932,15 @@ fn open_plate(
     Ok(std::sync::Arc::new(plate))
 }
 
-/// [`plate_cache_budget`] as Preferences › Performance › Memory Usage last set it
-/// ([`crate::prefs::Performance::plate_cache_bytes`]).
-static PLATE_CACHE_BUDGET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(photocraft_doc::DEFAULT_PLATE_CACHE_BYTES);
-
-/// Follow Memory Usage: every plate keeps at most `bytes` of decoded frames, open ones from their
-/// next read on.
-pub(crate) fn set_plate_cache_budget(bytes: u64) {
-    PLATE_CACHE_BUDGET.store(bytes, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Bytes of decoded frames a plate keeps around the playhead.
+/// Bytes of decoded frames a plate keeps around the playhead: an eighth of the memory PhotoCraft
+/// may use (Preferences › Performance › Memory Usage, the ceiling [`footage_byte_limit`] follows
+/// too), read again at every frame read so a changed setting reaches open plates.
 fn plate_cache_budget() -> u64 {
     #[cfg(test)]
     if let Some(limit) = limits::plate_cache_bytes() {
         return limit;
     }
-    PLATE_CACHE_BUDGET.load(std::sync::atomic::Ordering::Relaxed)
+    photocraft_raster::memory::stats().1.process_ceiling_bytes / 8
 }
 
 fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {

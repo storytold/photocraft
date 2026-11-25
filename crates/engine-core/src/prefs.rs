@@ -769,8 +769,7 @@ fn effect_cache_budget_bytes_for(stored: u32, small: bool) -> u64 {
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
     /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
-    /// oldest states are dropped beyond it), the result of one transform, and the image sequence
-    /// frames a video layer keeps decoded ([`Performance::plate_cache_bytes`]).
+    /// oldest states are dropped beyond it), and the result of one transform.
     pub memory_usage_mb: u32,
     /// Percent of physical RAM for the complete process; None preserves the legacy MB limit.
     #[serde(default)]
@@ -841,12 +840,6 @@ impl Performance {
     /// [`Self::history_budget_bytes`].
     pub fn history_cap_bytes(&self) -> usize {
         if photocraft_raster::spill::enabled() { 0 } else { self.history_budget_bytes() }
-    }
-
-    /// Decoded image sequence frames each video layer's plate keeps around the playhead, in
-    /// bytes: an eighth of Memory Usage (1 GiB at the 8 GB default).
-    pub fn plate_cache_bytes(&self) -> u64 {
-        (u64::from(self.effective_memory_usage_mb()) << 20) / 8
     }
 
     /// Pixel bytes kept in memory before tiles move to the scratch disk: half of Memory Usage
