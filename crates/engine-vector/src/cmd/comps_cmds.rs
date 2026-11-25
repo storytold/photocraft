@@ -520,17 +520,20 @@ fn comp_file_name(prefix: &str, index: usize, name: &str, comment: &str, ext: &s
     let room = MAX_FILE_NAME_BYTES.saturating_sub(index.len() + 1 + ext.len());
     // Once a part is cut, the parts after it are left out, even where a few bytes are still free.
     let kept_prefix = clip_bytes(prefix, room);
-    let room = if kept_prefix.len() < prefix.trim_end().len() { 0 } else { room - kept_prefix.len() };
+    let room = if kept_prefix.len() < prefix.len() { 0 } else { room - kept_prefix.len() };
     let kept_name = clip_bytes(name, room);
-    let room = if kept_name.len() < name.trim_end().len() { 0 } else { room - kept_name.len() };
+    let room = if kept_name.len() < name.len() { 0 } else { room - kept_name.len() };
     let (prefix, name, comment) = (kept_prefix, kept_name, clip_bytes(comment, room.saturating_sub(1)));
     let comment = if comment.is_empty() { String::new() } else { format!("_{comment}") };
     format!("{prefix}{index}{name}{comment}.{ext}")
 }
 
-/// The longest start of `text` that fits in `max` bytes without splitting a character, with any
-/// spaces the cut leaves at its end trimmed.
+/// `text` when it fits in `max` bytes, else its longest start that does without splitting a
+/// character, with any spaces the cut leaves at its end trimmed.
 fn clip_bytes(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
     let end = text.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|&end| end <= max).last().unwrap_or(0);
     text.get(..end).unwrap_or_default().trim_end()
 }

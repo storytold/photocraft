@@ -88,3 +88,10 @@ fn a_cut_comp_name_leaves_out_the_comment() {
     assert!(name.len() <= MAX_FILE_NAME_BYTES, "{} bytes", name.len());
     assert!(name.ends_with("_0000_.png"), "{name}");
 }
+
+/// A part that fits stays exactly as sanitized: only a cut trims the spaces it leaves.
+#[test]
+fn a_part_that_fits_keeps_its_trailing_space() {
+    let prefix = sanitize("A .");
+    assert!(comp_file_name(&prefix, 0, "Name", "x", "png").starts_with(&format!("{prefix}_0000_Name")), "{prefix:?}");
+}
