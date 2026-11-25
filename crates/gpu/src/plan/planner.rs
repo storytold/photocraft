@@ -449,6 +449,16 @@ impl<'a> Planner<'a> {
         self.mask_use_of(layer, which)
     }
 
+    /// `compose::fill_frame` of what the CPU lays a fill out from: `effects_source(layer)`, without
+    /// the masks that hide its effects, while those are left out (`unhid`).
+    fn fill_frame(&self, layer: &Layer) -> Rect {
+        if self.unhid.is_some_and(|u| std::ptr::eq(u, layer)) {
+            photocraft_compose::fill_frame(&photocraft_compose::advanced::effects_source(layer), self.cx.canvas)
+        } else {
+            photocraft_compose::fill_frame(layer, self.cx.canvas)
+        }
+    }
+
     /// Whether `layer` has masks to apply to its content (`mask_use` may still find them disabled).
     fn has_masks(&self, layer: &Layer) -> bool {
         if self.unhid.is_some_and(|u| std::ptr::eq(u, layer)) {
@@ -931,7 +941,7 @@ impl<'a> Planner<'a> {
                 // when missing), then the layer's masks.
                 let empty = self.clear();
                 let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable()) else { return Ok(empty) };
-                let frame = photocraft_compose::fill_frame(layer, self.cx.canvas);
+                let frame = self.fill_frame(layer);
                 let anchor = if frame.is_empty() { (0.0, 0.0) } else { (f64::from(frame.x0), f64::from(frame.y0)) };
                 let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
                 let canvas = self.cx.canvas;
@@ -958,7 +968,7 @@ impl<'a> Planner<'a> {
         match &layer.content {
             LayerContent::Fill(f) => match &layer.fill_cache {
                 Some(c) if c.fill == *f => self.surface_tex(&mut p, layer.id, &c.surface),
-                _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas))?,
+                _ => self.fill(&mut p, f, self.fill_frame(layer))?,
             },
             _ => {
                 if let Some(s) = layer.surface() {

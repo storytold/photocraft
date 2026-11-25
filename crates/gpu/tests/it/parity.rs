@@ -1715,7 +1715,7 @@ fn stroke(size: f32, position: StrokePosition, paint: FxPaint) -> StrokeFx {
     StrokeFx { common: FxCommon::new(BlendMode::Normal, 0.9), size, position, paint, overprint: false }
 }
 
-fn checker_pattern() -> Pattern {
+pub(crate) fn checker_pattern() -> Pattern {
     let mut s = photocraft_raster::Surface::new(PixelFormat::RGBA8);
     s.fill_rect(Rect::new(0, 0, 6, 5), &[0.9, 0.2, 0.1, 1.0]);
     s.fill_rect(Rect::new(0, 0, 3, 3), &[0.1, 0.3, 0.9, 0.6]);
