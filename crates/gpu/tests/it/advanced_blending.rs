@@ -63,6 +63,27 @@ fn top_level_knockout_matches_the_cpu() {
     }
 }
 
+/// Outside the shape of a partial-opacity knockout the drawn pixel is untouched, so 32-bit values
+/// above 1 survive as on the CPU.
+#[test]
+fn partial_opacity_knockout_keeps_hdr_pixels_outside_its_shape() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        let mut d = doc(SampleType::F32, false);
+        let mut bottom = Layer::raster("hdr", d.pixel_format());
+        let patterns = [[2.0, 1.5, 0.25, 1.0], [1.25, 3.0, 0.5, 1.0], [0.4, 0.6, 0.8, 1.0]];
+        let px: Vec<f32> = (0..48 * 40).flat_map(|i| patterns[i % patterns.len()]).collect();
+        bottom.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 48, 40), &px);
+        d.layers.push(bottom);
+        let mut l = ko_layer(&d, 3, knockout);
+        l.opacity = 0.5;
+        d.layers.push(l);
+        let cpu = photocraft_compose::render(&d, d.bounds());
+        assert!(cpu.px[0][..3].iter().any(|&v| v > 1.0), "the CPU keeps a value above 1 outside the shape ({knockout:?})");
+        run(&mut g, &d, "HDR outside a partial-opacity knockout", knockout);
+    }
+}
+
 #[test]
 fn knockout_in_every_depth() {
     let Some(mut g) = gpu() else { return };
@@ -283,5 +304,7 @@ fn the_remaining_advanced_blending_options_are_refused() {
     l.advanced.transparency_shapes = false;
     l.blend = BlendMode::ColorDodge;
     d.layers.push(l);
-    assert!(diff_rect(&mut g, &d, d.bounds(), "special-eight blend without transparency shapes").is_err());
+    let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+        .expect_err("the GPU must refuse a special-eight blend without transparency shapes");
+    assert!(e.to_string().contains("Transparency Shapes Layer off with a Color Dodge"), "{e}");
 }

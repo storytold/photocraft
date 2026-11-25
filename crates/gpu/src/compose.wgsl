@@ -57,7 +57,7 @@ const F_CHANNELS: u32 = 4096u;   // lerp: per-channel weights in p0 (channel res
 const F_LAB: u32 = 65536u;      // Lab document: Normal mixes in CIELAB
 const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposure retain values above 1
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
-const F_ADD_DIFF: u32 = 16384u;  // lerp: A + opacity * (B - C) premultiplied (clips on pass-through groups, knockout)
+const F_ADD_DIFF: u32 = 16384u;  // lerp: A + opacity * (B - C) premultiplied (clips on pass-through groups, knockout); p0.x: gate on the shape in layer_tex (knockout)
 const F_MIX_C: u32 = 4194304u;   // lerp: A mixed towards B by C's alpha * opacity (knockout); p0.y: keep A's alpha at most
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
@@ -1028,6 +1028,9 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         return a + (b - a) * op.p0;
     }
     if ((op.flags & F_ADD_DIFF) != 0u) {
+        // Knockout passes its shape in layer_tex (p0.x); outside it the drawn pixel stays as drawn,
+        // unclamped (compose::advanced::knockout_with skips zero coverage).
+        if (op.p0.x > 0.5 && textureLoad(layer_tex, p, 0).a <= 0.0) { return a; }
         // compose: pass-through group + (with clipped − without), premultiplied; knockout scales the
         // difference by `opacity` (1 − layer opacity, compose::advanced::knockout_with).
         let c = textureLoad(tex_c, p, 0);

@@ -15,9 +15,9 @@ const TOL: f32 = 1.0 / 255.0 + 4.0 * f32::EPSILON;
 use crate::GPU_LOCK;
 
 pub(crate) struct Gpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    comp: Compositor,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) comp: Compositor,
     /// The same device with a simulated texture limit of [`PAGED_LIMIT`]: every check also runs
     /// through layer pages and per-cell effect maps.
     paged: Compositor,

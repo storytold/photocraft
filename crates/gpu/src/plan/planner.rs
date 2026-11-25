@@ -352,7 +352,7 @@ impl<'a> Planner<'a> {
     /// `compose::advanced::knockout_with`: inside the layer's shape the backdrop becomes `target`
     /// (consumed), then `draw` composites the layer, and layer opacity mixes the result back
     /// with the untouched backdrop: `R' + (1 − o)(B − B')`. `clip_alpha` keeps alpha from
-    /// growing (clipped layers).
+    /// growing (clipped layers). The opacity correction applies only inside the shape, as on the CPU.
     fn knocked_out(
         &mut self,
         layer: &'a Layer,
@@ -363,6 +363,8 @@ impl<'a> Planner<'a> {
     ) -> Result<Slot, Unsupported> {
         let shape = self.knockout_shape(layer)?;
         let before = self.retain(backdrop);
+        let partial = layer.opacity < 1.0;
+        let keep_shape = if partial { Some(self.retain(shape)) } else { None };
         let mut p = Pass::new(Kernel::Lerp, 0);
         p.a = Some(backdrop);
         p.b = Some(target);
@@ -370,7 +372,6 @@ impl<'a> Planner<'a> {
         p.flags = F_MIX_C;
         p.params[0] = [0.0, if clip_alpha { 1.0 } else { 0.0 }, 0.0, 0.0];
         let knocked = self.emit(p);
-        let partial = layer.opacity < 1.0;
         let keep = if partial { Some(self.retain(knocked)) } else { None };
         let drawn = draw(self, knocked)?;
         let Some(keep) = keep else {
@@ -381,7 +382,9 @@ impl<'a> Planner<'a> {
         p.a = Some(drawn);
         p.b = Some(before);
         p.c = Some(keep);
+        p.d = keep_shape;
         p.flags = F_ADD_DIFF;
+        p.params[0] = [1.0, 0.0, 0.0, 0.0];
         p.opacity = 1.0 - layer.opacity.clamp(0.0, 1.0);
         Ok(self.emit(p))
     }
