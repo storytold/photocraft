@@ -1,15 +1,15 @@
 //! The Clone Source panel: five source slots, the slot's offset, scale, rotation and flips, and the overlay options.
 //! Every edit is a `cloneSource.*` engine command.
 
-use craft::behavior::{EditEvent, GestureId, Mixed};
-use craft::ui::buttons::{Button, ToggleButton};
+use craft::behavior::{EditEvent, GestureId, IconId, Mixed};
+use craft::ui::buttons::{Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Text;
 use craft::ui::form::{Field, FieldGroup, SliderField};
 use craft::ui::layout_components::Row;
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::UnitKind;
+use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::{LinkedFields, NumberField};
 use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
@@ -142,11 +142,30 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut frame_set: Option<(Value, Option<GestureId>)> = None;
         FieldGroup::new(tl!("Frame")).show(ui, |ui, _| {
             let mut shown = Some(slot.frame_offset as f64);
-            let out = NumberField::new(tl!("Frame Offset"), Bind::bound(&mut shown)).range(-9999.0..=9999.0).commit_decimals(0).show(ui);
-            if let Some(Some(landed)) = out.events.landed().copied()
+            // A visible label, as X and Y have, and − / + buttons that step the offset by one frame.
+            let (field, step) = Row::new()
+                .show(ui, |ui, _| {
+                    let field = Field::new(tl!("Frame Offset").to_string()).show(ui, |ui, _| {
+                        NumberField::new(tl!("Frame Offset").to_string(), Bind::bound(&mut shown))
+                            .keeps_name(true)
+                            .range(-9999.0..=9999.0)
+                            .commit_decimals(0)
+                            .show(ui)
+                    });
+                    let earlier = IconButton::new(IconId::new("minus")).label(Label::from(tl!("One Frame Earlier").to_string())).show(ui).clicked();
+                    let later = IconButton::new(IconId::new("plus")).label(Label::from(tl!("One Frame Later").to_string())).show(ui).clicked();
+                    (field.inner, if earlier { -1 } else if later { 1 } else { 0 })
+                })
+                .inner
+                .unwrap_or((None, 0));
+            if let Some(out) = field
+                && let Some(Some(landed)) = out.events.landed().copied()
                 && landed.round() as i64 != slot.frame_offset
             {
                 frame_set = Some((json!({"frameOffset": landed.round() as i64}), out.events.last().and_then(EditEvent::id)));
+            }
+            if step != 0 {
+                frame_set = Some((json!({"frameOffset": (slot.frame_offset + step).clamp(-9999, 9999)}), None));
             }
             let mut hold = slot.hold_frame;
             Checkbox::new(Bind::bound(&mut hold)).label(tl!("Hold Source Frame")).show(ui);
@@ -220,6 +239,8 @@ mod tests {
     fn the_frame_controls_set_the_slot_on_a_timeline_only() {
         assert!(offset_field(&harness(false)).is_none(), "no timeline, no frame controls");
         let mut h = harness(true);
+        let shown = h.query_all_by_label_contains("Frame Offset").filter(|n| n.accesskit_node().role() != Role::SpinButton).count();
+        assert!(shown > 0, "the field has a visible label beside it");
         offset_field(&h).expect("the Frame Offset field").click();
         h.run_steps(1);
         h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -228,6 +249,14 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run_steps(2);
         assert_eq!(h.state().session.presets().clone.active().frame_offset, -1);
+        h.get_by_role_and_label(Role::Button, "One Frame Earlier").click();
+        h.run_steps(2);
+        assert!(h.state().session.presets().clone.active().frame_offset < -1, "minus steps to an earlier frame");
+        h.get_by_role_and_label(Role::Button, "One Frame Later").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "One Frame Later").click();
+        h.run_steps(2);
+        assert!(h.state().session.presets().clone.active().frame_offset > -1, "plus steps to a later frame");
         h.get_by_label("Hold Source Frame").click();
         h.run_steps(2);
         assert!(h.state().session.presets().clone.active().hold_frame);
