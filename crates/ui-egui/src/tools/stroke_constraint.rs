@@ -115,6 +115,49 @@ pub fn snap45(origin: [f64; 2], p: [f64; 2]) -> [f64; 2] {
     }
 }
 
+/// The ⇧ lock of the Convert Point tool's drags FROM AN ANCHOR (#12739), measured in the
+/// reference app: a drag from the corner (300,300) by (+60,+25) lands its handles at (360,300).
+/// Of the steps that keep the offset's x component — the horizontal step (dx, 0) and the 45°
+/// diagonal (dx, ±|dx|) — the one nearest the pointer wins, which puts the axis band at
+/// atan(½) ≈ 26.6°. The tool's handle-END drags do NOT take this preference: both measured
+/// handle rows take the nearest band instead, see [`handle_step_nearest_band`].
+/// None means "leave the offset as it is": a zero or non-finite offset, and the vertical band
+/// (|dx| ≤ |dy|/2, its half-open side), where which component the reference keeps was *not
+/// measured* (#12739), so that drag stays today's.
+pub fn handle_step_keep_x(dx: f64, dy: f64) -> Option<[f64; 2]> {
+    if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+        return None;
+    }
+    let (ax, ay) = (dx.abs(), dy.abs());
+    if 2.0 * ay <= ax {
+        Some([dx, 0.0])
+    } else if 2.0 * ax <= ay {
+        None
+    } else {
+        Some([dx, dy.signum() * ax])
+    }
+}
+
+/// The ⇧ lock of the Convert Point tool's handle-END drags (#12739's measured table, both rows):
+/// the offset snaps onto the nearest of the 45° rays about the anchor — nearest by ray, so the
+/// horizontal band ends at plain 45° rounding (tan 22.5° = √2 − 1) — and lands on that band's
+/// x-keeping step. The table's two rows: (+60,+25) at 22.6° from the axis is nearer the diagonal
+/// than the axis and gives (+60,+60); (−78,+140), 29.1° past the vertical, takes its diagonal
+/// (−78,+78) as [`handle_step_keep_x`] does. As there, None leaves the offset as it is: a zero
+/// or non-finite offset, and the vertical band at its unmeasured-region boundary |dx| ≤ |dy|/2
+/// (which component the reference keeps there was not measured, and the band's own 67.5° side
+/// lies inside that unmeasured region).
+pub fn handle_step_nearest_band(dx: f64, dy: f64) -> Option<[f64; 2]> {
+    if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+        return None;
+    }
+    let (ax, ay) = (dx.abs(), dy.abs());
+    if 2.0 * ax <= ay {
+        return None;
+    }
+    if ay <= ax * (std::f64::consts::SQRT_2 - 1.0) { Some([dx, 0.0]) } else { Some([dx, dy.signum() * ax]) }
+}
+
 /// Constrain the pointer at `p` for a drag of `tool` that started at `start` and has reached
 /// `last`. `axis` carries the stroke's lock between events; `zoom` converts the lock distance
 /// to document pixels. The lock follows the tool's [`snap_mode`]: horizontal/vertical for the

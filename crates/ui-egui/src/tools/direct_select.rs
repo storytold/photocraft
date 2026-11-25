@@ -120,6 +120,10 @@ pub struct DirectSelection {
     /// The overlay whose press runs the `editing` gesture: `cancel_stale` ends that press with the gesture.
     #[serde(skip)]
     pub(crate) editing_overlay: Option<egui::Id>,
+    /// Where the latest primary press on the canvas went down, in document pixels: the start of
+    /// the pointer's own move, which the Convert Point ⇧ handle lock reads (#12739).
+    #[serde(skip)]
+    pub(crate) press_at: Option<craft::behavior::kurbo::Point>,
     #[serde(skip)]
     pub(crate) owner: Option<Owner>,
     /// The saved path whose anchors the first Escape hid (#13072): the next Escape deactivates it,
@@ -504,6 +508,9 @@ mod tests;
 
 #[cfg(test)]
 mod convert_point_history_tests;
+
+#[cfg(test)]
+mod convert_point_shift_tests;
 
 #[cfg(test)]
 mod convert_point_targeted_path_tests;

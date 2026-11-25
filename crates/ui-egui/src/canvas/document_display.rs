@@ -513,8 +513,9 @@ fn canvas_controls(
     crate::blur_pins::overlay(app, ui, rect);
     let doc = app.session.documents()[host.idx].doc.id;
     if let Some(shown) = crate::vector_ui::overlay::show_paths(app, ui, rect, doc) {
-        let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
-        crate::direct_select::edits::apply(app, &shown.output, &shown.refs, app.ui.tool, mods);
+        let frame = craft::ui::runtime::pointer::frame(ui.ctx());
+        let pointer = crate::direct_select::edits::PassPointer::of(&frame, &space.view);
+        crate::direct_select::edits::apply(app, &shown.output, &shown.refs, app.ui.tool, frame.mods, pointer);
     }
     crate::type_tool::canvas_controls(app, ui, rect);
     crate::type_path_placement::show(app, ui, rect);
