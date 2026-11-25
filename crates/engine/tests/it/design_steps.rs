@@ -420,6 +420,29 @@ fn a_fill_from_history_replays_its_result() {
     assert_eq!(doc(&s), want);
 }
 
+/// A baked step past the marker that last failed (its layer's step suppressed) still goes stale
+/// when a change before it lands: rolled forward, its stored result isn't applied as current.
+#[test]
+fn a_failed_baked_step_past_the_marker_goes_stale_too() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+    // A History source with layer A still empty (a snapshot is no step): filling from it changes A.
+    let snap = s.execute("history.newSnapshot", json!({})).unwrap()["snapshot"].clone();
+    s.execute("history.setSource", json!({"snapshot": snap})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("edit.fill", json!({"contents": "history"})).unwrap();
+    let n = steps(&mut s).len();
+    assert_eq!(steps(&mut s)[n - 1]["baked"], true);
+    let new_a = step_id(&mut s, 0);
+    s.execute("design.suppress", json!({"step": new_a})).unwrap();
+    assert!(["missingReference", "retargeted"].contains(&state(&mut s, n - 1).as_str()), "{}", state(&mut s, n - 1));
+    s.execute("design.rollTo", json!({"at": n - 1})).unwrap();
+    s.execute("design.unsuppress", json!({"step": new_a})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(state(&mut s, n - 1), "stale");
+}
+
 /// A stroke in one document is that document's step, never a tool setting for another one.
 #[test]
 fn a_stroke_in_one_document_is_not_replayed_in_another() {

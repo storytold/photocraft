@@ -323,6 +323,10 @@ impl Baked {
         while !pending.is_empty() {
             let before = pending.len();
             pending.retain(|(id, below, above)| {
+                // Already in: a created group put in before it brought it along.
+                if doc.layer(*id).is_some() {
+                    return false;
+                }
                 // As the step left it if it made or changed it, else as the replay has it.
                 let l = match self.layers.iter().find(|l| l.id == *id) {
                     Some(l) => self.merged(l, &current, created, changed),
@@ -574,6 +578,22 @@ mod tests {
         let ids: Vec<LayerId> = doc.layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
         assert_eq!(ids, [bid, aid]);
         assert_eq!(doc.layer(gid).unwrap().opacity, 0.5);
+    }
+
+    /// A created group with a created child goes in once, the child with it.
+    #[test]
+    fn a_created_group_with_a_created_child_goes_in_once() {
+        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        before.layers = vec![Layer::raster("A", PixelFormat::RGBA8)].into();
+        let mut after = before.clone();
+        after.layers.push(Layer::group("g", vec![Layer::raster("X", PixelFormat::RGBA8)]));
+        let (created, changed) = layer_changes(&before, &after);
+        assert_eq!(created.len(), 2);
+        let baked = Baked::capture(&before, &after, &created, &changed);
+        let mut doc = before.clone();
+        baked.apply(&mut doc, &created, &changed);
+        let ids = |d: &Document| d.walk().into_iter().map(|(_, _, l)| l.id).collect::<Vec<_>>();
+        assert_eq!(ids(&doc), ids(&after));
     }
 
     /// A step that moves a layer into a group, or out of one to the root, replays the move: the

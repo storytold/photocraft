@@ -602,7 +602,8 @@ pub(crate) fn replay(
     // their stored results as stale as those of the steps it replayed.
     for (i, later) in tl.steps.iter_mut().enumerate().skip(end) {
         later.checkpoint = Checkpoint(None);
-        if can_go_stale(later) && stale_from.is_some_and(|c| i >= c) && !later.state.is_failure() {
+        // Whatever its last outcome: that outcome is out of date too, and the next replay finds it again.
+        if can_go_stale(later) && stale_from.is_some_and(|c| i >= c) {
             later.state = StepState::Stale;
         }
     }
