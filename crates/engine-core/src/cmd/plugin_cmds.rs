@@ -2,8 +2,8 @@
 //!
 //! Plug-ins are installed per process (`plugin.install`, or the Plug-ins preference folder),
 //! listed with `plugin.list` and run with `plugin.run` on the active pixel layer, a targeted
-//! channel, or a smart object (recorded as a smart filter, re-run on re-render while the plug-in
-//! is installed). Runs respect the selection and are one undo step.
+//! channel, or a smart object (recorded as a smart filter that requires the original module).
+//! Runs respect the selection and are one undo step.
 
 use std::sync::Mutex;
 
@@ -17,6 +17,8 @@ use crate::{EngineError, Result, Session};
 
 /// The smart-filter command id plug-in runs are recorded under.
 pub const RUN: &str = "plugin.run";
+
+pub(crate) const MODULE_HASH: &str = "__pluginHash";
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -65,7 +67,7 @@ fn command_key(k: &str) -> bool {
 /// plug-in's [`photocraft_plugins::Manifest::preview_factor`] (its `"unit": "px"` parameters set
 /// the limit, not the built-in filters' parameter names). `k` when the plug-in isn't installed.
 pub fn preview_factor(p: &Value, k: u32) -> u32 {
-    let Ok(plugin) = plugin_by_id(RUN, p) else { return k };
+    let Ok(plugin) = stored_plugin(p) else { return k };
     match plugin_params(p) {
         Value::Object(params) => plugin.manifest().preview_factor(&params, k),
         // `null` means the defaults (see `Manifest::resolve_params`).
@@ -83,7 +85,7 @@ pub fn scale_for_preview(p: &mut Value, k: u32) {
     if k <= 1 {
         return;
     }
-    let Ok(plugin) = plugin_by_id(RUN, p) else { return };
+    let Ok(plugin) = stored_plugin(p) else { return };
     let nested = p.get("params").is_some();
     let mut params = match plugin_params(p) {
         Value::Object(params) => params,
@@ -103,6 +105,17 @@ pub fn scale_for_preview(p: &mut Value, k: u32) {
 fn plugin_by_id(cmd: &str, p: &Value) -> Result<std::sync::Arc<Plugin>> {
     let id = p.get("id").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `id` (see plugin.list)"))?;
     registry::get(id).ok_or_else(|| err(photocraft_plugins::Error::NotFound(id.into())))
+}
+
+/// Resolve a recorded filter against the installed module. Older documents have only an ID.
+pub(crate) fn stored_plugin(params: &Value) -> Result<std::sync::Arc<Plugin>> {
+    let plugin = plugin_by_id(RUN, params)?;
+    if let Some(hash) = params.get(MODULE_HASH)
+        && hash.as_str() != Some(plugin.fingerprint())
+    {
+        return Err(bad(RUN, format!("reinstall the original plug-in module for smart filter {:?}", plugin.id())));
+    }
+    Ok(plugin)
 }
 
 /// Identifies filters whose Skin Smooth algorithm interprets ABI pixels as encoded sRGB.
@@ -134,16 +147,8 @@ pub fn skin_smooth_color_supported(doc: &photocraft_doc::Document) -> std::resul
     if supported { Ok(()) } else { Err("Skin Smooth supports sRGB profiles only. Convert the document to sRGB first.") }
 }
 
-/// Rejects unsupported Skin Smooth document profiles before filtering or reusing smart-filter stages.
-pub(crate) fn check_color(doc: &photocraft_doc::Document, params: &Value) -> Result<()> {
-    if let Some(plugin) = params.get("id").and_then(Value::as_str).and_then(registry::get) {
-        check_plugin_color(doc, &plugin)?;
-    }
-    Ok(())
-}
-
 /// Check the captured instance: the registry can change while its edit job is waiting.
-fn check_plugin_color(doc: &photocraft_doc::Document, plugin: &Plugin) -> Result<()> {
+pub(crate) fn check_plugin_color(doc: &photocraft_doc::Document, plugin: &Plugin) -> Result<()> {
     if requires_srgb(plugin) {
         skin_smooth_color_supported(doc).map_err(|message| bad(RUN, message))?;
     }
@@ -188,7 +193,7 @@ fn run(s: &mut Session, p: &Value, plugin: std::sync::Arc<Plugin>) -> Result<Val
                 LayerContent::Smart(_) => {
                     let sf = SmartFilter {
                         command: RUN.into(),
-                        params: json!({"id": id, "params": resolved}),
+                        params: json!({"id": id, "params": resolved, (MODULE_HASH): plugin.fingerprint()}),
                         blend: photocraft_color::BlendMode::Normal,
                         opacity: 1.0,
                         visible: true,
@@ -223,14 +228,19 @@ pub fn preview_smart_region(
     }
     let _acceleration = photocraft_plugins::acceleration::scope(session.effective_plugin_accelerator());
     let _authorization = crate::jobs::render_authorization_scope(session.authorize);
-    check_color(&doc, params)?;
-    crate::commands::check_pixels_unlocked(&doc, layer)?;
     let plugin = plugin_by_id(RUN, params)?;
+    check_plugin_color(&doc, &plugin)?;
+    crate::commands::check_pixels_unlocked(&doc, layer)?;
     let resolved = plugin.manifest().resolve_params(&plugin_params(params)).map_err(|e| bad(RUN, e.to_string()))?;
     let selection = doc.selection.clone();
     let sf = SmartFilter {
         command: RUN.into(),
-        params: json!({"id":plugin.id(), "params":resolved, "__previewRegion":[region.x0,region.y0,region.x1,region.y1]}),
+        params: json!({
+            "id": plugin.id(),
+            "params": resolved,
+            (MODULE_HASH): plugin.fingerprint(),
+            "__previewRegion": [region.x0, region.y0, region.x1, region.y1],
+        }),
         blend: photocraft_color::BlendMode::Normal,
         opacity: 1.0,
         visible: true,
@@ -241,21 +251,15 @@ pub fn preview_smart_region(
     Ok(Some((layer, surface)))
 }
 
-/// Smart-filter re-render of a recorded `plugin.run` (see `filters::apply_filter_to_surface`).
-/// `None` when `command` isn't a plug-in run or the plug-in isn't installed (the smart filter is
-/// then skipped, as for other unknown filters) or fails.
+/// Run the module resolved for this stage. The stack owns progress across filters.
 pub(crate) fn apply_to_surface(
-    command: &str,
+    plugin: &Plugin,
     params: &Value,
     surf: &Surface,
     selection: Option<&Surface>,
     canvas: photocraft_geom::Rect,
-    ctl: &photocraft_raster::Interrupt<'_>,
-) -> Result<Option<Surface>> {
-    if command != RUN {
-        return Ok(None);
-    }
-    let Some(plugin) = params.get("id").and_then(Value::as_str).and_then(registry::get) else { return Ok(None) };
+    ctx: &crate::jobs::JobCtx,
+) -> Result<Surface> {
     let region_mask = params.get("__previewRegion").filter(|_| selection.is_none()).and_then(|v| serde_json::from_value::<[i32; 4]>(v.clone()).ok()).map(
         |[x0, y0, x1, y1]| {
             let mut mask = Surface::new(photocraft_color::PixelFormat::GRAY8);
@@ -263,11 +267,9 @@ pub(crate) fn apply_to_surface(
             mask
         },
     );
-    match plugin.apply_with(surf, canvas, selection.or(region_mask.as_ref()), params.get("params").unwrap_or(&Value::Null), ctl) {
-        Ok(out) => Ok(Some(out)),
-        Err(photocraft_plugins::Error::Cancelled) => Err(EngineError::Cancelled),
-        Err(_) => Ok(None),
-    }
+    let cancelled = || ctx.cancelled();
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
+    plugin.apply_with(surf, canvas, selection.or(region_mask.as_ref()), params.get("params").unwrap_or(&Value::Null), &ctl).map_err(err)
 }
 
 /// Largest base64 payload `plugin.install` accepts (the module limit, encoded).

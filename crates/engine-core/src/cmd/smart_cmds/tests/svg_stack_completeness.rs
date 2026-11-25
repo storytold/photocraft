@@ -95,7 +95,7 @@ fn svg_stack_does_not_reuse_incomplete_legacy_source_or_filter_stages() {
         opacity: 1.,
         visible: true,
     });
-    let filtered = stack_cache::filter_key(&placed, &smart.smart_filters[0], None);
+    let filtered = stack_cache::filter_key(&placed, &smart.smart_filters[0], None, None);
     stack_cache::put(filtered, &stage);
     assert!(render(doc, &smart).is_err(), "old deepest filter stages must not bypass strict decoding");
     assert!(render_with_warnings(doc, &smart).is_err());

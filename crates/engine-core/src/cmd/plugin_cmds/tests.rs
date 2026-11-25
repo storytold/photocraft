@@ -514,7 +514,9 @@ fn captured_plugin_keeps_its_color_requirement_after_registry_changes() {
                     assert!(registry::remove(id));
                 }
                 let params = json!({"id":id});
-                assert!(check_color(&s.active().unwrap().doc, &params).is_ok(), "ID lookup sees only the changed registry");
+                if let Some(current) = registry::get(id) {
+                    assert!(check_plugin_color(&s.active().unwrap().doc, &current).is_ok(), "ID lookup sees the replacement");
+                }
                 let result = run(&mut s, &params, captured);
                 if supported {
                     result.unwrap();
@@ -543,7 +545,8 @@ fn captured_plugin_does_not_inherit_a_replacements_color_requirement() {
     Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
     let before = pixels(&s);
     let params = json!({"id":id});
-    assert!(check_color(&s.active().unwrap().doc, &params).is_err(), "ID lookup sees the replacement's restriction");
+    let current = stored_plugin(&params).unwrap();
+    assert!(check_plugin_color(&s.active().unwrap().doc, &current).is_err(), "ID lookup sees the replacement's restriction");
     run(&mut s, &params, captured).unwrap();
     assert_ne!(pixels(&s), before, "the captured ordinary filter accepts non-sRGB input");
     registry::remove(id);
@@ -606,6 +609,50 @@ fn skin_smooth_smart_rerender_checks_profile_before_using_cached_stages() {
     let state = s.active().unwrap();
     let LayerContent::Smart(sm) = &state.doc.layer(state.active_layer.unwrap()).unwrap().content else { panic!("expected smart object") };
     assert!(crate::smart_cmds::render(&state.doc, sm).is_err());
+}
+
+#[test]
+fn smart_filter_requires_its_original_module_even_with_cached_stages() {
+    let id = "test.cmds.smart-module";
+    let original = wat_plugin(id, "{}", GREY);
+    let replacement = wat_plugin(id, "{}", "(i32.const 0)");
+    registry::install_bytes(&original).unwrap();
+    let mut s = doc(8);
+    let before = pixels(&s);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(RUN, json!({"id": id})).unwrap();
+    s.execute("layer.smartFilter.setParams", json!({"replace": true, "params": {"id": id, "params": {}}})).unwrap();
+    let processed = pixels(&s);
+    assert_ne!(processed, before);
+    let state = s.active().unwrap();
+    let bytes = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+    let mut doc = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let layer = state.active_layer.unwrap();
+    let read = |d: &photocraft_doc::Document| d.layer(layer).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 40, 28));
+
+    registry::install_bytes(&replacement).unwrap();
+    let error = crate::smart_cmds::refresh(&mut doc, layer).unwrap_err().to_string();
+    assert!(error.contains("reinstall the original plug-in"), "{error}");
+    assert_eq!(read(&doc), processed);
+
+    assert!(registry::remove(id));
+    let error = crate::smart_cmds::refresh(&mut doc, layer).unwrap_err().to_string();
+    assert!(error.contains(id), "{error}");
+    assert_eq!(read(&doc), processed);
+
+    registry::install_bytes(&original).unwrap();
+    assert!(crate::smart_cmds::refresh(&mut doc, layer).unwrap());
+    assert_eq!(read(&doc), processed);
+
+    // A document saved before fingerprints existed can still use an installed plug-in by ID.
+    let LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!("expected smart object") };
+    sm.smart_filters[0].params.as_object_mut().unwrap().remove(MODULE_HASH);
+    assert!(crate::smart_cmds::refresh(&mut doc, layer).unwrap());
+    assert_eq!(read(&doc), processed);
+    registry::install_bytes(&replacement).unwrap();
+    assert!(crate::smart_cmds::refresh(&mut doc, layer).unwrap());
+    assert_ne!(read(&doc), processed, "a legacy stage cached with the original binary must not be reused");
+    assert!(registry::remove(id));
 }
 
 /// Compares untagged and explicitly host-tagged pixels without assigning a profile as a filtering side effect.

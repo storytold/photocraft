@@ -25,10 +25,11 @@ preview when they have parameters), next to **Install Plug-in…**.
 installed at startup and whenever the preference changes (native builds only; the web build installs
 from bytes).
 
-Plug-ins are installed **per process**, not per document. A smart filter recorded from a plug-in
-(`{"command": "plugin.run", "params": {"id", "params"}}`) re-runs on re-render while that plug-in is
-installed; if it is missing, the filter is skipped (the cached pixels stay as they were), like other
-filters PhotoCraft does not implement.
+Plug-ins are installed **per process**. A new plug-in smart filter records the WASM module's
+fingerprint with its settings. If that module is missing or has been replaced, re-rendering
+reports an error and preserves the cached pixels. Reinstall the original WASM file to re-render
+the filter, or hide or delete the filter to render without it. Older documents that only recorded
+the plug-in ID can still render using the installed module for that ID.
 
 In this Smooth fork, native `plugin.run` uses background jobs with progress and cancellation
 (`Session::start`, or control requests with `wait: false`). Cancellation reaches WASM between fuel

@@ -6914,6 +6914,7 @@ dependencies = [
 name = "photocraft-plugins"
 version = "0.23.1"
 dependencies = [
+ "blake3",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",

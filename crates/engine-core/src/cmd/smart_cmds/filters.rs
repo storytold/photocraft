@@ -211,6 +211,11 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
             return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
+        let binding = if f.command == crate::plugin_cmds::RUN {
+            f.params.get("id").zip(f.params.get(crate::plugin_cmds::MODULE_HASH)).map(|(id, hash)| (id.clone(), hash.clone()))
+        } else {
+            None
+        };
         if let Some(params) = shape_params {
             f.params = params;
         } else if replace {
@@ -220,6 +225,14 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
                 (Value::Object(old), Value::Object(n)) => old.extend(n),
                 (slot, n) => *slot = n,
             }
+        }
+        if let Some((id, hash)) = binding {
+            let params = f.params.as_object_mut().ok_or_else(|| bad(CMD, "plug-in filter settings must be an object"))?;
+            if params.get("id").is_some_and(|new| *new != id) {
+                return Err(bad(CMD, "a smart filter is bound to its original plug-in"));
+            }
+            params.insert("id".into(), id);
+            params.insert(crate::plugin_cmds::MODULE_HASH.into(), hash);
         }
         if f.command == DISPLACE {
             if let Some(map) = &new_map {

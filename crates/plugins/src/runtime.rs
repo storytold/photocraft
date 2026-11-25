@@ -74,6 +74,7 @@ pub struct Plugin {
     module: Module,
     limits: Limits,
     size: usize,
+    fingerprint: String,
     source: Option<String>,
 }
 
@@ -219,7 +220,15 @@ impl Plugin {
                 imp.name()
             )));
         }
-        let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), source: None };
+        let mut p = Plugin {
+            manifest: placeholder_manifest(),
+            engine,
+            module,
+            limits,
+            size: bytes.len(),
+            fingerprint: blake3::hash(bytes).to_hex().to_string(),
+            source: None,
+        };
         let deadline = Deadline::new(&p.limits, photocraft_raster::Interrupt::NONE);
         let mut live = p.instantiate(&deadline)?;
         let version: TypedFunc<(), i32> = live.func("pc_abi_version")?;
@@ -246,6 +255,10 @@ impl Plugin {
     }
     pub fn id(&self) -> &str {
         &self.manifest.id
+    }
+    /// BLAKE3 fingerprint of the installed WASM bytes, including its manifest.
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
     }
     pub fn limits(&self) -> &Limits {
         &self.limits
