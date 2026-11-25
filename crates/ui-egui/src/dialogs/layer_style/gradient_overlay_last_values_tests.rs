@@ -246,7 +246,7 @@ fn a_recalled_gradient_with_more_stops_than_a_command_takes_still_applies() {
 }
 
 /// Reset to Default must not keep a remembered key that neither Make Default nor the factory values
-/// give: a recalled Smoothness 0 goes back to the engine's default (no key). An explicit Make Default
+/// give: a recalled Smoothness 0 goes back to the engine's default (100). An explicit Make Default
 /// Smoothness still wins (#16354 review).
 #[test]
 fn reset_to_default_drops_a_remembered_smoothness_no_default_gives() {
@@ -266,10 +266,102 @@ fn reset_to_default_drops_a_remembered_smoothness_no_default_gives() {
     let fx = first_of(&app, id, GRADIENT);
     reset_to_default(&mut app, id, fx);
     let reset = page(&app, id);
-    assert_eq!(reset.get("smoothness"), None, "reset keeps no remembered smoothness: {reset}");
+    assert_eq!(reset["smoothness"].as_f64(), Some(100.0), "reset gives the engine's default smoothness: {reset}");
     assert_eq!(reset["method"], factory["method"]);
 
     app.run("layer.layerStyle.makeDefault", json!({"kind": GRADIENT.key(), "params": {"smoothness": 50}})).unwrap();
     reset_to_default(&mut app, id, fx);
     assert_eq!(page(&app, id)["smoothness"].as_f64(), Some(50.0), "Make Default's smoothness wins");
+}
+
+/// Replaces the colour and transparency stops of the active layer's first Gradient Overlay, as a
+/// loaded file may hold them (the document type has no minimum or maximum).
+fn load_stops(app: &mut PhotocraftApp, stops: Vec<(f32, photocraft_color::Color)>, opacity: Vec<(f32, f32)>) {
+    let state = app.session.active_mut().unwrap();
+    let active_layer = state.active_layer.unwrap();
+    let loaded = &mut std::sync::Arc::make_mut(state.doc_mut()).layer_mut(active_layer).unwrap().effects.items[0];
+    let photocraft_doc::Effect::GradientOverlay { gradient, interpolation, .. } = loaded else { panic!("expected overlay") };
+    gradient.stops = stops;
+    gradient.opacity_stops = opacity;
+    *interpolation = None;
+}
+
+/// Opacity 60 with OK on the loaded overlay, then a new overlay on a new document: it opens with
+/// Opacity 60 and must apply.
+fn ok_then_new_overlay_applies(app: &mut PhotocraftApp) -> Value {
+    let id = open_gradient(app);
+    let fx = first_of(app, id, GRADIENT);
+    edit(app, id, |d| d.set_param(fx, "opacity", StyleValue::Number(60.0)));
+    ok(app, id);
+    assert!(!app.ui.status_error, "the loaded overlay applies: {}", app.ui.status);
+
+    new_document(app);
+    let id = open_gradient(app);
+    let shown = page(app, id);
+    assert_eq!(shown["opacity"], json!(60.0), "the rest of the last OK is recalled: {shown}");
+    ok(app, id);
+    assert!(!app.ui.status_error, "the new overlay applies: {}", app.ui.status);
+    assert_eq!(layer_effects(app).len(), 1, "the new overlay is on the layer");
+    shown
+}
+
+/// A stop list the remembered values leave out keeps its Make Default value: the last OK is laid
+/// over the Make Default entry, not put in its place (#16354 review).
+#[test]
+fn a_gradient_the_last_ok_leaves_out_keeps_its_make_default() {
+    use photocraft_color::Color;
+    use photocraft_engine::layer_style::MAX_STOPS;
+
+    let mut app = app_with_layer(20);
+    let made = json!({"stops": [[0.0, "#00ff00"], [1.0, "#ffff00"]], "opacityStops": [], "scale": 50});
+    app.run("layer.layerStyle.makeDefault", json!({"kind": GRADIENT.key(), "params": made})).unwrap();
+    app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
+    let n = MAX_STOPS + 1;
+    load_stops(&mut app, (0..n).map(|i| (i as f32 / (n - 1) as f32, Color::rgb(i as f32 / (n - 1) as f32, 0.0, 0.0))).collect(), vec![]);
+
+    let shown = ok_then_new_overlay_applies(&mut app);
+    assert_eq!(shown["stops"], made["stops"], "Make Default's gradient: {shown}");
+}
+
+/// A loaded overlay can hold one colour stop, which a command refuses (#16354 review). After an OK
+/// on it the next new overlay must still apply, with the default gradient. One transparency stop is
+/// harmless: the page reads fewer than two as none, so that gradient is remembered without it.
+#[test]
+fn a_recalled_gradient_a_command_refuses_is_not_remembered() {
+    use photocraft_color::Color;
+
+    let mut app = app_with_layer(20);
+    let factory = untouched_page(&mut app);
+    app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
+    load_stops(&mut app, vec![(0.5, Color::rgb(1.0, 0.0, 0.0))], vec![]);
+    let shown = ok_then_new_overlay_applies(&mut app);
+    assert_eq!(shown["stops"], factory["stops"], "the default gradient: {shown}");
+
+    let mut app = app_with_layer(20);
+    app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
+    load_stops(&mut app, vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))], vec![(0.5, 0.5)]);
+    let shown = ok_then_new_overlay_applies(&mut app);
+    assert_eq!(shown["stops"], json!([[0.0, "#ff0000"], [1.0, "#0000ff"]]), "the last OK's gradient: {shown}");
+    assert_eq!(shown["opacityStops"], json!([]));
+}
+
+/// Reset to Default on a loaded overlay with a recorded interpolation must give the engine's default
+/// Smoothness, not keep the recorded one (#16354 review).
+#[test]
+fn reset_to_default_replaces_a_loaded_overlays_recorded_smoothness() {
+    let mut app = app_with_layer(20);
+    app.run("layer.layerStyle.gradientOverlay", json!({"from": "#ff0000", "to": "#0000ff", "method": "classic", "smoothness": 0})).unwrap();
+    app.run("layer.layerStyle.makeDefault", json!({"kind": GRADIENT.key(), "params": {"method": "perceptual"}})).unwrap();
+    let id = open_gradient(&mut app);
+    let fx = first_of(&app, id, GRADIENT);
+    reset_to_default(&mut app, id, fx);
+    ok(&mut app, id);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+
+    let effects = layer_effects(&app);
+    let photocraft_doc::Effect::GradientOverlay { interpolation: Some(source), .. } = &effects[0] else {
+        panic!("expected an interpolated overlay: {effects:?}")
+    };
+    assert_eq!(source.method, "perceptual");
+    assert_eq!(source.smoothness, 100.0, "the engine's default smoothness");
 }

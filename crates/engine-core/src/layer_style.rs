@@ -60,6 +60,9 @@ fn color(p: &Value, k: &str, d: [f32; 3]) -> Color {
     let c = color_of(p, k).map_or(d, |c| c.to_rgb());
     Color::rgb(c[0], c[1], c[2])
 }
+/// A gradient's Smoothness (0..=100) when the params leave it out, as in Photoshop.
+pub const DEFAULT_SMOOTHNESS: f32 = 100.0;
+
 /// The stops of a two-colour gradient, baked with Photoshop's interpolation when `method` names
 /// one (`classic`, `perceptual`, `linear`, `smooth`; `smoothness` 0..=100, default 100 as in
 /// Photoshop): the compositors interpolate stops linearly, so the curve becomes dense stops, as on
@@ -68,7 +71,7 @@ fn color(p: &Value, k: &str, d: [f32; 3]) -> Color {
 fn gradient_stops(p: &Value, from: Color, to: Color) -> Vec<(f32, Color)> {
     let stops = vec![(0.0, from), (1.0, to)];
     match p.get("method").and_then(Value::as_str).and_then(photocraft_io::GradientMethod::from_name) {
-        Some(m) => photocraft_io::bake_gradient(stops, &[0.5], (f(p, "smoothness", 100.0) / 100.0).clamp(0.0, 1.0), m),
+        Some(m) => photocraft_io::bake_gradient(stops, &[0.5], (f(p, "smoothness", DEFAULT_SMOOTHNESS) / 100.0).clamp(0.0, 1.0), m),
         None => stops,
     }
 }

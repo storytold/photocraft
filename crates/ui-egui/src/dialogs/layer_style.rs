@@ -562,8 +562,13 @@ fn last_ok(kind: EffectKind) -> Remembered<Value> {
 /// only Reset to Default reads. A kind with nothing committed yet keeps its Make Default values.
 fn recall_last_ok(host: &craft::host::Host, user: &mut Map<String, Value>) {
     for kind in REMEMBERS_LAST_OK {
-        if let Some(values) = last_ok(*kind).recall(host).filter(Value::is_object) {
-            user.insert(kind.key().into(), values);
+        let Some(Value::Object(values)) = last_ok(*kind).recall(host) else { continue };
+        // A key the stored values leave out (a gradient too large to remember) keeps its Make Default value.
+        match user.get_mut(kind.key()).and_then(Value::as_object_mut) {
+            Some(made) => made.extend(values),
+            None => {
+                user.insert(kind.key().into(), Value::Object(values));
+            }
         }
     }
 }
@@ -585,11 +590,13 @@ fn remember_last_ok(host: &craft::host::Host, style: &LayerStyle) {
         // Settings are TOML, which has no null: a value the grammar left empty is not stored.
         if let Some(o) = values.as_object_mut() {
             o.retain(|_, v| !v.is_null());
-            // A loaded gradient can hold more stops than a command takes (a file has no limit). A
-            // new instance submits its stops, so such a gradient is not remembered: the next one
-            // opens with the default gradient and the rest of this OK.
-            let too_many = |key: &str| o.get(key).and_then(Value::as_array).is_some_and(|a| a.len() > photocraft_engine::layer_style::MAX_STOPS);
-            if too_many(gradient_field::KEY) || too_many(gradient_field::OPACITY_KEY) {
+            // A loaded gradient can hold more stops than a command takes, or a single colour stop (a
+            // file has no limits). A new instance submits its stops, so such a gradient is not
+            // remembered: the next one opens with the default gradient and the rest of this OK. Fewer
+            // than two transparency stops read as none on the page, so only too many count there.
+            let max = photocraft_engine::layer_style::MAX_STOPS;
+            let count = |key: &str| o.get(key).and_then(Value::as_array).map(Vec::len);
+            if count(gradient_field::KEY).is_some_and(|n| !(2..=max).contains(&n)) || count(gradient_field::OPACITY_KEY).is_some_and(|n| n > max) {
                 o.remove(gradient_field::KEY);
                 o.remove(gradient_field::OPACITY_KEY);
             }
@@ -1002,13 +1009,18 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
         params = params.over(&EffectSpec::photoshop(kind).defaults);
     }
     let remembers = REMEMBERS_LAST_OK.contains(&kind);
+    if remembers && kind == EffectKind::GradientOverlay && !params.0.contains_key("smoothness") {
+        // Set, not left out: a loaded overlay's recorded interpolation keeps its Smoothness for a
+        // missing key, so a reset would keep it.
+        params.0.insert("smoothness".into(), StyleValue::Number(f64::from(photocraft_engine::layer_style::DEFAULT_SMOOTHNESS)));
+    }
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
         let keys: Vec<String> = params.0.keys().cloned().collect();
         for (key, value) in params.0 {
             d.draft_mut().set_param(instance, &key, value);
         }
-        // A key neither default gives (Smoothness) may still hold the last OK's value: it goes, so
-        // the engine's default for a missing key applies. The loaded snapshot (`fx`) stays.
+        // A key neither default gives may still hold the last OK's value: it goes, so the engine's
+        // default for a missing key applies. The loaded snapshot (`fx`) stays.
         if remembers && let Some(e) = d.draft_mut().style.effect_mut(instance) {
             e.params.0.retain(|key, _| key == "fx" || keys.contains(key));
         }
