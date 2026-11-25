@@ -122,6 +122,7 @@ pub(super) const METHODS: &[&str] = &[
     "app.open",
     "app.quit",
     "app.save",
+    "doc.placeSvg",
     "engine.commands",
     "engine.execute",
     "jobs.cancel",
