@@ -41,6 +41,8 @@ use crate::{PhotocraftApp, color_picker_ui};
 mod bevel_reset_angle_tests;
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod drop_shadow_last_values_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
@@ -485,7 +487,8 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
     let user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let keys = blend_keys();
-    let specs = specs(&keys, &user, light);
+    let mut specs = specs(&keys, &user, light);
+    start_from_last_committed(app, &mut specs, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
     match select {
         None => {
@@ -538,6 +541,41 @@ pub(crate) fn open_layer(app: &PhotocraftApp) -> Option<LayerId> {
     let (id, doc, layer) = app.layer_style_target?;
     app.framework.dialogs.get_by_id::<HostedLayerStyle>(id)?;
     (app.session.active()?.doc.id == doc).then_some(layer)
+}
+
+/// The effects whose new instance starts with the values of the last one committed with OK, also after a restart, as
+/// the reference's do (#14877, Drop Shadow).
+const STARTS_FROM_LAST: &[EffectKind] = &[EffectKind::DropShadow];
+
+/// Where the last committed values of `kind` are kept (the framework's saved memory, so they survive a restart).
+fn last_committed_key(kind: EffectKind) -> craft::ui::runtime::memory::SaveKey {
+    craft::ui::runtime::memory::SaveKey::named(format!("photocraft.layerStyle.lastCommitted.{}", kind.key()))
+}
+
+/// A new instance of the [`STARTS_FROM_LAST`] kinds starts from the last committed values over the usual defaults; an
+/// effect lit by the shared light keeps the document's light angle. Reset to Default still writes the Make Default (or
+/// factory) values, which it reads from the engine.
+fn start_from_last_committed(app: &PhotocraftApp, specs: &mut [EffectSpec], light: f32) {
+    for spec in specs.iter_mut().filter(|s| STARTS_FROM_LAST.contains(&s.kind)) {
+        let Some(last) = craft::ui::runtime::memory::saved_value::<Option<Value>>(app.ctx(), &last_committed_key(spec.kind)) else { continue };
+        let mut values = style_params_json(&spec.defaults);
+        if let (Some(o), Some(l)) = (values.as_object_mut(), last.as_object()) {
+            o.extend(l.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true) {
+            values["angle"] = json!(light);
+        }
+        spec.defaults = style_params(spec.kind, &values, None).over(&spec.defaults);
+    }
+}
+
+/// After an OK: keeps the values of the committed style's last instance of each [`STARTS_FROM_LAST`] kind.
+fn keep_last_committed(app: &PhotocraftApp, style: &LayerStyle) {
+    for kind in STARTS_FROM_LAST {
+        if let Some(e) = style.effects.iter().rev().find(|e| e.kind == *kind) {
+            craft::ui::runtime::memory::set_saved_value::<Option<Value>>(app.ctx(), &last_committed_key(*kind), Some(style_params_json(&e.params)));
+        }
+    }
 }
 
 /// The effect pages with the user's defaults (Make Default) over the factory ones.
@@ -878,8 +916,9 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
         return fail(app, "Layer Style target document changed".into());
     };
     if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
-        fail(app, error);
+        return fail(app, error);
     }
+    keep_last_committed(app, style);
 }
 
 /// Applies a style preset to the draft without touching the document: Cancel leaves the document
