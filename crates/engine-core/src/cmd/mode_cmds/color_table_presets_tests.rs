@@ -13,7 +13,7 @@ const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
 /// Four solid bars red, green, blue and yellow, converted to Indexed Color with `palette`, no
 /// dither and no transparency.
 fn bars(palette: &str) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 4, "background": "white"})).unwrap();
     s.edit("setup", |doc, active| {
         let b = doc.bounds();
