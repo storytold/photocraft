@@ -28,11 +28,11 @@ fn windowed() -> H {
     h
 }
 
-/// The cursor the frame settles on with the pointer at `at`.
-fn cursor_at(h: &mut H, at: Pos2) -> Option<Cursor> {
+/// The cursor the frame settles on with the pointer at `at`, and the cursor the window shows.
+fn cursor_at(h: &mut H, at: Pos2) -> (Option<Cursor>, egui::CursorIcon) {
     h.event(Event::PointerMoved(at));
     h.run_steps(2);
-    cursor::current(&h.ctx)
+    (cursor::current(&h.ctx), h.output().platform_output.cursor_icon)
 }
 
 #[test]
@@ -42,8 +42,11 @@ fn the_title_bar_keeps_the_arrow_over_the_menu_titles_and_the_free_band() {
     let help = h.get_by_label("Help").rect();
     let grab = Some(Cursor::System(CursorIcon::Grab));
 
-    assert_ne!(cursor_at(&mut h, file.center()), grab, "the arrow over the File title, not the open hand");
-    assert_ne!(cursor_at(&mut h, help.center()), grab, "the arrow over the Help title");
-    assert_ne!(cursor_at(&mut h, Pos2::new(help.right() + 40.0, help.center().y)), grab, "the arrow over the free band");
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the window shows the arrow");
+    for (at, place) in
+        [(file.center(), "the File title"), (help.center(), "the Help title"), (Pos2::new(help.right() + 40.0, help.center().y), "the free band")]
+    {
+        let (requested, shown) = cursor_at(&mut h, at);
+        assert_ne!(requested, grab, "no open hand over {place}");
+        assert_eq!(shown, egui::CursorIcon::Default, "the window shows the arrow over {place}");
+    }
 }
