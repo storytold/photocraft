@@ -1110,12 +1110,16 @@ pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels:
         }
         // The gzip header can occur in a non-SVG preamble. A failed speculative
         // probe only owns the error when the filename also selects SVG.
-        let decoded = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).and_then(|plain| {
+        let sniff_limit = 64 * 1024 * 1024; // Match the shared format registry.
+        let limit = if named_svg { svg::MAX_INFLATED_BYTES as usize } else { sniff_limit };
+        let decoded = craft_svg::svgz::inflate(bytes, limit).and_then(|plain| {
             let text = craft_svg::svgz::decode(&plain)?;
-            Ok(is_svg_input(name, text.as_bytes()).then_some(plain))
+            // The outer format has already been probed. Inspect the XML root,
+            // as ordinary SVGZ recognition does, without probing for other formats.
+            Ok((svg::is_svg(text.as_bytes()) || named_svg).then_some(plain))
         });
         return match decoded {
-            Ok(Some(plain)) => svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some),
+            Ok(Some(plain)) => svg::import_inflated_svgz_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some),
             Err(error) if named_svg => Err(IoError::Svg(error.to_string())),
             Ok(None) | Err(_) => Ok(None),
         };

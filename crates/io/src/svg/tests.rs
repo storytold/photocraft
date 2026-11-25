@@ -41,10 +41,10 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
         resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
     }));
     let invalid = image_svg(&embedded_image("image/svg+xml", b"<not-svg/>"));
-    parse_image_bounded_with(invalid.as_bytes(), budget.clone(), inter_only).unwrap();
+    parse_image_bounded_with(invalid.as_bytes(), budget.clone(), inter_only, MAX_BOUNDED_SVG_BYTES).unwrap();
     assert!(budget.lock().unwrap().error.is_none(), "ordinary invalid images are still omitted");
     let svg = image_svg("<text>x</text>");
-    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), panic_fonts).unwrap_err();
+    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), panic_fonts, MAX_BOUNDED_SVG_BYTES).unwrap_err();
     assert!(error.to_string().contains("bounded SVG worker failed"));
     assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
 }

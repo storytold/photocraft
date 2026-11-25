@@ -140,7 +140,7 @@ fn repeated_use_reports_encoded_byte_exhaustion_at_small_pixel_counts() {
         error: None,
         resolver: resolver.clone(),
     }));
-    let error = svg::parse_image_bounded_with(source.as_bytes(), budget, empty_fonts).unwrap_err();
+    let error = svg::parse_image_bounded_with(source.as_bytes(), budget, empty_fonts, svg::MAX_BOUNDED_SVG_BYTES).unwrap_err();
     assert!(error.to_string().contains("encoded byte or decoded pixel budget"), "{error}");
     let usage = resolver.usage();
     assert!(usage.raster_limit_images > 0);

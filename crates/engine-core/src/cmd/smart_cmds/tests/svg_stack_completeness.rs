@@ -174,7 +174,7 @@ fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
 
 #[test]
 fn complete_svgz_replacement_keeps_encoded_bytes_and_existing_encoding_refusals() {
-    let xml = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"#;
+    let xml = r#"<?xml version="1.0"?><!-- saved vector artwork --><svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"#;
     let bytes = gzip(xml.as_bytes());
     for source_name in
         ["complete.svgz", "complete.gz", "complete.psd", "complete.afphoto", "complete.afdesign", "complete.afpub", "complete.AfPhOtO", "without-extension"]
@@ -208,6 +208,52 @@ fn complete_svgz_replacement_keeps_encoded_bytes_and_existing_encoding_refusals(
         assert!(photocraft_io::import("unsupported.svgz", &encoded).is_err());
         assert!(decode_source("unsupported.svgz", &encoded).is_err());
     }
+}
+
+#[test]
+fn contents_commands_keep_the_existing_svgz_size_allowance() {
+    let mut xml = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><!--"#.to_vec();
+    xml.resize(17 * 1024 * 1024, b'x');
+    xml.extend_from_slice(br#"--><rect width="2" height="2" fill="red"/></svg>"#);
+    // Only the limit for the outer SVGZ document changes. Plain bounded SVG
+    // and the embedded-resource checks keep their existing admission limits.
+    let plain = photocraft_io::svg::import_svg_bounded_images_strict("large.svg", &xml, 24_000_000).unwrap_err();
+    assert!(plain.to_string().contains("16 MiB"));
+    let bytes = Arc::new(gzip(&xml));
+    drop(xml);
+    let name = "large.svgz";
+    let ordinary = photocraft_io::import(name, &bytes).unwrap();
+    assert!(ordinary.warnings.is_empty());
+
+    let mut session = session(8);
+    paint(&mut session);
+    let id = LayerId(convert(&mut session));
+    let source = SmartSource::Embedded { file_name: name.into(), bytes: bytes.clone() };
+    session
+        .edit("load saved SVGZ Smart Object", |doc, _| {
+            doc.layer_mut(id).unwrap().content = LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, None));
+            Ok(())
+        })
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("contents.png");
+    let exported = session.execute("layer.smartObjects.exportContents", json!({"layer": id.0, "path": png})).unwrap();
+    assert_eq!(exported["converted"], true);
+    let exported = photocraft_io::import("contents.png", &std::fs::read(&png).unwrap()).unwrap();
+    assert_eq!(photocraft_compose::flatten(&exported.document).get(1, 1), [1., 0., 0., 1.]);
+    let (_, retained) = contents_of(&session.active().unwrap().doc, id).unwrap();
+    assert!(Arc::ptr_eq(&bytes, &retained));
+
+    session.execute("layer.smartObjects.editContents", json!({"layer": id.0})).unwrap();
+    let edited = &session.active().unwrap().doc;
+    assert_eq!(edited.size, ordinary.document.size);
+    assert_eq!(photocraft_compose::flatten(edited).get(1, 1), [1., 0., 0., 1.]);
+
+    session.set_active(0);
+    session.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+    assert!(!matches!(session.active().unwrap().doc.layer(id).map(|layer| &layer.content), Some(LayerContent::Smart(_))));
+    assert_eq!(photocraft_compose::flatten(&session.active().unwrap().doc).get(1, 1), [1., 0., 0., 1.]);
 }
 
 #[test]
