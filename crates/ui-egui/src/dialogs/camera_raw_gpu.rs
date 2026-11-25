@@ -1,7 +1,6 @@
-//! Camera Raw's preview develop on the GPU (#6916). When the settings don't use Detail
-//! (sharpening, noise reduction), the proxy develops in wgpu passes
+//! Camera Raw's preview develop on the GPU (#6916). The proxy develops in wgpu passes
 //! (`photocraft_gpu::CameraRawDevelop`) on the canvas's device and is read back once for the
-//! histogram, scopes and display conversion. Detail, Rendering Mode CPU,
+//! histogram, scopes and display conversion. Calibration, Rendering Mode CPU,
 //! `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software adapter, a device fault or a failed
 //! develop all keep the CPU develop on the worker.
 //!
@@ -129,8 +128,8 @@ impl CameraRawGpu {
         CameraRawGpu { device, queue, health, pass, failed: Arc::default(), points: Arc::default() }
     }
 
-    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Detail or Calibration, the
-    /// pass still building, a fault, or a GPU error (logged; the dialog then stays on the CPU).
+    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Calibration, the pass still
+    /// building, a fault, or a GPU error (logged; the dialog then stays on the CPU).
     /// `key` names the pixels when they are the dialog's unchanged proxy ([`source_key`]), so they
     /// upload once. Neutral settings are `None` too: the CPU develop returns them at once, a GPU
     /// round trip would only cost. `inputs` are the develop's seed, pixel scale and encoding gamma.
@@ -164,10 +163,10 @@ impl CameraRawGpu {
     }
 
     /// The image's black and white points for Whites and Blacks, measured on the CPU. With a
-    /// spatial stage the GPU measures them after it instead.
+    /// spatial stage before them the GPU measures them after it instead (Detail comes after).
     #[cfg(not(target_arch = "wasm32"))]
     fn points(&self, px: &[[f32; 4]], key: Option<u64>, w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs) -> Option<(f32, f32)> {
-        if (p.whites == 0.0 && p.blacks == 0.0) || photocraft_algo::camera_raw::spatial(p) {
+        if (p.whites == 0.0 && p.blacks == 0.0) || photocraft_algo::camera_raw::spatial_tone(p) {
             return None;
         }
         // PLAN: assumed `white_black_points(px, w, h, p, inputs)` (dialogs-w50 owns the algo signature)
@@ -258,6 +257,42 @@ mod gpu_tests {
         (frame.backend, frame.px, cpu)
     }
 
+    /// The open session's proxy pixel count, which every develop of it returns.
+    fn proxy_pixels(app: &PhotocraftApp) -> usize {
+        let (w, h) = app.raw.as_ref().expect("session").source.proxy_base().size;
+        w * h
+    }
+
+    /// The largest channel difference between a GPU and a CPU develop. Both must hold all
+    /// `pixels` (a nonzero count) and only finite channels first: `zip` stops at the shorter
+    /// buffer and `f32::max` drops a NaN, so either would pass unchecked.
+    fn off_by(pixels: usize, gpu: &[[f32; 4]], cpu: &[[f32; 4]], what: &str) -> f32 {
+        assert!(pixels > 0, "{what}: the proxy has no pixels");
+        assert_eq!((gpu.len(), cpu.len()), (pixels, pixels), "{what}: GPU and CPU pixel counts");
+        for (side, px) in [("GPU", gpu), ("CPU", cpu)] {
+            assert!(px.iter().flatten().all(|c| c.is_finite()), "{what}: a non-finite {side} channel");
+        }
+        gpu.iter().zip(cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max)
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU and CPU pixel counts")]
+    fn off_by_refuses_a_short_develop() {
+        off_by(2, &[[0.0; 4]], &[[0.0; 4]; 2], "short");
+    }
+
+    #[test]
+    #[should_panic(expected = "the proxy has no pixels")]
+    fn off_by_refuses_an_empty_proxy() {
+        off_by(0, &[], &[], "empty");
+    }
+
+    #[test]
+    #[should_panic(expected = "a non-finite GPU channel")]
+    fn off_by_refuses_a_non_finite_channel() {
+        off_by(1, &[[f32::NAN, 0.0, 0.0, 1.0]], &[[0.0, 0.0, 0.0, 1.0]], "nan");
+    }
+
     #[test]
     fn the_pass_is_built_when_camera_raw_first_opens_not_with_the_canvas() {
         let _gpu = photocraft_testkit::gpu_lock();
@@ -272,23 +307,8 @@ mod gpu_tests {
         assert_eq!(!has_gpu(&app), software, "a software adapter keeps the CPU develop");
     }
 
-    fn worst_difference(gpu: &[[f32; 4]], cpu: &[[f32; 4]]) -> f32 {
-        assert_eq!(gpu.len(), cpu.len(), "preview frame lengths differ");
-        gpu.iter()
-            .zip(cpu)
-            .enumerate()
-            .flat_map(|(pixel, (a, b))| {
-                (0..4).map(move |channel| {
-                    let diff = (a[channel] - b[channel]).abs();
-                    assert!(diff.is_finite(), "nonfinite preview difference at pixel {pixel}, channel {channel}");
-                    diff
-                })
-            })
-            .fold(0.0, f32::max)
-    }
-
     #[test]
-    fn per_pixel_settings_develop_on_the_gpu_like_the_cpu_and_the_rest_stays_on_the_cpu() {
+    fn every_stage_but_calibration_develops_on_the_gpu_like_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
         // 8 and 32 bits: the dialog hands the develop only `float` (32-bit or not, `camera_raw_ui/convert.rs`), so 16
         // bits takes 8 bits' path; every depth's develop is the gpu crate's `tests/it/camera_raw.rs` (#15652).
@@ -300,6 +320,7 @@ mod gpu_tests {
                 eprintln!("skipping: the device can't run the RAW Develop pass");
                 return;
             }
+            let pixels = proxy_pixels(&app);
             let per_pixel = cr! {
                 temperature: 20.0,
                 exposure: 0.4,
@@ -314,14 +335,14 @@ mod gpu_tests {
             };
             let (backend, gpu, cpu) = developed(&app, per_pixel.clone());
             assert_eq!(backend, "gpu", "{depth}-bit");
-            let worst = worst_difference(&gpu, &cpu);
+            let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit"));
             assert!(worst <= TOL, "{depth}-bit: off by {worst}");
             // PLAN: the old `describe["developBackend"] == "gpu"` check read the dialog's own render; a `Job` can only be run by the host (no public runner), so the helper runs the job's body and the session's reported backend is not asserted here.
             // Shadows and Highlights develop on the GPU too, Whites and Blacks measured after them.
             let toned = cr!(per_pixel.clone() => shadows: 40.0, highlights: -35.0);
             let (backend, gpu, cpu) = developed(&app, toned.clone());
             assert_eq!(backend, "gpu", "{depth}-bit, Shadows and Highlights");
-            let worst = worst_difference(&gpu, &cpu);
+            let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit, Shadows and Highlights"));
             assert!(worst <= TOL, "{depth}-bit, Shadows and Highlights: off by {worst}");
             // So do Dehaze, Clarity and Texture, with Whites and Blacks measured after them.
             for spatial in [
@@ -331,14 +352,25 @@ mod gpu_tests {
             ] {
                 let (backend, gpu, cpu) = developed(&app, spatial.clone());
                 assert_eq!(backend, "gpu", "{depth}-bit, {spatial:?}");
-                let worst = worst_difference(&gpu, &cpu);
+                let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit, {spatial:?}"));
                 assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
             }
-            // Detail develops the whole frame on the CPU.
-            for detail in [cr!(toned.clone() => sharpen_amount: 40.0), cr!(per_pixel.clone() => noise_luminance: 30.0, dehaze: 20.0)] {
-                let (backend, shown, cpu) = developed(&app, detail);
-                assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
+            // And Detail: sharpening and noise reduction, alone (Whites and Blacks measured on
+            // the CPU before it) and after every other stage.
+            for detail in [
+                cr!(per_pixel.clone() => sharpen_amount: 60.0, sharpen_masking: 30.0),
+                cr!(per_pixel.clone() => noise_luminance: 40.0, noise_color: 50.0),
+                cr!(toned.clone() => sharpen_amount: 80.0, noise_luminance: 30.0, noise_color: 40.0, clarity: 30.0, texture: 25.0, dehaze: 20.0),
+            ] {
+                let (backend, gpu, cpu) = developed(&app, detail.clone());
+                assert_eq!(backend, "gpu", "{depth}-bit, {detail:?}");
+                let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit, {detail:?}"));
+                assert!(worst <= TOL, "{depth}-bit, {detail:?}: off by {worst}");
             }
+            // Calibration develops the whole frame on the CPU (#5128).
+            let calibrated = cr!(per_pixel.clone() => sharpen_amount: 40.0, shadow_tint: 30.0);
+            let (backend, shown, cpu) = developed(&app, calibrated);
+            assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
             // A device fault: the CPU, from the next frame on.
             app.gpu.as_ref().unwrap().health().mark(photocraft_gpu::Fault::Lost("test".into()));
             let (backend, shown, cpu) = developed(&app, per_pixel);

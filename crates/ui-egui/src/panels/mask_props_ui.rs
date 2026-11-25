@@ -83,7 +83,12 @@ fn mask_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, secti
                     for event in &out.events {
                         // A cancel lands on the value from before the drag, written into the same undo step.
                         let Some(value) = event.landed() else { continue };
-                        let mut params = json!({"document": document, "layer": layer_id});
+                        // The pixel mask's command refuses a stale dialog by its document; the
+                        // vector mask's takes no `document`.
+                        let mut params = json!({"layer": layer_id});
+                        if section.command != "layer.vectorMask.edit" {
+                            params["document"] = json!(document);
+                        }
                         if let Some(gesture) = event.id() {
                             params["coalesce"] = json!(format!("{}:{document}:{layer_id}:{field}:{}", section.key, gesture.0));
                         }

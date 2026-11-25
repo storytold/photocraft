@@ -11,6 +11,7 @@
 //! A slot remembers the document its source was set in, so ⌥-clicking in one open document and
 //! painting in another clones across them, as in Photoshop.
 
+use crate::presets::PresetsExt;
 use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::Rect;
 use photocraft_paint::retouch::Region;
@@ -24,7 +25,7 @@ use crate::{Result, Session};
 pub const SLOTS: usize = 5;
 
 /// A stroke from a slot whose source document was closed.
-pub(crate) const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
+pub const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CloneSource {
@@ -213,7 +214,7 @@ pub fn transform_matrix(scale: [f64; 2], rotation_deg: f64, flip_h: bool, flip_v
 
 /// Null optional coordinates are omitted. Geometry, sampling and commit metadata must agree
 /// on this decision so an empty optional field cannot switch the source document.
-pub(crate) fn uses_slot(p: &Value) -> bool {
+pub fn uses_slot(p: &Value) -> bool {
     ["source", "offset"].into_iter().all(|key| p.get(key).is_none_or(Value::is_null))
 }
 
@@ -232,7 +233,7 @@ pub fn remember_mapping(s: &mut Session, p: &Value, map: &Mapping) {
     if !uses_slot(p) {
         return;
     }
-    let slot = s.presets.clone.active_mut();
+    let slot = s.presets_mut().clone.active_mut();
     let anchor = [map.anchor.0, map.anchor.1];
     slot.last_anchor = Some(anchor);
     if p.get("aligned").and_then(Value::as_bool).unwrap_or(true) {
@@ -249,7 +250,7 @@ pub fn resolve(s: &Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<(
     let offset = input_point(p, "offset", cmd)?;
     let anchor_param = input_point(p, "anchor", cmd)?.map(|a| (a[0], a[1]));
     let aligned = p.get("aligned").and_then(Value::as_bool).unwrap_or(true);
-    let slot = s.presets.clone.active().clone();
+    let slot = s.presets().clone.active().clone();
     let explicit_tf = ["scale", "rotation", "flipH", "flipV"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
     let m = if explicit_tf {
         let sc = p
@@ -361,7 +362,7 @@ pub fn resample(src: &Region, dst: Rect, map: &Mapping, alpha: Option<usize>) ->
 fn index(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
     let i = match p.get("index") {
         Some(v) if !v.is_null() => v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad(cmd, "index must be a source-slot number"))?,
-        _ => s.presets.clone.active,
+        _ => s.presets().clone.active,
     };
     if i < SLOTS { Ok(i) } else { Err(bad(cmd, format!("index {i} out of range (0..{SLOTS})"))) }
 }
@@ -393,14 +394,14 @@ fn valid_point(point: [f64; 2]) -> bool {
 
 /// Describe a slot with both its stable document identity and its current open-tab index.
 fn slot_json(s: &Session, i: usize) -> Value {
-    let slot = &s.presets.clone.slots[i.min(SLOTS - 1)];
+    let slot = &s.presets().clone.slots[i.min(SLOTS - 1)];
     let document = slot.open_document().and_then(|id| s.documents().iter().position(|st| st.doc.id == id));
     slot.to_json(i, document)
 }
 
 /// Report all slot geometry and stable identities with their current open-document indexes.
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
-    let c = &s.presets.clone;
+    let c = &s.presets().clone;
     Ok(
         json!({"active": c.active, "sources": (0..SLOTS).map(|i| slot_json(s, i)).collect::<Vec<_>>(), "overlay": serde_json::to_value(&c.overlay).unwrap_or(Value::Null)}),
     )
@@ -411,7 +412,7 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "cloneSource.select";
     p.get("index").filter(|v| !v.is_null()).ok_or_else(|| bad(CMD, "missing `index`"))?;
     let i = index(s, p, CMD)?;
-    s.presets.clone.active = i;
+    s.presets_mut().clone.active = i;
     Ok(slot_json(s, i))
 }
 
@@ -437,7 +438,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (document, active_layer) = (doc.map(|st| st.doc.id), doc.and_then(|st| st.active_layer).map(|id| id.0));
     // Build the edited slot off to the side so a rejected coordinate or sum is atomic.
-    let mut slot = s.presets.clone.slots[i].clone();
+    let mut slot = s.presets().clone.slots[i].clone();
     if let Some([x, y]) = source {
         // A new sample point re-pairs with the next stroke.
         slot.source = Some([x, y]);
@@ -497,9 +498,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if [slot.source, slot.anchor, slot.last_anchor].into_iter().flatten().any(|p| !valid_point(p)) {
         return Err(bad(CMD, "the edited clone coordinates exceed their range"));
     }
-    s.presets.clone.slots[i] = slot;
+    s.presets_mut().clone.slots[i] = slot;
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
-        s.presets.clone.active = i;
+        s.presets_mut().clone.active = i;
     }
     Ok(slot_json(s, i))
 }
@@ -507,14 +508,14 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
 /// Reset scale/rotation/flips while retaining source identity and established pairings.
 fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index(s, p, "cloneSource.resetTransform")?;
-    let slot = &mut s.presets.clone.slots[i];
+    let slot = &mut s.presets_mut().clone.slots[i];
     (slot.scale, slot.rotation, slot.flip_h, slot.flip_v) = ([100.0, 100.0], 0.0, false, false);
     Ok(slot_json(s, i))
 }
 
 /// Update transient overlay appearance without editing image pixels or source geometry.
 fn overlay(s: &mut Session, p: &Value) -> Result<Value> {
-    let o = &mut s.presets.clone.overlay;
+    let o = &mut s.presets_mut().clone.overlay;
     let flag = |k: &str| p.get(k).and_then(Value::as_bool);
     if let Some(b) = flag("show") {
         o.show = b;
@@ -617,11 +618,11 @@ mod tests {
         let mut s = crate::session();
         s.execute("cloneSource.set", json!({"width": 50, "height": 200})).unwrap();
         s.execute("cloneSource.set", json!({"width": 100})).unwrap();
-        assert_eq!(s.presets.clone.active().scale, [100.0, 200.0], "unlinked: H stays");
+        assert_eq!(s.presets().clone.active().scale, [100.0, 200.0], "unlinked: H stays");
         let r = s.execute("cloneSource.set", json!({"linked": true, "width": 150})).unwrap();
         assert_eq!((r["width"].as_f64(), r["height"].as_f64(), r["linked"].as_bool()), (Some(150.0), Some(300.0), Some(true)));
         s.execute("cloneSource.set", json!({"height": 60})).unwrap();
-        assert_eq!(s.presets.clone.active().scale, [30.0, 60.0], "linked: W follows H");
+        assert_eq!(s.presets().clone.active().scale, [30.0, 60.0], "linked: W follows H");
     }
 
     #[test]

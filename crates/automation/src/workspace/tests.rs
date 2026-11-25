@@ -1069,6 +1069,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.addAnchor"
             | "path.deleteAnchor"
             | "path.deleteSegment"
+            | "path.deleteComponents"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"
@@ -1083,6 +1084,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"
             | "layer.vectorMask.info"
+            | "layer.vectorMask.currentPath"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
             // `"as":"path"` pastes the clipboard as a vector path (#10694).

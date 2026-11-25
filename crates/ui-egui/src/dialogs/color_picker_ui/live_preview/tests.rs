@@ -1,4 +1,5 @@
 use craft::ui::canvas::ShieldColor;
+use craft::ui::dialog::StackDialog as _;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use craft::ui::runtime::requests::ColorRequest;
 use serde_json::{Value, json};
@@ -121,7 +122,7 @@ fn ok_keeps_the_colour_and_the_dialog_makes_one_history_step() {
     assert_eq!((answered_key.as_str(), rgb_hex(color).as_str()), (key.as_str(), "#336699"));
     assert!(answer_for(&mut app, fill).is_none(), "an answer is taken once");
     // The dialog takes the answer into its values as its pass does.
-    app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(fill).expect("Fill is open").answer_color(key.clone(), color);
+    app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(fill).expect("Fill is open").answer_color(&key, color);
     host_pass(&mut app);
     assert_eq!(held_color(&app, fill, &key).as_deref(), Some("#336699"));
 

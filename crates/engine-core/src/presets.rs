@@ -17,7 +17,7 @@
 //!
 //! The built-in groups are our own (clean-room): colours, styles and shapes were designed here,
 //! not copied from Photoshop's presets. User edits persist with the preferences document: see
-//! [`PresetState::to_json`] (saved under `"presets"` by [`Session::prefs_to_json`]).
+//! [`PresetState::to_json`] (saved under `"presets"` by [`SavedPrefsExt::prefs_to_json`](crate::prefs::SavedPrefsExt::prefs_to_json)).
 
 pub mod clone_source;
 pub mod gradients;
@@ -32,6 +32,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 
+use craft_tracked::Tracked;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -173,12 +174,28 @@ impl PresetState {
     }
 }
 
-impl Session {
+/// The session's presets: its [`PresetState`] (a session slot of this module) and restoring them.
+pub trait PresetsExt {
+    /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source, with
+    /// the revision every change moves (UIs key thumbnail caches on it).
+    fn presets(&self) -> &Tracked<PresetState>;
+    /// The presets, to change them.
+    fn presets_mut(&mut self) -> &mut Tracked<PresetState>;
     /// Restore presets saved by [`PresetState::to_json`]. Missing or malformed sets keep their
     /// defaults (presets are never worth refusing to start over). Each set loads on its own: the
     /// shell writes back only the keys that changed, so one damaged set would otherwise discard
     /// every other set, saved document presets included, at each launch (#5602).
-    pub fn load_presets_json(&mut self, v: Value) {
+    fn load_presets_json(&mut self, v: Value);
+}
+
+impl PresetsExt for Session {
+    fn presets(&self) -> &Tracked<PresetState> {
+        self.slot_or_default::<Tracked<PresetState>>()
+    }
+    fn presets_mut(&mut self) -> &mut Tracked<PresetState> {
+        self.slot_or_default_mut::<Tracked<PresetState>>()
+    }
+    fn load_presets_json(&mut self, v: Value) {
         let Value::Object(mut m) = v else { return };
         fn take<T: serde::de::DeserializeOwned>(m: &mut serde_json::Map<String, Value>, key: &str) -> Option<T> {
             m.remove(key).filter(|v| !v.is_null()).and_then(|v| serde_json::from_value(v).ok())
@@ -203,7 +220,10 @@ impl Session {
             },
             contours: take(&mut m, "contours"),
         };
-        let st = &mut *self.presets;
+        if let Some(c) = p.custom_shapes {
+            self.edit_state.custom_shapes = c;
+        }
+        let st = &mut **self.presets_mut();
         if let Some(g) = p.gradient {
             st.gradient = g;
         }
@@ -258,28 +278,25 @@ impl Session {
         if let Some(e) = p.export_presets {
             st.export_presets = crate::export_preset_cmds::load(e);
         }
-        if let Some(c) = p.custom_shapes {
-            self.edit_state.custom_shapes = c;
-        }
         if let Some(d) = p.layer_defaults {
             st.layer_defaults = d;
         }
         if let Some(mut g) = p.swatches {
             // A hand-edited preferences file can't make the library unbounded.
             crate::swatch_cmds::cap_library(&mut g);
-            self.presets.swatches = g;
+            st.swatches = g;
         }
         if let Some(c) = p.contours.filter(Value::is_array) {
-            self.presets.contours = crate::contour_lib_cmds::from_json(&c);
+            st.contours = crate::contour_lib_cmds::from_json(&c);
         }
     }
+}
 
-    /// Record a preset change: moves the presets' revision and marks the preferences document dirty
-    /// so the shell persists it.
-    pub(crate) fn presets_changed(&mut self) {
-        self.presets.edit(|_| ());
-        self.prefs.edit(|_| ());
-    }
+/// Record a preset change: moves the presets' revision and marks the preferences document dirty
+/// so the shell persists it.
+pub(crate) fn presets_changed(s: &mut Session) {
+    s.presets_mut().edit(|_| ());
+    s.prefs.edit(|_| ());
 }
 
 // ------------------------------------------------------------------ shared helpers

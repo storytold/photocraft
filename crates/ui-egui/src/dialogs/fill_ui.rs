@@ -8,7 +8,7 @@ use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
-use craft::ui::runtime::memory::SaveKey;
+use craft::ui::runtime::memory::{MemoryStage, SaveKey, set_saved_value};
 use photocraft_color::BlendMode;
 use serde_json::{Value, json};
 
@@ -19,6 +19,7 @@ use crate::dialogs::params::{captured, open_param};
 /// The command of the dialog, which is also its dialog key.
 pub const COMMAND: &str = "edit.fill";
 const REMEMBER: &str = "photocraft.dialog.edit.fill";
+const REMEMBER_INKS: &str = "photocraft.dialog.edit.fill.inks";
 
 /// The Contents menu: (param, label), in Photoshop's order. Color reads without an ellipsis: choosing it opens nothing.
 pub const CONTENTS: [(&str, &str); 9] = [
@@ -53,10 +54,11 @@ fn rows(foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
 }
 
 /// Photoshop's Fill defaults, which Alt+Reset restores instead of the last-used values.
-fn defaults(foreground: [f32; 3], first_pattern: Option<String>) -> DialogFields {
+fn defaults(foreground: [f32; 3], first_pattern: Option<String>, inks: Option<[f32; 4]>) -> DialogFields {
     let mut f = DialogFields::new();
     f.set("contents", "foreground");
     f.set("color", FieldValue::Color(foreground));
+    f.set(crate::color_picker_ui::ink_field("color"), crate::color_picker_ui::ink_value(craft::theme::Srgba::from_rgb_array(foreground), inks));
     if let Some(id) = first_pattern {
         f.set("pattern", id);
     }
@@ -84,9 +86,14 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let first = app.session.patterns.items.first().map(|p| p.id.clone());
     let patterns = crate::panels::preset_browser::pattern_swatches(app);
     let rows = rows([r, g, b], first.clone());
-    let reset = defaults([r, g, b], first);
+    let inks = crate::color_picker_ui::ink_value(craft::theme::Srgba::rgb(r, g, b), app.session.tools.picked_role_cmyk(0));
+    let reset = defaults([r, g, b], first, app.session.tools.picked_role_cmyk(0));
+    let mut fields = DialogFields::new();
+    let remembered: Option<DialogFields> = MemoryStage::peek_saved(app.ctx(), &SaveKey::named(REMEMBER_INKS));
+    let remembered_inks = remembered.as_ref().and_then(|saved| saved.get(&crate::color_picker_ui::ink_field("color"))).cloned();
+    fields.set(crate::color_picker_ui::ink_field("color"), remembered_inks.unwrap_or(inks));
     let title = Label::from(tl!("Fill"));
-    open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
+    open_param(app, COMMAND, fields, held, move |fields| {
         ParamDialog::new(COMMAND, title.clone(), rows.clone())
             .values(Bind::bound(fields))
             .remember(SaveKey::named(REMEMBER))
@@ -104,6 +111,9 @@ pub fn params(f: &DialogFields, held: &Value) -> Value {
         "color" => {
             if let Some(c) = f.color("color") {
                 p.insert("color".into(), json!(hex(c)));
+                if let Some(inks) = crate::color_picker_ui::request_inks(f, "color", craft::theme::Srgba::from_rgb_array(c)) {
+                    p.insert("colorCmyk".into(), json!(inks));
+                }
             }
         }
         "pattern" => {
@@ -143,7 +153,15 @@ pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(),
 pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
     let captured = captured(app, &result.key);
     match app.run(COMMAND, params(&result.fields, &captured)) {
-        Ok(_) => result.remember(ctx),
+        Ok(_) => {
+            result.remember(ctx);
+            // The framework remembers visible parameter rows only; keep their ink companion in the same saved tier.
+            let mut inks = DialogFields::new();
+            if let Some(value) = result.fields.get(&crate::color_picker_ui::ink_field("color")) {
+                inks.set(crate::color_picker_ui::ink_field("color"), value.clone());
+            }
+            set_saved_value(ctx, &SaveKey::named(REMEMBER_INKS), Some(inks));
+        }
         Err(e) => crate::notices::error(app, e),
     }
 }
