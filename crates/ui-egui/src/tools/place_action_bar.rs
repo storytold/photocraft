@@ -6,18 +6,15 @@
 //! 2. Remove background (scissors / mask cutout);
 //! 3. Adjust colors (Hue/Saturation adjustment layer);
 //! 4. Free Transform (vector-shape / quad with handles);
-//! 5. Create new fill or adjustment layer (adjustment-layer popup menu);
-//! 6. Place Embedded… / Add image (image);
-//! 7. the ⋯ menu (MoreMenu).
+//! 5. Place Embedded… / Add image (image);
+//! 6. the ⋯ menu (MoreMenu).
 
 use craft::behavior::IconId;
 use craft::behavior::kurbo::Point;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::canvas_controls::{TaskBar, TaskBarCx};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, Trigger};
-use craft::ui::menu::Menu;
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::primitives::IconSpec;
-use craft::ui::runtime::access::PopupKind;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -151,7 +148,6 @@ pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
 /// - Remove background
 /// - Adjust colors
 /// - Free Transform
-/// - Create new fill or adjustment layer
 /// - Place Embedded…
 /// - More options (⋯)
 fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>, ctx: &egui::Context) {
@@ -217,29 +213,7 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>, 
         }
     }
 
-    // 5. Create new fill or adjustment layer
-    let adj_btn = IconButton::new(IconId::new("adjustment_layer"))
-        .label(tl!("Create new fill or adjustment layer"))
-        .tooltip(tl!("Create new fill or adjustment layer"))
-        .popup(PopupKind::Menu)
-        .show(ui);
-
-    let mut entries = Vec::new();
-    for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
-        entries.push(Entry::new(c.id, tl!(c.label).trim_end_matches('…').to_string()));
-    }
-    entries.push(Entry::new("layer.newFillLayer.solidColor", tl!("Solid Color…").to_string()));
-    entries.push(Entry::new("layer.newFillLayer.gradient", tl!("Gradient…").to_string()));
-    entries.push(Entry::new("layer.newFillLayer.pattern", tl!("Pattern…").to_string()));
-
-    if let Some(cmd) = Menu::new(tl!("Create new fill or adjustment layer")).opened_by(&adj_btn, Trigger::Press).pick(ui, &entries).picked {
-        set_active(app);
-        if let Err(e) = app.run(cmd, json!({})) {
-            crate::notices::error(app, e);
-        }
-    }
-
-    // 6. Place Embedded…
+    // 5. Place Embedded…
     if IconButton::new(IconId::new("image"))
         .label(tl!("Place Embedded…"))
         .tooltip(tl!("Place Embedded…"))
@@ -252,7 +226,7 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>, 
         }
     }
 
-    // 7. More options (⋯)
+    // 6. More options (⋯)
     cx.more_menu(ui);
 }
 
