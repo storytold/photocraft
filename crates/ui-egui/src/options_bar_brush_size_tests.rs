@@ -68,5 +68,12 @@ fn the_brush_size_under_the_tip_lies_inside_the_options_bar() {
         // the two-line content, not a bar that happens to fit a single line.
         assert!(field.height() > one_line.height(), "{tool:?}: the field {field:?} holds a tip over a caption, taller than a one-line control {one_line:?}");
         assert!(bar.contains_rect(field), "{tool:?}: the brush picker field {field:?} runs out of the options bar {bar:?}, so its size caption is cut");
+        // The bar clips its members well inside its outer edge, so a field that only fits the bar's rect can still lose
+        // its caption: with the slot's line lost the field sat about 3 points low, inside the bar's rect, and the
+        // caption was cut. A field on the bar's middle line keeps the caption in view.
+        assert!(
+            (field.center().y - bar.center().y).abs() <= 1.0,
+            "{tool:?}: the brush picker field {field:?} sits off the options bar's middle {bar:?}, so its size caption is cut"
+        );
     }
 }
