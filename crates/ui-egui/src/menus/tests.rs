@@ -1,7 +1,201 @@
 use super::items::row;
 use super::*;
-use craft::menu::{THEME_COMMAND, ThemeChoice};
+use craft::keymap::CommandRef;
+use craft::menu::{ItemKind, MenuRole, Node, THEME_COMMAND, ThemeChoice};
 use photocraft_engine::color_cmds::ColorExt;
+
+/// Inspect the real native tree without depending on a platform menu backend.
+fn native_submenu<'a>(nodes: &'a [Node], title: &str) -> Option<&'a [Node]> {
+    nodes.iter().find_map(|node| match node {
+        Node::Submenu { label, children, .. } if label == title => Some(children.as_slice()),
+        _ => None,
+    })
+}
+
+/// Provider display text is data, including the label used to draw real separator rows.
+#[test]
+fn provider_resource_named_dashes_remains_a_command_in_window_native_and_search_menus() {
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("menu-separator-fixture-0001".into()).unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
+    let ctx = app.ctx().clone();
+    let command = "file.openProviderRecent.dashes";
+    assert!(row(model(&mut app, &ctx).rows(), command).is_none());
+    provider.connect("menu-fixture".into(), "Separator fixtures".into(), "account".into()).unwrap();
+    let connection = provider.snapshot()["connectionId"].as_str().unwrap().to_string();
+    provider.set_resources(&connection, vec![crate::file_providers::Resource { id: "dashes".into(), name: "---".into(), updated_at: String::new() }]).unwrap();
+
+    let items = menu_rows(&app);
+    let resource = row(&items, command).unwrap();
+    assert_eq!(resource.label, "---");
+    assert!(resource.enabled && resource.kind == ItemKind::Plain && !resource.command.id.is_empty());
+    assert!(items.iter().any(|row| row.command.id.is_empty() && row.label == "---"), "ordinary separator rows remain separators");
+    let shared = model(&mut app, &ctx);
+    assert_eq!(row(shared.rows(), command).unwrap().label, "---");
+    let file = shared.bar.menu(MenuRole::File).unwrap();
+    let recent = native_submenu(&file.children, "Open Recent").unwrap();
+    let resources = native_submenu(recent, "Separator fixtures").unwrap();
+    assert!(matches!(resources, [Node::Item(item)] if item.command.id == command && item.label == "---" && item.enabled));
+    let native = native_menu::laid_out(&mut app, &ctx);
+    assert!(native.bar.find(&CommandRef::new(command)).is_some_and(|item| item.label == "---" && item.enabled));
+    let entries = help_entries(&mut app, &ctx);
+    let listed: Vec<_> = entries.iter().filter(|entry| entry.command().id == command).collect();
+    assert_eq!(listed.len(), 1, "search includes the resource once and excludes separators");
+    assert_eq!(listed[0].label().as_str(), "---");
+    provider.set_enabled(false).unwrap();
+    assert!(row(model(&mut app, &ctx).rows(), command).is_none(), "idle host changes invalidate the shared menu cache");
+}
+
+#[test]
+fn provider_resource_names_remain_literal_in_localized_menus_and_search() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
+    let french = crate::i18n::Lang::from_code("fr").unwrap();
+    assert_eq!(crate::i18n::tr(french, "File"), "Fichier");
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("localized-menu-fixture-0001".into()).unwrap();
+    provider.connect("menu-fixture".into(), "File".into(), "account".into()).unwrap();
+    let connection = provider.snapshot()["connectionId"].as_str().unwrap().to_string();
+    let names = [("catalog", "File"), ("ellipsis", "File…")];
+    let resources =
+        names.into_iter().map(|(id, name)| crate::file_providers::Resource { id: id.into(), name: name.into(), updated_at: String::new() }).collect();
+    provider.set_resources(&connection, resources).unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider), ..Default::default() });
+    let ctx = app.ctx().clone();
+    let items = menu_rows(&app);
+    let _language = crate::i18n::language_scope(french);
+    let layout = native_menu::laid_out(&mut app, &ctx);
+    for (id, name) in names {
+        let command = format!("file.openProviderRecent.{id}");
+        let item = row(&items, &command).unwrap();
+        assert_eq!(translated_menu_label(french, &item.command.id, &item.label), name);
+        assert_eq!(layout.bar.find(&CommandRef::new(&command)).map(|item| item.label.as_str()), Some(name));
+    }
+    let entries = help_entries(&mut app, &ctx);
+    for (id, name) in names {
+        let command = CommandRef::new(format!("file.openProviderRecent.{id}"));
+        let entry = entries.iter().find(|entry| entry.command() == &command).unwrap();
+        assert_eq!(entry.label().as_str(), name);
+        assert_eq!(entry.english().map_or(entry.label().as_str(), |english| english.as_str()), name);
+    }
+    let file = layout.bar.menu(MenuRole::File).unwrap();
+    assert_eq!(file.title, "Fichier");
+    let recent = native_submenu(&file.children, crate::i18n::tr(french, "Open Recent")).unwrap();
+    assert!(native_submenu(recent, "File").is_some(), "the provider title is literal too");
+    assert_eq!(translated_menu_label(french, "fixture.catalog-control", "File"), "Fichier");
+}
+
+#[test]
+fn provider_recents_stay_separate_from_local_files_and_refresh_without_input() {
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("menu-recents-fixture-0001".into()).unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
+    *app.ui.recent_files = vec!["/tmp/drawing.psd".into()];
+    let ctx = app.ctx().clone();
+    let command = CommandRef::new("file.openProviderRecent.drawing");
+    let provider_path = ["File", "Open Recent", "File Provider"];
+    let local_path = ["File", "Open Recent", "Local Recent Files"];
+    let local_id = if cfg!(target_arch = "wasm32") { "file.localRecentHint" } else { "file.openRecent.0" };
+
+    let initial = model(&mut app, &ctx);
+    assert_eq!(row(initial.rows(), "file.openRecent.0").unwrap().path, ["File", "Open Recent"]);
+    assert!(initial.bar.find(&command).is_none());
+
+    let connection = provider.connect("menu-fixture".into(), "Local Recent Files".into(), "account".into()).unwrap();
+    let connected = model(&mut app, &ctx);
+    let empty = row(connected.rows(), "file.providerRecentEmpty").unwrap();
+    assert_eq!(empty.path, provider_path);
+    assert!(!empty.enabled);
+    assert_eq!(row(connected.rows(), local_id).unwrap().path, local_path);
+
+    let resources = |name: &str| vec![crate::file_providers::Resource { id: "drawing".into(), name: name.into(), updated_at: String::new() }];
+    provider.set_resources(&connection, resources("drawing.psd")).unwrap();
+    let listed = model(&mut app, &ctx);
+    assert!(row(listed.rows(), "file.providerRecentEmpty").is_none());
+    assert_eq!(row(listed.rows(), &command.id).unwrap().path, provider_path);
+    assert_eq!(listed.bar.find(&command).unwrap().label, "drawing.psd");
+    assert_eq!(row(listed.rows(), local_id).unwrap().path, local_path);
+    assert_eq!(*app.ui.recent_files, vec!["/tmp/drawing.psd".to_string()]);
+
+    let renamed = "full.name.with.ellipsis…";
+    provider.set_resources(&connection, resources(renamed)).unwrap();
+    assert_eq!(row(model(&mut app, &ctx).rows(), &command.id).unwrap().label, renamed);
+    assert_eq!(native_menu::laid_out(&mut app, &ctx).bar.find(&command).unwrap().label, renamed);
+
+    provider.set_enabled(false).unwrap();
+    assert!(!is_enabled(&app, &command.id));
+    let disabled = model(&mut app, &ctx);
+    assert!(row(disabled.rows(), &command.id).is_none(), "idle provider changes invalidate the shared menu cache");
+    assert_eq!(row(disabled.rows(), local_id).unwrap().path, local_path);
+    assert!(native_menu::laid_out(&mut app, &ctx).bar.find(&command).is_none());
+}
+
+#[test]
+fn provider_recent_commands_use_the_menu_gate_and_provider_dispatch() {
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("menu-gate-fixture-0001".into()).unwrap();
+    provider.connect("menu-fixture".into(), "Example Storage".into(), "account".into()).unwrap();
+    let connection = provider.connection_id().unwrap();
+    provider
+        .set_resources(&connection, vec![crate::file_providers::Resource { id: "drawing".into(), name: "File…".into(), updated_at: String::new() }])
+        .unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
+    let ctx = app.ctx().clone();
+    let command = CommandRef::new("file.openProviderRecent.drawing");
+    assert!(is_live(&command.id) && is_enabled(&app, &command.id) && allows(&app, &command));
+    invoke(&mut app, &ctx, &command.id, json!({})).unwrap();
+    assert!(provider.take_events().iter().any(|event| event.metadata["type"] == "openRequest" && event.metadata["resourceId"] == "drawing"));
+    assert!(app.ui.recent_files.is_empty());
+    app.run("file.new", json!({"width": 2, "height": 2})).unwrap();
+    app.sync_views();
+    invoke(&mut app, &ctx, "image.imageSize", json!({})).unwrap();
+    assert!(app.dialog_open());
+    assert!(!allows(&app, &command), "dynamic provider commands obey the same dialog gate as catalogue commands");
+}
+
+#[test]
+fn provider_recent_dispatch_correlates_the_exact_resource_id() {
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("menu-prefix-fixture-0001".into()).unwrap();
+    provider.connect("menu-fixture".into(), "Example Storage".into(), "account".into()).unwrap();
+    let connection = provider.connection_id().unwrap();
+    let resource = "drawing";
+    provider
+        .set_resources(&connection, vec![crate::file_providers::Resource { id: resource.into(), name: "Drawing.psd".into(), updated_at: String::new() }])
+        .unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
+    let ctx = app.ctx().clone();
+    let command = format!("file.openProviderRecent.{resource}");
+    assert_eq!(row(&menu_rows(&app), &command).unwrap().label, "Drawing.psd");
+    invoke(&mut app, &ctx, &command, json!({})).unwrap();
+    let events = provider.take_events();
+    let opens: Vec<_> = events.iter().filter(|event| event.metadata["type"] == "openRequest").collect();
+    assert_eq!(opens.len(), 1);
+    assert_eq!(opens[0].metadata["resourceId"], resource);
+    assert_eq!(opens[0].metadata["filename"], "Drawing.psd");
+    assert_eq!(opens[0].metadata["connectionId"], connection);
+    assert!(app.ui.recent_files.is_empty());
+}
+
+#[test]
+fn provider_recent_rejects_prefix_shaped_resource_ids_without_requests() {
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("menu-invalid-prefix-fixture-0001".into()).unwrap();
+    let connection = provider.connect("menu-fixture".into(), "Example Storage".into(), "account".into()).unwrap();
+    let valid = crate::file_providers::Resource { id: "drawing".into(), name: "Drawing.psd".into(), updated_at: String::new() };
+    provider.set_resources(&connection, vec![valid.clone()]).unwrap();
+    let invalid = "file.openProviderRecent.drawing";
+    assert!(provider.set_resources(&connection, vec![crate::file_providers::Resource { id: invalid.into(), ..valid.clone() }]).is_err());
+    assert_eq!(provider.resources(), vec![valid], "the rejected dotted ID cannot replace valid Recents");
+    assert!(provider.take_events().is_empty());
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
+    let ctx = app.ctx().clone();
+    let command = format!("file.openProviderRecent.{invalid}");
+    assert!(row(&menu_rows(&app), &command).is_none());
+    assert!(invoke(&mut app, &ctx, &command, json!({})).is_err());
+    assert!(provider.take_events().is_empty(), "a rejected resource ID cannot create an openRequest");
+}
 
 #[test]
 fn live_lookup_finds_engine_and_shell_commands() {
@@ -13,6 +207,56 @@ fn live_lookup_finds_engine_and_shell_commands() {
     }
     for id in ["", "missing.command", "💾"] {
         assert!(!is_live(id));
+    }
+}
+
+/// Every shared menu choice has its own English alias, including choices that share a command id.
+#[test]
+fn shared_menu_choices_keep_exact_english_aliases_and_titles() {
+    use craft::i18n::Words;
+    use craft::menu::{LANGUAGE_COMMAND, LanguageLabels, Target, ThemeLabels};
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = app.ctx().clone();
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    let _language = crate::i18n::language_scope(az);
+    let i18n = crate::i18n::framework_i18n();
+    let words = Words::from_i18n(i18n.clone(), i18n.from_code("az").unwrap());
+    let studio = craft::theme::ThemeId::parse("craft.studio").unwrap();
+    let theme_choices = [
+        (ThemeChoice::System.command(), "Sync with System".to_string()),
+        (ThemeChoice::NextMode.command(), "Next Mode".to_string()),
+        (ThemeChoice::theme(studio.clone(), false).command(), "Studio (Light)".to_string()),
+        (ThemeChoice::theme(studio, true).command(), "Studio (Dark)".to_string()),
+    ];
+    let language_choices = [
+        (CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "auto"})), "Automatic".to_string()),
+        (CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "en"})), i18n.name(i18n.from_code("en").unwrap()).to_string()),
+        (CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "az"})), i18n.name(i18n.from_code("az").unwrap()).to_string()),
+    ];
+    let mac = Target::current() == Target::Mac;
+    let visible_choices = theme_choices.iter().chain(language_choices.iter().filter(|_| mac));
+    let shared = model(&mut app, &ctx);
+    for (command, english) in visible_choices.clone() {
+        let item = shared.bar.find(command).expect("the shared command is visible on this platform");
+        assert_eq!(item.english.as_deref().unwrap_or(&item.label), english.as_str(), "{command:?}");
+    }
+    assert!(shared.bar.find(&CommandRef::with_params(THEME_COMMAND, json!({"mode": "unknown"}))).is_none());
+    assert!(shared.bar.find(&CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "unknown"}))).is_none());
+    let theme_labels = words.set::<ThemeLabels>();
+    let language_labels = words.set::<LanguageLabels>();
+    let titles = [(theme_labels.theme.as_str(), "Appearance"), (language_labels.language.as_str(), "Language")];
+    for (shown, expected) in titles.into_iter().take(if mac { 2 } else { 1 }) {
+        let english = shared.bar.menus.iter().flat_map(|menu| &menu.children).find_map(|node| match node {
+            Node::Submenu { label, english, .. } if label == shown => Some(english.as_deref().unwrap_or(label)),
+            _ => None,
+        });
+        assert_eq!(english, Some(expected));
+    }
+    let listed = help_entries(&mut app, &ctx);
+    for (command, english) in visible_choices {
+        let entry = listed.iter().find(|entry| entry.command() == command).expect("the visible shared menu choice is searchable");
+        assert_eq!(entry.english().map_or(entry.label().as_str(), |label| label.as_str()), english.as_str(), "{command:?}");
     }
 }
 

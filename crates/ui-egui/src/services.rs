@@ -515,6 +515,9 @@ pub type TabletPollFn = Box<dyn FnMut(bool)>;
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// Optional external file provider. Without an explicit connection, file operations keep
+    /// using the platform's existing dialogs and writer.
+    pub file_provider: Option<crate::file_providers::Host>,
     /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
     pub open_external_svg: Option<OpenExternalSvgFn>,
     /// A capture source for the screen picker; `None` uses the platform capture (`ScreenPick::tick`).

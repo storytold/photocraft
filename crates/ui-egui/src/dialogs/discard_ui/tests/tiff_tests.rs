@@ -139,14 +139,22 @@ fn close_all_waits_for_each_layered_tiff_write() {
     // Rebuild the prompt after making the second document dirty.
     h.state_mut().discard = None;
     assert!(intercept(h.state_mut(), "file.closeAll", &Value::Null));
+    // Retire the old question and draw the replacement before sending its Save answer.
+    h.run_steps(3);
     for (i, doc) in [first, second].into_iter().enumerate() {
         h.key_press(Key::Y);
         h.run_steps(3);
         assert_eq!(h.state().session.documents().len(), 2 - i, "each saved document closes once written");
         assert_eq!(writes.borrow().len(), i);
         assert_eq!(docs_left(&h), Some(2 - i));
+        let pending = h.state().parked_save.as_ref().expect("each Save waits for TIFF Options");
+        assert_eq!(pending.doc, doc);
+        assert_eq!(pending.path.as_str(), ["first.tif", "second.tif"][i]);
+        assert!(matches!(&pending.format, crate::dialogs::format_prompts::ParkedFormat::Tiff(_)));
         h.key_press(Key::Enter);
         h.run_steps(3);
+        assert_eq!(writes.borrow().len(), i + 1, "the requested document was written before closing");
+        assert_eq!(writes.borrow()[i].0, ["first.tif", "second.tif"][i]);
         assert_eq!(writes.borrow()[i].1, serde_json::to_vec(&(doc, true)).unwrap());
     }
     assert!(h.state().session.documents().is_empty());

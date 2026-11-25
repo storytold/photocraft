@@ -88,13 +88,19 @@ type Then = Box<dyn FnOnce(&mut PhotocraftApp, Picked) -> Result<Value, String>>
 
 /// The file dialog in progress.
 pub(crate) struct Pending {
-    /// The service's ticket for the pick.
+    /// A platform pick or a provider's save-destination answer.
     #[cfg(not(target_arch = "wasm32"))]
-    id: PickId,
+    answer: NativeAnswer,
     /// The web dialog's answer.
     #[cfg(target_arch = "wasm32")]
     answer: std::sync::mpsc::Receiver<Option<FileDialogAnswer>>,
     then: Then,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum NativeAnswer {
+    Host(PickId),
+    Provider(std::sync::mpsc::Receiver<Result<Option<String>, String>>),
 }
 
 /// The error of a cancelled dialog: not reported, since backing out is the user's choice.
@@ -162,9 +168,20 @@ impl PhotocraftApp {
     /// Hands `request` to the host's file service.
     #[cfg(not(target_arch = "wasm32"))]
     fn start_pick(&mut self, request: PickRequest, then: Then) -> Result<Pending, String> {
+        if request.kind == PickKind::Save
+            && let Some(provider) = self.services.file_provider.as_ref().filter(|provider| provider.wants_dialog())
+        {
+            let (tx, answer) = std::sync::mpsc::channel();
+            let ctx = self.ctx().clone();
+            provider.dialog(request.file_name.unwrap_or_default(), move |picked| {
+                let _ = tx.send(picked);
+                ctx.request_repaint();
+            });
+            return Ok(Pending { answer: NativeAnswer::Provider(answer), then });
+        }
         // PLAN: hub-w1's `Framework` has no accessor for the host's `Files`; `Framework::files(&self) -> &dyn Files` (the host's) is assumed.
         let id = self.framework.files().pick(request);
-        Ok(Pending { id, then })
+        Ok(Pending { answer: NativeAnswer::Host(id), then })
     }
 
     /// Shows the web dialog of [`Services::file_dialog`](crate::Services::file_dialog) for
@@ -181,8 +198,16 @@ impl PhotocraftApp {
     /// The answer of the pick in progress, once it has come.
     #[cfg(not(target_arch = "wasm32"))]
     fn take_picked(&mut self) -> Option<Picked> {
-        let id = self.file_dialog.as_ref()?.id;
-        self.framework.files().take_answer(id)
+        use std::sync::mpsc::TryRecvError;
+        match &self.file_dialog.as_ref()?.answer {
+            NativeAnswer::Host(id) => self.framework.files().take_answer(*id),
+            NativeAnswer::Provider(answer) => match answer.try_recv() {
+                Err(TryRecvError::Empty) => None,
+                Ok(Ok(Some(name))) => Some(Picked::Paths(vec![PathBuf::from(name)])),
+                Ok(Err(reason)) => Some(Picked::Unavailable(reason)),
+                Ok(Ok(None)) | Err(TryRecvError::Disconnected) => Some(Picked::Cancelled),
+            },
+        }
     }
 
     /// The answer of the web dialog in progress, once it has come.
@@ -250,10 +275,27 @@ impl PhotocraftApp {
     ) -> Result<Value, String> {
         let mut suggested = PathBuf::from(suggested);
         let doc = self.session.active().map(|d| d.doc.id);
+        if self.save_options_open() && self.services.file_provider.as_ref().is_some_and(|provider| doc.is_some_and(|doc| provider.prepared_for(doc))) {
+            // A shortcut such as Save a Copy must not inherit another save's prepared
+            // provider destination while that save is still asking for format options.
+            return Err(crate::SAVE_OPTIONS_OPEN.into());
+        }
+        // A queued chooser still owns its document before the dialog service runs.
+        if self.file_dialog.is_some() {
+            return Err("a file dialog is already open".into());
+        }
+        if let Some(provider) = self.services.file_provider.as_ref() {
+            provider.prepare_dialog(doc);
+        }
+        let provider_dialog = self.services.file_provider.as_ref().is_some_and(|provider| provider.wants_dialog());
+        if provider_dialog {
+            // A provider receives a display filename, never a remembered local directory.
+            suggested = std::path::PathBuf::from(display_name(&suggested.to_string_lossy()));
+        }
         // Closed documents' folders are no longer needed.
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
-        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty()) {
+        if !provider_dialog && suggested.parent().is_some_and(|p| p.as_os_str().is_empty()) {
             let document_dir = doc
                 .and_then(|d| self.save_dirs.get(&d).cloned())
                 // An export doesn't start in a folder that is gone.
@@ -265,21 +307,27 @@ impl PhotocraftApp {
             }
         }
         let request = save_request(if export { "export" } else { "document" }, &suggested.to_string_lossy(), copy);
+        let suggested_ext = request.suggested_extension.clone();
         self.ask_file(request, move |app, picked| {
             let Some(path) = path_strings(&picked).into_iter().next() else { return Err(UNEXPECTED.into()) };
+            let path = if provider_dialog || cfg!(target_arch = "wasm32") {
+                settled_save_name(path, suggested_ext.as_deref(), app.session.prefs().file_handling.lowercase_extension)
+            } else {
+                path
+            };
             // Some pickers accept a typed extension outside their filter list.
             if copy.is_some_and(|formats| !formats.allows_path(Path::new(&path))) {
                 return Err(tl!("Choose a file type that supports this document's colour mode and bit depth.").to_string());
             }
             // The web answers a download name, which has no folder to remember.
-            let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
+            let dir = doc.filter(|_| !provider_dialog).zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
             // An export's folder only once it has exported: a failed one doesn't move where
             // the next export starts.
             if !export && let Some((doc, dir)) = dir.clone() {
                 app.save_dirs.insert(doc, dir);
             }
             let exported = then(app, path.clone())?;
-            if export {
+            if export && !provider_dialog {
                 if let Some((doc, dir)) = dir {
                     app.save_dirs.insert(doc, dir);
                 }
@@ -476,6 +524,19 @@ impl PhotocraftApp {
     }
 }
 
+/// Browser and provider choices return names without the native service's extension policy.
+fn settled_save_name(path: String, suggested_ext: Option<&str>, lowercase: bool) -> String {
+    let filename = Path::new(&path);
+    match filename.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) if lowercase => filename.with_extension(extension.to_ascii_lowercase()).to_string_lossy().into_owned(),
+        None => suggested_ext.map_or(path.clone(), |extension| {
+            let extension = if lowercase { extension.to_ascii_lowercase() } else { extension.to_string() };
+            filename.with_extension(extension).to_string_lossy().into_owned()
+        }),
+        _ => path,
+    }
+}
+
 /// The web dialog request for `request`.
 #[cfg(target_arch = "wasm32")]
 fn web_request(request: &PickRequest) -> FileDialogRequest {
@@ -584,3 +645,75 @@ fn picked_files(picked: Picked) -> Result<Vec<PickedFile>, String> {
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod provider_pick_tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use craft::host::{Picked, ScriptedFiles};
+    use serde_json::json;
+
+    use super::settled_save_name;
+    use crate::file_providers::Host;
+    use crate::{PhotocraftApp, Services};
+
+    fn app() -> Result<(Box<PhotocraftApp>, Host, Arc<ScriptedFiles>), String> {
+        let provider = Host::default();
+        provider.set_session("save-picker-fixture-0001".into())?;
+        provider.connect("files".into(), "Stored documents".into(), "account".into())?;
+        let files = Arc::new(ScriptedFiles::held());
+        let services = Services { file_provider: Some(provider.clone()), files: Some(files.clone()), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 2, "height": 2}))?;
+        Ok((app, provider, files))
+    }
+
+    #[test]
+    fn provider_answer_uses_the_pick_flow_without_remembering_a_cloud_directory() {
+        let (mut app, provider, files) = app().unwrap();
+        let doc = app.active_doc_id().unwrap();
+        app.save_dirs.insert(doc, PathBuf::from("local-documents"));
+        app.session.edit_prefs(|prefs| prefs.export.last_folder = "local-exports".into());
+        provider.intent(doc, "saveAs");
+        app.pick_save("local-documents/Drawing.PSD", |_, name| Ok(json!(name))).unwrap();
+        assert!(files.requests().is_empty(), "the native picker must not handle the provider's chooser");
+        let event = provider.take_events().into_iter().find(|event| event.metadata["type"] == "saveDialog").unwrap();
+        assert_eq!(event.metadata["documentId"], doc.0.to_string());
+        assert_eq!(event.metadata["filename"], "Drawing.PSD");
+        let request = event.metadata["requestId"].as_str().unwrap();
+        provider.resolve_dialog(request, "provider", "Cloud").unwrap();
+        let picked = app.take_picked().unwrap();
+        assert_eq!(app.finish_file_dialog(picked).unwrap(), json!("Cloud.psd"));
+        assert_eq!(app.save_dirs.get(&doc), Some(&PathBuf::from("local-documents")));
+        assert_eq!(app.session.prefs().export.last_folder, "local-exports");
+    }
+
+    #[test]
+    fn a_copy_uses_the_native_file_service_after_a_provider_save_was_canceled() {
+        let (mut app, provider, files) = app().unwrap();
+        let doc = app.active_doc_id().unwrap();
+        provider.intent(doc, "saveAs");
+        app.pick_save("Drawing.psd", |_, path| Ok(json!(path))).unwrap();
+        let event = provider.take_events().into_iter().find(|event| event.metadata["type"] == "saveDialog").unwrap();
+        provider.resolve_dialog(event.metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+        let picked = app.take_picked().unwrap();
+        assert_eq!(app.finish_file_dialog(picked).unwrap_err(), super::CANCELLED);
+        assert!(!provider.prepared_for(doc));
+        provider.intent(doc, "copy");
+        app.pick_save("Copy.psd", |_, path| Ok(json!(path))).unwrap();
+        assert_eq!(files.requests().len(), 1);
+        assert!(provider.take_events().is_empty());
+        files.answer(Picked::Paths(vec![PathBuf::from("Copy.psd")])).unwrap();
+        let picked = app.take_picked().unwrap();
+        assert_eq!(app.finish_file_dialog(picked).unwrap(), json!("Copy.psd"));
+    }
+
+    #[test]
+    fn browser_and_provider_names_keep_the_requested_extension_policy() {
+        assert_eq!(settled_save_name("Cloud".into(), Some("psd"), true), "Cloud.psd");
+        assert_eq!(settled_save_name("Cloud.PSB".into(), Some("psd"), true), "Cloud.psb");
+        assert_eq!(settled_save_name("Cloud.PSB".into(), Some("psd"), false), "Cloud.PSB");
+        assert_eq!(settled_save_name("Cloud".into(), Some("pnm"), true), "Cloud.pnm");
+    }
+}

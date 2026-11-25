@@ -14,6 +14,7 @@ mod layers;
 mod panel_commands;
 mod perf;
 mod pinned;
+mod provider_browser_origin;
 mod scorecard;
 mod shards;
 mod stats;
@@ -38,6 +39,8 @@ commands:
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call, plus
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
+  browser-test-provider-origin --tmp-root DIR --evidence NEW.json [--timeout-seconds 1800]
+                  one explicit real-browser provider-boundary test with a bounded opaque-origin artifact relay
   ci [lint | archive [--gpu-shard] | build | tests [--from <dir> [--shard <k>]] [--gpu | --no-gpu] | <step>]
                   the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
@@ -91,6 +94,7 @@ fn main() -> ExitCode {
         Some("test-binaries") => test_binaries::run(&root()),
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test().and_then(|()| cmd_doctest()),
+        Some("browser-test-provider-origin") => provider_browser_origin::run(&rest),
         Some("ci") => ci_from_args(&rest, ci_exclude()).and_then(|(plan, options)| cmd_ci(&plan, &options)),
         Some("corpus") => corpus::cmd(&rest),
         Some("test-corpus") => corpus::test_cmd(&rest),

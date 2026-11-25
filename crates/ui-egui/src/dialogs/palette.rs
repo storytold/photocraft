@@ -58,7 +58,7 @@ pub(crate) fn note_recent(app: &mut PhotocraftApp, id: &str) {
 mod tests {
     use serde_json::json;
 
-    use super::entries;
+    use super::{CommandPalette, CommandRef, entries};
     use crate::PhotocraftApp;
 
     /// Every entry keeps the English name of its command, as its label or beside a translated label, so a query in
@@ -93,5 +93,36 @@ mod tests {
         crate::menus::invoke(&mut app, &ctx, "file.new", new()).unwrap();
         assert_eq!(app.ui.palette.recents.first(), Some(&first));
         assert_eq!(app.ui.palette.recents.len(), 1, "no duplicate");
+    }
+
+    #[test]
+    fn provider_resource_names_stay_complete_in_palette_search_and_recents() {
+        let french = crate::i18n::Lang::from_code("fr").unwrap();
+        let provider = crate::file_providers::Host::default();
+        provider.set_session("palette-provider-instance".into()).unwrap();
+        let connection = provider.connect("storage".into(), "Example Storage".into(), "account".into()).unwrap();
+        let names = [("catalog", "File"), ("ellipsis", "File…"), ("dashes", "---")];
+        provider
+            .set_resources(
+                &connection,
+                names.iter().map(|(id, name)| crate::file_providers::Resource { id: (*id).into(), name: (*name).into(), updated_at: String::new() }).collect(),
+            )
+            .unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider), ..Default::default() });
+        let ctx = app.ctx().clone();
+        let listed = crate::i18n::with_language(french, || entries(&mut app, &ctx));
+        let mut recents = Vec::new();
+        for (id, name) in names {
+            let command = CommandRef::new(format!("file.openProviderRecent.{id}"));
+            let entry = listed.iter().find(|entry| entry.command() == &command).expect("provider palette entry");
+            assert_eq!(entry.label().as_str(), name);
+            assert_eq!(entry.english().map_or(entry.label().as_str(), |label| label.as_str()), name);
+            CommandPalette::remember(&mut recents, command);
+        }
+        for command in recents {
+            let entry = listed.iter().find(|entry| entry.command() == &command).unwrap();
+            let resource = names.iter().find(|(id, _)| command.id == format!("file.openProviderRecent.{id}")).unwrap();
+            assert_eq!(entry.label().as_str(), resource.1);
+        }
     }
 }

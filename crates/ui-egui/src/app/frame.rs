@@ -53,6 +53,7 @@ impl PhotocraftApp {
 
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::file_providers::tick(self, ctx);
         self.cap_frame_rate();
         // Shortcuts run in this phase: a pass whose input carries an injected step acts for the
         // automation client here too.
@@ -142,6 +143,7 @@ impl PhotocraftApp {
         if capture_unissued || !WindowHost::of(ctx).injected_idle() {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
+        crate::file_providers::capture(self);
     }
 
     /// Shared UI body.
@@ -204,6 +206,10 @@ impl PhotocraftApp {
         self.issue_captures(&ctx);
         // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
         gpu_status::check_window(self, &ctx);
+        // Provider completions arrive in logic before widgets see this pass's raw input.
+        // Only now may an unchanged capture release its parked close/quit continuation.
+        discard_ui::finish_provider_save(self, &ctx);
+        crate::file_providers::capture(self);
     }
 
     /// The frame's UI, between `ui_start` and `finish_frame`.

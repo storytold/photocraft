@@ -328,7 +328,7 @@ fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
     if ui.button(tl!("Show All Menu Items")).clicked() {
         draft.hidden.clear();
     }
-    let items: Vec<&Row> = rows.iter().filter(|row| row.label != "---").collect();
+    let items: Vec<&Row> = rows.iter().filter(|row| !row.command.id.is_empty()).collect();
     let colors: Vec<Entry<&'static str>> = COLORS.iter().map(|c| Entry::new(*c, *c)).collect();
     let height = ui.spacing().interact_size.y;
     // PLAN: the framework `Table` draws a value in each cell and cannot hold a Checkbox or a Select, so the rows are laid out by hand.
@@ -403,4 +403,26 @@ pub(crate) fn rebind(
 #[cfg(test)]
 pub(crate) fn press_ok(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::testing::run_ui(ctx, Default::default(), |ui| pass(app, ui, true));
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    #[test]
+    fn menus_tab_keeps_a_provider_file_named_like_a_separator() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let rows = vec![Row::separator(&["File"]), Row::new(&["File"], "file.openProviderRecent.dashes", "---")];
+        let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).build_ui_state(
+            |ui, (rows, draft): &mut (Vec<Row>, MenusDraft)| {
+                menus_body(ui, rows, draft);
+            },
+            (rows, MenusDraft::default()),
+        );
+        h.run_steps(3);
+        assert!(h.query_by_label("File › ---").is_some());
+        assert_eq!(h.query_all_by_label("File › ---").count(), 1, "the real separator is omitted");
+    }
 }

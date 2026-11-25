@@ -146,6 +146,7 @@ struct ShownFacts<'a> {
     /// The Window menu's ticks: which panels are shown ([`window_ticks`]).
     ticks: Arc<Vec<bool>>,
     recent_files: &'a Tracked<Vec<String>>,
+    provider_recents: Option<Revision>,
     workspaces: &'a Tracked<crate::workspace_ui::Workspaces>,
 }
 
@@ -178,6 +179,7 @@ impl<'a> MenuFacts<'a> {
                 arrangement: ui.document_windows.arrangement,
                 ticks: window_ticks(app),
                 recent_files: &ui.recent_files,
+                provider_recents: app.services.file_provider.as_ref().map(crate::file_providers::Host::recent_menu_revision),
                 workspaces: &app.workspaces,
             },
         }

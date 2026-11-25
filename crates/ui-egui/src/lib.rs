@@ -34,6 +34,7 @@ pub mod dock;
 pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
+pub mod file_providers;
 pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
@@ -1084,6 +1085,8 @@ mod pen_path_ownership_tests;
 mod artboard_options_bar_tests;
 #[cfg(test)]
 mod artboards_include_name_dialog_tests;
+#[cfg(test)]
+mod file_provider_tests;
 
 #[cfg(test)]
 mod doc_tab_menu_tests;

@@ -71,6 +71,21 @@ impl Session {
         }
     }
 
+    /// Complete a provider save for the document and revision captured when the write started.
+    /// Provider names have no local path. A rename refreshes document lists without changing tabs.
+    pub fn saved_to_provider(&mut self, id: photocraft_doc::DocId, filename: &str, revision: u64) {
+        let Some(state) = self.document_mut(id) else { return };
+        let renamed = state.doc.name != filename;
+        if renamed {
+            std::sync::Arc::make_mut(state.doc_mut()).name = filename.to_string();
+        }
+        state.path = None;
+        state.saved_revision = revision;
+        if renamed {
+            self.documents_generation = self.documents_generation.wrapping_add(1);
+        }
+    }
+
     /// The open document with this id, active or not.
     pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
         self.docs.iter_mut().find(|d| d.doc.id == id).map(|st| &mut **st)
