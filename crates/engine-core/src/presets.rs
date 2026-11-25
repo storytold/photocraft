@@ -312,7 +312,9 @@ impl PresetsExt for Session {
         if let Some(c) = p.curves_presets.filter(Value::is_array) {
             st.curves_presets = curves::from_json(&c);
         }
-        st.curves_preset = p.curves_preset;
+        if let Some(name) = p.curves_preset {
+            st.curves_preset = Some(name);
+        }
     }
 }
 

@@ -65,7 +65,7 @@ fn app(files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
 
 /// A harness over `app(files)`, running the app's dialogs.
 fn harness(app: Box<PhotocraftApp>) -> H {
-    let mut h = Harness::builder()
+    let h = Harness::builder()
         .with_context(app.ctx().clone())
         .with_size(Vec2::new(1200.0, 900.0))
         .with_step_dt(1.0 / 60.0)
@@ -228,7 +228,7 @@ fn a_bad_preset_file_shows_an_error_and_changes_nothing() {
     let files = Arc::new(ScriptedFiles::held());
     let (mut h, id) = curves_dialog(files.clone());
     let before = params(&h, id);
-    for bytes in [b"{ not json".to_vec(), Vec::new(), vec![b'{' as u8; 4096], br#"{"photoCraftCurvePreset":1,"curves":{"points":[[0,0]]}}"#.to_vec()] {
+    for bytes in [b"{ not json".to_vec(), Vec::new(), vec![b'{'; 4096], br#"{"photoCraftCurvePreset":1,"curves":{"points":[[0,0]]}}"#.to_vec()] {
         open_gear(&mut h);
         pick(&mut h, LOAD);
         last_request(&files);
@@ -257,7 +257,6 @@ fn delete_current_preset_drops_it_and_greys_the_row_again() {
     assert!(state.session.presets().curves_presets.is_empty(), "the preset left the user list");
     assert!(state.session.presets().curves_preset.is_none(), "and nothing is current again");
     assert!(std::fs::metadata(&path).is_ok(), "the user's file stays on disk");
-    drop(state);
     open_gear(&mut h);
     assert_eq!(rows_enabled(&h), vec![true, true, false], "Delete is greyed again");
 }
@@ -306,7 +305,6 @@ fn a_cancelled_save_writes_nothing() {
     let state = h.state();
     assert!(state.session.presets().curves_presets.is_empty(), "a cancelled Save adds no preset");
     assert!(!state.ui.status_error, "cancelling the file dialog is not reported as an error");
-    drop(state);
     open_gear(&mut h);
     assert_eq!(rows_enabled(&h), vec![true, true, false], "and Delete stays greyed");
 }
