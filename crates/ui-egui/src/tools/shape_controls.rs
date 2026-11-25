@@ -76,6 +76,15 @@ fn box_shows(app: &PhotocraftApp) -> bool {
         && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line)
 }
 
+/// The shape layers the box or a corner widget is editing: the selected shape layers while one of them holds a press.
+/// They are not snap targets, so a handle does not snap to the starting edges and centres of the shapes it scales.
+pub(crate) fn pressed_layers(app: &PhotocraftApp) -> Vec<LayerId> {
+    if !box_shows(app) || !editing(app) {
+        return Vec::new();
+    }
+    selection(app, live_line(app).is_some()).map(|(layers, _)| layers.into_iter().map(LayerId).collect()).unwrap_or_default()
+}
+
 /// The selected shape layers and the box round their paths `[x0, y0, x1, y1]`. `None` unless at least
 /// one layer is selected and all are shape layers. A box with no extent along one axis counts only
 /// when `flat_ok` (a level or upright live line).
