@@ -247,7 +247,7 @@ fn channel_mixer_preset_properties_commits_one_edit_and_default_is_undoable() {
     choose(&mut h, "Black & White with Blue Filter");
     let (_, mixed) = layer(&h);
     let Adjustment::ChannelMixer { matrix, monochrome: true, .. } = mixed else { panic!("{mixed:?}") };
-    assert_eq!(matrix[0], [0.0, 0.0, 100.0, 0.0]);
+    assert_eq!(matrix[0], [0.0, 0.0, 1.0, 0.0]);
     let params = photocraft_engine::adjust_params::to_params(&mixed);
     assert_eq!(params["green"], original["green"], "the hidden green output is kept");
     assert_eq!(shown(&h).as_deref(), Some("Black & White with Blue Filter"));
