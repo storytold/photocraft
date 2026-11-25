@@ -28,7 +28,7 @@ Screen snapshots are held in memory, are never written or transmitted by the pic
 - **macOS:** safe CoreGraphics bindings capture the composed screen and use the snapshot's own ICC profile when available. Screen Recording permission may be required. The existing macOS 11 deployment target is preserved. The window-list capture API is deprecated by Apple, so current macOS releases require explicit manual validation; migration to modern native sampling must also preserve older-app compatibility.
 - **Web:** browsers exposing the standard EyeDropper API use the browser's native sampling/magnification UI. Browser support and zoom controls vary. Unsupported browsers retain document sampling and color fields; external screen sampling is unavailable.
 
-The implementation follows publicly documented Photoshop behavior for the full Type Color Picker and outside-image sampling. PhotoCraft's popups use an explicit screen-pick action and frozen snapshots rather than Photoshop's press-and-drag gesture; dragging from the canvas to outside the document is tracked in #11755.
+The implementation follows publicly documented Photoshop behavior for the full Type Color Picker and outside-image sampling. PhotoCraft's popups use an explicit screen-pick action and frozen snapshots rather than the reference application's press-and-drag gesture; dragging from the canvas to outside the document is tracked in #11755.
 
 ## Verification
 
