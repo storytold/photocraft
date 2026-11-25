@@ -287,3 +287,53 @@ fn a_mask_layer_named_merged_is_that_layer_not_the_composite() {
     run(&mut app, APPLY, mask(json!("merged")));
     assert_ne!([rgb(&app, 50, 50), rgb(&app, 300, 50)], through_dialog, "the composite masks differently");
 }
+
+/// "sentinels" (RGB 8 bit, 400 x 300, Background 200/100/50, targeted): an alpha channel named "none" white on the left
+/// half, and an alpha channel with no name white on the right half. The engine reads a mask channel "none" as no mask
+/// and drops an empty one.
+fn alphas_named_like_no_mask() -> (Box<PhotocraftApp>, egui::Context, usize) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    run(&mut app, "file.new", json!({"width": 400, "height": 300, "background": "#c86432", "name": "sentinels"}));
+    run(&mut app, "select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 300}));
+    run(&mut app, "select.saveSelection", json!({"name": "none"}));
+    run(&mut app, "select.rect", json!({"x": 200, "y": 0, "width": 200, "height": 300}));
+    run(&mut app, "select.saveSelection", json!({"name": "unnamed"}));
+    run(&mut app, "select.deselect", json!({}));
+    // The commands refuse an empty name; a file can still bring one.
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).channels[1].name = String::new();
+    app.sync_views();
+    let ctx = app.ctx().clone();
+    let doc = index_of(&app, "sentinels");
+    (app, ctx, doc)
+}
+
+/// Applies the inverted target with Normal through the mask alpha at `position` of the Channel list of "sentinels",
+/// checking the selector the dialog sends.
+fn apply_through_mask_alpha(position: usize, selector: Value) -> PhotocraftApp {
+    let (mut app, ctx, doc) = alphas_named_like_no_mask();
+    let alpha = option_at(&mut app, &mask_channel_key(doc), &["Gray", "Red", "Green", "Blue", "none", ""], position);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceInvert", json!(true));
+    set(&mut app, &ctx, d, MASK_ON, json!(true));
+    set(&mut app, &ctx, d, MASK_SOURCE, json!(doc.to_string()));
+    set(&mut app, &ctx, d, &mask_channel_key(doc), json!(alpha));
+    assert_eq!(fields(&app, d)["maskChannel"], selector, "an explicit alpha selector");
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    *app
+}
+
+#[test]
+fn a_mask_alpha_named_none_masks() {
+    let app = apply_through_mask_alpha(4, json!({"alpha": 0}));
+    // Only the left half, where the alpha is white, takes the inverted target; without a mask both halves would.
+    assert_eq!(rgb(&app, 50, 50), [55, 155, 205]);
+    assert_eq!(rgb(&app, 300, 50), [200, 100, 50]);
+}
+
+#[test]
+fn a_mask_alpha_with_no_name_masks() {
+    let app = apply_through_mask_alpha(5, json!({"alpha": 1}));
+    assert_eq!(rgb(&app, 50, 50), [200, 100, 50]);
+    assert_eq!(rgb(&app, 300, 50), [55, 155, 205]);
+}

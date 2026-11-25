@@ -710,9 +710,13 @@ pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocr
 /// name, sent as `{"name": …}` ([`apply_image_layer_selector`]).
 const LAYER_NAMED: &str = "layer#";
 /// The option id prefix of an alpha channel the engine would not read by its plain name: one named as a built-in
-/// channel ("Red", "RGB", "selection"…), a later one of a repeated name, or one with this prefix. The rest of the id is
-/// its index, sent as `{"alpha": index}` ([`apply_image_channel_selector`]).
+/// channel ("Red", "RGB", "selection"…), a later one of a repeated name, one named as a channel value the source and
+/// mask paths read as no channel ([`NO_CHANNEL`]), or one with this prefix. The rest of the id is its index, sent as
+/// `{"alpha": index}` ([`apply_image_channel_selector`]).
 const ALPHA_AT: &str = "alpha#";
+/// Channel values the engine reads as no channel: a mask channel "none" is no mask, and an empty channel is dropped
+/// from a flat source or mask (the source then reads the composite, the mask is off).
+const NO_CHANNEL: [&str; 2] = ["", "none"];
 
 /// The option id of the layer `name`: the name itself, unless the engine would read it as something else.
 fn apply_image_layer_option(name: &str) -> String {
@@ -746,7 +750,7 @@ fn apply_image_alpha_options(doc: &photocraft_doc::Document) -> Vec<(String, Lab
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let plain = !c.name.starts_with(ALPHA_AT) && parse_ref(&json!(c.name), doc) == Some(ChanRef::Alpha(i));
+            let plain = !c.name.starts_with(ALPHA_AT) && !NO_CHANNEL.contains(&c.name.as_str()) && parse_ref(&json!(c.name), doc) == Some(ChanRef::Alpha(i));
             (if plain { c.name.clone() } else { format!("{ALPHA_AT}{i}") }, Label::from(c.name.clone()))
         })
         .collect()
