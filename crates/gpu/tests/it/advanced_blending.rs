@@ -5,11 +5,11 @@
 //! check).
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent, LayerMask, Path, Subpath, VectorMask};
+use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, GradientStyle, Knockout, Layer, LayerContent, LayerMask, Path, Subpath, VectorMask};
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
 
-use crate::parity::{Gpu, base_doc, check, check_with, diff_rect, gpu, half_float_compositor, mask, noise_layer};
+use crate::parity::{Gpu, base_doc, check, check_with, checker_pattern, diff_rect, gpu, half_float_compositor, mask, noise_layer};
 
 const KNOCKOUTS: [Knockout; 2] = [Knockout::Shallow, Knockout::Deep];
 
@@ -1277,5 +1277,38 @@ fn fully_hiding_mask_keeps_hdr_values_across_cpu_render_tiles() {
     let at = |x: i32, y: i32| out[(y * w + x) as usize];
     for (x, y, what) in [(w - 20, 30, "far from the layer"), (120, 30, "under the hidden layer")] {
         assert!(at(x, y)[..3].iter().all(|&v| v > 1.0), "{what}: HDR value clamped, got {:?}", at(x, y));
+    }
+}
+
+/// A fill layer whose vector mask hides its effects is laid out as the CPU lays it out, from the
+/// layer without that mask: the canvas, not the revealed middle half the mask would otherwise
+/// give as its frame.
+#[test]
+fn fills_under_a_hiding_vector_mask_are_laid_out_over_the_canvas() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (64u32, 48u32);
+    let pat = checker_pattern();
+    let gradient = || {
+        let stops = vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))];
+        Fill::gradient(stops, 0.0, 1.0, GradientStyle::Linear, false)
+    };
+    let pattern = || Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) };
+    for (what, fill) in [("gradient", gradient()), ("linked pattern", pattern())] {
+        let mut d = base_doc(w, h);
+        d.patterns.push(pat.clone());
+        let mut l = Layer::new("fill", LayerContent::Fill(fill));
+        l.effects.items.push(Effect::default_drop_shadow());
+        let half = [(16.0, 12.0), (48.0, 12.0), (48.0, 36.0), (16.0, 36.0)];
+        l.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(&half)])));
+        l.advanced.vector_mask_hides_effects = true;
+        d.layers.push(l);
+        check(&mut g, &d, &format!("{what} under a hiding vector mask"));
+        if what == "gradient" {
+            let out = photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).expect("render");
+            let red = |x: u32| out[(24 * w + x) as usize][0];
+            // Laid out over the whole canvas the revealed half spans about half the gradient; fitted
+            // to it, it would span all of it.
+            assert!(red(18) - red(45) < 0.75, "the gradient is fitted to the revealed region: {} to {}", red(18), red(45));
+        }
     }
 }
