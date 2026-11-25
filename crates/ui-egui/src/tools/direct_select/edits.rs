@@ -90,7 +90,7 @@ pub(crate) fn delete_anchors(app: &mut PhotocraftApp, path: PathRef, anchors: &[
         return;
     }
     if path == PathRef::Pen {
-        edit_draft(app, |draft| {
+        edit_draft(app, false, |draft| {
             let Some(sub) = draft.subpaths.get_mut(0) else { return false };
             order.iter().filter(|[s, _]| *s == 0).fold(false, |changed, [_, k]| sub.remove_knot(*k) || changed)
         });
@@ -205,7 +205,12 @@ fn moved(x: f64, y: f64) -> bool {
 fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], tool: Tool, mods: Mods, dragged: bool) {
     let Some(r) = known(change.path(), refs) else { return };
     if r == PathRef::Pen {
-        edit_draft(app, |path| change.apply(path));
+        // A drag of an anchor of the path being drawn (⌘/Ctrl with a pen tool, or the Direct Selection tool): the
+        // anchor moves with its handles and the Curvature Pen takes the draft as the gesture left it, instead of
+        // solving the curve again under the move (#12757). An arrow-key nudge of the draft, which is no pointer
+        // gesture, and every other edit of it keep today's solve.
+        let dragged_move = dragged && matches!(change, PathEdit::MoveAnchors { .. });
+        edit_draft(app, dragged_move, |path| change.apply(path));
         return;
     }
     // The Convert Point tool names its steps as the reference does; the Pen's ⌥ and Direct
@@ -323,7 +328,7 @@ fn add_and_move(app: &mut PhotocraftApp, r: PathRef, prefix: &str, segment: Knot
 /// The Insert key: an anchor in the middle of the segment leaving `knot`.
 fn insert(app: &mut PhotocraftApp, r: PathRef, knot: KnotRef, t: f64) {
     if r == PathRef::Pen {
-        edit_draft(app, |path| path.subpaths.get_mut(knot.subpath).and_then(|sub| sub.insert_at(knot.knot, t)).is_some());
+        edit_draft(app, false, |path| path.subpaths.get_mut(knot.subpath).and_then(|sub| sub.insert_at(knot.knot, t)).is_some());
         return;
     }
     command(app, r, "path.addAnchor", json!({"subpath": knot.subpath, "knot": knot.knot, "t": t}));
@@ -407,15 +412,21 @@ pub(crate) fn command(app: &mut PhotocraftApp, r: PathRef, id: &str, params: Val
     }
 }
 
-/// Edits the pen draft as a path of its own key and hands the result back to the pen.
-fn edit_draft(app: &mut PhotocraftApp, edit: impl FnOnce(&mut EditPath) -> bool) {
+/// Edits the pen draft as a path of its own key and hands the result back to the pen. `moved` is the ⌘/Ctrl-drag
+/// of an anchor: the Pen takes the draft as the gesture left it, and a Curvature Pen draft is not solved again
+/// under it (#12757). Every other edit of the draft keeps the solve.
+fn edit_draft(app: &mut PhotocraftApp, moved: bool, edit: impl FnOnce(&mut EditPath) -> bool) {
     let Some(draft) = app.ui.pen.as_ref().map(|pen| pen.draft.clone()) else { return };
     let mut path = EditPath::new(PathRef::Pen.key(), vec![draft]).copies(false);
     if !edit(&mut path) {
         return;
     }
     if let Some(draft) = path.subpaths.into_iter().next() {
-        crate::vector_ui::replace_draft(app, &draft);
+        if moved {
+            crate::vector_ui::replace_draft_as_moved(app, &draft);
+        } else {
+            crate::vector_ui::replace_draft(app, &draft);
+        }
     }
 }
 

@@ -250,9 +250,21 @@ pub(crate) fn remove_last(app: &mut PhotocraftApp) -> bool {
 /// Pen draft keeps following its anchors. `false` with no draft or while a press is down. Called between passes: a call
 /// inside a run would reach the stand-in tools the run left in the app.
 pub(crate) fn replace_draft(app: &mut PhotocraftApp, draft: &EditSubpath) -> bool {
+    replace_draft_handback(app, draft, true)
+}
+
+/// `replace_draft` for the anchor a ⌘/Ctrl-drag moved: the draft goes back as the gesture left it, so moving one
+/// anchor of a Curvature Pen draft does not solve the rest of the curve again (#12757).
+pub(crate) fn replace_draft_as_moved(app: &mut PhotocraftApp, draft: &EditSubpath) -> bool {
+    replace_draft_handback(app, draft, false)
+}
+
+/// The draft hand-back of both routes: `solve` re-solves a Curvature Pen draft's handles, as an edit that changes
+/// which anchors there are (or a path the Pen carried on) needs.
+fn replace_draft_handback(app: &mut PhotocraftApp, draft: &EditSubpath, solve: bool) -> bool {
     let Some(pen) = app.ui.pen.as_mut() else { return false };
     let mut next = draft.clone();
-    if pen.curvature {
+    if pen.curvature && solve {
         next.reflow_kept(pen.kept);
     }
     pen.draft = next.clone();
