@@ -407,9 +407,13 @@ fn the_remaining_advanced_blending_options_are_refused() {
 fn shapeless_special_blends_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
     let modes = [BlendMode::ColorDodge, BlendMode::LinearBurn, BlendMode::VividLight, BlendMode::HardMix];
+    // Hard Mix runs on the GPU at 8 bits only (see `hard_mix_shapeless_at_16_and_32_bits_stays_on_the_cpu`).
     let combos = [(1.0, 1.0), (0.5, 1.0), (1.0, 0.5), (0.6, 0.4)];
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         for mode in modes {
+            if mode == BlendMode::HardMix && depth != SampleType::U8 {
+                continue;
+            }
             for (opacity, fill) in combos {
                 for masked in [false, true] {
                     let mut d = doc(depth, true);
@@ -421,7 +425,7 @@ fn shapeless_special_blends_match_the_cpu() {
                     l.advanced.transparency_shapes = false;
                     if mode == BlendMode::HardMix {
                         // Hard Mix below 100 % Fill divides by 1 − alpha × Fill: an alpha just under
-                        // 1 turns rounding noise into visible differences on either compositor.
+                        // 1 turns 8-bit rounding noise into visible differences on either compositor.
                         let (r, ch) = (Rect::new(6, 5, 42, 35), d.pixel_format().channels());
                         let surf = l.surface_mut().unwrap();
                         let mut px = surf.read_region(r);
@@ -447,6 +451,23 @@ fn shapeless_special_blends_match_the_cpu() {
     l.advanced.transparency_shapes = false;
     d.layers.push(l);
     check(&mut g, &d, "Multiply without transparency shapes");
+}
+
+/// A near-opaque alpha uploads as 1.0 at 16/32 bits, where Hard Mix's Fill formula flips to its
+/// binary branch: such a document stays on the CPU.
+#[test]
+fn hard_mix_shapeless_at_16_and_32_bits_stays_on_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U16, SampleType::F32] {
+        let mut d = doc(depth, true);
+        let mut l = noise_layer("shapeless", d.pixel_format(), Rect::new(6, 5, 42, 35), 3, 0.2);
+        l.blend = BlendMode::HardMix;
+        l.advanced.transparency_shapes = false;
+        d.layers.push(l);
+        let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+            .expect_err("the GPU must refuse Hard Mix without transparency shapes at 16/32 bits");
+        assert!(e.to_string().contains("Hard Mix"), "{depth:?}: {e}");
+    }
 }
 
 #[test]

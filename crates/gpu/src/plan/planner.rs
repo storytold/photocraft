@@ -497,10 +497,11 @@ impl<'a> Planner<'a> {
     /// Transparency Shapes Layer off (`F_SHAPELESS`, and the whole-layer effect shape in
     /// `effects`) and clipped layers blended individually (`clipped_individually`) run on the
     /// GPU. Blend Interior Effects as Group with effects and masks hiding effects have no GPU
-    /// pass: documents using them are composited on the CPU (`photocraft_compose::advanced`).
+    /// pass: documents using them are composited on the CPU (`photocraft_compose::advanced`), as
+    /// are Hard Mix layers with Transparency Shapes Layer off in 16/32-bit documents.
     /// Layers at the reference editor's defaults pass this check for free.
     fn check_advanced(&self, layer: &Layer) -> Result<(), Unsupported> {
-        if let Some(option) = advanced_on_cpu(layer) {
+        if let Some(option) = advanced_on_cpu(layer, self.cx.depth) {
             return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
         }
         Ok(())
