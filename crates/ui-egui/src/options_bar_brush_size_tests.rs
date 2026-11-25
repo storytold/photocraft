@@ -48,6 +48,14 @@ fn brush_field(h: &H) -> Rect {
         .rect()
 }
 
+/// The Brush Settings toggle the bar draws right after the field: a one-line, icon-only control.
+fn one_line_control(h: &H) -> Rect {
+    h.query_all_by_label("Toggle the Brush Settings panel")
+        .find(|node| node.accesskit_node().role() != Role::Label)
+        .expect("the Brush Settings toggle")
+        .rect()
+}
+
 /// Every tool that shows the brush picker field keeps the whole field, size caption included, inside the bar.
 #[test]
 fn the_brush_size_under_the_tip_lies_inside_the_options_bar() {
@@ -55,9 +63,10 @@ fn the_brush_size_under_the_tip_lies_inside_the_options_bar() {
         let h = app_with(tool);
         let bar = options_bar(&h);
         let field = brush_field(&h);
+        let one_line = one_line_control(&h);
         // A tip of the icon size over a caption line: the field is taller than a one-line control, so this checks
         // the two-line content, not a bar that happens to fit a single line.
-        assert!(field.height() > 24.0, "{tool:?}: the field holds a tip over a caption ({field:?})");
+        assert!(field.height() > one_line.height(), "{tool:?}: the field {field:?} holds a tip over a caption, taller than a one-line control {one_line:?}");
         assert!(bar.contains_rect(field), "{tool:?}: the brush picker field {field:?} runs out of the options bar {bar:?}, so its size caption is cut");
     }
 }
