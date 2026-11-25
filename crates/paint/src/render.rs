@@ -472,14 +472,15 @@ impl BrushContext {
         }
         // With `depth` the rasteriser leaves Wet Edges out of the coverage and reports each painted
         // pixel's depth (1 − rn) inside the dab, which is exactly the rn the wet factor takes. A
-        // brush carrying one of the modulations takes the general loop either way.
+        // brush carrying one of the modulations takes the general loop either way. Both maps are
+        // w × h dense: rasterize_into sizes every output it is given from `rect`.
         let mut scratch = Vec::new();
         let mut depth = Vec::new();
         self.rasterize_into(d, false, rect, &mut scratch, Some(&mut depth));
         let w = rect.width() as usize;
         let mut mods = vec![0.0f32; scratch.len()];
-        for (i, m) in mods.iter_mut().enumerate() {
-            if scratch[i] <= 0.0 {
+        for (i, (sc, dp)) in scratch.iter().zip(depth.iter()).enumerate() {
+            if *sc <= 0.0 {
                 continue;
             }
             let mut val = 1.0f32;
@@ -489,9 +490,9 @@ impl BrushContext {
                 val = texture_combine(b.texture.mode, 1.0, self.texture_at(rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32), d.depth);
             }
             if wet {
-                val *= wet_factor(1.0 - depth[i]);
+                val *= wet_factor(1.0 - *dp);
             }
-            *m = val * d.alpha;
+            mods[i] = val * d.alpha;
         }
         Some(mods)
     }
