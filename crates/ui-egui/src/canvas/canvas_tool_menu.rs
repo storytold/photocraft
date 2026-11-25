@@ -1392,14 +1392,17 @@ fn spelling_call(menu: &CanvasToolMenu, command: &str) -> (String, Value) {
     }
 }
 
-/// Does a right-click with `tool` at document point `doc` open the pasteboard menu? Outside the
-/// image, for the tools whose right-click has no job there: not the painting tools (their Brush
-/// Preset picker or right-button erase), the Pen (its path menu) or text being edited.
+/// Does a right-click with `tool` at document point `doc` open the pasteboard menu?
+/// Outside the image, some tools give the pasteboard menu priority over their canvas menu or picker.
 pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
+    let uses_pasteboard_menu = matches!(
+        tool,
+        Tool::Brush | Tool::SpotHealing | Tool::CloneStamp | Tool::Eraser | Tool::Blur | Tool::Dodge | Tool::Pen | Tool::PathSelection | Tool::QuickSelection
+    ) || (!path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool));
+    outside && uses_pasteboard_menu && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
 }
 
 /// A guide row: every row is a View › Guides command, the two Selected Guides ones included.
