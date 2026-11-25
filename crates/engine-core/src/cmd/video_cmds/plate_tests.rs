@@ -293,3 +293,60 @@ fn an_open_plate_applies_a_lowered_cache_budget() {
     assert_eq!(bar(&shown(&s, id)), bar_of(3));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Another frame of the document (what a clone source with a frame offset samples) reads a plate
+/// frame the cache dropped from its file, leaves the document's own frame as it was, and refuses
+/// a frame whose file is gone.
+#[test]
+fn another_frame_reads_a_dropped_plate_frame_from_its_file() {
+    let dir = folder("at-frame");
+    write_plate(&dir, 12);
+    let mut s = crate::session();
+    let id = open(&mut s, &dir);
+    let _low = limits::Scoped::plate_cache_bytes(FRAME_BYTES);
+    go(&mut s, 0);
+    go(&mut s, 6);
+    assert!(!video(&s, id).plate.as_ref().unwrap().cached_frames().contains(&5), "frame 5 is out of the cache");
+    let doc = s.active().unwrap().doc.clone();
+    let at = at_frame(&doc, 5).unwrap();
+    let LayerContent::Raster(previous) = &at.layer(id).unwrap().content else { panic!("a raster") };
+    assert_eq!(bar(previous), bar_of(5));
+    assert_eq!(bar(&shown(&s, id)), bar_of(6), "the document still shows its own frame");
+    std::fs::remove_file(frame_path(&dir, 4)).unwrap();
+    let err = at_frame(&doc, 4).unwrap_err();
+    assert!(err.contains("can't be read"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Opening decodes only the frames that fit the cache; the files past it have their headers read.
+/// So a later file whose header is right but whose pixels are broken opens, and is reported
+/// when its frame is shown, while a later file of another size still refuses the open.
+#[test]
+fn opening_reads_only_the_headers_of_frames_past_the_cache() {
+    let dir = folder("probe");
+    write_plate(&dir, 10);
+    let _low = limits::Scoped::plate_cache_bytes(2 * FRAME_BYTES);
+    let whole = std::fs::read(frame_path(&dir, 7)).unwrap();
+    // The compressed pixels made invalid (a reserved deflate block type), the header left as is.
+    let mut broken = whole.clone();
+    let idat = broken.windows(4).position(|w| w == b"IDAT").unwrap() + 4;
+    broken[idat + 2..idat + 12].fill(0xff);
+    std::fs::write(frame_path(&dir, 7), &broken).unwrap();
+    let mut s = crate::session();
+    let id = open(&mut s, &dir);
+    assert!(video(&s, id).plate.as_ref().unwrap().cached_frames().len() < 10, "frames past the cache were not kept");
+    go(&mut s, 6);
+    assert!(video(&s, id).plate_problem.is_none());
+    let moved = s.execute("timeline.setFrame", json!({"frame": 7})).unwrap();
+    assert!(video(&s, id).plate_problem.is_some() && moved["warnings"].as_array().is_some_and(|w| !w.is_empty()), "{moved}");
+
+    // A later frame of another size is still refused at open.
+    std::fs::write(frame_path(&dir, 7), &whole).unwrap();
+    let mut other = crate::session();
+    other.execute("file.new", json!({"width": W + 2, "height": H, "background": "#ffffff"})).unwrap();
+    let wider = photocraft_io::export(&other.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+    std::fs::write(frame_path(&dir, 8), wider).unwrap();
+    let err = s.execute("file.openImageSequence", json!({"path": frame_path(&dir, 0).to_string_lossy()})).unwrap_err().to_string();
+    assert!(err.contains("plate.0009"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

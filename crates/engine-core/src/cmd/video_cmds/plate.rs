@@ -24,6 +24,26 @@ pub(super) fn plate_file(path: &Path) -> std::io::Result<PlateFile> {
     Ok(PlateFile { path: path.to_string_lossy().into_owned(), len: meta.len(), modified_ns })
 }
 
+/// Bytes of a file [`probe`] reads first: past every PNG, JPEG, WebP or EXR header.
+const PROBE_PREFIX: u64 = 256 << 10;
+
+/// The pixel size the header of the image file `path` declares, read without decoding pixels:
+/// from its first bytes, or the whole file when its header lies further in (a TIFF's may). `None`
+/// for a format without a header probe (DPX, Cineon, PNM, deep EXR) or a file that can't be read.
+pub(super) fn probe(path: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path).ok()?.take(PROBE_PREFIX).read_to_end(&mut head).ok()?;
+    if let Ok(size) = photocraft_codecs::probe_size(&head) {
+        return Some(size);
+    }
+    if (head.len() as u64) < PROBE_PREFIX {
+        return None;
+    }
+    let whole = crate::allocation::read_file_within(path, super::footage_byte_limit()).ok()?;
+    photocraft_codecs::probe_size(&whole).ok()
+}
+
 /// Why `file` can't be read as the plate frame it was: missing, or changed since.
 fn unchanged(file: &PlateFile) -> std::result::Result<(), String> {
     let now = plate_file(Path::new(&file.path)).map_err(|e| format!("`{}` can't be read: {e}", file.path))?;

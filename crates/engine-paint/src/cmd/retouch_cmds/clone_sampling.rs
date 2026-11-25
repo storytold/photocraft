@@ -17,6 +17,9 @@ pub(super) struct CloneFrom {
     layer: Option<LayerId>,
     transform: Option<Arc<Transform>>,
     pixels: bool,
+    /// The sampled document as it shows another timeline frame (the slot's frame offset or held
+    /// frame), and that frame.
+    frame: Option<(Arc<Document>, usize)>,
 }
 
 impl CloneFrom {
@@ -32,7 +35,15 @@ impl CloneFrom {
             (None, None) => true,
             _ => false,
         };
-        document && self.layer == other.layer && colors && self.pixels == other.pixels
+        // The frame's document is rebuilt from the source document, which `document` and the
+        // stroke's base revision already pin: the same frame is the same pixels.
+        let frame = self.frame.as_ref().map(|f| f.1) == other.frame.as_ref().map(|f| f.1);
+        document && self.layer == other.layer && colors && self.pixels == other.pixels && frame
+    }
+
+    /// The timeline frame this source samples, when it isn't the one on screen.
+    pub(super) fn frame(&self) -> Option<usize> {
+        self.frame.as_ref().map(|f| f.1)
     }
 
     /// Pixel cloning carries coverage independently of the destination's stored alpha flag.
@@ -54,7 +65,10 @@ impl CloneFrom {
         wrap: bool,
         cmd: &str,
     ) -> Result<Region> {
-        let doc = self.other.as_ref().map_or(pre, |(doc, _)| doc.as_ref());
+        let doc = match (&self.frame, &self.other) {
+            (Some((doc, _)), _) | (None, Some((doc, _))) => doc.as_ref(),
+            (None, None) => pre,
+        };
         let fmt = self.sample_format(surf);
         if self.other.is_some() && fmt.mode != pre.mode {
             return Err(bad(cmd, "the destination layer color model does not match its document"));
@@ -64,9 +78,13 @@ impl CloneFrom {
                 let from = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
                 (composite_region(doc, self.layer, which, rect, from), from)
             } else {
-                let sampled = match self.layer {
-                    Some(id) => doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad(cmd, "the clone source layer no longer has pixels"))?,
-                    None => surf,
+                let sampled = match (self.layer, target) {
+                    (Some(id), _) => doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad(cmd, "the clone source layer no longer has pixels"))?,
+                    // The painted layer itself, as it shows the sampled frame.
+                    (None, Some(id)) if self.frame.is_some() => {
+                        doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad(cmd, "the painted layer has no pixels on the clone source's frame"))?
+                    }
+                    (None, _) => surf,
                 };
                 if self.other.is_some() && sampled.format().mode != doc.mode {
                     return Err(bad(cmd, "the source layer color model does not match its document; choose All Layers"));
@@ -233,7 +251,24 @@ fn resolve_source(s: &Session, p: &Value, cmd: &str, source: Option<crate::prese
         }
     }
     let transform = if external { color_transform(s, &st.doc, which, cmd)? } else { None };
-    Ok(CloneFrom { other: external.then(|| (st.doc.clone(), st.revision)), layer, transform, pixels: true })
+    let frame = if picked { source_frame(slot, &st.doc, active.doc.timeline.as_ref().map_or(0, |t| t.current), cmd)? } else { None };
+    Ok(CloneFrom { other: external.then(|| (st.doc.clone(), st.revision)), layer, transform, pixels: true, frame })
+}
+
+/// The document `slot` samples as it shows its source frame, when the slot's frame offset or held
+/// frame names a frame of `doc`'s timeline other than the one on screen (`painting` is the
+/// painted document's playhead). A frame outside the timeline is refused, never clamped.
+fn source_frame(slot: &crate::presets::clone_source::CloneSource, doc: &Document, painting: usize, cmd: &str) -> Result<Option<(Arc<Document>, usize)>> {
+    let Some(t) = &doc.timeline else { return Ok(None) };
+    let want = slot.source_frame(painting);
+    let frame = usize::try_from(want).ok().filter(|&f| f < t.duration).ok_or_else(|| {
+        bad(cmd, format!("the clone source samples frame {}, outside the timeline's frames 1 to {}; change its frame offset or move the playhead", want.saturating_add(1), t.duration))
+    })?;
+    if frame == t.current {
+        return Ok(None);
+    }
+    let at = photocraft_engine_core::video_cmds::at_frame(doc, frame).map_err(|why| bad(cmd, format!("the clone source frame {} can't be read: {why}", frame + 1)))?;
+    Ok(Some((Arc::new(at), frame)))
 }
 
 /// Choose the sampled pixel/composite profile and cache its conversion to the destination profile.

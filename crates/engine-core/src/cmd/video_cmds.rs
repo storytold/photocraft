@@ -899,9 +899,12 @@ fn open_image_sequence(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"document": index, "layer": id.0, "frames": n, "fps": fps, "warnings": warnings}))
 }
 
-/// The plate of the image sequence `files`: every frame is read once, so a file that doesn't
-/// decode or has another canvas size refuses the open as before, but only the frames from the
-/// first on that fit the plate's cache are kept; the others are read again when shown.
+/// The plate of the image sequence `files`. The frames from the first that fit the plate's cache
+/// are decoded and kept; every later file has only its header read, which must declare the first
+/// file's size. A file whose header can't be read that way (a format without a header probe, or
+/// another size) is decoded, so one that doesn't decode or has another canvas size refuses the
+/// open as before. A later file that probes right but fails to decode is reported when its frame
+/// is shown, and Render Video refuses it.
 fn open_plate(
     files: &[std::path::PathBuf],
     fmt: photocraft_color::PixelFormat,
@@ -912,16 +915,24 @@ fn open_plate(
         return Err(EngineError::Other(format!("the footage has more than {} frames", crate::timeline_cmds::MAX_DURATION)));
     }
     let budget = plate_cache_budget();
+    let header = files.first().and_then(|f| plate::probe(f));
     let mut listed = Vec::with_capacity(files.len());
     let mut kept = Vec::new();
     let mut kept_bytes = 0u64;
+    // Whether the frames kept so far run unbroken from the first and the cache has room left.
+    let mut filling = true;
     for f in files {
         listed.push(plate::plate_file(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?);
+        if !filling && header.is_some() && plate::probe(f) == header {
+            continue;
+        }
         let frame = read_frame(f, fmt, opts, Some(size))?;
         let bytes = photocraft_raster::stored_tiles_bytes(frame.tile_count() as u64, &frame.format());
-        if kept.len() + 1 == listed.len() && (kept.is_empty() || kept_bytes.saturating_add(bytes) <= budget) {
+        if filling && (kept.is_empty() || kept_bytes.saturating_add(bytes) <= budget) {
             kept_bytes = kept_bytes.saturating_add(bytes);
             kept.push(frame);
+        } else {
+            filling = false;
         }
     }
     let plate = photocraft_doc::Plate::new(listed, fmt, size);
@@ -1160,6 +1171,20 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// `doc` as it shows timeline frame `frame`: every video layer on that frame and every frame range
+/// applied, as Render Video renders it. `doc` itself is unchanged; `Err` when a video layer's
+/// frame can't be read from its plate.
+pub fn at_frame(doc: &Document, frame: usize) -> std::result::Result<Document, String> {
+    let mut at = doc.clone();
+    store(&mut at);
+    if let Some(t) = &mut at.timeline {
+        t.current = frame;
+    }
+    sync(&mut at);
+    plate_problems(&at)?;
+    Ok(at)
 }
 
 /// `Err` naming the first video layer whose frame at the playhead could not be read from its plate.

@@ -266,6 +266,9 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     crate::presets::clone_source::remember_mapping(s, p, &map);
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
+    if let Some(frame) = source.frame() {
+        r["sourceFrame"] = json!(frame);
+    }
     if from_live {
         r["fromLive"] = json!(true);
     }

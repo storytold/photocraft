@@ -56,6 +56,16 @@ pub struct CloneSource {
     /// by the same factor.
     #[serde(default)]
     pub linked: bool,
+    /// Frames from the painted frame to the frame a stroke samples, on a video timeline: −1
+    /// clones from the previous frame. Ignored while [`CloneSource::hold_frame`] is on.
+    #[serde(default)]
+    pub frame_offset: i64,
+    /// Sample the frame the source was set on ([`CloneSource::frame`]), whichever frame is painted.
+    #[serde(default)]
+    pub hold_frame: bool,
+    /// The playhead of the source document when the source was set.
+    #[serde(default)]
+    pub frame: Option<usize>,
 }
 
 impl Default for CloneSource {
@@ -72,6 +82,9 @@ impl Default for CloneSource {
             flip_h: false,
             flip_v: false,
             linked: false,
+            frame_offset: 0,
+            hold_frame: false,
+            frame: None,
         }
     }
 }
@@ -83,6 +96,12 @@ impl CloneSource {
             && self.rotation.rem_euclid(360.0).abs() < 1e-9
             && !self.flip_h
             && !self.flip_v
+    }
+    /// The timeline frame a stroke painted on frame `painting` samples (may be outside the
+    /// timeline: the caller refuses that).
+    pub fn source_frame(&self, painting: usize) -> i64 {
+        let painting = i64::try_from(painting).unwrap_or(i64::MAX);
+        if self.hold_frame { self.frame.and_then(|f| i64::try_from(f).ok()).unwrap_or(painting) } else { painting.saturating_add(self.frame_offset) }
     }
     /// Offset X/Y of the most recently used pairing, in source-minus-destination document pixels.
     pub fn offset(&self) -> Option<[f64; 2]> {
@@ -106,6 +125,7 @@ impl CloneSource {
         json!({
             "index": i, "source": self.source, "anchor": self.anchor, "lastAnchor": self.last_anchor, "offset": self.offset(), "layer": self.layer, "document": document, "documentId": self.document,
             "width": self.scale[0], "height": self.scale[1], "linked": self.linked, "rotation": self.rotation, "flipH": self.flip_h, "flipV": self.flip_v,
+            "frameOffset": self.frame_offset, "holdFrame": self.hold_frame, "frame": self.frame,
         })
     }
 }
@@ -437,6 +457,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let (document, active_layer) = (doc.map(|st| st.doc.id), doc.and_then(|st| st.active_layer).map(|id| id.0));
+    let playhead = doc.and_then(|st| st.doc.timeline.as_ref()).map(|t| t.current);
     // Build the edited slot off to the side so a rejected coordinate or sum is atomic.
     let mut slot = s.presets().clone.slots[i].clone();
     if let Some([x, y]) = source {
@@ -447,6 +468,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         slot.layer = p.get("layer").and_then(Value::as_u64).or(active_layer);
         slot.document = document;
         slot.document_closed = false;
+        slot.frame = playhead;
     }
     if let Some([dx, dy]) = offset {
         // Edit the pairing shown in the panel, including an unaligned stroke or a live preview.
@@ -491,6 +513,13 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(b) = p.get("flipV").and_then(Value::as_bool) {
         slot.flip_v = b;
+    }
+    if let Some(v) = p.get("frameOffset").filter(|v| !v.is_null()) {
+        let max = i64::try_from(crate::timeline_cmds::MAX_DURATION).unwrap_or(i64::MAX);
+        slot.frame_offset = v.as_i64().filter(|n| n.abs() < max).ok_or_else(|| bad(CMD, format!("frameOffset must be a whole number of frames within ±{max}")))?;
+    }
+    if let Some(b) = p.get("holdFrame").and_then(Value::as_bool) {
+        slot.hold_frame = b;
     }
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
         slot = CloneSource::default();
@@ -548,7 +577,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Clone Sources",
             menu: &[],
             shortcut: None,
-            params: "{} → {active,sources:[{index,source,anchor,lastAnchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV}],overlay}; offset is source minus the last used destination reference in document pixels",
+            params: "{} → {active,sources:[{index,source,anchor,lastAnchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV,frameOffset,holdFrame,frame}],overlay}; offset is source minus the last used destination reference in document pixels",
             enabled: always,
             run: list,
             journal: false,
@@ -568,7 +597,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Clone Source",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]? (source minus destination in document pixels),"anchor":[x,y]? (with offset: the preview/destination reference being edited; otherwise the last used reference),"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
+            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]? (source minus destination in document pixels),"anchor":[x,y]? (with offset: the preview/destination reference being edited; otherwise the last used reference),"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"frameOffset":frames? (on a video timeline: sample the painted frame plus this, −1 = the previous frame),"holdFrame":bool? (sample the frame the source was set on),"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
             enabled: always,
             run: set,
             journal: true,

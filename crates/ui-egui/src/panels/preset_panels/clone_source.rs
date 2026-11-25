@@ -137,6 +137,36 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         run(app, "cloneSource.resetTransform", json!({}));
     }
 
+    // On a video timeline: which frame a stroke samples, relative to the frame painted.
+    if app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
+        let mut frame_set: Option<(Value, Option<GestureId>)> = None;
+        FieldGroup::new(tl!("Frame")).show(ui, |ui, _| {
+            let mut shown = Some(slot.frame_offset as f64);
+            let out = NumberField::new(tl!("Frame Offset"), Bind::bound(&mut shown)).range(-9999.0..=9999.0).commit_decimals(0).show(ui);
+            if let Some(Some(landed)) = out.events.landed().copied()
+                && landed.round() as i64 != slot.frame_offset
+            {
+                frame_set = Some((json!({"frameOffset": landed.round() as i64}), out.events.last().and_then(EditEvent::id)));
+            }
+            let mut hold = slot.hold_frame;
+            Checkbox::new(Bind::bound(&mut hold)).label(tl!("Hold Source Frame")).show(ui);
+            if hold != slot.hold_frame {
+                frame_set = Some((json!({"holdFrame": hold}), None));
+            }
+            let line = match (slot.hold_frame, slot.frame, slot.frame_offset) {
+                (true, Some(f), _) => crate::i18n::fmt(tl!("Samples frame {frame}"), &[("frame", &(f + 1).to_string())]),
+                (true, None, _) => tl!("Samples the frame on screen until a source is set").to_string(),
+                (false, _, 0) => tl!("Samples the frame being painted").to_string(),
+                (false, _, -1) => tl!("Samples the previous frame").to_string(),
+                (false, _, n) => crate::i18n::fmt(tl!("Samples {count} frames from the one painted"), &[("count", &format!("{n:+}"))]),
+            };
+            Text::new(line).show(ui);
+        });
+        if let Some((params, gesture)) = frame_set {
+            edit(app, "cloneSource.set", params, gesture);
+        }
+    }
+
     // Overlay options.
     let mut o = cs.overlay.clone();
     let before = o.clone();
@@ -157,5 +187,49 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if o != before {
         let params = json!({"show": o.show, "opacity": o.opacity, "clipped": o.clipped, "autoHide": o.auto_hide, "invert": o.invert, "blend": o.blend});
         edit(app, "cloneSource.overlay", params, gesture);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Modifiers, vec2};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
+
+    fn harness(timeline: bool) -> H {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        if timeline {
+            app.run("timeline.create", json!({"duration": 10, "fps": 24.0})).unwrap();
+        }
+        let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(400.0, 900.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(2);
+        h
+    }
+
+    fn offset_field(h: &H) -> Option<egui_kittest::Node<'_>> {
+        h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == "Frame Offset"))
+    }
+
+    /// On a video timeline the panel sets the slot's frame offset and hold through
+    /// `cloneSource.set`; without a timeline it shows neither.
+    #[test]
+    fn the_frame_controls_set_the_slot_on_a_timeline_only() {
+        assert!(offset_field(&harness(false)).is_none(), "no timeline, no frame controls");
+        let mut h = harness(true);
+        offset_field(&h).expect("the Frame Offset field").click();
+        h.run_steps(1);
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("-1".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.presets().clone.active().frame_offset, -1);
+        h.get_by_label("Hold Source Frame").click();
+        h.run_steps(2);
+        assert!(h.state().session.presets().clone.active().hold_frame);
     }
 }

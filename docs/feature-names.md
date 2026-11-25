@@ -23,3 +23,10 @@ PhotoCraft's own names for showing a layer on some frames of the video timeline 
 - **Frame Range**: the frames a layer shows on (Layer › Frame Range; `layer.frameRange.*`; `Layer::span` in code).
 - **New Layer for This Frame**, **Start at Playhead**, **End at Playhead**, **Split at Playhead**, **Show on Every Frame**: the Frame Range menu's items.
 - **Open Image Sequence…**: File › Open Image Sequence…, a numbered run of images opened as one video layer.
+
+## Clone Source frames
+
+PhotoCraft's own names for cloning from another frame of a video timeline (Window › Clone Source, the Frame group, shown while the document has a timeline):
+
+- **Frame Offset**: frames from the painted frame to the one a stroke samples; −1 clones from the previous frame (`cloneSource.set` `frameOffset`).
+- **Hold Source Frame**: always sample the frame the source was set on (`holdFrame`).

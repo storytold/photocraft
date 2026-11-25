@@ -1035,3 +1035,83 @@ fn clone_no_alpha_soft_stroke_matches_reference_across_multiple_working_patches(
         assert_opaque_reference(actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
     }
 }
+
+/// A 32 x 32 document whose video layer shows frame `i` as a flat red of `i / 4`, on a timeline
+/// of four frames; the playhead on `at`.
+fn video_doc(at: usize) -> (Session, LayerId) {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("video", |doc, _| {
+        let rect = doc.bounds();
+        let fmt = doc.layer(id).unwrap().surface().unwrap().format();
+        let frames: Vec<Surface> = (0..4)
+            .map(|i| {
+                let mut f = Surface::new(fmt);
+                let px = photocraft_raster::from_rgba(&fmt, [i as f32 / 4.0, 0.0, 0.0, 1.0]);
+                f.write_region(rect, &px.repeat(32 * 32));
+                f
+            })
+            .collect();
+        doc.timeline = Some(photocraft_doc::Timeline::new(4, 24.0));
+        let l = doc.layer_mut(id).unwrap();
+        l.content = photocraft_doc::LayerContent::Raster(frames[0].clone());
+        l.video = Some(photocraft_doc::VideoData::new(frames, 24.0));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("timeline.setFrame", json!({"frame": at})).unwrap();
+    (s, id)
+}
+
+/// The red of the painted layer at (16, 16).
+fn red(s: &Session, id: LayerId) -> f32 {
+    pixel(s, id, 16, 16)[0]
+}
+
+fn stamp(s: &mut Session) -> Result<Value> {
+    s.execute("paint.cloneStamp", json!({"points": [[16, 16]], "size": 9, "hardness": 100, "sampleLayer": "current"}))
+}
+
+/// A frame offset samples another frame of the painted video layer: −1 the previous one. Held,
+/// the source keeps the frame it was set on; a frame off the timeline is refused, not clamped.
+#[test]
+fn clone_source_samples_the_frame_its_offset_or_hold_names() {
+    let (mut s, id) = video_doc(2);
+    let shown = red(&s, id);
+    s.execute("cloneSource.set", json!({"source": [16, 16], "frameOffset": -1})).unwrap();
+    let r = stamp(&mut s).unwrap();
+    let previous = red(&s, id);
+    assert!(previous < shown, "frame 2 painted from frame 1: {previous} vs {shown}");
+    assert_eq!(r["sourceFrame"], json!(1));
+    // Later strokes on another frame follow the playhead, and sample the paint frame 2 now holds.
+    s.execute("timeline.setFrame", json!({"frame": 3})).unwrap();
+    stamp(&mut s).unwrap();
+    assert!((red(&s, id) - previous).abs() < 0.01, "frame 3 painted from the painted frame 2: {} vs {previous}", red(&s, id));
+
+    // Held: set on frame 0, painted on frame 3.
+    s.execute("timeline.setFrame", json!({"frame": 0})).unwrap();
+    s.execute("cloneSource.set", json!({"source": [16, 16], "holdFrame": true})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 3})).unwrap();
+    stamp(&mut s).unwrap();
+    assert!(red(&s, id) < 0.01, "frame 3 painted from the held frame 0: {}", red(&s, id));
+
+    // Off the timeline: refused, the frame untouched.
+    s.execute("cloneSource.set", json!({"holdFrame": false, "frameOffset": 1})).unwrap();
+    let before = red(&s, id);
+    let err = stamp(&mut s).unwrap_err().to_string();
+    assert!(err.contains("outside the timeline"), "{err}");
+    assert_eq!(red(&s, id), before);
+}
+
+/// The live stroke draws what the commit paints from the offset frame.
+#[test]
+fn a_live_clone_stroke_samples_the_offset_frame() {
+    let (mut s, id) = video_doc(2);
+    s.execute("cloneSource.set", json!({"source": [16, 16], "frameOffset": -2})).unwrap();
+    let p = json!({"points": [[16, 16]], "size": 9, "hardness": 100, "sampleLayer": "current"});
+    let live = crate::retouch_cmds::LiveRetouch::begin(&s, "paint.cloneStamp", &p).unwrap();
+    let shown = live.doc.layer(id).unwrap().surface().unwrap().rgba(16, 16)[0];
+    s.execute("paint.cloneStamp", p).unwrap();
+    assert!((shown - red(&s, id)).abs() < 1e-3 && red(&s, id) < 0.01, "live {shown} and commit {} both from frame 0", red(&s, id));
+}
