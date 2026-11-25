@@ -155,3 +155,14 @@ fn each_commands_params_name_its_own_defaults() {
     let layer = crate::registry::find(LAYER).unwrap().params;
     assert!(layer.contains(r#""interpolation":"trilinear|tetrahedral"="trilinear""#) && layer.contains(r#""dither":bool=false"#), "{layer}");
 }
+
+/// A Smart Filter's editor opens on `lookup_filter_params`, so params the filter would refuse must reach it as
+/// recorded: an unknown `interpolation` stays an error even when the legacy flag sits beside it.
+#[test]
+fn a_smart_filters_unknown_interpolation_is_not_turned_into_a_setting() {
+    for flag in [false, true] {
+        let recorded = json!({"interpolation": "unsupported", "tetrahedral": flag});
+        assert!(lookup_from_params(&recorded, None).is_err(), "{recorded}: the filter refuses it");
+        assert_eq!(Value::Object(lookup_filter_params(recorded.as_object().unwrap())), recorded, "{recorded}: comes back as recorded");
+    }
+}

@@ -198,11 +198,10 @@ pub fn lookup_filter_params(recorded: &serde_json::Map<String, Value>) -> serde_
     let (Ok(flag), Ok(named), Ok(dither)) = (opt_bool(CMD, &p, "tetrahedral"), opt_str(CMD, &p, "interpolation"), opt_bool(CMD, &p, "dither")) else {
         return recorded.clone();
     };
-    let tetrahedral = match (flag, named) {
-        (Some(flag), _) => flag,
-        (None, None | Some("trilinear")) => false,
-        (None, Some("tetrahedral")) => true,
-        (None, Some(_)) => return recorded.clone(),
+    // `lookup_from_params` refuses an unknown name even when the flag overrides it, so check the name first.
+    let tetrahedral = match named {
+        None | Some("trilinear" | "tetrahedral") => flag.unwrap_or(named == Some("tetrahedral")),
+        Some(_) => return recorded.clone(),
     };
     let mut out = recorded.clone();
     out.remove("tetrahedral");
