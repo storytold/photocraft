@@ -1254,3 +1254,28 @@ fn masks_hiding_effects_keep_hdr_values_where_they_let_everything_through() {
         check(&mut g, &d, "HDR under a fully open hiding mask");
     }
 }
+
+/// A mask that hides a layer's effects completely leaves the backdrop as it was, even for 32-bit
+/// values above 1, over a canvas wider than one CPU render tile: the GPU matches the CPU, which
+/// is tile-independent there.
+#[test]
+fn fully_hiding_mask_keeps_hdr_values_across_cpu_render_tiles() {
+    let Some(mut g) = gpu() else { return };
+    let w = photocraft_compose::RENDER_TILE * 2 + 88;
+    let mut d = Document::new("wide", Size::new(w as u32, 64), ColorMode::Rgb, SampleType::F32);
+    let mut bottom = Layer::raster("hdr", d.pixel_format());
+    let px: Vec<f32> = (0..w * 64).flat_map(|_| [2.0, 1.5, 1.25, 1.0]).collect();
+    bottom.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, w as u32, 64), &px);
+    d.layers.push(bottom);
+    let mut l = noise_layer("fx", d.pixel_format(), Rect::new(100, 16, 140, 48), 3, 0.5);
+    l.effects.items.push(Effect::default_drop_shadow());
+    l.mask = Some(LayerMask::hide_all());
+    l.advanced.layer_mask_hides_effects = true;
+    d.layers.push(l);
+    check(&mut g, &d, "HDR under a fully hiding mask");
+    let out = photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).expect("render");
+    let at = |x: i32, y: i32| out[(y * w + x) as usize];
+    for (x, y, what) in [(w - 20, 30, "far from the layer"), (120, 30, "under the hidden layer")] {
+        assert!(at(x, y)[..3].iter().all(|&v| v > 1.0), "{what}: HDR value clamped, got {:?}", at(x, y));
+    }
+}
