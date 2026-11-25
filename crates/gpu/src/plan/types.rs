@@ -129,6 +129,10 @@ impl Kernel {
 pub enum Role {
     Content,
     Mask,
+    /// The layer's masks that still shape it, under Layer / Vector Mask Hides Effects.
+    VisibleMask,
+    /// The layer's masks that hide its effects, under Layer / Vector Mask Hides Effects.
+    HidingMask,
     /// A stroked shape's fill alone; its full content uses `Content`.
     Fill,
     /// A stroked shape's stroke alone.
@@ -210,6 +214,8 @@ impl SurfaceRef<'_> {
 #[derive(Clone, Debug)]
 pub struct MaskUse<'a> {
     pub layer: LayerId,
+    /// `Mask`, `VisibleMask` or `HidingMask`: which of the layer's masks this surface combines.
+    pub role: Role,
     pub surface: SurfaceRef<'a>,
     pub density: f32,
     pub default: f32,

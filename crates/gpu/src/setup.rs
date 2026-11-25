@@ -4,7 +4,7 @@ use super::kit::{Kit, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::pipelines::{NO_EFFECT_MAPS, Pipelines};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
+use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
 
 /// Classification of a synchronous compositor pipeline build failure.
 ///
@@ -298,7 +298,7 @@ impl Compositor {
         let mut seen = std::collections::HashSet::new();
         let mut total = 0u64;
         for p in &plan.passes {
-            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
+            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, m.role, m.surface.get()))];
             for (layer, role, s) in sources.into_iter().flatten() {
                 if seen.insert((layer, role)) {
                     let a = s.tile_bounds().intersect(&grid).intersect(&cells);
