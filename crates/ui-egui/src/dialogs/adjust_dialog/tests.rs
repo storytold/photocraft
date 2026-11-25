@@ -592,14 +592,30 @@ fn channel_mixer_preset_dialog_previews_and_resets() {
     choose(&mut h, "Default");
     assert_eq!(shown(&h).as_deref(), Some("Default"));
 
-    choose(&mut h, "Infrared Mix");
-    assert_eq!(shown(&h).as_deref(), Some("Infrared Mix"));
-    let mixed = params(h.state_mut(), id);
-    let gray: Vec<f64> = serde_json::from_value(mixed["gray"].clone()).unwrap();
-    assert!(gray[1] > 100.0 && gray[0] < 0.0 && gray[2] < 0.0 && gray[3] == 0.0);
-    assert_eq!(gray.iter().sum::<f64>(), 100.0);
-    for output in ["red", "green", "blue"] {
-        assert_eq!(mixed[output], initial[output], "the dialog keeps the hidden output {output}");
+    let presets = [
+        ("Black & White Infrared (RGB)", [-70.0, 200.0, -30.0, 0.0]),
+        ("Black & White with Blue Filter", [0.0, 0.0, 100.0, 0.0]),
+        ("Black & White with Green Filter", [0.0, 100.0, 0.0, 0.0]),
+        ("Black & White with Orange Filter", [50.0, 50.0, 0.0, 0.0]),
+        ("Black & White with Red Filter", [100.0, 0.0, 0.0, 0.0]),
+        ("Black & White with Yellow Filter", [34.0, 66.0, 0.0, 0.0]),
+    ];
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(4);
+    let options: Vec<_> = h.query_all_by_role(Role::ListBoxOption).filter_map(|node| node.accesskit_node().label()).collect();
+    let expected: Vec<_> = std::iter::once("Default").chain(presets.map(|(name, _)| name)).chain(std::iter::once("Custom")).collect();
+    assert_eq!(options, expected);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    for (name, weights) in presets {
+        choose(&mut h, name);
+        assert_eq!(shown(&h).as_deref(), Some(name));
+        let mixed = params(h.state_mut(), id);
+        assert_eq!(mixed["monochrome"], json!(true), "{name}");
+        assert_eq!(mixed["gray"], json!(weights), "{name}");
+        for output in ["red", "green", "blue"] {
+            assert_eq!(mixed[output], initial[output], "{name} keeps the hidden output {output}");
+        }
     }
     assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some());
     assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc));

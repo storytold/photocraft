@@ -48,6 +48,8 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
+        // The Spot Healing Brush (#12581).
+        Tool::SpotHealing => Some(tl!("spot healing brush")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
@@ -81,6 +83,10 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         let st = app.session.active()?;
         let pixel_layer = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
+    }
+    // A Spot Healing press on a hidden empty pixel layer, Sample All Layers off, is refused quietly (#12581).
+    if hidden && spot_healing_quiet(app, tool) {
+        return None;
     }
     let name = tool_name(app, tool)?;
     // The Art History Brush's hidden alert was measured on a layer's pixels only (#12638): a
@@ -126,6 +132,18 @@ fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
     locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
 }
 
+/// A Spot Healing press on an empty pixel layer with Sample All Layers off (#12581): when that layer is hidden, the
+/// press does nothing and says nothing, as in Photoshop; there is nothing to heal from.
+pub(crate) fn spot_healing_quiet(app: &PhotocraftApp, tool: Tool) -> bool {
+    if tool != Tool::SpotHealing || app.ui.tool_options.sample_all.spot_healing || crate::canvas::paint_target(app) != json!("pixels") {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    st.active_layer
+        .and_then(|id| st.doc.layer(id))
+        .is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)) && l.surface().is_some_and(|s| s.content_bounds().is_empty()))
+}
+
 #[cfg(test)]
 #[path = "../magic_eraser_refusal_alerts_tests.rs"]
 mod magic_eraser_refusal_alerts_tests;
@@ -133,6 +151,10 @@ mod magic_eraser_refusal_alerts_tests;
 #[cfg(test)]
 #[path = "../brush_refusal_alert_tests.rs"]
 pub(super) mod brush_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../spot_healing_refusal_alert_tests.rs"]
+mod spot_healing_refusal_alert_tests;
 
 #[cfg(test)]
 #[path = "../retouch_mode_refusal_alert_tests.rs"]

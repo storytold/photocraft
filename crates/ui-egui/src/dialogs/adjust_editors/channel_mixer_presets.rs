@@ -13,16 +13,15 @@ enum Preset {
     Custom,
 }
 
-// Original mixes with a neutral-gray total of 100% and zero offset. Color mixes emphasize
-// their named primary or combination of primaries. Infrared emphasizes green while subtracting blue and red.
+// Channel Mixer ships these monochrome settings in menu order (issue #9270).
 fn mixes() -> [(&'static str, [f64; 4]); 6] {
     [
-        (tl!("Infrared Mix"), [-20.0, 155.0, -35.0, 0.0]),
-        (tl!("Blue Mix"), [8.0, 12.0, 80.0, 0.0]),
-        (tl!("Green Mix"), [15.0, 75.0, 10.0, 0.0]),
-        (tl!("Orange Mix"), [68.0, 27.0, 5.0, 0.0]),
-        (tl!("Red Mix"), [80.0, 16.0, 4.0, 0.0]),
-        (tl!("Yellow Mix"), [40.0, 55.0, 5.0, 0.0]),
+        (tl!("Black & White Infrared (RGB)"), [-70.0, 200.0, -30.0, 0.0]),
+        (tl!("Black & White with Blue Filter"), [0.0, 0.0, 100.0, 0.0]),
+        (tl!("Black & White with Green Filter"), [0.0, 100.0, 0.0, 0.0]),
+        (tl!("Black & White with Orange Filter"), [50.0, 50.0, 0.0, 0.0]),
+        (tl!("Black & White with Red Filter"), [100.0, 0.0, 0.0, 0.0]),
+        (tl!("Black & White with Yellow Filter"), [34.0, 66.0, 0.0, 0.0]),
     ]
 }
 

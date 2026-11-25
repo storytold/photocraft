@@ -2,7 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use craft::font_manager::glyphs::{GlyphSource, GlyphsPanel};
+use craft::font_manager::glyphs::{CATEGORIES, GlyphCell, GlyphSource, GlyphsPanel};
 use craft::ui::contract::Bind;
 use serde_json::json;
 
@@ -20,13 +20,29 @@ fn char_style_for(family: &str, style: &str) -> photocraft_doc::text::CharStyle 
     st
 }
 
+/// Whether `c` belongs to the panel's `category` (a [`CATEGORIES`] id).
+fn in_category(c: char, category: &str) -> bool {
+    let u = c as u32;
+    match category {
+        "Latin" => ["Basic Latin", "Latin 1", "Latin Extended-A", "Latin Extended-B"].iter().any(|name| photocraft_text::glyphs::in_category(c, name)),
+        "Letterlike Symbols" => (0x2100..=0x214F).contains(&u),
+        "Superscripts and Subscripts" => (0x2070..=0x209F).contains(&u) || matches!(u, 0xB9 | 0xB2 | 0xB3),
+        // Alternates belong to a text selection's glyph, which the engine does not list per face.
+        "Alternates for Selection" => false,
+        other => photocraft_text::glyphs::in_category(c, other),
+    }
+}
+
 impl GlyphSource for PhotoGlyphs {
-    fn charmap(&self, family: &str, style: &str) -> Vec<char> {
+    /// The face's mapped characters in the category; the engine lists no unencoded glyphs.
+    fn cells(&self, family: &str, style: &str, category: &str) -> Vec<GlyphCell> {
         let st = char_style_for(family, style);
-        photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.charmap_for_style(&st)
+        let charmap = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.charmap_for_style(&st);
+        charmap.into_iter().filter(|c| category == CATEGORIES[0] || in_category(*c, category)).map(GlyphCell::Char).collect()
     }
 
-    fn glyph(&self, family: &str, style: &str, c: char, px: u32) -> Option<egui::ColorImage> {
+    fn glyph(&self, family: &str, style: &str, cell: GlyphCell, px: u32) -> Option<egui::ColorImage> {
+        let GlyphCell::Char(c) = cell else { return None };
         let st = char_style_for(family, style);
         let (n, alpha) = {
             let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
@@ -37,19 +53,6 @@ impl GlyphSource for PhotoGlyphs {
         }
         let pixels: Vec<u8> = alpha.iter().flat_map(|a| [255, 255, 255, *a]).collect();
         Some(egui::ColorImage::from_rgba_unmultiplied([n as usize, n as usize], &pixels))
-    }
-
-    fn in_category(&self, c: char, category: &str) -> bool {
-        use photocraft_text::glyphs::in_category;
-        let u = c as u32;
-        match category {
-            "Latin" => ["Basic Latin", "Latin 1", "Latin Extended-A", "Latin Extended-B"].iter().any(|name| in_category(c, name)),
-            "Letterlike Symbols" => (0x2100..=0x214F).contains(&u),
-            "Superscripts and Subscripts" => (0x2070..=0x209F).contains(&u) || matches!(u, 0xB9 | 0xB2 | 0xB3),
-            // Alternates belong to a text selection's glyph, which the engine does not list per face.
-            "Alternates for Selection" => false,
-            other => in_category(c, other),
-        }
     }
 
     fn ready(&self) -> bool {
@@ -109,8 +112,8 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         type_tool::finish_font_state(app, fonts);
         app.ui.type_panels.glyph_face = Some((family, style));
     }
-    if let Some(g) = out.insert
-        && !insert(app, &g)
+    if let Some(GlyphCell::Char(c)) = out.activated
+        && !insert(app, &c.to_string())
     {
         app.ui.status = tl!("Select a type layer or click into text to insert glyphs").into();
     }

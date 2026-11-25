@@ -276,7 +276,14 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
         patterns: d
             .patterns
             .iter()
-            .map(|p| PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) })
+            .map(|p| PatternM {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                width: p.width,
+                height: p.height,
+                source_mode: p.source_mode,
+                surface: surface_m(&p.surface, sink),
+            })
             .collect(),
         color_table: d.color_table.clone(),
         // Only while they hold for the layer saved here (and the document is Indexed Color): on
@@ -676,7 +683,14 @@ impl Loader<'_> {
             if p.width > max || p.height > max {
                 return Err(FormatError::LimitExceeded(format!("pattern `{}` is {}×{} px (max {max} per side)", p.name, p.width, p.height)));
             }
-            patterns.push(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: self.surface(&p.surface)? });
+            patterns.push(Pattern {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                width: p.width,
+                height: p.height,
+                source_mode: p.source_mode,
+                surface: self.surface(&p.surface)?,
+            });
         }
         let layer_comps = m.layer_comps.iter().map(|c| self.comp(c)).collect::<Result<Vec<_>>>()?;
         let last_document_state = m.last_document_state.as_ref().map(|c| self.comp(c)).transpose()?;

@@ -288,7 +288,9 @@ fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mu
     run.delta = [f64::from(dx), f64::from(dy)];
     run.moved = true;
     if readout {
-        cx.readout(vec![(Label::from("ΔX"), format!("{dx} px")), (Label::from("ΔY"), format!("{dy} px"))]);
+        let x_arrow = if dx < 0 { "←" } else { "→" };
+        let y_arrow = if dy < 0 { "↑" } else { "↓" };
+        cx.readout(vec![(Label::from(x_arrow), format!("{} px", dx.unsigned_abs())), (Label::from(y_arrow), format!("{} px", dy.unsigned_abs()))]);
     }
 }
 

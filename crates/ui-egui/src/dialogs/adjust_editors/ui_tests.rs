@@ -244,14 +244,13 @@ fn channel_mixer_preset_properties_commits_one_edit_and_default_is_undoable() {
     assert_eq!(shown(&h).as_deref(), Some("Custom"));
     let steps = history_len(&h);
 
-    choose(&mut h, "Blue Mix");
+    choose(&mut h, "Black & White with Blue Filter");
     let (_, mixed) = layer(&h);
     let Adjustment::ChannelMixer { matrix, monochrome: true, .. } = mixed else { panic!("{mixed:?}") };
-    let [red, green, blue, constant] = matrix[0];
-    assert!(blue > red && blue > green && constant == 0.0);
+    assert_eq!(matrix[0], [0.0, 0.0, 100.0, 0.0]);
     let params = photocraft_engine::adjust_params::to_params(&mixed);
     assert_eq!(params["green"], original["green"], "the hidden green output is kept");
-    assert_eq!(shown(&h).as_deref(), Some("Blue Mix"));
+    assert_eq!(shown(&h).as_deref(), Some("Black & White with Blue Filter"));
     assert_eq!(history_len(&h), steps + 1);
     assert!(h.state().live_adjust.is_none(), "preset selection leaves no pending preview");
 
@@ -259,8 +258,8 @@ fn channel_mixer_preset_properties_commits_one_edit_and_default_is_undoable() {
     assert_eq!(shown(&h).as_deref(), Some("Custom"));
     assert_eq!(layer(&h).1, mixed);
     assert_eq!(history_len(&h), steps + 1);
-    choose(&mut h, "Blue Mix");
-    assert_eq!(shown(&h).as_deref(), Some("Blue Mix"));
+    choose(&mut h, "Black & White with Blue Filter");
+    assert_eq!(shown(&h).as_deref(), Some("Black & White with Blue Filter"));
     assert_eq!(history_len(&h), steps + 1, "reselecting the same mix does not create a history step");
 
     choose(&mut h, "Default");
@@ -270,7 +269,7 @@ fn channel_mixer_preset_properties_commits_one_edit_and_default_is_undoable() {
     h.state_mut().run("edit.undo", json!({})).unwrap();
     h.run_steps(4);
     assert_eq!(layer(&h).1, mixed);
-    assert_eq!(shown(&h).as_deref(), Some("Blue Mix"));
+    assert_eq!(shown(&h).as_deref(), Some("Black & White with Blue Filter"));
 }
 
 /// #3264: wheel browsing previews without recording one edit per selected LUT.

@@ -271,11 +271,11 @@ pub(crate) mod params {
             let key = key_of(app, id);
             let Some(dialog) = dialog_mut(app, id) else { continue };
             let (colour, path, dropper, listing, footer, range) = (
-                dialog.pick_color(),
+                dialog.take_color_request(),
                 dialog.pick_path(),
                 dialog.take_eyedropper(),
                 dialog.take_listing(),
-                dialog.take_footer_action(),
+                dialog.take_action(),
                 dialog.take_range_alert(),
             );
             if let Some(alert) = range {
@@ -287,7 +287,7 @@ pub(crate) mod params {
             if let Some((row, colour)) = color_picker_ui::answer_for(app, id)
                 && let Some(dialog) = dialog_mut(app, id)
             {
-                dialog.answer_color(row, colour);
+                dialog.answer_color(&row, colour);
             }
             if let Some(request) = path {
                 start_pick(app, ctx, id, request);
@@ -713,6 +713,9 @@ pub mod blend_options;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
 pub mod caf_ui;
+#[cfg(test)]
+mod calculations_preview_tests;
+pub(crate) mod calculations_ui;
 pub(super) mod camera_raw_detail_ui;
 pub(super) mod camera_raw_gpu;
 pub(super) mod camera_raw_scope_ui;
@@ -721,6 +724,8 @@ pub(crate) mod canvas_input;
 pub mod channel_options_ui;
 #[cfg(test)]
 mod color_lookup_no_remember_tests;
+#[cfg(test)]
+mod color_lookup_smart_edit_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
