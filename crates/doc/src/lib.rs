@@ -1914,7 +1914,7 @@ mod id_tests {
         };
         let mut base = new_doc();
         base.layers.push(layer_in(7));
-        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None, state: None, root: None };
+        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None, state: None, root: None, moved: Vec::new() };
         let step = DesignStep {
             step: 3,
             command: "x".into(),

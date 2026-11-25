@@ -180,6 +180,9 @@ pub struct Baked {
     pub state: Option<(Arc<Document>, Vec<String>)>,
     /// The root stack bottom to top when the step reordered it (no layer records a root move).
     pub root: Option<Vec<LayerId>>,
+    /// Layers the step moved to another parent (into or out of a group), with the layers directly
+    /// below and above where it put them: no layer records the move of an unchanged one.
+    pub moved: Vec<(LayerId, Option<LayerId>, Option<LayerId>)>,
 }
 
 /// The document fields a baked step's `state` restores: all but those it keeps apart (`layers`,
@@ -240,15 +243,25 @@ impl Baked {
     /// from `before`'s.
     pub fn capture(before: &Document, after: &Document, created: &[LayerId], changed: &[LayerId]) -> Self {
         let layers = created.iter().chain(changed).filter_map(|id| after.layer(*id).cloned()).collect();
-        let placed = created
-            .iter()
+        // A layer's place in `d`: its parent group (None at the root) and its neighbours below and above.
+        let place = |d: &Document, id: LayerId| {
+            let path = d.path_of(id)?;
+            let (last, parent) = path.split_last()?;
+            let (group, siblings) = if parent.is_empty() { (None, &d.layers[..]) } else { (Some(d.layer_at(parent)?), d.layer_at(parent)?.children()?) };
+            let below = last.checked_sub(1).and_then(|i| siblings.get(i)).map(|l| l.id);
+            let above = siblings.get(last + 1).map(|l| l.id);
+            Some((group.map(|g| g.id), below, above))
+        };
+        let placed = created.iter().filter_map(|id| place(after, *id).map(|(_, below, above)| (*id, below, above))).collect();
+        let moved = after
+            .walk()
+            .into_iter()
+            .map(|(_, _, l)| l.id)
+            .filter(|id| !created.contains(id))
             .filter_map(|id| {
-                let path = after.path_of(*id)?;
-                let (last, parent) = path.split_last()?;
-                let siblings = if parent.is_empty() { &after.layers } else { after.layer_at(parent)?.children()? };
-                let below = last.checked_sub(1).and_then(|i| siblings.get(i)).map(|l| l.id);
-                let above = siblings.get(last + 1).map(|l| l.id);
-                Some((*id, below, above))
+                let (from, _, _) = place(before, id)?;
+                let (to, below, above) = place(after, id)?;
+                (from != to).then_some((id, below, above))
             })
             .collect();
         let selection = (before.selection != after.selection).then(|| after.selection.clone());
@@ -260,7 +273,7 @@ impl Baked {
         // others without reordering them.
         let ids = |d: &Document, other: &Document| d.layers.iter().map(|l| l.id).filter(|id| other.layers.iter().any(|o| o.id == *id)).collect::<Vec<_>>();
         let root = (ids(before, after) != ids(after, before)).then(|| after.layers.iter().map(|l| l.id).collect());
-        Baked { layers, placed, selection, color, state, root }
+        Baked { layers, placed, selection, color, state, root, moved }
     }
 
     /// Put the stored layers (and selection and colour state) into `doc` in place of the step's.
@@ -279,6 +292,10 @@ impl Baked {
         // The document before any of this step's layers go in: a changed group keeps the children it
         // has here (a replay may have changed them) unless the step itself changed them.
         let current = doc.clone();
+        // A moved layer leaves its old place first; it goes in where the step put it below.
+        for (id, _, _) in &self.moved {
+            doc.remove(*id);
+        }
         for id in changed {
             match self.layers.iter().find(|l| l.id == *id) {
                 Some(l) => {
@@ -294,14 +311,21 @@ impl Baked {
         }
         // Each created layer goes beside a recorded neighbour; one whose neighbours are themselves
         // still to come waits for them, so the stack comes out as recorded whatever the id order.
+        // A moved layer a changed group already took in needs no place of its own.
         let mut pending: Vec<&(LayerId, Option<LayerId>, Option<LayerId>)> =
-            self.placed.iter().filter(|(id, _, _)| created.contains(id) && doc.layer(*id).is_none()).collect();
+            self.placed.iter().filter(|(id, _, _)| created.contains(id)).chain(&self.moved).filter(|(id, _, _)| doc.layer(*id).is_none()).collect();
         let mut fallback = false;
         while !pending.is_empty() {
             let before = pending.len();
             pending.retain(|(id, below, above)| {
-                let Some(l) = self.layers.iter().find(|l| l.id == *id) else { return false };
-                let l = self.merged(l, &current, created, changed);
+                // As the step left it if it made or changed it, else as the replay has it.
+                let l = match self.layers.iter().find(|l| l.id == *id) {
+                    Some(l) => self.merged(l, &current, created, changed),
+                    None => match current.layer(*id) {
+                        Some(l) => l.clone(),
+                        None => return false,
+                    },
+                };
                 match (below.filter(|b| doc.layer(*b).is_some()), above.filter(|a| doc.layer(*a).is_some())) {
                     (Some(b), _) => doc.insert_above(Some(b), l),
                     (None, Some(a)) => doc.insert_below(Some(a), l),
@@ -340,7 +364,8 @@ impl Baked {
             let mut after: Option<LayerId> = None;
             for c in replayed {
                 let placed = kept.iter().any(|k| k.id == c.id);
-                if !placed && !changed.contains(&c.id) && !self.holds(c.id) {
+                let moved = self.moved.iter().any(|(m, _, _)| *m == c.id);
+                if !placed && !moved && !changed.contains(&c.id) && !self.holds(c.id) {
                     let at = after.and_then(|a| kept.iter().position(|k| k.id == a)).map_or(0, |i| i + 1);
                     kept.insert(at, c.clone());
                 }
@@ -503,6 +528,35 @@ mod tests {
         let ids: Vec<LayerId> = doc.layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
         assert_eq!(ids, [aid]);
         assert_eq!(doc.layer(gid).unwrap().opacity, 0.5);
+    }
+
+    /// A step that moves a layer into a group, or out of one to the root, replays the move: the
+    /// layer leaves where it was and is where the step put it, once.
+    #[test]
+    fn a_baked_move_between_parents_replays() {
+        let c = Layer::raster("C", PixelFormat::RGBA8);
+        let cid = c.id;
+        let group = Layer::group("g", Vec::new());
+        let gid = group.id;
+        let root_c = {
+            let mut d = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+            d.layers = vec![c.clone(), group.clone()].into();
+            d
+        };
+        let c_in_g = {
+            let mut d = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+            d.layers = vec![Layer { id: gid, ..Layer::group("g", vec![c.clone()]) }].into();
+            d
+        };
+        let ids = |d: &Document| d.walk().into_iter().map(|(_, _, l)| l.id).collect::<Vec<_>>();
+        for (before, after) in [(&root_c, &c_in_g), (&c_in_g, &root_c)] {
+            let (created, changed) = layer_changes(before, after);
+            let baked = Baked::capture(before, after, &created, &changed);
+            let mut doc = before.clone();
+            baked.apply(&mut doc, &created, &changed);
+            assert_eq!(ids(&doc), ids(after), "moved once, to where the step put it");
+            assert_eq!(doc.path_of(cid).map(|p| p.len()), after.path_of(cid).map(|p| p.len()));
+        }
     }
 
     /// Created layers go back below a surviving layer as recorded, whatever order their ids are in.

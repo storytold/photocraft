@@ -601,9 +601,13 @@ pub(crate) fn replay(
             step.state = StepState::Stale;
         }
     }
-    // Steps past the marker resume from it when rolled forward.
-    for later in tl.steps.iter_mut().skip(end) {
+    // Steps past the marker resume from it when rolled forward, and a change before them leaves
+    // their stored results as stale as those of the steps it replayed.
+    for (i, later) in tl.steps.iter_mut().enumerate().skip(end) {
         later.checkpoint = Checkpoint(None);
+        if can_go_stale(later) && stale_from.is_some_and(|c| i >= c) && !later.state.is_failure() {
+            later.state = StepState::Stale;
+        }
     }
     let st = r.active().ok_or(crate::EngineError::NoDocument)?;
     Ok(Replayed { doc: (*st.doc).clone(), active: st.active_layer, selected: st.selected_layers.clone(), timeline: tl })

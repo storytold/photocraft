@@ -1800,6 +1800,9 @@ impl Session {
                     job.timeline = Some((before, scope.step(), p, force_bake, drops));
                 }
             }
+            // Refused after the floating piece dropped (admitted again on the dropped pixels): the
+            // drop stays, so it is a step of its own, as for a job that doesn't land.
+            (Err(_), Some(_)) if drops => crate::timeline::record(self, before, scope.step(), "select.drop", &json!({}), true),
             _ => {}
         }
         // A started job may still mint ids under this step, and a design-timeline step is named

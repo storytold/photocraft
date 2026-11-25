@@ -285,6 +285,27 @@ fn a_baked_step_moving_into_a_deleted_steps_place_is_stale() {
     assert_eq!(state(&mut s, 0), "stale");
 }
 
+/// The same with the marker between them: the paste, past the marker, is marked stale too, and
+/// stays so when the marker rolls forward onto it.
+#[test]
+fn a_baked_step_past_the_marker_goes_stale_with_a_deletion_before_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 6, "height": 6})).unwrap();
+    s.execute("edit.pasteSpecial.pasteInto", json!({})).unwrap();
+    s.execute("design.rollTo", json!({"at": 1})).unwrap();
+    let select = step_id(&mut s, 0);
+    s.execute("design.delete", json!({"step": select})).unwrap();
+    assert_eq!(state(&mut s, 0), "stale", "past the marker");
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(state(&mut s, 0), "stale", "and once it runs again");
+}
+
 #[test]
 fn a_layer_copied_from_another_document_never_goes_stale() {
     let mut s = started();

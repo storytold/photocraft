@@ -1509,6 +1509,7 @@ mod tests {
             color: None,
             state: None,
             root: None,
+            moved: Vec::new(),
         }));
         tl.steps.push(step);
         doc.design_timeline = Some(std::sync::Arc::new(tl));

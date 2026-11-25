@@ -147,6 +147,9 @@ pub struct BakedM {
     /// The root stack (bottom to top) when the step reordered it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<Vec<u64>>,
+    /// (layer moved to another parent, layer below it, layer above it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved: Vec<(u64, Option<u64>, Option<u64>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
