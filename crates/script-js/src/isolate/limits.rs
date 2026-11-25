@@ -18,7 +18,8 @@
 //! Stopping a host also stops anything it started, which could otherwise hold its output pipe open
 //! (the script host starts nothing; this is for a host that misbehaves): on Unix the host runs in
 //! its own process group, which is killed while the host is still unreaped (its group id can't be
-//! reused then); on Windows the job object is closed, which ends every process in it.
+//! reused then); on Windows the job object is closed, which ends every process in it. On OpenBSD a
+//! host that exits on its own is only seen once reaped, so what it started may outlive it.
 //!
 //! On every platform the host ends when its input does: the app holds the only write end of that
 //! pipe, so the system closes it when the app exits or dies, however that happens. A
@@ -84,19 +85,14 @@ impl Containment {
             Host::Reaped => {}
         }
         let status = child.try_wait()?;
-        #[cfg(all(unix, not(target_os = "openbsd")))]
+        // On OpenBSD, without `waitid`, the host is only known to have exited once it is reaped,
+        // and then its pid, its group's id, may already belong to someone else: the group is not
+        // signalled, and a process the host started and left running outlives it. Watching the
+        // exit without reaping (a kqueue `EVFILT_PROC`) would let the group be stopped first; it
+        // is not done here, where it can't be built or tested.
+        #[cfg(unix)]
         if status.is_some() {
             self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-        // Without `waitid` the host is only known to have exited once it is reaped. What it
-        // started is still in its group then, and a group id is not given to a new process while
-        // the group has members, so the group is stopped right after. A group left empty is
-        // signalled once by an id that is free again: OpenBSD does not hand a freed pid out at
-        // once, but that is no guarantee. Watching the exit without reaping (a kqueue
-        // `EVFILT_PROC`) would close that; it is not done here, where it can't be built or tested.
-        #[cfg(target_os = "openbsd")]
-        if status.is_some() && !self.reaped.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            kill_group(child);
         }
         #[cfg(windows)]
         if status.is_some() {

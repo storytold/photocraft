@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::limits::{self, Containment, Exit, Meter, STATUS_ACCESS_VIOLATION, STATUS_STACK_BUFFER_OVERRUN, STATUS_STACK_OVERFLOW};
 use super::protocol::{
     FrameError, FromHost, MAX_FRAME_DEPTH, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_command, check_dialog_args, cut,
-    read_frame, write_frame,
+    encode_frame, read_frame, send_frame,
 };
 use super::{SCRIPT_HOST_FLAG, host};
 use crate::bounds::{MAX_CALLS, MAX_OUTPUT_BYTES};
@@ -203,8 +203,8 @@ enum Verdict {
     Violation(String),
     /// It closed its output but did not exit.
     Lingered,
-    /// The script's start message was over [`MAX_TO_HOST`] bytes.
-    TooLarge(usize),
+    /// The script's start message was too large to send; why, for the user.
+    TooLarge(String),
     /// The app did not answer a command (`false`) or a dialog (`true`) in time.
     NoReply(bool),
     /// An answer could not be sent to the host.
@@ -317,7 +317,7 @@ struct Shared {
     watch: Mutex<Watch>,
     child: Mutex<Child>,
     stderr: Mutex<Tail>,
-    /// Set from a forwarded request until the interface replies.
+    /// Set from a forwarded request until its answer starts going out to the host.
     awaiting: AtomicBool,
     /// The reader is blocked reading the host's output (not handing an event to the interface).
     reading: AtomicBool,
@@ -491,11 +491,8 @@ impl Shared {
             Some(Verdict::Violation(d)) => {
                 return Failure::new(FailureKind::HostViolation, format!("The script was stopped: the script host made a request it may not make ({d})."));
             }
-            Some(Verdict::TooLarge(n)) => {
-                return Failure::new(
-                    FailureKind::Script,
-                    format!("The script is too large to run: {} MiB, over the limit of {} MiB.", n.div_ceil(1 << 20), MAX_TO_HOST >> 20),
-                );
+            Some(Verdict::TooLarge(why)) => {
+                return Failure::new(FailureKind::Script, format!("The script is too large to run: {why}."));
             }
             Some(Verdict::NoReply(dialog)) => {
                 let (what, limit) = if *dialog { ("dialog", self.reply_limits.1) } else { ("command", self.reply_limits.0) };
@@ -702,7 +699,8 @@ impl IsolatedJob {
             _ => return Err("the script is not waiting for that reply".into()),
         };
         self.waiting = None;
-        self.shared.awaiting.store(false, Ordering::SeqCst);
+        // The host may ask again once the writer starts sending this answer (`write_host`), not
+        // before: an answer queued here is not yet one the host has.
         if let Some(tx) = &self.to_host {
             let _ = tx.send(msg);
         }
@@ -849,7 +847,9 @@ fn report_if_reader_stalls(shared: &Shared, events: &SyncSender<Event>) {
         if shared.reading.load(Ordering::SeqCst) {
             if stalled.get_or_insert_with(Instant::now).elapsed() >= READER_GRACE {
                 // Stop whatever holds the pipe, so the reader thread ends too (the group is
-                // stopped already when the host was reaped; this covers a host not reaped yet).
+                // stopped already when the host was reaped, except on OpenBSD, where a process
+                // it left holding the pipe keeps the reader blocked; this covers a host not
+                // reaped yet).
                 shared.containment.end(&mut lock(&shared.child));
                 // A reader that was only slow to run (the host wrote its result and exited)
                 // reads what is in the pipe now and reports that itself. Handing those events to
@@ -930,6 +930,7 @@ fn known_too_large(msg: &ToHost) -> Option<usize> {
 fn too_big(e: &FrameError) -> String {
     match e {
         FrameError::TooLarge(n) => format!("{} MiB, over the limit of {} MiB", n.div_ceil(1 << 20), MAX_TO_HOST >> 20),
+        FrameError::OverCap(cap) => format!("over the limit of {} MiB once encoded", cap >> 20),
         FrameError::TooDeep => format!("nested more than {MAX_FRAME_DEPTH} deep"),
         _ => format!("more than {MAX_FRAME_VALUES} values"),
     }
@@ -939,27 +940,37 @@ fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
     // Answers are written in the order `reply` numbered them.
     let mut answers = 0u64;
     for msg in rx {
-        let first = match known_too_large(&msg) {
+        let encoded = match known_too_large(&msg) {
             Some(n) => Err(FrameError::TooLarge(n)),
-            None => write_frame(&mut input, &msg, MAX_TO_HOST),
+            None => encode_frame(&msg, MAX_TO_HOST),
         };
-        let written = match first {
-            Err(FrameError::TooLarge(n)) if matches!(msg, ToHost::Start { .. }) => {
+        let encoded = match encoded {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::OverCap(_))) if matches!(msg, ToHost::Start { .. }) => {
                 // Nothing was sent: the host never sees the script, and the run fails by name.
-                shared.kill(Verdict::TooLarge(n));
+                shared.kill(Verdict::TooLarge(too_big(&e)));
                 return;
             }
-            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::TooDeep)) if matches!(msg, ToHost::Dialog { .. }) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::OverCap(_) | FrameError::TooManyValues | FrameError::TooDeep))
+                if matches!(msg, ToHost::Dialog { .. }) =>
+            {
                 // Nothing was sent: the host is still waiting, so the run ends here with the reason.
                 shared.kill(Verdict::Unsent(format!("a dialog's answer could not be sent to the script host: {}", too_big(&e))));
                 return;
             }
-            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::TooDeep)) if matches!(msg, ToHost::Executed { .. }) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::OverCap(_) | FrameError::TooManyValues | FrameError::TooDeep))
+                if matches!(msg, ToHost::Executed { .. }) =>
+            {
                 let result = Err(format!("the command's result is too large for a script: {}", too_big(&e)));
-                write_frame(&mut input, &ToHost::Executed { result }, MAX_TO_HOST)
+                encode_frame(&ToHost::Executed { result }, MAX_TO_HOST)
             }
             r => r,
         };
+        if matches!(msg, ToHost::Executed { .. } | ToHost::Dialog { .. }) {
+            // Encoded: from here the host can have its answer, and may ask again as soon as it
+            // reads it.
+            shared.awaiting.store(false, Ordering::SeqCst);
+        }
+        let written = encoded.and_then(|body| send_frame(&mut input, &body));
         if matches!(msg, ToHost::Executed { .. } | ToHost::Dialog { .. }) {
             // Out (or failed): the run's clock goes on, unless the host already asked again.
             answers += 1;
@@ -1033,7 +1044,7 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
             Ok(Some(m)) => m,
             // The host ended, or died in the middle of a message.
             Ok(None) | Err(FrameError::Truncated | FrameError::Io(_)) => return None,
-            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::TooDeep | FrameError::Malformed(_))) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::OverCap(_) | FrameError::TooManyValues | FrameError::TooDeep | FrameError::Malformed(_))) => {
                 shared.kill(Verdict::Violation(e.to_string()));
                 return None;
             }

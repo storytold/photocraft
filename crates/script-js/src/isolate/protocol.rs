@@ -99,6 +99,8 @@ pub enum FrameError {
     Truncated,
     /// The length prefix is over the cap.
     TooLarge(usize),
+    /// A message whose encoding passed the cap (given here) before it was finished.
+    OverCap(usize),
     /// A message within the byte cap that holds more values than the reader takes
     /// ([`MAX_FRAME_VALUES`]).
     TooManyValues,
@@ -114,6 +116,7 @@ impl std::fmt::Display for FrameError {
             Self::Io(e) => write!(f, "{e}"),
             Self::Truncated => f.write_str("the message was cut off"),
             Self::TooLarge(n) => write!(f, "a message of {n} bytes is over the limit"),
+            Self::OverCap(cap) => write!(f, "a message is over the limit of {cap} bytes"),
             Self::TooManyValues => write!(f, "a message holds more than {MAX_FRAME_VALUES} values"),
             Self::TooDeep => write!(f, "a message is nested more than {MAX_FRAME_DEPTH} deep"),
             Self::Malformed(e) => write!(f, "a malformed message ({e})"),
@@ -121,27 +124,66 @@ impl std::fmt::Display for FrameError {
     }
 }
 
+/// A buffer that takes at most `cap` bytes; a write past them fails and keeps nothing more.
+struct Capped {
+    body: Vec<u8>,
+    cap: usize,
+}
+
+impl Write for Capped {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.body.len().saturating_add(data.len()) > self.cap {
+            return Err(std::io::Error::other("over the cap"));
+        }
+        self.body.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Write one frame. A message over `cap` is not written.
 ///
 /// # Errors
-/// [`FrameError::TooLarge`] over the cap, [`FrameError::TooManyValues`] with more values than
-/// the reader takes ([`MAX_FRAME_VALUES`]), [`FrameError::TooDeep`] nested deeper than it parses
-/// ([`MAX_FRAME_DEPTH`]); the stream's error. Nothing is written then.
+/// What [`encode_frame`] and [`send_frame`] return. Nothing is written when encoding fails.
 pub fn write_frame<W: Write, T: Serialize>(w: &mut W, msg: &T, cap: usize) -> Result<(), FrameError> {
-    let body = serde_json::to_vec(msg).map_err(|e| FrameError::Malformed(e.to_string()))?;
-    // The reader's limits, checked here: a frame it would refuse ends its side of the link.
-    if body.len() > cap {
-        return Err(FrameError::TooLarge(body.len()));
+    send_frame(w, &encode_frame(msg, cap)?)
+}
+
+/// Encode one message as a frame's body, checked against the reader's limits.
+///
+/// # Errors
+/// [`FrameError::OverCap`] over the cap (the encoding stops there), [`FrameError::TooManyValues`]
+/// with more values than the reader takes ([`MAX_FRAME_VALUES`]), [`FrameError::TooDeep`] nested
+/// deeper than it parses ([`MAX_FRAME_DEPTH`]).
+pub fn encode_frame<T: Serialize>(msg: &T, cap: usize) -> Result<Vec<u8>, FrameError> {
+    // Encoded into a buffer that refuses to grow past the cap: escaping can make a message's
+    // encoding several times the size of its text, and that is never held in memory.
+    let mut capped = Capped { body: Vec::new(), cap };
+    if let Err(e) = serde_json::to_writer(&mut capped, msg) {
+        return Err(if e.is_io() { FrameError::OverCap(cap) } else { FrameError::Malformed(e.to_string()) });
     }
+    let body = capped.body;
+    // The reader's other limits, checked here: a frame it would refuse ends its side of the link.
     if values_in(&body) > MAX_FRAME_VALUES {
         return Err(FrameError::TooManyValues);
     }
     if too_deep(&body) {
         return Err(FrameError::TooDeep);
     }
+    Ok(body)
+}
+
+/// Write an encoded body as one frame: its length, then the body.
+///
+/// # Errors
+/// The stream's error, or a body too long for the length prefix.
+pub fn send_frame<W: Write>(w: &mut W, body: &[u8]) -> Result<(), FrameError> {
     let len = u32::try_from(body.len()).map_err(|_| FrameError::TooLarge(body.len()))?;
     w.write_all(&len.to_le_bytes()).map_err(FrameError::Io)?;
-    w.write_all(&body).map_err(FrameError::Io)?;
+    w.write_all(body).map_err(FrameError::Io)?;
     w.flush().map_err(FrameError::Io)
 }
 
@@ -299,7 +341,7 @@ mod tests {
         let mut r: &[u8] = &[2, 0, 0, 0, b'{', b'}'];
         assert!(matches!(read_frame::<_, FromHost>(&mut r, MAX_FROM_HOST), Err(FrameError::Malformed(_))));
         let mut buf = Vec::new();
-        assert!(matches!(write_frame(&mut buf, &FromHost::Output { line: "x".repeat(64) }, 16), Err(FrameError::TooLarge(_))));
+        assert!(matches!(write_frame(&mut buf, &FromHost::Output { line: "x".repeat(64) }, 16), Err(FrameError::OverCap(16))));
         assert!(buf.is_empty(), "nothing is written for an oversize message");
     }
 
