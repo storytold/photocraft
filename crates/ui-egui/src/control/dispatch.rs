@@ -804,7 +804,9 @@ impl PanelSet {
         writes.extend(preset_browsers_param(app, p)?);
         // The toolbar's width in tool columns: its dock column's steps, from one to the cells of its grid.
         if let Some(columns) = uint_field(p, "toolbarColumns")? {
-            let most = crate::panels::toolbar::cells(app);
+            // With the "…" slot hidden and every tool in the extras the grid has no cell of its own
+            // (#14622); one column is still a width the channel can set.
+            let most = crate::panels::toolbar::cells(app).max(1);
             let steps = u16::try_from(columns).ok().filter(|steps| (1..=most).contains(&usize::from(*steps)));
             let steps = steps.ok_or_else(|| format!("toolbarColumns must be 1 to {most}"))?;
             writes.push(Box::new(move |app| {

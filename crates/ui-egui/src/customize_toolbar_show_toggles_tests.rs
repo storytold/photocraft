@@ -6,17 +6,20 @@
 //! and follows on top of #14616.
 
 use craft::ui::shell::ScreenMode;
-use egui::{Key, Modifiers};
+use egui::{Key, Modifiers, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_engine::prefs::{Preferences, SavedPrefsExt};
 use serde_json::{Value, json};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::PhotocraftApp;
-use crate::panels::toolbar::{cells, layout_sections};
+use crate::panels::toolbar::{cells, layout_sections, measure};
 use crate::shortcut_dispatch::tests::app_harness;
 use crate::shortcut_dispatch::tests::tap;
 use crate::state::Tool;
+use crate::theme;
 
 /// The four Show flags, as their stored path under `toolbar` and their `edit.toolbar` param.
 const FLAGS: [&str; 4] = ["showMore", "showColors", "showQuickMask", "showScreenMode"];
@@ -198,6 +201,117 @@ fn reset_turns_every_show_flag_back_on() {
         assert_eq!(out[flag], json!(true), "{flag}: reset turns it on");
         assert_eq!(stored(&app, flag), Some(Value::Bool(true)), "{flag}: and stores it on");
     }
+}
+
+/// `ui.set` as the control channel answers it: whether the write was accepted.
+fn control_ok(app: &mut PhotocraftApp, params: Value) -> bool {
+    let ctx = app.ctx().clone();
+    let (request, _) = crate::control::ControlRequest::new("ui.set", params);
+    match crate::control::handle(app, &ctx, &request) {
+        crate::control::Reply::Done(value) => value.get("ok") == Some(&Value::Bool(true)),
+        _ => false,
+    }
+}
+
+/// Open the Edit Toolbar drawer the way the Edit menu does, which is the route left when the rail
+/// draws no "..." slot.
+fn open_drawer_through_the_menu(app: &mut PhotocraftApp) {
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(app, &ctx, "edit.toolbar", json!({})).unwrap();
+}
+
+/// The rail's kept height, measured `width` wide on every pass after the first.
+fn measure_harness(width: f32, seen: Rc<RefCell<Vec<f32>>>, app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut ready = false;
+    let mut harness = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(400.0, 900.0)).build_ui_state(
+        move |ui, app: &mut Box<PhotocraftApp>| {
+            if !ready {
+                egui_extras::install_image_loaders(ui.ctx());
+                theme::install_fonts(ui.ctx());
+                theme::apply(ui.ctx(), &theme::AppTheme::pro());
+                ready = true;
+                return;
+            }
+            seen.borrow_mut().push(measure(app, ui, width));
+        },
+        app,
+    );
+    harness.run_steps(4);
+    harness
+}
+
+fn last_height(seen: &Rc<RefCell<Vec<f32>>>) -> f32 {
+    *seen.borrow().last().expect("a pass measured the rail")
+}
+
+/// The measure key holds the slots `Arc`, which the preferences store rebuilds when any part of
+/// `toolbar` changes - this is what makes that follow a footer flag write instead of keeping a
+/// height for a footer that is no longer drawn.
+#[test]
+fn the_kept_rail_height_follows_a_footer_flag_write() {
+    let mut flags_off = app();
+    flags_off.run("edit.toolbar", json!({"showColors": false, "showQuickMask": false, "showScreenMode": false})).unwrap();
+
+    let seen: Rc<RefCell<Vec<f32>>> = Rc::default();
+    let mut harness = measure_harness(200.0, Rc::clone(&seen), app());
+    let (all_on, kept) = (seen.borrow()[0], last_height(&seen));
+    assert_eq!(all_on, kept, "the same inputs keep the height");
+
+    harness.state_mut().run("edit.toolbar", json!({"showColors": false, "showQuickMask": false, "showScreenMode": false})).unwrap();
+    harness.run_steps(3);
+    let written = last_height(&seen);
+    assert!(written < all_on, "hiding the footer's items shortens the rail: {written} against {all_on}");
+    assert_eq!(seen.borrow()[seen.borrow().len() - 2], written, "and the new height is kept across passes");
+
+    let fresh_seen: Rc<RefCell<Vec<f32>>> = Rc::default();
+    let _fresh = measure_harness(200.0, Rc::clone(&fresh_seen), flags_off);
+    assert_eq!(last_height(&fresh_seen), written, "the kept height is what a fresh measuring run of the same flags gives");
+
+    harness.state_mut().run("edit.toolbar", json!({"showColors": true, "showQuickMask": true, "showScreenMode": true})).unwrap();
+    harness.run_steps(2);
+    assert_eq!(last_height(&seen), all_on, "and turning them back on gives the old height, not a stale one");
+}
+
+#[test]
+fn the_toolbar_column_stays_settable_when_no_extra_item_is_drawn() {
+    let mut app = app();
+    // The narrowest grid the channel can meet: no tool slots and no "..." slot, so the rail's grid
+    // holds no cell of its own.
+    app.run("edit.toolbar", json!({"toolbar": []})).unwrap();
+    app.run("edit.toolbar", all_flags(false)).unwrap();
+    assert_eq!(cells(&app), 0, "the rail lays out no cells of its own");
+    assert!(control_ok(&mut app, json!({"toolbarColumns": 1})), "one column is still a width to set");
+    assert!(!control_ok(&mut app, json!({"toolbarColumns": 2})), "there is no second cell to fill");
+}
+
+#[test]
+fn the_drawer_opens_and_closes_with_the_slot_hidden() {
+    let mut app = doc_app();
+    app.run("edit.toolbar", all_flags(false)).unwrap();
+    open_drawer_through_the_menu(&mut app);
+    let mut harness = app_harness(app);
+    assert!(harness.state().ui.toolbar_drawer, "Edit > Toolbar opens the drawer with no \"...\" slot to open it");
+    for probe in ["Edit Toolbar", "All Tools", "Restore Defaults"] {
+        assert!(shows(&harness, probe), "{probe}: the drawer is drawn beside the rail");
+    }
+    tap(&mut harness, Key::Escape, Modifiers::NONE);
+    harness.run_steps(2);
+    assert!(!harness.state().ui.toolbar_drawer, "Escape closes it again");
+    assert!(shows(&harness, "Move Tool") && !shows_item(&harness, "showMore"), "the rail is drawn as the flags say, drawer gone");
+}
+
+#[test]
+fn the_drawer_defaults_button_turns_the_hidden_items_back_on() {
+    let mut app = doc_app();
+    app.run("edit.toolbar", flag_params("showColors", false)).unwrap();
+    open_drawer_through_the_menu(&mut app);
+    let mut harness = app_harness(app);
+    assert!(!shows(&harness, "Switch Foreground and Background Colors"), "the chips are hidden first");
+    assert!(shows(&harness, "All Tools") && shows(&harness, "Restore Defaults"), "the drawer is open and offers its defaults button");
+    harness.get_by_label("Restore Defaults").click();
+    harness.run_steps(4);
+    assert_eq!(stored(harness.state(), "showColors"), Some(Value::Bool(true)), "the drawer's Restore Defaults runs edit.toolbar reset");
+    assert!(shows(&harness, "Switch Foreground and Background Colors"), "and the chips are drawn again");
 }
 
 #[test]
