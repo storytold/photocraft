@@ -1,7 +1,7 @@
 # Windows, Linux and macOS release-ref nightly: supervised manual go-live
 
 **Enabled for supervised manual runs, not yet qualified.** The producer (`nightly.yml`, main) and the
-signer (`nightly-sign.yml`, release) keep only their exact context guards and run when one of the reviewed
+signer (`nightly-sign.yml`, on the dedicated `nightly-signer` branch) keep only their exact context guards and run when one of the reviewed
 manual actors dispatches them. `nightly-dispatch.yml` stays literally off and there is no schedule:
 it only forwards scheduled producers. The installed policy
 [`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is the real v3
@@ -14,20 +14,33 @@ gh api repos/storytold/photocraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `605d58766e8f536564da8fc81d3676ac86816dea`, the craft-common-actions
-main commit that merged [#339](https://github.com/storytold/craft-common-actions/pull/339) (bounded
-lineage compares and an issue reread at the end of candidate admission) on top of
-[#342](https://github.com/storytold/craft-common-actions/pull/342) (policy v3, the `platforms` input
-and the Linux and macOS legs). Both callers name it in `uses` and `tooling-revision`; #339 changes
-neither callee's inputs nor the policy fields. The earlier pins, `a4f6fd51` (#342) and `077d4657`
-(#330), lack those follow-ups or are Windows-only. A pin is reviewed
+Shared tooling is pinned to `88148a57ef09ef407d73c0f385e04cc7f4c2720a`, the craft-common-actions
+main commit that merged [#364](https://github.com/storytold/craft-common-actions/pull/364), which
+lets the signer run on the policy's signer branch (`release` or `nightly-signer`). It includes
+[#363](https://github.com/storytold/craft-common-actions/pull/363) (the multi-app pipeline, which
+makes the signer's `app-name` input required), #339 (`605d5876`) and #342 (`a4f6fd51`).
+Both callers name it in `uses` and `tooling-revision`. A pin is reviewed
 source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
 **First runs.** The first runs are manual dispatches in this order: `nightly.yml` on main (only a
-listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that
+listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `nightly-signer` with that
 producer run ID and attempt, by a listed manual actor. `nightly-dispatch.yml` only matters once a
 schedule is approved.
+
+**Signer branch.** The signer runs on `refs/heads/nightly-signer`, not on the stable `release`
+branch, so nightly signer files never need a stable release sync. The policy's `release_branch`
+names it, the signer's guard requires it and the dispatcher targets it. The branch only
+fast-forwards to reviewed main commits, through the settings script's `advance` (no queued signer
+run, a trust-closure scan, then the full diff of `.github/` and `packaging/`), and the existing
+`release` environment trusts it alongside `release`. Its trust closure is all of `.github/` and
+`packaging/`, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
+On that branch only the pinned `nightly-sign.yml` caller may reach an environment: no app workflow
+binds one, nothing else calls `nightly-release.yml`, and the only caller of the shared stable
+`release.yml` is `release.yml`, whose callee must carry the stable-only environment guard. The
+contract tests check the in-repo part on every main PR; the settings scan also resolves the callee.
+Stable releases still come only from `refs/heads/release`. History does not carry over a switch between `release` and `nightly-signer`, so the switch happens
+before the first publication.
 
 **Manual actors.** `bflatastic`, `dylanmtaylor`, `echelon`, `FredApps` and `skylartaylor`, in the
 producer's `manual-actors` and the policy's `manual_actors`. The list mirrors the release-managers
@@ -61,13 +74,13 @@ This is not a hosted no-key test, a native signing result or a working nightly f
 
 ## Installed policy values and their sources
 
-Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read anything that may have moved before the policy is promoted to `release`.
+Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read anything that may have moved before `nightly-signer` is advanced to it.
 
 | Field | Value | Source |
 |---|---|---|
 | `repository_id` | `1398080271` | `gh api repos/storytold/photocraft --jq .id` |
 | `producer_workflow_id` | `428462603` | `gh api repos/storytold/photocraft/actions/workflows/nightly.yml` after `nightly.yml` reached main (path `.github/workflows/nightly.yml`, state `active`) |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `605d5876…` (craft-common-actions #339) | The callers' pin |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `88148a57…` (craft-common-actions signer-branch change, on #363) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push (4 admin, FredApps write); equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist (Linux tarball is about 126 MB) |
 | `platforms` | three rows | v0.23.1 stable identities, as in the example; the Windows publisher subject was confirmed by reading the stable v0.23.1 `photocraft.exe` Authenticode signature on Windows |
@@ -78,7 +91,7 @@ Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read 
 
 The candidate check refuses whenever main's unresolved vulnerability set differs from `debt`, whether
 an issue is new or fixed, and whenever a required condition fails or a listed CI job is renamed. Refresh
-those values in the same reviewed change that promotes the policy to `release`.
+those values in the same reviewed main change that `nightly-signer` is then advanced to.
 
 ## Ownership and interface
 
@@ -88,15 +101,16 @@ those values in the same reviewed change that promotes the policy to `release`.
 - `.github/workflows/nightly-dispatch.yml`: completion transport only, still literally off until a
   schedule is approved. On activation it accepts
   only a successful same-repository/main first scheduled producer attempt, then sends only
-  `producer_run_id` and `producer_run_attempt` to the fixed `nightly-sign.yml` on `release`.
+  `producer_run_id` and `producer_run_attempt` to the fixed `nightly-sign.yml` on
+  `refs/heads/nightly-signer`.
   No checkout, artifact parsing, application code or release environment is used here.
   Its filters are not authorization: a writer can edit main transport.
 - `.github/nightly-linux-signing-key.asc`: the stable Linux release public key, byte for byte the
   `release-signing-key.asc` published with v0.23.1 (one ed25519 primary key,
   `2B76741B414AAD6CD33E631213A005C0B9D7C3ED`, with one signing subkey). The shared Linux verifier
-  reads it from the protected release checkout, never from a release asset. Public material only.
-- `.github/workflows/nightly-sign.yml`: top-level release registration, enabled for manual dispatch,
-  and identical on main and release after reviewed promotion. It rejects wrong repository/event/actual branch,
+  reads it from the protected `nightly-signer` checkout, never from a release asset. Public material only.
+- `.github/workflows/nightly-sign.yml`: top-level signer registration, enabled for manual dispatch
+  on `nightly-signer`, which carries a reviewed main commit. It rejects wrong repository/event/actual branch,
   including same-name tags. Its constant whole-run concurrency is distinct from stable,
   cancellation is off and `queue: max` must be hosted-qualified. The caller itself passes no
   credentials; only the shared callee's sign jobs bind the `release` environment.
@@ -136,12 +150,12 @@ without `platform`, `unsigned_artifact_name` and `windows_publisher_subject`, pl
 | `producer_workflow_id`, `producer_workflow_path` | Real default-branch registration ID and `.github/workflows/nightly.yml` |
 | `producer_tooling_revision`, `producer_workflow_ref` | Approved shared unsigned producer/attester commit and exact reusable path at that commit |
 | `signer_workflow_path`, `signer_tooling_revision` | `.github/workflows/nightly-sign.yml` and reviewed public shared signer commit |
-| `release_branch`, `platforms` keys | `release`; exactly the producer's `platforms` list and the targets admitted in the shared registry (`windows-x86_64`, `linux-x86_64`, `macos-aarch64`) |
+| `release_branch`, `platforms` keys | `nightly-signer` (the shared validator allows `release` or `nightly-signer`); exactly the producer's `platforms` list and the targets admitted in the shared registry (`windows-x86_64`, `linux-x86_64`, `macos-aarch64`) |
 | `manual_actors` | Reviewed manual producer/signer and rerun authority only: the five release managers, the same list as the producer's `manual-actors` |
 | `automatic_signer_actors` | Empty while there is no schedule; separate reviewed automatic-only authority for signer attempt 1 after authenticating a scheduled producer attempt 1; no manual producer or rerun grant |
 | `max_age_seconds`, `max_artifact_bytes`, `platforms.<platform>.unsigned_artifact_name` | Reviewed bounded age/size and each platform's fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
 | `candidate_policy` | Full reviewed `craft-nightly-candidate-policy/v3` with real required workflow/job/check/app IDs, Sonar organization/project/issue types/conditions and exact approved debt fingerprints; provider configuration is trusted as resolved, not a pinned scan inventory |
-| `platforms.linux-x86_64.trust.fingerprint` | Full primary fingerprint of the stable Linux release key, independently reviewed; the release checkout must also hold exactly that one public key at `.github/nightly-linux-signing-key.asc`, and the existing `LINUX_SIGNING_KEY` must be in the `release` environment only |
+| `platforms.linux-x86_64.trust.fingerprint` | Full primary fingerprint of the stable Linux release key, independently reviewed; the signer-branch checkout must also hold exactly that one public key at `.github/nightly-linux-signing-key.asc`, and the existing `LINUX_SIGNING_KEY` must be in the `release` environment only |
 | `platforms.macos-aarch64.trust.apple_team_id` | Stable's ten-character Developer ID team `DJ6XS33FX8`, read from the stable v0.23.1 macOS code signature, whose leaf is `CN=Developer ID Application: Learning Machines LLC (DJ6XS33FX8), OU=DJ6XS33FX8, O=Learning Machines LLC`. The Windows certificate names a different entity, `Learning Machines Inc`; only the team ID `DJ6XS33FX8` is enforced on macOS. Never a repository variable. The six stable `APPLE_*`/`KEYCHAIN_PASSWORD` names must be in the `release` environment only |
 | `platforms.windows-x86_64.trust.publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 1024 characters (the native signer's bound, checked at policy validation since #339), no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
 
