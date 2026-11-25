@@ -360,7 +360,6 @@ fn paint_bucket_behind_turns_off_on_the_background() {
     assert_eq!(app.session.journal.last().unwrap().1["mode"], "Normal");
 }
 
-
 #[test]
 fn retouch_strokes_paint_the_targeted_mask() {
     // #207: with the mask targeted, retouching changes the mask, never the pixels.

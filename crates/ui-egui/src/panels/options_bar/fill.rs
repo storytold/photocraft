@@ -27,11 +27,7 @@ pub(crate) fn mode_entries(tool: Tool, behind_enabled: bool, threshold: bool) ->
     static CACHE: crate::i18n::LangCache<(Tool, bool, bool), Vec<Entry<PaintMode>>> = crate::i18n::LangCache::new();
     CACHE.get_or_build((tool, behind_enabled, threshold), || {
         let keyed: Vec<BlendKeyEntry<PaintMode>> = if tool == Tool::PatternStamp || tool == Tool::PaintBucket {
-            let choices = if tool == Tool::PatternStamp {
-                crate::brush_mode_menu::pattern_stamp_choices()
-            } else {
-                crate::brush_mode_menu::choices()
-            };
+            let choices = if tool == Tool::PatternStamp { crate::brush_mode_menu::pattern_stamp_choices() } else { crate::brush_mode_menu::choices() };
             choices
                 .into_iter()
                 .filter_map(|((mode, behind), _)| match (mode, behind) {
