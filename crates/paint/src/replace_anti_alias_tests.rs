@@ -216,8 +216,8 @@ fn a_soft_tip_with_anti_alias_off_keeps_its_wet_edges_and_texture() {
     let (on, off) = (click_modulated_with(true, true, true, 0.5), click_modulated_with(false, true, true, 0.5));
     assert_eq!(px(&off, 100, 120), px(&on, 100, 120), "the soft tip keeps the wet-and-texture strength at its centre");
     assert_ne!(px(&off, 100, 120), full(), "the centre is not flattened to the dab's strength");
-    // Hardened edge and reach as before: the same pixels change with it on and off, and no pixel
-    // sits outside the levels the modulated tip produces.
+    // Hardened edge as before: the same pixels change with it on and off (the stored-value reach
+    // test cuts the faint tail); the strength levels themselves are pinned at the centre above.
     for y in (60..180).step_by(3) {
         for x in (20..180).step_by(3) {
             let (a, b) = (px(&on, x, y), px(&off, x, y));

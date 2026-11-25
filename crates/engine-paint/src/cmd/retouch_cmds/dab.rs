@@ -537,6 +537,10 @@ pub struct LiveDab {
     /// The document and revision the stroke started on, for strokes started from the session's
     /// active document ([`Self::with_effect`]); `None` for strokes on a prepared copy.
     base: Option<(photocraft_doc::DocId, u64)>,
+    /// Whether each footprint is built with the dab's modulation map
+    /// ([`photocraft_paint::retouch::Footprint::mods`], #13160) — only Color Replacement with
+    /// Anti-alias off reads it; the second rasterising pass is not paid by the other tools.
+    footprint_mods: bool,
     /// Every point rendered so far, in order.
     points: Vec<StrokePoint>,
 }
@@ -651,6 +655,7 @@ impl LiveDab {
             tail: Rect::EMPTY,
             tool: None,
             base: None,
+            footprint_mods: false,
             points: Vec::new(),
         };
         live.push(&stroke.points)?;
@@ -673,6 +678,14 @@ impl LiveDab {
         self
     }
 
+    /// Build each footprint of this stroke with the dab's modulation map (see
+    /// [`photocraft_paint::retouch::Footprint::mods`], #13160). Call it before pushing any points:
+    /// the flag decides how the footprints are rasterised, per dab.
+    pub(crate) fn with_footprint_mods(mut self) -> Self {
+        self.footprint_mods = true;
+        self
+    }
+
     /// Everything the stroke has touched so far.
     pub fn bounds(&self) -> Rect {
         self.bounds
@@ -692,7 +705,8 @@ impl LiveDab {
                 continue;
             }
             let mut region = self.work.read(&self.pre_surf, self.neighborhood.read_rect(r, d));
-            (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
+            let fp = if self.footprint_mods { ctx.footprint_with_mods(d, self.done.saturating_add(k)) } else { ctx.footprint(d, self.done.saturating_add(k)) };
+            (self.effect)(&mut region, &fp);
             self.work.write(&self.pre_surf, &region.crop(r));
             dmg = dmg.union(&r);
         }
@@ -738,7 +752,12 @@ impl LiveDab {
             if !r.is_empty() {
                 let mut region = self.work.read(&self.pre_surf, r.inflate(self.neighborhood.halo()));
                 for (k, d) in ds.iter().enumerate() {
-                    (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
+                    let fp = if self.footprint_mods {
+                        ctx.footprint_with_mods(d, self.done.saturating_add(k))
+                    } else {
+                        ctx.footprint(d, self.done.saturating_add(k))
+                    };
+                    (self.effect)(&mut region, &fp);
                 }
                 tail = Some((r, region.crop(r)));
             }

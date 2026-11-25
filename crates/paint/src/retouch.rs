@@ -88,8 +88,9 @@ pub struct Footprint {
     pub cov: Vec<f32>,
     /// `cov` with the tip's own edge forced to full coverage: the dab's non-edge modulation (per-tip
     /// Texture combine × Wet Edges at the dab's depth) times flow/pressure, per pixel (#13160).
-    /// `None` when the brush carries neither: the modulation is then 1 and the value is the dab's
-    /// alpha.
+    /// `None` when the brush carries neither, and for every footprint not built by a runner that
+    /// asks for the map ([`crate::BrushContext::footprint_with_mods`], [`apply_dab_stroke_with_mods`]):
+    /// the modulation is then 1 and the value is the dab's alpha.
     pub mods: Option<Vec<f32>>,
 }
 
@@ -285,6 +286,33 @@ pub fn apply_dab_stroke(
     selection: Option<&Surface>,
     lock_transparency: bool,
     halo: i32,
+    effect: impl FnMut(&mut Region, &Footprint),
+) -> Result<Rect, StrokeTooLarge> {
+    apply_dab_stroke_opts(target, stroke, selection, lock_transparency, halo, false, effect)
+}
+
+/// Like [`apply_dab_stroke`], but each [`Footprint`] also carries the dab's modulation map
+/// ([`Footprint::mods`]) — for the one effect that hardens the tip's edge and must keep the rest
+/// of the dab's strength (Color Replacement with Anti-alias off, #13160). It costs a second
+/// rasterising pass per dab, so it is a separate entry point, not the default.
+pub fn apply_dab_stroke_with_mods(
+    target: &mut Surface,
+    stroke: &Stroke,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    halo: i32,
+    effect: impl FnMut(&mut Region, &Footprint),
+) -> Result<Rect, StrokeTooLarge> {
+    apply_dab_stroke_opts(target, stroke, selection, lock_transparency, halo, true, effect)
+}
+
+fn apply_dab_stroke_opts(
+    target: &mut Surface,
+    stroke: &Stroke,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    halo: i32,
+    mods: bool,
     mut effect: impl FnMut(&mut Region, &Footprint),
 ) -> Result<Rect, StrokeTooLarge> {
     let ds = dabs(stroke);
@@ -302,7 +330,8 @@ pub fn apply_dab_stroke(
     let orig = Region::read(target, outer);
     let mut work = orig.clone();
     for (i, d) in ds.iter().enumerate() {
-        effect(&mut work, &ctx.footprint(d, i));
+        let fp = if mods { ctx.footprint_with_mods(d, i) } else { ctx.footprint(d, i) };
+        effect(&mut work, &fp);
     }
     mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
     Ok(bounds)
@@ -675,6 +704,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn footprints_carry_a_modulation_map_only_when_the_runner_asks() {
+        // #13160: the map costs a second rasterising pass, so a footprint from the plain entry
+        // point carries none — wet brush or not — and only a runner that reads it asks for one.
+        let wet = BrushSettings { size: 80.0, hardness: 1.0, wet_edges: true, pressure_size: false, ..Default::default() };
+        let ctx = crate::BrushContext::new(&wet);
+        let d = Dab::round(Point::new(40.0, 40.0), 20.0, 0.5);
+        assert!(ctx.footprint(&d, 0).mods.is_none(), "the plain footprint pays no second pass");
+        let asked = ctx.footprint_with_mods(&d, 0);
+        assert!(asked.mods.is_some(), "the asked footprint carries the wet modulation");
+        // At a dab's centre Wet Edges keep half the paint: wet factor 0.5 times the dab's alpha.
+        assert_eq!(asked.modulated_at(40, 40), 0.25);
+        // A brush with neither modulation keeps no map even when asked: factor 1, the dab's alpha.
+        let plain = crate::BrushContext::new(&BrushSettings::default());
+        assert!(plain.footprint_with_mods(&d, 0).mods.is_none(), "no modulation on this brush");
+        assert_eq!(plain.footprint_with_mods(&d, 0).modulated_at(40, 40), 0.5);
     }
 
     #[test]

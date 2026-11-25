@@ -450,8 +450,21 @@ impl BrushContext {
         }
     }
 
-    /// One dab's dense footprint (for the sequential retouch tools).
+    /// One dab's dense footprint (for the sequential retouch tools). It carries no modulation map
+    /// ([`Footprint::mods`] is `None`): only a tool that hardens the tip's edge asks for one.
     pub fn footprint(&self, d: &Dab, index: usize) -> Footprint {
+        let rect = self.dab_rect(d, false);
+        let mut cov = Vec::new();
+        self.rasterize(d, false, rect, &mut cov);
+        Footprint { dab: *d, index, rect, cov, mods: None }
+    }
+
+    /// [`footprint`](Self::footprint), additionally building the dab's [`Footprint::mods`] map for
+    /// an effect that hardens the tip's edge and must keep the rest of the dab's strength
+    /// (Color Replacement with Anti-alias off, #13160). That is a second rasterising pass, so it is
+    /// asked for only where it is read; the map stays `None` for a brush without Wet Edges or
+    /// per-tip Texture, whose fully covered pixels take exactly the dab's alpha.
+    pub fn footprint_with_mods(&self, d: &Dab, index: usize) -> Footprint {
         let rect = self.dab_rect(d, false);
         let mut cov = Vec::new();
         self.rasterize(d, false, rect, &mut cov);

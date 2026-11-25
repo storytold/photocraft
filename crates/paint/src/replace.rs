@@ -8,7 +8,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{Footprint, Region, StrokeTooLarge, apply_dab_stroke};
+use crate::retouch::{Footprint, Region, StrokeTooLarge, apply_dab_stroke, apply_dab_stroke_with_mods};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,7 +91,13 @@ pub fn apply_color_replacement(
     lock_transparency: bool,
 ) -> Result<Rect, StrokeTooLarge> {
     let effect = color_replacement_effect(target.clone(), rs.clone());
-    apply_dab_stroke(target, stroke, selection, lock_transparency, 0, effect)
+    // Only the Anti-alias-off branch reads a footprint's modulation map (#13160), so only that
+    // route pays the second rasterising pass that builds it.
+    if rs.anti_alias {
+        apply_dab_stroke(target, stroke, selection, lock_transparency, 0, effect)
+    } else {
+        apply_dab_stroke_with_mods(target, stroke, selection, lock_transparency, 0, effect)
+    }
 }
 
 /// One Color Replacement dab's edit of a working copy, matching against `pre` (the target before
