@@ -724,6 +724,40 @@ def _workflow_value(text):
     return re.split(r"\s+#", text, maxsplit=1)[0].strip()
 
 
+def _strip_comment(text):
+    """(text without its comment, unterminated) using a quote-aware scan.
+
+    As in YAML, a quote opens a quoted scalar only where a scalar starts (line start or after
+    `:`, `-`, `,`, `{` or `[`), and a `#` starts a comment only outside quotes, at the start or
+    after whitespace.
+    """
+    quote, index = None, 0
+    while index < len(text):
+        char = text[index]
+        if quote == '"':
+            if char == "\\":
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if text[index + 1:index + 2] == "'":
+                    index += 2
+                    continue
+                quote = None
+        elif char in "\"'" and text[:index].rstrip()[-1:] in ("", ":", "-", ",", "{", "["):
+            quote = char
+        elif char == "#" and (index == 0 or text[index - 1] in " \t"):
+            return text[:index].rstrip(), False
+        index += 1
+    return text.rstrip(), quote is not None
+
+
+FLOW_QUOTED = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'")
+FLOW_FORBIDDEN_KEYS = {"environment", "uses"}
+
+
 def workflow_entries(source):
     """Every mapping entry in a workflow, plus the YAML forms this reader refuses.
 
@@ -758,7 +792,11 @@ def workflow_entries(source):
             continue
         if "\t" in raw[:indent + 1]:
             refused.append(f"line {number}: tab indentation"); continue
-        body = stripped
+        body, unterminated = _strip_comment(stripped)
+        if unterminated:
+            refused.append(f"line {number}: unterminated or multi-line quoted scalar"); continue
+        if not body:
+            continue
         while body.startswith("- "):
             body = body[2:].lstrip()
         if body == "?" or body.startswith("? "):
@@ -771,7 +809,7 @@ def workflow_entries(source):
                 refused.append(f"line {number}: escaped double-quoted key"); continue
             if key == "<<":
                 refused.append(f"line {number}: merge key"); continue
-        plain = re.sub(r"\$\{\{.*?\}\}", "", value.split(" #", 1)[0]).strip()
+        plain = re.sub(r"\$\{\{.*?\}\}", "", value).strip()
         bare = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", "''", plain)
         if re.match(r"[&*!]", plain):
             refused.append(f"line {number}: anchor, alias or tag")
@@ -780,8 +818,12 @@ def workflow_entries(source):
             entries.append((number, key, _workflow_value(value),
                             is_block or ((value == "" or not is_block) and continues(index, indent))))
         if "{" in bare and bare != "{}":
-            flow = re.fullmatch(r"\{([^{}\[\]]*)\}", value.split(" #", 1)[0].strip())
-            if flow is None:
+            flow = re.fullmatch(r"\{([^{}\[\]]*)\}", FLOW_QUOTED.sub("''", value.strip()))
+            if any(set(scalar[1:-1]) & set("#{}[],") for scalar in FLOW_QUOTED.findall(value)):
+                refused.append(f"line {number}: flow mapping quoted scalar with # or flow punctuation")
+            elif flow is None:
+                refused.append(f"line {number}: nested or multi-line flow mapping")
+            elif not re.fullmatch(r"\{([^{}\[\]]*)\}", value.strip()):
                 refused.append(f"line {number}: nested or multi-line flow mapping")
             else:
                 for item in flow.group(1).split(","):
@@ -789,6 +831,8 @@ def workflow_entries(source):
                     key = _workflow_key(entry.group(1)) if entry else None
                     if key is None:
                         refused.append(f"line {number}: unreadable flow mapping entry")
+                    elif key in FLOW_FORBIDDEN_KEYS:
+                        refused.append(f"line {number}: {key} in a flow mapping (must be block style)")
                     else:
                         entries.append((number, key, _workflow_value(entry.group(2) or ""), False))
         if match is not None and is_block:
@@ -872,6 +916,13 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
             "a folded uses value": {**tree, "extra.yml": "jobs:\n  x:\n    uses: >-\n      " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
             "a continued uses value": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "\n      nightly-release.yml@" + "a" * 40 + "\n"},
             "a quoted second signer call": {**tree, "nightly-sign.yml": tree["nightly-sign.yml"] + "  again:\n    \"uses\": " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a hash inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "a} # b", runs-on: ubuntu-latest, environment: release, steps: []}\n'},
+            "a single-quoted hash in a flow scalar": {**tree, "extra.yml": "jobs:\n  x: {name: 'a # b', runs-on: ubuntu-latest}\n"},
+            "a comma inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "a, environment: release", runs-on: ubuntu-latest}\n'},
+            "a bracket inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "[a]", runs-on: ubuntu-latest}\n'},
+            "an unterminated quote": {**tree, "extra.yml": 'jobs:\n  x:\n    name: "a\n      b"\n    runs-on: ubuntu-latest\n'},
+            "environment in any flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    with: {environment: release}\n"},
+            "uses in any flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    steps:\n      - {uses: actions/checkout@v4}\n"},
             "another caller of the signer": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
             "a mutable signer pin": {**tree, "nightly-sign.yml": re.sub(r"nightly-release\.yml@[0-9a-f]{40}", "nightly-release.yml@main", tree["nightly-sign.yml"])},
             "a new stable release caller": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "release.yml@main\n"},
