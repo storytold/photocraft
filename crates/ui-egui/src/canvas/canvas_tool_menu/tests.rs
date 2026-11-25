@@ -513,8 +513,9 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     let ctx = app.ctx().clone();
     let active = |app: &PhotocraftApp| app.session.active().unwrap().active_layer.map(|l| l.0);
     assert_ne!(active(&app), Some(id));
-    // Away from the type, or with a Type Mask tool, nothing opens and nothing is selected.
-    assert!(!open_here(&mut app, Tool::Type, [30.0, 2.0]));
+    // Away from the type the Type tool opens the generic layer menu but selects nothing (#12042);
+    // with a Type Mask tool, nothing opens.
+    assert!(open_here(&mut app, Tool::Type, [30.0, 2.0]));
     assert!(!open_here(&mut app, Tool::HorizontalTypeMask, [16.0, 16.0]));
     assert!(!open_here(&mut app, Tool::Type, [f64::NAN, 16.0]));
     assert_ne!(active(&app), Some(id));
@@ -636,7 +637,8 @@ fn completed_pen_path_right_click_makes_selection() {
 fn pen_menu_finishes_in_progress_path_before_selection() {
     let mut app = app();
     pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)]);
-    assert!(app.session.active().unwrap().doc.work_path.is_none());
+    // #12890: the Work Path is in the document while the path is still being drawn.
+    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().map(|p| p.subpaths[0].knots.len()), Some(3));
     assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
     assert!(entry_enabled(&app, menu, "path.toSelection"));

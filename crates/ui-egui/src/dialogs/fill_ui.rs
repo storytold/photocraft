@@ -41,7 +41,7 @@ pub(crate) fn hex(c: [f32; 3]) -> String {
 }
 
 /// The dialog's rows.
-fn rows(foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
+fn rows(app: &PhotocraftApp, foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
     let contents = CONTENTS.iter().map(|(k, l)| (k.to_string(), Label::from(tl!(l)))).collect();
     let mut rows = vec![
         Param::new("contents", tl!("Contents:"), ParamKind::choice(contents, Some("foreground".into()))),
@@ -49,7 +49,7 @@ fn rows(foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
         Param::new("pattern", tl!("Custom Pattern:"), ParamKind::pattern(first_pattern)).visible_when("contents", "pattern"),
         Param::new("colorAdaptation", tl!("Color Adaptation"), ParamKind::bool(true)).visible_when("contents", "contentAware"),
     ];
-    rows.extend(blending_rows());
+    rows.extend(blending_rows(app));
     rows
 }
 
@@ -85,7 +85,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let [r, g, b, _] = app.session.tools.foreground;
     let first = app.session.patterns.items.first().map(|p| p.id.clone());
     let patterns = crate::panels::preset_browser::pattern_swatches(app);
-    let rows = rows([r, g, b], first.clone());
+    let rows = rows(app, [r, g, b], first.clone());
     let inks = crate::color_picker_ui::ink_value(craft::theme::Srgba::rgb(r, g, b), app.session.tools.picked_role_cmyk(0));
     let reset = defaults([r, g, b], first, app.session.tools.picked_role_cmyk(0));
     let mut fields = DialogFields::new();

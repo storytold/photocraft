@@ -99,7 +99,7 @@ pub(crate) struct Pending {
 
 /// The error of a cancelled dialog: not reported, since backing out is the user's choice.
 pub(crate) const CANCELLED: &str = "cancelled";
-const UNEXPECTED: &str = "the file dialog gave an unexpected answer";
+pub(crate) const UNEXPECTED: &str = "the file dialog gave an unexpected answer";
 
 /// The text of a chosen path. [`PhotocraftApp::ask_file`] has refused a path that is not valid
 /// Unicode by the time an action sees it.
@@ -113,6 +113,7 @@ fn path_string(path: &Path) -> String {
 fn path_strings(picked: &Picked) -> Vec<String> {
     match picked {
         Picked::Paths(paths) => paths.iter().map(|p| path_string(p)).collect(),
+        Picked::Saved { path, .. } => vec![path_string(path)],
         Picked::Contents(_) | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Vec::new(),
     }
 }
@@ -125,7 +126,7 @@ impl PhotocraftApp {
 
     /// Show a file dialog; `then` continues with the user's choice on a later frame (see the
     /// module docs). Returns at once with `{"fileDialog": "open" | "folder" | "save"}`; `Err` while
-    /// one is open. `then` gets [`Picked::Paths`] (every path valid Unicode) or
+    /// one is open. `then` gets [`Picked::Paths`] or [`Picked::Saved`] (every path valid Unicode) or
     /// [`Picked::Contents`]; Cancel ends the action with [`CANCELLED`] and an unavailable dialog
     /// with its reason, neither reaching `then`.
     pub(crate) fn ask_file(&mut self, request: PickRequest, then: impl FnOnce(&mut Self, Picked) -> Result<Value, String> + 'static) -> Result<Value, String> {
@@ -147,6 +148,10 @@ impl PhotocraftApp {
                     path_text(path, saving)?;
                 }
                 then(app, Picked::Paths(paths))
+            }
+            Picked::Saved { path, file_type } => {
+                path_text(&path, saving)?;
+                then(app, Picked::Saved { path, file_type })
             }
             picked @ Picked::Contents(_) => then(app, picked),
         });
@@ -343,7 +348,7 @@ impl PhotocraftApp {
                     app.open_paths_in_order(&path_strings(&picked));
                 }
                 Picked::Contents(files) => app.open_contents(files),
-                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
+                Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
         })
@@ -438,7 +443,11 @@ impl PhotocraftApp {
     /// always add the suggested extension to a bare name (the format follows the extension).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pump_files(&mut self, parent: &eframe::Frame) {
-        let policy = craft::dialogs::service::ExtensionPolicy { lowercase: self.session.prefs().file_handling.lowercase_extension, add_suggested: true };
+        let policy = craft::dialogs::service::ExtensionPolicy {
+            lowercase: self.session.prefs().file_handling.lowercase_extension,
+            add_suggested: true,
+            picked_type: true,
+        };
         // PLAN: `Services::file_panels: Option<craft::dialogs::FilePanels>` is dialogs-w59's field.
         let Some(panels) = self.services.file_panels.as_mut() else { return };
         panels.set_extension_policy(policy);
@@ -492,7 +501,8 @@ fn web_picked(answer: Option<FileDialogAnswer>) -> Picked {
     match answer {
         None => Picked::Cancelled,
         Some(FileDialogAnswer::Paths(paths)) => Picked::Paths(paths.into_iter().map(PathBuf::from).collect()),
-        Some(FileDialogAnswer::SaveTo(path) | FileDialogAnswer::FolderTo(path)) => Picked::Paths(vec![PathBuf::from(path)]),
+        Some(FileDialogAnswer::SaveTo(path)) => Picked::Saved { path: PathBuf::from(path), file_type: None },
+        Some(FileDialogAnswer::FolderTo(path)) => Picked::Paths(vec![PathBuf::from(path)]),
         Some(FileDialogAnswer::Contents(name, bytes)) => Picked::Contents(vec![(name, bytes)]),
         Some(FileDialogAnswer::ContentsMany(files)) => Picked::Contents(files),
         Some(FileDialogAnswer::Unavailable(why)) => Picked::Unavailable(why),
@@ -528,7 +538,7 @@ fn read_picked(picked: Picked) -> Result<(String, Vec<u8>), String> {
     match picked {
         Picked::Contents(files) => files.into_iter().next().ok_or_else(|| CANCELLED.into()),
         Picked::Paths(paths) => read_path(path_string(paths.first().ok_or(CANCELLED)?)),
-        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
+        Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
     }
 }
 
@@ -563,7 +573,7 @@ fn picked_files(picked: Picked) -> Result<Vec<PickedFile>, String> {
     let files: Vec<PickedFile> = match picked {
         Picked::Paths(paths) => paths.iter().map(|p| PickedFile::Path(path_string(p))).collect(),
         Picked::Contents(files) => files.into_iter().map(|(name, bytes)| PickedFile::Contents(name, bytes)).collect(),
-        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
+        Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
     };
     if files.is_empty() {
         return Err(CANCELLED.into());

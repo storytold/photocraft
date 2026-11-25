@@ -121,7 +121,28 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
         Param::new("suppressOpenOptions", tl!("Suppress File Open Options Dialogs"), ParamKind::bool(false)),
         Param::new("suppressWarnings", tl!("Suppress Color Profile Warnings"), ParamKind::bool(false)),
     ]);
-    rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
+    // Destination (#13711), worded as the reference application words its three choices, opening on
+    // None; the values stay the command's own words (`none`, `saveAndClose`, `folder`). Only a
+    // folder run names a folder and its Override "Save As" tick, so both rows take input only with
+    // Folder; the box rides into the droplet either way (the run not acting on it is what #13711
+    // measures). The reference measured greyed with None and live with Folder; the unmeasured middle
+    // choice keeps both rows off, so no unmeasured state gains an input.
+    rows.push(Param::new(
+        "destination",
+        tl!("Destination"),
+        ParamKind::choice(
+            vec![
+                ("none".to_owned(), Label::from(tl!("None").to_string())),
+                ("saveAndClose".to_owned(), Label::from(tl!("Save and Close").to_string())),
+                ("folder".to_owned(), Label::from(tl!("Folder").to_string())),
+            ],
+            Some("none".to_owned()),
+        ),
+    ));
+    rows.push(Param::new("overrideSaveAs", tl!("Override Action \"Save As\" Commands"), ParamKind::bool(false)).enabled_when("destination", "folder"));
+    rows.push(
+        Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder).enabled_when("destination", "folder"),
+    );
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))
 }

@@ -14,8 +14,9 @@ use std::ffi::OsStr;
 
 use serde_json::{Value, json};
 
+use craft::behavior::Selection;
 use craft::cms::convert::CmykConverter;
-use craft::color_ui::palette::SwatchColor;
+use craft::color_ui::palette::{SwatchColor, SwatchPaint};
 use craft::color_ui::ui::PickedColor;
 use craft::color_ui::ui::{SwatchAt, SwatchEdit, SwatchKey, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesWords};
 use craft::theme::Srgba;
@@ -88,7 +89,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub(crate) fn apply_used(app: &mut PhotocraftApp, at: SwatchAt, background: bool) {
     let name = app.session.presets().swatches.get(at.group).and_then(|g| g.entries.get(at.index)).map(|e| e.name.clone());
     if let Some(name) = name {
-        app.ui.swatches.selected = Some(SwatchKey::Swatch(name.clone()));
+        app.ui.swatches.selection = Selection::single(SwatchKey::Swatch(name.clone()));
         use_swatch(app, &name, background);
     }
 }
@@ -108,19 +109,31 @@ fn color_param(color: &SwatchColor, converter: Option<&CmykConverter>) -> Value 
 /// Runs one edit the panel resolved.
 pub(crate) fn apply_edit(app: &mut PhotocraftApp, edit: SwatchEdit) {
     match edit {
-        SwatchEdit::Add { group, name, color, .. } => new_swatch(app, group, name, &color),
+        // PhotoCraft's swatches hold colours: the panel offers no gradient, pattern or None swatch to add.
+        SwatchEdit::Add { group, name, paint: SwatchPaint::Color(color), .. } => new_swatch(app, group, name, &color),
         SwatchEdit::NewGroup { name, .. } => new_group(app, name),
         SwatchEdit::Rename { swatch, name, .. } => {
-            if run(app, "swatches.rename", json!({"swatch": swatch, "name": name})).is_some() && app.ui.swatches.selected == Some(SwatchKey::Swatch(swatch)) {
-                app.ui.swatches.selected = Some(SwatchKey::Swatch(name));
+            if run(app, "swatches.rename", json!({"swatch": swatch, "name": name})).is_some() {
+                // The renamed swatch stays selected under its new name.
+                let (old, new) = (SwatchKey::Swatch(swatch), SwatchKey::Swatch(name));
+                let selection = &mut app.ui.swatches.selection;
+                for key in selection.items.iter_mut().chain(selection.lead.as_mut()).chain(selection.anchor.as_mut()) {
+                    if *key == old {
+                        *key = new.clone();
+                    }
+                }
             }
         }
         SwatchEdit::RenameGroup { group, name, .. } => {
             run(app, "swatches.renameGroup", json!({"group": group, "name": name}));
         }
         SwatchEdit::Delete { swatch, .. } => {
-            if run(app, "swatches.delete", json!({"swatch": swatch})).is_some() && app.ui.swatches.selected == Some(SwatchKey::Swatch(swatch)) {
-                app.ui.swatches.selected = None;
+            if run(app, "swatches.delete", json!({"swatch": swatch})).is_some() {
+                let gone = SwatchKey::Swatch(swatch);
+                let selection = &mut app.ui.swatches.selection;
+                selection.items.retain(|key| *key != gone);
+                selection.lead = selection.lead.take().filter(|key| *key != gone);
+                selection.anchor = selection.anchor.take().filter(|key| *key != gone);
             }
         }
         SwatchEdit::DeleteGroup { group, .. } => {
@@ -149,7 +162,7 @@ fn new_swatch(app: &mut PhotocraftApp, group: Option<String>, name: String, colo
     }
     if let Some(r) = run(app, "swatches.add", params) {
         let name = r["name"].as_str().unwrap_or_default().to_string();
-        app.ui.swatches.selected = Some(SwatchKey::Swatch(name.clone()));
+        app.ui.swatches.selection = Selection::single(SwatchKey::Swatch(name.clone()));
         app.ui.swatches.rename = Some(SwatchKey::Swatch(name));
     }
 }
@@ -281,7 +294,7 @@ pub fn add_from_picker(app: &mut PhotocraftApp, picked: PickedColor) {
         app.ui.status_error = false;
         let template = "Added swatch {name}";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
-        app.ui.swatches.selected = Some(SwatchKey::Swatch(name));
+        app.ui.swatches.selection = Selection::single(SwatchKey::Swatch(name));
     }
 }
 
@@ -359,12 +372,12 @@ mod tests {
         apply_used(&mut app, SwatchAt::new(0, 0), true);
         assert_eq!(app.session.tools.background, [0.0, 0.0, 0.0, 1.0], "Black");
         assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "foreground untouched (default black)");
-        assert_eq!(app.ui.swatches.selected, Some(SwatchKey::Swatch("Black".into())));
+        assert_eq!(app.ui.swatches.selection, Selection::single(SwatchKey::Swatch("Black".into())));
         // The footer's trash deletes the selection.
         let n = app.session.presets().swatches[0].entries.len();
         apply_edit(&mut app, SwatchEdit::delete("Black".into()));
         assert_eq!(app.session.presets().swatches[0].entries.len(), n - 1);
-        assert_eq!(app.ui.swatches.selected, None);
+        assert_eq!(app.ui.swatches.selection, Selection::default());
     }
 
     #[test]
@@ -378,7 +391,7 @@ mod tests {
         assert_eq!(app.ui.swatches.rename, Some(SwatchKey::Swatch("Color Swatch 1".into())), "renamed in place");
         add_from_picker(&mut app, PickedColor::cmyk(Srgba::rgb(0.0, 1.0, 1.0), [100.0, 0.0, 0.0, 0.0]));
         let s = app.session.presets().swatches[0].entries.last().unwrap();
-        assert_eq!(s.color, photocraft_engine::presets::swatches::SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]));
+        assert_eq!(s.color(), Some(&photocraft_engine::presets::swatches::SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0])));
     }
 
     /// The menu's file requests go to the host file service: a read imports (a group named by the file, or a

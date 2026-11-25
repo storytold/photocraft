@@ -47,6 +47,8 @@ mod paint_thread;
 #[cfg(test)]
 mod paint_thread_tests;
 pub(crate) mod paint_tool;
+#[cfg(test)]
+mod pasteboard_menu_separator_tests;
 pub mod patch_preview;
 pub mod quick_pick;
 mod raster_source;

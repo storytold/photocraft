@@ -416,6 +416,10 @@ pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(
 mod tests;
 
 #[cfg(test)]
+#[path = "edit_menu_cmds/caf_select_all_tests.rs"]
+mod caf_select_all_tests;
+
+#[cfg(test)]
 #[path = "edit_menu_cmds/caf_new_layer_name_tests.rs"]
 mod caf_new_layer_name_tests;
 

@@ -22,7 +22,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     h
 }
 
-/// The value field showing `value`: the options bar's Smoothing is the brush's only one at 10.
+/// The value field showing `value`, unit included: the options bar's Smoothing is the brush's only one at 10 %.
 fn field<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, value: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.value().as_deref() == Some(value)).unwrap()
 }
@@ -50,12 +50,12 @@ fn view(h: &Harness<'_, Box<PhotocraftApp>>) -> (f32, [f32; 2]) {
 fn the_wheel_over_a_field_steps_it_without_a_click() {
     let mut h = harness();
     let before = view(&h);
-    let at = field(&h, "10").rect().center();
+    let at = field(&h, "10 %").rect().center();
     wheel(&mut h, at, 1.0, egui::Modifiers::NONE);
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("11")), "Smoothing stepped from 10 to 11");
+    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("11 %")), "Smoothing stepped from 10 to 11");
     wheel(&mut h, at, 1.0, egui::Modifiers::SHIFT);
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("21")), "Shift: ten a notch");
-    assert!(!field(&h, "21").is_focused(), "hovering doesn't put the cursor in the field");
+    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("21 %")), "Shift: ten a notch");
+    assert!(!field(&h, "21 %").is_focused(), "hovering doesn't put the cursor in the field");
     assert_eq!(view(&h), before, "the canvas didn't move");
 }
 
@@ -70,7 +70,7 @@ const TAIL_STEPS: usize = 4;
 fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f32, [f32; 2]) {
     let mut h = harness();
     if focus {
-        field(&h, "10").click();
+        field(&h, "10 %").click();
         h.run();
     }
     let canvas = egui::pos2(640.0, 500.0);
@@ -85,7 +85,7 @@ fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f3
         modifiers,
     });
     h.run_steps(TAIL_STEPS);
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("10")), "focus {focus}: the field wasn't stepped");
+    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("10 %")), "focus {focus}: the field wasn't stepped");
     let after = view(&h);
     (after.0 / before.0, [after.1[0] - before.1[0], after.1[1] - before.1[1]])
 }

@@ -624,9 +624,12 @@ fn doc_export_layers_writes_only_beneath_the_write_root() {
     std::fs::create_dir_all(&root).unwrap();
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
     h.handle("doc.new", json!({"width": 12, "height": 8, "background": "white", "name": "card"})).unwrap();
-    h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Badge"}})).unwrap();
-
     let out = root.join("out");
+    let refused = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy()})).unwrap_err().to_string();
+    assert!(refused.contains("Layers to Files needs a document with multiple layers."), "{refused}");
+    assert!(!out.exists() || std::fs::read_dir(&out).unwrap().next().is_none(), "the refusal wrote no files");
+
+    h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Badge"}})).unwrap();
     let exported = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy(), "format": "png", "prefix": "card"})).unwrap();
     assert_eq!(exported["count"].as_u64(), Some(2), "{exported}");
     let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();

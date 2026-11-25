@@ -73,6 +73,31 @@ def literal_off(condition):
     return depth == 0
 
 
+def job_conditions(jobs):
+    """Each job-level `if:` as (block indicator or None, the whole expression YAML would read).
+
+    A narrow source reader, not a YAML parser: every following line indented deeper than the
+    job keys continues the value, for block scalars and plain multi-line scalars alike, so a
+    continuation line can never hide from the guard checks.
+    """
+    lines = jobs.splitlines()
+    found = []
+    for index, line in enumerate(lines):
+        head = re.fullmatch(r"    if:(?: (.*))?", line)
+        if head is None:
+            continue
+        value = (head[1] or "").strip()
+        continuation = []
+        for follow in lines[index + 1:]:
+            if follow.strip() and len(follow) - len(follow.lstrip(" ")) <= 4:
+                break
+            continuation.append(follow.strip())
+        indicator = value if re.fullmatch(r"[>|][+-]?", value) else None
+        parts = continuation if indicator else [value] + continuation
+        found.append((indicator, " ".join(part for part in parts if part)))
+    return found
+
+
 NIGHTLY_PLATFORMS = ("windows-x86_64", "linux-x86_64", "macos-aarch64")
 # Each platform's one trust field in policy v3, and the public stable identity it must name.
 NIGHTLY_TRUST = {
@@ -308,8 +333,6 @@ class TrustedSourcePreparation(unittest.TestCase):
                     "max_artifact_bytes"):
             with self.subTest(unresolved=key):
                 self.assertIsNone(policy[key], "the example must not invent production authority")
-        path = ROOT / ".github/nightly-signing-policy.json"
-        self.assertFalse(path.exists() or path.is_symlink(), "installing the policy is a separately reviewed activation")
 
     def test_policy_platforms_are_exactly_what_the_producer_builds(self):
         policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
@@ -331,17 +354,17 @@ class TrustedSourcePreparation(unittest.TestCase):
                          "details_url", "issue_types", "accepted_conditions", "required_conditions", "debt"})
         self.assertTrue(all(value is None for value in candidate["sonar"].values()), "real identity/debt is unresolved")
 
-    def test_every_nightly_job_remains_explicitly_off(self):
-        for name in ("nightly.yml", "nightly-dispatch.yml", "nightly-sign.yml"):
+    def test_scheduled_dispatch_transport_remains_explicitly_off(self):
+        for name in ("nightly-dispatch.yml",):
             source = (ROOT / ".github/workflows" / name).read_text()
             jobs = source.split("\njobs:\n", 1)[1]
             headers = re.findall(r"(?m)^  (?![\s#])[^\n]+", jobs)
-            conditions = re.findall(r"(?m)^    if: ([^\n]+)(?:\n((?:      [^\n]*\n)+))?", jobs)
+            conditions = job_conditions(jobs)
             with self.subTest(workflow=name):
                 self.assertTrue(headers)
                 self.assertEqual(len(conditions), len(headers), "every job needs a literal-off condition")
-                for scalar, folded in conditions:
-                    self.assertTrue(literal_off(folded if scalar == ">-" else scalar), "nightly activation requires reviewed test update")
+                for _, expression in conditions:
+                    self.assertTrue(literal_off(expression), "nightly activation requires reviewed test update")
 
     def test_one_producer_and_one_signer_job_carry_every_platform(self):
         for name, job in (("nightly.yml", "unsigned"), ("nightly-sign.yml", "release")):
@@ -370,6 +393,28 @@ class TrustedSourcePreparation(unittest.TestCase):
                 producer_platforms(source.replace(current, new))
         with self.assertRaises(ValueError):
             producer_platforms(source.replace("      " + current + "\n", ""))
+
+    def test_continuation_lines_of_any_scalar_form_reach_the_guard_checks(self):
+        source = (ROOT / ".github/workflows/nightly-dispatch.yml").read_text()
+        guard = re.search(r"(?m)^    if: >-\n(?:      [^\n]*\n)+", source)[0]
+        for replacement in ("    if: false && github.event_name == 'workflow_run'\n      || true\n",
+                            "    if: false && github.event_name == 'workflow_run'\n     || true\n",
+                            "    if: >-\n      false && github.event_name == 'workflow_run'\n        || true\n",
+                            "    if: |\n      false && github.event_name == 'workflow_run'\n      || true\n"):
+            jobs = source.replace(guard, replacement).split("\njobs:\n", 1)[1]
+            with self.subTest(replacement=replacement):
+                (_, expression), = job_conditions(jobs)
+                self.assertTrue(expression.endswith("|| true"))
+                self.assertFalse(literal_off(expression))
+        for name, workflow in (("nightly.yml", "nightly.yml"), ("nightly-sign.yml", "nightly-sign.yml")):
+            source = (ROOT / ".github/workflows" / workflow).read_text()
+            expected = NightlyEnabledCallers.GUARDS[name]
+            guard = re.search(r"(?m)^    if: >-\n(?:      [^\n]*\n)+", source)[0]
+            for replacement in (guard + "     || true\n", "    if: " + expected + "\n      || true\n"):
+                jobs = source.replace(guard, replacement).split("\njobs:\n", 1)[1]
+                with self.subTest(workflow=name, replacement=replacement[-30:]):
+                    (indicator, expression), = job_conditions(jobs)
+                    self.assertFalse(indicator == ">-" and " ".join(expression.split()) == expected)
 
     def test_dormancy_guard_rejects_activation_and_top_level_or(self):
         for condition in ("true", "vars.ENABLE_NIGHTLY", "false || true", "false && true || true",
@@ -476,6 +521,172 @@ class NightlyTrustAnchors(unittest.TestCase):
             pins.update(uses)
         self.assertEqual(len(pins), 1, "producer and signer must pin the same shared commit")
         self.assertRegex(pins.pop(), r"^[0-9a-f]{40}$", "pin a full immutable commit, never a branch or placeholder")
+
+
+class NightlyEnabledCallers(unittest.TestCase):
+    """Producer and signer run only in their exact context, for the reviewed manual actor."""
+
+    GUARDS = {
+        "nightly.yml": "github.repository == 'storytold/photocraft' && github.ref == 'refs/heads/main' && "
+                       "github.ref_type == 'branch' && (github.event_name == 'schedule' || "
+                       "github.event_name == 'workflow_dispatch')",
+        "nightly-sign.yml": "github.repository == 'storytold/photocraft' && github.event_name == 'workflow_dispatch' && "
+                            "github.ref == 'refs/heads/release' && github.ref_type == 'branch'",
+    }
+
+    def test_enabled_jobs_keep_exact_context_guards(self):
+        for name, expected in self.GUARDS.items():
+            jobs = (ROOT / ".github/workflows" / name).read_text().split("\njobs:\n", 1)[1]
+            guards = job_conditions(jobs)
+            with self.subTest(workflow=name):
+                self.assertEqual(len(guards), 1)
+                indicator, expression = guards[0]
+                self.assertEqual(indicator, ">-")
+                self.assertEqual(" ".join(expression.split()), expected, "guards may only change with review")
+
+    def test_manual_actors_are_the_release_managers_in_caller_and_policy(self):
+        source = (ROOT / ".github/workflows/nightly.yml").read_text()
+        policy = json.loads(INSTALLED_POLICY.read_text())
+        self.assertEqual(reviewed_manual_actors(source, policy), RELEASE_MANAGERS)
+        self.assertEqual(policy["automatic_signer_actors"], [], "no automatic signer without a schedule")
+
+    def test_an_actor_outside_the_release_managers_is_refused(self):
+        source = (ROOT / ".github/workflows/nightly.yml").read_text()
+        policy = json.loads(INSTALLED_POLICY.read_text())
+        caller = json.dumps(RELEASE_MANAGERS, separators=(",", ":"))
+        widened = sorted(RELEASE_MANAGERS + ["echelon-robot"], key=str.lower)
+        for change in ("caller", "policy", "both", "order", "case"):
+            mutated_source, mutated_policy = source, copy.deepcopy(policy)
+            if change in ("caller", "both"):
+                mutated_source = source.replace(caller, json.dumps(widened, separators=(",", ":")))
+            if change in ("policy", "both"):
+                mutated_policy["manual_actors"] = widened
+            if change == "order":
+                mutated_policy["manual_actors"] = list(reversed(RELEASE_MANAGERS))
+            if change == "case":
+                mutated_policy["manual_actors"] = [login.lower() for login in RELEASE_MANAGERS]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                reviewed_manual_actors(mutated_source, mutated_policy)
+
+
+# Mirrors the storytold release-managers team (id 19837241) minus echelon-robot, which only has
+# read access to photocraft. Update by PR, in the caller and the policy, when the team changes.
+RELEASE_MANAGERS = ["bflatastic", "dylanmtaylor", "echelon", "FredApps", "skylartaylor"]
+
+
+def reviewed_manual_actors(caller_source, policy):
+    """The one reviewed manual-actor list, identical in the producer caller and the policy."""
+    rows = re.findall(r"(?m)^      manual-actors: '(\[[^']*\])'$", caller_source)
+    if len(rows) != 1:
+        raise ValueError("exactly one literal manual-actors list is required")
+    caller = json.loads(rows[0])
+    if caller != policy["manual_actors"]:
+        raise ValueError("caller and policy must grant the same actors in the same order")
+    if caller != RELEASE_MANAGERS:
+        raise ValueError("manual actors must be exactly the reviewed release managers")
+    if caller != sorted(caller, key=str.lower) or len({login.lower() for login in caller}) != len(caller):
+        raise ValueError("manual actors must be distinct and sorted case-insensitively")
+    if set(caller) & {login for login in policy["automatic_signer_actors"]}:
+        raise ValueError("manual and automatic actors overlap")
+    return caller
+
+
+INSTALLED_POLICY = ROOT / ".github/nightly-signing-policy.json"
+
+
+def caller_pin(name):
+    return re.findall(r"(?m)^      tooling-revision: ([0-9a-f]{40})$", (ROOT / ".github/workflows" / name).read_text())[0]
+
+
+class NightlyInstalledPolicy(unittest.TestCase):
+    """The installed v3 policy matches the callers, the repository and its documented sources."""
+
+    def setUp(self):
+        self.assertFalse(INSTALLED_POLICY.is_symlink())
+        self.policy = json.loads(INSTALLED_POLICY.read_text())
+
+    def test_exact_v3_fields_and_repository_identity(self):
+        example = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+        self.assertEqual(set(self.policy), set(example))
+        self.assertEqual(self.policy["schema"], "craft-nightly-release-policy/v3")
+        self.assertEqual(self.policy["repository"], "storytold/photocraft")
+        self.assertEqual(self.policy["release_branch"], "release")
+        # Both read from the GitHub API (the repository and nightly.yml's registration on main).
+        for key in ("repository_id", "producer_workflow_id"):
+            with self.subTest(key=key):
+                self.assertIs(type(self.policy[key]), int)
+                self.assertGreater(self.policy[key], 0)
+        self.assertNotEqual(self.policy["producer_workflow_id"],
+                            self.policy["candidate_policy"]["required_workflows"][0]["workflow_id"],
+                            "the producer is not its own quality workflow")
+
+    def test_paths_and_tooling_match_the_callers(self):
+        pin = caller_pin("nightly.yml")
+        self.assertEqual(caller_pin("nightly-sign.yml"), pin)
+        self.assertEqual(self.policy["producer_workflow_path"], ".github/workflows/nightly.yml")
+        self.assertEqual(self.policy["signer_workflow_path"], ".github/workflows/nightly-sign.yml")
+        self.assertEqual(self.policy["producer_tooling_revision"], pin)
+        self.assertEqual(self.policy["signer_tooling_revision"], pin)
+        self.assertEqual(self.policy["producer_workflow_ref"],
+                         "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@" + pin)
+
+    def test_platforms_equal_the_reviewed_example_and_producer(self):
+        example = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+        self.assertEqual(self.policy["platforms"], example["platforms"])
+        built = producer_platforms((ROOT / ".github/workflows/nightly.yml").read_text())
+        self.assertEqual(set(self.policy["platforms"]), set(built))
+
+    def test_bounds(self):
+        self.assertIs(type(self.policy["max_age_seconds"]), int)
+        self.assertTrue(0 < self.policy["max_age_seconds"] <= 604800)
+        self.assertIs(type(self.policy["max_artifact_bytes"]), int)
+        self.assertTrue(0 < self.policy["max_artifact_bytes"] <= 16 * 1024 ** 3)
+
+    def test_candidate_workflows_run_on_every_main_push(self):
+        candidate = self.policy["candidate_policy"]
+        self.assertEqual(set(candidate), {"schema", "epoch", "repository", "branch", "required_workflows", "sonar"})
+        self.assertEqual(candidate["schema"], "craft-nightly-candidate-policy/v3")
+        self.assertEqual((candidate["repository"], candidate["branch"]), ("storytold/photocraft", "main"))
+        self.assertTrue(isinstance(candidate["epoch"], str) and 0 < len(candidate["epoch"]) <= 128)
+        rows = candidate["required_workflows"]
+        self.assertTrue(rows)
+        for row in rows:
+            with self.subTest(workflow=row["workflow_path"]):
+                self.assertEqual(set(row), {"workflow_id", "workflow_path", "jobs"})
+                self.assertIs(type(row["workflow_id"]), int)
+                self.assertNotEqual(row["workflow_path"], self.policy["producer_workflow_path"])
+                source = (ROOT / row["workflow_path"]).read_text()
+                push = re.search(r"(?m)^  push:\n((?:    .*\n)+)", source)
+                self.assertIsNotNone(push, "a required workflow must run on main pushes")
+                self.assertIn("    branches: [main]\n", push[1])
+                self.assertNotRegex(push[1], r"paths", "a path filter would leave candidates without a run")
+                names = [job["name"] for job in row["jobs"]]
+                self.assertEqual(len(names), len(set(names)))
+                for job in row["jobs"]:
+                    self.assertEqual(set(job), {"name", "app_id", "applicability"})
+                    self.assertEqual((job["app_id"], job["applicability"]), (15368, "required"))
+
+    def test_sonar_identity_and_reviewed_scope(self):
+        sonar = self.policy["candidate_policy"]["sonar"]
+        properties = dict(line.split("=", 1) for line in (ROOT / "sonar-project.properties").read_text().splitlines()
+                          if line and not line.startswith("#"))
+        self.assertEqual(sonar["organization"], properties["sonar.organization"])
+        self.assertEqual(sonar["project"], properties["sonar.projectKey"])
+        self.assertEqual((sonar["app_id"], sonar["check_name"]), (12526, "SonarCloud Code Analysis"))
+        self.assertEqual(sonar["details_url"], "https://sonarcloud.io/dashboard?id=" + sonar["project"] + "&branch=main")
+        accepted = {"bugs": "BUG", "vulnerabilities": "VULNERABILITY", "code_smells": "CODE_SMELL",
+                    "security_rating": "VULNERABILITY", "new_security_rating": "VULNERABILITY"}
+        self.assertEqual({accepted[c["metric"]] for c in sonar["accepted_conditions"]}, set(sonar["issue_types"]))
+        metrics = [c["metric"] for c in sonar["accepted_conditions"] + sonar["required_conditions"]]
+        self.assertEqual(len(metrics), len(set(metrics)))
+        keys = [item["key"] for item in sonar["debt"]]
+        self.assertEqual(len(keys), len(set(keys)))
+        for item in sonar["debt"]:
+            with self.subTest(issue=item["key"]):
+                self.assertEqual(set(item), {"key", "rule", "component", "type", "severity", "hash"})
+                self.assertTrue(item["component"].startswith(sonar["project"] + ":"))
+                self.assertIn(item["type"], sonar["issue_types"])
+                self.assertRegex(item["hash"], r"^[0-9a-f]{32}$")
 
 
 if __name__ == "__main__":
