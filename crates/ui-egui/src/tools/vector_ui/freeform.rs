@@ -278,11 +278,17 @@ impl CanvasTool for FreeformPenTool {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.precise() {
+            return Cursor::Painted(PaintedCursor::Crosshair);
+        }
         if cx.pointer.as_ref().and_then(|pointer| self.end_at(pointer, cx)).is_some_and(|end| end.selected) {
-            // The nib is at the lower left of the same 24-point icon box the Pen uses.
             return Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(Tool::FreeformPen), Vec2::Y * 24.0, Some(CursorBadge::Continue)));
         }
-        Cursor::System(CursorIcon::Default)
+        if cx.pointer.is_none() || cx.mods.alt || cx.mods.cmd {
+            return Cursor::System(CursorIcon::Default);
+        }
+        const FREEFORM_NIB: Vec2 = Vec2::new(3.0, 5.0);
+        Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(Tool::FreeformPen), FREEFORM_NIB, None))
     }
 
     fn command_form(&self) -> ToolPath {
@@ -297,3 +303,7 @@ mod freeform_pen_tests;
 #[cfg(test)]
 #[path = "freeform_continue_endpoint_tests.rs"]
 mod freeform_continue_endpoint_tests;
+
+#[cfg(test)]
+#[path = "freeform_cursor_tests.rs"]
+mod freeform_cursor_tests;
