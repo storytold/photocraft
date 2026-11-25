@@ -145,6 +145,10 @@ pub(crate) fn arrow_key(app: &mut PhotocraftApp, direction: egui::Vec2, mods: Mo
     if app.ui.text_edit.is_some() {
         return false;
     }
+    // ⇧⌥-arrows with Clone Stamp or the Healing Brush nudge the clone source overlay.
+    if crate::preset_panels::clone_overlay_key(app, Some([f64::from(direction.x), f64::from(direction.y)]), mods) {
+        return true;
+    }
     // An open outline keeps ⌘-arrows as it keeps the plain ones: `cmd_nudges` cannot see it.
     let cmd = mods.cmd && !outline_open && crate::hold_keys::cmd_nudges(app);
     if app.ui.tool != Tool::Move && !cmd {

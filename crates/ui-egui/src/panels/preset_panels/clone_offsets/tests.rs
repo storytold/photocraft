@@ -179,3 +179,24 @@ fn clone_marker_follows_the_engine_slot() {
     app.session.presets_mut().clone.active_mut().anchor = Some([20.0, 20.0]);
     assert_eq!(clone_sample_point(&app, Some([30.0, 30.0])), Some([20.0, 20.0]));
 }
+
+/// ⇧⌥→ moves the source overlay right (each destination samples further left), a plain → leaves the source alone,
+/// and ⇧⌥Enter lines the source up so every pixel samples itself.
+#[test]
+fn shift_alt_arrows_nudge_the_source_and_shift_alt_enter_lines_it_up() {
+    let mut app = app();
+    remember_clone_cursor(&mut app, [40.0, 30.0]);
+    let start = clone_offset_readout(&app).unwrap();
+    let shift_alt = craft::keymap::Mods { shift: true, alt: true, ..craft::keymap::Mods::NONE };
+    let right = egui::vec2(1.0, 0.0);
+    crate::move_mods::arrow_key(&mut app, right, craft::keymap::Mods::NONE, 0.0, false);
+    assert_eq!(clone_offset_readout(&app), Some(start), "a plain arrow turns the brush, not the source");
+    assert!(crate::move_mods::arrow_key(&mut app, right, shift_alt, 0.0, false));
+    let moved = clone_offset_readout(&app).unwrap();
+    assert!(moved[0] < start[0] && moved[1] == start[1], "{start:?} → {moved:?}");
+    assert!(crate::move_mods::arrow_key(&mut app, egui::vec2(0.0, 1.0), shift_alt, 0.0, false));
+    assert!(clone_offset_readout(&app).unwrap()[1] < start[1], "↓ moves the overlay down");
+    assert!(clone_overlay_key(&mut app, None, shift_alt));
+    assert_eq!(clone_sample_point(&app, Some([40.0, 30.0])), Some([40.0, 30.0]), "lined up, a pixel samples itself");
+    assert!(!clone_overlay_key(&mut app, None, craft::keymap::Mods::NONE), "Enter alone is not the line-up key");
+}

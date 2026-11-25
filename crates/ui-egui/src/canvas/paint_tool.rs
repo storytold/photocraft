@@ -437,8 +437,13 @@ impl CanvasTool for PaintTool<'_> {
         }
     }
 
-    fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        let mods = cx.mods;
         self.scope.with_app(|app| {
+            // ⇧⌥Enter lines the clone source up with the canvas.
+            if matches!(key, ToolKey::Submit) && crate::preset_panels::clone_overlay_key(app, None, mods) {
+                return true;
+            }
             if crate::retouch_ui::bar::pending(app, Tool::Remove).is_none() {
                 return false;
             }

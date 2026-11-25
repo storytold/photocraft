@@ -58,6 +58,36 @@ pub(crate) fn clone_offset_edit(app: &PhotocraftApp, offset: [f64; 2]) -> Option
     Some(json!({"offset": offset, "anchor": [map.anchor.0, map.anchor.1]}))
 }
 
+/// ⇧⌥ with Clone Stamp or the Healing Brush moves the source overlay: an arrow nudges it one document pixel
+/// (`direction` is the arrow's unit screen vector; → moves the overlay right, which samples one pixel further
+/// left), and Enter (`direction` `None`) lines the source up with the canvas, the source pixel under every
+/// destination pixel being the same position (X and Y 0). Each goes through `cloneSource.set`. Returns true when
+/// the key was used.
+pub(crate) fn clone_overlay_key(app: &mut PhotocraftApp, direction: Option<[f64; 2]>, mods: craft::keymap::Mods) -> bool {
+    if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) || !(mods.shift && mods.alt) || mods.cmd || mods.ctrl {
+        return false;
+    }
+    let Some(now) = clone_offset_readout(app) else { return false };
+    let offset = match direction {
+        Some([dx, dy]) => [now[0] - step(dx), now[1] - step(dy)],
+        None => [0.0, 0.0],
+    };
+    if offset == now {
+        return true;
+    }
+    let Some(params) = clone_offset_edit(app, offset) else { return false };
+    if let Err(e) = app.run("cloneSource.set", params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
+/// One pixel along an arrow's axis, none across it (`f64::signum` gives 1 for 0).
+fn step(v: f64) -> f64 {
+    if v.abs() < 0.5 { 0.0 } else { v.signum() }
+}
+
 /// Where the source marker samples at a canvas point, using the overlay's mapping.
 pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[f64; 2]> {
     let map = clone_mapping_at(app, at)?;
