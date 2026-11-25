@@ -1227,7 +1227,12 @@ fn new_layers_made_with_a_layer_in_an_artboard_selected_go_directly_above_it() {
     // `low` has pixels: a live gradient turns an empty pixel layer into the fill layer in place
     // instead of adding one above it (#12015).
     s.execute("layer.select", json!({"name": "low"})).unwrap();
-    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.edit("pixels", |doc, _| {
+        let fmt = doc.pixel_format();
+        doc.layer_mut(low).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [0.5, 0.5, 0.5, 1.0]));
+        Ok(())
+    })
+    .unwrap();
     let board_path = doc(&s).path_of(board).unwrap();
     for (cmd, p) in new_layer_commands() {
         s.execute("layer.select", json!({"name": "low"})).unwrap();
