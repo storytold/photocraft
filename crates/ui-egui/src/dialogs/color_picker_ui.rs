@@ -477,3 +477,7 @@ mod tests;
 
 #[cfg(test)]
 mod screen_button_tests;
+
+#[cfg(test)]
+#[path = "color_picker_swatch_name_tests.rs"]
+mod swatch_name_tests;
