@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect); "history":false leaves out the History panel's rows, "layers":false the layer tree (neither is built)"##,
+            params: r##"{"document":index?,"serial":n? (the document's never-reused serial from session.inspect; not with document),"history":bool=true (false: without the History panel's rows),"layers":bool=true (false: without the layer tree; neither is built)}"##,
             enabled: has_doc,
             run: |s, p| {
                 let flag = |k: &str| match p.get(k).filter(|v| !v.is_null()) {
