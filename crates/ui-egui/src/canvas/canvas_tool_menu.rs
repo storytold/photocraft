@@ -1718,7 +1718,7 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
     }
     view.pending.pop();
     let mut next = view.canvas_view(shown.rect, ppp, shown.flip_x, shown.aspect as f32);
-    if step.apply(&mut next, &target, None, ppp) {
+    if step.apply(&mut next, &target, None, ppp, &craft::behavior::canvas::ZoomScheme::PHOTOSHOP) {
         use craft::behavior::kurbo::Point;
         let doc = Point::new(point[0], point[1]);
         let screen = Pos2::new(menu.pos[0], menu.pos[1]);

@@ -32,7 +32,7 @@ pub(crate) fn apply_resize_gates(params: &mut [Param], fields: &DialogFields) {
         let Some((format, "width" | "height")) = param.key.split_once('/') else { continue };
         let enabled = format!("{format}/enabled");
         if !fields.bool(&enabled).unwrap_or(format == "jpeg") {
-            param.enabled_when = Some((enabled, vec![true.into()]));
+            *param = param.clone().enabled_when(enabled, true);
         }
     }
 }
