@@ -36,7 +36,8 @@
 <p align="center">
   <a href="https://getartcraft.com/apps/photocraft"><b>PhotoCraft on getartcraft.com</b></a> ·
   <a href="https://getartcraft.com/">ArtCraft</a> ·
-  <a href="https://getartcraft.com/apps">All Crafting Apps</a>
+  <a href="https://getartcraft.com/apps">All Crafting Apps</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <br>
