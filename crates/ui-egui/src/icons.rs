@@ -29,6 +29,10 @@ pub const FOOTER_NEW_GROUP: &str = "folder";
 /// The footer's "delete" glyph.
 pub const FOOTER_DELETE: &str = "trash";
 
+/// The Type options bar's orientation toggle: the glyph of a vertical target, the caret of vertical writing. A
+/// horizontal target keeps the framework's own caret, so the button shows which way the text runs (#12061).
+pub const TYPE_ORIENTATION_VERTICAL: &str = "type-orientation-vertical";
+
 /// The icon of tool `t`: the one its command names (`ToolCommand`'s `icon` attribute), which the tool rail also draws.
 pub fn tool_icon(t: Tool) -> IconId {
     static ICONS: OnceLock<HashMap<String, Cow<'static, str>>> = OnceLock::new();

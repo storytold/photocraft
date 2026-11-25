@@ -1,5 +1,6 @@
 use super::defaults::{target, target_doc};
 use super::{LayerId, PhotocraftApp, byte_of, fonts, insertion_style, json, text_layer, values};
+use craft::behavior::IconId;
 use craft::text::ui::type_bar::TypeBar;
 
 /// Photoshop's Type options bar: the members of the type tool, shown inside the host's options `Bar`, which adds
@@ -15,6 +16,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .unit(values::doc_unit(app))
         .orientation(values::orientation(app))
         .anti_alias_methods(&methods)
+        // The toggle converts the text layer in hand, so it is offered only when one is: the edit's layer, or a
+        // selected type layer (`defaults::target`). A locked text layer keeps it clickable, as the command itself
+        // answers a locked target.
+        .can_orient(target(app).is_some())
+        // The vertical target gets PhotoCraft's own glyph, so the button shows which way the text runs; a
+        // horizontal target keeps the suite's caret.
+        .vertical_orientation_icon(IconId::new(crate::icons::TYPE_ORIENTATION_VERTICAL))
         .can_warp(crate::menus::is_enabled(app, "type.warpText"));
     bar = bar.font_picker(font_state.source());
     // A mixed selection leaves the anti-aliasing menu without a shown method.
@@ -81,6 +89,10 @@ pub(super) fn kerning_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::K
         })
         .map(|r| (r.style.kerning, r.style.kern))
 }
+
+#[cfg(test)]
+#[path = "orientation_toggle_state_tests.rs"]
+mod orientation_toggle_state_tests;
 
 #[cfg(test)]
 #[path = "vertical_mask_align_buttons_tests.rs"]
