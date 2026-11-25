@@ -1,6 +1,6 @@
 use super::lower::{
-    Paint, adjustment_on_gpu, adjustment_program, advanced_on_cpu, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths,
-    style_index,
+    Paint, adjustment_on_gpu, adjustment_program, advanced_on_cpu, check_gradient_stops, clipped_on_cpu, gradient_rows, placement, shapeless_blend,
+    single_content_pass, stroke_widths, style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
 use photocraft_compose::advanced::Scope;
@@ -143,6 +143,12 @@ pub const F_TEXT_GAMMA: u32 = 8192;
 /// `INIT_ALPHA` in the merge, for a layer with no interior effects between them.
 pub const F_LAYER_SHAPE: u32 = 1_048_576;
 
+/// `Blend` / `LayerBlend` of a special-eight layer with Transparency Shapes Layer off: the pass
+/// carries the layer's mask (`MaskUse`) beside the already masked content. Coverage is Opacity ×
+/// mask alone, and the content's own alpha (the masked alpha over the mask) joins Fill inside the
+/// blend, as `compose::blend_layer_into` does (`psblend::composite_fill`).
+pub const F_SHAPELESS: u32 = 8_388_608;
+
 /// A layer's Blend If ranges for `F_BLEND_IF`: Gray, then the colour channels, each as
 /// [this layer, underlying layer]; every range as two floats, `black low × 256 + black high` and
 /// `white low × 256 + white high` (exact in f32), so entry `e`, side `s` starts at float
@@ -157,6 +163,11 @@ pub(super) fn blend_if_params(bi: &photocraft_doc::BlendIf) -> [[f32; 4]; 4] {
         }
     }
     [[f[0], f[1], f[2], f[3]], [f[4], f[5], f[6], f[7]], [f[8], f[9], f[10], f[11]], [f[12], f[13], f[14], f[15]]]
+}
+
+/// `F_SHAPELESS` for a layer whose final blend needs it (see `shapeless_blend`).
+fn shapeless_flag(layer: &Layer) -> u32 {
+    if shapeless_blend(layer) { F_SHAPELESS } else { 0 }
 }
 
 /// `F_TEXT_GAMMA` for type layers while text gamma blending is on; the gamma goes in `p4.w`.
@@ -481,15 +492,24 @@ impl<'a> Planner<'a> {
         Ok(after)
     }
 
-    /// Blending Options › Advanced Blending: knockout (shallow and deep, also of clipped layers)
-    /// and Transparency Shapes Layer off without effects run on the GPU (`knocked_out`), as do
-    /// clipped layers blended individually (`clipped_individually`). Blend Interior Effects as
-    /// Group with effects, Transparency Shapes Layer off with effects or a special-eight blend,
-    /// and masks hiding effects have no GPU pass: documents using them are composited on the CPU
-    /// (`photocraft_compose::advanced`).
+    /// Blending Options › Advanced Blending: knockout (shallow and deep, also of clipped layers),
+    /// Transparency Shapes Layer off (`F_SHAPELESS`, and the whole-layer effect shape in
+    /// `effects`) and clipped layers blended individually (`clipped_individually`) run on the
+    /// GPU. Blend Interior Effects as Group with effects and masks hiding effects have no GPU
+    /// pass: documents using them are composited on the CPU (`photocraft_compose::advanced`).
     /// Layers at the reference editor's defaults pass this check for free.
     fn check_advanced(&self, layer: &Layer) -> Result<(), Unsupported> {
         if let Some(option) = advanced_on_cpu(layer) {
+            return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
+        }
+        Ok(())
+    }
+
+    /// `check_advanced` for a layer drawn atop its clipping base (`composite_atop`), where
+    /// Transparency Shapes Layer off with effects or a special-eight blend stays on the CPU.
+    fn check_clipped(&self, layer: &Layer) -> Result<(), Unsupported> {
+        self.check_advanced(layer)?;
+        if let Some(option) = clipped_on_cpu(layer) {
             return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
         }
         Ok(())
@@ -722,6 +742,10 @@ impl<'a> Planner<'a> {
             p.mode = layer.blend;
             p.opacity = layer.opacity;
             p.fill = layer.fill_opacity;
+            p.flags = shapeless_flag(layer);
+            if p.flags != 0 {
+                p.mask = self.mask_use(layer);
+            }
             return Ok(self.emit(p));
         }
 
@@ -732,7 +756,7 @@ impl<'a> Planner<'a> {
         if clip.is_some_and(|c| c.is_empty()) {
             // Nothing to draw (an empty layer, or a group of them).
             for c in &visible_clipped {
-                self.check_advanced(c)?;
+                self.check_clipped(c)?;
             }
             return Ok(backdrop);
         }
@@ -763,7 +787,10 @@ impl<'a> Planner<'a> {
         p.mode = layer.blend;
         p.opacity = layer.opacity;
         p.fill = layer.fill_opacity;
-        p.flags |= gamma_flag(layer);
+        p.flags |= gamma_flag(layer) | shapeless_flag(layer);
+        if p.flags & F_SHAPELESS != 0 && p.mask.is_none() {
+            p.mask = self.mask_use(layer);
+        }
         p.extra[3] = photocraft_compose::text_gamma(layer);
         p.clip = clip;
         let merged = self.emit(p);
@@ -939,7 +966,7 @@ impl<'a> Planner<'a> {
     /// composite_atop: `layer` onto `base`, restricted to the base's alpha, honouring the
     /// layer's channel restrictions.
     fn atop(&mut self, layer: &'a Layer, base: Slot) -> Result<Slot, Unsupported> {
-        self.check_advanced(layer)?;
+        self.check_clipped(layer)?;
         self.restricted(layer, base, |s, b| s.atop_any(layer, b))
     }
 
@@ -1019,6 +1046,9 @@ impl<'a> Planner<'a> {
             }
             None => (self.content(layer)?, None),
         };
+        // Transparency Shapes Layer off: the effect shape is the whole layer (its masks, the
+        // shape map), not the content's alpha (`effects::effect_shape`).
+        let shapeless = !layer.advanced.transparency_shapes;
         for p in self.passes.iter_mut().rev().take(if vstroke.is_some() { 2 } else { 1 }) {
             if !matches!(layer.content, LayerContent::Group(_)) {
                 p.clip = Some(clip);
@@ -1032,15 +1062,21 @@ impl<'a> Planner<'a> {
         let fx = self.fx.len();
         self.fx.push(FxLayer { layer, region, bounds: sb });
         let outline = photocraft_compose::effect_outline(layer).is_some();
-        let relative = outline || vstroke.is_some();
+        // Without Transparency Shapes Layer the content's transparency also acts like fill
+        // opacity within the shape (`effects::relative`).
+        let relative = outline || vstroke.is_some() || shapeless;
         // `content` becomes the effect shape (B of every effect pass); `lay_src` the layer's colour.
         let (lay_src, vstroke) = match vstroke {
             Some(s) => {
-                let mut p = Pass::new(Kernel::Blend, 0);
-                p.a = Some(self.retain(content));
-                p.b = Some(self.retain(s));
-                p.clip = Some(clip);
-                let union = self.emit(p);
+                let union = if shapeless {
+                    None
+                } else {
+                    let mut p = Pass::new(Kernel::Blend, 0);
+                    p.a = Some(self.retain(content));
+                    p.b = Some(self.retain(s));
+                    p.clip = Some(clip);
+                    Some(self.emit(p))
+                };
                 let m = self.mask_use(layer);
                 let masked = |me: &mut Self, slot: Slot| match &m {
                     Some(m) => {
@@ -1053,12 +1089,21 @@ impl<'a> Planner<'a> {
                     None => slot,
                 };
                 let fill = masked(self, content);
-                content = masked(self, union);
+                // The shape is replaced by the shape map below when it is the whole layer.
+                content = match union {
+                    Some(u) => masked(self, u),
+                    None => self.clear(),
+                };
                 (fill, Some(masked(self, s)))
+            }
+            None if shapeless => {
+                let lay = content;
+                content = self.clear();
+                (lay, None)
             }
             None => (self.retain(content), None),
         };
-        if outline {
+        if outline || shapeless {
             let mut p = Pass::new(Kernel::FxInit, 0);
             p.a = Some(content);
             p.adjust_kind = INIT_OUTLINE;

@@ -63,6 +63,7 @@ const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If range
 const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
+const F_SHAPELESS: u32 = 8388608u;   // blend / layer blend: Transparency Shapes Layer off, special eight (content alpha joins Fill; coverage = opacity × mask)
 const F_COVER: u32 = 16777216u;      // content: coverage record (r: alpha × mask >= 1, g: <= 0, b: 0, a: alpha × mask)
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
@@ -880,12 +881,21 @@ fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
 // blend_into(backdrop = b, src = s, mode, opacity) at chunk pixel p, including Dissolve.
 fn blend_px(p: vec2<i32>, b: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     var s = src;
+    var fill = op.fill;
+    if ((op.flags & F_SHAPELESS) != 0u) {
+        // compose::blend_layer_into: `src` carries alpha × mask; split them again. Coverage is
+        // opacity × mask, and the content's own alpha joins Fill inside the blend.
+        let m = mask_value(doc_px(p));
+        if (s.a <= 0.0 || m <= 0.0) { return b; }
+        fill = op.fill * clamp(s.a / m, 0.0, 1.0);
+        s = vec4(s.rgb, m);
+    }
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
         s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
-    return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
+    return composite_fill(op.mode, b, s, op.opacity, fill, (op.flags & F_TEXT_GAMMA) != 0u);
 }
 
 // blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
