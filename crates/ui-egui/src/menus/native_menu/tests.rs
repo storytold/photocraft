@@ -256,3 +256,47 @@ fn the_menu_state_follows_the_preferences_the_rows_show() {
     app.session.edit_prefs(|p| p.export.quick_export_format = photocraft_engine::prefs::QuickExportFormat::Jpg);
     assert_ne!(crate::menus::facts::key(&app), hidden, "the Quick Export label names the format");
 }
+
+/// The standard Mac items (the app menu's Services, Hide, Hide Others, Show All; the Window menu's Minimize, Zoom, Bring
+/// All to Front) appear once in the Mac model, which the layout builds from the source bar in one pass.
+#[test]
+fn the_mac_model_lists_each_standard_item_once() {
+    fn count(nodes: &[Node], found: &mut Vec<String>) {
+        for node in nodes {
+            match node {
+                Node::Standard { kind, .. } => found.push(format!("{kind:?}")),
+                Node::Item(item) if item.command.id.starts_with("craft-menu.") => found.push(item.command.id.clone()),
+                Node::Submenu { children, .. } => count(children, found),
+                _ => {}
+            }
+        }
+    }
+    let mut a = app(false);
+    craft::ui::testing::windows::set_os(a.ctx(), craft::host::target::Os::Mac);
+    let ctx = a.ctx().clone();
+    let held = (*crate::menus::items::model(&mut a, &ctx).bar).clone();
+    for layout in [laid(&mut a).bar, held] {
+        let mut found = Vec::new();
+        layout.menus.iter().for_each(|menu| count(&menu.children, &mut found));
+        assert!(found.len() >= 6, "the Mac layout adds the system items: {found:?}");
+        let mut unique = found.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), found.len(), "a system item listed twice: {found:?}");
+    }
+}
+
+/// Help search and the command palette list each open document once.
+#[test]
+fn help_search_lists_each_open_document_once() {
+    let mut a = app(true);
+    a.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    a.sync_views();
+    let ctx = a.ctx().clone();
+    let entries = crate::menus::help_entries(&mut a, &ctx);
+    let mut ids: Vec<String> = entries.iter().map(|e| e.command().id.clone()).filter(|id| id.starts_with(crate::menus::DOCUMENT_ITEM)).collect();
+    assert_eq!(ids.len(), 2, "one entry per open document: {ids:?}");
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 2);
+}

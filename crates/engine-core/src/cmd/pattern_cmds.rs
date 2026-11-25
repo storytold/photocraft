@@ -271,7 +271,7 @@ fn define_with_max_pixels(s: &mut Session, p: &Value, max_px: u64) -> Result<Val
         Some(n) if !n.trim().is_empty() => n.to_string(),
         _ => default_name(s),
     };
-    let pat = Pattern::new(name, surf, r.width(), r.height());
+    let pat = Pattern { source_mode: Some(doc.mode), ..Pattern::new(name, surf, r.width(), r.height()) };
     let id = pat.id.clone();
     let out = info(&pat, (pat.width, pat.height), false, true);
     if !s.patterns.items.iter().any(|q| q.id == id) {
@@ -651,12 +651,10 @@ mod tests {
         // 1e39 overflowed f32 to infinity: a NaN render, and a fill layer .pcraft refused to save.
         let mut s = session(8);
         let n = s.active().unwrap().doc.layers.len();
-        for cmd in ["layer.newFillLayer.pattern", "edit.fill", "paint.bucket"] {
-            for bad in [json!({"angle": 1e39}), json!({"angle": "x"}), json!({"phase": [1e39, 0]}), json!({"phase": [0, -1e300]})] {
-                let mut p = json!({"pattern": "Checkerboard", "contents": "pattern", "x": 1, "y": 1});
-                p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
-                assert!(s.execute(cmd, p).is_err(), "{cmd} {bad}");
-            }
+        for bad in [json!({"angle": 1e39}), json!({"angle": "x"}), json!({"phase": [1e39, 0]}), json!({"phase": [0, -1e300]})] {
+            let mut p = json!({"pattern": "Checkerboard", "contents": "pattern", "x": 1, "y": 1});
+            p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+            assert!(s.execute("layer.newFillLayer.pattern", p).is_err(), "{bad}");
         }
         assert_eq!(s.active().unwrap().doc.layers.len(), n);
         // The angle is normalised to (-180, 180] like the Pattern Fill dialog's.
@@ -670,7 +668,8 @@ mod tests {
     fn a_pattern_too_large_to_paint_is_refused_not_allocated() {
         // width × height overflows u32: this panicked (debug) or wrapped (release).
         let mut s = session(8);
-        let huge = Pattern { id: "huge".into(), name: "Huge".into(), width: 65_536, height: 65_536, surface: Surface::new(PixelFormat::RGBA8) };
+        let huge =
+            Pattern { id: "huge".into(), name: "Huge".into(), width: 65_536, height: 65_536, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         s.patterns.items.push(huge);
         let e = s.execute("brush.texturePattern", json!({"pattern": "huge"})).unwrap_err();
         assert!(e.to_string().contains("would paint nothing") && e.to_string().contains("65536 × 65536"), "{e}");

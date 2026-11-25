@@ -47,6 +47,8 @@ mod paint_thread;
 #[cfg(test)]
 mod paint_thread_tests;
 pub(crate) mod paint_tool;
+#[cfg(test)]
+mod pasteboard_menu_separator_tests;
 pub mod patch_preview;
 pub mod quick_pick;
 mod raster_source;
@@ -67,6 +69,7 @@ pub mod tool_feedback;
 pub(crate) mod tools;
 mod transform_controls;
 pub(crate) mod viewport_pages;
+mod window_drop;
 
 pub(crate) use cursor_policy::alt_samples;
 pub(crate) use display::GPU_OUTPUT;

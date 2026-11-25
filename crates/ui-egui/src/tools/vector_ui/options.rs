@@ -1,11 +1,13 @@
 use craft::behavior::EditEvent;
+use craft::behavior::geometry::OutlineDraft;
+use craft::behavior::kurbo::Rect;
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
 use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePanel, StrokeCells, VectorMode, VectorModeSelect};
 use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft::ui::display::{Divider, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
@@ -156,15 +158,13 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
-    // The Rectangle tool's Align Edges, at the bar's right end after the gear (#13346). Only a
-    // shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
-    if tool == Tool::Rectangle {
+    // Every shape tool's one Align Edges, at the bar's right end after the gear (#13346, #13370,
+    // #13326). Not the Star tool's, which the reference application doesn't have (its stars are the
+    // Polygon tool's). Only a shape layer has pixel edges to align: greyed in Path mode (and in a
+    // pixels mode).
+    if is_shape_tool(tool) && tool != Tool::Star {
         Divider::vertical().show(ui);
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
+        super::alignment::shape_tool_option(app, ui);
     }
 }
 
@@ -183,6 +183,9 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     }
     Divider::vertical().show(ui);
     if app.ui.tool_options.vector_mode == VectorMode::Shape {
+        // #12907: the row leads with the Fill and Stroke swatches, the shape tools' chips with
+        // their popups; a pick sets the tool defaults the next Pen shape is painted with.
+        crate::shape_options::pen_paint_swatches(app, ui);
         let ppi = document_ppi(app);
         let o = &mut app.ui.tool_options;
         let look = fw::ShapeAppearance::new(Paint::None, Paint::None, f64::from(o.stroke_width)).stroke_style((&o.shape_stroke).into());
@@ -202,7 +205,25 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         if let Some(alert) = out.out_of_range {
             crate::option_cells::range_alert(app, ui, &alert);
         }
+        // W and H (#12907): 0 px with no shape and the live size of the shape being drawn. What
+        // typing into them does was not measured, so it keeps today's behaviour — there was no
+        // field and no effect: these fields apply no edit (the Shape tools have no size fields
+        // yet either, #2496).
+        let (w, h) = pen_shape_size(app, tool);
+        // The Field shows the "W:" / "H:" caption, as the reference's row prints them; in a bar a
+        // Field already takes its content width. The fields are views: their output applies nothing,
+        // so their label offers no scrub handle either (scrub(false), unlike the editing fields).
+        let _ = Field::new(label(tl!("W:")))
+            .id_salt("pen-w")
+            .side(SideLabel::new().scrub(false))
+            .show(ui, |ui, _| NumberField::new(label(tl!("W:")), Bind::given(Some(w))).unit_kind(UnitKind::Pixels).show(ui));
+        let _ = Field::new(label(tl!("H:")))
+            .id_salt("pen-h")
+            .side(SideLabel::new().scrub(false))
+            .show(ui, |ui, _| NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui));
     }
+    // Align Edges, enabled in Shape mode only (greyed in Path mode).
+    super::alignment::pen_option(app, ui);
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
     let o = &mut app.ui.tool_options;
@@ -250,6 +271,35 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         Divider::vertical().show(ui);
         make_buttons(app, ui);
     }
+}
+
+/// The W / H the Pen Shape-mode bar shows (#12907): the size of the shape being drawn, 0 px when
+/// there is none. The Pen and the Curvature Pen draw into `app.ui.pen`, measured with the crate's
+/// one finite-guarded path bounds helper (`photocraft_text::area::path_bounds`, anchors and
+/// handles): the measured shapes are straight (200 × 200 px), and what a handle beyond the anchors
+/// or a typed size does was not measured and changes nothing today. A Freeform Pen trace is not a
+/// path while the pointer is down: the tool keeps its live points in its own outline draft and fits
+/// them into a path only when the pass ends, so that tool's row measures the draft's points and
+/// falls back to `app.ui.pen` (the fitted path of a trace whose commit failed) once no trace is in
+/// progress.
+fn pen_shape_size(app: &PhotocraftApp, tool: Tool) -> (f64, f64) {
+    if tool == Tool::FreeformPen
+        && let Some(size) = freeform_trace_size(&app.canvas_tools.vector.freeform.draft)
+    {
+        return size;
+    }
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| !p.draft.knots.is_empty()) else { return (0.0, 0.0) };
+    photocraft_text::area::path_bounds(&super::pen_path(pen)).map_or((0.0, 0.0), |(x0, y0, x1, y1)| (x1 - x0, y1 - y0))
+}
+
+/// The box the Freeform Pen's live trace covers, from the points the tool paints between presses
+/// (document units); `None` with no trace in progress. One point is the flat 0 x 0 the pen drafts
+/// show. The draft never holds a non-finite point — a non-finite sample is dropped where it comes
+/// in — so this needs no guard of its own.
+fn freeform_trace_size(draft: &OutlineDraft) -> Option<(f64, f64)> {
+    let first = *draft.points().first()?;
+    let box_ = draft.points().iter().fold(Rect::from_points(first, first), |box_, &at| box_.union_pt(at));
+    Some((box_.width(), box_.height()))
 }
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection…, Mask and Shape, from the
@@ -308,6 +358,7 @@ pub(super) fn selected_shape(session: &photocraft_engine::Session) -> Option<pho
 // ---------------------------------------------------------------------------------------------
 // Properties (shape layers)
 
+#[cfg(test)]
 pub(super) fn solid_paint(c: [f32; 4]) -> photocraft_doc::Fill {
     photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
 }
@@ -462,6 +513,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let was_linked = app.ui.arrow_default == Some(target);
     let mut linked = was_linked;
     let recent_colors: Vec<Srgba> = crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| Srgba::new(c[0], c[1], c[2], 1.0)).collect();
+    let sampled =
+        [fw::ShapePaint::Fill, fw::ShapePaint::Stroke].into_iter().find_map(|p| crate::screen_picker::take(app, ("shape-properties", p)).map(|c| (p, c)));
     let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
     let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [sh.fill.clone(), sh.stroke.as_ref().map(|s| s.paint.clone())];
@@ -475,13 +528,15 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     );
     let output = ShapePanel::new(label(tl!("Shape properties")), &shown, &appearance, ppi)
         .sections(true, sh.live.is_some())
+        .sampled(sampled)
         .stroke_open(Bind::bound(&mut app.ui.shape_stroke_open))
         .chips(|which, chip, chip_ui| crate::shape_paint_ui::decorate_chip(chip, which, &mut library, chip_ui))
         .fallbacks(Srgba::new(fg[0], fg[1], fg[2], fg[3]), Srgba::new(bg[0], bg[1], bg[2], bg[3]))
         .arrow_default(Bind::bound(&mut linked))
         .show(ui);
-    let fw::ShapePanelOutput { events, pick_color, out_of_range, .. } = output;
+    let fw::ShapePanelOutput { events, pick_color, screen_pick, out_of_range, .. } = output;
     let paint_gradients = [library.gradient(fw::ShapePaint::Fill), library.gradient(fw::ShapePaint::Stroke)];
+    super::alignment::option(app, ui, Some(id), false, true);
 
     let mut applied = false;
     let mut recent: Option<[f32; 3]> = None;
@@ -532,6 +587,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             _ => crate::shape_fill_ui::Paint::Stroke,
         };
         let _ = crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
+    }
+    if let Some((which, gesture)) = screen_pick {
+        crate::screen_picker::hold(app, ui.ctx(), ("shape-properties", which), gesture);
     }
     // A Concavity typed past -50..50 % raises the reference's alert (#13258).
     if let Some(alert) = out_of_range {

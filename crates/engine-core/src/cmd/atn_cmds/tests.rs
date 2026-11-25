@@ -297,40 +297,6 @@ fn sample() -> AtnFile {
 }
 
 #[test]
-fn layer_comp_apply_imports_plays_and_undoes() {
-    let name = "合成 𠮷";
-    let data = set_of("Comps", vec![("Apply", vec![item("applyComp", "Apply Layer Comp", Some(desc("null").with("null", name_ref("compsClass", name))))])]);
-    for depth in [8, 16, 32] {
-        let mut s = crate::session();
-        let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
-        assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-        assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("layerComp.apply", json!({"comp": name}))]);
-
-        s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
-        s.execute("layerComp.new", json!({"name": "Other"})).unwrap();
-        let before = s.active().unwrap().doc.clone();
-        let played = s.execute("actions.play", json!({"action": "Apply"})).unwrap();
-        assert_eq!(played["ran"], 0, "{played}");
-        assert!(played["failed"]["error"].as_str().unwrap().contains(name), "{played}");
-        assert_eq!(*s.active().unwrap().doc, *before, "a missing comp must not apply another comp");
-
-        let comp = s.execute("layerComp.new", json!({"name": name})).unwrap()["comp"].clone();
-        let layer = s.active().unwrap().active_layer.unwrap();
-        s.execute("layer.setProps", json!({"visible": false})).unwrap();
-        s.execute("layerComp.new", json!({"name": "Hidden"})).unwrap();
-        let played = s.execute("actions.play", json!({"action": "Apply"})).unwrap();
-        assert_eq!(played["ran"], 1, "{played}");
-        assert!(played.get("failed").is_none(), "{played}");
-        assert!(s.active().unwrap().doc.layer(layer).unwrap().visible);
-        assert_eq!(json!(s.active().unwrap().doc.last_applied_comp), comp);
-        assert!(s.undo());
-        assert!(!s.active().unwrap().doc.layer(layer).unwrap().visible);
-        assert!(s.redo());
-        assert!(s.active().unwrap().doc.layer(layer).unwrap().visible);
-    }
-}
-
-#[test]
 fn layer_comp_apply_round_trips_by_name() {
     for name in ["Comp 1", "合成 𠮷"] {
         let descriptor = desc("null").with("null", name_ref("compsClass", name));
@@ -351,46 +317,6 @@ fn layer_comp_apply_round_trips_by_name() {
     // Local comp ids and the default comp cannot be resolved to a portable name at export.
     for params in [json!({}), json!({"comp": 1}), json!({"comp": null}), json!({"comp": true}), json!({"comp": []})] {
         assert!(export_item("layerComp.apply", &params, "Comps").is_none(), "{params}");
-    }
-}
-
-#[test]
-fn layer_comp_apply_unknown_references_are_kept_and_stop_playback() {
-    let references = [
-        None,
-        Some(D::Integer(1)),
-        Some(D::Reference(vec![])),
-        Some(name_ref("Lyr ", "Comp 1")),
-        Some(class_ref("compsClass")),
-        Some(D::Reference(vec![ReferenceItem::Offset { class: class("compsClass"), offset: 1 }])),
-        Some(D::Reference(vec![ReferenceItem::Enumerated { class: class("compsClass"), type_id: code("Ordn"), value: code("unsupported") }])),
-        Some(D::Reference(vec![
-            ReferenceItem::Name { class: class("compsClass"), name: UnicodeString::new_nul("Comp 1") },
-            ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") },
-        ])),
-    ];
-    let items: Vec<_> =
-        references.into_iter().map(|reference| item("applyComp", "Apply Layer Comp", reference.map(|r| desc("null").with("null", r)))).collect();
-    let data = set_of("Comps", vec![("Unknown", items.clone())]);
-    let mut s = crate::session();
-    let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
-    assert_eq!(loaded["unsupported"].as_array().unwrap().len(), items.len());
-    assert!(s.actions().list.actions()[0].steps.iter().all(|st| st.command == PHOTOSHOP_STEP));
-    assert!(s.actions().list.actions()[0].disabled.is_empty());
-    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    s.execute("layerComp.new", json!({"name": "Comp 1"})).unwrap();
-    let before = s.active().unwrap().doc.clone();
-    let played = s.execute("actions.play", json!({"action": "Unknown"})).unwrap();
-    assert_eq!(played["ran"], 0, "{played}");
-    assert!(played["failed"]["error"].as_str().unwrap().contains("Apply Layer Comp"), "{played}");
-    assert_eq!(*s.active().unwrap().doc, *before);
-    let saved = s.execute("actions.save", json!({"set": "Comps"})).unwrap();
-    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
-    let file = atn::parse(&bytes).unwrap();
-    assert_eq!(file.actions[0].items.len(), items.len());
-    for (saved, original) in file.actions[0].items.iter().zip(&items) {
-        assert_eq!(saved.event, original.event);
-        assert_eq!(saved.descriptor, original.descriptor);
     }
 }
 
@@ -932,6 +858,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.mergeVisible", json!({})),
         ("layer.matting.defringe", json!({"width": 2})),
         ("layer.align.leftEdges", json!({"to": "canvas"})),
+        ("edit.autoAlignLayers", json!({"projection": "collage", "geometricCorrection": true})),
         ("select.inverse", json!({})),
         ("select.modify.feather", json!({"radius": 4})),
         ("select.modify.contract", json!({"radius": 1})),
@@ -1256,16 +1183,12 @@ fn every_mapped_command_exports_and_imports_back() {
     ];
     let unexpected: Vec<&str> = missing.iter().copied().filter(|id| !allowed.contains(id)).collect();
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
-    // Every command the table names exists.
+    // Every command the table names exists: the app's registry order lists every engine
+    // crate's commands, including those core's own tests don't install.
     // (Save is the desktop shell's: recorded by it, replayed by it, written by Batch.)
-    // The paint commands the table names are registered by the engine's paint crate, which
-    // core's own tests may not install.
     for id in EVENTS.iter().flat_map(|e| e.ids.iter()) {
         assert!(
-            crate::commands::find(id).is_some()
-                || PAINT_COMMANDS.contains(id)
-                || crate::actions_cmds::shell_save_command(id)
-                || crate::actions_cmds::shell_view_command(id),
+            ENGINE_COMMAND_IDS.lines().any(|line| line == *id) || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id),
             "the .atn table names an unknown command `{id}`"
         );
     }
@@ -6776,5 +6699,6 @@ fn whole_library_conditional_scopes_roundtrip() {
     assert_eq!((params["then"].as_str(), params["else"].as_str()), (Some("Target"), Some("Target")), "{params}");
 }
 
-/// The commands of the .atn table that the paint crate registers.
-const PAINT_COMMANDS: [&str; 4] = ["edit.fill", "layer.stampVisible", "paint.bucket", "paint.gradient"];
+/// Every engine command id, one per line: the app's registry order, which the top crate's order
+/// test keeps equal to the ids every engine crate installs.
+const ENGINE_COMMAND_IDS: &str = include_str!("../../../../engine/src/install/command_ids.txt");

@@ -1,6 +1,6 @@
 //! The rest of Photoshop's Edit menu: Fade, Purge, Content-Aware Fill and Scale, Define Brush
 //! Preset / Custom Shape, Find and Replace Text, the Preset Manager and preset export/import.
-//! Auto-Align and Auto-Blend Layers live in [`crate::align_cmds`].
+//! Auto-Align and Auto-Blend Layers live in the vector crate's `align_cmds`.
 //!
 //! Check Spelling is not implemented: it needs a word list per language, and no permissively
 //! licensed dictionary small enough to bundle (or a pure-Rust checker with one) was available.
@@ -414,6 +414,10 @@ pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(
 #[cfg(test)]
 #[path = "edit_menu_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/caf_select_all_tests.rs"]
+mod caf_select_all_tests;
 
 #[cfg(test)]
 #[path = "edit_menu_cmds/caf_new_layer_name_tests.rs"]

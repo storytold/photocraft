@@ -57,6 +57,24 @@ fn two_layers(s: &Session) -> std::result::Result<(), String> {
     if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
 }
 
+/// Auto-Blend's message when a type layer or a smart object is among the selected layers (#14204).
+const BLEND_UNAVAILABLE: &str = "The command \"Auto-Blend Layers\" is not currently available.";
+
+/// Whether a type layer or a smart object is among the selected layers. Auto-Blend is unavailable
+/// then, instead of quietly blending only the pixel layers; shape, adjustment and group layers in
+/// the selection were not measured and keep today's behaviour.
+fn has_type_or_smart_object(s: &Session) -> bool {
+    let Some(st) = s.active() else { return false };
+    st.selected_layers().iter().any(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_) | LayerContent::Smart(_))))
+}
+
+fn blend_enabled(s: &Session) -> std::result::Result<(), String> {
+    if has_type_or_smart_object(s) {
+        return Err(BLEND_UNAVAILABLE.into());
+    }
+    two_layers(s)
+}
+
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.autoAlignLayers";
     let ids = selected_pixel_layers(s);
@@ -184,6 +202,9 @@ const BLEND_BUFFERS: &str = "Auto-Blend Layers";
 
 fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.autoBlendLayers";
+    if has_type_or_smart_object(s) {
+        return Err(EngineError::Other(BLEND_UNAVAILABLE.into()));
+    }
     let ids = selected_pixel_layers(s);
     if ids.len() < 2 {
         return Err(bad(cmd, "select two or more pixel layers"));
@@ -372,8 +393,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 macro_rules! spec {
-    ($id:literal, $label:literal, $params:literal, $run:expr) => {
-        CommandSpec { id: $id, label: $label, menu: &["Edit"], shortcut: None, params: $params, enabled: two_layers, run: $run, journal: true }
+    ($id:literal, $label:literal, $params:literal, $enabled:expr, $run:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &["Edit"], shortcut: None, params: $params, enabled: $enabled, run: $run, journal: true }
     };
 }
 
@@ -383,12 +404,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.autoAlignLayers",
             "Auto-Align Layers…",
             r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=the locked selected layer, else the bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
+            two_layers,
             auto_align
         ),
         spec!(
             "edit.autoBlendLayers",
             "Auto-Blend Layers…",
             r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##,
+            blend_enabled,
             auto_blend
         ),
     ]

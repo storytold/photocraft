@@ -25,12 +25,12 @@ pub(crate) fn int_i32(cmd: &str, p: &Value, key: &str) -> Result<Option<i32>> {
 
 /// An id (layer comp, slice, style…) from a JSON value: a bad-params error unless it is a whole
 /// number in `u32` range. `as u32` would wrap `2^32 + 1` to `1` and target a real item.
-pub(crate) fn u32_id(cmd: &str, key: &str, v: &Value) -> Result<u32> {
+pub fn u32_id(cmd: &str, key: &str, v: &Value) -> Result<u32> {
     v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(cmd, format!("`{key}` = {v} is not a valid id (0..={})", u32::MAX)))
 }
 
 /// [`u32_id`] of `p[key]`: `None` when absent.
-pub(crate) fn u32_id_param(cmd: &str, p: &Value, key: &str) -> Result<Option<u32>> {
+pub fn u32_id_param(cmd: &str, p: &Value, key: &str) -> Result<Option<u32>> {
     p.get(key).map(|v| u32_id(cmd, key, v)).transpose()
 }
 
@@ -72,7 +72,7 @@ pub(crate) fn check_f32_values(cmd: &str, value: &Value) -> Result<()> {
 /// `p[key]` as CMYK inks 0..1 (`[c, m, y, k]`), the values a colour was picked as, or `None`
 /// when absent or null. A CMYK document stores exactly these instead of what the colour's sRGB
 /// stand-in converts back to (#4196, #8568).
-pub(crate) fn cmyk_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f32; 4]>> {
+pub fn cmyk_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f32; 4]>> {
     let Some(v) = p.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
     let inks: Option<Vec<f32>> =
         v.as_array().filter(|a| a.len() == 4).and_then(|a| a.iter().map(|x| x.as_f64().filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0) as f32)).collect());

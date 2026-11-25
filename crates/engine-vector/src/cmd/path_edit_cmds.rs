@@ -48,7 +48,7 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
 
 /// The History step name: `default`, or one of `named` when `stepName` asks for it (the Convert
 /// Point tool names its steps as the reference does, #12736; Direct Selection names a one-anchor
-/// drag, #13205). Any other value is refused.
+/// drag, #13205, and its arrow-key nudges, #13204). Any other value is refused.
 fn step_name(cmd: &str, p: &Value, default: &'static str, named: &[&'static str]) -> Result<&'static str> {
     match p.get("stepName") {
         None | Some(Value::Null) => Ok(default),
@@ -134,7 +134,7 @@ fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
     if duplicate && p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
         return Err(bad(CMD, "`duplicate` and `curvature` can't be combined"));
     }
-    let label = step_name(CMD, p, if duplicate { "Drag Path" } else { "Drag Anchor Points" }, &["Drag Path", "Drag Anchor Point"])?;
+    let label = step_name(CMD, p, if duplicate { "Drag Path" } else { "Drag Anchor Points" }, &["Drag Path", "Drag Anchor Point", "Nudge Path"])?;
     let curvature = p.get("curvature").and_then(Value::as_bool).unwrap_or(false);
     edit_path(s, CMD, p, label, |path| {
         if duplicate {
@@ -239,6 +239,43 @@ fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Removes selected components, including any subpaths joined to them, in one History step.
+fn delete_components(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.deleteComponents";
+    let heads = p.get("subpaths").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or_else(|| bad(CMD, "`subpaths` must list component starts"))?;
+    let name = p.get("name").and_then(Value::as_str).ok_or_else(|| bad(CMD, "`name` must identify a saved path or layer"))?;
+    if crate::vector_cmds::is_work(Some(name)) || p.get("typePath").and_then(Value::as_bool) == Some(true) {
+        return Err(bad(CMD, "only saved paths, shape paths and vector masks are supported"));
+    }
+    if name == "layer" {
+        let id = layer_id(s, p)?;
+        let st = s.active().ok_or_else(|| bad(CMD, "no active document"))?;
+        let layer = st.doc.layer(id).ok_or_else(|| bad(CMD, "no such layer"))?;
+        let locks = st.doc.effective_locks(id);
+        if locks.all || locks.pixels || (!matches!(layer.content, LayerContent::Shape(_)) && layer.vector_mask.is_none()) {
+            return Err(bad(CMD, "layer has no editable shape path or vector mask"));
+        }
+    }
+    edit_path(s, CMD, p, "Delete Selection", |path| {
+        let components = path.components();
+        if heads.len() > components.len() {
+            return Err("more indices than path components".into());
+        }
+        let mut remove = vec![false; path.subpaths.len()];
+        for value in heads {
+            let head = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("each component start must be a subpath index")?;
+            let range = components.binary_search_by_key(&head, |r| r.start).ok().and_then(|i| components.get(i)).ok_or("no component at that subpath index")?;
+            remove.get_mut(range.clone()).ok_or("component is out of bounds")?.fill(true);
+        }
+        if name == "layer" && remove.iter().all(|v| *v) {
+            return Err("cannot remove the last component of a shape path or vector mask".into());
+        }
+        let mut keep = remove.into_iter().map(|v| !v);
+        path.subpaths.retain(|_| keep.next().unwrap_or(false));
+        Ok(())
+    })
+}
+
 /// ⌫ / Delete on a segment selected with Direct Selection: the segment goes, its anchors stay.
 /// Photoshop names the step Delete Anchor Point (#13203).
 fn delete_segment(s: &mut Session, p: &Value) -> Result<Value> {
@@ -324,7 +361,7 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (anchors = all of one subpath's; that subpath is copied, with its operation (a joined subpath's copy takes its component's), as the path's last subpath, and the copy's anchors move instead; the source stays; Direct Selection's ⌥-drag on a segment, Add Anchor Point's ⌥-drag; not with curvature),"stepName":"Drag Path"|"Drag Anchor Point"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor, Add Anchor Point "Drag Path" when it duplicates a subpath; default "Drag Anchor Points", "Drag Path" with duplicate; any other value is refused)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (anchors = all of one subpath's; that subpath is copied, with its operation (a joined subpath's copy takes its component's), as the path's last subpath, and the copy's anchors move instead; the source stays; Direct Selection's ⌥-drag on a segment, Add Anchor Point's ⌥-drag; not with curvature),"stepName":"Drag Path"|"Drag Anchor Point"|"Nudge Path"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor and "Nudge Path" for its arrow-key nudges, Add Anchor Point "Drag Path" when it duplicates a subpath; default "Drag Anchor Points", "Drag Path" with duplicate; any other value is refused)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Control Point",
@@ -367,6 +404,16 @@ pub fn specs() -> Vec<CommandSpec> {
             r#""tolerance":px=0.1 (bakes the components' path operations into plain combined outlines, traced from the exact coverage)"#.into(),
             merge_components,
         ),
+        CommandSpec {
+            id: "path.deleteComponents",
+            label: "Delete Selection",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"name":str|"layer" (a saved path name or a shape path or vector mask),"layer":id? (with "layer"),"subpaths":[i,…] (the first subpath of each component to delete)} → {name,path}"#,
+            enabled: has_doc,
+            run: delete_components,
+            journal: true,
+        },
         spec(
             "path.setOperation",
             "Path Operation",
@@ -382,6 +429,31 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn deleting_components_rejects_invalid_indices_without_changing_history() {
+        let mut s = session();
+        let path = json!({"subpaths": [
+            {"closed": true, "knots": [[1,1], [30,1], [30,30], [1,30]]},
+            {"closed": true, "op": "join", "knots": [[5,5], [5,10], [10,10], [10,5]]},
+            {"closed": true, "knots": [[31,31], [35,31], [35,35], [31,35]]}
+        ]});
+        s.execute("path.set", json!({"name": "Saved", "path": path})).unwrap();
+        let st = s.active().unwrap();
+        let (before, steps) = (st.doc.paths.clone(), st.history.past_len());
+        for p in [
+            json!({}),
+            json!({"name":"Saved","subpaths":[]}),
+            json!({"name":"Saved","subpaths":[0,1]}),
+            json!({"name":"Saved","subpaths":[-1]}),
+            json!({"name":"Saved","subpaths":[99999]}),
+        ] {
+            assert!(s.execute("path.deleteComponents", p.clone()).is_err(), "{p}");
+            let st = s.active().unwrap();
+            assert_eq!(st.doc.paths, before, "{p}");
+            assert_eq!(st.history.past_len(), steps, "{p}");
+        }
+    }
 
     fn session() -> Session {
         let mut s = crate::session();

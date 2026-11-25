@@ -27,13 +27,27 @@ fn tolerance(depth: u32) -> f32 {
     }
 }
 
+/// Sets the pixels of `area` on the active layer to `hex`, through the document (the state
+/// `edit.fill` leaves).
+fn fill_active(s: &mut Session, area: photocraft_geom::Rect, hex: &str) {
+    let rgba = crate::commands::parse_hex(hex).unwrap();
+    s.edit("setup", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let px = photocraft_raster::from_rgba(&surf.format(), rgba);
+        let data: Vec<f32> = (0..(area.width() * area.height()) as usize).flat_map(|_| px.iter().copied()).collect();
+        surf.write_region(area, &data);
+        Ok(())
+    })
+    .unwrap();
+}
+
 /// A white Background and a red rectangle (partly off the right edge of the canvas) with a
 /// Normal-mode drop shadow, outer glow, inner shadow, outside stroke and a half colour overlay.
 fn scene(depth: u32) -> (Session, u64) {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
     let id = s.execute("layer.new.layer", json!({"name": "a"})).unwrap()["layer"].as_u64().unwrap();
-    crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(14, 10, 64, 30)), "#e02010");
+    fill_active(&mut s, photocraft_geom::Rect::new(14, 10, 64, 30), "#e02010");
     s.execute("layer.layerStyle.dropShadow", json!({"blend": "normal", "distance": 6, "size": 4, "color": "#102040"})).unwrap();
     s.execute("layer.layerStyle.outerGlow", json!({"blend": "normal", "size": 5, "color": "#20c040", "add": true})).unwrap();
     s.execute("layer.layerStyle.innerShadow", json!({"blend": "normal", "distance": 3, "size": 3, "add": true})).unwrap();
