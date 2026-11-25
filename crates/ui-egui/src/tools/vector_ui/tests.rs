@@ -714,7 +714,9 @@ fn an_unclosed_path_stays_with_its_document() {
         match act {
             0 | 1 => {
                 app.ui.tool = if act == 0 { Tool::Pen } else { Tool::CurvaturePen };
-                clicks(&mut app, &[[50.0, 50.0]]);
+                // Away from any anchor: an earlier act's first click left a one-anchor Work Path in this document
+                // (#12890), and a press on its anchor would be the anchor tools' delete.
+                clicks(&mut app, &[[150.0 + 20.0 * act as f64, 120.0]]);
             }
             _ => assert!(!remove_last(&mut app), "nothing of this document's to undo"),
         }
@@ -722,7 +724,13 @@ fn an_unclosed_path_stays_with_its_document() {
         assert!(knots <= 1, "act {act}: a new path, not the other document's (knots {knots})");
         // The two drawing entry points start a path of their own here; undo has none to take.
         let expected = if act == 2 { None } else { app.session.active().map(|st| st.doc.id) };
-        assert_eq!(app.ui.pen_doc, expected, "act {act}");
+        assert_eq!(
+            app.ui.pen_doc,
+            expected,
+            "act {act}: pen {:?}, status {}",
+            app.ui.pen.as_ref().map(|p| (p.draft.knots.len(), p.curvature, p.live_path)),
+            app.ui.status
+        );
         app.ui.pen = None;
         app.ui.pen_doc = None;
         app.ui.tool = Tool::Pen;
@@ -772,6 +780,9 @@ fn failed_stale_pen_commit_preserves_the_draft_until_retry() {
         let original = app.session.active().unwrap().doc.work_path.clone().unwrap();
         app.ui.selected_path = Some("work".into());
         app.ui.tool = Tool::Pen;
+        // The Pen writes the Work Path as it draws (#12890), so the document has to refuse the path from the first
+        // anchor on for this to be the state where every commit attempt is refused.
+        app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("test rejection".into())) } else { Ok(()) });
         clicks(&mut app, &[[20.0, 20.0], [80.0, 60.0]]);
         let mut draft = app.ui.pen.clone();
         draft.as_mut().unwrap().commit_failed = true;
@@ -823,7 +834,8 @@ fn failed_stale_pen_commit_preserves_the_draft_until_retry() {
     }
 }
 
-/// A draft under two anchors is no path, so a new document takes none of it along.
+/// A draft under two anchors is no path, so a new document takes none of it along. The Pen's first anchor is a step of
+/// its own in the document it was drawn on (#12890); the Curvature Pen keeps its draft until the finish.
 #[test]
 fn new_document_drops_a_one_anchor_draft() {
     for tool in [Tool::Pen, Tool::CurvaturePen] {
@@ -833,7 +845,8 @@ fn new_document_drops_a_one_anchor_draft() {
         assert!(app.ui.pen.is_some(), "{tool:?}: the anchor starts a draft");
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         assert!(app.ui.pen.is_none(), "{tool:?}");
-        assert!(app.session.documents()[0].doc.work_path.is_none(), "{tool:?}: no Work Path from one anchor");
+        let one_anchor = app.session.documents()[0].doc.work_path.as_ref().map(|p| p.subpaths[0].knots.len());
+        assert_eq!(one_anchor, (tool == Tool::Pen).then_some(1), "{tool:?}");
         assert!(app.session.active().unwrap().doc.work_path.is_none());
     }
 }
@@ -877,7 +890,22 @@ fn stale_pen_commits_to_its_owner_across_document_changes() {
             let source = app.session.documents().iter().find(|d| d.doc.id == owner).unwrap();
             let path = source.doc.work_path.as_ref().expect("the owner keeps the unfinished path");
             assert_eq!(path, &expected, "{tool:?} {action}");
-            assert!(app.session.documents().iter().filter(|d| d.doc.id != owner).all(|d| d.doc.work_path.is_none()));
+            let others = |app: &PhotocraftApp| -> Vec<usize> {
+                app.session
+                    .documents()
+                    .iter()
+                    .filter(|d| d.doc.id != owner)
+                    .map(|d| d.doc.work_path.as_ref().map_or(0, |p| p.subpaths.iter().map(|s| s.knots.len()).sum::<usize>()))
+                    .collect()
+            };
+            // #12890: a press in another document writes its Work Path there with its first anchor, so that document
+            // holds exactly that one anchor; every other document stays empty.
+            let counts = others(&app);
+            if action == "pen" {
+                assert_eq!(counts.as_slice(), &[1], "{tool:?} {action}: the receiving document has the press's one-anchor Work Path");
+            } else {
+                assert!(counts.iter().all(|n| *n == 0), "{tool:?} {action}: no other document takes the draft: {counts:?}");
+            }
             if action != "closeOther" {
                 assert_ne!(app.session.active().unwrap().doc.id, owner, "the active document is restored");
             }
@@ -885,7 +913,10 @@ fn stale_pen_commits_to_its_owner_across_document_changes() {
             let index = app.session.documents().iter().position(|d| d.doc.id == owner).unwrap();
             assert!(app.session.set_active(index));
             assert!(app.session.undo());
-            assert!(app.session.active().unwrap().doc.work_path.is_none());
+            // #12890: the Pen's clicks were steps of its own, so one Undo leaves the path with the anchors before the
+            // last; the Curvature Pen still commits the whole path in one step, which Undo takes back entire.
+            let anchors = app.session.active().map_or(0, |st| st.doc.work_path.as_ref().map_or(0, |p| p.subpaths.iter().map(|s| s.knots.len()).sum::<usize>()));
+            assert_eq!(anchors, usize::from(tool == Tool::Pen) * 2, "{tool:?} {action}");
             assert!(app.session.redo());
             assert!(app.session.active().unwrap().doc.work_path.is_some());
         }
@@ -912,10 +943,15 @@ fn a_new_pen_path_joins_the_selected_path() {
     assert!(wp.subpaths.iter().all(|s| s.closed && s.knots.len() == 3));
     assert_eq!(wp.subpaths[0].knots[0].anchor.x, 20.0);
     assert_eq!(wp.subpaths[1].knots[0].anchor.x, 120.0);
-    // One History step per path.
-    app.session.undo();
-    assert_eq!(work(&app).subpaths.len(), 1, "undo takes back only the second path");
+    // #12890: the second path went into the Work Path click by click, one step each: its component, its two further
+    // anchors and its close. Undo takes them back one at a time and leaves the first path alone.
+    let steps_of_the_second_path = 4;
+    for _ in 0..steps_of_the_second_path {
+        app.session.undo();
+    }
+    assert_eq!(work(&app).subpaths.len(), 1, "undo took the second path back anchor by anchor");
     app.session.redo();
+    assert_eq!(work(&app).subpaths.len(), 2, "and Redo puts its first anchor back");
     // A selected saved path takes the next one.
     app.run("path.set", json!({"name": "Saved", "path": {"subpaths": [{"knots": [[2, 2], [12, 2], [12, 8]]}]}})).unwrap();
     app.ui.selected_path = Some("Saved".into());
@@ -952,10 +988,16 @@ fn pen_point_undo_preserves_earlier_knots_and_document_history() {
     let pen = app.ui.pen.as_ref().unwrap();
     assert_eq!(pen.draft.knots, original_first_two);
     assert!(!testing::in_gesture(&app), "undo leaves no Pen drag running");
-    assert_eq!(app.session.active().unwrap().history.past_len(), old_history, "undo must not roll back previous document changes");
-    assert!(app.session.active().unwrap().doc.work_path.is_none(), "path is not committed yet");
-
+    // #12890: each click is a step of its own, so Undo takes that one step back and leaves the shape layer's step
+    // before them alone. The Work Path is in the document while the path is still being drawn.
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), old_history + 2, "three clicks made three steps, Undo took one back");
+    let work = st.doc.work_path.as_ref().expect("the Work Path exists while drawing");
+    assert_eq!(work.subpaths[0].knots.len(), 2);
+    assert!(work.subpaths[0].knots[1].smooth, "retained smooth handles are unchanged");
+    let steps = app.session.active().unwrap().history.past_len();
     pen_commit(&mut app, false);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "finishing adds no step");
     let work = app.session.active().unwrap().doc.work_path.as_ref().unwrap();
     assert_eq!(work.subpaths[0].knots.len(), 2);
     assert!(work.subpaths[0].knots[1].smooth, "retained smooth handles are unchanged");
