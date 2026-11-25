@@ -150,6 +150,9 @@ pub struct BakedM {
     /// (layer moved to another parent, layer below it, layer above it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub moved: Vec<(u64, Option<u64>, Option<u64>)>,
+    /// The changed groups whose children the step added, removed or reordered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regrouped: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

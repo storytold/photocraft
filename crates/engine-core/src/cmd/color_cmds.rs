@@ -723,6 +723,12 @@ pub fn working_profile(mode: ColorMode) -> Arc<Profile> {
     Arc::new(craft_cms::builtin::default_for(mode_space(mode)).unwrap_or(Builtin::Srgb.profile()).clone())
 }
 
+/// The id of the built-in profile [`working_profile`] gives `mode`, as a recorded step names it.
+pub(crate) fn working_fallback_id(mode: ColorMode) -> Option<&'static str> {
+    let fallback = craft_cms::builtin::default_for(mode_space(mode)).unwrap_or(Builtin::Srgb.profile());
+    Builtin::ALL.into_iter().find(|b| std::ptr::eq(b.profile(), fallback)).map(Builtin::id)
+}
+
 /// Parses ICC bytes, caching by allocation so repeated lookups for the same document are free.
 pub fn profile_from_bytes(bytes: &Arc<Vec<u8>>) -> std::result::Result<Arc<Profile>, craft_cms::CmsError> {
     type Cache = Mutex<Vec<(Weak<Vec<u8>>, Arc<Profile>)>>;
@@ -1685,6 +1691,16 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use photocraft_geom::Rect;
+
+    /// Every mode's built-in fallback has an id, and that id names the very profile the fallback is.
+    #[test]
+    fn every_working_fallback_has_the_id_of_its_profile() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            let id = working_fallback_id(mode).unwrap_or_else(|| panic!("{mode:?} has no id"));
+            let named = Builtin::from_id(id).unwrap_or_else(|| panic!("{id} names no built-in"));
+            assert_eq!(*named.profile(), *working_profile(mode), "{mode:?}: {id}");
+        }
+    }
 
     /// Image › Mode to CMYK keeps a filled background's shared tile shared (#4531): one
     /// converted tile for the whole grid, the same colour everywhere.

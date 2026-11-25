@@ -346,6 +346,7 @@ fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn 
                 },
                 root: b.root.as_ref().map(|ids| ids.iter().map(|id| id.0).collect()),
                 moved: b.moved.iter().map(|(id, below, above)| (id.0, below.map(|l| l.0), above.map(|l| l.0))).collect(),
+                regrouped: b.regrouped.iter().map(|id| id.0).collect(),
             }),
             None => None,
         };
@@ -756,6 +757,7 @@ impl Loader<'_> {
                     },
                     root: b.root.as_ref().map(|ids| ids.iter().map(|id| LayerId(*id)).collect()),
                     moved: b.moved.iter().map(|(id, below, above)| (LayerId(*id), below.map(LayerId), above.map(LayerId))).collect(),
+                    regrouped: b.regrouped.iter().map(|id| LayerId(*id)).collect(),
                 })),
                 None => None,
             };

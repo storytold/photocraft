@@ -183,6 +183,9 @@ pub struct Baked {
     /// Layers the step moved to another parent (into or out of a group), with the layers directly
     /// below and above where it put them: no layer records the move of an unchanged one.
     pub moved: Vec<(LayerId, Option<LayerId>, Option<LayerId>)>,
+    /// The changed groups whose children the step added, removed or reordered: any other changed
+    /// group keeps the children (and their order) the replay gives it.
+    pub regrouped: Vec<LayerId>,
 }
 
 /// The document fields a baked step's `state` restores: all but those it keeps apart (`layers`,
@@ -273,7 +276,9 @@ impl Baked {
         // others without reordering them.
         let ids = |d: &Document, other: &Document| d.layers.iter().map(|l| l.id).filter(|id| other.layers.iter().any(|o| o.id == *id)).collect::<Vec<_>>();
         let root = (ids(before, after) != ids(after, before)).then(|| after.layers.iter().map(|l| l.id).collect());
-        Baked { layers, placed, selection, color, state, root, moved }
+        let kids = |d: &Document, id: LayerId| d.layer(id).and_then(crate::Layer::children).map(|c| c.iter().map(|l| l.id).collect::<Vec<_>>());
+        let regrouped = changed.iter().copied().filter(|id| kids(after, *id).is_some() && kids(before, *id) != kids(after, *id)).collect();
+        Baked { layers, placed, selection, color, state, root, moved, regrouped }
     }
 
     /// Put the stored layers (and selection and colour state) into `doc` in place of the step's.
@@ -350,6 +355,24 @@ impl Baked {
     fn merged(&self, l: &crate::Layer, current: &Document, created: &[LayerId], changed: &[LayerId]) -> crate::Layer {
         let mut l = l.clone();
         let id = l.id;
+        // Only its own properties changed: the children are the replay's, in the replay's order,
+        // each one the step changed as it left it.
+        if !self.regrouped.contains(&id)
+            && let Some(replayed) = current.layer(id).and_then(crate::Layer::children)
+        {
+            let stored: Vec<crate::Layer> = l.children().map(<[crate::Layer]>::to_vec).unwrap_or_default();
+            let kids: Vec<crate::Layer> = replayed
+                .iter()
+                .map(|c| match stored.iter().find(|s| s.id == c.id).filter(|_| changed.contains(&c.id)) {
+                    Some(s) => self.merged(s, current, created, changed),
+                    None => c.clone(),
+                })
+                .collect();
+            if let Some(children) = l.children_mut() {
+                *children = kids;
+            }
+            return l;
+        }
         let Some(children) = l.children_mut() else { return l };
         let mut kept: Vec<crate::Layer> = Vec::with_capacity(children.len());
         for c in children.iter() {
@@ -527,6 +550,29 @@ mod tests {
         baked.apply(&mut doc, &created, &changed);
         let ids: Vec<LayerId> = doc.layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
         assert_eq!(ids, [aid]);
+        assert_eq!(doc.layer(gid).unwrap().opacity, 0.5);
+    }
+
+    /// A baked change to a group's own properties keeps its children in the replay's order: an
+    /// earlier reorder that is suppressed stays undone.
+    #[test]
+    fn a_baked_group_change_keeps_the_replayed_child_order() {
+        let (a, b) = (Layer::raster("A", PixelFormat::RGBA8), Layer::raster("B", PixelFormat::RGBA8));
+        let (aid, bid) = (a.id, b.id);
+        let group = Layer::group("g", vec![a.clone(), b.clone()]);
+        let gid = group.id;
+        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        before.layers = vec![group].into();
+        let mut after = before.clone();
+        after.layer_mut(gid).unwrap().opacity = 0.5;
+        let (created, changed) = layer_changes(&before, &after);
+        let baked = Baked::capture(&before, &after, &created, &changed);
+        assert!(baked.regrouped.is_empty(), "its children are as they were");
+        let mut doc = before.clone();
+        doc.layers = vec![Layer { id: gid, ..Layer::group("g", vec![b, a]) }].into();
+        baked.apply(&mut doc, &created, &changed);
+        let ids: Vec<LayerId> = doc.layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
+        assert_eq!(ids, [bid, aid]);
         assert_eq!(doc.layer(gid).unwrap().opacity, 0.5);
     }
 

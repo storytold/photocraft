@@ -451,10 +451,7 @@ fn pin_color_settings(s: &Session, id: &str, params: &Value) -> Option<Value> {
             Some((spec, _)) => Some(craft_cms::Builtin::from_id(spec).map_or(spec, |b| b.id())),
             // Color Settings that don't resolve fall back to the built-in default: pin that, not
             // whatever the settings resolve to at replay.
-            None => {
-                let fallback = craft_cms::builtin::default_for(crate::color_cmds::mode_space(working));
-                craft_cms::Builtin::ALL.into_iter().find(|b| fallback.is_some_and(|f| std::ptr::eq(b.profile(), f))).map(craft_cms::Builtin::id)
-            }
+            None => crate::color_cmds::working_fallback_id(working),
         };
         if let Some(spec) = spec {
             p.insert("profile".into(), spec.into());

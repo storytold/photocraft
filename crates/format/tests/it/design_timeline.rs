@@ -207,6 +207,7 @@ fn with_baked_canvas(size: Size) -> Document {
         state: Some((Arc::new(state), vec!["size".into()])),
         root: None,
         moved: Vec::new(),
+        regrouped: Vec::new(),
     }));
     doc
 }

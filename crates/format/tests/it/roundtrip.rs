@@ -505,6 +505,7 @@ fn deeply_nested_groups_in_a_design_timeline_roundtrip() {
             state: None,
             root: None,
             moved: Vec::new(),
+            regrouped: Vec::new(),
         }));
         doc.design_timeline =
             Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base: std::sync::Arc::new(base), steps: vec![step], marker: None }));
@@ -538,6 +539,7 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
                 state: None,
                 root: None,
                 moved: Vec::new(),
+                regrouped: Vec::new(),
             })
         });
         doc.design_timeline =
