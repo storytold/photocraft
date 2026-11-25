@@ -128,6 +128,12 @@ struct Element {
     items_array: Option<JsObject>,
     /// A list's selected item (its `selection`).
     selection: Option<JsObject>,
+    /// Lists: the items as the window last sent them, so the index the user chose names the item
+    /// they saw even when a getter of the script's changed the list while the window was read.
+    sent: Option<Vec<JsObject>>,
+    /// Lists: counts the assignments to `selection`, so one an item's `selected` setter makes
+    /// meanwhile is not undone by the assignment it interrupted.
+    selections: u64,
     children: Vec<u32>,
     parent: Option<u32>,
     /// The window this control is in (a window's own id for a window).
@@ -249,6 +255,8 @@ fn create(ctx: &mut Context, kind: Kind, parent: Option<u32>, type_name: &str, t
             items: Vec::new(),
             items_array: None,
             selection: None,
+            selections: 0,
+            sent: None,
             children: Vec::new(),
             parent,
             window,
@@ -391,15 +399,7 @@ fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> Js
     })();
     // A setter of the script's that throws leaves no half-made item in the list.
     if let Err(e) = filled {
-        let removed = element_mut(ctx, list, |e| {
-            let before = e.items.len();
-            e.items.retain(|i| !JsObject::equals(i, &item));
-            e.items.len() != before
-        })?;
-        // A setter that removed the item itself (`remove`) has given back its count already.
-        if removed {
-            count_items(ctx, -1)?;
-        }
+        unadd(ctx, list, &item)?;
         return Err(e);
     }
     // Appended to the list's own array, so adding n items is linear, not quadratic; by
@@ -407,13 +407,34 @@ fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> Js
     // still matches the list item for item up to the new one; otherwise (the script replaced
     // `items`, or a setter of its added or removed items meanwhile) the array is made again.
     let (obj, len, kept) = element(ctx, list, |e| (e.obj.clone(), e.items.len(), e.items_array.clone()))?;
-    match kept.and_then(|a| JsArray::from_object(a).ok()) {
-        Some(arr) if len == count + 1 && arr.length(ctx)? == count as u64 && arr.create_data_property(count, item.clone(), ctx)? => {
-            set(&obj, "items", JsValue::from(arr), ctx)?;
+    let published = (|| -> JsResult<()> {
+        match kept.and_then(|a| JsArray::from_object(a).ok()) {
+            Some(arr) if len == count + 1 && arr.length(ctx)? == count as u64 && arr.create_data_property(count, item.clone(), ctx)? => {
+                set(&obj, "items", JsValue::from(arr), ctx)
+            }
+            _ => sync_items(ctx, list),
         }
-        _ => sync_items(ctx, list)?,
+    })();
+    // A setter of the script's on `items` that throws leaves the item out too.
+    if let Err(e) = published {
+        unadd(ctx, list, &item)?;
+        return Err(e);
     }
     Ok(item.into())
+}
+
+/// Take back `item`, added to `list` by an `add` that failed: out of the list, and its count
+/// given back unless a setter of the script's removed it already (`remove` gives it back).
+fn unadd(ctx: &mut Context, list: u32, item: &JsObject) -> JsResult<()> {
+    let removed = element_mut(ctx, list, |e| {
+        let before = e.items.len();
+        e.items.retain(|i| !JsObject::equals(i, item));
+        e.items.len() != before
+    })?;
+    if removed {
+        count_items(ctx, -1)?;
+    }
+    Ok(())
 }
 
 /// `new Window(type, title, bounds, properties)`.
@@ -539,7 +560,13 @@ fn add(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
             if let Ok(child) = u32::try_from(next)
                 && with_registry(ctx, |r| r.elements.len() > next)?
             {
-                detach(ctx, id, child)?;
+                // The setup's error is the one the script sees, unless the run was stopped while
+                // the parent's `children` were published again.
+                if let Err(stopped) = detach(ctx, id, child)
+                    && stopped.as_engine().is_some()
+                {
+                    return Err(stopped);
+                }
             }
             Err(e)
         }
@@ -553,9 +580,8 @@ fn detach(ctx: &mut Context, parent: u32, child: u32) -> JsResult<()> {
         e.children.retain(|c| *c != child);
         e.children.len() != before
     })?;
-    if held {
-        sync_children(ctx, parent)?;
-    }
+    // The native side first: a setter of the script's on `children` that throws must not leave
+    // the child linked or its items counted.
     let mut stack = vec![child];
     let mut seen = 0usize;
     while let Some(at) = stack.pop() {
@@ -573,6 +599,9 @@ fn detach(ctx: &mut Context, parent: u32, child: u32) -> JsResult<()> {
             count_items(ctx, -(items as isize))?;
         }
         stack.extend(children);
+    }
+    if held {
+        sync_children(ctx, parent)?;
     }
     Ok(())
 }
@@ -803,6 +832,7 @@ fn node(ctx: &mut Context, id: u32, depth: usize, budget: &mut usize, special: (
             }
             m.insert("items".into(), Value::Array(texts));
             m.insert("selection".into(), json!(selection_index(ctx, &obj, &items)?));
+            element_mut(ctx, id, |e| e.sent = Some(items.clone()))?;
         }
         Kind::Button => {
             if special.0 == Some(id) {
@@ -842,9 +872,18 @@ fn selection_set(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         Some(o) if is_item(&what) => items.iter().find(|i| JsObject::equals(i, &o)).cloned(),
         _ => index.and_then(|n| items.get(n as usize).cloned()),
     };
+    let this_one = element_mut(ctx, id, |e| {
+        e.selections += 1;
+        e.selections
+    })?;
     for item in &items {
         let on = chosen.as_ref().is_some_and(|c| JsObject::equals(c, item));
         set(item, "selected", on, ctx)?;
+        // An item's `selected` setter assigned `selection` again: that assignment wrote every
+        // flag and kept its own choice, which stands. Going on would undo its flags.
+        if element(ctx, id, |e| e.selections)? != this_one {
+            return Ok(JsValue::undefined());
+        }
     }
     // Unless an item's `selected` setter took the choice out of the list meanwhile.
     element_mut(ctx, id, |e| e.selection = chosen.filter(|c| e.items.iter().any(|i| JsObject::equals(i, c))))?;
@@ -1187,7 +1226,10 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
     if let Some(values) = answer.get("values").and_then(Value::as_array) {
         for v in values {
             let Some(id) = v.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) else { continue };
-            let Ok((kind, owner, obj, items)) = element(ctx, id, |e| (Kind::from_code(e.kind), e.window, e.obj.clone(), e.items.clone())) else { continue };
+            let Ok((kind, owner, obj, items, sent)) = element(ctx, id, |e| (Kind::from_code(e.kind), e.window, e.obj.clone(), e.items.clone(), e.sent.clone()))
+            else {
+                continue;
+            };
             if owner != window || !usable(ctx, id)? {
                 continue;
             }
@@ -1211,7 +1253,16 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
                     }
                 }
                 Kind::Dropdown | Kind::ListBox => {
-                    let chosen = value.as_u64().and_then(|i| usize::try_from(i).ok()).and_then(|i| items.get(i).cloned());
+                    // The index is into the items the user saw; one no longer in the list is
+                    // ignored rather than taken as whichever item now has that index.
+                    let shown = sent.as_deref().unwrap_or(&items);
+                    let chosen = match value.as_u64() {
+                        Some(i) => match usize::try_from(i).ok().and_then(|i| shown.get(i)).filter(|c| items.iter().any(|it| JsObject::equals(it, c))) {
+                            Some(c) => Some(c.clone()),
+                            None => continue,
+                        },
+                        None => None,
+                    };
                     for item in &items {
                         let on = chosen.as_ref().is_some_and(|c| JsObject::equals(c, item));
                         set(item, "selected", on, ctx)?;

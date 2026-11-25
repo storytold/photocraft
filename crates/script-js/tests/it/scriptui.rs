@@ -791,3 +791,66 @@ fn a_list_that_fails_to_initialize_is_not_left_in_the_dialog() {
     "#;
     assert_eq!(both(src, vec![]), ["0 a list can hold at most 10000 items | no text", "250000"]);
 }
+
+/// An item whose list's `items` can't be published (a setter of the script's throws) is not
+/// kept in the list.
+#[test]
+fn an_item_the_list_could_not_publish_is_not_kept() {
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox");
+        l.add("item", "a");
+        Object.defineProperty(l, "items", { configurable: true, get: function () { return []; }, set: function (v) { throw new Error("no"); } });
+        try { l.add("item", "b"); } catch (e) { $.writeln("caught ", e.message); }
+        $.writeln(l.find("b") === null, " ", l.find("a") !== null);
+    "#;
+    assert_eq!(both(src, vec![]), ["caught no", "true true"]);
+}
+
+/// A control that fails to set up is taken out of its parent even when the parent's `children`
+/// can't be published, and the script sees the setup's own error.
+#[test]
+fn a_failed_control_is_taken_out_when_its_parent_cannot_publish_its_children() {
+    let src = r#"
+        var w = new Window("dialog"), refuse = false;
+        var real = w.children;
+        Object.defineProperty(w, "children", { configurable: true, get: function () { return real; }, set: function (v) { if (refuse) throw new Error("children"); real = v; } });
+        // Publishing fails only once the list's second item has failed.
+        var bad = ["x", { toString: function () { refuse = true; throw new Error("no text"); } }];
+        try { w.add("dropdownlist", undefined, bad); } catch (e) { $.writeln(e.message); }
+        refuse = false;
+        var ok = w.add("button", undefined, "OK");
+        $.writeln(ok.parent === w);
+    "#;
+    assert_eq!(both(src, vec![]), ["no text", "true"]);
+}
+
+/// An item's `selected` setter that assigns `selection` again wins, and the flags agree with it:
+/// the assignment it interrupted neither keeps its own choice nor undoes the flags.
+#[test]
+fn a_selection_made_by_an_items_setter_agrees_with_the_flags() {
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox", undefined, ["A", "B"]);
+        var a = l.items[0], b = l.items[1], once = true, flag = { a: false, b: false };
+        Object.defineProperty(a, "selected", { configurable: true, get: function () { return flag.a; }, set: function (v) { flag.a = v; } });
+        Object.defineProperty(b, "selected", { configurable: true, get: function () { return flag.b; }, set: function (v) { flag.b = v; if (once) { once = false; l.selection = b; } } });
+        l.selection = a;
+        $.writeln(l.selection === b, " ", a.selected, " ", b.selected);
+    "#;
+    assert_eq!(both(src, vec![]), ["true false true"]);
+}
+
+/// The index the user chose names the item they saw: a getter of the script's that removes an
+/// item while the window is read does not turn the choice into the item after it.
+#[test]
+fn a_list_choice_names_the_item_the_user_saw() {
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox", undefined, ["A", "B"]), e = w.add("edittext"), once = true;
+        Object.defineProperty(e, "text", { configurable: true, get: function () { if (once) { once = false; l.remove(0); } return ""; }, set: function (v) {} });
+        w.add("button", undefined, "OK");
+        w.show();
+        $.writeln(l.selection === null ? "none" : l.selection.text);
+    "#;
+    // window 0, listbox 1, edittext 2, OK 3; the user picks the first item they saw, A.
+    let events = vec![json!({"event": "click", "id": 3, "values": [{"id": 1, "value": 0}]})];
+    assert_eq!(both(src, events), ["none"]);
+}
