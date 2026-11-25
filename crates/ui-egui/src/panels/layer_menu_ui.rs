@@ -78,6 +78,13 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(Some((tl!("Quick Export as PNG"), "layer.quickExportAsPng")));
     v.push(Some((tl!("Export As…"), "layer.exportAs")));
     v.push(None);
+    // A group's row leads the artboard block with New Artboard and Artboard from Group (#14566); the
+    // right-click selected the row, so both act on the clicked group. Artboards, frames and a
+    // multi-selection keep the block as it was.
+    if !multi && l.is_group() && l.artboard().is_none() && l.frame.is_none() {
+        v.push(Some((tl!("New Artboard"), "layer.new.artboard")));
+        v.push(Some((tl!("Artboard from Group"), "layer.new.artboardFromGroup")));
+    }
     v.push(Some((tl!("Artboard from Layers…"), "layer.new.artboardFromLayers")));
     v.push(Some((tl!("Frame from Layers…"), "layer.new.frameFromLayers")));
     if !multi && matches!(l.content, LayerContent::Shape(_) | LayerContent::Text(_)) {
@@ -174,3 +181,7 @@ pub(crate) fn color_name(color: LabelColor) -> &'static str {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "layer_menu_artboard_group_tests.rs"]
+mod layer_menu_artboard_group_tests;
