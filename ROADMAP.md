@@ -19,7 +19,7 @@ About 80% of the work parallelizes.
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **~78%** | partly measured: menus 628/628, tools 68/68, panels 30/35, formats 13+4 of 31 |
+| **Feature breadth** | **~79%** | partly measured: menus 628/628, tools 68/68, panels 30/35, formats 13+4 of 31 |
 | **Ready for real work** | **~45%** (40–50%) | estimated: weighted by dimension below |
 | Mainstream practitioner | ~43% (38–48%) | estimated: weekly areas of a typical pro, with discounts ([method](docs/target-app-parity.md#mainstream-practitioner-43)) |
 | Essentials user | ~61% (55–67%) | estimated: core features only ([method](docs/target-app-parity.md#essentials-user-61)) |
@@ -50,7 +50,7 @@ four are partial in depth, none blocked.
 
 | Dimension | % ready | Hours to full | Doc |
 |---|---:|---:|---|
-| Features (depth) | 55% (breadth 78%) | 600–1,000 | [target-app-parity](docs/target-app-parity.md#feature-areas) |
+| Features (depth) | 55% (breadth 79%) | 600–1,000 | [target-app-parity](docs/target-app-parity.md#feature-areas) |
 | UI/UX fidelity (tools, handles, modifiers, brush feel, panels) | 40% | 350–600 | [ui-parity](docs/ui-parity.md), [brush-parity](docs/brush-parity.md), [context-menu-parity](docs/context-menu-parity.md) |
 | File formats | 60% (presence ~80%) | 300–500 | [file-format-parity](docs/file-format-parity.md) |
 | Hardware (GPU, pen, displays) | 50% | 80–150 | [hardware-parity](docs/hardware-parity.md) |
