@@ -335,6 +335,86 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments › Hue/Saturation's id.
+pub(crate) const HUE_SATURATION_ID: &str = "image.adjustments.hueSaturation";
+/// The reference application's alert for Hue/Saturation on a document or target it refuses.
+pub(crate) const HUE_SATURATION_UNAVAILABLE: &str = "The command \"Hue/Saturation\" is not currently available.";
+/// The reference application's alert for Hue/Saturation on an empty pixel layer.
+pub(crate) const HUE_SATURATION_EMPTY: &str = "Could not complete the Hue/Saturation command because the active layer is empty.";
+
+/// Hue/Saturation's precondition with no params: the Channels panel's target, as
+/// [`hue_saturation_enabled_with`] checks it, else [`has_adjustable`].
+pub(crate) fn hue_saturation_target_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, HUE_SATURATION_ID, Value::Null);
+    hue_saturation_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Hue/Saturation's precondition for a call with `p`, its target filled in from the Channels
+/// panel, as the reference application has it (#14749): greyed on a layer mask, in 8- and 16-bit
+/// Grayscale and in Multichannel documents and on a hidden pixel layer; otherwise [`has_adjustable`]'s (which
+/// already refuses type layers, groups and locked pixels, and the session refuses Bitmap). An
+/// alpha channel or Quick Mask target keeps [`has_adjustable`] alone, as before; `None` for a smart
+/// object's filter mask, which keeps its own check. A layer inside a hidden group, a hidden smart
+/// object and a 32-bit Grayscale document keep today's behaviour (not measured).
+pub(crate) fn hue_saturation_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    use photocraft_color::{ColorMode, SampleType};
+    let d = s.active()?;
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask => Some(Err(HUE_SATURATION_UNAVAILABLE.into())),
+        Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => {
+            let gray = d.doc.mode == ColorMode::Grayscale && d.doc.depth != SampleType::F32;
+            if gray || d.doc.mode == ColorMode::Multichannel {
+                return Some(Err(HUE_SATURATION_UNAVAILABLE.into()));
+            }
+            let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
+            let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
+            Some(if hidden { Err(HUE_SATURATION_UNAVAILABLE.into()) } else { has_adjustable(s) })
+        }
+    }
+}
+
+/// Why Hue/Saturation with `p` (its target filled in) must stop before it edits anything
+/// (#14749): [`hue_saturation_enabled_with`]'s refusals, or an empty pixel layer. `Ok` for every
+/// target Hue/Saturation works on.
+pub(crate) fn hue_saturation_refusal(s: &Session, p: &Value) -> Result<()> {
+    if let Some(Err(why)) = hue_saturation_enabled_with(s, p) {
+        return Err(EngineError::Disabled(HUE_SATURATION_ID.into(), why));
+    }
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(());
+    }
+    let id = crate::commands::layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if let LayerContent::Raster(surface) = &layer.content
+        && !has_visible_pixels(surface)?
+    {
+        return Err(EngineError::Other(HUE_SATURATION_EMPTY.into()));
+    }
+    Ok(())
+}
+
+/// Whether `s` has a pixel the layer shows, as the reference application's "the active layer is
+/// empty" counts it: alpha above 0, so pixels the Eraser cleared (it keeps their colour bytes) are
+/// empty. A tile that can't be read from scratch storage is an error, not an empty layer.
+fn has_visible_pixels(s: &Surface) -> Result<bool> {
+    let fmt = s.format();
+    if !fmt.alpha || s.default_pixel().last().is_none_or(|a| *a > 0.0) {
+        return Ok(!s.content_bounds().is_empty());
+    }
+    let (alpha, bpp) = (fmt.channels() - 1, fmt.bytes_per_pixel());
+    for (_, tile) in s.tiles() {
+        let bytes = tile.try_bytes().map_err(photocraft_raster::AllocationError::ScratchRead)?;
+        if bytes.chunks_exact(bpp).any(|px| photocraft_color::read_sample(px, fmt.sample, alpha) > 0.0) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.

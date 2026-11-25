@@ -67,6 +67,8 @@ pub mod history_menu_cmds;
 pub mod history_options_cmds;
 pub mod history_select_cmds;
 pub mod history_source_cmds;
+#[cfg(test)]
+mod hue_saturation_enabled_tests;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 #[cfg(test)]
