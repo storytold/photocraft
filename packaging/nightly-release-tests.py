@@ -701,11 +701,79 @@ def app_workflows():
     return {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.y*ml"))}
 
 
+WORKFLOW_KEY = re.compile(r'''("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s'"#{}\[\],:&*!|>%@`?-][^:#,{}]*?|-[^\s:#][^:#,{}]*?)\s*:(?:\s+(.*))?$''')
+
+
+def _workflow_key(text):
+    if text.startswith('"'):
+        return None if "\\" in text else text[1:-1]
+    if text.startswith("'"):
+        return text[1:-1].replace("''", "'")
+    return text
+
+
+def workflow_keys(source):
+    """Every mapping key in a workflow, as (line, key), plus the YAML forms this reader refuses.
+
+    A narrow reader, not a YAML parser (none ships with the runner's Python). It reads plain,
+    single- and double-quoted keys in block and simple one-line flow mappings, skips block scalar
+    bodies, and refuses whatever could hide a key from it: escaped double-quoted keys, explicit
+    `?` keys, merge keys, anchors, aliases, tags, tab indentation and nested or multi-line flow.
+    """
+    keys, refused, block = [], [], None
+    for number, raw in enumerate(source.splitlines(), 1):
+        stripped = raw.strip()
+        indent = len(raw) - len(raw.lstrip(" "))
+        if block is not None:
+            if not stripped or indent > block:
+                continue
+            block = None
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "\t" in raw[:indent + 1]:
+            refused.append(f"line {number}: tab indentation"); continue
+        body = stripped
+        while body.startswith("- "):
+            body = body[2:].lstrip()
+        if body == "?" or body.startswith("? "):
+            refused.append(f"line {number}: explicit key"); continue
+        match = WORKFLOW_KEY.match(body)
+        value = body
+        if match is not None:
+            key, value = _workflow_key(match.group(1)), match.group(2) or ""
+            if key is None:
+                refused.append(f"line {number}: escaped double-quoted key"); continue
+            if key == "<<":
+                refused.append(f"line {number}: merge key"); continue
+            keys.append((number, key))
+        plain = re.sub(r"\$\{\{.*?\}\}", "", value.split(" #", 1)[0]).strip()
+        bare = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", "''", plain)
+        if re.match(r"[&*!]", plain):
+            refused.append(f"line {number}: anchor, alias or tag")
+        if "{" in bare and bare != "{}":
+            flow = re.fullmatch(r"\{([^{}\[\]]*)\}", plain)
+            if flow is None:
+                refused.append(f"line {number}: nested or multi-line flow mapping")
+            else:
+                for item in flow.group(1).split(","):
+                    entry = WORKFLOW_KEY.match(item.strip())
+                    key = _workflow_key(entry.group(1)) if entry else None
+                    if key is None:
+                        refused.append(f"line {number}: unreadable flow mapping entry")
+                    else:
+                        keys.append((number, key))
+        if match is not None and re.fullmatch(r"[|>][0-9+-]*", plain):
+            block = indent
+    return keys, refused
+
+
 def trust_closure_problems(workflows):
     """The nightly-signer trust-closure scan over app workflow sources; empty when the tree is safe."""
     problems, stable_callers = [], set()
     for name, source in workflows.items():
-        if re.search(r"(?m)^\s*environment\s*:", source):
+        keys, refused = workflow_keys(source)
+        problems.extend(name + " uses YAML the scan cannot read (" + reason + ")" for reason in refused)
+        if any(key == "environment" for _, key in keys):
             problems.append(name + " binds an environment directly")
         for callee, ref in re.findall(r"uses:\s*" + re.escape(SHARED) + r"([\w.-]+\.ya?ml)@(\S+)", source):
             if callee == "nightly-release.yml" and (name != "nightly-sign.yml" or not re.fullmatch(r"[0-9a-f]{40}", ref)):
@@ -732,6 +800,14 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
         tree = app_workflows()
         bad = {
             "a workflow binds an environment": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    environment: release\n"},
+            "a double-quoted environment key": {**tree, "extra.yml": 'jobs:\n  x:\n    runs-on: ubuntu-latest\n    "environment": release\n'},
+            "a single-quoted environment key": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    'environment' : release\n"},
+            "an environment mapping": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    environment:\n      name: release\n"},
+            "an environment in a flow mapping": {**tree, "extra.yml": "jobs:\n  x: {runs-on: ubuntu-latest, environment: release}\n"},
+            "an escaped key": {**tree, "extra.yml": 'jobs:\n  x:\n    runs-on: ubuntu-latest\n    "environ\\u006dent": release\n'},
+            "a merge key": {**tree, "extra.yml": "base: &b\n  runs-on: ubuntu-latest\njobs:\n  x:\n    <<: *b\n"},
+            "an explicit key": {**tree, "extra.yml": "jobs:\n  x:\n    ? environment\n    : release\n"},
+            "a nested flow mapping": {**tree, "extra.yml": "jobs:\n  x: {steps: [{run: a}]}\n"},
             "another caller of the signer": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
             "a mutable signer pin": {**tree, "nightly-sign.yml": re.sub(r"nightly-release\.yml@[0-9a-f]{40}", "nightly-release.yml@main", tree["nightly-sign.yml"])},
             "a new stable release caller": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "release.yml@main\n"},
