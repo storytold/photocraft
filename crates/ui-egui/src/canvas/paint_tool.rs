@@ -196,6 +196,9 @@ fn with_resize<R>(app: &mut PhotocraftApp, f: impl FnOnce(&mut crate::brush_resi
 fn click_tool(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
     match tool {
         Tool::PaintBucket => {
+            // The press path returns before the stroke paths clear-off call, so the buckets
+            // own clear-off on the Background (#12531) happens here, before the options are read.
+            clear_off_on_background(app, Tool::PaintBucket);
             let o = app.ui.tool_options.clone();
             let contents = if o.bucket_fill_pattern { "pattern" } else { "foreground" };
             let mode = if o.bucket_clear {

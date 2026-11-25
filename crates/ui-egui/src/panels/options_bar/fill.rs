@@ -56,7 +56,7 @@ pub(crate) fn mode_entries(tool: Tool, behind_enabled: bool, threshold: bool) ->
             key => label_of(key).into(),
         })
         .into_iter()
-        .map(|entry| if entry.value() == Some(&PaintMode::Behind) { entry.enabled(behind_enabled) } else { entry })
+        .map(|entry| if matches!(entry.value(), Some(&PaintMode::Behind) | Some(&PaintMode::Clear)) { entry.enabled(behind_enabled) } else { entry })
         .collect()
     })
 }
