@@ -273,3 +273,23 @@ fn an_edit_to_every_frame_reads_the_plate_in_or_is_refused() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Lowering Memory Usage shrinks the cache of a plate that is already open, from its next read.
+#[test]
+fn an_open_plate_follows_memory_usage() {
+    let dir = folder("memory");
+    write_plate(&dir, 12);
+    let mut s = crate::session();
+    let id = open(&mut s, &dir);
+    let opened = video(&s, id).plate.as_ref().unwrap().cached_bytes();
+    let low = crate::prefs::Performance { memory_usage_mb: 4, ..Default::default() }.plate_cache_bytes();
+    assert!(opened > low, "the plate opened with more cached than the lower setting allows");
+    set_plate_cache_budget(low);
+    go(&mut s, 11);
+    go(&mut s, 3);
+    let cached = video(&s, id).plate.as_ref().unwrap().cached_bytes();
+    set_plate_cache_budget(crate::prefs::Performance::default().plate_cache_bytes());
+    assert!(cached <= low, "{cached} > {low}");
+    assert_eq!(bar(&shown(&s, id)), bar_of(3));
+    let _ = std::fs::remove_dir_all(&dir);
+}

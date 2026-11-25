@@ -35,7 +35,10 @@ fn unchanged(file: &PlateFile) -> std::result::Result<(), String> {
 
 /// Frame `index` of `plate`: from its cache, or read from its file and kept in the cache.
 pub(crate) fn plate_frame(plate: &Plate, index: usize) -> std::result::Result<Surface, String> {
+    // Memory Usage may have changed since the plate opened.
+    plate.set_cache_budget(super::plate_cache_budget());
     if let Some(frame) = plate.cached(index) {
+        plate.trim_around(index);
         return Ok(frame);
     }
     let file = plate.files.get(index).ok_or_else(|| format!("the plate has no frame {}", index + 1))?;

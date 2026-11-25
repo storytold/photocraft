@@ -70,17 +70,17 @@ impl Plate {
             c.bytes = c.bytes.saturating_sub(old);
         }
         c.bytes = c.bytes.saturating_add(bytes);
-        while c.bytes > c.budget {
-            let farthest = c.frames.keys().copied().filter(|&i| i != index).max_by_key(|&i| i.abs_diff(index));
-            let Some(far) = farthest else { break };
-            if let Some(f) = c.frames.remove(&far) {
-                c.bytes = c.bytes.saturating_sub(photocraft_raster::stored_tiles_bytes(f.tile_count() as u64, &f.format()));
-            }
-        }
+        c.trim(index);
+    }
+
+    /// Drop the frames farthest from `index` (which stays) until the cache is within its budget:
+    /// for a read the cache answered, after the budget went down.
+    pub fn trim_around(&self, index: usize) {
+        self.cache.lock().trim(index);
     }
 
     /// Set how many bytes of decoded frames the cache keeps, dropping what no longer fits the next
-    /// time a frame is kept.
+    /// time a frame is kept or [`Plate::trim_around`] runs.
     pub fn set_cache_budget(&self, bytes: u64) {
         self.cache.lock().budget = bytes;
     }
@@ -105,6 +105,19 @@ struct CacheInner {
     budget: u64,
     bytes: u64,
     frames: BTreeMap<usize, Surface>,
+}
+
+impl CacheInner {
+    /// Drop the frames farthest from `index`, never `index` itself, until within the budget.
+    fn trim(&mut self, index: usize) {
+        while self.bytes > self.budget {
+            let farthest = self.frames.keys().copied().filter(|&i| i != index).max_by_key(|&i| i.abs_diff(index));
+            let Some(far) = farthest else { break };
+            if let Some(f) = self.frames.remove(&far) {
+                self.bytes = self.bytes.saturating_sub(photocraft_raster::stored_tiles_bytes(f.tile_count() as u64, &f.format()));
+            }
+        }
+    }
 }
 
 impl PlateCache {
