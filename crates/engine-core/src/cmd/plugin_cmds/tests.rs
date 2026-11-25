@@ -1,0 +1,693 @@
+use super::*;
+use crate::prefs::SavedPrefsExt;
+use photocraft_geom::Rect;
+
+/// The example Invert plug-in, built from `examples/plugins/invert-rs`.
+const INVERT: &[u8] = include_bytes!("../../../../plugins/tests/fixtures/invert.wasm");
+const INVERT_ID: &str = "org.photocraft.example.invert";
+
+#[test]
+fn plugin_base64_keeps_standard_urlsafe_and_mixed_alphabets() {
+    for data in ["+/8=", "-_8=", "+_8=", "-/8=", "-_8"] {
+        assert_eq!(b64_decode(data), Some(vec![251, 255]), "{data}");
+    }
+    assert_eq!(b64_decode("aGk="), Some(b"hi".to_vec()));
+    assert_eq!(b64_decode("aGk"), Some(b"hi".to_vec()));
+    assert_eq!(b64_decode("a"), None);
+    assert_eq!(b64_decode("QQ==QUJD"), None);
+}
+
+/// Uses a non-returning module to verify background cancellation preserves both pixels and revision.
+#[test]
+fn background_plugin_runs_commit_once_and_cancel_without_editing() {
+    let id = "test.background-plugin";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let mut s = doc(8);
+    let before = pixels(&s);
+    let revision = s.active().unwrap().revision;
+    let crate::jobs::Started::Job(job) = s.start(RUN, json!({"id":id})).unwrap() else { panic!("plugin.run blocked instead of starting a job") };
+    assert_eq!(s.active().unwrap().revision, revision);
+    s.wait_job(job).unwrap();
+    assert_ne!(pixels(&s), before);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pixels(&s), before);
+    registry::install_bytes(&wat_plugin(id, "{}", "(loop $forever (br $forever)) (i32.const 0)")).unwrap();
+    let revision = s.active().unwrap().revision;
+    let crate::jobs::Started::Job(job) = s.start(RUN, json!({"id":id})).unwrap() else { panic!("expected cancellable job") };
+    assert!(s.cancel_job(job));
+    assert!(matches!(s.wait_job(job), Err(EngineError::Cancelled)));
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(pixels(&s), before);
+}
+
+fn b64(b: &[u8]) -> String {
+    photocraft_paint::tile::b64_encode(b)
+}
+
+/// A WAT plug-in with its own `id` whose `pc_filter` body is `filter`.
+fn wat_plugin(id: &str, params: &str, filter: &str) -> Vec<u8> {
+    let manifest = format!(r#"{{"id":"{id}","name":"Test {id}","version":"1","kind":"filter","params":{params}}}"#);
+    wat_module(&manifest, filter)
+}
+
+/// A complete manifest lets accelerator fixtures use the same WAT filter body.
+fn wat_module(manifest: &str, filter: &str) -> Vec<u8> {
+    let src = format!(
+        r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 16) "{data}")
+  (func (export "pc_abi_version") (result i32) (i32.const 1))
+  (func (export "pc_manifest") (result i64) (i64.or (i64.shl (i64.const {len}) (i64.const 32)) (i64.const 16)))
+  (func (export "pc_alloc") (param $n i32) (result i32) (local $old i32)
+    (local.set $old (memory.grow (i32.shr_u (i32.add (local.get $n) (i32.const 65535)) (i32.const 16))))
+    (if (result i32) (i32.eq (local.get $old) (i32.const -1)) (then (i32.const 0)) (else (i32.mul (local.get $old) (i32.const 65536)))))
+  (func (export "pc_filter") (param $buf i32) (param $len i32) (param $w i32) (param $h i32)
+    (param $ch i32) (param $fmt i32) (param $pp i32) (param $pl i32) (result i32) {filter}))"#,
+        data = manifest.replace('"', "\\\""),
+        len = manifest.len()
+    );
+    wat::parse_str(src).unwrap()
+}
+
+/// Sets every sample to 0.5.
+const GREY: &str = r#"(local $i i32)
+  (block $done (loop $l
+    (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+    (f32.store (i32.add (local.get $buf) (local.get $i)) (f32.const 0.5))
+    (local.set $i (i32.add (local.get $i) (i32.const 4)))
+    (br $l)))
+  (i32.const 0)"#;
+
+fn doc(depth: u32) -> Session {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 40, "height": 28, "depth": depth})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("pattern", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        for y in 0..28 {
+            for x in 0..40 {
+                let v = ((x * 5 + y * 3) % 17) as f32 / 16.0;
+                let a = if (x * y) % 11 == 3 { 0.0 } else { 0.3 + (x % 3) as f32 * 0.35 };
+                surf.write_pixel(x, y, &[v, 1.0 - v, (x % 4) as f32 / 3.0, a]);
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+fn pixels(s: &Session) -> Vec<f32> {
+    let d = s.active().unwrap();
+    d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 40, 28))
+}
+
+fn select_partial(s: &mut Session) {
+    s.edit("sel", |doc, _| {
+        let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(4, 4, 30, 20), &[1.0]);
+        sel.fill_rect(Rect::new(4, 4, 30, 9), &[0.4]);
+        doc.selection = Some(sel);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn example_invert_matches_builtin_invert_and_round_trips_the_registry() {
+    // One test owns the example plug-in's id (the registry is process-wide).
+    let r = crate::session().execute("plugin.install", json!({"data": b64(INVERT)})).unwrap();
+    assert_eq!(r["id"], INVERT_ID);
+    assert_eq!(r["name"], "Invert (WebAssembly)");
+    let list = crate::session().execute("plugin.list", json!({})).unwrap();
+    assert!(list["plugins"].as_array().unwrap().iter().any(|p| p["id"] == INVERT_ID));
+
+    for depth in [8, 16, 32] {
+        for with_selection in [false, true] {
+            let mut a = doc(depth);
+            let mut b = doc(depth);
+            if with_selection {
+                select_partial(&mut a);
+                select_partial(&mut b);
+            }
+            let before = pixels(&a);
+            a.execute("image.adjustments.invert", json!({})).unwrap();
+            let r = b.execute("plugin.run", json!({"id": INVERT_ID})).unwrap();
+            assert_eq!(r["plugin"], INVERT_ID);
+            assert_eq!(pixels(&a), pixels(&b), "depth {depth}, selection {with_selection}");
+            assert_ne!(pixels(&b), before);
+            // One undo step.
+            b.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(pixels(&b), before, "depth {depth} undo");
+        }
+    }
+
+    // Smart objects record a smart filter.
+    let mut s = doc(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("plugin.run", json!({"id": INVERT_ID})).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, RUN);
+    assert_eq!(sm.smart_filters[0].params["id"], INVERT_ID);
+
+    // Install from a path (native), then remove.
+    let dir = std::env::temp_dir().join(format!("pc-plugin-cmds-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("invert.wasm");
+    std::fs::write(&path, INVERT).unwrap();
+    let r = crate::session().execute("plugin.install", json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(r["source"], path.to_str().unwrap());
+    assert!(crate::session().execute("plugin.install", json!({"path": path.to_str().unwrap(), "replace": false})).is_err());
+    crate::session().execute("plugin.remove", json!({"id": INVERT_ID})).unwrap();
+    assert!(doc(8).execute("plugin.run", json!({"id": INVERT_ID})).is_err(), "removed");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn installing_a_file_that_is_not_wasm_names_what_it_is() {
+    // #10362: the Plug-ins > Install Plug-in dialog pointed at an old Photoshop plug-in (.8bt, a
+    // native Windows module) failed with a message that said nothing about that file. `path` goes
+    // through `registry::load_file`, so this is the exact user path.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Old Plug-in.8bt");
+    std::fs::write(&path, b"MZ\x90\x00\x03\0").unwrap();
+    let e = crate::session().execute("plugin.install", json!({"path": path.to_str().unwrap()})).unwrap_err();
+    let msg = e.to_string();
+    assert!(msg.contains("Windows") && msg.contains("8bf"), "{msg}");
+    assert!(msg.contains("WebAssembly"), "{msg}");
+    // The hint is static text: no path the person did not choose is added to the message.
+    assert!(!msg.contains(dir.path().to_str().unwrap()), "{msg}");
+}
+
+#[test]
+fn params_are_validated_and_passed() {
+    let bytes = wat_plugin("test.cmds.grey", r#"{"amount":{"type":"number","min":0,"max":1,"default":1}}"#, GREY);
+    crate::session().execute("plugin.install", json!({"data": b64(&bytes)})).unwrap();
+    let list = crate::session().execute("plugin.list", json!({})).unwrap();
+    let me = list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "test.cmds.grey").unwrap().clone();
+    assert_eq!(me["params"], r#"{"amount":0..1=1}"#);
+    let mut s = doc(16);
+    let before = pixels(&s);
+    let undo_before = s.active().unwrap().history.can_undo();
+    // Wrong type: refused before any edit (no undo step).
+    assert!(matches!(s.execute("plugin.run", json!({"id": "test.cmds.grey", "amount": "x"})), Err(EngineError::BadParams { .. })));
+    assert!(s.execute("plugin.run", json!({"id": "test.cmds.grey", "params": {"amount": true}})).is_err());
+    assert_eq!(pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.can_undo(), undo_before);
+    // Flat and nested params both work.
+    s.execute("plugin.run", json!({"id": "test.cmds.grey", "amount": 0.5})).unwrap();
+    s.execute("plugin.run", json!({"id": "test.cmds.grey", "params": {"amount": 0.25}})).unwrap();
+    assert!((pixels(&s)[0] - 0.5).abs() < 1e-4);
+    crate::session().execute("plugin.remove", json!({"id": "test.cmds.grey"})).unwrap();
+}
+
+/// #7524: a reduced live preview divides the plug-in's `"unit": "px"` params by the reduction, in
+/// both param shapes, and leaves unitless params (even ones named like built-in pixel params) and
+/// the command's own keys alone.
+#[test]
+fn preview_scales_the_plugin_pixel_params() {
+    let id = "test.cmds.px";
+    let params = concat!(
+        r#"{"amount":{"type":"number","min":0,"max":100,"default":12,"unit":"px"},"#,
+        r#""radius":{"type":"int","min":2,"max":50,"default":10,"unit":"px"},"#,
+        r#""size":{"type":"number","min":0,"max":100,"default":50}}"#
+    );
+    crate::session().execute("plugin.install", json!({"data": b64(&wat_plugin(id, params, GREY))})).unwrap();
+    let list = crate::session().execute("plugin.list", json!({})).unwrap();
+    let me = list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    assert_eq!(me["paramsSchema"]["amount"]["unit"], "px");
+
+    // Top level (the dialog's shape): px params scaled, `size` and the command's keys untouched.
+    let mut p = json!({"id": id, "amount": 12, "radius": 10, "size": 40, "channel": 1, "__preview": true});
+    scale_for_preview(&mut p, 4);
+    assert_eq!(p, json!({"id": id, "amount": 3.0, "radius": 3, "size": 40, "channel": 1, "__preview": true}));
+    // Nested: scaled inside `params`, missing ones from their defaults.
+    let mut p = json!({"id": id, "params": {"size": 40}});
+    scale_for_preview(&mut p, 2);
+    assert_eq!(p, json!({"id": id, "params": {"amount": 6.0, "radius": 5, "size": 40}}));
+    let mut p = json!({"id": id, "params": null});
+    scale_for_preview(&mut p, 2);
+    assert_eq!(p["params"], json!({"amount": 6.0, "radius": 5}));
+    // The scaled params still run.
+    doc(8).execute("plugin.run", p).unwrap();
+    // Full resolution, an unknown plug-in or bad shapes change nothing and never panic.
+    for (mut p, k) in [
+        (json!({"id": id, "amount": 12}), 1),
+        (json!({"id": "test.cmds.none", "amount": 12}), 4),
+        (json!({"amount": 12}), 4),
+        (json!({"id": id, "params": [1]}), 4),
+        (json!([1, 2]), 4),
+    ] {
+        let before = p.clone();
+        scale_for_preview(&mut p, k);
+        assert_eq!(p, before);
+    }
+    // A value of the wrong type is kept for the run to reject.
+    let mut p = json!({"id": id, "amount": "lots", "radius": 10});
+    scale_for_preview(&mut p, 4);
+    assert_eq!(p, json!({"id": id, "amount": "lots", "radius": 3}));
+    assert!(doc(8).execute("plugin.run", p).is_err());
+
+    // The factor: radius (min 2) 10 allows 4, 5 allows 2; unitless and missing plug-ins don't limit it.
+    assert_eq!(preview_factor(&json!({"id": id, "radius": 10}), 4), 4);
+    assert_eq!(preview_factor(&json!({"id": id, "radius": 5, "size": 0.5}), 4), 2);
+    assert_eq!(preview_factor(&json!({"id": id, "params": {"radius": 3}}), 4), 1);
+    assert_eq!(preview_factor(&json!({"id": id}), 8), 5, "the default radius");
+    assert_eq!(preview_factor(&json!({"id": "test.cmds.none", "radius": 3}), 4), 4);
+    crate::session().execute("plugin.remove", json!({"id": id})).unwrap();
+}
+
+#[test]
+fn locked_layers_refuse_plugin_filters() {
+    // Like built-in filters: locked pixels (or Lock All) refuse the run with no undo step.
+    let id = "test.cmds.locks";
+    crate::session().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", GREY))})).unwrap();
+    for lock_all in [false, true] {
+        let mut s = doc(16);
+        let layer = s.active().unwrap().active_layer.unwrap();
+        s.edit("lock", |doc, _| {
+            let l = doc.layer_mut(layer).unwrap();
+            if lock_all {
+                l.locks.all = true;
+            } else {
+                l.locks.pixels = true;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let before = pixels(&s);
+        let r = s.execute("plugin.run", json!({"id": id}));
+        assert!(r.as_ref().is_err_and(|e| e.to_string().contains("is locked")), "lock_all {lock_all}: {r:?}");
+        assert_eq!(pixels(&s), before, "lock_all {lock_all}");
+        s.execute("edit.undo", json!({})).unwrap();
+        let l = s.active().unwrap().doc.layer(layer).unwrap();
+        assert!(!l.locks.pixels && !l.locks.all, "the refused run left no undo step");
+        // Unlocked, the plug-in runs.
+        s.execute("plugin.run", json!({"id": id})).unwrap();
+        assert_ne!(pixels(&s), before);
+    }
+    // Lock Transparency: the run changes colour but keeps every pixel's alpha (GREY sets alpha too).
+    let mut s = doc(16);
+    let layer = s.active().unwrap().active_layer.unwrap();
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(layer).unwrap().locks.transparency = true;
+        Ok(())
+    })
+    .unwrap();
+    let before = pixels(&s);
+    s.execute("plugin.run", json!({"id": id})).unwrap();
+    let after = pixels(&s);
+    assert_ne!(after, before);
+    for (a, b) in after.as_chunks::<4>().0.iter().zip(before.as_chunks::<4>().0) {
+        assert_eq!(a[3], b[3], "alpha kept");
+        if b[3] > 0.0 {
+            assert!((a[0] - 0.5).abs() < 1e-3, "colour changed: {a:?}");
+        }
+    }
+    crate::session().execute("plugin.remove", json!({"id": id})).unwrap();
+}
+
+#[test]
+fn hostile_plugins_fail_without_touching_the_document() {
+    for (id, body) in [
+        ("test.cmds.trap", "unreachable"),
+        ("test.cmds.spin", "(loop $l (br $l)) (i32.const 0)"),
+        ("test.cmds.oob", "(i32.store (i32.const -4) (i32.const 1)) (i32.const 0)"),
+    ] {
+        crate::session().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", body))})).unwrap();
+        let mut s = doc(8);
+        let before = pixels(&s);
+        let undo_before = s.active().unwrap().history.can_undo();
+        let t = std::time::Instant::now();
+        assert!(s.execute("plugin.run", json!({"id": id})).is_err(), "{id}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{id} took {:?}", t.elapsed());
+        assert_eq!(pixels(&s), before, "{id}");
+        assert_eq!(s.active().unwrap().history.can_undo(), undo_before, "{id}: no undo step");
+        crate::session().execute("plugin.remove", json!({"id": id})).unwrap();
+    }
+}
+
+#[test]
+fn bad_params_are_errors_not_panics() {
+    let mut s = doc(8);
+    for (cmd, p) in [
+        ("plugin.install", json!({})),
+        ("plugin.install", json!({"data": 5})),
+        ("plugin.install", json!({"data": "!!!not base64"})),
+        ("plugin.install", json!({"data": "QUJD"})),
+        ("plugin.install", json!({"data": b64(b"\0asm\x01\0\0\0junk")})),
+        ("plugin.install", json!({"path": ""})),
+        ("plugin.install", json!({"path": 3})),
+        ("plugin.install", json!({"path": "/definitely/not/here.wasm"})),
+        ("plugin.install", json!({"path": "/"})),
+        ("plugin.remove", json!({})),
+        ("plugin.remove", json!({"id": "no.such.plugin"})),
+        ("plugin.run", json!({})),
+        ("plugin.run", json!({"id": 7})),
+        ("plugin.run", json!({"id": "no.such.plugin"})),
+        ("plugin.reload", json!({"path": 1})),
+        ("plugin.reload", json!({"path": ""})),
+        ("plugin.reload", json!({"path": "/definitely/not/here"})),
+    ] {
+        assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {p}");
+    }
+    // No document: running is disabled.
+    assert!(crate::session().execute("plugin.run", json!({"id": "x"})).is_err());
+}
+
+#[test]
+fn preference_folder_is_loaded() {
+    let dir = std::env::temp_dir().join(format!("pc-plugin-prefs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("grey.wasm"), wat_plugin("test.cmds.folder", "{}", GREY)).unwrap();
+    std::fs::write(dir.join("broken.wasm"), b"nope").unwrap();
+    let mut s = crate::session();
+    // Off by default: setting the folder alone loads nothing.
+    s.execute("prefs.set", json!({"path": "plugIns.additionalPluginsFolder", "value": dir.to_str().unwrap()})).unwrap();
+    assert!(registry::get("test.cmds.folder").is_none());
+    s.execute("prefs.set", json!({"path": "plugIns.useAdditionalPluginsFolder", "value": true})).unwrap();
+    assert!(registry::get("test.cmds.folder").is_some());
+    let list = s.execute("plugin.list", json!({})).unwrap();
+    assert_eq!(list["folder"]["failed"].as_array().map(Vec::len), Some(1));
+    registry::remove("test.cmds.folder");
+    let r = s.execute("plugin.reload", json!({})).unwrap();
+    assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
+    registry::remove("test.cmds.folder");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Round-trips preferences to prove preset namespaces survive restart and malformed command inputs are rejected.
+#[test]
+fn presets_survive_restart_and_are_isolated_and_validated() {
+    let plugin = photocraft_plugins::Plugin::load(
+        &wat_plugin("test.saved-presets", r#"{"fine":{"type":"number","min":0,"max":100,"default":45}}"#, GREY),
+        Default::default(),
+    )
+    .unwrap();
+    let id = plugin.id().to_string();
+    photocraft_plugins::registry::install(plugin);
+    let mut s = crate::session();
+    s.execute("plugin.preset.save", json!({"id":id,"name":"我的預設","params":{"fine":72}})).unwrap();
+    let mut restart = crate::session();
+    restart.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restart.execute("plugin.preset.load", json!({"id":id,"name":"我的預設"})).unwrap(), json!({"fine":72.0}));
+    assert_eq!(restart.execute("plugin.preset.list", json!({"id":"other.plugin"})).unwrap(), json!({}));
+    for p in [
+        json!({}),
+        json!({"id":id,"name":"","params":{"fine":72}}),
+        json!({"id":id,"name":"x","params":42}),
+        json!({"id":"../bad","name":"x","params":{"fine":72}}),
+    ] {
+        assert!(restart.execute("plugin.preset.save", p).is_err());
+    }
+    restart.execute("plugin.preset.remove", json!({"id":id,"name":"我的預設"})).unwrap();
+    assert_eq!(restart.execute("plugin.preset.list", json!({"id":id})).unwrap(), json!({}));
+}
+
+#[test]
+fn skin_smooth_preset_load_preserves_session_samples() {
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    let id = "local.skinsmooth.skin-smooth";
+    let mut session = crate::session();
+    let samples = json!({"positiveColors":[[0.7, 0.5, 0.4]], "negativeColors":[[0.2, 0.3, 0.8]]});
+    let mut params = samples.as_object().unwrap().clone();
+    params.insert("fine".into(), json!(72));
+    session.execute("plugin.preset.save", json!({"id":id,"name":"Portrait","params":params})).unwrap();
+    let mut loaded = crate::session();
+    loaded.load_prefs_json(&session.prefs_to_json()).unwrap();
+    let preset = loaded.execute("plugin.preset.load", json!({"id":id,"name":"Portrait"})).unwrap();
+    assert!(preset.get("positiveColors").is_none());
+    assert!(preset.get("negativeColors").is_none());
+    let mut current = samples.as_object().unwrap().clone();
+    current.extend(preset.as_object().unwrap().clone());
+    assert_eq!(current["positiveColors"], samples["positiveColors"]);
+    assert_eq!(current["negativeColors"], samples["negativeColors"]);
+    assert_eq!(current["fine"], json!(72.0));
+}
+
+/// Checks that rejected profiles leave no edit, while sRGB filtering preserves alpha, selection bounds and undo/redo.
+#[test]
+fn skin_smooth_checks_icc_before_editing_at_every_depth() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = doc(depth);
+        select_partial(&mut s);
+        let before = pixels(&s);
+        let params = json!({"id":"local.skinsmooth.skin-smooth", "params":{"skinOnly":false,"brightness":10}});
+        for profile in [Some(Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = profile;
+            let revision = s.active().unwrap().revision;
+            assert!(s.execute(RUN, params.clone()).is_err());
+            assert_eq!(pixels(&s), before);
+            assert_eq!(s.active().unwrap().revision, revision);
+        }
+        Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+        let mut full_strength = crate::session();
+        let mut full_doc = (*s.active().unwrap().doc).clone();
+        full_doc.selection.as_mut().unwrap().fill_rect(Rect::new(4, 4, 30, 20), &[1.0]);
+        full_strength.add_document(full_doc, None);
+        full_strength.select_layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+        full_strength.execute(RUN, params.clone()).unwrap();
+        let full_strength = pixels(&full_strength);
+        let tolerance = match depth {
+            8 => 1.0 / 255.0,
+            16 => 1.0 / 65535.0,
+            _ => 1e-6,
+        };
+        s.execute(RUN, params).unwrap();
+        let after = pixels(&s);
+        assert_ne!(after, before);
+        let mut largest_change = 0.0_f32;
+        let mut full_change = 0.0_f32;
+        for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
+            assert_eq!(original[3], filtered[3]);
+            let (x, y) = (i % 40, i / 40);
+            if !(4..30).contains(&x) || !(4..20).contains(&y) {
+                assert_eq!(original, filtered, "{depth}: pixel {x},{y} outside selection");
+            } else if y < 9 {
+                for channel in 0..3 {
+                    largest_change = largest_change.max((full_strength[i * 4 + channel] - original[channel]).abs());
+                    let expected = original[channel] * 0.6 + full_strength[i * 4 + channel] * 0.4;
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: 40% selection at {x},{y}, channel {channel}");
+                }
+            } else {
+                assert_eq!(&filtered[..3], &full_strength[i * 4..i * 4 + 3], "{depth}: 100% selection at {x},{y}");
+                for channel in 0..3 {
+                    full_change = full_change.max((filtered[channel] - original[channel]).abs());
+                }
+            }
+        }
+        assert!(largest_change > 4.0 * tolerance, "{depth}: the full-strength fractional region must change, delta={largest_change}");
+        assert!(full_change > 4.0 * tolerance, "{depth}: the fully selected region must change, delta={full_change}");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(pixels(&s), before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(pixels(&s), after);
+    }
+}
+
+/// Mutate the registry after capture, then run the real edit body without racing a worker.
+#[test]
+fn captured_plugin_keeps_its_color_requirement_after_registry_changes() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    for replace in [false, true] {
+        let id = if replace { "test.cmds.captured-replaced" } else { "test.cmds.captured-removed" };
+        for depth in [8, 16, 32] {
+            for supported in [false, true] {
+                let manifest = json!({"id":id,"name":"Captured Skin Smooth","version":"1","kind":"filter","params":{},"accelerator":"skinsmooth.v2"});
+                let captured = registry::install_bytes(&wat_module(&manifest.to_string(), GREY)).unwrap();
+                let mut s = doc(depth);
+                let profile = if supported { Builtin::Srgb } else { Builtin::DisplayP3 };
+                Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(profile.profile().to_bytes());
+                let before = pixels(&s);
+                let state = s.active().unwrap();
+                let (revision, history) = (state.revision, state.history.past_len());
+                if replace {
+                    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+                } else {
+                    assert!(registry::remove(id));
+                }
+                let params = json!({"id":id});
+                assert!(check_color(&s.active().unwrap().doc, &params).is_ok(), "ID lookup sees only the changed registry");
+                let result = run(&mut s, &params, captured);
+                if supported {
+                    result.unwrap();
+                    assert_ne!(pixels(&s), before, "sRGB remains filterable after registry changes");
+                } else {
+                    assert!(matches!(result, Err(EngineError::BadParams { .. })), "{id}, {depth}: {result:?}");
+                    assert_eq!(pixels(&s), before);
+                    let state = s.active().unwrap();
+                    assert_eq!((state.revision, state.history.past_len()), (revision, history));
+                }
+            }
+        }
+        registry::remove(id);
+    }
+}
+
+#[test]
+fn captured_plugin_does_not_inherit_a_replacements_color_requirement() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    let id = "test.cmds.captured-general";
+    let captured = registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let manifest = json!({"id":id,"name":"Replacement Skin Smooth","version":"1","kind":"filter","params":{},"accelerator":"skinsmooth.v2"});
+    registry::install_bytes(&wat_module(&manifest.to_string(), GREY)).unwrap();
+    let mut s = doc(8);
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    let before = pixels(&s);
+    let params = json!({"id":id});
+    assert!(check_color(&s.active().unwrap().doc, &params).is_err(), "ID lookup sees the replacement's restriction");
+    run(&mut s, &params, captured).unwrap();
+    assert_ne!(pixels(&s), before, "the captured ordinary filter accepts non-sRGB input");
+    registry::remove(id);
+}
+
+/// A +1-stop, tone-only run has an independent RGB oracle: double the input, then clamp.
+/// Keep the selection bounds; check unselected, 40%-selected and fully selected pixels.
+#[test]
+fn skin_smooth_selection_matches_independent_exposure_oracle_at_every_depth() {
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = doc(depth);
+        select_partial(&mut s);
+        let before = pixels(&s);
+        s.execute(
+            RUN,
+            json!({"id":"local.skinsmooth.skin-smooth", "params":{
+                "preset":"manual", "fine":0,"medium":0,"large":0,"detail":0,
+                "skinOnly":false,"brightness":100,"warmth":0,"redness":0
+            }}),
+        )
+        .unwrap();
+        let after = pixels(&s);
+        let tolerance = match depth {
+            8 => 1.0 / 255.0,
+            16 => 1.0 / 65535.0,
+            _ => 1e-6,
+        };
+        let mut largest_change = 0.0_f32;
+        for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
+            let (x, y) = (i % 40, i / 40);
+            assert_eq!(filtered[3], original[3]);
+            // Unselected pixels and hidden RGB on fully transparent pixels stay exact.
+            if !(4..30).contains(&x) || !(4..20).contains(&y) || original[3] == 0.0 {
+                assert_eq!(original, filtered, "{depth}: unselected or transparent pixel {x},{y}");
+            } else {
+                let coverage = if y < 9 { 0.4 } else { 1.0 };
+                for channel in 0..3 {
+                    let exposed = (original[channel] * 2.0).min(1.0);
+                    let expected = original[channel] * (1.0 - coverage) + exposed * coverage;
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: coverage {coverage} at {x},{y}, channel {channel}");
+                    largest_change = largest_change.max((expected - original[channel]).abs());
+                }
+            }
+        }
+        assert!(largest_change > 4.0 * tolerance, "{depth}: the reference must exercise a visible RGB change");
+    }
+}
+
+#[test]
+fn skin_smooth_smart_rerender_checks_profile_before_using_cached_stages() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    let mut s = doc(8);
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(RUN, json!({"id":"local.skinsmooth.skin-smooth"})).unwrap();
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    let state = s.active().unwrap();
+    let LayerContent::Smart(sm) = &state.doc.layer(state.active_layer.unwrap()).unwrap().content else { panic!("expected smart object") };
+    assert!(crate::smart_cmds::render(&state.doc, sm).is_err());
+}
+
+/// Compares untagged and explicitly host-tagged pixels without assigning a profile as a filtering side effect.
+#[test]
+fn untagged_skin_smooth_matches_the_same_pixels_tagged_with_the_host_default() {
+    use std::sync::Arc;
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut untagged = doc(depth);
+        let mut tagged = doc(depth);
+        select_partial(&mut untagged);
+        select_partial(&mut tagged);
+        assert!(untagged.active().unwrap().doc.icc_profile.is_none());
+        let profile = crate::color_cmds::document_profile(&untagged.active().unwrap().doc);
+        Arc::make_mut(tagged.active_mut().unwrap().doc_mut()).icc_profile = Some(profile.to_bytes());
+        let before = pixels(&untagged);
+        let params = json!({"id":"local.skinsmooth.skin-smooth", "params":{"brightness":10}});
+        untagged.execute(RUN, params.clone()).unwrap();
+        tagged.execute(RUN, params).unwrap();
+        assert_ne!(pixels(&untagged), before, "untagged RGB must actually be filtered at {depth} bits");
+        assert_eq!(pixels(&untagged), pixels(&tagged));
+        assert!(untagged.active().unwrap().doc.icc_profile.is_none(), "filtering never assigns a profile implicitly");
+        untagged.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(pixels(&untagged), before);
+    }
+}
+
+#[test]
+fn smart_plugin_progress_keeps_the_stacks_progress_interval() {
+    let id = "test.cmds.stack-progress";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let canvas = photocraft_geom::Rect::new(0, 0, 32, 24);
+    let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(canvas, &[0.2, 0.4, 0.6, 1.0]);
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.progress(0.25, "stack");
+    let result = crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx).unwrap().unwrap();
+    assert_ne!(result.pixel(1, 1), surface.pixel(1, 1));
+    assert_eq!(ctx.fraction(), 0.25, "a plugin cannot complete the rest of the stack");
+    ctx.cancel();
+    assert!(matches!(crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx), Err(EngineError::Cancelled)));
+}
+
+#[test]
+fn preview_regions_cannot_restrict_committed_smart_filters() {
+    let id = "test.cmds.committed-preview";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width":32,"height":24,"background":"#204060"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(RUN, json!({"id":id,"__previewRegion":[8,8,16,16]})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert!(sm.smart_filters.last().unwrap().params.get("__previewRegion").is_none());
+    assert_eq!(sm.cache.as_ref().unwrap().pixel(0, 0), sm.cache.as_ref().unwrap().pixel(12, 12));
+    let mut doc = (**doc).clone();
+    crate::smart_cmds::refresh(&mut doc, layer).unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert_eq!(sm.cache.as_ref().unwrap().pixel(0, 0), sm.cache.as_ref().unwrap().pixel(12, 12));
+}
+
+#[test]
+fn bitmap_documents_refuse_plugin_filters_but_keep_plugin_management() {
+    // #10484: Photoshop 2025 refuses its filter plug-in modules (Solarize, Clouds, Average) on a
+    // Bitmap document and runs them on a Grayscale one. Installing, listing and removing stay.
+    let id = "test.cmds.bitmap";
+    crate::session().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", GREY))})).unwrap();
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 40, "height": 28, "mode": "grayscale", "background": "white"})).unwrap();
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    assert!(!s.is_enabled(RUN), "Filter › Plug-ins is greyed out");
+    let e = s.execute(RUN, json!({"id": id})).unwrap_err().to_string();
+    assert!(e.contains("Bitmap mode"), "{e}");
+    assert_eq!(pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no undo step");
+    for cmd in ["plugin.list", "plugin.install", "plugin.remove", "plugin.reload"] {
+        assert!(s.is_enabled(cmd), "{cmd}");
+    }
+    let list = s.execute("plugin.list", json!({})).unwrap();
+    assert!(list["plugins"].as_array().unwrap().iter().any(|p| p["id"] == id));
+    s.execute("plugin.remove", json!({"id": id})).unwrap();
+}

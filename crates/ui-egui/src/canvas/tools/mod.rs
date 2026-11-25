@@ -460,6 +460,11 @@ impl Preflight<'_, '_> {
         let pressure = pointer.sample.pressure;
         let mods = pointer.mods;
         self.scope.with_app(|app| {
+            // The Adjustment Brush paints a new layer's mask whatever the active layer is (hidden, locked, a group or
+            // type): only Indexed Color refuses it (#12519).
+            if tool == Tool::AdjustmentBrush {
+                return crate::adjustment_brush::press_refused(app);
+            }
             // Auto-Select's press picks the layer to move, so the hidden active layer is not its target.
             let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.cmd;
             (!picks && press_refused(app, tool))

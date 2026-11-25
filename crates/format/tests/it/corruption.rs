@@ -160,6 +160,66 @@ fn too_new_version_rejected() {
     assert!(matches!(load_from_bytes(&b), Err(FormatError::TooNew { found: 999, .. })));
 }
 
+// In-tree-generated manifest mutations; no third-party files or user documents.
+#[test]
+fn newer_format_keeps_the_reported_prerelease_identity() {
+    let writer = "photocraft-format 0.23.1-nightly.20261121.17.1.g0123456789ab";
+    let bytes = rebuild(&sample(), |name, original| {
+        Some(if name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            manifest["format_version"] = 999.into();
+            manifest["generator"] = writer.into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            original
+        })
+    });
+    let error = load_from_bytes(&bytes).unwrap_err();
+    match &error {
+        FormatError::TooNew { found, supported, generator } => {
+            assert!(found > supported);
+            assert_eq!(generator.as_deref(), Some(writer));
+        }
+        other => panic!("expected newer-format refusal, got {other}"),
+    }
+    assert!(error.to_string().contains(writer), "the person must be able to identify the reported build");
+}
+
+#[test]
+fn hostile_writer_text_cannot_expand_or_inject_lines_into_newer_file_diagnostics() {
+    let writer = format!("reported nightly\n\r\t\u{202e}{}", "x".repeat(100_000));
+    let bytes = rebuild(&sample(), |name, original| {
+        Some(if name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            manifest["format_version"] = 999.into();
+            manifest["generator"] = writer.clone().into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            original
+        })
+    });
+    let error = load_from_bytes(&bytes).unwrap_err();
+    assert!(matches!(&error, FormatError::TooNew { generator: Some(value), .. } if value.len() < writer.len() / 10));
+    let display = error.to_string();
+    assert!(display.len() < writer.len() / 10 && format!("{error:?}").len() < writer.len() / 10);
+    assert!(!display.contains(['\n', '\r', '\t', '\u{202e}']), "reported metadata must not inject lines or directional controls");
+}
+
+#[test]
+fn same_format_damage_is_not_reclassified_from_its_prerelease_generator() {
+    let bytes = rebuild(&sample(), |name, original| {
+        Some(if name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            manifest["generator"] = "photocraft-format 99.0.0-nightly.20990101.1.1.g0123456789ab".into();
+            manifest["document"] = false.into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            original
+        })
+    });
+    assert!(!matches!(load_from_bytes(&bytes).unwrap_err(), FormatError::TooNew { .. }), "only format compatibility, not a writer label, decides TooNew");
+}
+
 #[test]
 fn invalid_hash_strings_rejected() {
     let b = rebuild(&sample(), |n, d| {

@@ -109,7 +109,7 @@ impl StackDialog for PluginDialog {
                     ui.label(tl!(&msg));
                 }
             })
-            .reset_with(|fields, opening| {
+            .reset_with(|fields, opening, _| {
                 let mut reset = fields.clone();
                 if reset.contains_key("__presetValues") {
                     plugin_presets::reset(&self.presets, &mut reset);

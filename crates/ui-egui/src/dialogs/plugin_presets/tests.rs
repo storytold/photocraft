@@ -1,4 +1,6 @@
 use super::*;
+use egui_kittest::kittest::Queryable;
+use photocraft_engine::prefs::SavedPrefsExt;
 
 fn plugin_fields(app: &PhotocraftApp) -> &Map<String, Value> {
     &app.framework.dialogs.get::<crate::dialogs::plugin_dialog::PluginDialog>().unwrap().fields
@@ -7,7 +9,6 @@ fn plugin_fields(app: &PhotocraftApp) -> &Map<String, Value> {
 fn plugin_fields_mut(app: &mut PhotocraftApp) -> &mut Map<String, Value> {
     &mut crate::dialogs::plugin_dialog::get_mut(app).unwrap().fields
 }
-use egui_kittest::kittest::Queryable;
 
 const MENU: &str = "plugin.filter.local.skinsmooth.skin-smooth";
 const ID: &str = "local.skinsmooth.skin-smooth";
@@ -21,7 +22,10 @@ fn app() -> Box<PhotocraftApp> {
 
 fn harness(size: egui::Vec2, theme: crate::theme::AppTheme) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let app = app();
-    let mut h = egui_kittest::Harness::builder().with_size(size).with_context(app.ctx().clone()).build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(size)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, theme.clone());
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, MENU, json!({})).unwrap();
