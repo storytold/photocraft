@@ -318,6 +318,63 @@ fn a_broken_current_preset_name_is_ignored() {
 }
 
 #[test]
+fn a_preset_of_another_colour_space_is_refused_naming_the_channels() {
+    let cmyk = json!({"points": [[0.0, 10.0], [255.0, 245.0]], "cyan": [[0.0, 0.0], [255.0, 200.0]], "magenta": [[0.0, 30.0], [255.0, 255.0]]});
+    let mut s = crate::session();
+    let bytes = to_bytes(&CurvePreset { name: "Ink".into(), curves: parsed(&cmyk) }).expect("an ink preset writes");
+    let data = json!(photocraft_paint::tile::b64_encode(&bytes));
+
+    let e = load(&mut s, &json!({"data": data, "space": "rgb"})).unwrap_err().to_string();
+    for key in ["cyan", "magenta"] {
+        assert!(e.contains(key), "the message names the channel that has no place here: {e}");
+    }
+    assert!(e.contains("rgb"), "and says which dialog they do not fit: {e}");
+    assert_eq!(list(&mut s)["count"], 0, "a refused load adds nothing to the user list");
+    assert!(s.presets().curves_preset.is_none(), "and selects nothing");
+
+    // The same file in a dialog of its own space, and a preset of only the composite anywhere.
+    let r = load(&mut s, &json!({"data": data, "space": "cmyk"})).expect("ink curves in a cmyk dialog load");
+    assert_eq!(r["curves"]["cyan"], parsed(&cmyk)["cyan"], "the ink curves come through");
+    let plain = json!({"data": photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Plain".into(), curves: one_curve() }).expect("a preset writes")), "space": "cmyk"});
+    assert!(load(&mut s, &plain).is_ok(), "a preset naming no channel fits every dialog");
+    assert!(load(&mut s, &json!({"data": data, "space": "lab"})).is_err(), "and in a lab dialog they have no place either");
+    assert!(load(&mut s, &json!({"data": data, "space": "not a space"})).is_err(), "a space that is not one is an error");
+    assert!(load(&mut s, &json!({"data": data, "space": null})).is_ok(), "no space names no dialog: the file is read as it is");
+}
+
+#[test]
+fn a_save_that_only_returns_bytes_changes_nothing() {
+    let mut s = crate::session();
+    save(&mut s, &json!({"curves": curves_params(), "name": "Mine"})).expect("a save works");
+    let r = save(&mut s, &json!({"curves": one_curve(), "name": "Not yet", "record": false})).expect("the bytes answer");
+    assert!(r["data"].is_string(), "the bytes are there to write");
+    assert_eq!(r["name"], "Not yet", "and the name it would take");
+    assert_eq!(list(&mut s)["count"], 1, "nothing was added to the list");
+    assert_eq!(list(&mut s)["current"], "Mine", "and nothing was selected");
+    // The dialog's second step: the same curves recorded for good.
+    save(&mut s, &json!({"curves": one_curve(), "name": "Not yet"})).expect("a save works");
+    assert_eq!(list(&mut s)["count"], 2, "and now the preset is in the list");
+}
+
+#[test]
+fn a_current_name_is_kept_only_while_that_preset_is_in_the_list() {
+    let mut s = crate::session();
+    save(&mut s, &json!({"curves": curves_params(), "name": "Mine"})).expect("a save works");
+    let saved = s.presets().to_json(&s);
+    let mut t = crate::session();
+    t.load_presets_json(json!({"curves_presets": [], "curves_preset": saved["curves_preset"]}));
+    assert!(t.presets().curves_preset.is_none(), "a current preset that is not in the list is dropped");
+    assert!(list(&mut t)["current"].is_null(), "so Default is current");
+    let mut u = crate::session();
+    u.load_presets_json(saved.clone());
+    assert_eq!(u.presets().curves_preset.as_deref(), Some("Mine"), "a listed current preset stays");
+    // The list is read before the name is checked, so a preset the file keeps keeps its selection.
+    let mut v = crate::session();
+    v.load_presets_json(json!({"curves_presets": saved["curves_presets"], "curves_preset": "Mine"}));
+    assert_eq!(v.presets().curves_preset.as_deref(), Some("Mine"), "the name matches the loaded list");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();
@@ -327,6 +384,13 @@ fn the_command_docs_name_the_preset_file_type() {
     assert!(save.params.contains("curves"), "the save documents its curves key: {}", save.params);
     assert!(specs.iter().any(|c| c.id == "curves.presets.list"), "the list command is there");
     assert!(specs.iter().any(|c| c.id == "curves.presets.delete"), "the delete command is there");
+    // The preset commands change the user list, like every other preset command here.
+    for id in ["curves.presets.save", "curves.presets.load", "curves.presets.delete"] {
+        let spec = specs.iter().find(|c| c.id == id).expect("the command is installed");
+        assert!(spec.journal, "{id} is recorded in the session journal, as contours.new and contours.load are");
+    }
+    let list = specs.iter().find(|c| c.id == "curves.presets.list").expect("the list command is installed");
+    assert!(!list.journal, "a query is not journaled");
 }
 
 #[test]

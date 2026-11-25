@@ -312,7 +312,11 @@ impl PresetsExt for Session {
         if let Some(c) = p.curves_presets.filter(Value::is_array) {
             st.curves_presets = curves::from_json(&c);
         }
-        if let Some(name) = p.curves_preset {
+        // A selected name only means something while that preset is in the list: a hand-edited
+        // preferences file, or a list read entry by entry that dropped it, leaves Default current.
+        if let Some(name) = p.curves_preset
+            && st.curves_presets.iter().any(|preset| preset.name == name)
+        {
             st.curves_preset = Some(name);
         }
     }

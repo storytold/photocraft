@@ -26,6 +26,7 @@ use super::{PresetsExt, always, bad, presets_changed};
 use crate::adjust_params;
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
+use photocraft_doc::adjust::ToneSpace;
 
 /// The extension of PhotoCraft's curve preset file.
 pub const EXT: &str = "pcrv";
@@ -78,6 +79,83 @@ fn normalized(curves: &Value) -> Result<Value> {
 pub fn to_bytes(preset: &CurvePreset) -> Result<Vec<u8>> {
     let file = File { version: VERSION, name: Some(preset.name.clone()), curves: preset.curves.clone() };
     serde_json::to_vec_pretty(&file).map_err(|e| EngineError::Other(format!("cannot write the curve preset: {e}")))
+}
+
+/// The colour mode whose Curves dialog works in `space`.
+fn space_mode(space: ToneSpace) -> photocraft_doc::ColorMode {
+    match space {
+        ToneSpace::Rgb => photocraft_doc::ColorMode::Rgb,
+        ToneSpace::Cmyk => photocraft_doc::ColorMode::Cmyk,
+        ToneSpace::Lab => photocraft_doc::ColorMode::Lab,
+    }
+}
+
+/// The channels of `space` that `curves` actually moves: a channel equal to the straight line the
+/// neutral Curves adjustment holds is no curve at all, and a preset of only the straight lines of
+/// one colour mode can be applied in any other.
+fn moved_channels(space: ToneSpace, curves: &Value) -> Vec<&'static str> {
+    let Ok(plain) = adjust_params::default_for("curves", space_mode(space)) else {
+        return Vec::new();
+    };
+    let neutral = adjust_params::to_params(&plain);
+    adjust_params::channel_keys(space)
+        .iter()
+        .filter(|key| match (curves.get(*key), neutral.get(*key)) {
+            (Some(here), Some(plain)) => here != plain,
+            (Some(_), None) => true,
+            _ => false,
+        })
+        .copied()
+        .collect()
+}
+
+/// The tone space `curves` names a real channel of, from the parameter keys the Curves command
+/// itself uses ([`adjust_params::channel_keys`]): `None` when it only holds the composite or
+/// straight lines, which every colour mode has.
+fn curves_space(curves: &Value) -> Option<ToneSpace> {
+    curves.as_object()?;
+    [ToneSpace::Cmyk, ToneSpace::Lab, ToneSpace::Rgb].into_iter().find(|space| !moved_channels(*space, curves).is_empty())
+}
+
+/// The lower-case name of a tone space, as the `space` parameter spells it.
+fn space_name(space: ToneSpace) -> &'static str {
+    match space {
+        ToneSpace::Rgb => "rgb",
+        ToneSpace::Cmyk => "cmyk",
+        ToneSpace::Lab => "lab",
+    }
+}
+
+/// A `space` parameter: absent, or one of `rgb`, `cmyk`, `lab`.
+fn wanted_space(cmd: &str, p: &Value) -> Result<Option<ToneSpace>> {
+    let want = match p.get("space") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(s)) => s.trim().to_ascii_lowercase(),
+        Some(_) => return Err(bad(cmd, "`space` must be \"rgb\", \"cmyk\" or \"lab\"")),
+    };
+    let space = match want.as_str() {
+        "rgb" => ToneSpace::Rgb,
+        "cmyk" => ToneSpace::Cmyk,
+        "lab" => ToneSpace::Lab,
+        other => return Err(bad(cmd, format!("`space` must be \"rgb\", \"cmyk\" or \"lab\", not \"{other}\""))),
+    };
+    Ok(Some(space))
+}
+
+/// Why a preset whose channels belong to another colour mode cannot be applied in `want`, naming
+/// both channel sets. Reading a file into the user's list is one thing; writing curves the open
+/// dialog has no place for into it is a silent half-apply, so it is refused.
+fn check_space(cmd: &str, curves: &Value, want: ToneSpace) -> Result<()> {
+    let Some(found) = curves_space(curves) else { return Ok(()) };
+    if found == want {
+        return Ok(());
+    }
+    let named = moved_channels(found, curves);
+    let keys = |space: ToneSpace| adjust_params::channel_keys(space).join(", ");
+    Err(bad(
+        cmd,
+        format!("the preset curves {} for {} do not fit this {} dialog, which has {}", named.join(", "), space_name(found), space_name(want), keys(want)),
+    ))
 }
 
 /// The preset in `bytes`, or why the file is not one. A file naming no curve of its own comes back
@@ -170,6 +248,15 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let curves = normalized(raw)?;
     let path = path_param(CMD, p)?;
     let name = name_param(CMD, p)?.or_else(|| path.as_deref().and_then(stem));
+    // `record: false` only answers with the bytes: a dialog that writes the file itself asks
+    // first, so a failed or cancelled write leaves the user's preset list exactly as it was.
+    let record = match p.get("record") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(CMD, "`record` must be true or false")),
+    };
+    // The cap is checked for a preview too: a dialog asking for bytes of a preset it could not
+    // record should be told before it writes the file.
     if s.presets().curves_presets.len() >= MAX_PRESETS {
         return Err(bad(CMD, format!("the curve preset list is full ({MAX_PRESETS} presets)")));
     }
@@ -181,20 +268,31 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(path) = &path {
         crate::file_cmds::write_file(path, &bytes)?;
     }
-    select(s, preset);
-    presets_changed(s);
     let mut out = json!({"name": name, "count": s.presets().curves_presets.len()});
     match path {
         Some(path) => out["path"] = json!(path),
         None => out["data"] = json!(photocraft_paint::tile::b64_encode(&bytes)),
+    }
+    if record {
+        select(s, preset);
+        presets_changed(s);
+        out["count"] = json!(s.presets().curves_presets.len());
+        out["current"] = json!(s.presets().curves_preset);
     }
     Ok(out)
 }
 
 fn load(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "curves.presets.load";
+    let want = wanted_space(CMD, p)?;
     let (bytes, file_stem) = crate::preset_import_cmds::file_bytes_limited(p, CMD, &format!(".{EXT} file"), MAX_FILE_BYTES)?;
     let mut preset = from_bytes(&bytes)?;
+    // A caller that names the colour mode it is applying in (`space`) gets an error instead of a
+    // half-apply when the file's channels belong to another mode; the list and the selection stay
+    // as they were.
+    if let Some(want) = want {
+        check_space(CMD, &preset.curves, want)?;
+    }
     if preset.name.is_empty() {
         preset.name = file_stem;
     }
@@ -233,8 +331,9 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": name, "count": s.presets().curves_presets.len(), "current": s.presets().curves_preset}))
 }
 
-/// The gear menu's commands (#14379). None of them touches a document: they change the user's
-/// preset list, which persists with the preferences, so none is journaled.
+/// The gear menu's commands (#14379). They change the user's preset list, which persists with the
+/// preferences, so the three that change it are recorded in the session journal like the other
+/// preset commands (`layer.layerStyle.contours.*`); the list is a query and is not.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -252,20 +351,20 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Curve Preset…",
             menu: &[],
             shortcut: None,
-            params: r##"{"curves":{"points":[[in 0..255,out 0..255],…],"red":…,"pencil":bool?} (all channels),"name":str? (default: `path`'s file name),"path":".pcrv file"?} → {name (made unique), count, path | data (base64 when no path)} (Curves dialog › gear › Save Preset…)"##,
+            params: r##"{"curves":{"points":[[in 0..255,out 0..255],…],"red":…,"pencil":bool?} (all channels),"name":str? (default: `path`'s file name),"path":".pcrv file"?,"record":bool (default true; false only answers with the bytes, for a host that writes the file itself)} → {name (made unique), count, path | data (base64 when no path)} (Curves dialog › gear › Save Preset…)"##,
             enabled: always,
             run: save,
-            journal: false,
+            journal: true,
         },
         CommandSpec {
             id: "curves.presets.load",
             label: "Load Curve Preset…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".pcrv file"?,"data":base64 bytes?} → {name, curves (params for image.adjustments.curves), count, current} (Curves dialog › gear › Load Preset…)"##,
+            params: r##"{"path":".pcrv file"?,"data":base64 bytes?,"space":"rgb"|"cmyk"|"lab"? (the colour mode the curves are applied in: a preset whose channels belong to another one is refused, naming them)} → {name, curves (params for image.adjustments.curves), count, current} (Curves dialog › gear › Load Preset…)"##,
             enabled: always,
             run: load,
-            journal: false,
+            journal: true,
         },
         CommandSpec {
             id: "curves.presets.delete",
@@ -275,7 +374,7 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"name":str? (default: the current preset)} → {deleted, count, current|null} (Curves dialog › gear › Delete Current Preset; the preset's file on disk is left alone)"##,
             enabled: always,
             run: delete,
-            journal: false,
+            journal: true,
         },
     ]
 }
