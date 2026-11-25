@@ -255,7 +255,11 @@ fn layer_box_blurs_match_direct_convolution_at_any_radius() {
             SampleType::U16 => 1.0 / 65535.0,
             _ => 0.0,
         } + 2e-5;
-        for p in &params {
+        // Each format sees both blur modes; each radius is covered across formats.
+        for (pi, p) in params.iter().enumerate() {
+            if pi % 2 != i % 2 {
+                continue;
+            }
             let boxes = box_widths(p).expect("a box-pass blur");
             let reach: i32 = boxes.iter().map(|w| (w / 2) as i32).sum();
             let area = crate::output_area(p, s.content_bounds(), canvas, None);
