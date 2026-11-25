@@ -1563,7 +1563,7 @@ fn headless_diagonal_arrow_preserves_geometry_after_nonuniform_scale() {
 
 #[test]
 fn layer_is_a_reserved_saved_path_name() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
     // "layer" addresses the active layer's shape path or vector mask in the path commands; a
     // saved path by that name would be unaddressable (and the Paths panel's row for it would
