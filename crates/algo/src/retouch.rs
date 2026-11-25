@@ -2,12 +2,11 @@
 //! Blur, Sharpen. The brush engine (`photocraft-paint`) decides *where* and *how strongly* each dab
 //! applies; these functions decide *what* happens to the pixels.
 //!
-//! Tone curves are our own design, chosen to match the observed behaviour of Photoshop's tools:
-//! the selected range is affected most, pure black and white stay put for Midtones, every curve
-//! keeps tones in order at every strength, and "Protect Tones" works on luminance (moving luma
-//! along the curve and scaling the colour around it as much as the curve stretches the colour's
-//! own channel range, so hue is kept and a faint cast in the shadows can't grow into a saturated
-//! colour; gamut compression replaces per-channel clipping).
+//! Shadows Dodge and Highlights Burn are fitted to strokes measured in the reference application
+//! (8-bit RGB, with and without Protect Tones); the other four curves are our own design. Every
+//! curve keeps tones in order at every strength. "Protect Tones" moves luma along its curve and
+//! scales the channels by new ÷ old luma, as the reference does, so a colour keeps its hue and
+//! proportions; gamut compression replaces per-channel clipping.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,32 +26,37 @@ pub fn luma(c: [f32; 3]) -> f32 {
     0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 }
 
-/// Strength of the Shadows Dodge and Highlights Burn curves for exposure `e`. Their slope is
-/// `1 − 3s·(…)²`, so `s` must stay at or below 1/3 for the curve to keep tones in order (#11526);
-/// `e / (1 + 2e)` reaches 1/3 at full exposure and stays close to `e` at low exposure.
 #[inline]
-fn end_strength(e: f32) -> f32 {
-    e / (1.0 + 2.0 * e)
+fn smoothstep(lo: f32, hi: f32, v: f32) -> f32 {
+    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// The dodge/burn transfer for one value `v` (0..1) with strength `e` (0..1). Monotone in `v`.
+/// `protect` selects the Protect Tones curve, which is applied to luma.
+///
+/// The constants of Shadows Dodge and Highlights Burn come from reference strokes at one Exposure
+/// each (Shadows Dodge 50 %, Highlights Burn 100 %); their strength grows linearly with Exposure,
+/// as the reference's Highlights Burn does between 50 % and 100 % (#12659).
 #[inline]
-pub fn tone_curve(v: f32, e: f32, range: ToneRange, burn: bool) -> f32 {
+pub fn tone_curve(v: f32, e: f32, range: ToneRange, burn: bool, protect: bool) -> f32 {
     let v = v.max(0.0);
     let e = e.clamp(0.0, 1.0);
     let u = v.min(1.0);
-    match (range, burn) {
+    match (range, burn, protect) {
+        // Protected, black stays put and the lift fades out above the shadows; the slope at black
+        // stays at 1 + 0.8e, so scaling a near-black colour by its luma ratio keeps a cast faint.
+        (ToneRange::Shadows, false, true) => v + 0.8 * e * v * (1.0 - smoothstep(0.0, 0.7, u)),
+        (ToneRange::Shadows, false, false) => v + 0.55 * e * (1.0 - u),
+        (ToneRange::Highlights, true, true) => v - 0.195 * e * v * smoothstep(0.15, 0.64, u),
+        (ToneRange::Highlights, true, false) => v * (1.0 - 0.418 * e),
         // Gamma bend, weighted to peak at mid-grey: 0 and 1 are fixed points.
-        (ToneRange::Midtones, _) => {
+        (ToneRange::Midtones, _, _) => {
             let w = (4.0 * v * (1.0 - v)).clamp(0.0, 1.0);
             v + w * (u.powf(midtone_gamma(e, burn)) - v)
         }
-        // Shadows / highlights: weight (1−v)² or v² times the distance to the target, so the chosen
-        // end moves most (black lifts when dodging shadows, white drops when burning highlights).
-        (ToneRange::Shadows, false) => v + end_strength(e) * (1.0 - u).powi(3),
-        (ToneRange::Shadows, true) => v - e * (1.0 - u).powi(2) * v,
-        (ToneRange::Highlights, false) => v + e * u.powi(2) * (1.0 - u),
-        (ToneRange::Highlights, true) => v - end_strength(e) * u.powi(2) * v,
+        (ToneRange::Shadows, true, _) => v - e * (1.0 - u).powi(2) * v,
+        (ToneRange::Highlights, false, _) => v + e * u.powi(2) * (1.0 - u),
     }
 }
 
@@ -79,34 +83,24 @@ fn compress_gamut(c: [f32; 3], l: f32) -> [f32; 3] {
 
 /// Dodge (`burn = false`) or Burn one straight-RGB colour with strength `e` (0..1).
 ///
-/// With `protect_tones`, luma goes through the curve and the colour's offset from grey is scaled
-/// by the curve's average slope across the colour's channel range (hue kept, gamut-compressed), so
-/// the channels spread apart as far as the per-channel curve would spread them; otherwise each
-/// channel goes through the curve. Scaling the colour by new ÷ old luma instead multiplied shadow
-/// casts by up to 40× (#11522).
+/// With `protect_tones`, luma goes through the protected curve and the channels scale by new ÷ old
+/// luma (hue and proportions kept, gamut-compressed); otherwise each channel goes through the curve.
 pub fn dodge_burn(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect_tones: bool) -> [f32; 3] {
     if e <= 0.0 {
         return c;
     }
-    if protect_tones {
-        let l = luma(c);
-        let nl = tone_curve(l, e, range, burn);
-        // Widened around luma so a grey pixel still gets the local slope instead of 0 ÷ 0. The
-        // widening stops at 0 and 1, where the curve bends: past them its slope belongs to no
-        // in-gamut tone, and averaging it in skewed near-black and near-white casts.
-        let slope = |a: f32, b: f32| ((tone_curve(b, e, range, burn) - tone_curve(a, e, range, burn)) / (b - a)).max(0.0);
-        let (cmin, cmax) = (c[0].min(c[1]).min(c[2]), c[0].max(c[1]).max(c[2]));
-        let (lo, hi) = (cmin.min((l - 1e-3).max(0.0)), cmax.max((l + 1e-3).min(1.0)));
-        let mut k = slope(lo, hi);
-        // Where the curve steepens past a narrow cast, the widened slope would spread the cast
-        // further than the per-channel curve does (up to 39% near black in Shadows Dodge).
-        if (lo, hi) != (cmin, cmax) && cmax > cmin {
-            k = k.min(slope(cmin, cmax));
-        }
-        compress_gamut([nl + (c[0] - l) * k, nl + (c[1] - l) * k, nl + (c[2] - l) * k], nl)
-    } else {
-        [tone_curve(c[0], e, range, burn), tone_curve(c[1], e, range, burn), tone_curve(c[2], e, range, burn)]
+    let curve = |v: f32| tone_curve(v, e, range, burn, protect_tones);
+    if !protect_tones {
+        return c.map(curve);
     }
+    let l = luma(c);
+    // Every protected curve keeps black at 0, so a colour this dark has no ratio to scale by.
+    if l <= 1e-6 {
+        return c.map(curve);
+    }
+    let nl = curve(l);
+    let k = nl / l;
+    compress_gamut(c.map(|v| v * k), nl)
 }
 
 /// HSV-style saturation (chroma / max) of an RGB triple.
@@ -403,10 +397,10 @@ mod tests {
 
     #[test]
     fn ranges_target_their_tones() {
-        let d = |v: f32, r| tone_curve(v, 0.5, r, false) - v;
+        let d = |v: f32, r| tone_curve(v, 0.5, r, false, false) - v;
         assert!(d(0.1, ToneRange::Shadows) > d(0.9, ToneRange::Shadows));
         assert!(d(0.9, ToneRange::Highlights) > d(0.1, ToneRange::Highlights));
-        let b = |v: f32, r| v - tone_curve(v, 0.5, r, true);
+        let b = |v: f32, r| v - tone_curve(v, 0.5, r, true, false);
         assert!(b(0.9, ToneRange::Highlights) > b(0.2, ToneRange::Highlights));
         assert!(b(0.3, ToneRange::Shadows) / 0.3 > b(0.9, ToneRange::Shadows) / 0.9);
     }
@@ -431,46 +425,19 @@ mod tests {
     }
 
     #[test]
-    fn protect_tones_keeps_a_shadow_cast_faint() {
-        for c in [[8.0f32, 8.0, 13.0], [10.0, 8.0, 8.0], [26.0, 20.0, 20.0]] {
-            let c = c.map(|v| v / 255.0);
-            for (range, burn) in CURVES {
-                let p = dodge_burn(c, 1.0, range, burn, true);
-                let per_channel = dodge_burn(c, 1.0, range, burn, false);
-                let spread = |v: [f32; 3]| v[0].max(v[1]).max(v[2]) - v[0].min(v[1]).min(v[2]);
-                assert!(spread(p) <= spread(per_channel) * 1.1 + 1e-4, "{range:?} burn={burn}: {c:?} -> {p:?}, per channel {per_channel:?}");
-                assert!(spread(p) <= spread(c) * 2.0, "{range:?} burn={burn}: {c:?} -> {p:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn protect_tones_keeps_casts_by_white_and_black_faint() {
-        for c in [[1.0f32, 0.9993, 0.9993], [0.9995, 1.0, 0.9990], [0.0, 0.0007, 0.0007], [0.0005, 0.0, 0.0010]] {
-            for (range, burn) in CURVES {
-                for e in [0.3, 0.6, 1.0] {
-                    let p = dodge_burn(c, e, range, burn, true);
-                    let per_channel = dodge_burn(c, e, range, burn, false);
-                    let spread = |v: [f32; 3]| v[0].max(v[1]).max(v[2]) - v[0].min(v[1]).min(v[2]);
-                    assert!(spread(p) <= spread(per_channel) * 1.1 + 1e-5, "{range:?} burn={burn} e={e}: {c:?} -> {p:?}, per channel {per_channel:?}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn protect_tones_never_spreads_a_near_black_cast_past_the_per_channel_curve() {
-        let spread = |v: [f32; 3]| v[0].max(v[1]).max(v[2]) - v[0].min(v[1]).min(v[2]);
-        for base in [0.0f32, 0.0005, 0.001, 0.002, 0.005, 0.01] {
-            for d in [1e-5f32, 1e-4, 3e-4, 7e-4, 1.5e-3, 3e-3] {
-                for c in [[base, base, base + d], [base + d, base, base], [base, base + d, base + d], [base + d, base, base + d / 2.0]] {
-                    for (range, burn) in CURVES {
-                        for e in [0.1, 0.3, 0.6, 1.0] {
-                            let p = dodge_burn(c, e, range, burn, true);
-                            let per_channel = dodge_burn(c, e, range, burn, false);
-                            assert!(spread(p) <= spread(per_channel) + 1e-6, "{range:?} burn={burn} e={e}: {c:?} -> {p:?}, per channel {per_channel:?}");
-                        }
+    fn protect_tones_keeps_black_and_a_cast_in_proportion() {
+        let casts = [[8.0f32, 8.0, 13.0], [10.0, 8.0, 8.0], [26.0, 20.0, 20.0]].map(|c| c.map(|v| v / 255.0));
+        let near_black = [[0.0f32, 0.0007, 0.0007], [0.0005, 0.0, 0.0010], [0.002, 0.002, 0.005]];
+        for (range, burn) in CURVES {
+            for e in [0.1, 0.3, 0.6, 1.0] {
+                assert_eq!(dodge_burn([0.0; 3], e, range, burn, true), [0.0; 3], "{range:?} burn={burn} e={e}");
+                for c in casts.iter().chain(&near_black) {
+                    let p = dodge_burn(*c, e, range, burn, true);
+                    let k = p[0].max(p[1]).max(p[2]) / c[0].max(c[1]).max(c[2]);
+                    for i in 0..3 {
+                        assert!((p[i] - c[i] * k).abs() < 1e-5, "{range:?} burn={burn} e={e}: {c:?} -> {p:?}");
                     }
+                    assert!(k <= 2.0, "{range:?} burn={burn} e={e}: {c:?} scaled by {k}");
                 }
             }
         }
@@ -479,23 +446,48 @@ mod tests {
     #[test]
     fn every_curve_keeps_tones_in_order_at_every_exposure() {
         for (range, burn) in CURVES {
-            for e in 1..=100 {
-                let e = e as f32 / 100.0;
-                let mut prev = tone_curve(0.0, e, range, burn);
-                for i in 1..=1000 {
-                    let v = tone_curve(i as f32 / 1000.0, e, range, burn);
-                    assert!(v >= prev - 1e-6, "{range:?} burn={burn} e={e} at {i}: {v} < {prev}");
-                    prev = v;
+            for protect in [false, true] {
+                for e in 1..=100 {
+                    let e = e as f32 / 100.0;
+                    let mut prev = tone_curve(0.0, e, range, burn, protect);
+                    for i in 1..=1000 {
+                        let v = tone_curve(i as f32 / 1000.0, e, range, burn, protect);
+                        assert!(v >= prev - 1e-6, "{range:?} burn={burn} protect={protect} e={e} at {i}: {v} < {prev}");
+                        prev = v;
+                    }
                 }
             }
         }
     }
 
+    /// One stroke, hard 60 px brush, 8-bit RGB, measured in the reference application (#11533).
+    /// Unprotected, the measured greys scatter by a few levels around a straight line.
     #[test]
-    fn full_exposure_keeps_the_far_end_in_place() {
-        assert!(tone_curve(1.0, 1.0, ToneRange::Highlights, true) > 0.5);
-        assert!(tone_curve(0.0, 1.0, ToneRange::Shadows, false) < 0.5);
-        assert!(tone_curve(0.2, 0.5, ToneRange::Shadows, false) > tone_curve(0.0, 0.5, ToneRange::Shadows, false));
+    fn shadows_dodge_and_highlights_burn_match_the_reference() {
+        type Sample = ([u8; 3], [u8; 3]);
+        let grey = |pairs: &[(u8, u8)]| pairs.iter().map(|&(a, b)| ([a; 3], [b; 3])).collect::<Vec<Sample>>();
+        let cases: [(ToneRange, bool, f32, bool, f32, Vec<Sample>); 4] = [
+            (ToneRange::Shadows, false, 0.5, true, 1.0, {
+                let mut s = grey(&[(0, 0), (32, 44), (64, 81), (128, 138), (192, 193), (230, 230), (255, 255)]);
+                s.extend([([8, 8, 13], [12, 12, 19]), ([10, 8, 8], [14, 11, 11]), ([26, 20, 20], [36, 28, 28])]);
+                s
+            }),
+            (ToneRange::Shadows, false, 0.5, false, 4.0, grey(&[(0, 74), (32, 89), (64, 120), (128, 165), (192, 208), (255, 255)])),
+            (ToneRange::Highlights, true, 1.0, true, 1.0, {
+                let mut s = grey(&[(0, 0), (32, 32), (64, 63), (128, 108), (192, 155), (230, 184), (255, 204)]);
+                s.push(([230, 200, 180], [184, 161, 146]));
+                s
+            }),
+            (ToneRange::Highlights, true, 1.0, false, 3.0, grey(&[(32, 19), (64, 36), (128, 73), (192, 115), (255, 145)])),
+        ];
+        for (range, burn, e, protect, levels, samples) in cases {
+            for (input, want) in samples {
+                let got = dodge_burn(input.map(|v| f32::from(v) / 255.0), e, range, burn, protect).map(|v| (v * 255.0).round());
+                for (g, w) in got.iter().zip(want) {
+                    assert!((g - f32::from(w)).abs() <= levels, "{range:?} burn={burn} e={e} protect={protect}: {input:?} -> {got:?}, reference {want:?}");
+                }
+            }
+        }
     }
 
     #[test]

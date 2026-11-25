@@ -433,14 +433,16 @@ fn dodge_brightens_midtones_more_than_shadows_and_burn_darkens() {
         assert!(mid > 2.0 * shadow.max(0.0), "depth {depth}: midtone +{mid} shadow +{shadow}");
         s.execute("paint.burn", json!({"points": [[5, 15], [35, 15]], "size": 6, "hardness": 100, "exposure": 80})).unwrap();
         assert!(rgba(&s, 20, 15)[0] < 0.45);
-        // Shadows range dodges the dark side more than the grey.
+        // Shadows range dodges the dark side more than the grey, relative to each tone: with
+        // Protect Tones the reference lifts 128 by 10 levels and a 20-level shadow by about 9.
         s.execute("paint.dodge", json!({"points": [[5, 3], [75, 3]], "size": 4, "hardness": 100, "range": "shadows"})).unwrap();
-        assert!(rgba(&s, 60, 3)[0] - 0.08 > rgba(&s, 20, 3)[0] - 0.5);
+        let (dark, grey) = (rgba(&s, 60, 3)[0], rgba(&s, 20, 3)[0]);
+        assert!((dark - 0.08) / 0.08 > 2.0 * (grey - 0.5) / 0.5, "depth {depth}: 0.08 -> {dark}, 0.5 -> {grey}");
     }
     // Grayscale document too.
     let mut s = session(20, 20, 8, "gray");
     s.execute("paint.burn", json!({"points": [[10, 10]], "size": 6, "hardness": 100, "range": "highlights"})).unwrap();
-    assert!(rgba(&s, 10, 10)[0] < 0.9);
+    assert!(rgba(&s, 10, 10)[0] < 0.95);
     assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
 }
 
@@ -458,6 +460,31 @@ fn dodge_does_not_compound_within_a_stroke() {
     assert!(single > 0.55 && (single - scrubbed).abs() < 1.0 / 255.0, "{single} {scrubbed}");
     s.execute("paint.dodge", json!({"points": [[5, 10], [75, 10]], "size": 10, "hardness": 100})).unwrap();
     assert!(rgba(&s, 40, 10)[0] > single + 0.02);
+}
+
+#[test]
+fn a_dodge_or_burn_stroke_matches_the_reference_measurements() {
+    // One stroke, hard 60 px brush, 8-bit RGB, measured in the reference application (#11533).
+    let cases = [
+        ("paint.dodge", "shadows", 50, true, [8u8, 8, 13], [12u8, 12, 19]),
+        ("paint.dodge", "shadows", 50, true, [26, 20, 20], [36, 28, 28]),
+        ("paint.dodge", "shadows", 50, true, [64, 64, 64], [81, 81, 81]),
+        ("paint.burn", "highlights", 100, true, [255, 255, 255], [204, 204, 204]),
+        ("paint.burn", "highlights", 100, true, [230, 200, 180], [184, 161, 146]),
+        ("paint.burn", "highlights", 100, false, [128, 128, 128], [73, 73, 73]),
+    ];
+    for (cmd, range, exposure, protect, input, want) in cases {
+        let mut s = session(160, 80, 8, "rgb");
+        let c = input.map(|v: u8| f32::from(v) / 255.0);
+        paint_layer(&mut s, |_, _| [c[0], c[1], c[2], 1.0]);
+        let p = json!({"points": [[20, 40], [140, 40]], "size": 60, "hardness": 100, "range": range, "exposure": exposure, "protectTones": protect});
+        s.execute(cmd, p).unwrap();
+        let got = rgba(&s, 80, 40);
+        for i in 0..3 {
+            let level = (got[i] * 255.0).round();
+            assert!((level - f32::from(want[i])).abs() <= 2.0, "{cmd} {range} {exposure}% protect={protect}: {input:?} -> {got:?}, reference {want:?}");
+        }
+    }
 }
 
 #[test]
