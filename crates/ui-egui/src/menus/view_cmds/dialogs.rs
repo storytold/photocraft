@@ -58,13 +58,20 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
     let image_processor = id == image_processor_ui::COMMAND;
+    let calculations = id == crate::dialogs::calculations_ui::COMMAND;
     if image_processor {
         image_processor_ui::settings_opened(app.ctx());
     }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
         let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
-        if image_processor { image_processor_ui::settings_footer(dialog) } else { dialog }
+        if image_processor {
+            image_processor_ui::settings_footer(dialog)
+        } else if calculations {
+            dialog.previews(true)
+        } else {
+            dialog
+        }
     })
 }
 
