@@ -19,6 +19,9 @@
   `clippy --all-targets -- -D warnings` чисто, `cargo xtask layers` 31/31 OK,
   `cargo fmt --check` чисто. `docs/collab/adapters.md` — шесть поверхностей и
   следующие инкременты.
+- PR в `storytold/photocraft`: #16984 (изучение, соответствие ADR, план,
+  STATUS) и #16985 (крейт адаптера) — оба MERGEABLE, CI-раны форка не
+  запущены, на #16984 висит внешний CodeRabbit.
 - Не измерено: размер `Patch` на реальном штрихе, `Document::clone`/compose на
   100 МП, детерминизм `paint.stroke`; PSD-writer на сервере не подключён.
 
