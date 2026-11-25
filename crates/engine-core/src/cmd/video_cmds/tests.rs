@@ -275,7 +275,20 @@ fn video_frames_to_layers_enforces_the_footage_limit_on_every_tiff_page() {
     let _limit = super::limits::Scoped::max_footage_bytes(budget);
     let err = s.execute("file.import.videoFramesToLayers", json!({"path": path})).unwrap_err().to_string();
     assert!(err.contains("pages.tif") && err.contains("more than 1 MiB"), "{err}");
+    assert!(err.contains("Memory Usage"), "the refusal names the setting that lets more open: {err}");
     assert_eq!(s.active().unwrap().doc.layers.len(), before, "nothing imported");
+}
+
+/// A plate opens when the memory PhotoCraft may use holds it: a higher Memory Usage lets more
+/// footage in, a lower one never takes it below the old fixed 2 GiB, and a 32-bit build, whose
+/// address space holds no more, stays there.
+#[test]
+fn the_footage_limit_follows_memory_usage() {
+    let min = super::MIN_FOOTAGE_BYTES;
+    let big = super::footage_limit_for(64 << 30, false);
+    assert!(big > super::footage_limit_for(16 << 30, false) && big > min, "more memory, more footage");
+    assert_eq!(super::footage_limit_for(256 << 20, false), min, "never below the old limit");
+    assert_eq!(super::footage_limit_for(64 << 30, true), min, "a 32-bit build keeps the old limit");
 }
 
 /// #10897 review: a single-page layered TIFF does not take the multi-page branch, so it falls

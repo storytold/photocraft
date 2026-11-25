@@ -22,13 +22,13 @@ use crate::{EngineError, Result, Session};
 /// quantised frame and palette while rendering, so the document canvas limit is not enough.
 const MAX_GIF_FRAME_PIXELS: u64 = 64 << 20;
 /// Largest total an animated GIF render keeps staged before encoding: one index byte per pixel plus
-/// a 768-byte palette for every frame, the same 2 GiB bound as imported footage ([`MAX_FOOTAGE_BYTES`]).
+/// a 768-byte palette for every frame, 2 GiB, the least imported footage may keep ([`MIN_FOOTAGE_BYTES`]).
 /// The per-frame cap alone lets `frames × pixels` reach terabytes (a 4000 × 4000 canvas over a
 /// 1,000,000-frame timeline). 1920 × 1080 holds about 2,145 frames and 4096 × 2160 about 242.
 /// This bounds the staged frames only (indices and palettes). It does not bound the encoder's output
 /// buffer (LZW data, roughly 1.3-1.5 times the raw size, growing by doubling) or the per-frame
 /// transients (RGBA f32, 16 bytes per pixel), so it is not a bound on peak memory.
-const MAX_GIF_STAGED_BYTES: u64 = MAX_FOOTAGE_BYTES;
+const MAX_GIF_STAGED_BYTES: u64 = MIN_FOOTAGE_BYTES;
 /// The GIF format stores each side as 16 bits.
 const MAX_GIF_SIDE: u64 = 65_535;
 
@@ -420,17 +420,28 @@ type ImportFrames = fn(
     &mut dyn FnMut(photocraft_doc::Document, u32) -> std::result::Result<(), photocraft_io::IoError>,
 ) -> std::result::Result<photocraft_io::FramesImport, photocraft_io::IoError>;
 
-/// Frame storage one footage import may keep (whole tiles, all frames together).
-const MAX_FOOTAGE_BYTES: u64 = 2 << 30;
+/// The least frame storage one footage import may keep (whole tiles, all frames together), and
+/// all of it on a build with a 32-bit address space, which holds no more.
+const MIN_FOOTAGE_BYTES: u64 = 2 << 30;
 
-/// The footage frame limit this import applies: the production cap, or a test scope's lowered
-/// cap so a regression can reach the refusal without keeping gibibytes of frames.
+/// The footage frame limit this import applies: the memory PhotoCraft may use (Preferences ›
+/// Performance › Memory Usage), or a test scope's lowered cap so a regression can reach the
+/// refusal without keeping gibibytes of frames.
 fn footage_byte_limit() -> u64 {
     #[cfg(test)]
     if let Some(limit) = limits::max_footage_bytes() {
         return limit;
     }
-    MAX_FOOTAGE_BYTES
+    let ceiling = photocraft_raster::memory::stats().1.process_ceiling_bytes;
+    footage_limit_for(ceiling, cfg!(target_pointer_width = "32"))
+}
+
+/// Frame storage a footage import may keep when the process may use `ceiling` bytes: all of it,
+/// so a long plate opens on a machine with the memory for it (tiles past the tile budget go to
+/// the scratch disk), and never less than [`MIN_FOOTAGE_BYTES`]. A build with a 32-bit address
+/// space (`small`) keeps that minimum.
+fn footage_limit_for(ceiling: u64, small: bool) -> u64 {
+    if small { MIN_FOOTAGE_BYTES } else { ceiling.max(MIN_FOOTAGE_BYTES) }
 }
 
 /// Import options for footage files. A test scope may lower the PSD/layered-TIFF memory limit,
@@ -578,7 +589,10 @@ fn load_frame_files(
         let tile = u64::from(photocraft_geom::TILE_SIZE.unsigned_abs()).pow(2) * surface.format().bytes_per_pixel() as u64;
         kept_bytes = kept_bytes.saturating_add(tile.saturating_mul(surface.tile_count() as u64));
         if kept_bytes > max_footage_bytes {
-            return Err(format!("the footage needs more than {} MiB of frames", max_footage_bytes >> 20));
+            return Err(format!(
+                "the footage needs more than {} MiB of frames; a higher Memory Usage (Edit › Preferences › Performance) lets more open",
+                max_footage_bytes >> 20
+            ));
         }
         frames.push(surface);
         Ok(())
