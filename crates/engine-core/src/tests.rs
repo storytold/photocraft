@@ -1649,6 +1649,8 @@ fn type_create_in_place_keeps_a_users_name_that_reads_like_the_apps() {
 fn a_new_layer_into_a_layer_that_is_no_group_leaves_a_floating_selection_floating() {
     for cmd in ["layer.new.layer", "layer.new.group"] {
         let mut s = session_with_doc();
+        let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": s.active().unwrap().doc.layers[0].id.0})).unwrap();
         let pixels = s.execute("layer.new.layer", json!({"name": "Pixels"})).unwrap()["layer"].as_u64().unwrap();
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
         s.execute("select.float", json!({"dx": 8})).unwrap();
@@ -1660,6 +1662,9 @@ fn a_new_layer_into_a_layer_that_is_no_group_leaves_a_floating_selection_floatin
         assert_eq!(s.active().unwrap().history.entries(), history, "{cmd}");
         assert!(s.execute(cmd, json!({"group": 999_999})).is_err(), "{cmd}");
         assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: a missing group leaves it floating too");
+        // A real group with a position too is refused the same way.
+        assert!(s.execute(cmd, json!({"group": group, "position": "above"})).is_err(), "{cmd}");
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: group with position leaves it floating");
     }
 }
 

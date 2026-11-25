@@ -338,6 +338,8 @@ fn a_new_layer_into_a_group_replays_into_the_group_of_that_name() {
     s.execute("layer.new.layer", json!({"name": "Inside", "group": group})).unwrap();
     s.execute("layer.new.group", json!({"name": "Sub", "group": group})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
+    let steps = s.execute("actions.get", json!({"action": "Into Box"})).unwrap()["steps"].clone();
+    assert_eq!((&steps[0][1]["group"], &steps[1][1]["group"]), (&json!("Box"), &json!("Box")), "both steps keep the group: {steps}");
 
     s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
     // Other layers first, so the replay's Box has another id.

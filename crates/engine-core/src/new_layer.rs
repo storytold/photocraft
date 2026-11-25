@@ -84,6 +84,9 @@ pub(crate) fn admit(s: &Session, id: &str, p: &Value) -> Result<()> {
         return Ok(());
     }
     let Some(group) = group_param(id, p)? else { return Ok(()) };
+    if given_position(p) {
+        return Err(EngineError::BadParams { cmd: id.into(), msg: "give `group` or `position`, not both".into() });
+    }
     let Some(d) = s.active() else { return Ok(()) };
     let group = group.in_doc(&d.doc, id)?;
     let layer = if id == CMD { Layer::raster(String::new(), d.doc.pixel_format()) } else { Layer::group(String::new(), vec![]) };
