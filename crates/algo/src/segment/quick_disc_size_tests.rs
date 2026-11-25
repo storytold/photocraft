@@ -39,7 +39,7 @@
 
 use photocraft_geom::Rect;
 
-use super::quick::{CLICK_MARGIN, quick_select};
+use super::quick::{CLICK_MARGIN, Tuning, quick_select, stroke_mask};
 use super::{ImageSampler, Region, RgbImage, Rng};
 
 /// The issue's test document: 800 x 600 white.
@@ -286,6 +286,36 @@ fn quick_select_a_click_on_an_object_smaller_than_the_footprint_growth_keeps_the
     assert!(
         (37..=44).contains(&w) && (37..=44).contains(&h),
         "bbox {w} x {h}: the object plus at most the footprint growth of a 30 px brush, so the click did not run away"
+    );
+}
+
+/// The case the grown footprint's own colour hides: an object whose edge lies exactly ON that
+/// boundary. The document here is painted from the footprint itself - red wherever the growth
+/// `grow + grow_frac * radius` reaches, white in the first cell outside it - so every pixel the
+/// colour test samples inside the growth is the object's own colour and the step sits one working
+/// pixel outside. Reading only the inside calls the click flat and trims: the answer is the 33 px
+/// brush disc and the object's own outer ring is gone. 400 x 400 works at full resolution, so the
+/// document grid is the working grid and the ring lands whole on document pixels.
+#[test]
+fn quick_select_a_click_whose_object_edge_sits_on_the_grown_footprint_keeps_the_object() {
+    let t = Tuning::default();
+    let (size, at, side) = (30.0f32, (200.5, 200.5), 400usize);
+    let grow = t.grow + t.grow_frac * (size / 2.0);
+    let seeds = stroke_mask(&[at], size / 2.0, side, side);
+    let d = crate::selection::edt(&seeds, side, side);
+    let object: Vec<usize> = (0..side * side).filter(|&i| d[i] <= grow).collect();
+    let img = RgbImage::from_fn(side, side, |x, y| if d[y * side + x] <= grow { [0.78, 0.23, 0.23] } else { [1.0, 1.0, 1.0] });
+    let r = click(&img, at, size);
+    let lost: Vec<usize> = object.iter().copied().filter(|&i| r.at((i % side) as i32, (i / side) as i32) < 0.5).collect();
+    let (w, h, full, part) = measure(&r);
+    let reach = |i: usize| ((i % side) as f32 + 0.5 - at.0).hypot((i / side) as f32 + 0.5 - at.1);
+    let ring = lost.iter().map(|&i| reach(i) as i32).min().zip(lost.iter().map(|&i| reach(i) as i32).max());
+    assert_eq!(
+        lost.len(),
+        0,
+        "{}/{} pixels of an object ending on the grown footprint are not selected (they lie {ring:?} px from the click): the selection is {w} x {h} with {full} fully and {part} partly selected, the brush disc of a 30 px click",
+        lost.len(),
+        object.len()
     );
 }
 

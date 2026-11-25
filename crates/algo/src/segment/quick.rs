@@ -301,6 +301,13 @@ fn select_working_using<const OPTIMIZED: bool>(
 /// [`Tuning::sigma`] - the step where the cut weight `floor + 1 / (1 + (D / sigma)^k)` halves, the
 /// step this model calls an edge - the click reached an object and the grown ring is that object's
 /// extent: trimming it would drop an object smaller than the growth (#12922).
+///
+/// The first ring outside the growth is read as well. An object whose edge lands exactly ON the
+/// grown footprint leaves no step among the pixels inside it, because they are all the object's own
+/// colour, and the cut closes right there: the step it would otherwise have to cross sits one
+/// working pixel further out. Sampling `grow < dist <= grow + 1` sees that step, so such a click
+/// keeps what the cut selected instead of answering with the brush disc. A click on a flat area has
+/// the same colour in that ring as in the footprint and keeps its trim.
 fn footprint_holds_an_edge(img: &RgbImage, seeds: &[bool], d: &[f32], grow: f32, sigma: f32) -> bool {
     let mut mean = [0.0f32; 3];
     let mut footprint = 0usize;
@@ -319,7 +326,7 @@ fn footprint_holds_an_edge(img: &RgbImage, seeds: &[bool], d: &[f32], grow: f32,
         *m /= footprint as f32;
     }
     d.iter().enumerate().any(|(i, &dist)| {
-        dist <= grow
+        dist <= grow + 1.0
             && !seeds.get(i).copied().unwrap_or(true)
             && img.px.get(i).is_some_and(|q| {
                 let (a, b, c) = (q[0] - mean[0], q[1] - mean[1], q[2] - mean[2]);
