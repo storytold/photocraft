@@ -266,13 +266,15 @@ fn pickers_answer_the_chosen_path_or_null() {
         dialog(ScriptDialog::OpenFile, json!({"prompt": "Pick", "filter": "Images:*.png;*.JPG", "multiple": false})),
         dialog(ScriptDialog::SelectFolder, json!({"prompt": "Where?"})),
         dialog(ScriptDialog::OpenFile, json!({"prompt": "Several", "filter": null, "multiple": true})),
+        dialog(ScriptDialog::SaveFile, json!({"prompt": "Save", "filter": null})),
     ];
     let paths = |ps: &[&str]| Picked::Paths(ps.iter().map(PathBuf::from).collect());
-    let answers = vec![paths(&["/x/a.png"]), Picked::Cancelled, paths(&["/x/1.png", "/x/2.png"])];
+    let saved = Picked::Saved { path: PathBuf::from("/x/out.png"), file_type: None };
+    let answers = vec![paths(&["/x/a.png"]), Picked::Cancelled, paths(&["/x/1.png", "/x/2.png"]), saved];
     let mut h = harness(vec![program], &log, answers);
     start_named(h.state_mut(), "pick.jsx");
-    h.run_steps(12);
-    assert_eq!(*log.answers.borrow(), [json!("/x/a.png"), Value::Null, json!(["/x/1.png", "/x/2.png"])]);
+    h.run_steps(16);
+    assert_eq!(*log.answers.borrow(), [json!("/x/a.png"), Value::Null, json!(["/x/1.png", "/x/2.png"]), json!("/x/out.png")]);
     assert!(!h.state().scripts.running());
 }
 

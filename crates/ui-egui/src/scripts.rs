@@ -477,7 +477,9 @@ fn browse(app: &mut PhotocraftApp) -> Result<Value, String> {
             }
         }
         // Save answers: an Open picker gives neither.
-        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err("the file dialog gave an unexpected answer".into()),
+        Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {
+            Err("the file dialog gave an unexpected answer".into())
+        }
     })
 }
 
@@ -716,6 +718,8 @@ fn ask_picker(app: &mut PhotocraftApp, id: u64, kind: ScriptDialog, args: &Value
         let value = match chosen {
             Picked::Paths(paths) if multiple => json!(paths.into_iter().map(text).collect::<Vec<_>>()),
             Picked::Paths(paths) => json!(paths.into_iter().next().map(text)),
+            // Save File's answer: the path chosen, the extension policy applied.
+            Picked::Saved { path, .. } => json!(text(path)),
             // The web gives a file's name and contents, not a path: the script gets the name.
             Picked::Contents(files) if multiple => json!(files.into_iter().map(|(n, _)| n).collect::<Vec<_>>()),
             Picked::Contents(files) => json!(files.into_iter().next().map(|(n, _)| n)),
@@ -1288,7 +1292,7 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
         let loads: Vec<Value> = match picked {
             Picked::Paths(paths) => paths.into_iter().map(|p| json!({ "path": p.to_string_lossy() })).collect(),
             Picked::Contents(files) => files.into_iter().map(|(name, bytes)| text(name, bytes)).collect::<Result<_, _>>()?,
-            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {
+            Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {
                 return Err("the file dialog gave an unexpected answer".into());
             }
         };
