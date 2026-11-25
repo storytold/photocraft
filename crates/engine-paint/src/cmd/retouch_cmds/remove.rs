@@ -277,6 +277,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let p = p.clone();
     let id = plan.id;
     let new_layer = plan.new_layer;
+    let smart = plan.smart;
     crate::jobs::run(
         s,
         label,
@@ -298,7 +299,15 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(r)
                 })?;
                 s.hint_damage(damage);
-                return Ok(json!({ "damage": damage_json(damage), "layer": nid.0 }));
+                // The caller runs this as a job, so the result is the only place the interface can
+                // learn what landed: `smartObject` says the new layer holds a Smart Object's edits
+                // and the smart object itself was left alone (#12555).
+                let edits = if smart {
+                    json!({ "damage": damage_json(damage), "layer": nid.0, "smartObject": true })
+                } else {
+                    json!({ "damage": damage_json(damage), "layer": nid.0 })
+                };
+                return Ok(edits);
             }
             let damage = s.edit(HISTORY, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
             s.hint_damage(damage);

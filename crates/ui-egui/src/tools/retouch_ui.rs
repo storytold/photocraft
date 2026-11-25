@@ -299,8 +299,9 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Ok(r) if tool == Tool::PatternStamp => {
             app.ui.pattern_stamp_phase = r.get("phase").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.pattern_stamp_aligned);
         }
-        // The first removal that kept a Smart Object intact says where its fill went (#12555).
-        Ok(r) if remove_edits && r.get("layer").is_some() => notice_edits_layer(app),
+        // A removal that wrote to a new layer above a Smart Object says so in its result: the inline
+        // one lands here, the job one in [`crate::jobs_ui`]'s end (#12555).
+        Ok(r) if removal_edits_a_smart_object(&r) => notice_edits_layer(app),
         Ok(_) => {}
         // The Art History Brush's source refusals are alerts with OK, as the press-time ones, and
         // not in the status bar as well (#12638). They were measured on a layer's pixels only: a
@@ -339,8 +340,14 @@ pub(crate) const EDITS_NOTICE: &str = "We created a new layer with your edits to
 /// keeps the notice out of later removals.
 pub(crate) const EDITS_NOTICE_PREF: &str = "removeTool.newLayerNotice";
 
+/// Whether a finished `paint.remove` wrote its fill to a new layer above a Smart Object, which kept
+/// its own pixels (#12555). The result says so itself, which is how the job path learns it too.
+pub(crate) fn removal_edits_a_smart_object(result: &Value) -> bool {
+    result.get("smartObject").and_then(Value::as_bool) == Some(true)
+}
+
 /// Post [`EDITS_NOTICE`]: it stays until closed, and one card at a time.
-fn notice_edits_layer(app: &mut PhotocraftApp) {
+pub(crate) fn notice_edits_layer(app: &mut PhotocraftApp) {
     if crate::notices::shown_titled(app, EDITS_NOTICE) {
         return;
     }
@@ -398,13 +405,15 @@ pub fn remove_pending_commit(app: &mut PhotocraftApp) -> bool {
     app.remove_pending_target = None;
     // Taken before the run: a removal that writes to a new layer above a Smart Object makes that
     // layer the active one (#12555).
-    let edits = remove_on_smart_object(app);
-    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"), edits);
+    let smart_object = remove_on_smart_object(app);
+    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"), smart_object);
     p["strokes"] = json!(strokes);
     p["target"] = crate::canvas::paint_target(app);
     app.ui.status.clear();
     match app.run("paint.remove", p) {
-        Ok(r) if edits && r.get("layer").is_some() => notice_edits_layer(app),
+        // Inline (the web build, and the tests): the notice. With background jobs on, the run ends
+        // in [`crate::jobs_ui`]'s end, which posts the same notice from the job's result.
+        Ok(r) if removal_edits_a_smart_object(&r) => notice_edits_layer(app),
         Ok(_) => {}
         Err(e) => {
             app.ui.status = e;
