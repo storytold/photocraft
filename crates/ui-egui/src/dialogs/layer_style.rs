@@ -589,17 +589,14 @@ fn picker_patterns(app: &PhotocraftApp) -> Vec<&photocraft_doc::Pattern> {
     doc_pats.iter().chain(app.session.patterns.items.iter()).filter(|p| seen.insert(&p.id)).collect()
 }
 
-/// The patterns a style can use (document's, then the library's), as (id, name).
-pub fn pattern_list(app: &PhotocraftApp) -> Vec<(String, String)> {
-    picker_patterns(app).into_iter().map(|p| (p.id.clone(), p.display_name().to_string())).collect()
-}
-
 /// What the Pattern field's picker shows: the library's folders with their patterns, the patterns in no folder after
-/// them, and the swatch each pattern paints.
+/// them, and the swatch each pattern paints. Taken when the dialog opens, like the rest of what it opens with: a
+/// library edited while the dialog is open shows at the next opening.
 #[derive(craft::ui::contract::MemoProps)]
 pub(crate) struct PatternPresets {
     folders: Vec<Folder>,
     loose: Vec<(String, String)>,
+    /// The pattern's id, the key of its face and the texture of its swatch.
     #[memo_props(hash = "an id, the key of its picture and the texture it paints")]
     swatches: Vec<(String, u64, egui::TextureId)>,
     #[memo_props(
@@ -610,9 +607,9 @@ pub(crate) struct PatternPresets {
 }
 
 impl PatternPresets {
-    /// The picture key and the texture of the pattern `id`, as [`pattern_presets`] loaded them.
+    /// The face key and the texture of the pattern `id`, as [`pattern_presets`] loaded them.
     fn swatch(&self, id: &str) -> Option<(u64, egui::TextureId)> {
-        self.swatches.iter().find(|(key, _, _)| key == id).map(|(_, face, texture)| (*face, *texture))
+        self.swatches.iter().find(|(swatch, _, _)| *swatch == id).map(|(_, face, texture)| (*face, *texture))
     }
 }
 
@@ -653,22 +650,25 @@ pub(crate) fn pattern_presets(app: &PhotocraftApp, ctx: &egui::Context) -> Patte
     PatternPresets { folders, loose, swatches, _textures: textures }
 }
 
-/// The picker's rows: each folder, its patterns below it, and the patterns in no folder after the folders. A folder
-/// row is keyed apart from any pattern id by its `folder/` prefix, as the Styles page's groups use `group/`: a pattern
-/// id is a group of hex fields (`photocraft_doc::Pattern::new`), so it never reads as a folder key. A pattern listed
-/// in two folders is a row once, under the first of them, so no key is ever a row twice.
+/// The picker's rows: each folder, its patterns below it, and the patterns in no folder after the folders. This order
+/// is also what the page reads an empty Pattern value from - it takes the first row that is not a folder - so a new
+/// Pattern Overlay starts on the first pattern of the first folder.
+///
+/// A folder row's key carries its place in the folder list, so it cannot read as a pattern id and two folders that
+/// carry the same name (the preset store does not refuse that) keep their chevrons apart. A pattern listed in two
+/// folders is a row once, under the first of them, so no pattern id is ever a row twice.
 fn pattern_rows(inputs: &PatternPresets, _: &Env) -> Vec<PresetRow<String>> {
     let mut rows = Vec::new();
     let mut placed = HashSet::new();
-    for folder in &inputs.folders {
+    for (at, folder) in inputs.folders.iter().enumerate() {
         let items: Vec<&(String, String)> = folder.items.iter().filter(|(id, _)| placed.insert(id.clone())).collect();
         if items.is_empty() {
             continue; // every pattern of this folder stands in an earlier one: no empty header
         }
-        rows.push(PresetRow::group(format!("folder/{}", folder.name), folder.name.clone(), 0));
+        rows.push(PresetRow::group(format!("folder/{at}/{}", folder.name), folder.name.clone(), 0));
         rows.extend(items.into_iter().map(|(id, name)| pattern_row(id, name, 1, inputs)));
     }
-    // The loose ones are in no folder at all, so they were none of them placed above.
+    // The loose ones are in no folder at all, so none of them was placed above.
     rows.extend(inputs.loose.iter().map(|(id, name)| pattern_row(id, name, 0, inputs)));
     rows
 }
