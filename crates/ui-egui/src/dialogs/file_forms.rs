@@ -251,7 +251,7 @@ fn naming_rows(fields: &DialogFields) -> Vec<NamingRow> {
         .iter()
         .take(6)
         .map(|part| match component_rule(part) {
-            Some(rule) => NamingRow { rule: rule.to_string(), text: rule_label(rule).to_string() },
+            Some(rule) => NamingRow { rule: rule.to_string(), text: tl!(rule_label(rule)).to_string() },
             None => NamingRow { rule: NAMING_NONE.to_string(), text: part.get("text").and_then(Value::as_str).unwrap_or_default().to_string() },
         })
         .collect();
