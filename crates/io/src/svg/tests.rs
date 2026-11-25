@@ -335,6 +335,9 @@ fn text_without_any_font_is_reported_not_silently_dropped() {
     let r = import_parsed("t", parsed, MAX_GROUP_DEPTH, Some(MAX_RASTER_PIXELS), false).unwrap();
     assert!(r.document.layers.is_empty());
     assert!(r.warnings.iter().any(|w| w.contains("font")), "{:?}", r.warnings);
+    let (parsed, _) = parse_bounded_inner_with(svg, MAX_RASTER_PIXELS, no_fonts).unwrap();
+    let error = import_parsed_with_limits("t", parsed, MAX_GROUP_DEPTH, None, false, MAX_PIXEL_BYTES, OmissionPolicy::Reject).unwrap_err();
+    assert!(error.to_string().contains("incomplete smart object contents"));
     // A drawing without text never loads or misses fonts.
     let parsed =
         parse_with(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\"/></svg>", no_fonts).unwrap();
@@ -767,6 +770,28 @@ fn rasterized_groups_stop_at_the_aggregate_pixel_budget() {
     assert_eq!(result.document.layers.len(), 1, "one U8 surface fills the retained-byte allowance");
     assert_eq!(result.document.layers[0].name, "g0");
     assert!(result.warnings.iter().any(|warning| warning.contains("pixel memory")), "{:?}", result.warnings);
+}
+
+#[test]
+fn strict_conversion_rejects_missing_pixels_but_preserves_shapes_without_caches() {
+    let raster = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgba, vec![0, 255, 0, 255]).unwrap();
+    let png = photocraft_codecs::encode(&raster, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let image = embedded_image("image/png", &png);
+    let shape = r#"<rect width="1" height="1" fill="red"/>"#;
+    let mixed = image_svg(&format!("{shape}{image}"));
+    let parse_strict = |svg: &str| {
+        let parsed = parse_bounded(svg.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+        assert_eq!(omitted_image_count(parsed.image_usage), 0);
+        import_parsed_with_limits("budget", parsed, MAX_GROUP_DEPTH, None, false, 0, OmissionPolicy::Reject)
+    };
+    let error = parse_strict(&mixed).unwrap_err();
+    assert!(error.to_string().contains("incomplete smart object contents"));
+    let shapes = parse_strict(&image_svg(shape)).unwrap();
+    assert_eq!(shapes.document.layers.len(), 1);
+    let LayerContent::Shape(shape) = &shapes.document.layers[0].content else { panic!("expected an editable shape") };
+    assert!(shape.cache.is_none());
+    let raster = photocraft_vector::render_shape(shape, shapes.document.pixel_format(), shapes.document.bounds());
+    assert_eq!(raster.rgba(0, 0), [1., 0., 0., 1.]);
 }
 
 #[test]

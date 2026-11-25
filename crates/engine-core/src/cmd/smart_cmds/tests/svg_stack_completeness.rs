@@ -141,6 +141,35 @@ fn reset_transform_keeps_existing_svgz_with_an_omitted_image() {
 }
 
 #[test]
+fn svg_contents_replacement_rejects_an_embedded_image_lost_during_conversion() {
+    let image = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgba, vec![0, 255, 0, 255]).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let data = png.iter().map(|byte| format!("%{byte:02X}")).collect::<String>();
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="5000" height="5000">
+            <rect id="surviving-shape" width="2" height="2" fill="red"/>
+            <image width="5000" height="5000" href="data:image/png,{data}"/>
+        </svg>"#
+    );
+    for (name, bytes) in [("contents.svg", svg.as_bytes().to_vec()), ("contents.svgz", gzip(svg.as_bytes()))] {
+        let opened = photocraft_io::import(name, &bytes).unwrap();
+        assert!(opened.warnings.iter().any(|warning| warning.contains("too large to rasterise")), "{name}");
+        assert_eq!(opened.document.layers.len(), 1, "{name}");
+        assert_eq!(opened.document.layers[0].name, "surviving-shape", "{name}");
+        let mut s = session(8);
+        paint(&mut s);
+        let id = LayerId(convert(&mut s));
+        let before = s.active().unwrap().clone();
+        let error = replace_contents_bytes(&mut s, id, name, bytes).unwrap_err();
+        assert!(error.to_string().contains("incomplete smart object contents"), "{name}: {error}");
+        let after = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before.doc, &after.doc), "{name}");
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.history.past_len(), before.history.past_len());
+    }
+}
+
+#[test]
 fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
     let bytes = gzip(&incomplete_svg());
     for name in
