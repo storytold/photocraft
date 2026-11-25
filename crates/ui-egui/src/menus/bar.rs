@@ -1,4 +1,6 @@
+use craft::behavior::{Cursor, CursorIcon, CursorPriority};
 use craft::menu::MenuBarUi;
+use craft::ui::runtime::cursor;
 
 use super::PhotocraftApp;
 use super::items;
@@ -26,7 +28,10 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (gate, _) = menu_gate(app);
     let ctx = ui.ctx().clone();
     let model = items::model(app, &ctx);
-    MenuBarUi::new(&model.bar).mnemonics(&TOP_PREFERRED).help_search(true).keyboard(!(gate.modal || gate.recording_shortcut)).show(ui);
+    let out = MenuBarUi::new(&model.bar).mnemonics(&TOP_PREFERRED).help_search(true).keyboard(!(gate.modal || gate.recording_shortcut)).show(ui);
+    if ui.rect_contains_pointer(out.titles) {
+        cursor::request(&ctx, Cursor::System(CursorIcon::Default), CursorPriority::Hover);
+    }
 }
 
 /// The commands of the menu model's bar as the command palette lists them, with each path and the English names the model carries. The model's

@@ -54,6 +54,22 @@ fn press(h: &mut H, at: Pos2, pressed: bool) {
 }
 
 #[test]
+fn menu_titles_use_arrow_instead_of_tool_cursor() {
+    use craft::behavior::{Cursor, CursorIcon, CursorPriority};
+    use craft::ui::runtime::cursor;
+
+    let mut h = harness(1, 0, 0);
+    let menu = h.get_by_label("File").rect().center();
+    let canvas = h.state().last_canvas_rect.center();
+    for (at, expected) in [(canvas, CursorIcon::Move), (menu, CursorIcon::Default), (canvas, CursorIcon::Move)] {
+        h.event(Event::PointerMoved(at));
+        cursor::request(&h.ctx, Cursor::System(CursorIcon::Move), CursorPriority::Hover);
+        h.run_steps(1);
+        assert_eq!(cursor::current(&h.ctx), Some(Cursor::System(expected)));
+    }
+}
+
+#[test]
 fn an_idle_frame_keys_the_same_bytes_whatever_the_model_size() {
     let idle = |mut h: H| {
         h.run_steps(1);
