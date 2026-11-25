@@ -84,7 +84,7 @@ fn reset_appends_a_numbered_set_and_persists_it() {
     assert!(s.execute("actions.reset", json!({"confirm":true,"mode":"bad"})).is_err());
     assert_eq!(s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap()["set"], "PhotoCraft Basics");
     assert_eq!(s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap()["set"], "PhotoCraft Basics 2");
-    assert_eq!(s.actions().list.sets(), ["PhotoCraft Basics", "PhotoCraft Basics 2", "Existing"]);
+    assert_eq!(s.actions().list.sets(), ["Existing", "PhotoCraft Basics", "PhotoCraft Basics 2"], "sets in the order they were made");
     assert_eq!(names(&s), ["Invert Colors", "Desaturate", "Invert Colors 2", "Desaturate 2"]);
     assert_eq!(s.actions().list.actions()[0].steps[0].command, "image.adjustments.invert");
     assert_eq!(s.actions().list.actions()[1].steps[0].command, "image.adjustments.desaturate");

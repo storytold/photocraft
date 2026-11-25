@@ -316,7 +316,10 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     // The default rendering (no Dehaze, no local tone, no black point) needs no statistic of
     // the whole frame: demosaic and encode band by band, with no full RGB frame (the same
     // condition under which `Haze::new` and `ToneMap::new` return `None`).
-    let fused = allow_fused && opts.tone.is_neutral() && s.black_point <= 0.0;
+    // The shared non-Bayer demosaic currently returns a complete RGB frame even
+    // with neutral tone settings. Do not admit it under the legacy fused budget.
+    let shared = matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd);
+    let fused = allow_fused && opts.tone.is_neutral() && s.black_point <= 0.0 && (bayer || !shared);
     let orient_copy = opts.orient && (2..=8).contains(&s.orientation);
     let jobs = working_memory(c.width, c.height, s.cfa.is_some(), bayer, Shape { fused, orient_copy }, opts, par::workers())?;
     let mut warnings = s.warnings.clone();
@@ -486,7 +489,6 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
                 Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
             };
-            let shared = matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd);
             // Whether the sensor clipped is told from the measured sample, before lens shading lifts or lowers it.
             let clipped = shared && sensor_clipped(w, h, band, &|iy, row| fill_raw(iy, row, [1.0; 3], f32::INFINITY));
             let rebuild = if clipped {
@@ -576,7 +578,8 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                     let norm = craft_develop::sensor::Normalized { width: w, height: h, cpp: 1, data: norm_data, cfa: Some(cfa_at(cfa_pat, cfa_w, cfa_h)) };
                     let method = if bayer { shared_method } else { craft_develop::sensor::Method::Bilinear };
                     let dem = craft_develop::sensor::demosaic(&norm, method);
-                    rgb = dem.data.into_iter().flatten().collect();
+                    drop(norm);
+                    rgb = dem.data.into_flattened();
                 }
             } else {
                 let mut plane = Padded::new(w, h);
@@ -1486,6 +1489,42 @@ mod tests {
                 s.orientation = 3;
                 assert_fused_matches_full(&s, &DevelopOptions::default(), &format!("linear {samples} {w}x{h}"));
             }
+        }
+    }
+
+    #[test]
+    fn shared_non_bayer_neutral_develop_uses_full_frame_budget() {
+        let rows = ["GGRGGB", "GGBGGR", "BRGRBG", "GGBGGR", "GGRGGB", "RBGBRG"];
+        let colors = rows
+            .iter()
+            .flat_map(|row| {
+                row.bytes().map(|c| match c {
+                    b'R' => 0,
+                    b'G' => 1,
+                    _ => 2,
+                })
+            })
+            .collect();
+        let mut s = test_sensor(600, 350, Some(crate::Cfa { width: 6, height: 6, colors, origin_x: 0, origin_y: 0 }), 1);
+        s.crop = crate::Rect::new(3, 5, 592, 339);
+        s.orientation = 6;
+        for v in &mut s.data {
+            *v = 64 + (*v - 64) * 3 / 4;
+        }
+        for method in [Demosaic::Bilinear, Demosaic::Ahd] {
+            let mut opts = DevelopOptions { demosaic: method, ..Default::default() };
+            let reference = develop_sensor(&s, &opts).unwrap();
+            opts.limits.max_alloc = 8 * 1024 * 1024;
+            let bounded = with_threads(3, || develop_sensor(&s, &opts).unwrap());
+            assert_eq!((bounded.width, bounded.height), (reference.width, reference.height));
+            assert_eq!(bounded.rgb, reference.rgb, "{method:?}: budget must not change pixels");
+            // Both settings dispatch the same whole-frame shared method, so their
+            // admission decisions must agree under an ordinary limited workspace.
+            opts.limits.max_alloc = 3_900_000;
+            let automatic = with_threads(1, || develop(&s, &opts, true));
+            let full = with_threads(1, || develop(&s, &opts, false));
+            assert!(matches!(full, Err(RawError::LimitExceeded(_))));
+            assert!(matches!(automatic, Err(RawError::LimitExceeded(_))), "{method:?}: equivalent route must use the same budget");
         }
     }
 

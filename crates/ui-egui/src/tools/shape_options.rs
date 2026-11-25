@@ -1,14 +1,16 @@
 //! Shape toolbar edits share the engine commands used by the Properties panel.
 
 use craft::behavior::{EditEvent, Mixed};
+use craft::color_ui::ui::{Paint, PaintChip};
 use craft::draw::stroke::StrokeStyle;
 use craft::draw::ui::RADIUS_RANGE;
-use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings};
+use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords};
 use craft::draw::ui::shape_drag::ShapeKind;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::display::Divider;
-use craft::ui::runtime::env::Env;
+use craft::ui::form::Field;
+use craft::ui::runtime::env::{Env, Label};
 use photocraft_doc::{Fill, LayerContent};
 use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
@@ -358,8 +360,103 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
 }
 
+/// The value a chip event proposes: like [`proposal`], for the paint a `PaintChip` reports.
+fn paint_proposal(event: &EditEvent<Paint>) -> Option<&Paint> {
+    match event {
+        EditEvent::Update { value, .. } => Some(value),
+        EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(after),
+        EditEvent::Cancel { before: Some(Mixed::Same(value)), .. } => Some(value),
+        _ => None,
+    }
+}
+
+/// The Pen family's Shape-mode Fill and Stroke swatches (#12907): the shape tools' chips with the
+/// same popups (Recently Used Colors, the Swatches list, the Gradient tab and Color Picker…),
+/// under the reference's "Fill:" and "Stroke:" labels. A pick writes the tool's shape fill and
+/// stroke defaults — the paints `vector_ui::shapes` gives the next Pen shape — and runs no
+/// document command: as in the Shape tools' bar with no shape layer selected, only the tool
+/// changes.
+pub(crate) fn pen_paint_swatches(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let o = &app.ui.tool_options;
+    // The same tool-default paints the Shape tools' bar shows when no shape layer is selected.
+    let fill = o.shape_fill_gradient.clone().unwrap_or_else(|| solid(fg));
+    let stroke_paint = o.shape_stroke_gradient.clone().unwrap_or_else(|| solid(bg));
+    let (fill, stroke) = (o.shape_fill.then_some(fill), (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, stroke_paint)));
+    let width = stroke.as_ref().map_or(0.0, |s| f64::from(s.width));
+    let appearance = ShapeAppearance::new(paint_of(fill.as_ref()), paint_of(stroke.as_ref().map(|s| &s.paint)), width).stroke_style((&o.shape_stroke).into());
+    let sampled = [ShapePaint::Fill, ShapePaint::Stroke].into_iter().find_map(|p| crate::screen_picker::take(app, ("pen-bar", p)).map(|c| (p, c)));
+    let recent_colors: Vec<craft::theme::Srgba> =
+        crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| srgba([c[0], c[1], c[2], 1.0])).collect();
+    let groups = ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
+    let gradients = ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    let current = [fill.clone(), stroke.as_ref().map(|s| s.paint.clone())];
+    let mut library =
+        ChipLibrary::new(&recent_colors, &app.session.presets().swatches, &mut app.ui.paint_folders, gradients, &mut app.ui.shape_gradient_state, current);
+    let words = Env::of(ui).words::<ShapeWords>();
+    // The Field's label is the control's accessible name, so the swatches answer to the
+    // reference's "Fill:" and "Stroke:"; inside, the chips keep the shape tools' names and tips.
+    let fill_out = Field::new(Label::from(tl!("Fill:").to_owned())).id_salt("pen-fill").show(ui, |ui, _| {
+        let mut chip = PaintChip::new(words.fill_color.clone(), Bind::given(appearance.fill.clone()), srgba(fg)).tooltip(words.set_fill_type.clone());
+        if let Some((_, color)) = sampled.filter(|(target, _)| *target == ShapePaint::Fill) {
+            chip = chip.sampled(color);
+        }
+        decorate_chip(chip, ShapePaint::Fill, &mut library, ui)
+    });
+    let stroke_out = Field::new(Label::from(tl!("Stroke:").to_owned())).id_salt("pen-stroke").show(ui, |ui, _| {
+        let mut chip = PaintChip::new(words.stroke_color.clone(), Bind::given(appearance.stroke.clone()), srgba(bg)).tooltip(words.set_stroke_type.clone());
+        if let Some((_, color)) = sampled.filter(|(target, _)| *target == ShapePaint::Stroke) {
+            chip = chip.sampled(color);
+        }
+        decorate_chip(chip, ShapePaint::Stroke, &mut library, ui)
+    });
+    let (fill_gradient, stroke_gradient) = (library.gradient(ShapePaint::Fill), library.gradient(ShapePaint::Stroke));
+    let mut recent: Option<[f32; 3]> = None;
+    let mut remembered: Vec<Fill> = Vec::new();
+    for (is_stroke, gradient, out) in [(false, fill_gradient, fill_out.inner), (true, stroke_gradient, stroke_out.inner)] {
+        let Some(out) = out else { continue };
+        let which = if is_stroke { ShapePaint::Stroke } else { ShapePaint::Fill };
+        let shown = if is_stroke { &appearance.stroke } else { &appearance.fill };
+        for event in &out.edit.events {
+            let Some(paint) = paint_proposal(event) else { continue };
+            // A cancelled gesture restoring what the chip already shows reached no edit: run nothing.
+            if matches!(event, EditEvent::Cancel { .. }) && shown == paint {
+                continue;
+            }
+            let Some(change) = paint_change(paint, &gradient) else { continue };
+            let applied = apply_tool_paint(app, is_stroke, &change);
+            if applied && !matches!(event, EditEvent::Update { .. } | EditEvent::Cancel { .. }) {
+                match &change {
+                    PaintChange::Color(c) => recent = Some([c[0], c[1], c[2]]),
+                    PaintChange::Gradient(g) => remembered.push(g.clone()),
+                    PaintChange::None => {}
+                }
+            }
+        }
+        if let Some(gesture) = out.screen_pick {
+            crate::screen_picker::hold(app, ui.ctx(), ("pen-bar", which), gesture);
+        }
+        if out.pick_color.is_some() {
+            // The full Color Picker starts from the tool's paint; no layer is edited.
+            if let Some((which, fallback)) = paint_dialog_target(which, fg, bg) {
+                crate::shape_fill_ui::open_paint(app, which, None, true, fallback);
+            }
+        }
+    }
+    if let Some(rgb) = recent {
+        crate::paint_picker::remember(app, rgb);
+    }
+    for g in &remembered {
+        shape_gradient::remember_recent(&mut app.ui.recent_gradients, g);
+    }
+}
+
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
+    set_tool_paint_with_inks(app, stroke, change, None)
+}
+
+pub(crate) fn set_tool_paint_with_inks(app: &mut PhotocraftApp, stroke: bool, change: PaintChange, inks: Option<[f32; 4]>) -> Result<(), String> {
     // A colour takes the place of a gradient; No Color keeps it for when the paint comes back.
     let o = &mut app.ui.tool_options;
     let gradient = if stroke { &mut o.shape_stroke_gradient } else { &mut o.shape_fill_gradient };
@@ -369,7 +466,12 @@ pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: Pain
         PaintChange::None => {}
     }
     if let PaintChange::Color(color) = change {
-        app.run("tools.setColors", if stroke { json!({"background": color}) } else { json!({"foreground": color}) })?;
+        let role = if stroke { "background" } else { "foreground" };
+        let mut params = json!({role: color});
+        if let Some(inks) = inks {
+            params[format!("{role}Cmyk")] = json!(inks);
+        }
+        app.run("tools.setColors", params)?;
     }
     if stroke {
         app.ui.tool_options.stroke_width = if change == PaintChange::None { 0.0 } else { enabled_stroke_width(app.ui.tool_options.stroke_width) };

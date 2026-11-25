@@ -46,6 +46,8 @@ mod library_tests;
 #[cfg(test)]
 mod menu_tests;
 #[cfg(test)]
+mod missing_layer_tests;
+#[cfg(test)]
 mod panel_menu_tests;
 #[cfg(test)]
 mod playback_tests;
