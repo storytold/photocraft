@@ -7,15 +7,19 @@
 //! in by its coverage. Only the targeted surface is read and written: in Normal mode the patch
 //! samples the current layer.
 //!
-//! With `contentAware` (Photoshop's Patch: Content-Aware) the selected area is filled from the
-//! dragged-to place content-aware, as the Content-Aware Move Tool lands its content
-//! ([`super::content_aware_move::land`]): the middle is copied, fitted to the selection's
-//! surroundings by `color` (0–10), and a band along the edge, set by `structure` (1–7), is
-//! re-synthesised. Measured on Photoshop 25.4 (a 60 px selection dragged 150 px onto a ring-shaped
-//! object): only the selection changes; Structure 3 to 7 give the same result; Color 0 keeps the
-//! copied level, higher values shift it towards the surroundings by up to about `0.04 · color`
-//! (3: 32 of 42 levels, 31 of 102; 10: 35 of 42, 95 of 102). It runs as a background job, like
-//! the move.
+//! With `contentAware` (Photoshop's Patch: Content-Aware) the selected area is filled to match
+//! its surroundings, as Edit › Content-Aware Fill: the fill copies pieces from the sampling window
+//! around the selection ([`super::content_aware_move::window`], Photoshop's square) and never
+//! pastes the dragged-to area as it stands — that area only joins the window it is sampled from.
+//! Measured on Photoshop 25.4 (the document of #12118): a black spot on grey dragged onto a
+//! checker stays grey 128 (128/129 at Structure 7 / Color 5); a white spot on green dragged onto
+//! a red stripe becomes green 40..42, 160..161, 60..62; both for Structure 1 to 7 and Color 0 to
+//! 10 within 3 levels of the surroundings. `color` sets the copies' colour adaptation; Structure
+//! has no measured effect here (the whole selection is re-synthesised), but is still validated.
+//! Only the selected area changes and the selection stays. It runs as a background job, like the
+//! move.
+
+use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fill_with};
 
 use super::{
     BlendMode, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, Session, Surface, Value, apply_coverage, bad, clamp_samples, damage_json,
@@ -309,14 +313,18 @@ fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
     }
 }
 
-/// Patch: Content-Aware. The selection is filled from the place it was dragged to (see the module
+/// Patch: Content-Aware. The selection is filled to match its surroundings (see the module
 /// docs), as a background job.
 fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
-    use super::content_aware_move::{Target, land, mask, read, window};
+    use super::content_aware_move::{Target, fill_options, mask, read, replace, window};
     // The job's progress text; its History step is `HISTORY_NAME`.
     const LABEL: &str = "Patch (Content-Aware)";
     let plan = plan(s, p)?;
-    let structure = level(p, "structure", 4, 1, 7)?;
+    // The options bar sends both levels, and they are validated as the Content-Aware Move
+    // Tool's are. `color` becomes the fill's colour adaptation; Structure has no measured
+    // effect on this fill (the whole selection is re-synthesised), so it only gates what is
+    // accepted.
+    level(p, "structure", 4, 1, 7)?;
     let color = level(p, "color", 0, 0, 10)?;
     let target = Target { id: plan.id, all_layers: flag(p, "sampleAllLayers", false) && targets_pixels(p) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -334,12 +342,18 @@ fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
                 ctx.progress(0.0, LABEL);
                 let mut work = (*doc).clone();
                 let sel = doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+                // Photoshop's Rectangular sampling area: the window around the selection and
+                // every pixel in it outside the selection. The dragged-to place belongs to that
+                // pool when it lies in the window — a texture source among the surroundings,
+                // never pasted in.
                 let win = window(area, canvas);
-                let mut content = read(&mut work, target, &p, win.translate(dx, dy))?;
-                content.rect = win;
-                let selected = mask(sel, win);
-                let avoid = vec![false; selected.len()];
-                let damage = land(&mut work, target, &p, win, &selected, &content, &avoid, structure, color, (0.0, 1.0), ctx, LABEL)?;
+                let here = read(&mut work, target, &p, win)?;
+                let (w, h, n) = (win.width() as usize, win.height() as usize, here.ch);
+                let hole = mask(sel, win);
+                let source: Vec<bool> = hole.iter().map(|m| !*m).collect();
+                let opts = FillOptions { color_adaptation: if color == 0 { color_level("default") } else { color_amount(color) }, ..fill_options() };
+                let data = ctx.stage(0.0, 1.0, LABEL, |ctl| fill_with(w, h, n, &here.data, &hole, &source, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
+                let damage = replace(&mut work, target, &p, &Region { rect: win, ch: n, data }, &hole)?;
                 let surf = crate::channel_cmds::target_surface(&mut work, target.id, &p)?.0.clone();
                 Ok((surf, damage))
             }
@@ -354,6 +368,10 @@ fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
         },
     )
 }
+
+#[cfg(test)]
+#[path = "patch_content_aware_fill_tests.rs"]
+mod patch_content_aware_fill_tests;
 
 #[cfg(test)]
 #[path = "patch_destination_selection_tests.rs"]

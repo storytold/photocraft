@@ -34,24 +34,24 @@ pub(super) fn lut_at(l: &[f32], v: f32) -> f32 {
 /// coverage `v` through `contour(min(v / range, 1))`, so the default 50 % doubles a blurred
 /// edge's 0.5 to full strength). `None` = identity.
 ///
-/// One measured exception (#14958, and #14929 through this same table): at the Range-1 % test
-/// document (Softer, Size 10, Spread 0, Linear contour, Edge source) the reference application
-/// hardens the glow instead of amplifying the blur's tail to one pixel further: the coverage at
-/// the tent's last tap (its reach's outermost pixel, 0.0025 at Size 10) paints nothing, and the
-/// coverage one pixel inside it (0.0125) paints 0.85 - measured as 39 of 255 outside the layer
-/// and 19 of 128 inside. A linear ramp from that last tap to `range` plus 3/4 of it reproduces
-/// all four measured pixels within 1 level (outer 40, inner 20, both reaches exact); today's
-/// `min(v / range, 1)` there paints solid one pixel wider and leaves 191 (outer) / 96 (inner)
-/// at the pixel the reference stops at. Every other configuration - all other Ranges, Sizes
-/// and Spreads, Precise, the Center source, and custom contours - keeps `ranged_lut` exactly.
-pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
-    if matches!(g.contour, Contour::Linear)
-        && matches!(g.technique, GlowTechnique::Softer)
-        && g.source == GlowSource::Edge
-        && g.spread == 0.0
-        && g.size == 10.0
-        && (g.range - 0.01).abs() < 1e-6
-    {
+/// An outer Softer glow from the Edge with Spread 0 and the Linear contour follows
+/// [`softer_edge_lut`] instead, at every Size and Range (#14958, #15871). Precise, Spread, the
+/// Center source and custom contours keep `ranged_lut` exactly.
+///
+/// Inner glows (`inner`) keep one measured exception (#14929, the mirror image of #14958's first
+/// measurement): at the Range-1 % test document (Softer, Size 10, Spread 0, Linear contour, Edge
+/// source) the coverage at the tent's last tap (its reach's outermost pixel, 0.0025 at Size 10)
+/// paints nothing, and the coverage one pixel inside it (0.0125) paints 0.85, measured as 19 of
+/// 128. A linear ramp from that last tap to `range` plus 3/4 of it gives 20; `min(v / range, 1)`
+/// there paints solid one pixel wider and leaves 96 at the pixel the reference stops at. Every
+/// other inner glow keeps `ranged_lut`: their other Sizes and Ranges are measured against it
+/// (`inner_glow_size_one_tests`).
+pub fn glow_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
+    let softer_edge = matches!(g.contour, Contour::Linear) && matches!(g.technique, GlowTechnique::Softer) && g.source == GlowSource::Edge && g.spread == 0.0;
+    if softer_edge && !inner {
+        return Some(softer_edge_lut(g.size, g.range));
+    }
+    if softer_edge && g.size == 10.0 && (g.range - 0.01).abs() < 1e-6 {
         // `tent_kernel` stores its weights from -r to r and never an empty list, so its last
         // entry is the tap at the reach's end (for Size 10: 1/400): the straight edge's
         // coverage at the reach's outermost pixel. `end` 0 (unreachable) leaves today's ramp.
@@ -60,6 +60,38 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
         return Some((0..GLOW_LUT_LEN).map(|k| ((k as f32 / (GLOW_LUT_LEN - 1) as f32 - end) / full).clamp(0.0, 1.0)).collect());
     }
     ranged_lut(&g.contour, g.range)
+}
+
+/// The Linear transfer of an outer Softer Edge glow with Spread 0:
+/// `(v - floor) / (levels · (1 - floor))`, clamped to 0..=1. `levels` is the Range rounded to a
+/// whole 8-bit level, and `floor` is [`softer_edge_floor`]: the coverage a straight edge gives
+/// the reach's outermost pixel at an even Size, which paints nothing. The `1 - floor` keeps full
+/// coverage at full strength.
+///
+/// Measured on the #14958 document (black, Normal 100 %), with the flattened R channel from the
+/// layer edge outwards. Size 10 at Range 1 % (3 levels) gives `0 x8, 39`; at Range 2 % (5 levels)
+/// `0 x8, 125`; Size 20 at Range 1 % gives `0 x17, 93, 201`; Size 5 at Range 1 % gives `0 x4`. Each
+/// is followed by no glow. Size 10 at Range 25, 50 and 100 % keeps the measured profiles. This
+/// rule gives every one of those pixels within 1 level. The plain `min(v / range, 1)` reaches one
+/// pixel further at small Ranges (`0 x8, 96, 223` at Range 2 %) and leaves 252 for 255 at the
+/// end of the Range 100 % profile.
+fn softer_edge_lut(size: f32, range: f32) -> Vec<f32> {
+    let range = if range.is_finite() { range.clamp(0.01, 1.0) } else { 1.0 };
+    let levels = (range * 255.0).round() / 255.0;
+    let floor = softer_edge_floor(size);
+    let full = levels * (1.0 - floor);
+    (0..GLOW_LUT_LEN).map(|k| ((k as f32 / (GLOW_LUT_LEN - 1) as f32 - floor) / full).clamp(0.0, 1.0)).collect()
+}
+
+/// The tent's outermost tap (the box's end tap squared) when the box `blur` runs for `size` ends
+/// in partial taps, else 0. Even Sizes end in half taps (1/400 at Size 10, 1/1600 at Size 20).
+/// Odd Sizes end in whole taps (Size 5's outermost pixel paints in full at Range 1 %), and a
+/// Size of one pixel or less has no falloff.
+fn softer_edge_floor(size: f32) -> f32 {
+    match super::blur::box_end_taps(size) {
+        Some((end, next)) if end < 0.999 * next => end * end,
+        _ => 0.0,
+    }
 }
 
 /// The coverage transfer a glow paints through (CPU `glow_map` and the GPU's `MFinish` stage
@@ -99,7 +131,7 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 /// Inner glows keep `glow_lut` (`inner`): their unreached pixels are the shape's interior, where
 /// Photoshop's behaviour with a high contour is unmeasured. `None` = identity.
 pub fn glow_paint_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
-    let lut = glow_lut(g);
+    let lut = glow_lut(g, inner);
     if inner || matches!(g.contour, Contour::Linear) {
         return lut;
     }

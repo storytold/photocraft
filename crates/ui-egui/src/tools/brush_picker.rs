@@ -14,7 +14,7 @@ use craft::draw::ui::brush_presets::{
 use craft::draw::ui::brush_settings::TipAngle;
 use craft::ui::buttons::{Button, ToggleButton};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, Props as _, SaveKey, Show as _, Tracked, bind_tracked};
+use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, Props as _, SaveKey, Show as _, TooltipSpec, Tracked, bind_tracked, tooltip};
 use craft::ui::patterns::presets::PresetSource;
 use craft::ui::runtime::env::Env;
 use photocraft_engine::BrushSettings;
@@ -223,6 +223,7 @@ struct FieldProps<'a> {
     face: BrushFace,
     current: Option<BrushKey>,
     enabled: bool,
+    clone_stamp: bool,
     state: &'a mut Tracked<BrushPickerState<BrushKey>>,
     out: Outbox<'a, FieldEvent>,
 }
@@ -242,6 +243,7 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
         face: BrushFace::of(&tools.brush),
         current: current_key(tools),
         enabled,
+        clone_stamp: app.ui.tool == Tool::CloneStamp,
         state: &mut app.ui.brush_picker_state,
         out: Outbox::new(&mut sent),
     };
@@ -255,6 +257,13 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
 fn field_view(props: &mut FieldProps<'_>, ui: &mut egui::Ui) {
     let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
     let out = input.picker(bind_tracked!(props.state)).enabled(props.enabled).show(ui);
+    if props.clone_stamp && !out.open {
+        let face = &out.response;
+        let at = face.hover_pos().or_else(|| face.has_focus().then(|| face.rect.center()));
+        // The picker already owns a tooltip stage for its response id.
+        let tip_id = face.id.with("clone-stamp-tip");
+        tooltip::at_pointer(ui, tip_id, Some(&TooltipSpec::new(tl!("Open the Brush Preset picker")).into()), at, face.is_pointer_button_down_on());
+    }
     let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
     props.out.send(FieldEvent(out, keys));
 }
