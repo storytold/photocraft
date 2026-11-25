@@ -493,8 +493,8 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         let mut one = (*doc).clone();
         apply_comp(&mut one, c, false);
         one.last_applied_comp = Some(c.id);
-        let comment = if c.comment.trim().is_empty() { String::new() } else { format!("_{}", part(&c.comment)) };
-        let path = join(&dir, &format!("{}_{:04}_{}{comment}.{ext}", sanitize(&prefix), i, part(&c.name)));
+        let comment = if c.comment.trim().is_empty() { String::new() } else { part(&c.comment) };
+        let path = join(&dir, &comp_file_name(&sanitize(&prefix), i, &part(&c.name), &comment, ext));
         save_doc(&one, &path, save)?;
         files.push(path);
     }
@@ -505,6 +505,32 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         apply(s, id, "Apply Layer Comp")?;
     }
     Ok(json!({"files": files}))
+}
+
+/// The longest file name most file systems take: 255 bytes (and a name of at most 255 UTF-8 bytes
+/// is at most 255 UTF-16 units, Windows' limit).
+const MAX_FILE_NAME_BYTES: usize = 255;
+
+/// `<prefix>_<index>_<name>[_<comment>].<ext>`, at most [`MAX_FILE_NAME_BYTES`] long. A name that
+/// doesn't fit loses the end of its comment first (the whole comment, with its `_`, when none of it
+/// fits), then of the comp name, then of the prefix; the index and extension always stay. Each
+/// cut falls between characters.
+fn comp_file_name(prefix: &str, index: usize, name: &str, comment: &str, ext: &str) -> String {
+    let index = format!("_{index:04}_");
+    let room = MAX_FILE_NAME_BYTES.saturating_sub(index.len() + 1 + ext.len());
+    let prefix = clip_bytes(prefix, room);
+    let room = room - prefix.len();
+    let name = clip_bytes(name, room);
+    let comment = clip_bytes(comment, (room - name.len()).saturating_sub(1));
+    let comment = if comment.is_empty() { String::new() } else { format!("_{comment}") };
+    format!("{prefix}{index}{name}{comment}.{ext}")
+}
+
+/// The longest start of `text` that fits in `max` bytes without splitting a character, with any
+/// spaces the cut leaves at its end trimmed.
+fn clip_bytes(text: &str, max: usize) -> &str {
+    let end = text.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|&end| end <= max).last().unwrap_or(0);
+    text.get(..end).unwrap_or_default().trim_end()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -577,7 +603,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.layerCompsToFiles",
             "Layer Comps to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"selectedOnly":bool=false (only the last applied comp),"comps":[id]?,"quality":0..12?} → {files} (one "<prefix>_<index>_<comp name>[_<comment>].<ext>" per comp, the index 4 digits from 0000 in panel order and the comment only when not blank: spaces in the name and comment become "-" in PNG and stay in other formats, characters a file name can't hold become "_", and TIFF and JPEG are written as .tif and .jpg)"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"selectedOnly":bool=false (only the last applied comp),"comps":[id]?,"quality":0..12?} → {files} (one "<prefix>_<index>_<comp name>[_<comment>].<ext>" per comp, the index 4 digits from 0000 in panel order and the comment only when not blank: spaces in the name and comment become "-" in PNG and stay in other formats, characters a file name can't hold become "_", and TIFF and JPEG are written as .tif and .jpg; a name past 255 bytes is cut from the end of the comment first, then of the comp name, then of the prefix, keeping the index and extension)"##,
             export_comps,
             comps_to_files
         ),

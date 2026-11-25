@@ -13,9 +13,11 @@ fn session(comps: &[(&str, &str)]) -> Session {
     s
 }
 
-/// Runs Layer Comps to Files with `format` into a fresh folder named after it; the folder and the file names.
+/// Runs Layer Comps to Files with `format` into a fresh folder of its own; the folder and the file names.
 fn export(s: &mut Session, format: &str) -> (std::path::PathBuf, Vec<String>) {
-    let dir = std::env::temp_dir().join(format!("photocraft-comp-names-{format}-{}", std::process::id()));
+    static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("photocraft-comp-names-{format}-{}-{run}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let params = json!({"dir": dir.to_string_lossy(), "prefix": "lcomps-test", "format": format});
@@ -52,6 +54,27 @@ fn other_formats_keep_spaces_and_write_tif_and_jpg() {
         // The file is what its extension says.
         let path = dir.join(&names[1]);
         assert!(photocraft_io::import(&names[1], &std::fs::read(&path).unwrap()).is_ok(), "{format}: {}", path.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A comment of several sentences no longer stops the export at its comp (#13940 review): the
+/// comment is cut to fit, between characters, and that comp and the next keep their indices and
+/// extension.
+#[test]
+fn a_long_comment_is_shortened_and_the_export_goes_on() {
+    let long = "Hintergrund für die Nachtszene, mit gedämpftem Licht über dem Fluss. ".repeat(6);
+    for (format, ext) in [("png", "png"), ("tiff", "tif")] {
+        let mut s = session(&[("Comp A", &long), ("Comp B", "")]);
+        let (dir, names) = export(&mut s, format);
+        assert_eq!(names.len(), 2, "{format}: {names:?}");
+        let full = if ext == "png" { sanitize(&long).replace(' ', "-") } else { sanitize(&long) };
+        let first = names[0].strip_prefix("lcomps-test_0000_Comp").and_then(|n| n.strip_suffix(&format!(".{ext}"))).unwrap_or_default();
+        let kept = first.get(3..).unwrap_or_default();
+        assert!(!kept.is_empty() && full.starts_with(kept) && kept.len() < full.len(), "{format}: the comment is shortened, not dropped: {}", names[0]);
+        assert!(names[0].len() <= 255, "{format}: {} bytes", names[0].len());
+        assert_eq!(names[1], format!("lcomps-test_0001_Comp{}B.{ext}", if ext == "png" { "-" } else { " " }), "{format}");
+        assert!(names.iter().all(|n| dir.join(n).is_file()), "{format}: both files are written");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
