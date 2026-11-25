@@ -3915,8 +3915,8 @@ fn folder_listing_takes_every_format_photocraft_opens() {
     for name in ["a.cr3", "IMG_0001.CR3", "a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
         assert!(!super::openable_name(name), "{name}");
     }
-    // PhotoCraft does not read AVIF.
-    assert!(!super::openable_name("a.avif"));
+    // AVIF decode is part of the default build, so a folder batch picks up AVIF photos too.
+    assert!(super::openable_name("a.avif"));
 }
 
 /// Save and Close never writes a source in a format other than its own: a Cineon source, which

@@ -26,7 +26,8 @@ use photocraft_engine::export_preset_cmds::{DEFAULT_RESAMPLE, export_resample};
 
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 7] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO"), ("jxl", "JPEG XL")];
+const FORMATS: [(&str, &str); 8] =
+    [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("avif", "AVIF"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO"), ("jxl", "JPEG XL")];
 
 /// The command id Export As records its automation step under (#7207) and replays from.
 pub(crate) const COMMAND: &str = "file.export.exportAs";
@@ -223,9 +224,11 @@ struct PreviewWork {
     answered: Option<ExportPreview>,
 }
 
-/// The export formats the dialog offers: the framework's list and JPEG XL, which has no quality.
+/// The export formats the dialog offers: the framework's list, AVIF and JPEG XL. Both extras keep
+/// alpha; AVIF also uses the quality slider (the codec encodes from `jpeg_quality`).
 fn dialog_formats() -> Vec<ExportFormat> {
     let mut formats = ExportFormat::standard();
+    formats.push(ExportFormat::new("avif", "AVIF").transparency(true));
     formats.push(ExportFormat::new("jxl", "JPEG XL").transparency(true));
     formats
 }
@@ -608,7 +611,8 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
     let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
     let metadata = s(f, "metadata");
     ExportSettings {
-        jpeg_quality: (fmt == "jpg").then_some(quality),
+        // The shared AVIF encoder reads the same quality field as JPEG's.
+        jpeg_quality: (fmt == "jpg" || fmt == "avif").then_some(quality),
         // Photoshop's 1-7 Export As presets measured 4:2:0 at 1-4 and 4:4:4 at 5-7.
         // An exact mapping to 1-100 is unestablished; reuse PhotoCraft's Save for Web cutoff.
         jpeg_chroma_subsampling: fmt == "jpg" && quality <= 50,

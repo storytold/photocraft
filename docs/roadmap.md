@@ -86,7 +86,7 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 
 | Next milestone | Scope | Estimate |
 |---|---|---:|
-| 0.7 "files you can trust" | Current focus 1 plus JPEG Options, AVIF read, Photoshop PDF read | 200–320 h |
+| 0.7 "files you can trust" | Current focus 1 plus JPEG Options, Photoshop PDF read | 200–320 h |
 | 0.8 "fast enough" | Current focus 2; GPU tiling past the texture limit (#49); complex layout documents | 200–350 h |
 | 0.9 "feels like Photoshop" | Current focus 4 and 5; transform context menu; floating panels; Color panel | 300–500 h |
 | Beta | All of the above, type depth, Select and Mask / Content-Aware Fill workspaces, Hindi/Arabic/Vietnamese + RTL, bug backlog under 100 | 1,100–1,800 h total |

@@ -125,7 +125,7 @@ photocraft/
 │  │  ── I/O ──
 │  ├─ psd/                     craft-psd       PSD/PSB read + write; its OWN format-level model; depends on nothing in this workspace
 │  ├─ adobe-assets/            photocraft-adobe-assets  .abr .asl .aco/.ase .grd .pat .csh .atn .cube/.3dl, ACR .xmp presets (standalone, like psd)
-│  ├─ codecs/                  photocraft-codecs    flat raster decode/encode at format-supported depths; AVIF encode only (feature `avif`), HEIF/HEIC decode only (feature `heif`); no JPEG XL
+│  ├─ codecs/                  photocraft-codecs    flat raster decode/encode at format-supported depths; AVIF read/write, HEIF/HEIC decode, JPEG XL read/write, SGI and Sun Raster read/write (shared codec features enabled; AVIF decode is native-only)
 │  ├─ affinity/                craft-affinity       bounded native Affinity reader: archive, object stream, layers, vectors, text, pixels (shared in craft-libs)
 │  ├─ raw/                     photocraft-raw       clean-room camera RAW decode (DNG, CR2, TIFF/EP) + develop pipeline (standalone, like psd)
 │  ├─ format/                  photocraft-format    native document format (.pcraft bundle): manifest + content-addressed tiles

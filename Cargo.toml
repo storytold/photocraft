@@ -23,8 +23,10 @@ photocraft-doc = { path = "crates/doc" }
 photocraft-ops = { path = "crates/ops" }
 craft-plist = { git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4" }
 craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4" }
-photocraft-codecs = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4" }
-photocraft-formats = { package = "craft-file-formats", git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4", features = ["raster-codecs", "pdf", "svg", "ora", "kra", "xcf", "pdn", "raw", "psd", "affinity", "pcraft"] }
+# Every optional codec feature the app's code paths already cover is on in default builds. All of
+# them are pure Rust on Windows; AVIF reads use the native-only decoder (unreadable on wasm).
+photocraft-codecs = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4", features = ["avif", "avif-decode", "heif", "jxl", "sgi", "sunraster", "threads"] }
+photocraft-formats = { package = "craft-file-formats", git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4", features = ["raster-codecs", "avif", "heif", "pdf", "svg", "ora", "kra", "xcf", "pdn", "raw", "psd", "affinity", "pcraft"] }
 photocraft-raw = { path = "crates/raw" }
 craft-affinity = { git = "https://github.com/storytold/craft-libs", rev = "a165ef3a2cbc1e88f1b945966b77dc75a1fdf8e4" }
 photocraft-compose = { path = "crates/compose" }

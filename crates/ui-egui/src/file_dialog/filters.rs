@@ -10,10 +10,10 @@ use photocraft_color::{ColorMode, SampleType};
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 pub(super) const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
-    "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
-    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "avif", "gif", "bmp", "dib",
+    "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom",
+    "dc3", "iff", "lbm", "ilbm", "heic", "heif", "hif", "jxl", "sgi", "rgb", "rgba", "bw", "ras", "sun", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef",
+    "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -27,6 +27,7 @@ pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("PhotoCraft", &["pcraft"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Amiga IFF", &["iff", "lbm", "ilbm"]),
+    ("AVIF", &["avif"]),
     ("BMP", &["bmp", "dib"]),
     ("DDS", &["dds"]),
     ("DICOM", &["dcm", "dicom", "dc3"]),
@@ -37,6 +38,7 @@ pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("HEIF", &["heic", "heif", "hif"]),
     ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
+    ("JPEG XL", &["jxl"]),
     ("Krita", &["kra", "krz"]),
     ("OpenEXR", &["exr"]),
     ("OpenRaster", &["ora"]),
@@ -47,6 +49,8 @@ pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("QOI", &["qoi"]),
     ("Radiance HDR", &["hdr"]),
     ("RAW images", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
+    ("SGI", &["sgi", "rgb", "rgba", "bw"]),
+    ("Sun Raster", &["ras", "sun"]),
     ("SVG", SVG_EXTS),
     ("Targa", &["tga"]),
     ("TIFF", &["tif", "tiff"]),
@@ -70,6 +74,7 @@ pub(super) const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PSB Large Document", &["psb"]),
     ("PhotoCraft", &["pcraft"]),
     ("Amiga IFF", &["iff"]),
+    ("AVIF", &["avif"]),
     ("BMP", &["bmp", "dib"]),
     ("Cineon", &["cin"]),
     // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
@@ -90,6 +95,8 @@ pub(super) const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PDF", &["pdf"]),
     ("PNG", &["png"]),
     ("Radiance HDR", &["hdr"]),
+    ("SGI", &["sgi"]),
+    ("Sun Raster", &["ras"]),
     ("Targa", &["tga"]),
     ("TIFF", &["tif", "tiff"]),
     ("WebP", &["webp"]),
