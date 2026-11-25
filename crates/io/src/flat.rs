@@ -2745,7 +2745,7 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
     let bytes = writer.write(&[ifd]).map_err(|e| IoError::Unsupported(format!("TIFF write error: {e}")))?;
 
     let mut warnings = vec![warning];
-    if opts.tiff_layers && doc.layers.len() > 1 {
+    if opts.tiff_layers && crate::tiff_layers::would_write_layers(doc) {
         warnings.push("layers are not supported in 1-bit bilevel TIFF; document flattened".into());
     }
     let total_channels = doc.channels.len().saturating_add(usize::from(doc.quick_mask.is_some()));
@@ -3865,5 +3865,35 @@ mod bilevel_tiff_tests {
             let err = crate::export(doc, "out.unknownext", &opts).unwrap_err();
             assert!(matches!(err, IoError::UnknownFormat(_)), "{err}");
         }
+    }
+
+    #[test]
+    fn bilevel_tiff_layer_warning_uses_would_write_layers() {
+        let mut bg_doc = Document::new("bg", Size::new(2, 2), ColorMode::Bitmap, SampleType::U8);
+        let mut surface = Surface::new(bg_doc.pixel_format());
+        surface.fill_rect(Rect::new(0, 0, 2, 2), &[1.0, 1.0]);
+        let mut bg_layer = photocraft_doc::Layer::new("Background", photocraft_doc::LayerContent::Raster(surface.clone()));
+        bg_layer.locks.transparency = true;
+        bg_doc.layers.push(bg_layer);
+
+        let opts = ExportOptions { tiff_ccitt_g4: true, tiff_layers: true, ..Default::default() };
+        let res_bg = export_flat(&bg_doc, Format::Tiff, &opts).unwrap();
+        assert!(
+            !res_bg.warnings.iter().any(|w| w.contains("layers are not supported")),
+            "plain background layer should not emit layer loss warning: {:?}",
+            res_bg.warnings
+        );
+
+        // Single editable / unlocked named layer would normally write Photoshop layer metadata in TIFF.
+        let mut single_layer_doc = Document::new("layer", Size::new(2, 2), ColorMode::Bitmap, SampleType::U8);
+        let named_layer = photocraft_doc::Layer::new("Layer 1", photocraft_doc::LayerContent::Raster(surface));
+        single_layer_doc.layers.push(named_layer);
+
+        let res_single = export_flat(&single_layer_doc, Format::Tiff, &opts).unwrap();
+        assert!(
+            res_single.warnings.iter().any(|w| w.contains("layers are not supported")),
+            "single non-background layer flattened in bilevel TIFF must warn: {:?}",
+            res_single.warnings
+        );
     }
 }
