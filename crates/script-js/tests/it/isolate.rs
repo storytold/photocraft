@@ -21,8 +21,6 @@ const SLOW_LIMIT: Duration = Duration::from_secs(30);
 /// platform; what is checked is that it stops, not how fast.
 const GRACE: Duration = Duration::from_secs(5);
 
-/// The host executable: this crate's own, or another one that serves `--script-host` (such as
-/// the app's release binary) named by `PHOTOCRAFT_TEST_SCRIPT_HOST`.
 /// The full name the test harness knows test `f` of this module by (`isolate::f`), for running
 /// it alone in a copy of this test binary.
 #[cfg(unix)]
@@ -33,8 +31,15 @@ fn test_name(f: &str) -> String {
     }
 }
 
+/// The host executable: one that serves `--script-host` (such as the app's release binary)
+/// named by `PHOTOCRAFT_TEST_SCRIPT_HOST`, or else this crate's own. A test run from a nextest
+/// archive finds it where nextest unpacked it (`NEXTEST_BIN_EXE_*`), not at the path it was built
+/// at, which is on another machine.
 fn host_program() -> std::path::PathBuf {
-    std::env::var_os("PHOTOCRAFT_TEST_SCRIPT_HOST").map_or_else(|| env!("CARGO_BIN_EXE_photocraft-script-host").into(), Into::into)
+    std::env::var_os("PHOTOCRAFT_TEST_SCRIPT_HOST")
+        .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_photocraft_script_host"))
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_photocraft-script-host").into())
+        .into()
 }
 
 fn options(key: &str) -> IsolateOptions {
