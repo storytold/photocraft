@@ -354,8 +354,9 @@ fn custom_options_too_large_to_keep_say_so() {
     let lines = run(
         &s,
         r#"
-        var d = new ActionDescriptor(), big = Array(30001).join('x');
-        for (var i = 0; i < 3; i++) { d.putString(i + 1, big); }
+        // Within the limit as text, past it encoded: each quote is escaped to two bytes.
+        var d = new ActionDescriptor(), big = Array(30001).join('x'), quotes = Array(30001).join('"');
+        for (var i = 0; i < 2; i++) { d.putString(i + 1, quotes); }
         try { app.putCustomOptions('big', d); } catch (e) { $.writeln(e.name, ' ', e.message.indexOf('64 KiB') >= 0); }
         // Texts far past the limit are refused the same way.
         var huge = new ActionDescriptor(); for (var i = 0; i < 1000; i++) { huge.putString(i + 1, big); }
@@ -626,6 +627,39 @@ fn a_side_left_out_is_read_after_the_method_or_anchor_is_converted() {
          $.writeln(d.width, 'x', d.height);",
     );
     assert_eq!(lines, ["120 pxx96 px", "200 pxx50 px"]);
+}
+
+/// A length in physical units is made pixels at the resolution the document has once every
+/// argument is converted: a resample method's or anchor's `toString` that changes it counts.
+#[test]
+fn physical_lengths_use_the_resolution_after_every_argument_is_converted() {
+    let s = session(100, 50);
+    let lines = run(
+        &s,
+        "var d = app.activeDocument;
+         var to144 = function (name) { return { toString: function () { d.resizeImage(undefined, undefined, 144); return name; } }; };
+         d.resizeImage(new UnitValue(1, 'in'), undefined, undefined, to144('ResampleMethod.BICUBIC'));
+         $.writeln(d.width.as('px'), ' ', d.resolution);
+         d.resizeImage(undefined, undefined, 72);
+         d.resizeCanvas(new UnitValue(1, 'in'), undefined, to144('AnchorPosition.TOPLEFT'));
+         $.writeln(d.width.as('px'), ' ', d.resolution);",
+    );
+    assert_eq!(lines, ["144 144", "144 144"]);
+}
+
+/// Text goes only where it can be made: a position past the range `type.create` takes is
+/// refused, so every supported position stays one move away.
+#[test]
+fn text_moves_only_within_the_supported_positions() {
+    let s = session(64, 64);
+    let lines = run(
+        &s,
+        "var t = app.activeDocument.artLayers.add(); t.kind = LayerKind.TEXT; t.textItem.contents = 'Hi';
+         try { t.textItem.position = [400000, 0]; $.writeln('moved'); } catch (e) { $.writeln(e.name); }
+         t.textItem.position = [300000, 0]; t.textItem.position = [-300000, 0];
+         $.writeln(t.textItem.position[0].as('px'));",
+    );
+    assert_eq!(lines, ["RangeError", "-300000"]);
 }
 
 /// Saved key names are checked all together before any is kept: a set refused at the run's

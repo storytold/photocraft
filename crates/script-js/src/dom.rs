@@ -205,6 +205,25 @@ fn to_px(ctx: &mut Context, v: &JsValue, dpi: f64) -> JsResult<f64> {
     }
 }
 
+/// A length a script gave, converted (its `valueOf` run) but not yet in pixels: [`px_at`] makes
+/// it pixels at the resolution read after every argument is converted.
+struct Length(f64, String);
+
+fn length(ctx: &mut Context, v: &JsValue) -> JsResult<Length> {
+    let typ = unit_typ(ctx, RULERS)?;
+    let (value, typ) = unit_value::length_of(v, typ, ctx)?;
+    Ok(Length(value, typ))
+}
+
+fn px_at(l: &Length, dpi: f64) -> JsResult<f64> {
+    let px = unit_value::length_in_pixels(l.0, &l.1, dpi)?;
+    if px.is_finite() && px.abs() <= MAX_PX {
+        Ok(px)
+    } else {
+        Err(JsNativeError::range().with_message(format!("a length must be a finite number within {MAX_PX:e} pixels")).into())
+    }
+}
+
 /// A document side in whole pixels, as `documents.add` takes it.
 fn side(px: f64) -> JsResult<f64> {
     let px = px.round();
@@ -754,6 +773,10 @@ fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
                     p[crate::commands::ON_DOCUMENT] = json!(doc.serial);
                     p
                 };
+                // Both fit on the tape, or neither is made: the tape refusing the move would
+                // stop the run with the copy beside the group. (Room for their small requests and
+                // replies, and for the delete if the move is refused.)
+                crate::natives::room_for(ctx, 3, 64 << 10)?;
                 let made = crate::natives::command_charged(ctx, "layer.duplicate", on(json!({ "layer": id })), (true, false))?;
                 let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
                 let placed =
@@ -778,16 +801,12 @@ fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
 
 fn layer_translate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
-    let d = inspect(ctx, doc)?;
-    let r = dpi(&d);
-    let dx = match arg(args, 0) {
-        Some(v) => to_px(ctx, v, r)?,
-        None => 0.0,
-    };
-    let dy = match arg(args, 1) {
-        Some(v) => to_px(ctx, v, r)?,
-        None => 0.0,
-    };
+    // Converted before the resolution is read: a `valueOf` may change it.
+    let lx = arg(args, 0).map(|v| length(ctx, v)).transpose()?;
+    let ly = arg(args, 1).map(|v| length(ctx, v)).transpose()?;
+    let r = dpi(&inspect(ctx, doc)?);
+    let dx = lx.map_or(Ok(0.0), |l| px_at(&l, r))?;
+    let dy = ly.map_or(Ok(0.0), |l| px_at(&l, r))?;
     edit(ctx, doc, "layer.translate", json!({ "layer": id, "dx": whole(dx), "dy": whole(dy) }))?;
     Ok(JsValue::undefined())
 }
@@ -950,11 +969,15 @@ fn text_set_position(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     let t = text_ref(this)?;
     let p = args.first().and_then(JsValue::as_object).ok_or_else(|| type_error("a position is [x, y]"))?;
     let (px, py) = (p.get(0, ctx)?, p.get(1, ctx)?);
-    let r = dpi(&inspect(ctx, t.doc)?);
-    // Converted first: a `valueOf` may itself move the text, and the move is from where it is
-    // once the target is known.
-    let (nx, ny) = (to_px(ctx, &px, r)?, to_px(ctx, &py, r)?);
-    let (x, y, _) = text_anchor(ctx, t)?;
+    // Converted first: a `valueOf` may itself move the text or change the resolution, and the
+    // move is from where it is once the target is known.
+    let (lx, ly) = (length(ctx, &px)?, length(ctx, &py)?);
+    let (x, y, r) = text_anchor(ctx, t)?;
+    let (nx, ny) = (px_at(&lx, r)?, px_at(&ly, r)?);
+    // Text goes only where `artLayers.add` and `type.create` can put it.
+    if [nx, ny].iter().any(|v| v.abs() > crate::commands::SIDE) {
+        return Err(JsNativeError::range().with_message(format!("a text position is within {} pixels of the origin", crate::commands::SIDE)).into());
+    }
     edit(ctx, t.doc, "type.edit", json!({ "layer": t.layer, "move": [nx - x, ny - y] }))?;
     Ok(JsValue::undefined())
 }
@@ -1072,14 +1095,19 @@ fn sel_select(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     if len == 0 || len > 1 << 16 {
         return Err(type_error("select() takes 1 to 65536 points"));
     }
-    let d = inspect(ctx, doc)?;
-    let r = dpi(&d);
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    // Every point converted before the resolution is read: a `valueOf` may change it.
+    let mut points = Vec::with_capacity(len as usize);
     for i in 0..len {
         let p = region.get(i, ctx)?;
         let p = p.as_object().ok_or_else(|| type_error("each point is [x, y]"))?;
         let (px, py) = (p.get(0, ctx)?, p.get(1, ctx)?);
-        let (x, y) = (to_px(ctx, &px, r)?, to_px(ctx, &py, r)?);
+        points.push((length(ctx, &px)?, length(ctx, &py)?));
+    }
+    let d = inspect(ctx, doc)?;
+    let r = dpi(&d);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (lx, ly) in &points {
+        let (x, y) = (px_at(lx, r)?, px_at(ly, r)?);
         x0 = x0.min(x);
         y0 = y0.min(y);
         x1 = x1.max(x);
@@ -1210,16 +1238,13 @@ const RESAMPLES: &[(&str, &str)] = &[
 /// proportions; sizes are unit values or numbers in the ruler unit.
 fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let doc = doc_key(this)?;
-    let d = inspect(ctx, doc)?;
     let res = arg(args, 2).map(|v| v.to_number(ctx)).transpose()?;
     // A NaN is in no range either.
     if res.is_some_and(|r| !(1.0..=30_000.0).contains(&r)) {
         return Err(JsNativeError::range().with_message("a resolution is 1 to 30000 pixels per inch").into());
     }
-    // Sizes in physical units mean pixels at the resolution the image will have.
-    let r = res.unwrap_or_else(|| dpi(&d));
-    let w = arg(args, 0).map(|v| to_px(ctx, v, r)).transpose()?;
-    let h = arg(args, 1).map(|v| to_px(ctx, v, r)).transpose()?;
+    let w = arg(args, 0).map(|v| length(ctx, v)).transpose()?;
+    let h = arg(args, 1).map(|v| length(ctx, v)).transpose()?;
     let resample = match arg(args, 3) {
         Some(m) => {
             let m = text(m, ctx)?;
@@ -1227,9 +1252,13 @@ fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
         }
         None => None,
     };
-    // The proportions kept are the document's once every argument is converted: a `valueOf` or
-    // `toString` may itself have resized it.
-    let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
+    // Read once every argument is converted: a `valueOf` or `toString` may itself have resized
+    // the document or changed its resolution. Sizes in physical units mean pixels at the
+    // resolution the image will have; the proportions kept are the document's now.
+    let d = inspect(ctx, doc)?;
+    let r = res.unwrap_or_else(|| dpi(&d));
+    let w = w.map(|l| px_at(&l, r)).transpose()?;
+    let h = h.map(|l| px_at(&l, r)).transpose()?;
     let (w0, h0) = (d["width"].as_f64().unwrap_or(1.0), d["height"].as_f64().unwrap_or(1.0));
     let (w, h) = match (w, h) {
         (Some(w), Some(h)) => (w, h),
@@ -1262,10 +1291,8 @@ const ANCHOR_NAMES: &[(&str, &str)] = &[
 
 fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let doc = doc_key(this)?;
-    let d = inspect(ctx, doc)?;
-    let r = dpi(&d);
-    let w = arg(args, 0).map(|v| to_px(ctx, v, r)).transpose()?;
-    let h = arg(args, 1).map(|v| to_px(ctx, v, r)).transpose()?;
+    let w = arg(args, 0).map(|v| length(ctx, v)).transpose()?;
+    let h = arg(args, 1).map(|v| length(ctx, v)).transpose()?;
     let anchor = match arg(args, 2) {
         Some(a) => {
             let a = text(a, ctx)?;
@@ -1273,11 +1300,18 @@ fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
         }
         None => "center",
     };
-    // A side left out stays as it is once every argument is converted (a `valueOf` or
-    // `toString` may resize).
-    let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
-    let w = w.unwrap_or_else(|| d["width"].as_f64().unwrap_or(1.0));
-    let h = h.unwrap_or_else(|| d["height"].as_f64().unwrap_or(1.0));
+    // Read once every argument is converted (a `valueOf` or `toString` may resize or change the
+    // resolution): the lengths at the resolution now, a side left out as it is now.
+    let d = inspect(ctx, doc)?;
+    let r = dpi(&d);
+    let w = match w {
+        Some(l) => px_at(&l, r)?,
+        None => d["width"].as_f64().unwrap_or(1.0),
+    };
+    let h = match h {
+        Some(l) => px_at(&l, r)?,
+        None => d["height"].as_f64().unwrap_or(1.0),
+    };
     edit(ctx, doc, "image.canvasSize", json!({ "width": side(w)?, "height": side(h)?, "anchor": anchor }))?;
     Ok(JsValue::undefined())
 }
@@ -1286,12 +1320,17 @@ fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
 fn doc_crop(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let doc = doc_key(this)?;
     let b = args.first().and_then(JsValue::as_object).ok_or_else(|| type_error("crop() takes [left, top, right, bottom]"))?;
+    // Converted before the resolution is read: a `valueOf` may change it.
+    let mut lengths = Vec::with_capacity(4);
+    for i in 0..4u32 {
+        let e = b.get(i, ctx)?;
+        lengths.push(length(ctx, &e)?);
+    }
     let d = inspect(ctx, doc)?;
     let r = dpi(&d);
     let mut v = [0.0; 4];
-    for (i, slot) in v.iter_mut().enumerate() {
-        let e = b.get(i, ctx)?;
-        *slot = to_px(ctx, &e, r)?;
+    for (slot, l) in v.iter_mut().zip(&lengths) {
+        *slot = px_at(l, r)?;
     }
     let [l, t, rt, bt] = v;
     let (w, h) = ((rt - l).round(), (bt - t).round());

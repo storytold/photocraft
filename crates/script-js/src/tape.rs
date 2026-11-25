@@ -249,6 +249,26 @@ impl Tape {
         self.overflow.is_none() && self.charge(8)
     }
 
+    /// Whether `calls` more calls, recording about `bytes` with their results, still fit: for
+    /// calls that must not be split, so the first is not made when the second would be refused.
+    /// Calls already recorded (a replay) fit.
+    ///
+    /// # Errors
+    /// The named error of the bound they would cross.
+    pub fn room_for(&self, calls: usize, bytes: usize) -> Result<(), String> {
+        if let Some(m) = &self.overflow {
+            return Err(m.clone());
+        }
+        let live = (self.cursor + calls).saturating_sub(self.entries.len());
+        if self.entries.len() + live > self.limits.entries {
+            return Err(format!("The script was stopped: it made more than {} host calls (output lines, dialogs and commands).", self.limits.entries));
+        }
+        if live > 0 && self.bytes.saturating_add(live * ENTRY_BYTES).saturating_add(bytes) > self.limits.bytes {
+            return Err(format!("The script was stopped: its recorded host calls took more than {} MiB.", self.limits.bytes >> 20));
+        }
+        Ok(())
+    }
+
     /// Start the next call.
     ///
     /// # Errors
@@ -448,6 +468,23 @@ mod tests {
         let Ok(Begin::Live(0)) = t.begin(Call::Modal { kind: crate::ModalKind::Prompt, args: json!([]) }) else { panic!("live") };
         assert!(t.answer(json!("z".repeat(1 << 20))).is_ok());
         assert_eq!(t.overflow(), stop);
+    }
+
+    /// Room is for the calls still to be recorded: two calls fit while two entries are left, not
+    /// when one is, and calls a replay already holds always fit.
+    #[test]
+    fn room_counts_only_the_calls_still_to_record() {
+        let mut t = Tape::with_limits(3, MAX_BYTES, MAX_READINGS);
+        let Ok(Begin::Live(0)) = t.begin(cmd("a")) else { panic!("live") };
+        t.finish(0, Outcome::Return(json!(null)));
+        assert!(t.room_for(2, 0).is_ok());
+        let Ok(Begin::Live(1)) = t.begin(cmd("b")) else { panic!("live") };
+        t.finish(1, Outcome::Return(json!(null)));
+        assert!(t.room_for(2, 0).is_err(), "one entry left");
+        assert!(t.room_for(1, 0).is_ok());
+        t.rewind();
+        assert!(t.room_for(2, 0).is_ok(), "both are recorded");
+        assert!(Tape::with_limits(MAX_ENTRIES, 1 << 20, MAX_READINGS).room_for(2, 1 << 20).is_err(), "past the bytes");
     }
 
     #[test]

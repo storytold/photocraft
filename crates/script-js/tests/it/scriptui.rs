@@ -827,9 +827,9 @@ fn a_failed_control_is_taken_out_when_its_parent_cannot_publish_its_children() {
         try { w.add("dropdownlist", undefined, bad); } catch (e) { $.writeln(e.message); }
         refuse = false;
         var ok = w.add("button", undefined, "OK");
-        $.writeln(ok.parent === w);
+        $.writeln(ok.parent === w, " ", w.children.length, " ", w.children[0] === ok);
     "#;
-    assert_eq!(both(src, vec![]), ["no text", "true"]);
+    assert_eq!(both(src, vec![]), ["no text", "true 1 true"]);
 }
 
 /// An item's `selected` setter that assigns `selection` again wins, and the flags agree with it:
@@ -861,4 +861,47 @@ fn a_list_choice_names_the_item_the_user_saw() {
     // window 0, listbox 1, edittext 2, OK 3; the user picks the first item they saw, A.
     let events = vec![json!({"event": "click", "id": 3, "values": [{"id": 1, "value": 0}]})];
     assert_eq!(both(src, events), ["none"]);
+}
+
+/// An item whose list could not publish its `items` is out of the array the script holds too,
+/// and no longer the selection a setter gave it meanwhile.
+#[test]
+fn an_unpublished_item_leaves_the_kept_array_and_the_selection() {
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox");
+        l.add("item", "a");
+        var arr = l.items;
+        Object.defineProperty(l, "items", { configurable: true, get: function () { return arr; }, set: function (v) { l.selection = v[v.length - 1]; throw new Error("no"); } });
+        try { l.add("item", "b"); } catch (e) {}
+        $.writeln(arr.length, " ", arr[0].text, " ", l.selection === null);
+    "#;
+    assert_eq!(both(src, vec![]), ["1 a true"]);
+}
+
+/// A list's reply is checked against the items as they are once `enabled` was read (its getter
+/// may change them), and applied in one assignment, so an item's `selected` setter that chooses
+/// another item keeps that choice.
+#[test]
+fn a_list_reply_is_applied_after_the_controls_getters_and_once() {
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox", undefined, ["A", "B", "C"]), reads = 0;
+        l.selection = 1;
+        var on = true;
+        // Read once as the window is sent, then as the reply is applied: A goes at that one.
+        Object.defineProperty(l, "enabled", { configurable: true, get: function () { if (++reads == 2) l.remove(0); return on; }, set: function (v) { on = v; } });
+        w.add("button", undefined, "OK");
+        w.show();
+        $.writeln(l.selection.text);
+    "#;
+    // window 0, listbox 1, OK 2: the user picks A, which the getter took out before the reply.
+    assert_eq!(both(src, vec![json!({"event": "click", "id": 2, "values": [{"id": 1, "value": 0}]})]), ["B"]);
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox", undefined, ["A", "B"]), once = true, flag = false;
+        var a = l.items[0], b = l.items[1];
+        Object.defineProperty(a, "selected", { configurable: true, get: function () { return flag; }, set: function (v) { flag = v; if (v && once) { once = false; l.selection = b; } } });
+        w.add("button", undefined, "OK");
+        w.show();
+        $.writeln(l.selection.text);
+    "#;
+    assert_eq!(both(src, vec![json!({"event": "click", "id": 2, "values": [{"id": 1, "value": 0}]})]), ["B"]);
 }

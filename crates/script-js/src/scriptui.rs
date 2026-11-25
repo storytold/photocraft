@@ -415,12 +415,41 @@ fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> Js
             _ => sync_items(ctx, list),
         }
     })();
-    // A setter of the script's on `items` that throws leaves the item out too.
+    // A setter of the script's on `items` that throws leaves the item out too: out of the list,
+    // and out of the array the list keeps for `items`, which already held it.
     if let Err(e) = published {
         unadd(ctx, list, &item)?;
+        unpublish(ctx, list, &item)?;
         return Err(e);
     }
     Ok(item.into())
+}
+
+/// Take `item` out of the array `list` keeps for its `items`, by identity, keeping the rest (an
+/// item a setter of the script's added meanwhile included). By definition, not assignment, so
+/// no setter of the script's runs.
+fn unpublish(ctx: &mut Context, list: u32, item: &JsObject) -> JsResult<()> {
+    let Some(arr) = element(ctx, list, |e| e.items_array.clone())?.and_then(|a| JsArray::from_object(a).ok()) else { return Ok(()) };
+    let len = arr.length(ctx)?;
+    let mut kept = Vec::new();
+    let mut found = false;
+    for i in 0..len {
+        let v = arr.get(i, ctx)?;
+        if v.as_object().is_some_and(|o| JsObject::equals(&o, item)) {
+            found = true;
+        } else {
+            kept.push(v);
+        }
+    }
+    if !found {
+        return Ok(());
+    }
+    for (i, v) in kept.into_iter().enumerate() {
+        arr.create_data_property_or_throw(i, v, ctx)?;
+    }
+    // An array's own `length`: shortening it drops the last, now repeated, element.
+    arr.set(js_string!("length"), len - 1, true, ctx)?;
+    Ok(())
 }
 
 /// Take back `item`, added to `list` by an `add` that failed: out of the list, and its count
@@ -429,6 +458,10 @@ fn unadd(ctx: &mut Context, list: u32, item: &JsObject) -> JsResult<()> {
     let removed = element_mut(ctx, list, |e| {
         let before = e.items.len();
         e.items.retain(|i| !JsObject::equals(i, item));
+        // A setter that chose it meanwhile chose an item that is gone; another choice stays.
+        if e.selection.as_ref().is_some_and(|s| JsObject::equals(s, item)) {
+            e.selection = None;
+        }
         e.items.len() != before
     })?;
     if removed {
@@ -1226,13 +1259,14 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
     if let Some(values) = answer.get("values").and_then(Value::as_array) {
         for v in values {
             let Some(id) = v.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) else { continue };
-            let Ok((kind, owner, obj, items, sent)) = element(ctx, id, |e| (Kind::from_code(e.kind), e.window, e.obj.clone(), e.items.clone(), e.sent.clone()))
-            else {
+            let Ok((kind, owner, obj, sent)) = element(ctx, id, |e| (Kind::from_code(e.kind), e.window, e.obj.clone(), e.sent.clone())) else {
                 continue;
             };
             if owner != window || !usable(ctx, id)? {
                 continue;
             }
+            // Read after `usable`, whose read of `enabled` may run a getter of the script's.
+            let items = element(ctx, id, |e| e.items.clone())?;
             let value = v.get("value").unwrap_or(&Value::Null);
             match kind {
                 Kind::EditText => {
@@ -1263,10 +1297,8 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
                         },
                         None => None,
                     };
-                    for item in &items {
-                        let on = chosen.as_ref().is_some_and(|c| JsObject::equals(c, item));
-                        set(item, "selected", on, ctx)?;
-                    }
+                    // One assignment, which sets the flags itself: a `selected` setter's own
+                    // choice made meanwhile then stands (see `selection_set`).
                     set(&obj, "selection", chosen.map_or(JsValue::null(), JsValue::from), ctx)?;
                 }
                 _ => {}

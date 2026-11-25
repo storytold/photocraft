@@ -54,7 +54,7 @@ const NAME: usize = 1024;
 /// Longest text for a type layer.
 const TEXT: usize = 1 << 20;
 /// Largest canvas side, as `file.new` takes it.
-const SIDE: f64 = 300_000.0;
+pub(crate) const SIDE: f64 = 300_000.0;
 /// Largest index or id.
 const MAX_INDEX: u64 = 1 << 53;
 /// Largest translation or position, in pixels.

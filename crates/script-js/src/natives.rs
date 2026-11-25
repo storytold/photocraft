@@ -113,6 +113,13 @@ pub(crate) fn command(ctx: &mut Context, id: &str, params: Value) -> JsResult<Va
     command_charged(ctx, id, params, (true, true))
 }
 
+/// Stop the run now unless `calls` more host calls, recording about `bytes`, fit on the tape:
+/// before calls that must not be split, so the first is not made when the next would be refused.
+pub(crate) fn room_for(ctx: &mut Context, calls: usize, bytes: usize) -> JsResult<()> {
+    let room = shared(ctx)?.borrow().tape.room_for(calls, bytes);
+    room.map_err(|m| stop(ctx, Stop::Fault(m)))
+}
+
 /// [`command`], with the budget charged (and a stop taken) before and after it only as
 /// `charged` says. Two commands that must not be split by a stop run with the charge between
 /// them left out: the first not charged after, the second not before.

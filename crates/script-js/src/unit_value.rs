@@ -169,13 +169,24 @@ pub(crate) fn document_length(px: f64, dpi: f64, typ: &str, ctx: &mut Context) -
 /// `v` as document pixels at `dpi`: a unit value converts from its own unit, anything else is a
 /// number in `default_typ` (the ruler unit, as existing scripts expect).
 pub(crate) fn to_document_pixels(v: &JsValue, dpi: f64, default_typ: &str, ctx: &mut Context) -> JsResult<f64> {
+    let (value, typ) = length_of(v, default_typ, ctx)?;
+    length_in_pixels(value, &typ, dpi)
+}
+
+/// `v` as a length: its number and unit (`default_typ` for a plain number). The script code a
+/// conversion may run (`valueOf`) runs here, before anything is read for it.
+pub(crate) fn length_of(v: &JsValue, default_typ: &str, ctx: &mut Context) -> JsResult<(f64, String)> {
+    match v.as_object().and_then(|o| o.downcast_ref::<UnitValueData>().map(|d| (d.value, d.typ.clone()))) {
+        Some(d) => Ok(d),
+        None => Ok((v.to_number(ctx)?, default_typ.to_owned())),
+    }
+}
+
+/// A length from [`length_of`] in document pixels at `dpi`.
+pub(crate) fn length_in_pixels(value: f64, typ: &str, dpi: f64) -> JsResult<f64> {
     let base = (1.0 / dpi.max(1e-6), "in".to_owned());
-    let (value, typ) = match v.as_object().and_then(|o| o.downcast_ref::<UnitValueData>().map(|d| (d.value, d.typ.clone()))) {
-        Some(d) => d,
-        None => (v.to_number(ctx)?, default_typ.to_owned()),
-    };
-    let typ = if typ == "%" { "px".to_owned() } else { typ };
-    convert_num(value, &typ, "px", &base).filter(|f| f.is_finite()).ok_or_else(|| typ_err(format!("{value} {typ} is not a length")))
+    let typ = if typ == "%" { "px" } else { typ };
+    convert_num(value, typ, "px", &base).filter(|f| f.is_finite()).ok_or_else(|| typ_err(format!("{value} {typ} is not a length")))
 }
 
 fn leading_number(s: &str) -> Option<(f64, &str)> {
