@@ -909,9 +909,9 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     // Also rejects dragging a selected group onto any of its descendants.
     for id in &moved_ids {
         let path = doc.path_of(*id).ok_or(EngineError::NoLayer(*id))?;
-        // A copy moves nothing, so it may land anywhere its source's subtree is, inside the
-        // source included: it is made from the source as it was before the edit.
-        if target_path.starts_with(&path) && !copy {
+        // A copy may land beside its own source (not inside it).
+        let beside_itself = copy && *id == target && pos != "into";
+        if target_path.starts_with(&path) && !beside_itself {
             return Err(bad(CMD, "target cannot be one of the moved layers or its descendant"));
         }
     }

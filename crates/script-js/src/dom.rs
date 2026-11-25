@@ -735,13 +735,40 @@ fn layer_remove(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<Js
 
 fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
-    // Made where it goes in one command (`moveTo` with `copy`), a group copied into itself too,
-    // so a copy that can't go there, or a run stopped meanwhile, leaves no copy behind; the
-    // destination is read first.
+    // Made where it goes in one command (`moveTo` with `copy`), so a copy that can't go there,
+    // or a run stopped meanwhile, leaves no copy behind; the destination is read first. A group
+    // copied into itself is the exception (see below).
     let made = match arg(args, 0) {
         Some(rel) => {
             let (target, position) = destination(ctx, doc, rel, args.get(1))?;
-            edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
+            // A copy of a group placed inside that group (`INSIDE` it, or at its end, beside its
+            // last layer) is not a move the app makes in one step: the copy is made first and
+            // then moved in, as a layer copied from the group would be. The run can't be stopped
+            // between the two (neither charges the budget there), and a copy that can't go in
+            // is deleted again, so a stop never leaves it beside the group.
+            let node = find(&inspect(ctx, doc)?["layers"], id).map(|(node, _)| node);
+            let inside_itself = node
+                .is_some_and(|node| node["children"].is_array() && (if target == id { position == "into" } else { find(&node["children"], target).is_some() }));
+            if inside_itself {
+                let on = |mut p: Value| {
+                    p[crate::commands::ON_DOCUMENT] = json!(doc.serial);
+                    p
+                };
+                let made = crate::natives::command_charged(ctx, "layer.duplicate", on(json!({ "layer": id })), (true, false))?;
+                let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
+                let placed =
+                    crate::natives::command_charged(ctx, "layer.moveTo", on(json!({ "layer": new, "target": target, "position": position })), (false, true));
+                if let Err(e) = placed {
+                    // Refused (not stopped: nothing charged before it): the copy goes again.
+                    if e.as_engine().is_none() {
+                        let _ = crate::natives::command_charged(ctx, "layer.delete", on(json!({ "layer": new })), (false, false));
+                    }
+                    return Err(e);
+                }
+                made
+            } else {
+                edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
+            }
         }
         None => edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?,
     };

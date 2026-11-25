@@ -91,7 +91,14 @@ pub(crate) fn checkpoint(ctx: &mut Context) -> JsResult<()> {
 
 /// Start a taped call: charge the budget, then answer from the tape or report it live.
 fn begin(ctx: &mut Context, call: Call) -> JsResult<Result<Outcome, usize>> {
-    checkpoint(ctx)?;
+    begin_with(ctx, call, true)
+}
+
+/// [`begin`], charging the budget first only with `charge`.
+fn begin_with(ctx: &mut Context, call: Call, charge: bool) -> JsResult<Result<Outcome, usize>> {
+    if charge {
+        checkpoint(ctx)?;
+    }
     let begun = shared(ctx)?.borrow_mut().tape.begin(call);
     match begun {
         Err(divergence) => Err(stop(ctx, Stop::Fault(divergence))),
@@ -103,9 +110,16 @@ fn begin(ctx: &mut Context, call: Call) -> JsResult<Result<Outcome, usize>> {
 /// Run a session command through the tape. Only the commands in [`crate::commands`] with the
 /// parameters they allow get through, the same check the script host's supervisor applies.
 pub(crate) fn command(ctx: &mut Context, id: &str, params: Value) -> JsResult<Value> {
+    command_charged(ctx, id, params, (true, true))
+}
+
+/// [`command`], with the budget charged (and a stop taken) before and after it only as
+/// `charged` says. Two commands that must not be split by a stop run with the charge between
+/// them left out: the first not charged after, the second not before.
+pub(crate) fn command_charged(ctx: &mut Context, id: &str, params: Value, charged: (bool, bool)) -> JsResult<Value> {
     crate::commands::check_command(id, &params).map_err(error)?;
     shared(ctx)?.borrow().grants.check(id, &params).map_err(error)?;
-    let outcome = match begin(ctx, Call::Command { id: id.into(), params: params.clone() })? {
+    let outcome = match begin_with(ctx, Call::Command { id: id.into(), params: params.clone() }, charged.0)? {
         Ok(o) => o,
         Err(at) => {
             let s = shared(ctx)?;
@@ -119,7 +133,9 @@ pub(crate) fn command(ctx: &mut Context, id: &str, params: Value) -> JsResult<Va
                 o
             };
             // A slow command counts too: charge again once it returned.
-            checkpoint(ctx)?;
+            if charged.1 {
+                checkpoint(ctx)?;
+            }
             o
         }
     };
