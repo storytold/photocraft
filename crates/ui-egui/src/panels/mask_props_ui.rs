@@ -1,11 +1,17 @@
-//! Non-destructive layer-mask controls (pixel and vector), shared by docked and floating Properties.
+//! Non-destructive layer-mask controls (pixel and vector), shown in the Properties panel.
 
+use craft::keymap::CommandRef;
+use craft::ui::bars::{Bar, BarKind};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, Show, ShowContainer};
+use craft::ui::form::SliderField;
+use craft::ui::runtime::env::{UnitKind, with_env};
+use craft::ui::sections::Section;
+use craft::ui::value_drag::SliderScale;
 use photocraft_doc::{Layer, LayerContent};
-use serde_json::json;
+use serde_json::{Value, json};
 
-use crate::props_layout::COL_GAP;
-use crate::theme::{self, Tokens};
-use crate::{PhotocraftApp, widgets};
+use crate::PhotocraftApp;
 
 /// Image › Adjustments › Invert, which inverts a targeted layer mask in place (#780).
 const INVERT: &str = "image.adjustments.invert";
@@ -21,32 +27,28 @@ pub fn vector_targeted(app: &PhotocraftApp, layer: &Layer) -> bool {
     app.ui.vector_mask_target && layer.vector_mask.is_some()
 }
 
+/// One mask section: its title, the command that edits it and whether it has the Refine row.
+struct MaskSection {
+    /// Keys the section's ids and its coalescing.
+    key: &'static str,
+    title: &'static str,
+    command: &'static str,
+    refine: bool,
+}
+
 /// The pixel-mask section: Density, Feather and the Refine row. Pixels stay intact; the two
 /// properties ride on the mask and are applied by the compositor.
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let Some(mask) = &layer.mask else { return };
-    let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
-    ui.push_id((document, layer.id, "pixel-mask-properties"), |ui| {
-        if !crate::props_layout::section(ui, "pixel-mask", "Layer Mask") {
-            return;
-        }
-        let (density, feather) = (mask.density, mask.feather);
-        sliders(app, ui, layer.id.0, document, "layer.layerMask.edit", "pixel-mask", density, feather);
-        refine_row(app, ui);
-    });
+    let section = MaskSection { key: "pixel-mask", title: tl!("Layer Mask"), command: "layer.layerMask.edit", refine: true };
+    mask_section(app, ui, layer, &section, mask.density, mask.feather);
 }
 
 /// The vector-mask section: Density and Feather, likewise non-destructive.
 pub fn vector_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let Some(vm) = &layer.vector_mask else { return };
-    let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
-    ui.push_id((document, layer.id, "vector-mask-properties"), |ui| {
-        if !crate::props_layout::section(ui, "vector-mask", "Vector Mask") {
-            return;
-        }
-        let (density, feather) = (vm.density, vm.feather);
-        sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "vector-mask", density, feather);
-    });
+    let section = MaskSection { key: "vector-mask", title: tl!("Vector Mask"), command: "layer.vectorMask.edit", refine: false };
+    mask_section(app, ui, layer, &section, vm.density, vm.feather);
 }
 
 /// A shape layer's path is its vector mask (Photoshop's Properties › Masks): its Density and
@@ -56,54 +58,54 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Laye
     if layer.vector_mask.is_some() {
         return;
     }
-    let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
-    ui.push_id((document, layer.id, "shape-mask-properties"), |ui| {
-        if !crate::props_layout::section(ui, "shape-mask", "Vector Mask") {
-            return;
-        }
-        let (density, feather) = (sh.density, sh.feather);
-        sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "shape-mask", density, feather);
-    });
+    let section = MaskSection { key: "shape-mask", title: tl!("Vector Mask"), command: "layer.vectorMask.edit", refine: false };
+    mask_section(app, ui, layer, &section, sh.density, sh.feather);
 }
 
-/// Density (%) and Feather (px) sliders writing one undoable edit per drag: the value lives on the
-/// mask, not in its pixels. `command` is the mask's edit command and `prefix` keys its coalescing.
-#[allow(clippy::too_many_arguments)]
-fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64, command: &str, prefix: &str, density: f32, feather: f32) {
-    // Like brush settings, track pointer presses even on frames without a value change.
-    // slider_row also merges numeric scrubbing, whose drag flags are not in its Response.
-    let key = ui.scope_id().with("gesture");
-    let pass = ui.ctx().cumulative_pass_nr();
-    let pressed = ui.input(|i| i.pointer.any_pressed());
-    let gesture = ui.data_mut(|d| {
-        let g = d.get_temp_mut_or_default::<(u64, u64)>(key);
-        if pressed && g.1 != pass {
-            g.0 = g.0.wrapping_add(1);
-            g.1 = pass;
-        }
-        g.0
-    });
-    // Feather's track is curved like Photoshop's, so a few px can be dragged to (#6545).
-    for (field, label, mut value, max, unit, curve) in
-        [("density", tl!("Density"), density * 100.0, 100.0, "%", None), ("feather", tl!("Feather"), feather, 1000.0, "px", Some(3.0))]
-    {
-        let gestures = widgets::RowGestures { curve, ..Default::default() };
-        let response = widgets::slider_row_with(ui, label, &mut value, 0.0..=max, unit, None, gestures);
-        response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(value), label));
-        if response.changed() {
-            let mut params = json!({"document": document, "layer": layer,
-                "coalesce": format!("{prefix}:{document}:{layer}:{field}:{gesture}")});
-            params[field] = json!(value);
-            if let Err(error) = app.run(command, params) {
-                app.ui.status = error;
-                app.ui.status_error = true;
-            }
-            if !ui.input(|i| i.pointer.any_down()) {
-                ui.data_mut(|d| {
-                    let g = d.get_temp_mut_or_default::<(u64, u64)>(key);
-                    g.0 = g.0.wrapping_add(1);
-                });
-            }
+/// A section of Density (%) and Feather (px) fields writing one undoable edit per gesture: the value lives on
+/// the mask, not in its pixels. The gesture's id keys the coalescing, so two drags are two undo steps.
+fn mask_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, section: &MaskSection, density: f32, feather: f32) {
+    let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
+    let layer_id = layer.id.0;
+    let mut edits: Vec<Value> = Vec::new();
+    with_env(
+        ui,
+        |set| set.id_salt = Some(egui::Id::unique((document, layer.id, section.key))),
+        |ui| {
+            Section::new(section.title).show(ui, |ui, _| {
+                // Feather's track is curved like Photoshop's, so a few px can be dragged to (#6545).
+                let rows = [
+                    ("density", tl!("Density"), f64::from(density) * 100.0, 100.0, 100.0, UnitKind::Percent, SliderScale::Linear),
+                    ("feather", tl!("Feather"), f64::from(feather), 1000.0, 0.0, UnitKind::Pixels, SliderScale::Power(3.0)),
+                ];
+                for (field, label, value, max, reset, unit, scale) in rows {
+                    let out = SliderField::new(label, Bind::given(value).reset(reset), 0.0..=max).scale(scale).unit_kind(unit).show(ui);
+                    for event in &out.events {
+                        // A cancel lands on the value from before the drag, written into the same undo step.
+                        let Some(value) = event.landed() else { continue };
+                        // The pixel mask's command refuses a stale dialog by its document; the
+                        // vector mask's takes no `document`.
+                        let mut params = json!({"layer": layer_id});
+                        if section.command != "layer.vectorMask.edit" {
+                            params["document"] = json!(document);
+                        }
+                        if let Some(gesture) = event.id() {
+                            params["coalesce"] = json!(format!("{}:{document}:{layer_id}:{field}:{}", section.key, gesture.0));
+                        }
+                        params[field] = json!(value);
+                        edits.push(params);
+                    }
+                }
+                if section.refine {
+                    refine_row(ui);
+                }
+            });
+        },
+    );
+    for params in edits {
+        if let Err(error) = app.run(section.command, params) {
+            app.ui.status = error;
+            app.ui.status_error = true;
         }
     }
 }
@@ -112,31 +114,10 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64
 /// dialogs (the mask is Select and Mask's input when nothing is selected), and Invert flips the
 /// mask. Invert names its target itself (`"target":"mask"`) rather than leaning on the shell's
 /// target routing, so it edits the mask and never the layer's pixels (#1137).
-fn refine_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let refine: [(&str, &str); 3] = [(tl!("Select and Mask…"), "select.selectAndMask"), (tl!("Color Range…"), "select.colorRange"), (tl!("Invert"), INVERT)];
-    ui.add_space(theme::ROW_GAP / 2.0);
-    ui.label(egui::RichText::new(tl!("Refine")).color(Tokens::get(ui.ctx()).text_dim));
-    ui.add_space(theme::ROW_GAP / 2.0);
-    let avail = ui.available_width();
-    // Two buttons to a row in a wide panel, as Quick Actions do; a narrow one stacks them.
-    let cols = if avail >= 360.0 { 2 } else { 1 };
-    for row in refine.chunks(cols) {
-        // A short last row (or a lone button) still spans the panel.
-        let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = COL_GAP;
-            for &(label, id) in row {
-                // Greyed when its command can't run, by the same rule as the menu item.
-                let enabled = crate::menus::is_enabled(app, id);
-                if ui.add_enabled_ui(enabled, |ui| widgets::secondary_button(ui, label, w).clicked()).inner {
-                    let params = if id == INVERT { json!({"target": "mask"}) } else { json!({}) };
-                    if let Err(error) = crate::menus::invoke(app, ui.ctx(), id, params) {
-                        app.ui.status = error;
-                        app.ui.status_error = true;
-                    }
-                }
-            }
-        });
-        ui.add_space(theme::ROW_GAP);
-    }
+fn refine_row(ui: &mut egui::Ui) {
+    Bar::new(tl!("Refine"), BarKind::Options).show(ui, |ui, _| {
+        Button::command(CommandRef::new("select.selectAndMask")).show(ui);
+        Button::command(CommandRef::new("select.colorRange")).show(ui);
+        Button::command(CommandRef::with_params(INVERT, json!({"target": "mask"}))).show(ui);
+    });
 }

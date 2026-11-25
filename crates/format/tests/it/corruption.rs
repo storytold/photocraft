@@ -160,6 +160,66 @@ fn too_new_version_rejected() {
     assert!(matches!(load_from_bytes(&b), Err(FormatError::TooNew { found: 999, .. })));
 }
 
+// In-tree-generated manifest mutations; no third-party files or user documents.
+#[test]
+fn newer_format_keeps_the_reported_prerelease_identity() {
+    let writer = "photocraft-format 0.23.1-nightly.20261121.17.1.g0123456789ab";
+    let bytes = rebuild(&sample(), |name, original| {
+        Some(if name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            manifest["format_version"] = 999.into();
+            manifest["generator"] = writer.into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            original
+        })
+    });
+    let error = load_from_bytes(&bytes).unwrap_err();
+    match &error {
+        FormatError::TooNew { found, supported, generator } => {
+            assert!(found > supported);
+            assert_eq!(generator.as_deref(), Some(writer));
+        }
+        other => panic!("expected newer-format refusal, got {other}"),
+    }
+    assert!(error.to_string().contains(writer), "the person must be able to identify the reported build");
+}
+
+#[test]
+fn hostile_writer_text_cannot_expand_or_inject_lines_into_newer_file_diagnostics() {
+    let writer = format!("reported nightly\n\r\t\u{202e}{}", "x".repeat(100_000));
+    let bytes = rebuild(&sample(), |name, original| {
+        Some(if name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            manifest["format_version"] = 999.into();
+            manifest["generator"] = writer.clone().into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            original
+        })
+    });
+    let error = load_from_bytes(&bytes).unwrap_err();
+    assert!(matches!(&error, FormatError::TooNew { generator: Some(value), .. } if value.len() < writer.len() / 10));
+    let display = error.to_string();
+    assert!(display.len() < writer.len() / 10 && format!("{error:?}").len() < writer.len() / 10);
+    assert!(!display.contains(['\n', '\r', '\t', '\u{202e}']), "reported metadata must not inject lines or directional controls");
+}
+
+#[test]
+fn same_format_damage_is_not_reclassified_from_its_prerelease_generator() {
+    let bytes = rebuild(&sample(), |name, original| {
+        Some(if name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            manifest["generator"] = "photocraft-format 99.0.0-nightly.20990101.1.1.g0123456789ab".into();
+            manifest["document"] = false.into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            original
+        })
+    });
+    assert!(!matches!(load_from_bytes(&bytes).unwrap_err(), FormatError::TooNew { .. }), "only format compatibility, not a writer label, decides TooNew");
+}
+
 #[test]
 fn invalid_hash_strings_rejected() {
     let b = rebuild(&sample(), |n, d| {
@@ -342,7 +402,7 @@ fn deflated_zip_entries_are_readable() {
         let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(&data).unwrap();
         let comp = enc.finish().unwrap();
-        let crc = zip::crc32(&data);
+        let crc = crc32fast::hash(&data);
         let off = out.len() as u32;
         let name = e.name.as_bytes();
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
@@ -486,7 +546,12 @@ fn pattern_sizes_from_the_file_are_checked() {
     assert!(matches!(huge, Err(FormatError::LimitExceeded(_))), "{huge:?}");
     let empty = load_from_bytes(&with_pattern_size(0, 24));
     assert!(matches!(empty, Err(FormatError::Corrupt(_))), "{empty:?}");
-    assert!(load_from_bytes(&with_pattern_size(32, 24)).is_ok());
+    let ordinary = load_from_bytes(&with_pattern_size(32, 24)).unwrap();
+    // Storage preserves imported pattern declarations; dense painting has a separate budget.
+    let retained = load_from_bytes(&with_pattern_size(30_000, 30_000)).unwrap();
+    let pattern = &retained.patterns[0];
+    assert!(!pattern.is_paintable());
+    assert_eq!(pattern.surface.tile_count(), ordinary.patterns[0].surface.tile_count());
 }
 
 /// A canvas is a few bytes of manifest JSON; one past the budget is refused before any work (#2935).
@@ -522,4 +587,23 @@ fn declared_canvas_outside_the_budget_is_refused() {
     assert!(matches!(load_from_bytes_with(&edge, &opts), Err(FormatError::LimitExceeded(_))));
     let opts = LoadOptions { max_canvas_side: 65_536, ..Default::default() };
     assert!(matches!(load_from_bytes_with(&with_size(65_537, 1), &opts), Err(FormatError::LimitExceeded(_))));
+}
+
+/// #8595: the default decode budget follows the machine: the format's cap, lowered to the
+/// available RAM plus the scratch disk's room, never below 1 GiB. A bundle that expands past the
+/// budget a machine gets stops with an error instead of running it out of memory.
+#[test]
+fn the_default_decode_budget_follows_the_machines_memory() {
+    let cap = 16 << 30;
+    assert_eq!(total_budget(cap, None, None), cap, "nothing known: the format's cap");
+    assert_eq!(total_budget(cap, Some(4 << 30), None), 4 << 30);
+    assert_eq!(total_budget(cap, Some(4 << 30), Some(8 << 30)), 12 << 30, "spilled tiles count too");
+    assert_eq!(total_budget(cap, Some(64 << 30), None), cap);
+    assert_eq!(total_budget(cap, Some(0), None), MIN_TOTAL_BUDGET, "a brief shortage doesn't refuse every load");
+    assert_eq!(total_budget(1 << 20, Some(4 << 30), None), 1 << 20, "never above the cap");
+    // The budget a machine gets is enforced: a bundle that expands past it is refused.
+    let b = sample();
+    assert!(load_from_bytes(&b).is_ok());
+    let opts = LoadOptions { max_total_bytes: total_budget(1000, Some(4 << 30), Some(4 << 30)), ..Default::default() };
+    assert!(matches!(load_from_bytes_with(&b, &opts), Err(FormatError::LimitExceeded(_))));
 }

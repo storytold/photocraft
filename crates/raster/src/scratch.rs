@@ -255,11 +255,21 @@ fn take_with<T: Pooled>(len: usize, fill: T, slack: usize) -> Vec<T> {
     }
 }
 
+/// Fallible [`take`]: on a pool miss the heap allocation is `try_reserve_exact`, so `None` means
+/// the allocation failed rather than aborting. The pool lookup keeps `take`'s existing 2x slack.
+pub fn try_take<T: Pooled>(len: usize, fill: T) -> Option<Vec<T>> {
+    try_take_with_slack(len, fill, 2)
+}
+
 /// Fallible [`take_exact`]: on a pool miss the heap allocation is `try_reserve_exact`, so
-/// `None` means the allocation failed rather than aborting.
+/// `None` means the allocation failed rather than aborting. Only exact-capacity buffers are reused.
 pub fn try_take_exact<T: Pooled>(len: usize, fill: T) -> Option<Vec<T>> {
+    try_take_with_slack(len, fill, 1)
+}
+
+fn try_take_with_slack<T: Pooled>(len: usize, fill: T, slack: usize) -> Option<Vec<T>> {
     USES.fetch_add(1, Ordering::Relaxed);
-    let mut v = match pop::<T>(len, 1) {
+    let mut v = match pop::<T>(len, slack) {
         Some(v) => v,
         None => {
             let mut v = Vec::new();

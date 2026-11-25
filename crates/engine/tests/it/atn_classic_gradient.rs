@@ -1,8 +1,13 @@
 //! Synthetic measured-layout recordings through public ATN load/save and playback.
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
+};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionList, ActionsFile},
+    atn_cmds,
 };
 use serde_json::json;
 
@@ -81,11 +86,11 @@ fn both_event_ids_and_top_level_classes_keep_complete_unchanged_descriptors() {
                         let loaded = atn_cmds::import(&recording(event, d.clone())).unwrap();
                         assert!(loaded.unsupported.is_empty(), "{style} {method}");
                         let action = &loaded.actions[0];
-                        assert_eq!(action.steps[0].0, "paint.gradient");
+                        assert_eq!(action.steps[0].command, "paint.gradient");
                         assert_eq!(saved(action).descriptor.unwrap().to_bytes(), d.to_bytes());
-                        assert_eq!(action.steps[0].1["dither"], false, "omitted Dthr is off, unlike native default");
-                        assert_eq!(action.steps[0].1["opacity"], if changed { json!(54.5) } else { json!(100) });
-                        assert_eq!(action.steps[0].1["transparency"], if changed { json!([[0, 20], [1, 80]]) } else { json!([]) });
+                        assert_eq!(action.steps[0].params["dither"], false, "omitted Dthr is off, unlike native default");
+                        assert_eq!(action.steps[0].params["opacity"], if changed { json!(54.5) } else { json!(100) });
+                        assert_eq!(action.steps[0].params["transparency"], if changed { json!([[0, 20], [1, 80]]) } else { json!([]) });
                     }
                 }
             }
@@ -114,7 +119,7 @@ fn explicit_defaults_key_order_id_encoding_and_flags_are_preserved() {
 fn supported_edits_replace_stale_source_and_export_recorded_default_omissions() {
     let original = fixture("Rdl ", "Perc", true);
     let mut loaded = imported(original.clone());
-    let p = &mut loaded.actions[0].steps[0].1;
+    let p = &mut loaded.actions[0].steps[0].params;
     p["opacity"] = json!(100);
     p["mode"] = json!("Normal");
     p["reverse"] = json!(false);
@@ -128,9 +133,9 @@ fn supported_edits_replace_stale_source_and_export_recorded_default_omissions() 
     assert_eq!(keys, vec![b"From".as_slice(), b"T   ", b"Type", b"Dthr", b"gradientsInterpolationMethod", b"Grad"]);
     let back = imported(d);
     assert!(back.unsupported.is_empty());
-    assert_eq!(back.actions[0].steps[0].1["from"], json!([2, 3]));
-    assert_eq!(back.actions[0].steps[0].1["dither"], true);
-    assert_eq!(back.actions[0].steps[0].1["transparency"], json!([]));
+    assert_eq!(back.actions[0].steps[0].params["from"], json!([2, 3]));
+    assert_eq!(back.actions[0].steps[0].params["dither"], true);
+    assert_eq!(back.actions[0].steps[0].params["transparency"], json!([]));
 }
 
 #[test]
@@ -189,7 +194,7 @@ fn malformed_unknown_and_unrepresentable_descriptors_stay_whole() {
         let bytes = d.to_bytes();
         let loaded = imported(d);
         assert_eq!(loaded.unsupported.len(), 1);
-        assert_eq!(loaded.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(loaded.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         assert_eq!(saved(&loaded.actions[0]).descriptor.unwrap().to_bytes(), bytes);
     }
 }
@@ -210,7 +215,7 @@ fn unsupported_native_targets_and_damaged_origins_are_refused() {
         ("stops", json!([[0.1, "#000000"], [1, "#ffffff"]])),
     ] {
         let mut action = loaded.actions[0].clone();
-        action.steps[0].1[key] = value;
+        action.steps[0].params[key] = value;
         assert!(atn_cmds::export("S", &[&action], &[], false).is_err(), "{key}");
         let (_, skipped) = atn_cmds::export("S", &[&action], &[], true).unwrap();
         assert_eq!(skipped.len(), 1, "{key}");
@@ -253,7 +258,7 @@ fn omitted_transparency_and_dither_use_recorded_defaults_during_playback() {
             for s in [&mut actual, &mut control] {
                 s.execute("file.new", json!({"width":8,"height":4,"depth":depth,"background":"#204060"})).unwrap();
             }
-            actual.actions.list = loaded.actions;
+            actual.actions_mut().list = ActionList::from_file(ActionsFile::new(loaded.actions, Vec::new()));
             actual.execute("actions.play", json!({"action":0})).unwrap();
             // The descriptor contains non-opaque Trns, but omitted UsMs disables them.
             // Dthr=false is explicit, overriding the native command's true default.
@@ -291,7 +296,7 @@ fn recorded_gradients_match_native_pixels_and_undo_at_each_depth() {
                         s.execute("file.new", json!({"width":8,"height":4,"depth":depth,"background":"#204060"})).unwrap();
                     }
                     let before = actual.active().unwrap().doc.clone();
-                    actual.actions.list = loaded.actions;
+                    actual.actions_mut().list = ActionList::from_file(ActionsFile::new(loaded.actions, Vec::new()));
                     actual.execute("actions.play", json!({"action":0})).unwrap();
                     control
                         .execute(

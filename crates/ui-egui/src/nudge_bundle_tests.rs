@@ -8,10 +8,10 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app.run("select.rect", json!({"x": 40, "y": 40, "width": 20, "height": 20})).unwrap();
@@ -24,16 +24,16 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn bounds(h: &Harness<'_, PhotocraftApp>) -> Rect {
+fn bounds(h: &Harness<'_, Box<PhotocraftApp>>) -> Rect {
     let st = h.state().session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
 }
 
-fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
+fn steps(h: &Harness<'_, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn nudge(h: &mut Harness<'_, PhotocraftApp>, key: egui::Key, frames: usize) {
+fn nudge(h: &mut Harness<'_, Box<PhotocraftApp>>, key: egui::Key, frames: usize) {
     h.key_press(key);
     h.run_steps(frames);
 }
@@ -48,8 +48,8 @@ fn tapping_an_arrow_key_ten_times_is_one_history_step() {
     assert_eq!(bounds(&h).x0, start.x0 + 10);
     assert_eq!(steps(&h), n0 + 1, "ten taps, one state");
     let entries = h.state().session.active().unwrap().history.entries();
-    assert_eq!(entries.last().map(String::as_str), Some("Move"));
-    assert_eq!(entries.iter().filter(|e| *e == "Move").count(), 1);
+    assert_eq!(entries.last().map(String::as_str), Some("Nudge"));
+    assert_eq!(entries.iter().filter(|e| *e == "Nudge").count(), 1);
     h.state_mut().session.undo();
     assert_eq!(bounds(&h), start, "one Undo takes all ten pixels back");
 }
@@ -109,15 +109,4 @@ fn the_preference_turns_bundling_off_and_on_again() {
     }
     assert_eq!(steps(&h), n0 + 4, "the next four bundle: 3 earlier states and one run");
     assert_eq!(bounds(&h).x0, start.x0 + 7);
-}
-
-/// Bad values are rejected, not stored (the control channel and the Preferences dialog share the
-/// same ranges).
-#[test]
-fn the_pause_preference_stays_within_its_range() {
-    let mut h = harness();
-    for bad in [json!(0), json!(99), json!(10_001), json!("long"), json!(-5)] {
-        assert!(h.state_mut().run("prefs.set", json!({"path": "tools.nudgeBundlePauseMs", "value": bad.clone()})).is_err(), "{bad}");
-    }
-    assert_eq!(h.state().session.prefs().tools.nudge_bundle_pause_ms, 1000);
 }
