@@ -14,10 +14,11 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 /// the Eyedropper's Sample Size over the box it reads at the view zoom, as in Photoshop (#1649,
 /// #11751), and cached per pixel, revision, size and zoom.
 pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
-    let rev = app.session.active()?.revision;
+    let st = app.session.active()?;
+    let (doc, rev) = (st.doc.id, st.revision);
     let sample_size = app.ui.tool_options.eyedropper.size.pixels();
     let zoom = app.current_zoom();
-    let key = (x, y, rev, sample_size, zoom.to_bits());
+    let key = (doc, x, y, rev, sample_size, zoom.to_bits());
     if let Some((k, v)) = app.info_sample
         && k == key
     {
@@ -28,6 +29,21 @@ pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Opt
     let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
     app.info_sample = Some((key, v));
     Some(v)
+}
+
+fn pointer_cmyk_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
+    let st = app.session.active()?;
+    let size = app.ui.tool_options.eyedropper.size;
+    let key = (st.doc.id, x, y, st.revision, size.pixels(), app.current_zoom().to_bits());
+    if let Some((stored, value)) = app.info_cmyk_sample
+        && stored == key
+    {
+        return value;
+    }
+    let value = crate::canvas::sampling::native_color(app, [f64::from(x) + 0.5, f64::from(y) + 0.5], size, craft::color_ui::ui::SampleSource::All)
+        .map(|(_, inks)| inks);
+    app.info_cmyk_sample = Some((key, value));
+    value
 }
 
 /// The Info panel's W and H for a size of `wh` px (the selection's or the pending crop frame's):
@@ -103,7 +119,10 @@ pub(crate) fn readings<'a>(app: &mut PhotocraftApp, samplers: &'a [(SamplerReado
     let color = rgba.map(|c| {
         // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as the Color
         // Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk = photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2]));
+        let native = pointer.and_then(|point| pointer_cmyk_sample(app, point));
+        let cmyk = native.map(|inks| inks.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32)).unwrap_or_else(|| {
+            photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2]))
+        });
         InfoColor::from_parts([byte(c[0]), byte(c[1]), byte(c[2])], cmyk.map(|v| v.clamp(0, 100) as u8))
     });
     // Measured from the rulers' zero point (#2955).

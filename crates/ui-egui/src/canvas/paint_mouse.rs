@@ -11,6 +11,7 @@
 use craft::keymap::Mods;
 use photocraft_engine::BrushSettings;
 use photocraft_engine::prefs::RightClickPaint;
+use photocraft_engine::preset_store::PresetStoreExt;
 
 use crate::PhotocraftApp;
 use crate::canvas_tool_menu::MenuKind;

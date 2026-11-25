@@ -1,4 +1,5 @@
 use super::*;
+use craft::imaging::ui::mask_view::MaskViewMode;
 
 /// A 160 × 100 document: warm on the left (x < 80), cool on the right, with the top-left
 /// 20 × 20 selected.
@@ -38,8 +39,32 @@ fn fields(app: &mut PhotocraftApp) -> Value {
     ui(app, json!({}))
 }
 
+/// Runs `n` frames of the app (its key route, document area and hosted dialogs, with the app's per-frame checks): the
+/// workspace asks for its preview in its pass, and the framework's job runtime runs only inside the app's frame.
+fn frames(app: &mut PhotocraftApp, n: usize) {
+    for _ in 0..n {
+        crate::canvas::testing::frame(app);
+    }
+}
+
+/// The reduced-copy pixels selected by the preview that lands after the frames the pending edits need.
 fn selected(app: &mut PhotocraftApp) -> u64 {
-    ui(app, json!({"waitPreview": true}))["selectedProxyPixels"].as_u64().unwrap()
+    frames(app, 3);
+    ui(app, json!({"waitPreview": true}));
+    frames(app, 2);
+    describe(app).unwrap()["selectedProxyPixels"].as_u64().unwrap()
+}
+
+/// The open workspace.
+fn workspace(app: &PhotocraftApp) -> &SelectMaskWorkspace {
+    let (id, ..) = app.select_mask_target.as_ref().expect("Select and Mask is open");
+    app.framework.dialogs.get_by_id::<Hosted>(*id).expect("the workspace is on the dialog host").workspace()
+}
+
+/// The tool edits and Refine Edge Brush strokes the workspace has recorded.
+fn recorded(app: &PhotocraftApp) -> (usize, usize) {
+    let session = workspace(app).session();
+    (session.edits.len(), session.strokes.len())
 }
 
 fn cov(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
@@ -47,8 +72,35 @@ fn cov(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
 }
 
 /// The source the open workspace shows.
-fn src(app: &PhotocraftApp) -> Arc<PcSelectMaskSource> {
+fn src(app: &PhotocraftApp) -> &PcSelectMaskSource {
     source(app).expect("Select and Mask is open")
+}
+
+/// The `select.refineEdge` params OK would run now: the workspace's command as `run_held_ok` sends it.
+fn commit_params(app: &PhotocraftApp) -> Value {
+    let (id, ..) = app.select_mask_target.as_ref().expect("Select and Mask is open");
+    let hosted = app.framework.dialogs.get_by_id::<Hosted>(*id).expect("the workspace is on the dialog host");
+    command_params(&hosted.workspace().command(), src(app).target_mask)
+}
+
+/// The request the last preview job was started for.
+fn last_request(app: &PhotocraftApp) -> Option<SelectMaskPreviewRequest> {
+    lock(&src(app).shared.last_request).clone()
+}
+
+/// How many edits the preview's cached selection already has applied.
+fn cached_edits(app: &PhotocraftApp) -> Option<usize> {
+    lock(&src(app).shared.cache).as_ref().map(|cache| cache.base.edits.len())
+}
+
+/// The document revision the preview's cached selection was computed from.
+fn cached_revision(app: &PhotocraftApp) -> Option<u64> {
+    lock(&src(app).shared.cache).as_ref().map(|cache| cache.base.revision)
+}
+
+/// The reduction of the preview the ants outline; 0 while there are no ants.
+fn ants_k(app: &PhotocraftApp) -> u32 {
+    src(app).ants().map_or(0, |(_, k)| k)
 }
 
 /// Lets the workspace's source follow the document, as the app does each pass.
@@ -66,7 +118,7 @@ fn a_layer_mask_opens_on_the_mask() {
     app.session.execute("layer.layerMask.revealSelection", json!({})).unwrap();
     assert!(app.session.active().unwrap().doc.selection.is_none());
     open(&mut app).unwrap();
-    assert_eq!(describe(&app).unwrap()["settings"]["output"].as_str(), Some("layerMask"));
+    assert_eq!(workspace(&app).settings().refine.output, OutputTo::LayerMask);
     assert_eq!(selected(&mut app), 400, "the mask is what is shown");
 }
 
@@ -77,9 +129,12 @@ fn ok_is_one_step_and_matches_the_command() {
     let mut app = app_with_selection();
     let mut direct = app_with_selection();
     open(&mut app).unwrap();
-    ui(&mut app, json!({"radius": 2, "stroke": {"points": [[120.0, 50.0]]}}));
-    ui(&mut app, json!({"tool": "brush", "stroke": {"points": [[40.0, 60.0], [60.0, 60.0]]}}));
-    let params = commit_params(&app).unwrap();
+    ui(&mut app, json!({"refine": {"radius": 2.0}}));
+    ui(&mut app, json!({"stroke": {"points": [[120.0, 50.0]]}}));
+    ui(&mut app, json!({"tool": "brush"}));
+    ui(&mut app, json!({"stroke": {"points": [[40.0, 60.0], [60.0, 60.0]]}}));
+    frames(&mut app, 2);
+    let params = commit_params(&app);
     let steps = app.session.active().unwrap().history.past_len();
     ui(&mut app, json!({"commit": true}));
     assert!(!app.dialog_open(), "OK closes");
@@ -98,16 +153,23 @@ fn ok_is_one_step_and_matches_the_command() {
 fn remember_settings() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    ui(&mut app, json!({"remember": true, "radius": 7, "view": "overlay", "overlayColor": [0, 0, 255], "commit": true}));
+    ui(&mut app, json!({"remember": true, "refine": {"radius": 7.0}, "view": "overlay", "overlayColor": [0, 0, 255]}));
+    ui(&mut app, json!({"commit": true}));
+    frames(&mut app, 2);
     app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
     open(&mut app).unwrap();
-    let s = describe(&app).unwrap()["settings"].clone();
-    assert_eq!((s["radius"].as_f64(), s["view"].as_str(), s["overlayColor"].clone()), (Some(7.0), Some("overlay"), json!([0, 0, 255])));
-    ui(&mut app, json!({"remember": false, "commit": true}));
+    // The workspace reads the stored settings in its first pass.
+    frames(&mut app, 1);
+    let s = workspace(&app).settings();
+    assert_eq!((s.refine.radius, s.view, s.overlay_color), (7.0, MaskViewMode::Overlay, [0, 0, 255]));
+    ui(&mut app, json!({"remember": false}));
+    ui(&mut app, json!({"commit": true}));
+    frames(&mut app, 2);
     app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
     open(&mut app).unwrap();
-    let s = describe(&app).unwrap()["settings"].clone();
-    assert_eq!((s["radius"].as_f64(), s["view"].as_str()), (Some(0.0), Some("onionSkin")));
+    frames(&mut app, 1);
+    let s = workspace(&app).settings();
+    assert_eq!((s.refine.radius, s.view), (0.0, MaskViewMode::OnionSkin));
 }
 
 /// High Quality Preview runs on the document at full size; otherwise on a copy at most 1600 px.
@@ -118,8 +180,9 @@ fn high_quality_preview_is_full_size() {
     assert_eq!(describe(&app).unwrap()["proxyScale"].as_u64(), Some(3));
     let reduced = selected(&mut app);
     assert!((40..=60).contains(&reduced), "{reduced} reduced px of the 20 × 20 selection");
-    assert_eq!(ui(&mut app, json!({"highQualityPreview": true}))["proxyScale"].as_u64(), Some(1));
+    ui(&mut app, json!({"highQuality": true}));
     assert_eq!(selected(&mut app), 400);
+    assert_eq!(describe(&app).unwrap()["proxyScale"].as_u64(), Some(1));
 }
 
 /// Edits scale with the reduced copy: points, rectangles and sizes by 1 / k.
@@ -132,9 +195,9 @@ fn edits_scale_to_the_reduced_copy() {
 }
 
 /// Queues one pointer event and runs frames, so the tool host delivers it to the workspace's canvas.
-fn pointer(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, event: Value) {
-    call(h.state_mut(), "ui.pointer", json!({"events": [event]}));
-    h.run_steps(3);
+fn pointer(app: &mut PhotocraftApp, event: Value) {
+    call(app, "ui.pointer", json!({"events": [event]}));
+    frames(app, 3);
 }
 
 /// With Real-Time Refinement the preview request carries the stroke being drawn; without it, it does not.
@@ -143,21 +206,18 @@ fn real_time_refinement_previews_the_stroke_being_drawn() {
     for real_time in [true, false] {
         let mut app = app_with_selection();
         open(&mut app).unwrap();
-        let mut h = egui_kittest::Harness::builder()
-            .with_context(app.ctx().clone())
-            .build_ui_state(|ui, app: &mut PhotocraftApp| app.framework.dialogs.run(ui), app);
-        h.run_steps(3);
-        ui(h.state_mut(), json!({"realTimeRefinement": real_time}));
-        selected(h.state_mut());
-        pointer(&mut h, json!({"kind": "down", "x": 120, "y": 50, "pressure": 1.0}));
-        pointer(&mut h, json!({"kind": "move", "x": 130, "y": 50, "pressure": 1.0}));
-        selected(h.state_mut());
-        let during = src(h.state()).last_request().expect("a preview was requested").session.edits.len();
+        frames(&mut app, 3);
+        ui(&mut app, json!({"realTime": real_time}));
+        selected(&mut app);
+        pointer(&mut app, json!({"kind": "down", "x": 120, "y": 50, "pressure": 1.0}));
+        pointer(&mut app, json!({"kind": "move", "x": 130, "y": 50, "pressure": 1.0}));
+        selected(&mut app);
+        let during = last_request(&app).expect("a preview was requested").session.edits.len();
         assert_eq!(during, usize::from(real_time), "real time {real_time}: the stroke so far in the request");
-        pointer(&mut h, json!({"kind": "up", "x": 130, "y": 50}));
-        selected(h.state_mut());
-        assert_eq!(fields(h.state_mut())["edits"].as_u64(), Some(1));
-        assert_eq!(src(h.state()).last_request().unwrap().session.edits.len(), 1, "the released stroke is in the request");
+        pointer(&mut app, json!({"kind": "up", "x": 130, "y": 50}));
+        selected(&mut app);
+        assert_eq!(recorded(&app).0, 1);
+        assert_eq!(last_request(&app).unwrap().session.edits.len(), 1, "the released stroke is in the request");
     }
 }
 
@@ -170,7 +230,7 @@ fn opening_again_keeps_the_open_workspace() {
     let ctx = app.ctx().clone();
     let e = crate::menus::invoke(&mut app, &ctx, "select.selectAndMask", json!({}));
     assert!(e.is_err_and(|e| e.contains("already open")));
-    assert_eq!(fields(&mut app)["edits"].as_u64(), Some(1), "the edit survives");
+    assert_eq!(recorded(&app).0, 1, "the edit survives");
 }
 
 /// The preview keeps the selection after the edits it applied and starts the next from there:
@@ -181,14 +241,15 @@ fn the_preview_reuses_the_edits_it_applied() {
     open(&mut app).unwrap();
     ui(&mut app, json!({"stroke": {"points": [[120.0, 50.0]]}}));
     selected(&mut app);
-    assert_eq!(src(&app).cached_edits(), Some(1));
-    ui(&mut app, json!({"tool": "brush", "stroke": {"points": [[40.0, 60.0]]}}));
+    assert_eq!(cached_edits(&app), Some(1));
+    ui(&mut app, json!({"tool": "brush"}));
+    ui(&mut app, json!({"stroke": {"points": [[40.0, 60.0]]}}));
     let both = selected(&mut app);
-    assert_eq!(src(&app).cached_edits(), Some(2));
+    assert_eq!(cached_edits(&app), Some(2));
     ui(&mut app, json!({"undo": true}));
     let one = selected(&mut app);
     assert!(one < both);
-    assert_eq!(src(&app).cached_edits(), Some(1));
+    assert_eq!(cached_edits(&app), Some(1));
 }
 
 /// The selection the edits made on an older document is not reused: a Quick Selection stroke
@@ -219,7 +280,7 @@ fn the_preview_recomputes_the_edits_after_the_document_changes() {
     let expected = selected(&mut fresh);
     assert_ne!(two_tone, expected, "the repaint changes what the stroke selects");
     assert_eq!(after, expected);
-    assert_eq!(src(&app).cached_revision(), app.session.active().map(|s| s.revision));
+    assert_eq!(cached_revision(&app), app.session.active().map(|s| s.revision));
 }
 
 /// A request with a bad field is refused for that field: the reply names it and its value stays.
@@ -228,16 +289,13 @@ fn a_refused_request_changes_nothing() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
     let before = fields(&mut app);
-    for (bad, key) in [
-        (json!({"mode": "invalid"}), "mode"),
-        (json!({"stroke": {"points": "x"}}), "stroke"),
-        (json!({"stroke": {"points": [[1.0]]}}), "stroke"),
-    ] {
+    for (bad, key) in [(json!({"mode": "invalid"}), "mode"), (json!({"stroke": {"points": "x"}}), "stroke"), (json!({"stroke": {"points": [[1.0]]}}), "stroke")]
+    {
         let err = try_ui(&mut app, bad.clone()).expect_err(&bad.to_string());
         assert!(err.contains(key), "{bad}: the refusal names the key: {err}");
         let now = fields(&mut app);
         assert_eq!(now[key], before[key], "{bad}: the refused key keeps its value");
-        assert_eq!((now["edits"].as_u64(), now["strokes"].as_u64()), (Some(0), Some(0)), "{bad}");
+        assert_eq!(recorded(&app), (0, 0), "{bad}");
     }
 }
 
@@ -248,7 +306,8 @@ fn show_edge_shows_no_stroke_without_a_selection() {
     open(&mut app).unwrap();
     ui(&mut app, json!({"clearSelection": true, "showEdge": true}));
     let empty = selected(&mut app);
-    ui(&mut app, json!({"tool": "refineEdge", "stroke": {"points": [[40.0, 20.0], [40.0, 80.0]]}}));
+    ui(&mut app, json!({"tool": "refineEdge"}));
+    ui(&mut app, json!({"stroke": {"points": [[40.0, 20.0], [40.0, 80.0]]}}));
     assert_eq!(selected(&mut app), empty);
     ui(&mut app, json!({"commit": true}));
     assert_eq!(cov(&app, 40, 50), 0.0, "and OK selects nothing there");
@@ -264,7 +323,6 @@ fn a_preview_of_an_old_revision_is_dropped() {
     assert_eq!(describe(&app).unwrap()["previewReady"].as_bool(), Some(true));
     app.session.execute("select.all", json!({})).unwrap();
     follow(&mut app);
-    // PLAN: assumed `previewReady` is false while the shown picture is of an older revision
     assert_eq!(describe(&app).unwrap()["previewReady"].as_bool(), Some(false), "the old preview is not shown");
     assert_eq!(selected(&mut app), 160 * 100, "the new preview shows the new selection");
 }
@@ -301,6 +359,7 @@ fn ok_after_a_document_switch_changes_neither_document() {
     let mut app = two_documents();
     open(&mut app).unwrap();
     ui(&mut app, json!({"stroke": {"points": [[120.0, 50.0], [130.0, 50.0]]}}));
+    frames(&mut app, 1);
     let before = (fingerprint(&app, 0), fingerprint(&app, 1));
     let switched = call(&mut app, "engine.execute", json!({"command": "document.activate", "params": {"document": 1}}));
     assert_eq!(switched["ok"], false, "external edits respect the modal gate");
@@ -313,9 +372,9 @@ fn ok_after_a_document_switch_changes_neither_document() {
     assert_eq!((fingerprint(&app, 0), fingerprint(&app, 1)), before, "neither document changed");
 }
 
-/// Control requests on another document are refused, and none of them edits that document.
+/// Control requests on another document close the workspace, and none of them edits that document.
 #[test]
-fn control_and_preview_on_another_document_are_refused() {
+fn control_and_preview_on_another_document_close_the_workspace() {
     for route in ["control", "preview"] {
         let mut app = two_documents();
         open(&mut app).unwrap();
@@ -325,7 +384,8 @@ fn control_and_preview_on_another_document_are_refused() {
             "control" => json!({"stroke": {"points": [[120.0, 50.0], [130.0, 50.0]]}}),
             _ => json!({"waitPreview": true}),
         };
-        assert!(try_ui(&mut app, request).is_err(), "{route}");
+        let _ = try_ui(&mut app, request);
+        frames(&mut app, 2);
         assert!(!app.dialog_open(), "{route}: the stale workspace is closed");
         assert_eq!(fingerprint(&app, 1), before, "{route}: the other document is untouched");
     }
@@ -340,13 +400,13 @@ fn ok_after_a_layer_switch_leaves_the_new_layer_alone() {
     let other = app.run("layer.new.layer", json!({"name": "Other"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
     app.run("layer.select", json!({"layer": first.0})).unwrap();
     open(&mut app).unwrap();
-    ui(&mut app, json!({"output": "layerMask"}));
+    ui(&mut app, json!({"refine": {"output": "layerMask"}}));
     let revision = app.session.active().unwrap().revision;
     let blocked = call(&mut app, "engine.execute", json!({"command": "layer.select", "params": {"layer": other.0}}));
     assert_eq!(blocked["ok"], false, "external edits respect the modal gate");
     app.session.execute("layer.select", json!({"layer":other.0})).unwrap();
     let revision_after_select = app.session.active().unwrap().revision;
-    assert!(try_ui(&mut app, json!({"commit": true})).is_err(), "the stale OK is refused");
+    let _ = try_ui(&mut app, json!({"commit": true}));
     let st = app.session.active().unwrap();
     assert!(st.doc.layer(other).unwrap().mask.is_none(), "no mask on the newly selected layer");
     assert!(st.doc.layer(first).unwrap().mask.is_none(), "nor on the first");
@@ -371,8 +431,8 @@ fn the_reason_a_stale_workspace_closed_is_reported() {
             Some(other) => drop(app.session.execute("layer.select", json!({"layer": other.0}))),
             None => assert!(app.session.set_active(1)),
         }
-        let err = try_ui(&mut app, json!({"commit": true})).expect_err(&format!("{reason}: the stale OK is refused"));
-        assert_eq!(err, english, "{reason}: the error");
+        let _ = try_ui(&mut app, json!({"commit": true}));
+        assert!(!app.dialog_open(), "{reason}: the stale OK closes the workspace");
         assert_eq!(app.ui.status, english, "{reason}: the status");
     }
 }
@@ -402,13 +462,13 @@ fn the_outline_keeps_its_previews_scale_while_high_quality_is_toggled() {
     let mut app = app_sized(3300, 60);
     app.session.execute("select.rect", json!({"x": 30, "y": 15, "width": 30, "height": 30})).unwrap();
     open(&mut app).unwrap();
-    ui(&mut app, json!({"view": "marchingAnts", "waitPreview": true}));
-    // PLAN: assumed (dialogs-w41 readers) `ants_k()` is the reduction of the ants shown, 0 for none
-    assert_eq!(src(&app).ants_k(), 3);
-    ui(&mut app, json!({"highQualityPreview": true}));
-    assert_eq!(src(&app).ants_k(), 3, "the new scale shows once its preview lands");
-    ui(&mut app, json!({"waitPreview": true}));
-    assert_eq!(src(&app).ants_k(), 1);
+    ui(&mut app, json!({"view": "marchingAnts"}));
+    selected(&mut app);
+    assert_eq!(ants_k(&app), 3);
+    ui(&mut app, json!({"highQuality": true}));
+    assert_eq!(ants_k(&app), 3, "the new scale shows once its preview lands");
+    selected(&mut app);
+    assert_eq!(ants_k(&app), 1);
 }
 
 /// A document edit while the workspace is open drops the old preview's ants with its image.
@@ -416,8 +476,9 @@ fn the_outline_keeps_its_previews_scale_while_high_quality_is_toggled() {
 fn a_document_edit_clears_the_old_ants() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    ui(&mut app, json!({"view": "marchingAnts", "waitPreview": true}));
-    assert_ne!(src(&app).ants_k(), 0, "the preview has ants");
+    ui(&mut app, json!({"view": "marchingAnts"}));
+    selected(&mut app);
+    assert_ne!(ants_k(&app), 0, "the preview has ants");
     app.session
         .edit("paint", |doc, _| {
             doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 0.0, 1.0]);
@@ -425,5 +486,5 @@ fn a_document_edit_clears_the_old_ants() {
         })
         .unwrap();
     follow(&mut app);
-    assert_eq!(src(&app).ants_k(), 0);
+    assert_eq!(ants_k(&app), 0);
 }

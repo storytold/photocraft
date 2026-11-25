@@ -11,6 +11,7 @@
 //! Every edit is one command, so one history step per gesture: the UI previews a drag with
 //! [`apply_set`] and commits it once on release.
 
+use crate::presets::PresetsExt;
 use photocraft_color::Color;
 use photocraft_compose::gradient_fill as gf;
 use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, LayerId};
@@ -123,7 +124,7 @@ fn hex(c: &Color) -> String {
 /// else the current gradient (Gradients panel); explicit `"transparency"` stops replace its own.
 fn preset_param(s: &Session, p: &Value, cmd: &str) -> Result<GradientPreset> {
     if let Some(name) = p.get("gradient").and_then(Value::as_str) {
-        let groups = &s.presets.gradients;
+        let groups = &s.presets().gradients;
         return groups
             .iter()
             .flat_map(|g| g.items.iter())
@@ -135,7 +136,7 @@ fn preset_param(s: &Session, p: &Value, cmd: &str) -> Result<GradientPreset> {
     if p.get("stops").is_some() {
         return GradientPreset::from_params("Custom", p, cmd);
     }
-    s.presets.gradient.clone().with_transparency(p, cmd)
+    s.presets().gradient.clone().with_transparency(p, cmd)
 }
 
 /// The fill and frame of gradient fill layer `id`.

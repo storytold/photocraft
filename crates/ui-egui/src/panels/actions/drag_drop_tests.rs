@@ -2,21 +2,22 @@
 //! The panel reports the drop as `Delete` or `Duplicate`; these tests run those events.
 use super::*;
 use craft::automation::actions::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn names(app: &PhotocraftApp) -> Vec<String> {
-    app.session.actions.list.actions().iter().map(|a| a.name.clone()).collect()
+    app.session.actions().list.actions().iter().map(|a| a.name.clone()).collect()
 }
 
 fn steps(app: &PhotocraftApp, action: usize) -> Vec<String> {
-    app.session.actions.list.action(action).unwrap().steps.iter().map(|s| s.command.clone()).collect()
+    app.session.actions().list.action(action).unwrap().steps.iter().map(|s| s.command.clone()).collect()
 }
 
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let first = ["view.zoomOut", "view.fitOnScreen", "view.actualPixels"].map(|id| ActionStep::new(id, json!({}))).to_vec();
-    app.session.actions.list.push(Action { name: "First".into(), steps: first, ..Default::default() }).unwrap();
+    app.session.actions_mut().list.push(Action { name: "First".into(), steps: first, ..Default::default() }).unwrap();
     let second = Action { name: "Second".into(), steps: vec![ActionStep::new("view.zoomIn", json!({}))], ..Default::default() };
-    app.session.actions.list.push(second).unwrap();
+    app.session.actions_mut().list.push(second).unwrap();
     app
 }
 

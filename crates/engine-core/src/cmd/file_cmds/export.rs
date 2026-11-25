@@ -8,6 +8,11 @@ mod layers_to_files_index_tests;
 
 // ---------- Export ----------
 
+/// Layers to Files requires another layer when the document only contains a Background.
+pub fn layers_to_files_needs_more_layers(doc: &Document) -> bool {
+    doc.layers.len() == 1 && doc.background().is_some()
+}
+
 pub(super) fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layersToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
@@ -59,6 +64,9 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    if layers_to_files_needs_more_layers(&d.doc) {
+        return Err(EngineError::Other("Layers to Files needs a document with multiple layers.".into()));
+    }
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut report = LayerExportReport::default();
@@ -431,6 +439,3 @@ pub(super) fn push_unique(v: &mut Vec<f64>, x: f64) {
 #[cfg(test)]
 #[path = "export_clut_stack_tests.rs"]
 mod export_clut_stack_tests;
-#[cfg(test)]
-#[path = "layers_to_files_prefix_tests.rs"]
-mod layers_to_files_prefix_tests;

@@ -3,6 +3,7 @@
 //! AOV). The query command feeds the File › Open EXR Parts… dialog, the CLI, MCP and the
 //! control channel alike.
 
+use crate::color_cmds::ColorExt;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;

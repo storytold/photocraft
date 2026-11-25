@@ -587,9 +587,25 @@ fn a_channel_mixer_smart_filter_turned_off_monochrome_keeps_its_red_row() {
     let sm = recorded(h.state(), id);
     assert_eq!(sm.smart_filters.len(), 1, "no filter was stacked");
     let adjustment = photocraft_engine::adjust_params::from_params("channelMixer", &sm.smart_filters[0].params, None, photocraft_doc::ColorMode::Rgb).unwrap();
-    let photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome } = adjustment else { panic!("Channel Mixer params") };
+    let photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome, .. } = adjustment else { panic!("Channel Mixer params") };
     assert!(!monochrome);
     assert!(matrix[0].iter().zip([0.7, 0.3, 0.0, 0.0]).all(|(a, b)| (a - b).abs() < 1e-5), "the edited Red row renders: {:?}", matrix[0]);
+}
+
+/// #8047: the framework Channel Mixer editor has red, green and blue outputs only. A Channel Mixer
+/// smart filter with ink outputs (`cyan`..`black` keys, accepted in any document mode) reopened in
+/// an RGB document must not open it over RGB defaults, whose edits the engine would drop beside the
+/// ink keys: nothing opens, the reason is shown, and the filter keeps its params.
+#[test]
+fn a_cmyk_channel_mixer_smart_filter_is_not_opened_in_the_rgb_editor() {
+    let (app, id) = adjustment_filter("rgb", "image.adjustments.channelMixer", json!({"cyan": [80, 0, 0, 0, 0]}));
+    let before = recorded(&app, id).smart_filters[0].params.clone();
+    assert!(photocraft_engine::adjust_params::MIXER_INKS.iter().any(|k| before.get(*k).is_some()), "an ink-output filter: {before}");
+    let h = edit_first_filter(app, id);
+    assert!(h.state().adjust_open.is_none(), "no Channel Mixer editor opened");
+    assert_eq!(h.state().ui.status, crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE, "the reason is shown");
+    assert!(h.state().ui.status_error);
+    assert_eq!(recorded(h.state(), id).smart_filters[0].params, before, "the filter is kept as it is");
 }
 
 /// In Lab, top-level `points` aliases Lightness and the editor writes both on an edit. A stored

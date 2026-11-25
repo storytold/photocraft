@@ -1,5 +1,6 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
+use crate::color_cmds::ColorExt;
 
 /// Replace only the file choice before either authorization gate; malformed params stay invalid.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
@@ -213,7 +214,7 @@ pub fn open_bytes_as_with_options(
             path
         }
     };
-    if raw_settings.is_some() && s.color.open_question(&doc).is_some() {
+    if raw_settings.is_some() && s.color().open_question(&doc).is_some() {
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
@@ -363,6 +364,9 @@ pub(crate) struct PlaceInput {
     pub(super) linked: Option<String>,
     pub(super) params: Value,
     pub(super) canvas: (f64, f64),
+    /// File › Place Embedded's centre on the selection (`"centerOnSelection"`, #14102): the
+    /// placed image is centred there and the selection removed in the place's own step.
+    pub(super) on_selection: Option<(f64, f64)>,
     /// The document's resolution (ppi): a placed file keeps its physical size in it.
     pub(super) ppi: f64,
     pub(super) fmt: PixelFormat,
@@ -409,6 +413,8 @@ impl PlaceInput {
             let [a, b, c, d, _, _] = f.transform.m;
             (a.hypot(b), c.hypot(d))
         });
+        // Not into a frame, whose image fills the frame.
+        let on_selection = if frame.is_none() && p.get("centerOnSelection").and_then(Value::as_bool) == Some(true) { selection_centre(&d.doc) } else { None };
         let approve = match p.get("approveHighMemory") {
             None | Some(Value::Null) => false,
             Some(Value::Bool(b)) => *b,
@@ -422,6 +428,7 @@ impl PlaceInput {
         Ok(Self {
             name: name.to_string(),
             canvas,
+            on_selection,
             ppi: f64::from(d.doc.resolution_dpi),
             fmt: d.doc.pixel_format(),
             opts,
@@ -452,6 +459,22 @@ impl PlaceInput {
     }
 }
 
+/// The centre of the selection a File › Place Embedded centres the placed image on (#14102):
+/// the bounds of a hard-edged rectangle on the canvas, the selection measured. Any other
+/// selection (feathered, not rectangular, or reaching past the canvas) leaves the place centred
+/// as before, and kept.
+fn selection_centre(doc: &Document) -> Option<(f64, f64)> {
+    let sel = doc.selection.as_ref()?;
+    let b = sel.content_bounds();
+    if b.is_empty() || b.intersect(&doc.bounds()) != b || sel.default_pixel().first().is_some_and(|v| *v > 0.0) {
+        return None;
+    }
+    // Row by row, so a large selection is never read at once.
+    let n = sel.channels().max(1);
+    let hard = (b.y0..b.y1).all(|y| sel.read_region(photocraft_geom::Rect::new(b.x0, y, b.x1, y + 1)).chunks_exact(n).all(|px| px[0] >= 1.0));
+    hard.then(|| (f64::from(b.x0 + b.x1) / 2.0, f64::from(b.y0 + b.y1) / 2.0))
+}
+
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
 pub(crate) struct Prepared {
     pub(super) warnings: Vec<String>,
@@ -464,11 +487,13 @@ pub(crate) struct Prepared {
     pub(super) smart: bool,
     /// The frame the layer fills, if any (it becomes the frame's content instead of a new layer).
     pub(super) frame: Option<LayerId>,
+    /// The place was centred on the selection, which it removes in the same step.
+    pub(super) deselect: bool,
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
 pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = p;
+    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame, deselect } = p;
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {
@@ -478,6 +503,9 @@ pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
         } else {
             crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
             *active = Some(id);
+        }
+        if deselect {
+            doc.selection = None;
         }
         Ok(())
     })?;

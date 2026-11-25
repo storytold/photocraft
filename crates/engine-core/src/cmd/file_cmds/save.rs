@@ -12,7 +12,7 @@ pub fn tiff_would_write_layers(doc: &Document) -> bool {
 /// bits, DPX bits, DDS compression and mipmaps, PSD previews, the PSD merged image and the
 /// `.pcraft` full-size composite.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SaveOpts {
+pub struct SaveOpts {
     /// Photoshop's 0–12 JPEG scale.
     pub quality: Option<f64>,
     /// JPEG Options › Format Options (`"jpegFormat"`); unset, Baseline ("Standard").
@@ -91,7 +91,7 @@ impl SaveOpts {
     /// Maximize Compatibility checkbox both start on); `maximizeCompatibility` decides the merged
     /// image for this save instead. The `.pcraft` full-size composite comes from
     /// `pcraftFullComposite`, or without it from the File Handling preference.
-    pub(crate) fn from_params(s: &Session, p: &Value, cmd: &str) -> Result<Self> {
+    pub fn from_params(s: &Session, p: &Value, cmd: &str) -> Result<Self> {
         let file_handling = &s.prefs().file_handling;
         Ok(SaveOpts {
             quality: f64_param(p, "quality"),
@@ -304,7 +304,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
-pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
+pub fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
     let (bytes, warnings) = encode(doc, path, save)?;
     write_file(path, &bytes)?;
     Ok(warnings)

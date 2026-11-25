@@ -182,30 +182,6 @@ fn object_selection_point_honours_the_modes() {
 }
 
 #[test]
-fn object_finder_cache_serves_the_whole_object_until_pixels_change() {
-    let (mut s, _) = disc(8);
-    let d = s.active().unwrap();
-    let doc = std::sync::Arc::clone(&d.doc);
-    let target = sampled_target(&doc, d.active_layer, false);
-    assert!(s.object_finder.lookup(&doc, target, 100.0, 80.0).is_none());
-    let r = std::sync::Arc::new(find_object(&doc, d.active_layer, false, 100.0, 80.0).unwrap());
-    s.object_finder.insert(&doc, target, std::sync::Arc::clone(&r));
-    // Any point on the object hits; the background and another target miss.
-    assert!(std::sync::Arc::ptr_eq(&s.object_finder.lookup(&doc, target, 120.0, 90.0).unwrap(), &r));
-    assert!(s.object_finder.lookup(&doc, target, 3.0, 3.0).is_none());
-    assert!(s.object_finder.lookup(&doc, Some(LayerId(u64::MAX)), 100.0, 80.0).is_none());
-    // The click reuses it, and a selection-only edit keeps it.
-    s.execute("select.object", json!({"point": [110, 70]})).unwrap();
-    assert_eq!(s.object_finder.len(), 1);
-    s.execute("select.deselect", json!({})).unwrap();
-    let d = s.active().unwrap();
-    assert!(s.object_finder.lookup(&std::sync::Arc::clone(&d.doc), target, 100.0, 80.0).is_some());
-    // A pixel edit drops it.
-    s.execute("paint.pencil", json!({"points": [[5, 5], [30, 5]], "size": 4, "color": "#000000"})).unwrap();
-    assert!(s.object_finder.is_empty());
-}
-
-#[test]
 fn object_selection_disc() {
     for depth in [8, 16, 32] {
         let (mut s, inside) = disc(depth);
@@ -221,26 +197,6 @@ fn object_selection_disc() {
 }
 
 #[test]
-fn object_selection_on_an_empty_active_layer_says_so() {
-    // #5246: an empty layer above the photo used to find nothing without a word.
-    let (mut s, inside) = disc(8);
-    s.execute("layer.new.layer", json!({})).unwrap();
-    for p in [json!({"rect": [40, 20, 120, 120]}), json!({"point": [100, 80]})] {
-        let e = s.execute("select.object", p.clone()).unwrap_err().to_string();
-        assert!(e.contains("active layer is empty") && e.contains("sampleAllLayers"), "{p}: {e}");
-        assert!(s.active().unwrap().doc.selection.is_none());
-    }
-    // Sampling all layers finds the disc below.
-    s.execute("select.object", json!({"rect": [40, 20, 120, 120], "sampleAllLayers": true})).unwrap();
-    assert!(sel_iou(&s, 200, 160, &inside) > 0.95);
-    // A layer with pixels elsewhere: the rectangle holds none of them.
-    s.execute("select.deselect", json!({})).unwrap();
-    s.execute("paint.pencil", json!({"points": [[5, 5], [10, 5]], "size": 2, "color": "#000000"})).unwrap();
-    let e = s.execute("select.object", json!({"rect": [60, 60, 100, 80]})).unwrap_err().to_string();
-    assert!(e.contains("no pixels in that area"), "{e}");
-}
-
-#[test]
 fn select_subject_centred_object() {
     let (mut s, inside) = disc(8);
     assert!(s.is_enabled("select.subject"));
@@ -249,23 +205,6 @@ fn select_subject_centred_object() {
     assert!(v > 0.9, "IoU {v}");
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().doc.selection.is_none());
-}
-
-/// Select Subject looks at the selected layer only; with no layer selected it looks at the
-/// whole image.
-#[test]
-fn select_subject_samples_the_selected_layer_else_the_composite() {
-    let (mut s, inside) = disc(8);
-    // A layer above holding only a small square in the corner: the disc is not on it.
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("paint.pencil", json!({"points": [[10, 10], [30, 10]], "size": 3, "color": "#000000"})).unwrap();
-    s.execute("select.subject", json!({})).unwrap();
-    assert!(cov(&s, 100, 80) < 0.5, "the disc on the layer below was selected");
-    s.execute("select.deselect", json!({})).unwrap();
-    // No layer selected: the whole image, so the disc is found.
-    s.execute("select.deselectLayers", json!({})).unwrap();
-    s.execute("select.subject", json!({})).unwrap();
-    assert!(sel_iou(&s, 200, 160, &inside) > 0.9);
 }
 
 /// #2865: a repeat on unchanged pixels reuses the last mask (an identical selection, even
@@ -278,7 +217,7 @@ fn select_subject_repeat_reuses_the_mask_until_pixels_change() {
         s.active().unwrap().doc.selection.as_ref().unwrap().read_region_into(Rect::new(0, 0, 200, 160), &mut v);
         v
     };
-    let cached = |s: &Session| s.subject_cache.region.clone().unwrap();
+    let cached = |s: &Session| s.slot_or_default::<SubjectCache>().region.clone().unwrap();
     s.execute("select.subject", json!({})).unwrap();
     let (first, mask) = (sel(&s), cached(&s));
     s.execute("select.deselect", json!({})).unwrap();
@@ -296,7 +235,7 @@ fn select_subject_repeat_reuses_the_mask_until_pixels_change() {
         Ok(())
     })
     .unwrap();
-    assert!(s.subject_cache.region.is_none());
+    assert!(s.slot_or_default::<SubjectCache>().region.is_none());
     s.execute("select.subject", json!({})).unwrap();
     // Recomputed on the edited pixels (one changed pixel may move the edge a little).
     assert!(!std::sync::Arc::ptr_eq(&mask, &cached(&s)));

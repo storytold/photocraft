@@ -15,7 +15,7 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// Restore the remembered brush at launch; stored tips load when the preset store attaches
-/// (`Session::attach_preset_store`).
+/// (`PresetStoreExt::attach_preset_store`).
 pub fn restore(app: &mut PhotocraftApp) {
     photocraft_engine::brush_cmds::restore_brush(&mut app.session);
 }

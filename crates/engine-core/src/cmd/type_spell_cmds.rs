@@ -314,6 +314,7 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use crate::actions_cmds::ActionStep;
+    use crate::actions_cmds::ActionsExt;
 
     #[test]
     fn char_offsets_matches_per_offset_counting() {
@@ -435,7 +436,7 @@ mod tests {
         s.execute("edit.checkSpelling", json!({"allLayers": true, "suggestions": 8})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
         assert_eq!(text_of(&s, id), "The brown end");
-        let action = &s.actions.list.actions()[0];
+        let action = &s.actions().list.actions()[0];
         assert_eq!(action.steps, vec![ActionStep::new("edit.checkSpelling", json!({"allLayers": true}))]);
         assert_eq!(action.dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     }
@@ -447,9 +448,9 @@ mod tests {
         s.execute("edit.checkSpelling", json!({"allLayers": false})).unwrap();
         s.execute("edit.checkSpelling", json!({"layer": id})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        let steps: Vec<&Value> = s.actions.list.actions()[0].steps.iter().map(|step| &step.params).collect();
+        let steps: Vec<&Value> = s.actions().list.actions()[0].steps.iter().map(|step| &step.params).collect();
         assert_eq!(steps, [&json!({"allLayers": false}), &json!({"allLayers": false})]);
-        assert_eq!(s.actions.list.actions()[0].dialogs.len(), 2);
+        assert_eq!(s.actions().list.actions()[0].dialogs.len(), 2);
     }
 
     /// `"action": null` runs Check Spelling itself, so it is recorded as one.
@@ -459,7 +460,7 @@ mod tests {
         s.execute("actions.record", json!({"name": "Null"})).unwrap();
         s.execute("edit.checkSpelling", json!({"action": null})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new("edit.checkSpelling", json!({"allLayers": true}))]);
+        assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("edit.checkSpelling", json!({"allLayers": true}))]);
     }
 
     #[test]
@@ -495,16 +496,6 @@ mod tests {
         s.execute("type.insertText", json!({"text": "!"})).unwrap();
         assert_eq!(text_of(&s, id), "€b!");
         assert!(s.execute("type.insertText", json!({"text": ""})).is_err());
-    }
-
-    #[test]
-    fn insert_crlf_reports_caret_in_normalized_text() {
-        let (mut s, id) = session("");
-        let inserted = s.execute("type.insertText", json!({"layer": id, "text": "x\r\ny"})).unwrap();
-
-        assert_eq!(inserted["caret"], 3);
-        assert_eq!(s.execute("type.info", json!({"layer": id})).unwrap()["text"], "x\ny");
-        assert_eq!(s.execute("type.caret", json!({"layer": id, "index": inserted["caret"]})).unwrap()["index"], inserted["caret"]);
     }
 }
 

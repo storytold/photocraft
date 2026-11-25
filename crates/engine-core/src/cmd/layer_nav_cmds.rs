@@ -194,7 +194,9 @@ mod tests {
         let (mut s, _) = session();
         let st = s.active_mut().unwrap();
         st.saved_revision = st.revision;
-        s.execute("layer.selectTop", json!({"junk": [1, 2]})).unwrap();
+        // An undocumented key is refused rather than ignored (#7596).
+        assert!(s.execute("layer.selectTop", json!({"junk": [1, 2]})).unwrap_err().to_string().contains("unknown parameter `junk`"));
+        s.execute("layer.selectTop", json!({})).unwrap();
         assert!(!s.active().unwrap().is_dirty(), "selecting a layer is not an edit");
         let mut empty = crate::session();
         for c in specs() {

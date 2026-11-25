@@ -8,6 +8,7 @@ use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::text::RangeAlert;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::Value as Json;
 
 use crate::PhotocraftApp;
@@ -141,7 +142,7 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
 /// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
 /// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let source_unset = app.session.presets.clone.active().source.is_none();
+    let source_unset = app.session.presets().clone.active().source.is_none();
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
     let o = &mut app.ui.tool_options;
     check(ui, tl!("Aligned"), &mut o.clone_aligned, true, None);
