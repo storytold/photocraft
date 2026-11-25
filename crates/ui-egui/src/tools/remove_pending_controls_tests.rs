@@ -260,6 +260,18 @@ fn the_layers_panel_takes_no_pick_while_strokes_wait() {
     click(&mut h, at, Modifiers::NONE);
     h.run_steps(3);
     assert_eq!(active_layer(&h), Some(l0), "and the panel takes the pick again");
+
+    // Apply takes the same panel back through the waiting state, this time with a command run.
+    wait_one_stroke(h.state_mut());
+    h.run_steps(3);
+    assert!(row_greyed(&h, "L1"), "the panel is shut again while the next stroke waits");
+    button(&h, APPLY).click();
+    h.run_steps(3);
+    assert!(!row_greyed(&h, "L1"), "and free again after Apply");
+    let at1 = name_point(&h, "L1");
+    click(&mut h, at1, Modifiers::NONE);
+    h.run_steps(3);
+    assert_eq!(active_layer(&h), Some(l1), "and the pick works after Apply as well");
 }
 
 /// Neighbour case: Content-Aware Move keeps today's bar - its answer pair appears only while its
