@@ -34,12 +34,16 @@ pub fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
     Ok(())
 }
 
-/// Largest sampled tip side (like Photoshop's 5000 px limit, kept smaller for preset size).
+/// Largest tip side for an image file imported as a brush (kept smaller for preset size).
 pub const MAX_TIP: u32 = 2500;
 
+/// Largest tip side for Define Brush Preset (Photoshop's limit).
+pub const MAX_DEFINED_TIP: u32 = 5000;
+
 /// A sampled-tip brush from a paint-amount map (`w`×`h`, row-major, 0 = no paint, 1 = full):
-/// cropped to the painted extent, at most [`MAX_TIP`] px a side. Shared by Define Brush Preset
-/// and importing an image file as a brush (`brush.presets.importImage`).
+/// cropped to the painted extent, at most [`MAX_DEFINED_TIP`] px a side. Shared by Define Brush
+/// Preset and importing an image file as a brush (`brush.presets.importImage`), which checks the
+/// smaller [`MAX_TIP`] itself.
 pub fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushSettings, u32, u32)> {
     let at = |x: usize, y: usize| v.get(y * w + x).copied().unwrap_or(0.0);
     // Crop to the painted extent.
@@ -58,10 +62,11 @@ pub fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushS
         return Err(bad(cmd, "the pixels contain no paint (all white or transparent)"));
     }
     let (tw, th) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    if tw.max(th) > MAX_TIP {
-        return Err(bad(cmd, format!("too large for a brush tip ({tw}×{th}; max {MAX_TIP} px)")));
+    if tw.max(th) > MAX_DEFINED_TIP {
+        return Err(bad(cmd, format!("too large for a brush tip ({tw}×{th}; max {MAX_DEFINED_TIP} px)")));
     }
-    let mut data = Vec::with_capacity((tw * th) as usize);
+    // A 5000 px tip is ~100 MB of f32, so reserve it fallibly.
+    let mut data = crate::allocation::capacity(tw as usize * th as usize, "making a brush tip")?;
     for y in y0..y1 {
         data.extend((x0..x1).map(|x| at(x, y)));
     }
@@ -69,3 +74,7 @@ pub fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushS
     let brush = BrushSettings { tip: TipShape::Sampled(tip).into(), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
     Ok((brush, tw, th))
 }
+
+#[cfg(test)]
+#[path = "brush_defs_tests.rs"]
+mod brush_defs_tests;
