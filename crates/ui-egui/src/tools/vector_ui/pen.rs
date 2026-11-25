@@ -100,7 +100,8 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         // The selected shape layer keeps its fill and stroke; the new component cuts, intersects…
         app.run("shape.create", json!({"kind": "path", "path": path, "addTo": layer, "op": op, "useAlignedRendering": app.ui.tool_options.align_edges}))
     } else if shape_mode {
-        let fill = if closed { fill_param(app) } else { Value::Null };
+        // An open path is filled to its chord and stays open, as in Photoshop (#12839).
+        let fill = fill_param(app);
         let stroke = if closed { stroke_param(app) } else { super::shapes::open_pen_stroke_param(app) };
         app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges, "historyName": freeform.then_some("Freeform Pen")}))
     } else if let Some((name, p)) =
@@ -1037,6 +1038,10 @@ mod freeform_close_tolerance_tests;
 #[cfg(test)]
 #[path = "pen_shape_first_click_tests.rs"]
 mod pen_shape_first_click_tests;
+
+#[cfg(test)]
+#[path = "shape_open_path_fill_tests.rs"]
+mod shape_open_path_fill_tests;
 
 #[cfg(test)]
 #[path = "pen_history_steps_tests.rs"]

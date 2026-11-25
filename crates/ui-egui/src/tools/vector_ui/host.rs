@@ -59,7 +59,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
     if super::shapes::is_shape_tool(tool) {
         let (sides, ratio) = match tool {
             Tool::Triangle => (3, 1.0),
-            Tool::Star => (5, 0.5),
+            Tool::Star => (o.star_points.clamp(3, 20), 0.5),
             _ => (o.polygon_sides, 1.0),
         };
         let mut options = ShapeDragOptions::new(super::kind_of(tool))

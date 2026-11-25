@@ -7,6 +7,7 @@ mod color_settings_presets;
 mod lut_row_cache_purge;
 mod mask_cache_purge;
 mod memory_gate;
+mod render_video_scratch;
 mod scratch_disk;
 mod scratch_pause;
 mod scratch_release;
