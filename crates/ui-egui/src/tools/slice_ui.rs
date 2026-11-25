@@ -7,13 +7,13 @@ use craft::behavior::EditEvent;
 use craft::behavior::geometry::Constraint;
 use craft::behavior::kurbo::Rect as DocRect;
 use craft::draw::ui::slice::{
-    DivideBy, DivideSlices, DivideSlicesDialog, SliceBar, SliceCommand, SliceEvent, SliceItem, SliceKind, SliceMode, SliceOptions, SliceOptionsDialog,
-    SliceOrigin as ItemOrigin, SliceOverlay, SliceRules, SliceTool, SliceToolSettings,
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceBackground, SliceBar, SliceCommand, SliceEvent, SliceItem, SliceKind, SliceMode, SliceOptions,
+    SliceOptionsDialog, SliceOrigin as ItemOrigin, SliceOverlay, SliceRules, SliceTool, SliceToolSettings,
 };
 use craft::theme::Srgba;
 use craft::ui::canvas::ToolHostResponse;
 use craft::ui::contract::Show as _;
-use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::dialog::{DialogId, DialogResult, StackDialog as _};
 use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
 use photocraft_doc::SliceOrigin;
 use photocraft_doc::slices::{self, ResolvedSlice};
@@ -388,8 +388,7 @@ pub(crate) fn open_options(app: &mut PhotocraftApp) -> Result<DialogId, String> 
     options.message = text("message");
     options.alt = text("alt");
     options.cell_text = text("cellText");
-    options.background_row = true;
-    options.background = v["background"].as_str().and_then(Srgba::from_hex);
+    options.background = v["background"].as_str().and_then(Srgba::from_hex).map_or(SliceBackground::None, SliceBackground::Color);
     let target = r.id.map_or(SliceTarget::Auto(n), SliceTarget::Stored);
     // HTML Text is offered only for a Table slice, so its value shows.
     let mut kinds = vec![SliceKind::Image, SliceKind::NoImage];
@@ -418,13 +417,13 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
 
 fn take_options(app: &mut PhotocraftApp) {
     let Some((id, target)) = app.ui.slices.options else { return };
-    if let Some(request) = app.framework.dialogs.get_mut_by_id::<SliceOptionsDialog>(id).and_then(SliceOptionsDialog::pick_color) {
+    if let Some(request) = app.framework.dialogs.get_mut_by_id::<SliceOptionsDialog>(id).and_then(|dialog| dialog.take_color_request()) {
         crate::color_picker_ui::open_for_request(app, id, request);
     }
     if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
         && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<SliceOptionsDialog>(id)
     {
-        dialog.set_color(&key, color);
+        dialog.answer_color(&key, color);
     }
     match app.framework.dialogs.take_by_id::<SliceOptionsDialog>(id) {
         Some(DialogResult::Ok(options)) => {
@@ -441,13 +440,15 @@ fn take_options(app: &mut PhotocraftApp) {
             ] {
                 params[k] = json!(v);
             }
-            params["background"] = match options.background {
-                Some(c) => {
+            // The engine stores no colour or a colour: Matte (the export's matte) leaves the stored background as it was.
+            match options.background {
+                SliceBackground::Color(c) => {
                     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                    json!(format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b)))
+                    params["background"] = json!(format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b)));
                 }
-                None => json!("none"),
-            };
+                SliceBackground::None => params["background"] = json!("none"),
+                _ => {}
+            }
             match app.run("slice.set", params) {
                 Ok(v) => app.ui.slices.selected = v.get("number").and_then(Value::as_u64).map(|n| n as usize),
                 Err(e) => report(app, e),
