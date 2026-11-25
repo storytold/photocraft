@@ -125,6 +125,7 @@ pub struct OpenPreview {
     /// The armed split tool of the Warp phase, one-shot (#12498). Hover, placing and the quick split are the
     /// warp grid's.
     split: Option<WarpSplit>,
+    warp_grid: warp::GridSelection,
     /// The tool the session began with: picking another one applies the transform.
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
@@ -158,6 +159,7 @@ impl OpenPreview {
             above: None,
             styled: None,
             split: None,
+            warp_grid: warp::GridSelection::default(),
             tool,
             path: None,
             follow: None,

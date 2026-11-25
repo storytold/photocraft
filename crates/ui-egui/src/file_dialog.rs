@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::PickId;
 use craft::host::{PickKind, PickRequest, Picked};
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::DocId;
 use serde_json::{Value, json};
 
@@ -24,7 +25,7 @@ use crate::PhotocraftApp;
 use crate::file_open::{display_name, path_text};
 
 mod filters;
-use filters::{open_filters, save_request};
+use filters::{SaveCopyFormats, open_filters, save_request};
 
 /// What a file or folder dialog asks the user for, on the web build, which keeps its own dialog
 /// path until the framework's web `Files` replaces it (FW-264).
@@ -98,7 +99,7 @@ pub(crate) struct Pending {
 
 /// The error of a cancelled dialog: not reported, since backing out is the user's choice.
 pub(crate) const CANCELLED: &str = "cancelled";
-const UNEXPECTED: &str = "the file dialog gave an unexpected answer";
+pub(crate) const UNEXPECTED: &str = "the file dialog gave an unexpected answer";
 
 /// The text of a chosen path. [`PhotocraftApp::ask_file`] has refused a path that is not valid
 /// Unicode by the time an action sees it.
@@ -112,6 +113,7 @@ fn path_string(path: &Path) -> String {
 fn path_strings(picked: &Picked) -> Vec<String> {
     match picked {
         Picked::Paths(paths) => paths.iter().map(|p| path_string(p)).collect(),
+        Picked::Saved { path, .. } => vec![path_string(path)],
         Picked::Contents(_) | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Vec::new(),
     }
 }
@@ -124,7 +126,7 @@ impl PhotocraftApp {
 
     /// Show a file dialog; `then` continues with the user's choice on a later frame (see the
     /// module docs). Returns at once with `{"fileDialog": "open" | "folder" | "save"}`; `Err` while
-    /// one is open. `then` gets [`Picked::Paths`] (every path valid Unicode) or
+    /// one is open. `then` gets [`Picked::Paths`] or [`Picked::Saved`] (every path valid Unicode) or
     /// [`Picked::Contents`]; Cancel ends the action with [`CANCELLED`] and an unavailable dialog
     /// with its reason, neither reaching `then`.
     pub(crate) fn ask_file(&mut self, request: PickRequest, then: impl FnOnce(&mut Self, Picked) -> Result<Value, String> + 'static) -> Result<Value, String> {
@@ -146,6 +148,10 @@ impl PhotocraftApp {
                     path_text(path, saving)?;
                 }
                 then(app, Picked::Paths(paths))
+            }
+            Picked::Saved { path, file_type } => {
+                path_text(&path, saving)?;
+                then(app, Picked::Saved { path, file_type })
             }
             picked @ Picked::Contents(_) => then(app, picked),
         });
@@ -214,20 +220,32 @@ impl PhotocraftApp {
     /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered for
     /// the document the dialog was asked for.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.pick_save_in(suggested, false, then)
+        self.pick_save_in(suggested, false, None, then)
+    }
+
+    /// Save a Copy filters the picker by the copied document's mode and depth.
+    pub(crate) fn pick_save_copy(
+        &mut self,
+        suggested: &str,
+        mode: ColorMode,
+        depth: SampleType,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        self.pick_save_in(suggested, false, SaveCopyFormats::for_document(mode, depth), then)
     }
 
     /// [`Self::pick_save`] for the export flows (Export As, Quick Export, Save for Web, ...): starts in
     /// the folder [`export_start_dir`] picks (#10192), and once `then` has exported, remembers the
     /// chosen file's folder in `export.lastFolder`; a failed or cancelled export leaves it alone.
     pub(crate) fn pick_export(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.pick_save_in(suggested, true, then)
+        self.pick_save_in(suggested, true, None, then)
     }
 
     fn pick_save_in(
         &mut self,
         suggested: &str,
         export: bool,
+        copy: Option<SaveCopyFormats>,
         then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
         let mut suggested = PathBuf::from(suggested);
@@ -246,9 +264,13 @@ impl PhotocraftApp {
                 suggested = dir.join(suggested);
             }
         }
-        let request = save_request(if export { "export" } else { "document" }, &suggested.to_string_lossy());
+        let request = save_request(if export { "export" } else { "document" }, &suggested.to_string_lossy(), copy);
         self.ask_file(request, move |app, picked| {
             let Some(path) = path_strings(&picked).into_iter().next() else { return Err(UNEXPECTED.into()) };
+            // Some pickers accept a typed extension outside their filter list.
+            if copy.is_some_and(|formats| !formats.allows_path(Path::new(&path))) {
+                return Err(tl!("Choose a file type that supports this document's colour mode and bit depth.").to_string());
+            }
             // The web answers a download name, which has no folder to remember.
             let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
             // An export's folder only once it has exported: a failed one doesn't move where
@@ -326,7 +348,7 @@ impl PhotocraftApp {
                     app.open_paths_in_order(&path_strings(&picked));
                 }
                 Picked::Contents(files) => app.open_contents(files),
-                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
+                Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
         })
@@ -421,7 +443,11 @@ impl PhotocraftApp {
     /// always add the suggested extension to a bare name (the format follows the extension).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pump_files(&mut self, parent: &eframe::Frame) {
-        let policy = craft::dialogs::service::ExtensionPolicy { lowercase: self.session.prefs().file_handling.lowercase_extension, add_suggested: true };
+        let policy = craft::dialogs::service::ExtensionPolicy {
+            lowercase: self.session.prefs().file_handling.lowercase_extension,
+            add_suggested: true,
+            picked_type: true,
+        };
         // PLAN: `Services::file_panels: Option<craft::dialogs::FilePanels>` is dialogs-w59's field.
         let Some(panels) = self.services.file_panels.as_mut() else { return };
         panels.set_extension_policy(policy);
@@ -475,7 +501,8 @@ fn web_picked(answer: Option<FileDialogAnswer>) -> Picked {
     match answer {
         None => Picked::Cancelled,
         Some(FileDialogAnswer::Paths(paths)) => Picked::Paths(paths.into_iter().map(PathBuf::from).collect()),
-        Some(FileDialogAnswer::SaveTo(path) | FileDialogAnswer::FolderTo(path)) => Picked::Paths(vec![PathBuf::from(path)]),
+        Some(FileDialogAnswer::SaveTo(path)) => Picked::Saved { path: PathBuf::from(path), file_type: None },
+        Some(FileDialogAnswer::FolderTo(path)) => Picked::Paths(vec![PathBuf::from(path)]),
         Some(FileDialogAnswer::Contents(name, bytes)) => Picked::Contents(vec![(name, bytes)]),
         Some(FileDialogAnswer::ContentsMany(files)) => Picked::Contents(files),
         Some(FileDialogAnswer::Unavailable(why)) => Picked::Unavailable(why),
@@ -511,7 +538,7 @@ fn read_picked(picked: Picked) -> Result<(String, Vec<u8>), String> {
     match picked {
         Picked::Contents(files) => files.into_iter().next().ok_or_else(|| CANCELLED.into()),
         Picked::Paths(paths) => read_path(path_string(paths.first().ok_or(CANCELLED)?)),
-        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
+        Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
     }
 }
 
@@ -546,7 +573,7 @@ fn picked_files(picked: Picked) -> Result<Vec<PickedFile>, String> {
     let files: Vec<PickedFile> = match picked {
         Picked::Paths(paths) => paths.iter().map(|p| PickedFile::Path(path_string(p))).collect(),
         Picked::Contents(files) => files.into_iter().map(|(name, bytes)| PickedFile::Contents(name, bytes)).collect(),
-        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
+        Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
     };
     if files.is_empty() {
         return Err(CANCELLED.into());

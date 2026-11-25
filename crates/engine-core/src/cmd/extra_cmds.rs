@@ -169,6 +169,9 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
+    if let Some(st) = s.active() {
+        crate::pixel_fill::check_mode_available("edit.stroke", &st.doc, mode)?;
+    }
     // Stroke keeps its layer behavior for channel views; an explicit mask edits that mask.
     let pixels = Value::Null;
     let target = if crate::commands::is_mask_target(p) { p } else { &pixels };

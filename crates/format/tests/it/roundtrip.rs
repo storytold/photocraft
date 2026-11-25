@@ -169,6 +169,34 @@ fn older_bundles_without_import_conversion_still_load() {
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
 }
 
+/// The mode a pattern was defined from (#13071) comes back with its pixels, and a bundle written
+/// before that member existed still loads, with no source recorded.
+#[test]
+fn a_pattern_source_mode_round_trips_and_an_older_bundle_loads_without_it() {
+    let mut doc = Document::new("Indexed pattern", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+    let mut pattern = photocraft_doc::Pattern::new("From an Indexed image", surface, 4, 4);
+    pattern.source_mode = Some(ColorMode::Indexed);
+    doc.patterns.push(pattern);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc, "the mode comes back with the pixels");
+
+    let zip = zip::ZipReader::new(&bytes).unwrap();
+    let mut z = zip::ZipWriter::new();
+    for e in &zip.entries {
+        let data = zip.read(e, usize::MAX).unwrap();
+        if e.name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            assert!(manifest["document"]["patterns"][0].as_object_mut().unwrap().remove("source_mode").is_some(), "the writer names the member");
+            z.add(&e.name, &serde_json::to_vec(&manifest).unwrap()).unwrap();
+        } else {
+            z.add(&e.name, &data).unwrap();
+        }
+    }
+    assert_eq!(load_from_bytes(&z.finish().unwrap()).unwrap().patterns[0].source_mode, None, "an older bundle records no source");
+}
+
 /// Rewrite only the fixture's report manifest to exercise corrupt framing and missing-blob validation.
 fn edit_import_manifest(bytes: &[u8], edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
     edit_import_bundle(bytes, None, edit)
@@ -1370,6 +1398,51 @@ fn arrow_document_is_backward_compatible() {
     // The new reader restores full parametric editability.
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
+}
+/// Native files keep enabled alignment; missing or disabled fields preserve legacy rendering.
+#[test]
+fn use_aligned_rendering_roundtrips_and_defaults_for_legacy_files() {
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    use photocraft_format::manifest::ContentM;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+
+    doc.layers.push(Layer::new(
+        "Pixel aligned rectangle",
+        LayerContent::Shape(ShapeLayer {
+            path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(10.0, 10.0), (70.0, 10.0), (70.0, 70.0), (10.0, 70.0)])]),
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            use_aligned_rendering: true,
+            ..Default::default()
+        }),
+    ));
+
+    // The enabled option survives a complete save/load cycle.
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let reopened = load_from_bytes(&bytes).unwrap();
+    assert_eq!(reopened, doc);
+
+    let manifest = read_manifest(&bytes).unwrap();
+    let layer = manifest.document.layers.iter().find(|l| l.name == "Pixel aligned rectangle").unwrap();
+
+    let stored = serde_json::to_value(&layer.content).unwrap();
+    assert_eq!(stored["use_aligned_rendering"], true);
+
+    // A legacy manifest without the new property defaults to false.
+    let mut legacy = stored.clone();
+    legacy.as_object_mut().unwrap().remove("use_aligned_rendering");
+
+    let old_content: ContentM = serde_json::from_value(legacy).unwrap();
+    assert!(matches!(old_content, ContentM::Shape { use_aligned_rendering: false, .. }));
+
+    // Disabled alignment must not add a new field to legacy-style manifests.
+    let mut disabled = layer.content.clone();
+    if let ContentM::Shape { use_aligned_rendering, .. } = &mut disabled {
+        *use_aligned_rendering = false;
+    }
+
+    let disabled_json = serde_json::to_value(disabled).unwrap();
+    assert!(disabled_json.get("use_aligned_rendering").is_none());
 }
 
 /// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):

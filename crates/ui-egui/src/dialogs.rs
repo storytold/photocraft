@@ -271,11 +271,11 @@ pub(crate) mod params {
             let key = key_of(app, id);
             let Some(dialog) = dialog_mut(app, id) else { continue };
             let (colour, path, dropper, listing, footer, range) = (
-                dialog.pick_color(),
+                dialog.take_color_request(),
                 dialog.pick_path(),
                 dialog.take_eyedropper(),
                 dialog.take_listing(),
-                dialog.take_footer_action(),
+                dialog.take_action(),
                 dialog.take_range_alert(),
             );
             if let Some(alert) = range {
@@ -287,7 +287,7 @@ pub(crate) mod params {
             if let Some((row, colour)) = color_picker_ui::answer_for(app, id)
                 && let Some(dialog) = dialog_mut(app, id)
             {
-                dialog.answer_color(row, colour);
+                dialog.answer_color(&row, colour);
             }
             if let Some(request) = path {
                 start_pick(app, ctx, id, request);
@@ -415,6 +415,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     disk_change_prompt::answer,
     rasterize_prompt::answer,
     live_shape_prompt::answer,
+    assign_profile_layers_alert::answer,
     preset_group_prompt::answer,
     open_prompt::answer_prompt,
     alerts::answer,
@@ -633,8 +634,14 @@ const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.expo
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 4] {
-    [delete_layer_prompt::PREF, live_shape_prompt::PREF, crate::analysis::note_alerts::DELETE_NOTE_PREF, crate::retouch_ui::CAM_NO_PIXELS_PREF]
+fn dont_show_again_keys() -> [&'static str; 5] {
+    [
+        delete_layer_prompt::PREF,
+        live_shape_prompt::PREF,
+        assign_profile_layers_alert::PREF,
+        crate::analysis::note_alerts::DELETE_NOTE_PREF,
+        crate::retouch_ui::CAM_NO_PIXELS_PREF,
+    ]
 }
 
 /// Where the remembered value of the preference entry `key` goes: `None` keeps it in `Preferences.dialogs`, else the
@@ -698,6 +705,9 @@ pub mod adjust_preview;
 pub mod alerts;
 #[cfg(test)]
 mod arbitrary_ruler_prefill_tests;
+pub mod assign_profile_layers_alert;
+#[cfg(test)]
+mod assign_profile_layers_alert_tests;
 pub(crate) mod bitmap_dialog;
 pub mod blend_options;
 pub mod blur_pins;

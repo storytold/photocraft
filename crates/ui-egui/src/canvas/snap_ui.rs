@@ -58,7 +58,8 @@ fn selection_moves(app: &PhotocraftApp) -> bool {
 /// The layers a drag moves or resizes: they are not targets. The selected layers when the Move tool drags and,
 /// unless selected pixels float, what it moves whole (the layers linked to them and everything inside a group, so a
 /// group does not snap to its own layers' starting edges), the type layer being edited (a paragraph-box handle drag
-/// does not snap to the text it resizes, #6819) and the layers of the open Free Transform.
+/// does not snap to the text it resizes, #6819), the layers of the open Free Transform and the shape layers the shape
+/// scale box or a corner widget is pressing.
 fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     if moves_as_move_tool(app) && crate::move_ui::color_target(app).is_some() {
         return app.session.active().and_then(|st| st.active_layer).into_iter().collect();
@@ -86,6 +87,7 @@ fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     if let Some(t) = app.ui.transform.as_ref() {
         set.extend(crate::transform_tool::moving_layers(t));
     }
+    set.extend(crate::shape_controls::pressed_layers(app));
     set
 }
 
