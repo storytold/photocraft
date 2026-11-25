@@ -477,6 +477,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<
         EngineStroke::Dab(Box::new(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?))
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
+        crate::retouch_ui::alt_finger_painting(d.tool, d.modifiers.alt, &mut p);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
         unsmoothed_line(&mut p, d.line);

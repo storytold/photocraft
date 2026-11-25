@@ -34,6 +34,9 @@ pub(crate) struct TypeState {
     /// Where the running press began, in document units: the corner of the box a drag makes, or the point of a
     /// click. Set by a press that starts new text, taken by its release.
     pub(super) press: Option<kurbo::Point>,
+    /// Whether ⌥ was held at the press of the running gesture. Set with `press`, taken by its release: an Alt+drag
+    /// opens the Paragraph Text Size dialog instead of making the box (#12044), the modifier read at the press.
+    pub(super) press_alt: bool,
     /// The press of this pass ended an open session (the editor commits on a background press): it starts no new
     /// text, as in Photoshop. Set by the canvas controls before the tool runs, taken by the press, cleared by `drain`.
     pub(super) began_with_session: bool,
@@ -59,6 +62,7 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut TypeState, _response: &
     state.began_with_session = false;
     if !crate::canvas::tools::in_gesture(app) {
         state.press = None;
+        state.press_alt = false;
     }
 }
 
@@ -211,72 +215,129 @@ fn press_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64, mods: 
     ToolAction::Done
 }
 
-/// A release that makes new text: from `start` to `end` in document units. A drag of at least 4 screen pixels both
-/// ways makes a paragraph box; anything less is a click, which makes point text, or text on or in the path under it.
-fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
-    let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
-    let o = app.ui.tool_options.clone();
-    let mask = app.ui.tool.is_type_mask();
-    let is_box = makes_box(app, start, end);
-    // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
-    // on the path on its outline. The Type Mask tools ignore paths.
-    let target = if !mask && !is_box { path_target(app, start[0], start[1]) } else { None };
+/// The settings a `type.create` is built from: the tool in hand (horizontal or vertical, and which
+/// Type Mask), the options bar's type settings and the placeholder preference. A plain drag or a
+/// click reads them live at its release, through [`TypeSnapshot::live`]. The Paragraph Text Size
+/// dialog instead takes the snapshot when it opens and hands it to its OK (#12044): that dialog is
+/// modal in the reference application, so nothing can change the tool or its options between the
+/// Alt+drag and OK, and the box it makes uses what was active at the drag even when a control
+/// changes them while the dialog is open.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TypeSnapshot {
+    pub tool: crate::state::Tool,
+    pub options: crate::state::ToolOptions,
+    pub placeholder: bool,
+}
+
+impl TypeSnapshot {
+    /// Read from the app as it stands at this moment: today's live reading, what the plain drag and
+    /// the click create with.
+    pub(crate) fn live(app: &PhotocraftApp) -> Self {
+        Self { tool: app.ui.tool, options: app.ui.tool_options.clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
+    }
+}
+
+/// The `type.create` parameters a Type-tool gesture ending now starts from: the placeholder or
+/// empty text, the tool's orientation and the options bar's styles. The caller adds the geometry
+/// (`box` for a dragged paragraph, `x`/`y` for point text), and [`create_layer`] adds the session's
+/// `coalesce` key. `is_box` says whether the gesture that ends was a paragraph drag, which #12077's
+/// mask style applies only to a click; `s` names the tool and settings to create with.
+pub(crate) fn create_params(app: &PhotocraftApp, is_box: bool, s: &TypeSnapshot) -> serde_json::Value {
+    let mask = s.tool.is_type_mask();
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
-    let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
+    let placeholder = s.tool != crate::state::Tool::VerticalTypeMask && s.placeholder;
     let text = if placeholder { PLACEHOLDER } else { "" };
-    let mut p = default_style_params(app);
+    let mut p = default_style_params(app, &s.options);
     // #12077: the measured case - a click, not a paragraph box, with the Horizontal Type Mask over
     // a horizontal text layer - starts the mask in that layer's font, style and size, as the
     // options bar shows them for the layer. The vertical mask and a box drag are not measured in
     // the issue, so they keep today's tool options.
     if mask
         && !is_box
-        && app.ui.tool == crate::state::Tool::HorizontalTypeMask
+        && s.tool == crate::state::Tool::HorizontalTypeMask
         && let Some(style) = mask_style_from_active_layer(app)
         && let (Some(params), Some(style)) = (p.as_object_mut(), style.as_object())
     {
         params.extend(style.clone());
     }
     p["text"] = json!(text);
-    p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
+    p["orientation"] = json!(if s.tool.is_vertical_type() { "vertical" } else { "horizontal" });
+    p
+}
+
+/// Create the type layer `p` describes, and finish what a released Type-tool gesture does with it:
+/// the path target of a click, the options bar's antialiasing, the Type Mask tools' hidden working
+/// layer, and the edit session with the placeholder selected. `s` is the snapshot `p` was built
+/// from, so the antialiasing and the Type Mask handling follow those settings and not the live ones.
+/// The id of the new layer, or why creating it failed (the status bar already says so, since
+/// [`PhotocraftApp::run`] reported it).
+pub(crate) fn create_layer(app: &mut PhotocraftApp, mut p: serde_json::Value, target: Option<PathClick>, s: &TypeSnapshot) -> Result<u64, String> {
+    let o = &s.options;
+    let mask = s.tool.is_type_mask();
+    let n = p.get("text").and_then(serde_json::Value::as_str).unwrap_or("").chars().count();
+    let key = session_key(app);
+    p["coalesce"] = json!(key);
+    let v = app.run("type.create", p)?;
+    let Some(id) = v.get("layer").and_then(serde_json::Value::as_u64) else {
+        return Err("type.create returned no layer".to_string());
+    };
+    // A failed follow-up leaves point text; say why instead of passing over it.
+    let follow_up = match &target {
+        Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
+        Some(PathClick::OnPath { shape, subpath, start }) => {
+            app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
+        }
+        None => Ok(serde_json::Value::Null),
+    };
+    if let Err(e) = follow_up {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    if o.type_aa != "sharp" {
+        let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
+    }
+    // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
+    // instead, and committing turns it into the selection.
+    if mask {
+        let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
+    }
+    // Like Photoshop: the placeholder is selected, so typing replaces it.
+    app.ui.text_edit = Some(TextEdit { layer: id, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: true, mask });
+    app.ui.text_edit_return_tool = None;
+    Ok(id)
+}
+
+/// A release that makes new text: from `start` to `end` in document units. A drag of at least 4 screen pixels both
+/// ways makes a paragraph box; anything less is a click, which makes point text, or text on or in the path under it.
+/// `alt_at_press` is ⌥ held at the press of the gesture.
+fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_press: bool) {
+    let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
+    let is_box = makes_box(app, start, end);
+    // Photoshop (#12044): Alt+drag with the Type tool sizes the new paragraph box in the
+    // Paragraph Text Size dialog instead of committing the drag, and its OK creates the text.
+    // Measured for the horizontal Type tool alone, so the vertical and Type Mask tools keep the
+    // plain drag; Alt+click (a drag too small for a box) stays point text.
+    if alt_at_press && is_box && app.ui.tool == crate::state::Tool::Type {
+        crate::paragraph_text_size::open(app, [start[0].min(end[0]), start[1].min(end[1])], w, h);
+        return;
+    }
+    let mask = app.ui.tool.is_type_mask();
+    // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
+    // on the path on its outline. The Type Mask tools ignore paths.
+    let target = if !mask && !is_box { path_target(app, start[0], start[1]) } else { None };
+    // A plain drag or click reads the tool, its options and the placeholder preference as they
+    // stand at its release, as they always have (#12044).
+    let snapshot = TypeSnapshot::live(app);
+    let mut p = create_params(app, is_box, &snapshot);
     if is_box {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
     } else {
         p["x"] = json!(start[0].round());
         p["y"] = json!(start[1].round());
     }
-    let key = session_key(app);
-    p["coalesce"] = json!(key);
-    if let Ok(v) = app.run("type.create", p)
-        && let Some(id) = v.get("layer").and_then(serde_json::Value::as_u64)
-    {
-        // A failed follow-up leaves point text; say why instead of passing over it.
-        let follow_up = match &target {
-            Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
-            Some(PathClick::OnPath { shape, subpath, start }) => {
-                app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
-            }
-            None => Ok(serde_json::Value::Null),
-        };
-        if let Err(e) = follow_up {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-        if o.type_aa != "sharp" {
-            let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
-        }
-        // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
-        // instead, and committing turns it into the selection.
-        if mask {
-            let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
-        }
-        // Like Photoshop: the placeholder is selected, so typing replaces it.
-        let n = text.chars().count();
-        app.ui.text_edit = Some(TextEdit { layer: id, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: true, mask });
-        app.ui.text_edit_return_tool = None;
-    }
+    let _ = create_layer(app, p, target, &snapshot);
 }
 
 impl CanvasTool for TypeTool<'_> {
@@ -290,6 +351,7 @@ impl CanvasTool for TypeTool<'_> {
         let ctx = self.scope.ctx().clone();
         let action = self.scope.with_app(|app| press_at(app, &ctx, at.x, at.y, pointer.mods));
         self.state.press = (action == ToolAction::Claimed).then_some(at);
+        self.state.press_alt = action == ToolAction::Claimed && pointer.mods.alt;
         action
     }
 
@@ -311,11 +373,12 @@ impl CanvasTool for TypeTool<'_> {
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let Some(start) = self.state.press.take() else { return };
+        let alt = std::mem::take(&mut self.state.press_alt);
         let Some(space) = cx.space() else { return };
         let end = space.view.to_doc(pointer.pos);
         let ctx = self.scope.ctx().clone();
         self.scope.with_app(|app| {
-            create_text(app, [start.x, start.y], [end.x, end.y]);
+            create_text(app, [start.x, start.y], [end.x, end.y], alt);
             // The new session's editor takes the keyboard from the pass it opens, as an edit of existing text does.
             if app.ui.text_edit.is_some() {
                 super::editing::focus_editor(&ctx);
@@ -325,6 +388,7 @@ impl CanvasTool for TypeTool<'_> {
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
         self.state.press = None;
+        self.state.press_alt = false;
         self.state.began_with_session = false;
     }
 

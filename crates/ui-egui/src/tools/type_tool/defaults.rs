@@ -59,9 +59,10 @@ pub(super) fn shown_scale(app: &PhotocraftApp) -> f32 {
 
 /// The styles a new Type-tool layer will receive. Use the same command parameters for the
 /// panels and creation so defaults also survive action recording/replay. The older options-bar
-/// fields remain authoritative, and text colour continues to follow the foreground colour.
-pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
-    let o = &app.ui.tool_options;
+/// fields remain authoritative, and text colour continues to follow the foreground colour. `o` is
+/// the options-bar state to read: today's live one for a panel or a plain gesture, a snapshot taken
+/// when the Paragraph Text Size dialog opened for its OK (#12044).
+pub(super) fn default_style_params(app: &PhotocraftApp, o: &crate::state::ToolOptions) -> serde_json::Value {
     let mut p = json!({});
     // Settings are editable JSON: only recognized formatting keys may reach type.create.
     // In particular a stray `text`, `box`, or `coalesce` key must not become a create parameter.
@@ -149,7 +150,7 @@ fn finite_style_value(value: &serde_json::Value) -> bool {
 
 pub(super) fn default_styles(app: &PhotocraftApp) -> (photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle) {
     let (mut c, mut para) = app.session.type_defaults.clone().unwrap_or_default();
-    let mut p = default_style_params(app);
+    let mut p = default_style_params(app, &app.ui.tool_options);
     // The saved panels can appear on the very first frame. Style parsing resolves the named
     // font through shared(), which waits for the font scan; display the saved names meanwhile,
     // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready.
