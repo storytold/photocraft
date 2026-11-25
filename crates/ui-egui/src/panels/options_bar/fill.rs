@@ -96,6 +96,8 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         PaintMode::Behind => {
             o.bucket_clear = false;
             o.bucket_behind = true;
+            // Behind names no blend: the stored mode reads Normal while it is chosen (#12531).
+            o.bucket_blend_mode = BlendMode::Normal;
         }
     }
     if let Some(opacity) = number_field(ui, tl!("Opacity"), o.fill_opacity, 1.0..=100.0, "%").landed() {
