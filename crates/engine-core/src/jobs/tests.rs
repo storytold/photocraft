@@ -1720,3 +1720,110 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inline_run_job_checks_cancellation_before_apply() {
+    let mut s = session(8, 8);
+    let ctx = JobCtx::new();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    let applied = Arc::new(AtomicBool::new(false));
+    let applied_apply = Arc::clone(&applied);
+    let cancel_ctx = ctx.clone();
+
+    let result = run(
+        &mut s,
+        "Inline cancel before apply",
+        false,
+        move |_ctx| {
+            std::thread::spawn(move || cancel_ctx.cancel()).join().unwrap();
+            Ok(())
+        },
+        move |_s, ()| {
+            applied_apply.store(true, Ordering::SeqCst);
+            Ok(json!({ "applied": true }))
+        },
+    );
+    assert!(matches!(result, Err(EngineError::Cancelled)), "expected Cancelled, got {result:?}");
+    assert!(!applied.load(Ordering::SeqCst), "apply must not run after cancellation");
+
+    // Same contract for run_open when a cancel arrives during the completion stage (e.g. flattening).
+    let ctx = JobCtx::new();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    let applied = Arc::new(AtomicBool::new(false));
+    let applied_apply = Arc::clone(&applied);
+    let cancel_ctx = ctx.clone();
+
+    let result = run_open(
+        &mut s,
+        "Inline open cancel before apply",
+        |_ctx| Ok(()),
+        move |_ctx, ()| {
+            std::thread::spawn(move || cancel_ctx.cancel()).join().unwrap();
+            Ok(())
+        },
+        move |_s, ()| {
+            applied_apply.store(true, Ordering::SeqCst);
+            Ok(json!({ "applied": true }))
+        },
+    );
+    assert!(matches!(result, Err(EngineError::Cancelled)), "expected Cancelled, got {result:?}");
+    assert!(!applied.load(Ordering::SeqCst), "apply must not run after cancellation in run_open");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inline_batch_job_keeps_apply_exemption_and_committed_job_applies() {
+    // Batch keeps its background exemption: apply runs and marks the result cancelled.
+    let mut s = session(8, 8);
+    let ctx = JobCtx::new();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    let applied = Arc::new(AtomicBool::new(false));
+    let applied_apply = Arc::clone(&applied);
+    let cancel_ctx = ctx.clone();
+
+    let started = s
+        .start_job_with_spawn(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            false,
+            move |_ctx| {
+                std::thread::spawn(move || cancel_ctx.cancel()).join().unwrap();
+                Ok(json!({ "files": ["done.png"], "cancelled": false }))
+            },
+            move |_s, result| {
+                applied_apply.store(true, Ordering::SeqCst);
+                Ok(result)
+            },
+        )
+        .unwrap();
+    assert!(applied.load(Ordering::SeqCst), "batch apply must still run when cancelled");
+    let Started::Done(report) = started else { panic!("expected inline batch completion") };
+    assert_eq!(report["cancelled"], json!(true), "{report}");
+
+    // A committed job ignores a later cancel and still applies.
+    let ctx = JobCtx::new();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    let cancel_ctx = ctx.clone();
+    let applied = Arc::new(AtomicBool::new(false));
+    let applied_apply = Arc::clone(&applied);
+    let result = run(
+        &mut s,
+        "Inline committed",
+        false,
+        move |ctx| {
+            ctx.commit()?;
+            std::thread::spawn(move || cancel_ctx.cancel()).join().unwrap();
+            Ok(())
+        },
+        move |_s, ()| {
+            applied_apply.store(true, Ordering::SeqCst);
+            Ok(json!({ "applied": true }))
+        },
+    )
+    .unwrap();
+    assert!(applied.load(Ordering::SeqCst));
+    assert_eq!(result["applied"], json!(true));
+}

@@ -624,6 +624,9 @@ pub struct Jobs {
     draining: Vec<Draining>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    /// Set while `file.automate.batch` runs inline, keeping its cancellation exemption aligned with
+    /// the background path (`finish_job_step`).
+    batch_command: bool,
     /// No worker threads: [`StepWork`] jobs are stepped by [`Session::poll_jobs`], everything else
     /// runs inline. On for wasm; see [`Session::set_cooperative_jobs`].
     cooperative: bool,
@@ -646,6 +649,7 @@ impl Default for Jobs {
             #[cfg(not(target_arch = "wasm32"))]
             draining: Vec::new(),
             inline: None,
+            batch_command: false,
             cooperative: cfg!(target_arch = "wasm32"),
             step_budget: STEP_BUDGET,
         }
@@ -790,8 +794,20 @@ fn run_job<T: Send + 'static>(
     let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
     let _document = crate::doc_path::scope(document.as_deref());
     if !s.jobs.threaded() {
-        let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
-        return apply(s, t);
+        let ctx = s.jobs.inline.clone().unwrap_or_default();
+        let batch = s.jobs.batch_command;
+        let t = work(&ctx)?;
+        if ctx.cancelled() && !batch {
+            return Err(EngineError::Cancelled);
+        }
+        let mut v = apply(s, t)?;
+        if batch
+            && ctx.cancelled()
+            && let Some(result) = v.as_object_mut()
+        {
+            result.insert("cancelled".into(), Value::Bool(true));
+        }
+        return Ok(v);
     }
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
@@ -1485,9 +1501,12 @@ impl Session {
     /// `Jobs::threaded`), and files the job it started under `command`.
     fn start_registered(&mut self, command: &str, params: Value, spawn: bool, register: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Started> {
         let prev_spawn = self.jobs.spawn;
+        let prev_batch = self.jobs.batch_command;
         self.jobs.spawn = spawn;
+        self.jobs.batch_command = command == "file.automate.batch";
         let r = register(self);
         self.jobs.spawn = prev_spawn;
+        self.jobs.batch_command = prev_batch;
         let pending = self.jobs.pending.take();
         match (r, pending) {
             (Err(e), Some(job)) => {
@@ -1827,6 +1846,7 @@ impl Session {
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
         self.filter_mask_layer = crate::channel_cmds::filter_mask_layer(self, id, &run_params);
+        let prev_batch = std::mem::replace(&mut self.jobs.batch_command, id == "file.automate.batch");
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
@@ -1849,6 +1869,7 @@ impl Session {
             self.actions.recording = recording;
         }
         self.jobs.spawn = false;
+        self.jobs.batch_command = prev_batch;
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;

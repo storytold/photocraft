@@ -19,10 +19,21 @@ fn eligible_source(smart: &SmartObject) -> Option<(&str, &[u8])> {
     .then_some((file_name, bytes))
 }
 
-/// A candidate still missing pixels after recovery. Rendering over an existing cache would lose them.
+/// An embedded RAW or PNG layer still missing pixels after recovery. Flattening or rendering over
+/// an existing cache without it would drop the layer's content.
 pub(super) fn unrestored_embedded_layer(doc: &Document) -> Option<&str> {
     doc.walk().into_iter().find_map(|(_, _, layer)| match &layer.content {
-        LayerContent::Smart(smart) if eligible_source(smart).is_some() => Some(layer.name.as_str()),
+        LayerContent::Smart(smart)
+            if smart.cache.is_none()
+                && matches!(
+                    &smart.source,
+                    SmartSource::Embedded { file_name, bytes }
+                        if matches!(photocraft_formats::detect(file_name, bytes), Some(Format::Png | Format::Raw))
+                            || photocraft_io::raw::is_raw(bytes)
+                ) =>
+        {
+            Some(layer.name.as_str())
+        }
         _ => None,
     })
 }
