@@ -1,5 +1,5 @@
 use super::history::{fix_selection, visibility_changes};
-use super::{Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, retouch_cmds, smart_cmds};
+use super::{Arc, Document, EngineError, LayerId, Result, Session, Value, channel_cmds, commands, hidden_target, jobs, smart_cmds};
 use crate::color_channels;
 
 impl Session {
@@ -20,35 +20,6 @@ impl Session {
             // Not reached: inline dispatch never starts a job. Waiting is still correct.
             jobs::Started::Job(j) => self.wait_job(j),
         }
-    }
-
-    /// Offer a finished live stroke to the next command: a `paint.stroke` / `paint.pencil` whose
-    /// params match it exactly takes its pixels instead of rendering the stroke again (its result
-    /// then says `"fromLive": true`); any other command drops the offer. The command still runs
-    /// through the normal dispatch, so authorization, the journal and history are unchanged.
-    pub fn offer_live_stroke(&mut self, live: brush_cmds::LiveStroke) -> Result<()> {
-        self.live_commit = Some(live.into_commit()?);
-        Ok(())
-    }
-
-    /// [`Self::offer_live_stroke`] for a live Clone Stamp or History Brush stroke, taken by the
-    /// `paint.cloneStamp` / `paint.historyBrush` it was drawn for. Refused for the Healing Brush
-    /// (it blends on release) and when the brush, layer or clone source changed during the stroke.
-    pub fn offer_live_retouch(&mut self, live: retouch_cmds::LiveRetouch) -> Result<()> {
-        let commit = live.into_commit(self)?;
-        self.live_commit = Some(commit);
-        Ok(())
-    }
-
-    /// [`Self::offer_live_stroke`] for a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke,
-    /// taken by the command it was drawn for: the stroke's finishing dabs are run first. Refused
-    /// when the brush, tool options or layer changed during the stroke.
-    pub fn offer_live_dab(&mut self, live: retouch_cmds::LiveDab) -> Result<()> {
-        // A refused offer withdraws the previous one too.
-        self.live_commit = None;
-        let commit = live.into_commit(self)?;
-        self.live_commit = Some(commit);
-        Ok(())
     }
 
     /// Withdraw an offer the command didn't take.
@@ -98,8 +69,8 @@ impl Session {
 
     /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
     /// refused command leaves it floating) and again after: the precondition (on a named layer
-    /// for commands that take one), a job running on the document, a hidden target, the Magic
-    /// Eraser's colour-mode alert. The run params (the Channels panel's target filled in) when it
+    /// for commands that take one), a job running on the document, a hidden target, then the
+    /// engine crates' `admit` hooks (the Magic Eraser's colour-mode alert). The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
@@ -116,12 +87,8 @@ impl Session {
         if let Some(why) = hidden_target::refusal(self, id, params) {
             return Err(EngineError::Other(why.into()));
         }
-        // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same
-        // error its `run` gives: checked here too, so a floating selection stays floating (#13169).
-        if id == "paint.magicEraser"
-            && let Some(why) = self.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc))
-        {
-            return Err(EngineError::Other(why.into()));
+        for admit in &crate::registry::hooks().admit {
+            admit(self, id, params)?;
         }
         Ok(run_params)
     }

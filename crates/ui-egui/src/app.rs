@@ -172,6 +172,7 @@ impl PhotocraftApp {
             canvas_hover_layer: None,
             clone_preview: None,
             info_sample: None,
+            info_cmyk_sample: None,
             os_clip_sig: None,
             os_clip_svg: None,
             clip_unmirrored: true,
@@ -276,6 +277,9 @@ impl eframe::App for PhotocraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.close_control();
+        if let Some(at_exit) = self.services.at_exit.take() {
+            at_exit();
+        }
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -361,3 +365,6 @@ mod apply_data_set_alert_tests;
 
 #[cfg(test)]
 mod apply_data_set_missing_file_tests;
+
+#[cfg(test)]
+mod exit_hook_tests;

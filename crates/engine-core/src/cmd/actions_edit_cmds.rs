@@ -652,7 +652,7 @@ mod tests {
         s.execute("actions.stop", json!({})).unwrap();
         let i = r["index"].as_u64().unwrap() as usize;
         assert_eq!(s.actions().list.actions()[i].set.as_deref(), Some("Retouch"));
-        assert_eq!(set_names(&s), ["Set 1", "Retouch", "Set 2"], "Retouch now holds an action");
+        assert_eq!(set_names(&s), ["Set 1", "Set 2", "Retouch"], "Retouch keeps its place now that it holds an action");
         assert!(s.execute("actions.record", json!({"set": 3})).is_err());
     }
 

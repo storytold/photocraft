@@ -123,7 +123,7 @@ fn shown_gray(s: &Session) -> Option<(Rect, Vec<[u8; 4]>)> {
 }
 
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
-pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
+pub fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = d.doc.bounds();
     let layer = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface());

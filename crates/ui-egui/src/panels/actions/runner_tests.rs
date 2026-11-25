@@ -514,7 +514,7 @@ fn view_menu_commands_record_append_and_replay_after_resize() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
     let mut camera = app.ui.views[idx].canvas_view(rect, 1.0, false, 1.0);
     for request in &app.ui.views[idx].pending {
-        request.command().apply(&mut camera, &target, None, 1.0);
+        request.command().apply(&mut camera, &target, None, 1.0, &craft::behavior::canvas::ZoomScheme::PHOTOSHOP);
     }
     app.ui.views[idx].set_from(&camera, 1.0);
     assert_eq!(app.ui.views[idx].zoom, 0.75);
@@ -2156,4 +2156,16 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
         assert_eq!(app.session.recording.playing, 0);
         assert!(app.session.recording.playback_stack.is_empty());
     }
+}
+
+/// #8047: a recorded Channel Mixer step with ink outputs reopened in an RGB document is refused by
+/// the RGB-only editor. Playback must say why, not fall back to the generic step editor over it.
+#[test]
+fn a_recorded_cmyk_channel_mixer_step_reports_the_editors_refusal() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let open = app.framework.dialogs.open_dialogs().len();
+    let result = open_recorded_editor(&mut app, "image.adjustments.channelMixer", &json!({"cyan": [80, 0, 0, 0, 0]}));
+    assert_eq!(result, Err(crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE.to_string()));
+    assert_eq!(app.framework.dialogs.open_dialogs().len(), open, "no editor opened");
 }

@@ -83,6 +83,7 @@ fn store_preferences(app: &mut PhotocraftApp, now: Instant) -> Option<Instant> {
     }
     if let Some(merged) = merged {
         app.session.set_saved_prefs(merged);
+        crate::tool_memory::restore_colors(app);
         app.prefs_rt.saved_rev = app.session.prefs.rev();
     }
     result.next_deadline
@@ -96,9 +97,7 @@ fn store_preferences(app: &mut PhotocraftApp, _now: Instant) -> Option<Instant> 
     if rev == app.prefs_rt.saved_rev {
         return None;
     }
-    let text = app.session.prefs_to_json();
-    let Some(save) = app.services.save_prefs.as_mut() else { return None };
-    match save(&text) {
+    match write_browser_preferences(app) {
         Ok(()) => {
             app.prefs_rt.saved_rev = rev;
             saved(app);
@@ -139,6 +138,12 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
     hand_over(app, None);
     let Some((store, _)) = app.services.settings.as_mut() else { return Ok(()) };
     store.flush().map_err(|e| e.to_string())?;
+    let merged = store.take_merged_change().then(|| store.get().clone());
+    if let Some(merged) = merged {
+        app.session.set_saved_prefs(merged);
+        crate::tool_memory::restore_colors(app);
+        app.prefs_rt.saved_rev = app.session.prefs.rev();
+    }
     saved(app);
     Ok(())
 }
@@ -147,11 +152,23 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
     let rev = app.session.prefs.rev();
-    let text = app.session.prefs_to_json();
-    let Some(save) = app.services.save_prefs.as_mut() else { return Ok(()) };
-    save(&text)?;
+    write_browser_preferences(app)?;
     app.prefs_rt.saved_rev = rev;
     saved(app);
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_browser_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
+    let mut ours = app.session.prefs_value();
+    let colors = ours.get("toolColors").cloned().unwrap_or_default();
+    let stored = app.services.load_prefs.as_mut().and_then(|load| load()).and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    if let (Some(base), Some(theirs)) = (&app.prefs_rt.saved_colors, stored.as_ref().and_then(|v| v.get("toolColors"))) {
+        ours["toolColors"] = prefs::merge_tool_colors(base, &colors, theirs);
+    }
+    let Some(save) = app.services.save_prefs.as_mut() else { return Ok(()) };
+    save(&serde_json::to_string_pretty(&ours).map_err(|e| e.to_string())?)?;
+    app.prefs_rt.saved_colors = Some(colors);
     Ok(())
 }
 

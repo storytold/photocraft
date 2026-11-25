@@ -160,6 +160,7 @@ pub use dialogs::new_guide_ui;
 pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
+pub use dialogs::paragraph_text_size;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
@@ -303,7 +304,7 @@ use tools::type_transform;
 pub use tools::vector_ui;
 
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
-type InfoSampleKey = (i32, i32, u64, u32, u32);
+type InfoSampleKey = (DocId, i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -613,6 +614,7 @@ pub struct PhotocraftApp {
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
+    info_cmyk_sample: Option<(InfoSampleKey, Option<[f32; 4]>)>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
     /// Pen paths finished, which Undo back to their finish gives back to the Pen
@@ -730,6 +732,8 @@ struct InputTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod artboards_to_files_background_tests;
+#[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
@@ -740,11 +744,15 @@ mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;
 #[cfg(test)]
+mod patch_rasterize_prompt_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod paths_scroll_tests;
 #[cfg(test)]
 mod pencil_pressure_toggles_tests;
+#[cfg(test)]
+mod smudge_alt_finger_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
@@ -903,6 +911,9 @@ mod star_tool_tests;
 
 #[cfg(test)]
 mod new_doc_bitmap_mode_tests;
+
+#[cfg(test)]
+mod new_doc_recent_items_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
@@ -1094,3 +1105,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod place_visible_centre_tests;

@@ -24,6 +24,36 @@ const DIR: &str = "/memory/photocraft";
 /// The title of the notice a failed preferences save posts.
 const SAVE_NOTICE: &str = "Preferences can't be saved";
 
+#[test]
+fn settings_store_restores_distinct_same_rgb_role_inks() {
+    let (mut app, files) = app_with_store();
+    let fg = [0., 0., 0., 1.];
+    let bg = [0.5, 0.5, 0.5, 1.];
+    app.run("tools.setColors", json!({"foreground":[0.,0.,0.],"background":[0.,0.,0.],"foregroundCmyk":fg,"backgroundCmyk":bg})).unwrap();
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let mut restored = app_on(&files);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(fg));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg));
+    for (role, inks) in [("foreground", fg), ("background", bg)] {
+        let id = crate::color_picker_ui::open(&mut restored, role);
+        let picked = crate::color_picker_ui::testing::current(&restored, id).unwrap();
+        assert!(crate::color_picker_ui::same_inks(crate::color_picker_ui::inks_of(&picked).unwrap(), inks));
+    }
+    restored.run("file.new", json!({"width":4,"height":4,"mode":"cmyk"})).unwrap();
+    let fill = crate::solid_fill_ui::open_new(&mut restored).unwrap();
+    let picked = crate::color_picker_ui::testing::current(&restored, fill).unwrap();
+    assert!(
+        crate::color_picker_ui::same_inks(crate::color_picker_ui::inks_of(&picked).unwrap(), fg),
+        "new fill uses foreground's separation, not background's identical RGB"
+    );
+    crate::dialogs::testing::confirm(&mut restored, fill).unwrap();
+    let st = restored.session.active().unwrap();
+    let photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Solid(color)) = st.doc.layer(st.active_layer.unwrap()).unwrap().content else {
+        panic!("solid fill")
+    };
+    assert_eq!(color.c, fg);
+}
+
 fn config_path() -> std::path::PathBuf {
     std::path::Path::new(DIR).join("config.toml")
 }
@@ -1124,7 +1154,7 @@ fn damaged_cases() -> (Vec<Loaded>, Vec<Case>) {
             }),
             check: Box::new(|app, _, stored| {
                 // The file holds the f32 colour widened to f64.
-                assert_eq!(stored["toolColors"]["foreground"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
+                assert_eq!(stored["toolColors"]["selections"]["foreground"]["color"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
                 assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 0.8]);
             }),
         });
