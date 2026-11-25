@@ -718,7 +718,7 @@ fn ask_picker(app: &mut PhotocraftApp, id: u64, kind: ScriptDialog, args: &Value
         let value = match chosen {
             Picked::Paths(paths) if multiple => json!(paths.into_iter().map(text).collect::<Vec<_>>()),
             Picked::Paths(paths) => json!(paths.into_iter().next().map(text)),
-            // Save File's answer: the path chosen, the extension policy applied.
+            // Save File's answer: the file chosen (on the web, its name).
             Picked::Saved { path, .. } => json!(text(path)),
             // The web gives a file's name and contents, not a path: the script gets the name.
             Picked::Contents(files) if multiple => json!(files.into_iter().map(|(n, _)| n).collect::<Vec<_>>()),

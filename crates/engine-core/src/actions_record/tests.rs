@@ -349,6 +349,7 @@ fn a_new_layer_into_a_group_replays_into_the_group_of_that_name() {
     let played = s.execute("actions.play", json!({"action": "Into Box"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     let doc = &s.active().unwrap().doc;
-    let inside: Vec<String> = doc.layer(LayerId(replay_box)).unwrap().children().unwrap().iter().map(|l| l.name.clone()).collect();
-    assert_eq!(inside.len(), 2, "both went into Box: {inside:?}");
+    let mut inside: Vec<String> = doc.layer(LayerId(replay_box)).unwrap().children().unwrap().iter().map(|l| l.name.clone()).collect();
+    inside.sort();
+    assert_eq!(inside, ["Inside", "Sub"], "both went into Box");
 }

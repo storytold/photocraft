@@ -444,11 +444,14 @@ fn unpublish(ctx: &mut Context, list: u32, item: &JsObject) -> JsResult<()> {
     if !found {
         return Ok(());
     }
+    let kept_len = kept.len();
     for (i, v) in kept.into_iter().enumerate() {
         arr.create_data_property_or_throw(i, v, ctx)?;
     }
-    // An array's own `length`: shortening it drops the last, now repeated, element.
-    arr.set(js_string!("length"), len - 1, true, ctx)?;
+    // An array's own `length`: shortening it drops the elements left over past the kept ones
+    // (the item may have been in it more than once).
+    let kept_len = kept_len as u64;
+    arr.set(js_string!("length"), kept_len, true, ctx)?;
     Ok(())
 }
 
@@ -1298,7 +1301,8 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
                         None => None,
                     };
                     // One assignment, which sets the flags itself: a `selected` setter's own
-                    // choice made meanwhile then stands (see `selection_set`).
+                    // choice made meanwhile then stands (see `selection_set`). A script that
+                    // redefined `selection` handles the flags itself.
                     set(&obj, "selection", chosen.map_or(JsValue::null(), JsValue::from), ctx)?;
                 }
                 _ => {}
