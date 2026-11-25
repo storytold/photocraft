@@ -75,15 +75,13 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 
 /// Whether any Advanced Blending option changes how `layer` (with its clipping group `clipped`)
 /// composites. This is the full set the CPU path implements. The GPU compositor runs knockout,
-/// clipped layers blended individually, Transparency Shapes Layer off and masks hiding effects
-/// itself and sends the rest (Blend Interior Effects as Group with effects) to the CPU path, as it
-/// does Transparency Shapes Layer off with effects or a special-eight blend on a layer drawn atop
-/// its clipping base (Blend Clipped Layers as Group on), Color Burn, Color Dodge, Vivid Light or
-/// Hard Mix with it off in a 16/32-bit document (or, on a layer without effects, on half-float
-/// accumulation), and individually blended clipped layers on a 32-bit base that takes several
-/// passes or wears a 16-bit, vector or feathered mask; its own gates are
-/// `plan::lower::advanced_on_cpu`, `plan::lower::clipped_on_cpu` and the planner and compositor
-/// checks.
+/// clipped layers blended individually, Transparency Shapes Layer off, masks hiding effects and
+/// Blend Interior Effects as Group itself. Only these go to the CPU path: Transparency Shapes Layer
+/// off with effects or a special-eight blend on a layer drawn atop its clipping base (Blend Clipped
+/// Layers as Group on; `plan::lower::clipped_on_cpu`), Color Burn, Color Dodge, Vivid Light or Hard
+/// Mix with it off in a 16/32-bit document (`plan::lower::dividing_shapeless_on_cpu`) or, without
+/// effects, on half-float accumulation, and individually blended clipped layers on a 32-bit base
+/// that takes several passes or wears a 16-bit, vector or feathered mask.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
     let a = &layer.advanced;
     if a.is_default() {
