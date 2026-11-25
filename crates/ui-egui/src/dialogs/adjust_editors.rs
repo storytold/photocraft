@@ -187,14 +187,30 @@ pub enum CurvesPresetAsk {
 }
 
 /// The Curves gear menu's rows (#14379): which row, its label, and whether it runs, top to bottom;
-/// the menu draws a separator after the second row. Delete is greyed while no user preset is the
-/// current one — the Default curve, or a built-in preset, which the Preset dropdown (#9221) adds.
+/// [`preset_menu_entries`] puts the separator between the second and the third. Delete is greyed
+/// while no user preset is the current one — the Default curve, or a built-in preset, which the
+/// Preset dropdown (#9221) adds.
 pub fn preset_menu_rows(current: Option<&str>) -> [(CurvesPresetAsk, &'static str, bool); 3] {
     [
         (CurvesPresetAsk::Save, "Save Preset…", true),
         (CurvesPresetAsk::Load, "Load Preset…", true),
         (CurvesPresetAsk::Delete, "Delete Current Preset", current.is_some()),
     ]
+}
+
+/// The gear menu's entries as the framework menu gets them (#14379): [`preset_menu_rows`] with a
+/// [`Entry::separator`] after the second row, which divides the two rows that ask for a file from
+/// the row that only changes the session's list.
+pub fn preset_menu_entries(current: Option<&str>) -> Vec<Entry<CurvesPresetAsk>> {
+    let rows = preset_menu_rows(current);
+    let mut entries: Vec<Entry<CurvesPresetAsk>> = Vec::with_capacity(rows.len() + 1);
+    for (at, (row, text, enabled)) in rows.into_iter().enumerate() {
+        if at == 2 {
+            entries.push(Entry::separator());
+        }
+        entries.push(Entry::new(row, word(tl!(text))).enabled(enabled));
+    }
+    entries
 }
 
 /// What one pass of an editor reports.
@@ -262,14 +278,7 @@ fn word(text: &str) -> Label {
 /// and MCP run the same way.
 fn curves_preset_menu(ui: &mut Ui, setup: &EditorSetup) -> Option<CurvesPresetAsk> {
     let name = word(tl!("Preset options"));
-    let rows = preset_menu_rows(setup.curves_current.as_deref());
-    let mut entries: Vec<Entry<CurvesPresetAsk>> = Vec::with_capacity(rows.len() + 1);
-    for (at, (row, text, enabled)) in rows.into_iter().enumerate() {
-        if at == 2 {
-            entries.push(Entry::separator());
-        }
-        entries.push(Entry::new(row, word(tl!(text))).enabled(enabled));
-    }
+    let entries = preset_menu_entries(setup.curves_current.as_deref());
     let mut picked = None;
     Row::new().show(ui, |ui, _| {
         let button = IconButton::new(IconId::new("settings"))

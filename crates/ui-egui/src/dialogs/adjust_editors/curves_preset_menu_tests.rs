@@ -14,7 +14,7 @@ use photocraft_engine::presets::curves::{self, CurvePreset};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use crate::adjust_editors::preset_menu_rows;
+use crate::adjust_editors::{preset_menu_entries, preset_menu_rows};
 use crate::dialogs::adjust_dialog::{self, open_params};
 use crate::{PhotocraftApp, Services};
 
@@ -155,6 +155,27 @@ fn the_gear_lists_save_load_and_delete_in_that_order() {
 }
 
 #[test]
+fn a_separator_divides_the_two_file_rows_from_the_delete_row() {
+    let entries = preset_menu_entries(None);
+    let separators: Vec<usize> = entries.iter().enumerate().filter(|(.., entry)| entry.is_separator()).map(|(at, ..)| at).collect();
+    assert_eq!(separators, vec![2], "one separator, between the second and the third row");
+    let labels: Vec<&str> = entries.iter().filter(|entry| entry.is_item()).map(|entry| entry.label().as_str()).collect();
+    assert_eq!(labels, [SAVE, LOAD, DELETE], "the three rows keep their order around the separator");
+    assert_eq!(entries.iter().filter(|entry| entry.is_item()).count(), 3, "the menu has exactly three rows to pick");
+    assert!(
+        entries.iter().filter(|entry| entry.is_item()).all(|entry| entry.is_enabled()) || entries.iter().any(|entry| !entry.is_enabled()),
+        "the rows carry their own enabled flag"
+    );
+    let live = preset_menu_entries(Some("Mine"));
+    assert_eq!(live.iter().filter(|entry| entry.is_item() && entry.is_enabled()).count(), 3, "with a user preset current, all three rows run");
+    assert_eq!(
+        preset_menu_entries(None).iter().filter(|entry| entry.is_item() && entry.is_enabled()).count(),
+        2,
+        "with Default current, the third row is greyed"
+    );
+}
+
+#[test]
 fn a_current_user_preset_makes_the_delete_row_live() {
     let rows: Vec<(&str, bool)> = preset_menu_rows(Some("My Curve")).iter().map(|(.., label, on)| (*label, *on)).collect();
     assert_eq!(rows, [(SAVE, true), (LOAD, true), (DELETE, true)], "with a user preset current, all three rows run");
@@ -169,6 +190,101 @@ fn the_other_adjustment_dialogs_have_no_gear() {
         h.run_steps(4);
         assert!(h.query_all_by_label(GEAR).next().is_none(), "{command} shows no preset gear");
     }
+}
+
+// -------------------------------------------------------------------------------- colour modes
+
+/// The ink curves of a CMYK document, as the engine writes them back.
+fn ink_curves() -> Value {
+    let cmyk = json!({"points": [[0.0, 10.0], [255.0, 245.0]], "cyan": [[0.0, 0.0], [255.0, 200.0]], "magenta": [[0.0, 30.0], [255.0, 255.0]]});
+    photocraft_engine::adjust_params::to_params(
+        &photocraft_engine::adjust_params::from_params("curves", &cmyk, None, photocraft_doc::ColorMode::Cmyk).expect("the ink parameters parse"),
+    )
+}
+
+#[test]
+fn a_preset_of_another_colour_mode_is_refused_naming_its_channels() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    let before = params(&h, id);
+    let bytes = curves::to_bytes(&CurvePreset { name: "Ink".into(), curves: ink_curves() }).expect("an ink preset writes");
+
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Ink.pcrv"), &bytes);
+
+    let state = h.state();
+    assert!(state.ui.status_error, "the load is reported as an error");
+    for key in ["cyan", "magenta"] {
+        assert!(state.ui.status.contains(key), "the message names the channel that has no place in this dialog: {}", state.ui.status);
+    }
+    assert_eq!(params(&h, id), before, "the dialog keeps the curves it had");
+    assert!(state.session.presets().curves_presets.is_empty(), "and no preset was added to the user list");
+    assert!(state.session.presets().curves_preset.is_none(), "and none was selected");
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "so Delete is still greyed");
+}
+
+#[test]
+fn a_preset_of_the_same_colour_mode_loads_into_the_dialog() {
+    // The dialog's own mode: the same curves that `stored_curves()` holds, named rgb.
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    let bytes = curves::to_bytes(&CurvePreset { name: "Mine".into(), curves: stored_curves() }).expect("a preset writes");
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Mine.pcrv"), &bytes);
+    assert!(!h.state().ui.status_error, "a matching preset loads: {}", h.state().ui.status);
+    assert_eq!(params(&h, id)["red"], stored_curves()["red"], "its red curve reaches the dialog");
+}
+
+// --------------------------------------------------------------------------- the row follows the list
+
+#[test]
+fn a_preset_changed_while_the_dialog_is_open_updates_the_delete_row() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, _id) = curves_dialog(files);
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "Delete starts greyed");
+    // A preset arrives through the control channel while the dialog stays open.
+    h.state_mut().run("curves.presets.save", json!({"curves": stored_curves(), "name": "From the channel"})).expect("the command runs");
+    h.run_steps(3);
+    assert_eq!(h.state().session.presets().curves_presets.len(), 1, "the session holds the preset");
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, true], "the open dialog's Delete row lights up");
+    // And back off when that preset is deleted the same way.
+    h.state_mut().run("curves.presets.delete", json!({})).expect("the command runs");
+    h.run_steps(3);
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "and greys again");
+}
+
+#[test]
+fn a_file_that_cannot_be_written_leaves_no_preset_behind() {
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness({
+        let mut a = app(files.clone());
+        a.services.write = Some(Box::new(|_path: &str, _bytes: &[u8]| Err("the disk is full".into())));
+        a
+    });
+    let id = adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the dialog opens");
+    h.run_steps(4);
+    adjust_dialog::apply_params(h.state_mut(), id, &lifted());
+    h.run_steps(2);
+
+    open_gear(&mut h);
+    pick(&mut h, SAVE);
+    let path = dir("write-fails").join("Curves.pcrv");
+    answer(&mut h, &files, Picked::Paths(vec![path.clone()]));
+
+    let state = h.state();
+    assert!(state.ui.status_error, "the failed write is reported");
+    assert!(state.ui.status.contains("disk is full"), "with the writer's own words: {}", state.ui.status);
+    assert!(state.session.presets().curves_presets.is_empty(), "no preset was added for a file that does not exist");
+    assert!(state.session.presets().curves_preset.is_none(), "and nothing is selected");
+    assert!(std::fs::metadata(&path).is_err(), "no file was written");
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "so the Delete row stays greyed");
 }
 
 // ---------------------------------------------------------------------------- save, load and delete
