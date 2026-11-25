@@ -290,9 +290,9 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) ->
                 let result = app.run("brush.mixer.clean", json!({}));
                 report(app, result);
             }
-            // Only the Eraser alerts; the Brush and Pencil clamp silently (#11938).
+            // The Eraser and the Brush alert (#11938, #16809); the Pencil clamps silently.
             PaintEvent::OutOfRange(range) => {
-                if tool == Tool::Eraser {
+                if matches!(tool, Tool::Eraser | Tool::Brush) {
                     open_range_alert(app, ui, &range);
                 }
             }
@@ -350,6 +350,10 @@ mod mixer_blend_combination_tests;
 #[cfg(test)]
 #[path = "../../mixer_load_solid_colors_tests.rs"]
 mod mixer_load_solid_colors_tests;
+
+#[cfg(test)]
+#[path = "../../brush_options_bar_range_alert_tests.rs"]
+mod brush_options_bar_range_alert_tests;
 
 #[cfg(test)]
 mod mixer_load_image_tests {
