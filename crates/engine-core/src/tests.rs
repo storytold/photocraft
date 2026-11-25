@@ -1572,3 +1572,52 @@ fn the_active_layer_marker_advances_for_a_new_document_and_not_for_a_same_layer_
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     assert!(s.active_layer_changes() > before, "a new active document advances the marker");
 }
+
+#[test]
+fn documents_are_inspected_and_activated_by_their_serial() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "One"})).unwrap();
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Two"})).unwrap();
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Three"})).unwrap();
+    let serial = |s: &mut Session, i: usize| s.execute("session.inspect", json!({})).unwrap()["documents"][i]["serial"].as_u64().unwrap();
+    let three = serial(&mut s, 2);
+    s.execute("file.close", json!({"save": "discard"})).unwrap();
+    // A closed document's serial is not given to the next one.
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Four"})).unwrap();
+    assert!(serial(&mut s, 2) > three);
+    s.execute("file.close", json!({"save": "discard"})).unwrap();
+    let one = serial(&mut s, 0);
+    let inspected = s.execute("document.inspect", json!({"serial": one})).unwrap();
+    assert_eq!((&inspected["name"], &inspected["serial"]), (&json!("One"), &json!(one)), "the answer names its document");
+    assert_eq!(inspected["id"], s.execute("session.inspect", json!({})).unwrap()["documents"][0]["id"]);
+    assert_eq!(s.active_index(), Some(1), "inspecting does not switch documents");
+    assert_eq!(s.execute("document.activate", json!({"serial": one})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.active_index(), Some(0));
+    for bad in [json!({"serial": 999}), json!({"serial": "1"}), json!({"serial": one, "document": 0})] {
+        assert!(s.execute("document.activate", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(s.execute("document.inspect", json!({"serial": 999})).is_err());
+    // An index and a serial naming different documents is refused, not settled by the serial.
+    assert!(s.execute("document.inspect", json!({"serial": one, "document": 1})).is_err());
+    assert_eq!(s.execute("document.inspect", json!({"serial": one, "document": null})).unwrap()["name"], "One");
+    // A serial follows its document when the tabs move, where an index would not.
+    assert_eq!(s.move_document(0, 1), Some(1));
+    assert_eq!(s.execute("document.activate", json!({"serial": one})).unwrap(), json!({"document": 1}));
+    assert_eq!(s.execute("document.inspect", json!({"serial": one})).unwrap()["name"], "One");
+}
+
+#[test]
+fn document_inspect_can_leave_out_the_history() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    let full = s.execute("document.inspect", json!({})).unwrap();
+    let lite = s.execute("document.inspect", json!({"history": false})).unwrap();
+    assert!(full.get("history").is_some() && lite.get("history").is_none());
+    assert_eq!(lite["name"], full["name"]);
+    assert!(s.execute("document.inspect", json!({"history": "no"})).is_err());
+    // Nor the layer tree, for a reader of the document's own values.
+    let own = s.execute("document.inspect", json!({"history": false, "layers": false})).unwrap();
+    assert!(full.get("layers").is_some() && lite.get("layers").is_some() && own.get("layers").is_none());
+    assert_eq!((&own["name"], &own["width"], &own["resolution"]), (&full["name"], &full["width"], &full["resolution"]));
+    assert!(s.execute("document.inspect", json!({"layers": 0})).is_err());
+}

@@ -38,6 +38,7 @@ photocraft-format = { path = "crates/format" }
 photocraft-automation = { path = "crates/automation" }
 photocraft-plugins = { path = "crates/plugins" }
 photocraft-engine = { path = "crates/engine" }
+photocraft-script-js = { path = "crates/script-js" }
 photocraft-engine-core = { path = "crates/engine-core" }
 photocraft-engine-paint = { path = "crates/engine-paint" }
 photocraft-engine-vector = { path = "crates/engine-vector" }
