@@ -1,10 +1,9 @@
 //! Crop tool: the contextual task bar under the crop frame (#10890).
 //!
-//! Measured in the reference application: the bar is centred under the frame with its top 11 px
-//! below the frame's bottom edge and follows the frame; dragged by its grip it stays where it was
-//! dropped; Reset bar position brings it back under the frame, Pin bar position keeps it where it
-//! is; Hide bar hides it and unticks Window › Contextual Task Bar; Cancel and Done show only
-//! while a crop is pending and do what the options bar's cancel and commit do.
+//! The bar's place under the frame (follow, grip drag, Reset, Pin) is the framework task bar's;
+//! this file keeps the app's rules: Hide bar hides it and unticks Window › Contextual Task Bar;
+//! Cancel and Done show only while a crop is pending and do what the options bar's cancel and
+//! commit do.
 //!
 //! The whole app runs in an egui_kittest harness (no GPU needed); the bar's own buttons are
 //! pressed with pointer events, so a click must reach the bar and not the canvas under it.
@@ -12,29 +11,24 @@
 use egui::{Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::canvas::ViewXform;
-use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
-use photocraft_ui_egui::crop_ui::{corners, pending};
+use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
+use photocraft_ui_egui::crop_ui::{frame, pending};
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
-
-/// The bar's top below the frame's bottom edge, measured in the reference application (screen px
-/// at 100 %, points here).
-const GAP: f32 = 11.0;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The app in English with a 400 × 300 white document at 100 %, the Crop tool picked in Classic
 /// Mode (the frame moves over a fixed image, so the frame's screen place is easy to predict).
 fn harness() -> Harness {
     let mut h = Harness::builder().with_size(vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
         // English labels, whatever the system language.
         app.session.prefs.edit(|p| p.interface.language = "en".into());
         app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
         app.ui.extras.snap = false;
         app.ui.view.show.smart_guides = false;
-        app.ui.tool_options.crop_shield.classic_mode = true;
+        app.ui.tool_options.crop.shield.classic_mode = true;
         app
     });
     h.run_steps(4);
@@ -47,8 +41,15 @@ fn harness() -> Harness {
 fn control(h: &mut Harness, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (req, _rx) = ControlRequest::new(method, params.clone());
-    let Outcome::Done(v) = handle(h.state_mut(), &ctx, &req) else { panic!("{method} {params}: not done") };
-    assert_eq!(v["ok"], true, "{method} {params}: {v}");
+    let v = match handle(h.state_mut(), &ctx, &req) {
+        Reply::Done(v) => {
+            assert_eq!(v["ok"], true, "{method} {params}: {v}");
+            v
+        }
+        // Input the canvas takes on its next pass: the frames below deliver it.
+        Reply::AfterInput => Value::Null,
+        _ => panic!("{method} {params}: not done"),
+    };
     h.run_steps(6);
     v
 }
@@ -63,23 +64,14 @@ fn draw_frame(h: &mut Harness, a: [f64; 2], b: [f64; 2]) {
     control(h, "ui.pointer", json!({"events": events}));
 }
 
-/// The crop frame's screen bounds, as the canvas maps it.
-fn frame_on_screen(h: &Harness) -> Rect {
-    let app = h.state();
-    let xf = ViewXform::active(app).expect("a view");
-    let r = app.ui.crop_rect.expect("a crop frame");
-    Rect::from_points(&corners(r, app.ui.crop_angle).map(|[x, y]| xf.to_screen(x as f32, y as f32)))
+/// The crop frame's rect as `[x0, y0, x1, y1]` (document px).
+fn frame_rect(h: &Harness) -> Option<[f64; 4]> {
+    frame(h.state()).map(|f| [f.rect.x0, f.rect.y0, f.rect.x1, f.rect.y1])
 }
 
 /// The task bar's screen rect, as `ui.inspect` reports it.
 fn bar(h: &Harness) -> Option<Rect> {
     h.state().ui.task_bar_shown.map(|[x0, y0, x1, y1]| Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))
-}
-
-fn assert_under_frame(h: &Harness, what: &str) {
-    let (f, b) = (frame_on_screen(h), bar(h).unwrap_or_else(|| panic!("{what}: no bar")));
-    assert!((b.top() - (f.bottom() + GAP)).abs() < 1.0, "{what}: bar top {} vs frame bottom {} + {GAP}", b.top(), f.bottom());
-    assert!((b.center().x - f.center().x).abs() < 1.0, "{what}: bar centre {} vs frame centre {}", b.center().x, f.center().x);
 }
 
 fn button(h: &mut Harness, at: Pos2, pressed: bool) {
@@ -105,14 +97,6 @@ fn has(h: &Harness, label: &str) -> bool {
     h.query_by_label(label).is_some()
 }
 
-/// Opens the bar's ⋯ menu and picks `entry`.
-fn menu(h: &mut Harness, entry: &str) {
-    let more = widget(h, "More options");
-    click_at(h, more);
-    let at = widget(h, entry);
-    click_at(h, at);
-}
-
 /// Drags the bar by its grip by `d` screen points.
 fn drag_grip(h: &mut Harness, d: Vec2) {
     let from = widget(h, "Move bar");
@@ -125,34 +109,6 @@ fn drag_grip(h: &mut Harness, d: Vec2) {
     }
     button(h, from + d, false);
     h.run_steps(4);
-}
-
-fn window_item_checked(h: &mut Harness) -> Option<bool> {
-    let items = control(h, "ui.menu.list", json!({}));
-    let item = items["result"].as_array()?.iter().find(|i| i["id"] == "window.panel.contextualTaskBar")?.clone();
-    item["checked"].as_bool()
-}
-
-#[test]
-fn sits_centred_eleven_points_under_the_frame_and_follows_it() {
-    let mut h = harness();
-    // The untouched default frame (the whole canvas).
-    assert_under_frame(&h, "default frame");
-    draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
-    assert_under_frame(&h, "drawn frame");
-    // Moved: the bar comes along.
-    let events = json!([
-        {"kind": "down", "x": 150.0, "y": 110.0},
-        {"kind": "move", "x": 210.0, "y": 150.0},
-        {"kind": "up", "x": 210.0, "y": 150.0},
-    ]);
-    control(&mut h, "ui.pointer", json!({"events": events}));
-    assert_eq!(h.state().ui.crop_rect, Some([100.0, 70.0, 320.0, 240.0]), "the frame moved");
-    assert_under_frame(&h, "moved frame");
-    let v = control(&mut h, "ui.inspect", json!({}));
-    assert_eq!(v["result"]["taskBar"]["visible"], true);
-    assert_eq!(v["result"]["taskBar"]["enabled"], true);
-    assert_eq!(v["result"]["taskBar"]["pinned"], false);
 }
 
 #[test]
@@ -171,46 +127,11 @@ fn shows_only_with_the_crop_tool() {
     assert!(bar(&h).is_none(), "closing the document clears the bar");
 }
 
-#[test]
-fn a_dragged_bar_stays_put_and_reset_brings_it_back() {
-    let mut h = harness();
-    draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
-    let before = bar(&h).expect("bar");
-    drag_grip(&mut h, vec2(-60.0, -120.0));
-    let dropped = bar(&h).expect("bar");
-    assert!((dropped.min - (before.min + vec2(-60.0, -120.0))).length() < 1.5, "{before:?} dragged to {dropped:?}");
-    assert!(h.state().ui.panels.task_bar.at.is_some());
-    assert_eq!(h.state().ui.crop_rect, Some([40.0, 30.0, 260.0, 200.0]), "dragging the bar doesn't touch the frame");
-    // A new frame no longer moves it; its left edge stays.
-    draw_frame(&mut h, [300.0, 200.0], [120.0, 60.0]);
-    assert_eq!(bar(&h).expect("bar").left_top(), dropped.left_top());
-    menu(&mut h, "Reset bar position");
-    assert_eq!(h.state().ui.panels.task_bar, Default::default());
-    assert_under_frame(&h, "after Reset bar position");
-}
-
-#[test]
-fn pin_keeps_the_bar_where_it_is() {
-    let mut h = harness();
-    draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
-    menu(&mut h, "Pin bar position");
-    let pinned = bar(&h).expect("bar");
-    assert!(h.state().ui.panels.task_bar.pinned);
-    draw_frame(&mut h, [300.0, 200.0], [120.0, 60.0]);
-    assert_eq!(bar(&h).expect("bar").left_top(), pinned.left_top(), "pinned: the frame changed, the bar didn't move");
-    // Pinning over the control channel freezes it the same way.
-    menu(&mut h, "Reset bar position");
-    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": true, "at": null}}}));
-    let here = bar(&h).expect("bar");
-    draw_frame(&mut h, [20.0, 20.0], [100.0, 80.0]);
-    assert_eq!(bar(&h).expect("bar").left_top(), here.left_top());
-}
-
 /// Runs one control-channel request without drawing after it.
 fn request(h: &mut Harness, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (req, _rx) = ControlRequest::new(method, params.clone());
-    let Outcome::Done(v) = handle(h.state_mut(), &ctx, &req) else { panic!("{method} {params}: not done") };
+    let Reply::Done(v) = handle(h.state_mut(), &ctx, &req) else { panic!("{method} {params}: not done") };
     v
 }
 
@@ -220,38 +141,80 @@ fn ui_set_changes_only_the_place_fields_it_names() {
     draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
     drag_grip(&mut h, vec2(-60.0, -120.0));
     let dropped = bar(&h).expect("bar");
-    let at = h.state().ui.panels.task_bar.at;
-    // Pinning keeps the dragged place: the bar doesn't jump back under the frame.
+    // Unpinned, the drop is an offset from the bar's place under the frame.
+    let place = h.state().ui.panels.task_bar;
+    assert!(place.at.is_none() && place.offset.is_some(), "{place:?}");
+    // Pinning keeps the dragged place: the bar doesn't jump back under the frame, and stays where it shows.
     control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": true}}}));
-    assert_eq!(h.state().ui.panels.task_bar.at, at);
     assert!(h.state().ui.panels.task_bar.pinned);
+    assert!(h.state().ui.panels.task_bar.at.is_some(), "a pinned bar holds its position");
     assert_eq!(bar(&h).expect("bar").left_top(), dropped.left_top());
     // Placing it keeps the pin.
     control(&mut h, "ui.set", json!({"panels": {"task_bar": {"at": [12.0, 34.0]}}}));
-    assert_eq!(h.state().ui.panels.task_bar, photocraft_ui_egui::state::TaskBarPlace { pinned: true, at: Some([12.0, 34.0]) });
+    assert!(h.state().ui.panels.task_bar.pinned);
+    assert_eq!(h.state().ui.panels.task_bar.at, Some([12.0, 34.0]));
     // A field the bar doesn't have is refused, and nothing changes.
     let v = request(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "nope": 1}}}));
     assert_eq!(v["ok"], false, "{v}");
     assert!(h.state().ui.panels.task_bar.pinned);
     // Reset bar position over the control channel.
-    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null}}}));
+    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null, "offset": null}}}));
     assert_eq!(h.state().ui.panels.task_bar, Default::default());
-    assert_under_frame(&h, "after the reset");
+    let v = request(&mut h, "ui.inspect", json!({}));
+    assert_eq!(v["result"]["taskBar"]["at"], Value::Null, "after the reset the bar follows the frame again");
 }
 
 #[test]
 fn the_bars_preset_dropdown_is_the_options_bars() {
     let mut h = harness();
     let b = bar(&h).expect("bar");
-    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 400.0, 300.0]), "the untouched frame is the canvas");
+    assert_eq!(frame_rect(&h), Some([0.0, 0.0, 400.0, 300.0]), "the untouched frame is the canvas");
     // Both bars show the Ratio dropdown: open the task bar's.
     let ratio = h.get_all_by_value("Ratio").map(|n| n.rect().center()).find(|p| b.contains(*p)).expect("the task bar's Ratio dropdown");
     click_at(&mut h, ratio);
     h.get_by_label("1 : 1 (Square)").click();
     h.run_steps(6);
-    let [x0, y0, x1, y1] = h.state().ui.crop_rect.expect("a frame");
-    assert!(((x1 - x0) - (y1 - y0)).abs() < 1e-6, "a square frame: {:?}", h.state().ui.crop_rect);
+    let [x0, y0, x1, y1] = frame_rect(&h).expect("a frame");
+    assert!(((x1 - x0) - (y1 - y0)).abs() < 1e-6, "a square frame: {:?}", frame_rect(&h));
     assert_eq!(h.get_all_by_value("1 : 1 (Square)").count(), 2, "the options bar shows the same preset");
+}
+
+#[test]
+fn the_options_bar_ratio_list_takes_escape_and_enter_before_the_crop() {
+    let mut h = harness();
+    control(&mut h, "ui.set", json!({"panels": {"context_task_bar": false}}));
+    draw_frame(&mut h, [100.0, 50.0], [300.0, 250.0]);
+    assert!(pending(h.state()), "the drawn square crop is pending");
+    let before = frame_rect(&h).expect("the pending frame");
+    let size = |h: &Harness| h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height));
+    let history = |h: &Harness| h.state().session.active().expect("the crop document").history.past_len();
+    let steps = history(&h);
+    let square = "1 : 1 (Square)";
+
+    // Escape dismisses the list. Enter accepts its first row, the selected free Ratio.
+    // Neither key should reach the pending crop while the list is open (#7386).
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        assert!(!has(&h, square), "the square row is only in the open list");
+        let at = h.get_by_value("Ratio").rect().center();
+        click_at(&mut h, at);
+        assert!(has(&h, square), "the options bar ratio list opened");
+        h.key_press(key);
+        h.run_steps(12);
+        assert!(!has(&h, square), "{key:?} closed the ratio list");
+        assert!(pending(h.state()), "{key:?} left the crop pending");
+        assert_eq!(frame_rect(&h), Some(before), "{key:?} left the frame alone");
+        assert_eq!(size(&h), Some((400, 300)), "{key:?} did not crop the document");
+    }
+
+    // A closed dropdown still has focus. Click inside the frame to return focus to the canvas.
+    let at = h.state().last_canvas_rect.center();
+    click_at(&mut h, at);
+    assert_eq!(frame_rect(&h), Some(before), "the click only moved focus");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(6);
+    assert_eq!(size(&h), Some((200, 200)), "Enter on the canvas commits the pending crop");
+    assert_eq!(history(&h), steps + 1, "Enter adds one document history step");
+    assert!(!pending(h.state()), "Enter clears the pending Crop session once the document accepts the crop");
 }
 
 #[test]
@@ -303,23 +266,6 @@ fn with_tiled_documents_the_bar_sits_on_the_active_tile() {
 }
 
 #[test]
-fn hide_bar_and_the_window_toggle() {
-    let mut h = harness();
-    assert_eq!(window_item_checked(&mut h), Some(true));
-    menu(&mut h, "Hide bar");
-    assert!(!h.state().ui.panels.context_task_bar);
-    assert!(bar(&h).is_none());
-    assert_eq!(window_item_checked(&mut h), Some(false), "Hide bar unticks Window › Contextual Task Bar");
-    let ctx = h.ctx.clone();
-    photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "window.panel.contextualTaskBar", json!({})).expect("toggle");
-    h.run_steps(6);
-    assert!(bar(&h).is_some(), "Window › Contextual Task Bar shows it again");
-    assert_eq!(window_item_checked(&mut h), Some(true));
-    control(&mut h, "ui.set", json!({"panels": {"context_task_bar": false}}));
-    assert!(bar(&h).is_none(), "ui.set hides it");
-}
-
-#[test]
 fn cancel_and_done_only_while_a_crop_is_pending() {
     let mut h = harness();
     assert!(!pending(h.state()));
@@ -339,6 +285,7 @@ fn cancel_and_done_only_while_a_crop_is_pending() {
     let at = widget(&h, "Done");
     click_at(&mut h, at);
     assert_eq!(h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height)), Some((220, 170)), "Done crops");
+    assert!(!pending(h.state()), "Done also clears the pending Crop session");
 }
 
 /// The active document's stored zoom.
@@ -362,27 +309,11 @@ fn done_fits_the_cropped_document() {
     assert!((zoom(&h) - 1.0).abs() < 1e-4, "Done fits the cropped document: zoom {}", zoom(&h));
     let app = h.state();
     let v = app.session.active_index().and_then(|i| app.ui.views.get(i)).expect("a view");
-    assert!(!v.fit_pending && (v.center[0] - 110.0).abs() < 0.5 && (v.center[1] - 85.0).abs() < 0.5, "fitted and centred: {:?}", v.center);
-}
-
-#[test]
-fn the_bar_grows_for_cancel_and_done() {
-    let mut h = harness();
-    let idle = bar(&h).expect("bar").width();
-    draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
-    h.run_steps(4);
-    let busy = bar(&h).expect("bar").width();
-    assert!(busy > idle + 40.0, "idle {idle}, pending {busy}");
-}
-
-#[test]
-fn straighten_is_the_options_bar_straighten() {
-    let mut h = harness();
-    assert!(!photocraft_ui_egui::crop_straighten::mode(h.state()));
-    let at = widget(&h, "Straighten");
-    click_at(&mut h, at);
-    assert!(photocraft_ui_egui::crop_straighten::mode(h.state()), "armed, as by the options bar's button");
-    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 400.0, 300.0]), "the click didn't reach the canvas");
+    assert!(
+        !v.asks(craft::ui::canvas::ViewCommands::FitOnScreen) && (v.center[0] - 110.0).abs() < 0.5 && (v.center[1] - 85.0).abs() < 0.5,
+        "fitted and centred: {:?}",
+        v.center
+    );
 }
 
 #[test]

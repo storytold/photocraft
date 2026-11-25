@@ -17,7 +17,7 @@
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
 //!
 //! `--in-window-menus` (or `PHOTOCRAFT_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
-//! macOS instead of the macOS menu bar (`mac_menu`).
+//! macOS instead of the macOS menu bar (`photocraft_ui_egui::native_menu`).
 //!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
@@ -31,23 +31,21 @@
 
 mod app_dirs;
 mod app_icon;
-mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
+#[cfg(test)]
+mod build_channel;
+mod build_flavor;
 mod caps_lock;
-mod caption_style;
-mod control_server;
 mod crash_guard;
 mod cursor;
-mod file_dialog_probe;
 mod gpu_startup;
-#[cfg(target_os = "linux")]
-mod icon_theme;
 mod launch_args;
-#[cfg(target_os = "macos")]
-mod mac_menu;
+mod launch_profile;
 #[cfg(target_os = "macos")]
 mod mac_window;
+mod process_identity;
+mod profile_root;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(not(target_arch = "wasm32"))]
 mod external_svg;
@@ -55,15 +53,12 @@ mod external_svg;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod nightly_session;
 mod photoshop_settings;
-// Save As through the desktop portal, which reports the file type picked (#6121).
-#[cfg(target_os = "linux")]
-mod portal_save;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod print_portal;
-mod screen_color;
 mod services;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
@@ -72,93 +67,131 @@ mod startup_report;
 // Tablet support (macOS AppKit monitor, Linux X11/Wayland, Windows barrel button).
 mod tablet;
 mod ui_state;
-mod updates;
 mod window_frame;
 
 use photocraft_engine::Session;
+#[cfg(target_os = "linux")]
+use photocraft_engine::print_cmds::PrintExt;
 use photocraft_ui_egui::PhotocraftApp;
+use photocraft_ui_egui::Prefix;
+use photocraft_ui_egui::window_policy::{self, Backend, Frame, TitleBarPref};
 
-use photocraft_ui_egui::os_window::APP_ID;
+use photocraft_ui_egui::os_window;
 
-/// Windows and Linux can use the app's title bar, with its own caption buttons and edge resizing
-/// (`photocraft_ui_egui::titlebar`); the preference below selects the mode. macOS always keeps its
-/// system traffic lights over the integrated title strip.
-const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
+/// The smallest the main window may be, in points.
+const MIN_WINDOW_SIZE: [f32; 2] = [760.0, 480.0];
 
-/// Whether this start draws its own title bar: Windows and Linux do, unless Preferences ›
-/// Interface › System Title Bar asks for the system's (#1271, #1316). Read from the saved
-/// preferences before the window opens; a missing or unreadable file keeps the default.
-fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
-    let prefs: photocraft_engine::prefs::Preferences =
-        prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    CUSTOM_TITLEBAR && !prefs.interface.system_title_bar
+/// Which title bar Preferences › Interface › System Title Bar asks for (#1271, #1316), from the
+/// preferences read before the window opens (`services::saved_prefs`). The frame decision
+/// (`window_policy::decide_for`) turns it into the frame the platform allows.
+fn title_bar_pref(prefs: &photocraft_engine::prefs::Preferences) -> TitleBarPref {
+    if prefs.interface.system_title_bar { TitleBarPref::System } else { TitleBarPref::Integrated }
 }
 
-/// Preferences › Integrations, read before the window opens the way [`custom_titlebar`] is:
-/// whether agents may drive this launch at all, and the port to listen on when no `--control`
-/// was given (0 = only with `--control`). A missing or unreadable file keeps the defaults.
-///
-/// The section is read on its own, and when it doesn't read as a whole each value on its own,
-/// as the app's lenient load reads them (#6611): a wrong-typed value elsewhere in the file, or
-/// in the other field, must not turn Allow Agent Control back on while the dialog shows it off.
-fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::prefs::Integrations {
-    use serde_json::Value;
-    let mut out = photocraft_engine::prefs::Preferences::default().integrations;
-    let file: Option<Value> = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok());
-    let Some(section) = file.as_ref().and_then(|v| v.get("integrations")) else {
-        return out;
+/// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
+/// variables) win; a direction without one takes Preferences › AI Integrations' folder, and with
+/// that empty too the channel's default agent folder: stable uses
+/// `Documents/ArtCraft/Agents/PhotoCraft`; Nightly uses its private profile's `AgentFiles`.
+/// It is created only when first used (`AgentSettings::folders_with`). A flag's
+/// root that can't be opened stops the launch (exit status 2) as before. A preference's root that
+/// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
+/// from), is left out, so that direction fails closed, and the warning says why: a folder moved
+/// since it was chosen must not stop the app from starting. Each folder is opened once, so one
+/// that goes away during the launch can't turn into an error, and the same folder for reading
+/// and writing shares one capability, as it does when given by flags.
+fn automation_workspace(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &craft::automation::agents::AgentSettings,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    automation_workspace_for_profile(flags, prefs, launch_profile::current(), || craft::control::agents::default_folder(AGENT_APP_NAME))
+}
+
+fn automation_workspace_for_profile(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &craft::automation::agents::AgentSettings,
+    profile: &launch_profile::Profile,
+    stable_default: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    let default = match profile.root() {
+        Some(root) => Some(profile_root::agent_directory(root).map_err(photocraft_automation::AutomationError::BadRequest)?),
+        None => stable_default(),
     };
-    if let Ok(whole) = serde_json::from_value(section.clone()) {
-        return whole;
+    automation_workspace_in(flags, prefs, default.as_deref())
+}
+
+/// The app's name in its default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`.
+const AGENT_APP_NAME: &str = "PhotoCraft";
+
+/// [`automation_workspace`] with `default` as the default agent folder (tests use a temporary one).
+fn automation_workspace_in(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &craft::automation::agents::AgentSettings,
+    default: Option<&std::path::Path>,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    let mut workspace = flags.workspace()?;
+    let mut warnings = Vec::new();
+    let (read_given, write_given) = (!flags.automation_read_root.is_empty(), flags.automation_write_root.is_some());
+    // The default folder is created only when a direction no flag names has no folder of the
+    // person's own; otherwise it would be made and never used.
+    let needs_default = (!read_given && prefs.read_folder().is_none()) || (!write_given && prefs.write_folder().is_none());
+    let folders = prefs.folders_with(default.filter(|_| needs_default));
+    for read in [true, false] {
+        let given = if read { read_given } else { write_given };
+        let Some(root) = (if read { folders.read.clone() } else { folders.write.clone() }).filter(|_| !given) else {
+            continue;
+        };
+        let own = if read { prefs.read_folder() } else { prefs.write_folder() }.is_some();
+        let opened = if !root.is_absolute() {
+            Err(photocraft_automation::AutomationError::BadRequest(format!("`{}` is not an absolute path", root.display())))
+        } else if read {
+            workspace.with_read_root(&root)
+        } else {
+            workspace.with_write_root(&root)
+        };
+        match opened {
+            Ok(w) => workspace = w,
+            Err(e) if own => {
+                let which = if read { "Automation Read Folder" } else { "Automation Write Folder" };
+                warnings.push(format!("Preferences › AI Integrations › {which} is not used: {e}"));
+            }
+            Err(e) => warnings.push(format!("The default agent folder {} is not used: {e}", root.display())),
+        }
     }
-    if let Some(allow) = section.get("allowAgentControl").and_then(Value::as_bool) {
-        out.allow_agent_control = allow;
-    }
-    if let Some(port) = section.get("controlPort").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()) {
-        out.control_port = port;
-    }
-    out
+    Ok((workspace, (!warnings.is_empty()).then(|| warnings.join("\n"))))
 }
 
 /// The control port this launch listens on, and the warning to print when a request was refused.
-/// `--control` (or `PHOTOCRAFT_CONTROL_PORT`) wins over the preference; Allow Agent Control off
-/// refuses both, and says so rather than ignoring the flag silently. A preferred port outside
-/// 1..=65535 is refused the same way.
+/// Only `--control` (or `PHOTOCRAFT_CONTROL_PORT`) opens one at launch: the agent link starts and
+/// stops its own while the app runs (`craft::automation::agents::AgentLink`). Allow Agent Control
+/// off refuses the flag too, and says so rather than ignoring it silently.
 fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrations) -> (Option<u16>, Option<String>) {
-    if !prefs.allow_agent_control {
-        let warning = cli.map(|p| format!("photocraft: Preferences › Integrations › Allow Agent Control is off: not listening on port {p}\n"));
+    if !prefs.agents.allow_agent_control {
+        let warning = cli.map(|p| {
+            format!(
+                "photocraft: Preferences › AI Integrations › Allow Agent Control is off: not listening on port {p}
+"
+            )
+        });
         return (None, warning);
     }
-    if let Some(port) = cli {
-        return (Some(port), None);
-    }
-    match prefs.control_port {
-        0 => (None, None),
-        p => match u16::try_from(p).ok().filter(|p| *p != 0) {
-            Some(port) => (Some(port), None),
-            None => (None, Some(format!("photocraft: Preferences › Integrations › Control Port {p} is not a usable port: not listening\n"))),
-        },
-    }
+    (cli, None)
 }
 
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
-/// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
+/// when it still doesn't fit, `embed::before_ui`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
 /// different offset every launch (#419). A later launch restores the saved position instead
 /// (`main` turns `centered` off, #4826). Wayland compositors place windows themselves.
-fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
+fn native_options(frame: &Frame) -> eframe::NativeOptions {
     let viewport = egui::ViewportBuilder::default().with_icon(app_icon::viewport_icon(std::env::current_exe().ok().as_deref()));
+    let viewport = viewport
+        .with_app_id(os_window::app_id())
+        .with_title(os_window::name_for(os_window::identity()))
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size(MIN_WINDOW_SIZE)
+        .with_drag_and_drop(true);
     eframe::NativeOptions {
-        viewport: viewport
-            .with_app_id(APP_ID)
-            .with_title("PhotoCraft")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([760.0, 480.0])
-            .with_drag_and_drop(true)
-            .with_decorations(!custom_titlebar)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false),
+        viewport: window_policy::apply(viewport, frame),
         centered: true,
         // PhotoCraft owns its fallback fonts (`cjk_fonts`, craft-fonts): eframe's system-font
         // provider would compete with it and make glyph choice machine-dependent (#8512).
@@ -174,8 +207,8 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
 /// The window eframe restores from `ui.ron`, corrected before it is created: at least the
 /// minimum size, and never full screen. PhotoCraft always starts in Standard Screen Mode, but
 /// eframe also saves and restores full screen, and a window closed in a full-screen mode is
-/// saved full screen and maximized at once: the overlap `view_cmds::screen_mode_commands` keeps
-/// apart at run time. [OBSERVED 2026-10-12, Windows 11] Restored that way, View › Screen Mode ›
+/// saved full screen and maximized at once: the overlap the window's screen-mode sequence
+/// (`AppShell`'s `ScreenModeFollow`) keeps apart at run time. [OBSERVED 2026-10-12, Windows 11] Restored that way, View › Screen Mode ›
 /// Full Screen did nothing until `F` had cycled through Standard.
 fn restored_window(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
     at_least_min_size(builder).with_fullscreen(false)
@@ -219,18 +252,19 @@ fn claim_single_instance(
     mut launch_options: Vec<launch_args::PerProcess>,
 ) -> std::ops::ControlFlow<(), Option<single_instance::Primary>> {
     use std::ops::ControlFlow::{Break, Continue};
-    let new_instance_env = std::env::var("PHOTOCRAFT_NEW_INSTANCE").ok();
+    let nightly = launch_profile::current().is_nightly();
+    let new_instance_env = if nightly { None } else { std::env::var("PHOTOCRAFT_NEW_INSTANCE").ok() };
     // A variable documented as the equivalent of a per-launch flag counts as that flag: a
     // launch that sets only `PHOTOCRAFT_PRESENT_MODE` (say) has per-process options too, so it
     // keeps its own process instead of handing its files over and being ignored.
     launch_options.extend_from_slice(&single_instance::env_launch_options());
     let context = single_instance::LaunchContext {
-        per_user_settings: app_dirs::current().mode == app_dirs::Mode::Platform,
-        new_instance_flag: new_instance,
+        per_user_settings: launch_profile::current().is_nightly() || app_dirs::current().mode == app_dirs::Mode::Platform,
+        new_instance_flag: new_instance && !nightly,
         new_instance_env: new_instance_env.as_deref(),
-        control,
+        control: control && !nightly,
         unreadable_paths,
-        launch_options: &launch_options,
+        launch_options: if nightly { &[] } else { &launch_options },
     };
     match (single_instance::skip_reason(&context), services::config_dir()) {
         (Some(reason), _) => {
@@ -258,13 +292,13 @@ fn claim_single_instance(
 /// The display server to open the window on: Xwayland for a pen on Wayland, which gives this app
 /// no pen input (#639). Exits with the package to install when its libraries are missing.
 #[cfg(target_os = "linux")]
-fn linux_display_session() -> linux_libs::DisplaySession {
+fn linux_display_session(display_server: photocraft_engine::prefs::LinuxDisplayServer) -> linux_libs::DisplaySession {
     let session = tablet::display_session();
     // Preferences › Performance › Linux display server = X11: Xwayland on a Wayland session too,
     // where native file drops work (winit 0.30 has none on Wayland, #386). Only when Xwayland can
     // run the window ($DISPLAY set, X11 libraries installed); otherwise the session's own.
     let session = if session == linux_libs::DisplaySession::Wayland
-        && gpu_startup::read_display_server(services::prefs_file().as_deref()) == photocraft_engine::prefs::LinuxDisplayServer::X11
+        && display_server == photocraft_engine::prefs::LinuxDisplayServer::X11
         && std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty())
         && linux_libs::available(linux_libs::DisplaySession::X11)
     {
@@ -282,17 +316,55 @@ fn linux_display_session() -> linux_libs::DisplaySession {
     session
 }
 
-/// The control server's port, token and workspace, when it is on (exits 2 on a bad configuration).
+/// The control server: its listener, token and workspace.
+type Control = (std::net::TcpListener, String, photocraft_automation::workspace::AuthorizedWorkspace);
+
+/// What [`control_setup`] set up: the control server when it is on, and a notice for the window
+/// (a preference's automation folder that wasn't used).
+struct ControlSetup {
+    control: Option<Control>,
+    warning: Option<ControlNotice>,
+}
+
+/// A notice for the window about the control server: a Dock launch has no console.
+struct ControlNotice {
+    title: &'static str,
+    lines: Vec<String>,
+}
+
+/// The `--control` server's port, token and workspace, when it is on (exits 2 on a bad
+/// configuration). Preferences › AI Integrations (`prefs`, read before the window opens) decide
+/// whether agents may drive this launch, and its folders stand in for automation roots no flag
+/// names. The server the agents switch starts is the agent link's, not this.
 fn control_setup(
+    prefs: &photocraft_engine::prefs::Integrations,
     cli_port: Option<u16>,
     auth: photocraft_automation::args::ControlArgs,
     automation: &photocraft_automation::args::AutomationArgs,
-) -> Option<(std::net::TcpListener, String, photocraft_automation::workspace::AuthorizedWorkspace)> {
-    let (port, warning) = control_port_for(cli_port, &integrations(services::prefs_file().as_deref()));
+) -> ControlSetup {
+    control_setup_in(services::config_dir(), prefs, cli_port, auth, automation)
+}
+
+/// [`control_setup`] with the settings folder and Preferences › AI Integrations given.
+fn control_setup_in(
+    settings: Option<std::path::PathBuf>,
+    prefs: &photocraft_engine::prefs::Integrations,
+    cli_port: Option<u16>,
+    auth: photocraft_automation::args::ControlArgs,
+    automation: &photocraft_automation::args::AutomationArgs,
+) -> ControlSetup {
+    let (port, warning) = control_port_for(cli_port, prefs);
     if let Some(warning) = &warning {
         eprint!("{warning}");
     }
-    let port = port?;
+    // A file a crashed (or, on macOS, quit) launch left behind names a port nothing serves. Before
+    // binding, so this launch's own listener doesn't keep it.
+    if let Some(dir) = &settings {
+        craft::automation::agents::remove_stale_connection(dir);
+    }
+    let Some(port) = port else {
+        return ControlSetup { control: None, warning: None };
+    };
     let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
         Ok(listener) => listener,
         Err(error) => {
@@ -308,21 +380,26 @@ fn control_setup(
             std::process::exit(2);
         }
     };
-    if let Some(path) = token_file {
+    if let Some(path) = &token_file {
         eprintln!("photocraft: control token file: {}", path.display());
     } else if supplied.is_none() {
         eprintln!("photocraft: control token: {token}");
     } else {
         eprintln!("photocraft: using supplied control token");
     }
-    let workspace = match automation.workspace() {
+    let (workspace, warning) = match automation_workspace(automation, &prefs.agents) {
         Ok(workspace) => workspace,
         Err(error) => {
             eprintln!("photocraft: cannot configure automation workspace: {error}");
             std::process::exit(2);
         }
     };
-    Some((listener, token, workspace))
+    if let Some(warning) = &warning {
+        eprintln!("photocraft: {warning}");
+        log::warn!("{warning}");
+    }
+    let warning = warning.map(|w| ControlNotice { title: "Automation folder not used", lines: w.lines().map(str::to_owned).collect() });
+    ControlSetup { control: Some((listener, token, workspace)), warning }
 }
 
 /// Record this start's backend in the GPU startup marker, if the marker is locked.
@@ -339,7 +416,66 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
+fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
+    process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, os_window::id_for(os_window::LaunchIdentity::NightlyV1))
+}
+
+fn report_launch_profile_error(error: &str) {
+    eprintln!("PhotoCraft launch profile: {error}");
+    let desktop_session = cfg!(windows)
+        || cfg!(target_os = "macos")
+        || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
+    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+        if let Err(error) = initialize_nightly_process_identity() {
+            eprintln!("PhotoCraft launch profile: {error}");
+            return;
+        }
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        let _ = rfd::MessageDialog::new()
+            .set_title("PhotoCraft Nightly")
+            .set_description(error)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+}
+
+/// Select the immutable launch profile before any startup service or side effect.
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
+    // The trusted Launcher protocol is decided before logger/crash/update/font/prefs access.
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    // Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root <dir>
+    // --version`: answered before root validation, process identity, IPC or any window.
+    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), "PhotoCraft {}", build_flavor::version(build_flavor::COMPILED, env!("PHOTOCRAFT_BUILT_VERSION")));
+        return None;
+    }
+    let early = launch_profile::parse_startup(argv, std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").is_some())
+        .and_then(|launch| {
+            build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
+            initialize_nightly_process_identity().map_err(|error| error.to_string())?;
+            Ok(launch)
+        })
+        .and_then(|launch| {
+            launch_profile::prepare(launch, |root| launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref()))
+        })
+        .unwrap_or_else(|error| {
+            report_launch_profile_error(&error);
+            std::process::exit(2)
+        });
+    let identity = if early.profile.is_nightly() { os_window::LaunchIdentity::NightlyV1 } else { os_window::LaunchIdentity::Stable };
+    if let Err(error) = launch_profile::install(early.profile).and_then(|()| os_window::select_identity(identity)) {
+        report_launch_profile_error(&error);
+        std::process::exit(2);
+    }
+
+    Some(early.args)
+}
+
 fn main() -> eframe::Result {
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
+
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
@@ -347,7 +483,9 @@ fn main() -> eframe::Result {
     let logger = logging::install();
     crash_guard::install_hook();
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(done) = craft_update::self_update::finish(&photocraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if !launch_profile::current().is_nightly()
+        && let Some(done) = craft_update::self_update::finish(&photocraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>())
+    {
         if let Err(e) = done {
             eprintln!("PhotoCraft update helper failed: {e}");
             std::process::exit(1);
@@ -358,10 +496,10 @@ fn main() -> eframe::Result {
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown
-    // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT: issues #701, #6429, #6431)
+    // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT for Stable: issues #701, #6429, #6431)
     // names the argument on standard error and exits 2, so a launcher sees the failure. Neither
     // panics when the stream is closed or a pipe (`photocraft --help | head -1`).
-    let launch = launch_args::parse(launch_args::command(), std::env::args_os().skip(1)).unwrap_or_else(|e| e.exit());
+    let launch = launch_args::parse(launch_args::command_for_profile(launch_profile::current().is_nightly()), arguments).unwrap_or_else(|e| e.exit());
     let launch_args::FileNames { openable: files, unreadable: unreadable_paths } = launch.file_names();
     let launch_args::LaunchArgs {
         files: _,
@@ -379,8 +517,12 @@ fn main() -> eframe::Result {
 
     attach_log_file(logger);
 
+    // The saved preferences the launch needs before the window opens, read once without opening
+    // the settings store (the app opens it later).
+    let saved = services::saved_prefs();
+    let prefs = &saved.prefs;
     // An adapter named in the environment is chosen at startup, which a forwarded launch never reaches.
-    let rendering_mode = gpu_startup::read_rendering_prefs(services::prefs_file().as_deref()).1;
+    let rendering_mode = gpu_startup::rendering_prefs(&prefs.performance).1;
     if gpu_startup::adapter_override_is_process_specific(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), rendering_mode, gpu_startup::ADAPTER_CHOICE) {
         launch_options.push(launch_args::PerProcess::GpuAdapterEnv);
     }
@@ -398,12 +540,17 @@ fn main() -> eframe::Result {
     let _ = (new_instance, &launch_options);
 
     // Bind and authenticate the authorized control listener before display/GPU initialization.
-    let control = control_setup(control_port, auth, &automation);
+    let ControlSetup { control, warning: control_warning } = if launch_profile::current().is_nightly() {
+        // No inherited stable token file/Launcher agent switch is consulted by this first protocol.
+        ControlSetup { control: None, warning: None }
+    } else {
+        control_setup(&prefs.integrations, control_port, auth, &automation)
+    };
 
     #[cfg(target_os = "linux")]
     let native_session = linux_libs::session_from_env(|name| std::env::var(name).ok());
     #[cfg(target_os = "linux")]
-    let session = linux_display_session();
+    let session = linux_display_session(prefs.performance.linux_display_server);
 
     // Finder / Dock / Open With deliver files as Apple events, not arguments; catch the one that
     // launched us as well as later ones. Lives until the event loop returns.
@@ -432,8 +579,11 @@ fn main() -> eframe::Result {
     let monitor = monitor_profile::detect_async();
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
-    let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
-    let mut options = native_options(custom_titlebar);
+    // Who draws the window frame, decided once: the viewport below and the runtime's root frame both follow it.
+    // `PHOTOCRAFT_TITLEBAR`, `PHOTOCRAFT_CAPTION_STYLE` and `PHOTOCRAFT_CAPTION_LAYOUT` are read by the decision.
+    let decision = window_policy::decide_for(Prefix::new("PHOTOCRAFT"), Backend::from_env(), title_bar_pref(prefs));
+    let integrated_frame = matches!(decision.frame, Frame::Integrated(_));
+    let mut options = native_options(&decision.frame);
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
     #[cfg(target_os = "linux")]
     if session == linux_libs::DisplaySession::X11 {
@@ -451,7 +601,7 @@ fn main() -> eframe::Result {
     // driver moves to a safer one), and lock this start's marker until the first frames render.
     let t_sentinel = std::time::Instant::now();
     let os = gpu_startup::Os::current();
-    let (pref, mode) = gpu_startup::read_rendering_prefs(services::prefs_file().as_deref());
+    let (pref, mode) = gpu_startup::rendering_prefs(&prefs.performance);
     let (previous, sentinel) = match services::config_dir() {
         Some(dir) => gpu_startup::Sentinel::begin(&dir),
         None => (gpu_startup::Previous::Clean, None),
@@ -465,12 +615,11 @@ fn main() -> eframe::Result {
     write_start_marker(&sentinel, &plan);
     let gpu_note: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
     // The adapter's real texture limits (egui asks for 8192 px), so big documents stay on the GPU.
-    let wanted_adapter =
-        gpu_startup::wanted_adapter(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), &gpu_startup::read_gpu_adapter(services::prefs_file().as_deref()));
+    let wanted_adapter = gpu_startup::wanted_adapter(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), &gpu_startup::gpu_adapter(&prefs.performance));
     gpu_startup::configure(&mut options.wgpu_options.wgpu_setup, &plan, os, wanted_adapter, sentinel.clone(), gpu_note.clone());
     // Preferences › Performance › Low-Latency Drawing (#1343): without vsync a stroke shows about
     // 50 ms sooner; wgpu picks Immediate, else Mailbox, else Fifo by what the driver offers.
-    if gpu_startup::read_low_latency(services::prefs_file().as_deref()) {
+    if prefs.performance.low_latency_drawing {
         options.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync;
     }
     // Testers' present mode and frame latency overrides (#1343), after the preference.
@@ -494,20 +643,50 @@ fn main() -> eframe::Result {
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
+    // After primary IPC claim, before entering the window loop. Stable and secondaries do not
+    // own a Nightly record. No document names, paths or diagnostic payload is collected.
+    let (nightly_session, session_health_warning) = match nightly_session::Session::begin_with_health(
+        launch_profile::current().root(),
+        photocraft_engine::build_info::VERSION,
+        photocraft_engine::build_info::git_sha(),
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            log::warn!("Nightly session health is unavailable: {error}");
+            (None, true)
+        }
+    };
+    let previous_nightly_unclean = nightly_session.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    // Set once a window has posted the interruption notice; until then the record must survive.
+    let unclean_notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let notice_shown_in_callback = unclean_notice_shown.clone();
+    let nightly_session: nightly_session::Shared = std::sync::Arc::new(std::sync::Mutex::new(nightly_session));
+    // The app's exit hook is the controlled return on macOS, where every quit ends the process
+    // inside AppKit's terminate (craft::quit) and `run_native` never returns. Elsewhere the
+    // return path below finishes, as before.
+    #[cfg(target_os = "macos")]
+    let finish_at_exit = {
+        let shared = nightly_session.clone();
+        let shown = unclean_notice_shown.clone();
+        move || nightly_session::finish_once(&shared, shown.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let result = eframe::run_native(
-        "PhotoCraft",
+        os_window::name_for(os_window::identity()),
         options,
         Box::new(move |cc| {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
-            let mut services = services::native(automation);
+            let wake = {
+                let ctx = cc.egui_ctx.clone();
+                craft::host::Wake::new(move || ctx.request_repaint())
+            };
+            let mut services = services::native(automation, wake);
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
             #[cfg(target_os = "linux")]
             {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
-                file_dialog_probe::start();
                 if services.is_wayland {
                     let var = |name| std::env::var(name).ok();
                     services.xwayland_command =
@@ -517,16 +696,17 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             let session = {
                 let mut session = Session::new();
-                session.print_spooler = print_portal::spooler();
+                *session.print_spooler_mut() = print_portal::spooler();
                 session
             };
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
-            PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
-            let mut app = PhotocraftApp::new(session, services);
+            // Before the first pass: the one install of the craft runtime must see every pass from
+            // the first (R71); the app then runs on that context.
+            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
+            app.open_suite(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
-            app.integrated_titlebar = cfg!(target_os = "macos");
-            app.custom_titlebar = custom_titlebar;
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
             #[cfg(target_os = "macos")]
             mac_window::disable_native_title_drag();
@@ -618,18 +798,34 @@ fn main() -> eframe::Result {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
             });
-            if let Some((listener, token, _)) = control {
-                let rx = control_server::start(listener, token, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+            // Agents in the open window. Behind the suite's AI-MCP flag the ArtCraft Launcher's
+            // switch (Settings › AI agents) is the one consent; without it, as before, a Control
+            // Port saved in the preferences. The launch flags (`--control`) manage the connection
+            // for the whole run instead.
+            if !launch_profile::current().is_nightly() {
+                app.services.agent_switch = Some(craft::automation::agents::AgentSwitch::watch(photocraft_automation::agent_link::LAUNCHER_APP_ID, {
+                    let ctx = cc.egui_ctx.clone();
+                    move || ctx.request_repaint()
+                }));
+                let link = if let Some((listener, token, _)) = control {
+                    let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
+                    let (requests, server) = craft::automation::server::serve(listener, token, host)?;
+                    eprintln!("photocraft: control server listening on {}", server.addr);
+                    app = app.with_control(requests);
+                    craft::automation::agents::AgentLink::from_launch(server)
+                } else {
+                    app.services.agent_automation = Some(Box::new(services::agent_automation));
+                    craft::automation::agents::AgentLink::new(services::config_dir(), photocraft_engine::build_info::long_version())
+                };
+                app.services.agent_link = Some(link);
             }
+
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
-                // Quit through AppKit, not by closing the window (Touch Bar Macs, #1575, #1458).
-                app.services.quit = Some(Box::new(mac_window::terminate_later));
                 // The macOS menu bar, installed now so winit's default menu doesn't stay up.
                 if !in_window_menus {
-                    app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
+                    app.services.native_menu = photocraft_ui_egui::native_menu::install(&cc.egui_ctx, &mut app);
                 }
             }
             #[cfg(not(target_os = "macos"))]
@@ -641,24 +837,14 @@ fn main() -> eframe::Result {
             }
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // The physical primary button: it ends a floating document window's OS move by its title bar (#16415).
+            app.services.primary_down = cursor::primary_down_service();
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
-            app.services.window_frame = window_frame::service(cc, custom_titlebar);
-            // Linux: the desktop's caption buttons (GNOME's, KDE's) on the sides its layout puts them.
-            if custom_titlebar {
-                app.services.caption_style = caption_style::service();
-            }
+            app.services.window_frame = window_frame::service(cc, integrated_frame);
             // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
             // precise crosshair for painting tools while it is toggled on (#1758).
             app.services.caps_lock = caps_lock::service(cc);
-            // Pick through the portal on a Wayland desktop even when the window went through
-            // Xwayland (a pen, or the X11 display-server preference): Xwayland's root window has
-            // no desktop pixels to read (#8977).
-            #[cfg(target_os = "linux")]
-            let portal = screen_color::uses_portal(native_session);
-            #[cfg(not(target_os = "linux"))]
-            let portal = false;
-            app.services.screen_pick = screen_color::service(cc, portal);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).
@@ -688,15 +874,50 @@ fn main() -> eframe::Result {
                 use photocraft_ui_egui::i18n;
                 let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");
                 let lines = unreadable_paths.iter().map(|p| i18n::fmt(line, &[("path", p.as_str())])).collect();
-                photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, true, None);
+                photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, craft::theme::variant::Tone::Bad, None);
+            }
+            if previous_nightly_unclean || session_health_warning {
+                use photocraft_ui_egui::i18n;
+                let message = if previous_nightly_unclean {
+                    i18n::t(
+                        "The previous PhotoCraft Nightly session did not finish normally. You can report a problem from About. No diagnostics have been sent.",
+                    )
+                } else {
+                    i18n::t(
+                        "PhotoCraft Nightly could not record session health in its private profile. You can still edit, but abnormal-exit detection is unavailable.",
+                    )
+                };
+                photocraft_ui_egui::notices::post(
+                    &mut app,
+                    i18n::t("PhotoCraft Nightly"),
+                    vec![message.to_owned()],
+                    craft::theme::variant::Tone::Neutral,
+                    None,
+                );
+                notice_shown_in_callback.store(previous_nightly_unclean, std::sync::atomic::Ordering::Relaxed);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                app.services.at_exit = Some(Box::new(finish_at_exit));
             }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
-                photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], false, None);
+                photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], craft::theme::variant::Tone::Neutral, None);
             }
-            Ok(Box::new(app))
+            // A preference's automation folder that couldn't be opened, or a token file it couldn't
+            // write: a Dock launch has no console.
+            if let Some(ControlNotice { title, lines }) = control_warning {
+                photocraft_ui_egui::notices::post(&mut app, title, lines, craft::theme::variant::Tone::Neutral, None);
+            }
+            Ok(app)
         }),
     );
+    // This is a controlled return, even for a handled startup error or CPU relaunch. Release
+    // health ownership BEFORE primary IPC, so a successor never observes a stale busy owner.
+    // A renderer failure before the window (and so before the CPU retry) has not shown an
+    // earlier interruption: keep that record so the retry, or the next start, still reports it.
+    // On macOS a window that was created has already finished in its exit hook; this is then a no-op.
+    nightly_session::finish_once(&nightly_session, unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed));
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
     // the CPU-compatibility relaunch below) becomes the primary instead of handing its files to a
     // process that is exiting.
@@ -773,106 +994,7 @@ pub(crate) fn no_child_spawns() -> std::sync::RwLockWriteGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn window_and_panel_geometry_survive_a_restart() {
-        let options = super::native_options(super::CUSTOM_TITLEBAR);
-        assert!(options.persist_window);
-        assert_eq!(options.persistence_path, super::services::config_dir().map(|dir| dir.join("ui.ron")));
-
-        #[derive(Default)]
-        struct Storage(std::collections::BTreeMap<String, String>);
-        impl eframe::Storage for Storage {
-            fn get_string(&self, key: &str) -> Option<String> {
-                self.0.get(key).cloned()
-            }
-            fn set_string(&mut self, key: &str, value: String) {
-                self.0.insert(key.into(), value);
-            }
-            fn remove_string(&mut self, key: &str) {
-                self.0.remove(key);
-            }
-            fn flush(&mut self) {}
-        }
-        let ctx = egui::Context::default();
-        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
-        let mut output = ctx.run_ui(input(), |ui| {
-            egui::Panel::right("dock").exact_size(410.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
-        });
-        output.textures_delta.clear();
-        let mut storage = Storage::default();
-        ctx.memory(|memory| eframe::set_value(&mut storage, "egui", memory));
-        let restored = egui::Context::default();
-        restored.memory_mut(|memory| *memory = eframe::get_value(&storage, "egui").unwrap());
-        let mut output = restored.run_ui(input(), |ui| {
-            egui::Panel::right("dock").default_size(290.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
-        });
-        output.textures_delta.clear();
-        let panel = egui::containers::panel::PanelState::load(&restored, photocraft_ui_egui::panels::panel_state_id(&restored, "dock")).unwrap();
-        assert_eq!(panel.size().x, 410.0);
-    }
-
-    /// A 0.36 `ui.ron` saved panel widths under `Id::new("dock")`; the first 0.37 launch copies
-    /// them to the parent-scoped key, leaves the old one for a rollback, and a later resize
-    /// survives two more restarts.
-    #[test]
-    fn saved_036_panel_widths_migrate_and_survive_two_restarts() {
-        #[derive(Default)]
-        struct Storage(std::collections::BTreeMap<String, String>);
-        impl eframe::Storage for Storage {
-            fn get_string(&self, key: &str) -> Option<String> {
-                self.0.get(key).cloned()
-            }
-            fn set_string(&mut self, key: &str, value: String) {
-                self.0.insert(key.into(), value);
-            }
-            fn remove_string(&mut self, key: &str) {
-                self.0.remove(key);
-            }
-            fn flush(&mut self) {}
-        }
-        let state = |width: f32| egui::containers::panel::PanelState { outer_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0)) };
-        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
-        let draw = |ctx: &egui::Context| {
-            let mut output = ctx.run_ui(input(), |ui| {
-                egui::Panel::right("dock").default_size(290.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
-            });
-            output.textures_delta.clear();
-        };
-        let save = |ctx: &egui::Context| {
-            let mut storage = Storage::default();
-            ctx.memory(|memory| eframe::set_value(&mut storage, "egui", memory));
-            storage
-        };
-        let restore = |storage: &Storage| {
-            let ctx = egui::Context::default();
-            ctx.memory_mut(|memory| *memory = eframe::get_value(storage, "egui").expect("the saved memory"));
-            ctx
-        };
-
-        // The real 0.14/0.15 shape: the panel state under the old key inside the egui memory.
-        let ctx = egui::Context::default();
-        ctx.data_mut(|d| d.insert_persisted(egui::Id::unique("dock"), state(410.0)));
-        let storage = save(&ctx);
-
-        let first = restore(&storage);
-        photocraft_ui_egui::panels::migrate_panel_state(&first);
-        draw(&first);
-        let key = photocraft_ui_egui::panels::panel_state_id(&first, "dock");
-        assert_eq!(egui::containers::panel::PanelState::load(&first, key).map(|p| p.size().x), Some(410.0));
-        assert!(egui::containers::panel::PanelState::load(&first, egui::Id::unique("dock")).is_some(), "the 0.36 key is kept");
-        // Resize in 0.37: the new key wins from now on.
-        first.data_mut(|d| d.insert_persisted(key, state(500.0)));
-        let storage = save(&first);
-
-        for restart in 0..2 {
-            let next = restore(&storage);
-            photocraft_ui_egui::panels::migrate_panel_state(&next);
-            draw(&next);
-            let key = photocraft_ui_egui::panels::panel_state_id(&next, "dock");
-            let width = egui::containers::panel::PanelState::load(&next, key).map(|p| p.size().x).unwrap_or_default();
-            assert!((width - 500.0).abs() < 0.5, "restart {restart}: the old 410 key must not win (got {width})");
-        }
-    }
+    use photocraft_engine::prefs::SavedPrefsExt;
 
     /// Schema-probe `ui.ron` shapes *reconstructed* from the documented 0.14/0.15/0.37 layouts,
     /// not recorded machine saves: 0.14 and 0.15 both store the flat window entry, which the
@@ -904,7 +1026,7 @@ mod tests {
 
     #[test]
     fn the_window_opens_centred_at_its_default_size() {
-        let o = super::native_options(super::CUSTOM_TITLEBAR);
+        let o = super::native_options(&super::Frame::Native);
         assert!(o.centered, "#419: centred, not cascaded from the top-left corner");
         assert_eq!(o.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)));
         // eframe shrinks the start size to the monitor, so the centred position is on-screen.
@@ -913,31 +1035,31 @@ mod tests {
 
     #[test]
     fn a_window_saved_while_minimized_reopens_at_the_minimum_size() {
-        let hook = super::native_options(super::CUSTOM_TITLEBAR).window_builder.expect("a window builder hook");
+        let hook = super::native_options(&super::Frame::Native).window_builder.expect("a window builder hook");
         // Saved minimized on Windows, then centred on a 1920 × 1080 monitor by eframe.
-        let saved = super::native_options(super::CUSTOM_TITLEBAR).viewport.with_inner_size([160.0, 64.0]).with_position([880.0, 508.0]);
+        let saved = super::native_options(&super::Frame::Native).viewport.with_inner_size([160.0, 64.0]).with_position([880.0, 508.0]);
         let opened = hook(saved);
         assert_eq!(opened.inner_size, Some(egui::vec2(760.0, 480.0)));
         assert_eq!(opened.position, Some(egui::pos2(580.0, 300.0)), "still centred");
         // Too narrow only: only the width grows.
-        let opened = super::at_least_min_size(super::native_options(false).viewport.with_inner_size([500.0, 900.0]));
+        let opened = super::at_least_min_size(super::native_options(&super::Frame::Native).viewport.with_inner_size([500.0, 900.0]));
         assert_eq!(opened.inner_size, Some(egui::vec2(760.0, 900.0)));
         // A window at or above the minimum, or with no size, is left alone.
         for size in [[760.0, 480.0], [1100.0, 760.0]] {
-            let builder = super::native_options(false).viewport.with_inner_size(size).with_position([10.0, 20.0]);
+            let builder = super::native_options(&super::Frame::Native).viewport.with_inner_size(size).with_position([10.0, 20.0]);
             let opened = super::at_least_min_size(builder);
             assert_eq!((opened.inner_size, opened.position), (Some(egui::Vec2::from(size)), Some(egui::pos2(10.0, 20.0))));
         }
-        let mut builder = super::native_options(false).viewport;
+        let mut builder = super::native_options(&super::Frame::Native).viewport;
         builder.inner_size = None;
         assert_eq!(super::at_least_min_size(builder).inner_size, None);
     }
 
     #[test]
     fn a_window_saved_in_full_screen_reopens_maximized_not_full_screen() {
-        let hook = super::native_options(super::CUSTOM_TITLEBAR).window_builder.expect("a window builder hook");
+        let hook = super::native_options(&super::Frame::Native).window_builder.expect("a window builder hook");
         // What eframe restores from a ui.ron saved in a full-screen mode on Windows.
-        let saved = super::native_options(super::CUSTOM_TITLEBAR)
+        let saved = super::native_options(&super::Frame::Native)
             .viewport
             .with_inner_size([2560.0, 1392.0])
             .with_position([0.0, 0.0])
@@ -949,43 +1071,51 @@ mod tests {
         assert_eq!(opened.inner_size, Some(egui::vec2(2560.0, 1392.0)));
     }
 
+    /// The preferences the launch reads from the settings folder `dir` (`services::saved_prefs`).
+    fn launch_prefs(dir: Option<&std::path::Path>) -> photocraft_engine::prefs::Preferences {
+        photocraft_engine::prefs::read_saved(dir).prefs
+    }
+
     #[test]
-    fn the_system_title_bar_preference_keeps_the_window_decorations() {
-        // #1271, #1316: Preferences › Interface › System Title Bar gives the window back its
-        // system decorations on Windows and Linux; macOS always has them.
+    fn the_system_title_bar_preference_is_read_from_the_saved_preferences() {
+        // #1271, #1316: Preferences › Interface › System Title Bar asks for the system's bar; the frame
+        // decision (craft-window) turns the preference into the frame the platform allows.
+        use super::TitleBarPref;
         let dir = std::env::temp_dir().join(format!("pc-titlebar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("prefs.json");
-        let default_custom = super::CUSTOM_TITLEBAR;
-        assert_eq!(super::custom_titlebar(None), default_custom, "no preferences file: the platform default");
+        let file = dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE);
+        let read = || super::title_bar_pref(&launch_prefs(Some(&dir)));
+        assert_eq!(super::title_bar_pref(&launch_prefs(None)), TitleBarPref::default(), "no settings folder: the default");
+        assert_eq!(read(), TitleBarPref::default(), "nothing saved: the default");
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), default_custom, "an unreadable file: the platform default");
+        assert_eq!(read(), TitleBarPref::default(), "an unreadable file: the default");
         std::fs::write(&file, r#"{"interface":{}}"#).unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), default_custom, "an older preference file: the platform default");
+        assert_eq!(read(), TitleBarPref::default(), "an older preference file: the default");
         std::fs::write(&file, r#"{"interface":{"systemTitleBar":true}}"#).unwrap();
-        assert!(!super::custom_titlebar(Some(&file)));
-        assert_eq!(super::native_options(false).viewport.decorations, Some(true));
+        assert_eq!(read(), TitleBarPref::System);
         std::fs::write(&file, r#"{"interface":{"systemTitleBar":false}}"#).unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR);
-        if super::CUSTOM_TITLEBAR {
-            assert_eq!(super::native_options(true).viewport.decorations, Some(false));
-        }
+        assert_eq!(read(), TitleBarPref::Integrated);
+
+        // Once the app's settings store has saved config.toml, the launch reads that, not the older file.
+        let (mut store, _) = craft::settings::SettingsStore::open_with(photocraft_engine::prefs::store_options(Some(&dir)));
+        store.update(|saved| saved.prefs.interface.system_title_bar = true);
+        store.flush().unwrap();
+        assert_eq!(read(), TitleBarPref::System, "config.toml wins over preferences.json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn integrations_preferences_decide_the_control_port() {
-        use photocraft_engine::prefs::Integrations;
-        let off = Integrations { allow_agent_control: false, control_port: 0 };
-        let on = Integrations { allow_agent_control: true, control_port: 0 };
-        let preferred = Integrations { allow_agent_control: true, control_port: 7878 };
+        let (off, on, preferred) = (agent_prefs(false, 0), agent_prefs(true, 0), agent_prefs(true, 7878));
 
         // Nothing asked for, nothing listening.
         assert_eq!(super::control_port_for(None, &on), (None, None));
         // --control wins over the preference.
         assert_eq!(super::control_port_for(Some(9000), &preferred), (Some(9000), None));
-        // The preference opens the port when --control is absent.
-        assert_eq!(super::control_port_for(None, &preferred), (Some(7878), None));
+        // The preference alone opens nothing at launch: the agent link starts it while the app
+        // runs.
+        assert_eq!(super::control_port_for(None, &preferred), (None, None));
 
         // Allow Agent Control off refuses both, and says so when --control asked for one
         // rather than ignoring the flag.
@@ -993,30 +1123,32 @@ mod tests {
         let (port, warning) = super::control_port_for(Some(9000), &off);
         assert_eq!(port, None);
         assert!(warning.is_some_and(|w| w.contains("Allow Agent Control") && w.contains("9000")), "the refusal names the port");
-        let off_with_port = Integrations { allow_agent_control: false, control_port: 7878 };
-        assert_eq!(super::control_port_for(None, &off_with_port), (None, None), "off beats a preferred port");
+        assert_eq!(super::control_port_for(None, &agent_prefs(false, 7878)), (None, None), "off beats a preferred port");
+    }
 
-        // A port a hand-edited file could hold, outside 1..=65535, is refused and named.
-        let huge = Integrations { allow_agent_control: true, control_port: 70_000 };
-        let (port, warning) = super::control_port_for(None, &huge);
-        assert_eq!(port, None);
-        assert!(warning.is_some_and(|w| w.contains("70000")), "the refusal names the value");
+    fn agent_prefs(allow: bool, port: u32) -> photocraft_engine::prefs::Integrations {
+        let mut prefs = photocraft_engine::prefs::Integrations::default();
+        prefs.agents.allow_agent_control = allow;
+        prefs.agents.control_port = port;
+        prefs
     }
 
     #[test]
     fn integrations_fall_back_to_the_defaults_without_a_readable_file() {
         let dir = std::env::temp_dir().join(format!("pc-integrations-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("prefs.json");
+        let file = dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE);
         let default = photocraft_engine::prefs::Integrations::default();
 
-        assert_eq!(super::integrations(None), default, "no preferences file");
+        assert_eq!(launch_prefs(None).integrations, default, "no settings folder");
+        assert_eq!(launch_prefs(Some(&dir)).integrations, default, "nothing saved");
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(super::integrations(Some(&file)), default, "an unreadable file");
+        assert_eq!(launch_prefs(Some(&dir)).integrations, default, "an unreadable file");
         std::fs::write(&file, r#"{"integrations":{"allowAgentControl":false,"controlPort":7878}}"#).unwrap();
-        let read = super::integrations(Some(&file));
-        assert!(!read.allow_agent_control);
-        assert_eq!(read.control_port, 7878);
+        let read = launch_prefs(Some(&dir)).integrations;
+        assert!(!read.agents.allow_agent_control);
+        assert_eq!(read.agents.control_port, 7878);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1025,8 +1157,9 @@ mod tests {
     #[test]
     fn a_bad_value_elsewhere_keeps_agent_control_off() {
         let dir = std::env::temp_dir().join(format!("pc-integrations-lenient-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("prefs.json");
+        let file = dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE);
         // What the Preferences dialog shows for the same file.
         let shown = |text: &str| {
             let mut session = photocraft_engine::Session::new();
@@ -1035,26 +1168,209 @@ mod tests {
         };
         let read = |text: &str| {
             std::fs::write(&file, text).unwrap();
-            let read = super::integrations(Some(&file));
+            let read = launch_prefs(Some(&dir)).integrations;
             assert_eq!(read, shown(text), "{text}");
             read
         };
 
         let r = read(r#"{"interface":{"showTooltips":"nope"},"integrations":{"allowAgentControl":false,"controlPort":7878}}"#);
-        assert!(!r.allow_agent_control, "a bad value in another section");
-        assert_eq!(r.control_port, 7878);
+        assert!(!r.agents.allow_agent_control, "a bad value in another section");
+        assert_eq!(r.agents.control_port, 7878);
         let r = read(r#"{"integrations":{"allowAgentControl":false,"controlPort":"x"}}"#);
-        assert!(!r.allow_agent_control, "a bad port");
-        assert_eq!(r.control_port, 0, "the bad port alone takes its default");
+        assert!(!r.agents.allow_agent_control, "a bad port");
+        assert_eq!(r.agents.control_port, 0, "the bad port alone takes its default");
         // A bad Allow Agent Control alone takes its default.
         let r = read(r#"{"integrations":{"allowAgentControl":"no","controlPort":7878}}"#);
-        assert_eq!(r, photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: 7878 });
+        // (A saved port from before the agents switch turns it on, in both reads.)
+        assert_eq!(r, photocraft_engine::prefs::Integrations { connect_agents: true, ..agent_prefs(true, 7878) });
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":-1}}"#);
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":4294967296}}"#);
         read(r#"{"integrations":"off"}"#);
-        // serde reads a struct from a list too; the app does.
-        assert!(!read(r#"{"integrations":[false]}"#).allow_agent_control, "a list");
-        assert_eq!(read(r#"{"integrations":[false,7878]}"#).control_port, 7878);
+        // A section that isn't an object keeps the defaults, in both reads.
+        read(r#"{"integrations":[false,7878]}"#);
+        // The automation folders: a bad one takes its default alone, too.
+        let r = read(r#"{"integrations":{"allowAgentControl":false,"readRoot":5,"writeRoot":"/w"}}"#);
+        assert!(!r.agents.allow_agent_control, "a bad folder");
+        assert_eq!((r.agents.read_root.as_str(), r.agents.write_root.as_str()), ("", "/w"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn flags(read: Option<&std::path::Path>, write: Option<&std::path::Path>) -> photocraft_automation::args::AutomationArgs {
+        photocraft_automation::args::AutomationArgs {
+            automation_read_root: read.map(Into::into).into_iter().collect(),
+            automation_write_root: write.map(Into::into),
+        }
+    }
+
+    fn roots(read: &std::path::Path, write: &std::path::Path) -> craft::automation::agents::AgentSettings {
+        let mut prefs = craft::automation::agents::AgentSettings::default();
+        prefs.read_root = read.to_string_lossy().into_owned();
+        prefs.write_root = write.to_string_lossy().into_owned();
+        prefs
+    }
+
+    /// Preferences › AI Integrations' folders are the automation roots when no flag names one, and
+    /// a flag wins over its preference, direction by direction.
+    #[test]
+    fn automation_folders_come_from_the_preferences_unless_a_flag_names_one() {
+        let dir = temp_dir("automation-roots");
+        let (pref, flag) = (dir.join("pref"), dir.join("flag"));
+        std::fs::create_dir_all(&pref).unwrap();
+        std::fs::create_dir_all(&flag).unwrap();
+
+        // No flags: both directions from the preferences.
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &roots(&pref, &pref)).unwrap();
+        assert_eq!(warning, None);
+        ws.write("a.txt", b"pref").unwrap();
+        assert_eq!(std::fs::read(pref.join("a.txt")).unwrap(), b"pref");
+        assert_eq!(ws.read("a.txt").unwrap(), b"pref");
+        // One folder for both shares one capability, as the flags do: an implicit save is allowed.
+        assert_eq!(ws.read_with_save_path("a.txt").unwrap().1.as_deref(), Some("a.txt"));
+
+        // A write flag wins over the write folder; reads still come from the preference.
+        let (ws, _) = super::automation_workspace(&flags(None, Some(&flag)), &roots(&pref, &pref)).unwrap();
+        ws.write("b.txt", b"flag").unwrap();
+        assert!(flag.join("b.txt").is_file() && !pref.join("b.txt").exists(), "the flag's folder takes the write");
+        assert_eq!(ws.read("a.txt").unwrap(), b"pref");
+        assert_eq!(ws.read_with_save_path("a.txt").unwrap().1, None, "read and write folders differ: no implicit save");
+
+        // A read folder spelled like the write flag shares the flag's capability.
+        let (ws, _) = super::automation_workspace(&flags(None, Some(&flag)), &roots(&flag, &pref)).unwrap();
+        assert_eq!(ws.read_with_save_path("b.txt").unwrap().1.as_deref(), Some("b.txt"));
+
+        // Empty preferences and no default agent folder grant nothing, as no flags do.
+        let (ws, warning) = super::automation_workspace_in(&flags(None, None), &craft::automation::agents::AgentSettings::default(), None).unwrap();
+        assert_eq!(warning, None);
+        assert!(ws.read("a.txt").is_err() && ws.write("c.txt", b"x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nightly_agent_workspace_uses_its_private_profile_not_stable_documents() {
+        let dir = temp_dir("nightly-agent-roots");
+        let private = dir.join("nightly profile");
+        let stable = dir.join("redirected Documents/ArtCraft/Agents/PhotoCraft");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("existing-document"), b"stable document bytes").unwrap();
+        let profile = super::launch_profile::Profile::NightlyV1(private.clone());
+        let (ws, warning) = super::automation_workspace_for_profile(&flags(None, None), &craft::automation::agents::AgentSettings::default(), &profile, || {
+            panic!("Nightly must never consult the stable agent-folder fallback")
+        })
+        .unwrap();
+        assert_eq!(warning, None);
+        let canonical_private = std::fs::canonicalize(&private).unwrap();
+        assert!(ws.read_folders().iter().all(|p| p.starts_with(&canonical_private)));
+        assert!(ws.write_folder().unwrap().starts_with(&canonical_private));
+        ws.write("nightly-document", b"nightly document bytes").unwrap();
+        assert_eq!(ws.read("nightly-document").unwrap(), b"nightly document bytes");
+        assert_eq!(std::fs::read(stable.join("existing-document")).unwrap(), b"stable document bytes");
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1);
+        drop(ws);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stable_agent_workspace_preserves_the_resolved_default_folder() {
+        let dir = temp_dir("stable-agent-roots");
+        let stable = dir.join("redirected Documents/ArtCraft/Agents/PhotoCraft");
+        let (ws, warning) = super::automation_workspace_for_profile(
+            &flags(None, None),
+            &craft::automation::agents::AgentSettings::default(),
+            &super::launch_profile::Profile::Stable,
+            || Some(stable.clone()),
+        )
+        .unwrap();
+        assert_eq!(warning, None);
+        // These accessors preserve the configured spelling, not Windows' canonical
+        // verbatim prefix or expanded short names. The held capability still opens it.
+        assert_eq!(ws.read_folders(), vec![stable.clone()]);
+        assert_eq!(ws.write_folder(), Some(stable.clone()));
+        ws.write("stable-document", b"stable document bytes").unwrap();
+        assert_eq!(std::fs::read(stable.join("stable-document")).unwrap(), b"stable document bytes");
+        assert_eq!(ws.read("stable-document").unwrap(), b"stable document bytes");
+        assert_eq!(ws.read_with_save_path("stable-document").unwrap().1.as_deref(), Some("stable-document"));
+        drop(ws);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Empty preferences fall back to the default agent folder, created when first used, for
+    /// both directions (one shared capability); a flag or the person's own folder still wins.
+    #[test]
+    fn empty_folder_preferences_use_the_default_agent_folder() {
+        let dir = temp_dir("automation-roots-default");
+        let default = dir.join("ArtCraft").join("Agents").join("PhotoCraft");
+        let empty = craft::automation::agents::AgentSettings::default();
+
+        let (ws, warning) = super::automation_workspace_in(&flags(None, None), &empty, Some(&default)).unwrap();
+        assert_eq!(warning, None);
+        assert!(default.is_dir(), "the default agent folder is created");
+        ws.write("out.png", b"x").unwrap();
+        assert_eq!(std::fs::read(default.join("out.png")).unwrap(), b"x");
+        assert_eq!(ws.read_with_save_path("out.png").unwrap().1.as_deref(), Some("out.png"), "one folder for both: an implicit save is allowed");
+
+        let flag = dir.join("flag");
+        std::fs::create_dir_all(&flag).unwrap();
+        let (ws, _) = super::automation_workspace_in(&flags(None, Some(&flag)), &empty, Some(&default)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![default.clone()], Some(flag.clone())));
+
+        // A write flag and the person's own read folder leave nothing for the default: not created.
+        let unused = dir.join("unused");
+        let mut own = empty.clone();
+        own.read_root = flag.to_string_lossy().into_owned();
+        let (ws, _) = super::automation_workspace_in(&flags(None, Some(&flag)), &own, Some(&unused)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![flag.clone()], Some(flag.clone())));
+        assert!(!unused.exists(), "an unused default folder is not created");
+
+        let (ws, _) = super::automation_workspace_in(&flags(None, None), &own, Some(&default)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![flag.clone()], Some(default.clone())));
+
+        // A default that can't be made is left out with a warning; the app still starts.
+        let file = dir.join("file");
+        std::fs::write(&file, b"x").unwrap();
+        let (ws, warning) = super::automation_workspace_in(&flags(None, None), &empty, Some(&file.join("PhotoCraft"))).unwrap();
+        assert_eq!(warning, None, "a folder that couldn't be created is no folder at all");
+        assert!(ws.read_folders().is_empty() && ws.write_folder().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A preference's folder that can't be opened is left out (that direction fails closed) and
+    /// named in the warning; the app still starts. A flag's still stops the launch.
+    #[test]
+    fn a_missing_preference_folder_is_left_out_and_a_missing_flag_root_is_an_error() {
+        let dir = temp_dir("automation-roots-missing");
+        let missing = dir.join("gone");
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &roots(&dir, &missing)).unwrap();
+        let warning = warning.expect("the missing write folder is named");
+        assert!(warning.contains("Automation Write Folder") && !warning.contains("Read Folder"), "{warning}");
+        std::fs::write(dir.join("in.txt"), b"x").unwrap();
+        assert_eq!(ws.read("in.txt").unwrap(), b"x", "the read folder still applies");
+        assert!(ws.write("out.txt", b"x").is_err(), "no write access without its folder");
+
+        assert!(super::automation_workspace(&flags(Some(&missing), None), &roots(&dir, &dir)).is_err(), "a flag's root must open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A relative folder preference would depend on the folder the app was started from: left
+    /// out with a warning, like a missing one.
+    #[test]
+    fn a_relative_preference_folder_is_left_out() {
+        let dir = temp_dir("automation-roots-relative");
+        let mut relative = roots(&dir, &dir);
+        relative.read_root = ".".into();
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &relative).unwrap();
+        let warning = warning.expect("the relative read folder is named");
+        assert!(warning.contains("Automation Read Folder") && warning.contains("not an absolute path"), "{warning}");
+        assert!(ws.read("anything").is_err(), "no read access from a relative folder");
+        ws.write("out.txt", b"x").unwrap();
+        assert!(dir.join("out.txt").is_file(), "the absolute write folder still applies");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1064,6 +1380,26 @@ mod tests {
     fn the_desktop_entry_names_the_window_class() {
         let entry = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
         let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
-        assert_eq!(class, Some(super::APP_ID));
+        assert_eq!(class, Some(super::os_window::APP_ID));
+    }
+
+    /// Both flatpak manifests build with the craft-i18n commit `craft-i18n.rev` pins: CI and
+    /// releases read the file, and the manifests have to name the commit themselves. The pin may
+    /// have a trailing newline or CRLF (a Windows checkout), so it is trimmed, as every reader does.
+    #[test]
+    fn the_flatpak_manifests_pin_the_craft_i18n_rev() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rev = std::fs::read_to_string(root.join("craft-i18n.rev")).unwrap();
+        let rev = rev.trim();
+        assert!(rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()), "craft-i18n.rev holds one full SHA: {rev:?}");
+        for manifest in ["ai.storyteller.photocraft.yml", "ai.storyteller.photocraft.bundle.yml"] {
+            let text = std::fs::read_to_string(root.join("packaging/linux/flatpak").join(manifest)).unwrap();
+            let source = text.split("url: https://github.com/storytold/craft-i18n").nth(1).unwrap_or_else(|| panic!("{manifest}: a craft-i18n git source"));
+            let source = source.split("- type:").next().unwrap_or(source);
+            let commit =
+                source.lines().find_map(|l| l.trim().strip_prefix("commit:")).unwrap_or_else(|| panic!("{manifest}: the craft-i18n source pins a commit"));
+            assert_eq!(commit.trim().trim_matches(['\'', '"']), rev, "{manifest}");
+            assert!(text.contains("CRAFT_I18N_DIR: /run/build/photocraft/craft-i18n"), "{manifest}: the build names the catalogs");
+        }
     }
 }

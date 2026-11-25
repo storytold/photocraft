@@ -8,7 +8,7 @@ description = "PhotoCraft: an open-source, native image editor"
 build = "build.rs"
 
 [features]
-# Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
+# Open HEIC/HEIF photos (the optional craft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
 
@@ -29,6 +29,9 @@ photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
 # Pen tablet pressure/tilt on macOS and X11 (the workspace's one isolated unsafe helper crate).
 photocraft-tablet = { workspace = true }
+# The framework facade: `craft::host` (Wake, window services), `craft::menu` (the macOS menu bar)
+# and `craft::automation` (the control server, the agent link and the launcher's agents switch).
+craft = { workspace = true, features = ["ui", "menu", "automation-agents", "control-agents"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "wayland", "x11", "persistence", "clipboard"] }
 egui = { workspace = true }
 serde = { workspace = true }
@@ -41,7 +44,7 @@ thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "=3.27.0"
-roxmltree = "0.21"
+craft-xml = { workspace = true }
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { version = "3.7", features = ["wayland-data-control"] }
@@ -65,15 +68,9 @@ fmv-macos-events = "=0.1.0"
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSGraphics", "NSResponder", "NSView", "NSWindow"] }
-# The macOS menu bar (mac_menu.rs): a standalone native menu crate (from the tauri-apps org, but
-# not Tauri: no webview, no JS), AppKit menus behind a safe API (no GTK with default features off). Pinned exactly: review the diff before bumping.
-muda = { version = "=0.21.2", default-features = false }
-# Quit with `terminate:` from the main queue, outside winit's event handler (mac_window.rs).
-# Already in Cargo.lock (winit, objc2-app-kit); pinned exactly to the same version.
-dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.5", features = ["fs"] }
+rustix = { version = "=1.1.6", features = ["fs"] }
 # Reads CFBundleExecutable from a chosen macOS application bundle's Info.plist (XML or binary) for
 # external vector editing. Already in Cargo.lock (craft-update); built on every Unix so Linux CI
 # compiles and tests the bundle checks. The event-stream reader (behind plist's "unstable"
@@ -83,7 +80,7 @@ plist = { version = "=1.10.3", features = ["enable_unstable_features_that_may_br
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
-photocraft-cms = { workspace = true }
+craft-cms = { workspace = true }
 # The print portal's PDF: a private (0600) temporary file, removed when the dialog is done.
 tempfile = "3"
 x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
@@ -93,8 +90,8 @@ wl-clipboard-rs = { version = "=0.9.4", default-features = false }
 # Wayland desktop color selection through the existing XDG portal transport.
 zbus = "=5.19.0"
 # Caption button glyphs from the desktop's icon theme (`caption_style.rs`): SVG paths only, no
-# text or images. Already in Cargo.lock (photocraft-io); pinned exactly.
-resvg = { version = "=0.45.1", default-features = false }
+# text or images. Already in Cargo.lock (photocraft-io).
+craft-svg = { workspace = true }
 # Already used by the portal stack; bounded waits let cancelling close the OS request.
 futures-lite = "=2.6.1"
 async-io = "=2.6.0"
@@ -102,22 +99,20 @@ async-io = "=2.6.0"
 # re-export winit's `EventLoopBuilderExtX11`. Already in Cargo.lock (eframe); pinned exactly.
 winit = { version = "=0.30.13", default-features = false, features = ["wayland-csd-adwaita-notitle", "x11"] }
 
+# FreeBSD runs the same Wayland and X11 stack, so the System Title Bar preference should get winit's
+# font-free Adwaita controls there as well: without them winit draws sctk's plain fallback frame on
+# compositors without server-side decorations (GNOME). Already in Cargo.lock (eframe); pinned exactly.
+[target.'cfg(target_os = "freebsd")'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["wayland-csd-adwaita-notitle"] }
+
 # Safe Win32 wrappers on Windows: the pointer position for file drops (`cursor.rs`,
 # GetCursorPos) and the window frame for the custom title bar (`window_frame.rs`, window styles),
 # no dependencies of its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
-winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
+winsafe = { version = "=0.0.29", default-features = false, features = ["user", "shell"] }
 
-# tests/mac_menu_appkit.rs: reads AppKit's menu bar back and sends it real key events.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSResponder"] }
-
-[[test]]
-name = "mac_menu_appkit"
-harness = false
 
 [build-dependencies]
 # Icon + VERSIONINFO for photocraft.exe; build.rs only uses it when targeting Windows.
@@ -126,3 +121,4 @@ winresource = "0.1"
 [dev-dependencies]
 # Opt-in native save-back acceptance transports embedded sources through engine JSON.
 base64 = "=0.22.1"
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }

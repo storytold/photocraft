@@ -2,6 +2,8 @@
 
 mod analysis;
 mod autosave;
+mod camera_raw_roundtrip;
+mod channel_mixer_cmyk;
 mod common;
 mod corruption;
 mod design_timeline;
@@ -10,4 +12,6 @@ mod float_roundtrip;
 mod frame_stroke;
 mod layer_labels;
 mod roundtrip;
+mod scratch_retry;
 mod smart_contents;
+mod triangle_live;

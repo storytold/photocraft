@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{Document, LayerId};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct DesignTimeline {
     /// The document when the timeline started, without a timeline of its own.
     pub base: Arc<Document>,
@@ -59,17 +59,19 @@ impl DesignTimeline {
 
 /// A command run before a step that changed no document but feeds later ones (a foreground
 /// colour, brush settings). Replayed ahead of the step it precedes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Prelude {
     pub command: String,
+    #[plain_data(assume = "JSON value: plain data")]
     pub params: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DesignStep {
     /// The id-scope step the command ran under; also identifies the step in the timeline.
     pub step: u64,
     pub command: String,
+    #[plain_data(assume = "JSON value: plain data")]
     pub params: Value,
     /// History label of the edit.
     pub label: String,
@@ -105,7 +107,7 @@ pub struct DesignStep {
     pub patterns: Vec<crate::pattern::Pattern>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum StepState {
     #[default]
@@ -135,7 +137,7 @@ pub type BakedColor = (crate::ColorMode, crate::SampleType, Option<Arc<Vec<u8>>>
 /// A step's result as it came out: the layers it created and changed (a changed layer missing
 /// here was removed), for each created layer the layers directly below and above it, and the
 /// selection and colour state when the step changed them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Baked {
     pub layers: Vec<crate::Layer>,
     pub placed: Vec<(LayerId, Option<LayerId>, Option<LayerId>)>,
@@ -197,6 +199,7 @@ doc_state!(
     slices,
     variables,
     timeline,
+    color_indices,
     file_encoding,
 );
 
@@ -220,7 +223,7 @@ impl Baked {
         let color = ((before.mode, before.depth, &before.icc_profile) != (after.mode, after.depth, &after.icc_profile))
             .then(|| (after.mode, after.depth, after.icc_profile.clone()));
         let fields = changed_state(before, after);
-        let state = (!fields.is_empty()).then(|| (Arc::new(Document { layers: Vec::new(), design_timeline: None, ..after.clone() }), fields));
+        let state = (!fields.is_empty()).then(|| (Arc::new(Document { layers: Default::default(), design_timeline: None, ..after.clone() }), fields));
         Baked { layers, placed, selection, color, state }
     }
 
@@ -261,7 +264,7 @@ impl Baked {
 }
 
 /// A cached document state. Never compared: two timelines are equal whatever they cache.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, craft_ui_macros::PlainData)]
 pub struct Checkpoint(pub Option<Arc<Document>>);
 
 impl PartialEq for Checkpoint {
@@ -315,7 +318,7 @@ mod tests {
         let child = Layer::raster("c", PixelFormat::RGBA8);
         let gone = Layer::raster("gone", PixelFormat::RGBA8);
         let (cid, gid) = (child.id, gone.id);
-        before.layers = vec![Layer::group("g", vec![child]), gone];
+        before.layers = vec![Layer::group("g", vec![child]), gone].into();
         let mut after = before.clone();
         after.layers.pop();
         after.layer_mut(cid).unwrap().opacity = 0.5;
@@ -334,7 +337,7 @@ mod tests {
         let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
         let (low, high) = (Layer::raster("low", PixelFormat::RGBA8), Layer::raster("high", PixelFormat::RGBA8));
         let (lid, hid) = (low.id, high.id);
-        before.layers = vec![low, high];
+        before.layers = vec![low, high].into();
         let mut after = before.clone();
         let mid = Layer::raster("mid", PixelFormat::RGBA8);
         let mid_id = mid.id;

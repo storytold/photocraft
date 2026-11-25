@@ -16,6 +16,8 @@ pub mod comps;
 pub mod design;
 pub mod effects;
 pub mod frame;
+pub mod import_conversion;
+pub mod layer_tree;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -38,7 +40,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use frame::Frame;
-pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
+pub use mode::{ColorIndices, ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
@@ -188,7 +190,7 @@ pub fn next_step_after(doc: &Document) -> u64 {
     minted.max(steps).map_or(0, |s| s.saturating_add(1))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct LayerId(pub u64);
 
 impl LayerId {
@@ -198,7 +200,7 @@ impl LayerId {
 }
 
 /// Identity of the source contents shared by smart-object instances, independent of their bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct SmartContentsId(pub u64);
 
 impl SmartContentsId {
@@ -207,7 +209,7 @@ impl SmartContentsId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DocId(pub u64);
 
 impl DocId {
@@ -222,7 +224,7 @@ pub fn ensure_doc_ids_above(max: u64) {
     NEXT_DOC_ID.fetch_max(max.saturating_add(1), Ordering::Relaxed);
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Locks {
     pub transparency: bool,
     pub pixels: bool,
@@ -270,7 +272,7 @@ impl Locks {
 }
 
 /// Photoshop layer colour labels.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum LabelColor {
     #[default]
     None,
@@ -374,7 +376,7 @@ mod label_color_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct LayerMask {
     /// Grayscale surface; untouched pixels read as `default` (0 = hide, 1 = reveal).
     pub surface: Surface,
@@ -424,7 +426,7 @@ impl LayerMask {
 }
 
 /// Layer styles. Parsed PSD effect data is kept raw until the effects engine lands (M9).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct Effects {
     pub enabled: bool,
     pub items: Vec<Effect>,
@@ -445,7 +447,18 @@ pub struct Effects {
 /// this up front; `photocraft-format` refuses to save deeper trees.
 pub const MAX_GROUP_DEPTH: usize = 100;
 
-#[derive(Clone, Debug, PartialEq)]
+thread_local! {
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`Document::walk`] ran on this thread. Count trials read it: a frame that
+/// changes nothing walks no document. Per thread, so tests running beside each other don't count
+/// each other's walks.
+pub fn walks() -> u64 {
+    WALKS.with(std::cell::Cell::get)
+}
+
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Group {
     pub children: Vec<Layer>,
     pub expanded: bool,
@@ -457,7 +470,7 @@ pub struct Group {
     pub frame_stroke: Option<ShapeStroke>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Fill {
     Solid(Color),
     /// Gradient between stops at `angle` degrees (`style` geometry, optionally reversed), laid
@@ -523,7 +536,46 @@ impl Fill {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Hashes every field, consistent with `PartialEq`: an `f32` hashes by its bits, with −0.0 as 0.0 (they compare
+/// equal). A NaN never equals anything, so any hash agrees with `PartialEq`; it hashes by its own bits, so a fill
+/// holding one keeps its hash. The patterns name every field, so a new field fails to compile here until it is hashed.
+impl std::hash::Hash for Fill {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        fn bits(v: f32) -> u32 {
+            if v == 0.0 { 0 } else { v.to_bits() }
+        }
+        fn color<H: std::hash::Hasher>(h: &mut H, c: &Color) {
+            let Color { mode, c, alpha } = c;
+            mode.hash(h);
+            c.map(bits).hash(h);
+            bits(*alpha).hash(h);
+        }
+        std::mem::discriminant(self).hash(h);
+        match self {
+            Fill::Solid(c) => color(h, c),
+            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
+                stops.len().hash(h);
+                for (at, c) in stops {
+                    bits(*at).hash(h);
+                    color(h, c);
+                }
+                [*angle, *scale, offset.0, offset.1].map(bits).hash(h);
+                std::mem::discriminant(style).hash(h);
+                (reverse, dither, align).hash(h);
+                opacity_stops.len().hash(h);
+                opacity_stops.iter().for_each(|(a, b)| [bits(*a), bits(*b)].hash(h));
+                midpoints.len().hash(h);
+                midpoints.iter().for_each(|m| bits(*m).hash(h));
+            }
+            Fill::Pattern { name, scale, id, angle, link, phase } => {
+                (name, id, link).hash(h);
+                [*scale, *angle, phase.0, phase.1].map(bits).hash(h);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct TextLayer {
     pub text: String,
     pub font_family: String,
@@ -638,13 +690,13 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
 
 /// A bounded display preview for an embedded native vector, bound to its exact source bytes.
 /// The SVG is display data only; saving the object retains the native source format.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct VectorPreview {
     pub source_hash: [u8; 32],
     pub svg: Arc<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
     pub contents_id: SmartContentsId,
@@ -703,16 +755,17 @@ impl SmartObject {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub enum SmartSource {
     Embedded { file_name: String, bytes: Arc<Vec<u8>> },
     Linked { path: String },
 }
 
 /// A filter applied non-destructively: a command id plus its parameters (data, not code).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct SmartFilter {
     pub command: String,
+    #[plain_data(assume = "JSON value: plain data")]
     pub params: serde_json::Value,
     pub blend: BlendMode,
     pub opacity: f32,
@@ -724,7 +777,7 @@ pub struct SmartFilter {
 /// Used by the compositor instead of rendering [`Fill`] itself, but only while
 /// `fill` still equals the layer's current fill (editing the fill invalidates
 /// the cache automatically).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct FillCache {
     /// The fill these pixels were rendered for.
     pub fill: Fill,
@@ -732,7 +785,7 @@ pub struct FillCache {
     pub surface: Surface,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub enum LayerContent {
     Raster(Surface),
     Group(Group),
@@ -765,7 +818,7 @@ impl LayerContent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Layer {
     pub id: LayerId,
     pub name: String,
@@ -915,7 +968,7 @@ impl Layer {
 /// Ruler guides in document pixels. f64 like the rest of the view geometry: a guide placed in
 /// ruler units (1 cm at 300 ppi is 118.110236… px) or read from a PSD's 1/32 px positions keeps
 /// its exact place.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Guides {
     pub horizontal: Vec<f64>,
     pub vertical: Vec<f64>,
@@ -928,7 +981,7 @@ pub struct Guides {
 /// One guide's own colour. It is keyed by orientation and position, not by index, so code that
 /// drops or reorders guide positions (crop, artboards, guide layouts) can never move a colour onto
 /// another guide: a guide whose entry no longer matches simply uses the preference colour.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct GuideColor {
     pub vertical: bool,
     pub position: f64,
@@ -958,7 +1011,7 @@ impl Guides {
 }
 
 /// Which areas an alpha channel's overlay colour marks (Channel Options › Color Indicates).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum ColorIndicates {
     /// Colour shows over black (unselected) pixels: Photoshop's default.
@@ -971,7 +1024,7 @@ pub enum ColorIndicates {
 /// An extra (alpha or spot) channel, also used for the temporary Quick Mask channel.
 ///
 /// The surface is grayscale at the document depth; white = selected (1.0), black = masked.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct AlphaChannel {
     pub name: String,
     pub surface: Surface,
@@ -1002,8 +1055,11 @@ impl AlphaChannel {
 /// A raw PSD global tagged block: (signature, key, data).
 pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct Metadata {
+    /// Historical conversion information; never consulted by native rendering or editing.
+    /// Shared so document/history clones do not duplicate report entries, strings or retained payloads.
+    pub import_conversion: Option<Arc<import_conversion::ImportConversion>>,
     /// The XMP packet as stored, kept as text so properties PhotoCraft doesn't model survive.
     /// Shared like the other payloads here: cloning a document or a history state never copies
     /// it (#4535).
@@ -1018,7 +1074,7 @@ pub struct Metadata {
     pub psd_global_blocks: Vec<PsdGlobalBlock>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Document {
     pub id: DocId,
     pub name: String,
@@ -1028,7 +1084,7 @@ pub struct Document {
     pub depth: SampleType,
     pub icc_profile: Option<Arc<Vec<u8>>>,
     /// Bottom-to-top.
-    pub layers: Vec<Layer>,
+    pub layers: layer_tree::LayerTree,
     pub channels: Vec<AlphaChannel>,
     pub guides: Guides,
     /// The rulers' zero point in document pixels (`[x, y]`), dragged from the ruler corner. The
@@ -1057,6 +1113,10 @@ pub struct Document {
     pub patterns: Vec<Pattern>,
     /// Indexed Color palette (Image › Mode › Color Table). Set while `mode` is Indexed.
     pub color_table: Option<ColorTable>,
+    /// Each pixel's Color Table index where it is known (recorded by opening a palette PNG, the
+    /// Indexed Color conversion and Color Table), so entries of one colour keep their own pixels
+    /// (#14342).
+    pub color_indices: Option<ColorIndices>,
     /// Duotone inks. Set while `mode` is Duotone.
     pub duotone: Option<Duotone>,
     /// Window › Layer Comps, top to bottom as listed in the panel.
@@ -1088,7 +1148,7 @@ pub struct Document {
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
 /// Save As defaults reuse for that format. Empty for a new document or a file without lossy
 /// options. Qualities are on the codecs' 1–100 scale.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FileEncoding {
     /// JPEG quality (estimated from the file's quantisation tables on open).
@@ -1105,6 +1165,13 @@ pub struct FileEncoding {
     /// side by side; saving a stereo PNG keeps this eye-order mark (#6063).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_stereo: Option<u8>,
+    /// How many images (frames, pages, parts, icon sizes) the file held when it held more than
+    /// the one the document was opened from; `u32::MAX` when the count is unknown. File › Save
+    /// then goes through Save As rather than writing one image over all of them (#5733). Kept in
+    /// `.pcraft` on purpose: crash recovery reopens the autosaved bundle at the original path,
+    /// where the count must still hold. A document's own Save or Save As clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_images: Option<u32>,
 }
 
 impl FileEncoding {
@@ -1127,7 +1194,7 @@ impl Document {
             mode,
             depth,
             icc_profile: None,
-            layers: Vec::new(),
+            layers: Default::default(),
             channels: Vec::new(),
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
@@ -1141,6 +1208,7 @@ impl Document {
             quick_mask_unselected: false,
             patterns: Vec::new(),
             color_table: None,
+            color_indices: None,
             duotone: None,
             layer_comps: Vec::new(),
             last_applied_comp: None,
@@ -1212,14 +1280,18 @@ impl Document {
     }
 
     /// Every pixel surface the document holds: layer pixels and caches, masks, smart filter
-    /// masks, video frames (including the originals), channels, the quick mask, patterns and
-    /// the selection. History snapshots and saves cover exactly these tiles.
+    /// masks, video frames (including the originals), channels, the quick mask, the Color Table
+    /// indices, patterns and the selection. History snapshots and saves cover exactly these tiles.
     pub fn for_each_surface(&self, mut visit: impl FnMut(&Surface)) {
         for layer in &self.layers {
             layer_surfaces(layer, &mut visit);
         }
         for channel in self.channels.iter().chain(&self.quick_mask) {
             visit(&channel.surface);
+        }
+        if let Some(c) = &self.color_indices {
+            visit(&c.pixels);
+            visit(&c.indices);
         }
         for pattern in &self.patterns {
             visit(&pattern.surface);
@@ -1250,8 +1322,10 @@ impl Document {
         health
     }
 
-    /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top.
+    /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top. Each call counts in
+    /// [`walks`].
     pub fn walk(&self) -> Vec<(LayerPath, usize, &Layer)> {
+        WALKS.with(|n| n.set(n.get() + 1));
         fn rec<'a>(layers: &'a [Layer], prefix: &mut LayerPath, out: &mut Vec<(LayerPath, usize, &'a Layer)>) {
             for (i, l) in layers.iter().enumerate() {
                 prefix.push(i);
@@ -1267,23 +1341,13 @@ impl Document {
         out
     }
 
+    /// Every layer, nested ones included, counted from the layer index.
     pub fn layer_count(&self) -> usize {
-        self.walk().len()
+        self.layers.index().len()
     }
 
     pub fn path_of(&self, id: LayerId) -> Option<LayerPath> {
-        fn rec(layers: &[Layer], id: LayerId, path: &mut LayerPath) -> bool {
-            for (i, l) in layers.iter().enumerate() {
-                path.push(i);
-                if l.id == id || l.children().is_some_and(|ch| rec(ch, id, path)) {
-                    return true;
-                }
-                path.pop();
-            }
-            false
-        }
-        let mut path = Vec::new();
-        rec(&self.layers, id, &mut path).then_some(path)
+        self.layers.index().path(id).map(<[usize]>::to_vec)
     }
 
     /// The locks in force on the layer at `path`: its own and those of every group around it,
@@ -1322,10 +1386,7 @@ impl Document {
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        fn rec(layers: &[Layer], id: LayerId) -> Option<&Layer> {
-            layers.iter().find_map(|l| if l.id == id { Some(l) } else { l.children().and_then(|ch| rec(ch, id)) })
-        }
-        rec(&self.layers, id)
+        self.layer_at(self.layers.index().path(id)?)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
@@ -1532,6 +1593,32 @@ mod tests {
         assert_eq!(d.unused_link_group(), Some(1));
         with(&mut d, &[0, 1, 2, 4, u64::MAX]);
         assert_eq!(d.unused_link_group(), Some(3));
+    }
+
+    /// Id lookups share one index per document state: 100 lookups on 200 layers build it once,
+    /// an edit builds it once more, and a clone built after the edit has its own.
+    #[test]
+    fn layer_lookups_share_one_index_per_state() {
+        let mut d = doc();
+        for i in 0..199 {
+            d.layers.push(Layer::raster(format!("l{i}"), PixelFormat::RGBA8));
+        }
+        let ids: Vec<LayerId> = d.layers.iter().map(|l| l.id).collect();
+        let first = d.layers.index().serial();
+        for i in 0..100 {
+            let id = ids[i * 2];
+            assert_eq!(d.layer(id).unwrap().id, id);
+            assert_eq!(d.path_of(id), Some(vec![i * 2]));
+        }
+        assert_eq!(d.layers.index().serial(), first);
+        assert!(d.shift(ids[10], 1));
+        assert_eq!(d.path_of(ids[10]), Some(vec![11]));
+        let second = d.layers.index().serial();
+        assert_ne!(second, first);
+        d.layer_mut(ids[3]).unwrap().name = "x".into();
+        let copy = d.clone();
+        assert_ne!(copy.layers.index().serial(), d.layers.index().serial());
+        assert_eq!(copy.layer(ids[3]).unwrap().name, "x");
     }
 
     #[test]

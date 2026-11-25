@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
-    AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+    AlphaChannel, ColorIndices, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask,
+    Metadata, NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::{
-    BakedM, ChannelM, CompAppearanceM, CompStateM, ContentM, DesignStepM, DesignTimelineM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM,
-    MetadataM, NamedPathM, PatternM, SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
+    BakedM, ChannelM, ColorIndicesM, CompAppearanceM, CompStateM, ContentM, DesignStepM, DesignTimelineM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM,
+    MaskM, MetadataM, NamedPathM, PatternM, SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
 };
 use crate::{FormatError, Result};
 
@@ -111,8 +111,6 @@ fn key4(s: &str) -> Result<[u8; 4]> {
     unhex(s)?.try_into().map_err(|_| FormatError::corrupt(format!("bad 4-byte key `{s}`")))
 }
 
-pub(crate) use craft_pcraft_format::is_valid_hash;
-
 /// Convert native-endian sample bytes to little-endian in place (and back:
 /// the swap is an involution).
 pub(crate) fn swap_to_le(bytes: &mut [u8], sample: SampleType) {
@@ -187,14 +185,20 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
+            use_aligned_rendering: s.use_aligned_rendering,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
             live: match &s.live {
-                Some(photocraft_doc::LiveShape::ArrowLine { .. }) => None,
+                Some(photocraft_doc::LiveShape::ArrowLine { .. } | photocraft_doc::LiveShape::Triangle { .. }) => None,
                 other => other.clone(),
             },
             arrow_live: match &s.live {
                 Some(arrow @ photocraft_doc::LiveShape::ArrowLine { .. }) => Some(arrow.clone()),
+                _ => None,
+            },
+            // Likewise for a triangle: older builds cannot read the kind, so they open its path.
+            triangle_live: match &s.live {
+                Some(triangle @ photocraft_doc::LiveShape::Triangle { .. }) => Some(triangle.clone()),
                 _ => None,
             },
             density: s.density,
@@ -268,9 +272,12 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
-/// The manifest form of `d`, its design timeline included; tiles and blobs go to `sink`.
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
-    DocM {
+/// The manifest form of `d`, its design timeline included; tiles, blobs and durable conversion provenance go to the
+/// same bounded content `sink`.
+pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+    let import_conversion = d.metadata.import_conversion.as_deref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
+    let design_timeline = d.design_timeline.as_ref().map(|t| design_timeline_m(t, sink).map(Box::new)).transpose()?;
+    Ok(DocM {
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -284,6 +291,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
+            import_conversion,
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
@@ -298,6 +306,13 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         quick_mask_unselected: d.quick_mask_unselected,
         patterns: d.patterns.iter().map(|p| pattern_m(p, sink)).collect(),
         color_table: d.color_table.clone(),
+        // Only while they hold for the layer saved here (and the document is Indexed Color): on
+        // open, identical tiles load as one, so loaded pixels can't show a change made since.
+        color_indices: d
+            .color_indices
+            .as_ref()
+            .filter(|c| d.color_table.is_some() && d.layer(c.layer).and_then(Layer::surface).is_some_and(|p| c.holds(c.layer, p)))
+            .map(|c| ColorIndicesM { layer: c.layer.0, indices: surface_m(&c.indices, sink) }),
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
@@ -309,30 +324,32 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
-        design_timeline: d.design_timeline.as_ref().map(|t| Box::new(design_timeline_m(t, sink))),
-    }
+        design_timeline,
+    })
 }
 
 /// The manifest form of `t`: its base, steps and baked results (checkpoints are caches, not saved).
-fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn Sink) -> DesignTimelineM {
-    let steps = t
-        .steps
-        .iter()
-        .map(|st| DesignStepM {
-            step: st.clone(),
-            baked: st.baked.as_ref().map(|b| BakedM {
+fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn Sink) -> Result<DesignTimelineM> {
+    let mut steps = Vec::with_capacity(t.steps.len());
+    for st in &t.steps {
+        let baked = match &st.baked {
+            Some(b) => Some(BakedM {
                 layers: b.layers.iter().map(|l| layer_m(l, sink)).collect(),
                 placed: b.placed.iter().map(|(id, below, above)| (id.0, below.map(|l| l.0), above.map(|l| l.0))).collect(),
                 selection_changed: b.selection.is_some(),
                 selection: b.selection.as_ref().and_then(|s| s.as_ref().map(|s| surface_m(s, sink))),
                 color: b.color.as_ref().map(|(mode, depth, profile)| (*mode, *depth, opt_blob(profile, sink))),
                 // Without a timeline of its own (a constructed one could nest without end).
-                state: b.state.as_ref().map(|(doc, fields)| (Box::new(doc_m(&Document { design_timeline: None, ..(**doc).clone() }, sink)), fields.clone())),
+                state: match &b.state {
+                    Some((doc, fields)) => Some((Box::new(doc_m(&Document { design_timeline: None, ..(**doc).clone() }, sink)?), fields.clone())),
+                    None => None,
+                },
             }),
-            patterns: st.patterns.iter().map(|p| pattern_m(p, sink)).collect(),
-        })
-        .collect();
-    DesignTimelineM { base: doc_m(&t.base, sink), steps, marker: t.marker }
+            None => None,
+        };
+        steps.push(DesignStepM { step: st.clone(), baked, patterns: st.patterns.iter().map(|p| pattern_m(p, sink)).collect() });
+    }
+    Ok(DesignTimelineM { base: doc_m(&t.base, sink)?, steps, marker: t.marker })
 }
 
 fn pattern_m(p: &Pattern, sink: &mut dyn Sink) -> PatternM {
@@ -547,16 +564,24 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, density, feather } => LayerContent::Shape(ShapeLayer {
-                path: path.clone(),
-                fill: fill.clone(),
-                stroke: stroke.clone(),
-                live: arrow_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. })).cloned().or_else(|| live.clone()),
-                cache: self.opt_surface(cache)?,
-                psd_raw: self.opt_blob(psd_raw)?,
-                density: *density,
-                feather: *feather,
-            }),
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, live, arrow_live, triangle_live, density, feather } => {
+                LayerContent::Shape(ShapeLayer {
+                    path: path.clone(),
+                    fill: fill.clone(),
+                    stroke: stroke.clone(),
+                    use_aligned_rendering: *use_aligned_rendering,
+                    live: arrow_live
+                        .as_ref()
+                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                        .cloned()
+                        .or_else(|| live.clone()),
+                    cache: self.opt_surface(cache)?,
+                    psd_raw: self.opt_blob(psd_raw)?,
+                    density: *density,
+                    feather: *feather,
+                })
+            }
             ContentM::Smart {
                 contents_id,
                 source,
@@ -650,7 +675,9 @@ impl Loader<'_> {
         })
     }
 
-    /// The document of `m` with its design timeline, warning when the timeline must be dropped.
+    /// The document of `m` with its design timeline, warning when the timeline must be dropped. Reconstructs checked
+    /// native data while reserving/remapping ids, validating resources and preserving references plus opaque
+    /// conversion provenance.
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
         // One decision for the document and its timeline's base and baked trees: the steps name
         // their layers by stored id, so remapping any one tree would break them.
@@ -750,6 +777,7 @@ impl Loader<'_> {
         }
         let quick_mask = m.quick_mask.as_ref().map(|c| self.channel(c)).transpose()?;
         let mut md = Metadata {
+            import_conversion: m.metadata.import_conversion.as_ref().map(|report| crate::import_conversion::from_manifest(report, self.fetch)).transpose()?,
             xmp: m.metadata.xmp.as_deref().map(std::sync::Arc::from),
             exif: self.opt_blob(&m.metadata.exif)?,
             text: m.metadata.text.clone(),
@@ -790,7 +818,7 @@ impl Loader<'_> {
             }
         }
         let id = if self.preserve_ids && reserve_doc_ids_through(m.id) { DocId(m.id) } else { DocId::fresh() };
-        Ok(Document {
+        let mut doc = Document {
             id,
             name: m.name.clone(),
             size: m.size,
@@ -798,7 +826,7 @@ impl Loader<'_> {
             mode: m.mode,
             depth: m.depth,
             icc_profile: self.opt_blob(&m.icc_profile)?,
-            layers,
+            layers: layers.into(),
             channels,
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,
@@ -812,6 +840,7 @@ impl Loader<'_> {
             quick_mask_unselected: m.quick_mask_unselected,
             patterns,
             color_table: m.color_table.clone(),
+            color_indices: None,
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
@@ -824,7 +853,16 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
-        })
+        };
+        // Saved only while they held for the layer as saved, so they pair with its pixels as
+        // loaded. Optional side data: indices of a layer the file doesn't hold, or damaged ones,
+        // are dropped (Color Table then maps by nearest colour) rather than failing the open.
+        doc.color_indices = m.color_indices.as_ref().and_then(|c| {
+            let layer = *self.id_map.get(&c.layer)?;
+            let pixels = doc.layer(layer)?.surface()?.clone();
+            Some(ColorIndices { layer, pixels, indices: self.surface(&c.indices).ok()? })
+        });
+        Ok(doc)
     }
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {

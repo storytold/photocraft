@@ -26,20 +26,36 @@ fn require_scratch(expected: bool) -> Result<(), IoError> {
     Ok(())
 }
 
+/// Interleaved F32 gray + alpha samples as F32 RGBA, the gray value in R, G and B.
+fn gray_alpha_to_rgba(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len().saturating_mul(2));
+    for [gray, alpha] in data.as_chunks::<4>().0.as_chunks::<2>().0 {
+        out.extend_from_slice(gray);
+        out.extend_from_slice(gray);
+        out.extend_from_slice(gray);
+        out.extend_from_slice(alpha);
+    }
+    out
+}
+
 /// Decode a single-part flat scanline EXR from `source` one compression block at a time.
 /// `Ok(None)`: the header is not one the band decoder takes (multi-part, deep, tiled, custom
 /// chromaticities, over its block limits or malformed by its stricter checks); the caller
 /// falls back to the whole-file decoder. Once pixels are being decoded any failure fails the
 /// open, so no partial document is published.
 pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<Option<ImportResult>, IoError> {
-    let _metadata = photocraft_raster::memory::try_reserve(32 << 20).map_err(IoError::OutOfMemory)?;
     let mut decoder = match photocraft_codecs::exr_stream::Decoder::new(source, &|| ctl.cancelled()) {
         Ok(decoder) => decoder,
         Err(_) if ctl.cancelled() => return Err(IoError::Cancelled),
+        Err(photocraft_codecs::CodecError::LimitExceeded(reason)) if reason.contains("EXR pixel count") => {
+            return Err(IoError::OutOfMemory("decoded image tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
+        }
         Err(_) => return Ok(None),
     };
     let info = decoder.info();
-    let mode = if info.gray { ColorMode::Grayscale } else { ColorMode::Rgb };
+    // Every EXR opens as RGB 32-bit, as in the reference application: a luminance or single
+    // data channel (decoded as gray) fills R, G and B alike (#14069).
+    let mode = ColorMode::Rgb;
     let fmt = PixelFormat::new(mode, SampleType::F32, true);
     let scratch_expected = photocraft_raster::spill::enabled();
     if !scratch_expected {
@@ -52,6 +68,9 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
             tiles.saturating_mul(side * side).saturating_mul(fmt.bytes_per_pixel() as u64),
         )?;
     }
+    // Report the dominant decoded-tile requirement first. Reserving metadata before checking
+    // the image extent can mask this actionable limit with a generic allocation failure.
+    let _metadata = photocraft_raster::memory::try_reserve(32 << 20).map_err(IoError::OutOfMemory)?;
     let _working = photocraft_raster::memory::try_reserve(info.working_bytes).map_err(IoError::OutOfMemory)?;
     let mut surface = Surface::new(fmt);
     let mut done = 0;
@@ -71,7 +90,11 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
                 missing.saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(fmt.bytes_per_pixel() as u64),
             )?;
         }
-        surface.write_interleaved(rect, &band.data);
+        if info.gray {
+            surface.write_interleaved(rect, &gray_alpha_to_rgba(&band.data));
+        } else {
+            surface.write_interleaved(rect, &band.data);
+        }
         require_scratch(scratch_expected)?;
         done += 1;
         ctl.progress(0.05 + 0.9 * done as f32 / info.blocks.max(1) as f32);
@@ -90,8 +113,7 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
         layer.locks.position = true;
     }
     document.layers.push(layer);
-    document.icc_profile =
-        Some(if mode == ColorMode::Rgb { photocraft_cms::Builtin::LinearSrgb.profile().to_bytes() } else { photocraft_cms::builtin::linear_gray().to_bytes() });
+    document.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
     let warnings = if info.all_half { vec!["16-bit float samples are stored as 32-bit float".into()] } else { Vec::new() };
     ctl.progress(1.0);
     Ok(Some(ImportResult { document, warnings, source_read_only: false, preview_only: false }))

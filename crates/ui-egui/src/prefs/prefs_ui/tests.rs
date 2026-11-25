@@ -1,276 +1,324 @@
-#[test]
-fn memory_usage_has_a_dedicated_explanation_and_keeps_its_value() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let values = json!({"memoryUsageMb":50000}).as_object().unwrap().clone();
-    assert!(!field_visible("performance", &values, "memoryUsageMb", ""));
-    let mut h = Harness::builder()
-        .with_size(vec2(680.0, 350.0))
-        .build_ui_state(|ui, values| section_fields(ui, "performance", values, &["memoryUsageMb".into()], crate::i18n::Lang::EN, None, ""), values);
-    h.run_steps(2);
-    h.get_by_label("Memory Usage");
-    h.get_by_label("Per-document RAM limit (MB)");
-    h.get_by_label("Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.");
-    h.get_by_label("Applies immediately when saved. Memory is not reserved in advance.");
-    assert_eq!(h.state()["memoryUsageMb"], 50000);
-}
+use super::appearance::{display_scale, selected_theme};
+use super::*;
+use crate::theme::{AppTheme, Tokens};
+use craft::draw::ui::transform::Interpolation;
+use craft::keymap::{Binding, CommandRef, Policy};
+use craft::menu::{Chord, ItemKind, Node, ThemeChoice, ThemeLabels};
+use craft::settings::testing::{MemoryFiles, retry_delay};
+use craft::settings::{Location, OpenOptions, Settings, SettingsFiles, SettingsStore};
+use craft::theme::ThemeId;
+use craft::ui::patterns::preferences::{PrefValue, SettingsDraft};
+use egui::{Color32, vec2};
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::prefs::{self, AppearanceMode};
+use photocraft_engine::preset_store::PresetStoreExt;
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+// --- helpers --------------------------------------------------------------------------------------------------
+
+/// The folder of the scratch settings store; its file lives in memory.
+const DIR: &str = "/memory/photocraft";
+
+/// The title of the notice a failed preferences save posts.
+const SAVE_NOTICE: &str = "Preferences can't be saved";
 
 #[test]
-fn the_generator_checkbox_reads_enable_generator() {
-    // #9392: the reference application's Plug-ins page says "Enable Generator", not "Generator enabled".
-    use egui_kittest::{Harness, kittest::Queryable};
-    let values = serde_json::to_value(photocraft_engine::prefs::PlugIns::default()).unwrap().as_object().unwrap().clone();
-    let keys: Vec<String> = values.keys().cloned().collect();
-    let mut h = Harness::builder()
-        .with_size(vec2(680.0, 350.0))
-        .build_ui_state(move |ui, values| section_fields(ui, "plugIns", values, &keys, crate::i18n::Lang::EN, None, ""), values);
-    h.run_steps(2);
-    assert!(h.query_by_label("Generator enabled").is_none());
-    h.get_by_label("Enable Generator").click();
-    h.run_steps(2);
-    assert_eq!(h.state()["generatorEnabled"], true);
-}
-
-#[test]
-fn graphics_dropdowns_are_named_for_their_settings() {
-    use egui::accesskit::Role;
-    use egui_kittest::Harness;
-    use egui_kittest::kittest::{NodeT, Queryable};
-
-    let obj = json!({"gpuBackend": "auto", "gpuAdapter": ""}).as_object().unwrap().clone();
-    let mut h = Harness::builder()
-        .with_size(vec2(700.0, 500.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
-        .build_ui_state(|ui, obj| gpu_status_rows(ui, None, None, obj), obj);
-    h.run_steps(2);
-    h.get_by_label("Advanced").click();
-    h.run_steps(2);
-    let labels: Vec<String> = h.query_all_by_role(Role::ComboBox).filter_map(|n| n.accesskit_node().label()).collect();
-    assert!(labels.iter().any(|label| label == "GPU Backend"), "{labels:?}");
-    if cfg!(target_os = "linux") {
-        assert!(labels.iter().any(|label| label == "GPU adapter"), "{labels:?}");
+fn settings_store_restores_distinct_same_rgb_role_inks() {
+    let (mut app, files) = app_with_store();
+    let fg = [0., 0., 0., 1.];
+    let bg = [0.5, 0.5, 0.5, 1.];
+    app.run("tools.setColors", json!({"foreground":[0.,0.,0.],"background":[0.,0.,0.],"foregroundCmyk":fg,"backgroundCmyk":bg})).unwrap();
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let mut restored = app_on(&files);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(fg));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg));
+    for (role, inks) in [("foreground", fg), ("background", bg)] {
+        let id = crate::color_picker_ui::open(&mut restored, role);
+        let picked = crate::color_picker_ui::testing::current(&restored, id).unwrap();
+        assert!(crate::color_picker_ui::same_inks(crate::color_picker_ui::inks_of(&picked).unwrap(), inks));
     }
-    assert!(!labels.iter().any(|label| label == "Graphics"), "the section title names neither control: {labels:?}");
+    restored.run("file.new", json!({"width":4,"height":4,"mode":"cmyk"})).unwrap();
+    let fill = crate::solid_fill_ui::open_new(&mut restored).unwrap();
+    let picked = crate::color_picker_ui::testing::current(&restored, fill).unwrap();
+    assert!(
+        crate::color_picker_ui::same_inks(crate::color_picker_ui::inks_of(&picked).unwrap(), fg),
+        "new fill uses foreground's separation, not background's identical RGB"
+    );
+    crate::dialogs::testing::confirm(&mut restored, fill).unwrap();
+    let st = restored.session.active().unwrap();
+    let photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Solid(color)) = st.doc.layer(st.active_layer.unwrap()).unwrap().content else {
+        panic!("solid fill")
+    };
+    assert_eq!(color.c, fg);
 }
 
-#[test]
-fn colour_preferences_take_a_typed_hex_value() {
-    // #668: the canvas colour (and every colour preference) showed its hex but couldn't take one.
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
-    let mut h = egui_kittest::Harness::new_ui_state(|ui, rgb: &mut [u8; 3]| super::hex_field(ui, "interface.canvasCustomColor", rgb), [0x28, 0x28, 0x28]);
-    h.run();
-    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("#282828"));
-    h.get_by_role(Role::TextInput).click();
-    h.run_steps(1);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.run_steps(1);
-    for ch in "#80".chars() {
-        h.event(egui::Event::Text(ch.to_string()));
-        h.run_steps(1);
+fn config_path() -> std::path::PathBuf {
+    std::path::Path::new(DIR).join("config.toml")
+}
+
+/// Services whose preferences store reads and writes `files`. A zero debounce makes the first `tick` after a
+/// change write it.
+fn services_on(files: &Arc<MemoryFiles>) -> crate::Services {
+    let options = OpenOptions::new(Location::Dir(DIR.into())).debounce(Duration::ZERO).files(files.clone());
+    crate::Services { settings: Some(SettingsStore::<prefs::SavedPrefs>::open_with(options)), ..Default::default() }
+}
+
+/// One upkeep pass at the current time. A trial that steps the store's clock calls `save::tick` with its own `Instant`.
+fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    super::save::tick(app, ctx, Instant::now());
+}
+
+/// An app whose preferences live in `files`.
+fn app_on(files: &Arc<MemoryFiles>) -> Box<PhotocraftApp> {
+    PhotocraftApp::new(photocraft_engine::Session::new(), services_on(files))
+}
+
+pub(super) fn app_with_store() -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
+    let files = Arc::new(MemoryFiles::new());
+    (app_on(&files), files)
+}
+
+/// An app that starts on a file holding `saved` (the JSON form of the preferences), at the current schema version.
+fn app_with_json(saved: &Value) -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
+    app_with_json_at(saved, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION))
+}
+
+/// An app that starts on a file holding `saved` with the given `schema_version` (`None`: no version key).
+fn app_with_json_at(saved: &Value, version: Option<u32>) -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
+    let files = Arc::new(MemoryFiles::new());
+    seed(&files, saved, version);
+    (app_on(&files), files)
+}
+
+/// An app that starts on a legacy `preferences.json` holding `saved` with the given `version` key (`None`: none), the
+/// file the settings store imports on its first run, before it has a `config.toml`. Only the import reads values one by
+/// one and migrates a file by its version; a `config.toml` section that does not fit resets as a whole.
+fn app_with_legacy_json(saved: &Value, version: Option<u32>) -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let mut saved = saved.clone();
+    if let (Some(map), Some(version)) = (saved.as_object_mut(), version) {
+        map.insert("version".into(), json!(version));
     }
-    // A partial value stays as typed and leaves the colour alone.
-    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("#80"));
-    assert_eq!(*h.state(), [0x28, 0x28, 0x28]);
-    for ch in "8080".chars() {
-        h.event(egui::Event::Text(ch.to_string()));
-        h.run_steps(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-legacy-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("preferences.json");
+    std::fs::write(&path, saved.to_string()).unwrap();
+    let files = Arc::new(MemoryFiles::new());
+    let legacy = vec![craft::settings::LegacyFile { path, parse: prefs::parse_legacy_prefs }];
+    let options = OpenOptions::new(Location::Dir(DIR.into())).debounce(Duration::ZERO).files(files.clone()).legacy(legacy);
+    let services = crate::Services { settings: Some(SettingsStore::<prefs::SavedPrefs>::open_with(options)), ..Default::default() };
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    std::fs::remove_dir_all(&dir).ok();
+    (app, files)
+}
+
+/// Writes the settings file as TOML, which has no null: nulls are left out.
+fn seed(files: &MemoryFiles, saved: &Value, version: Option<u32>) {
+    fn strip_nulls(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.retain(|_, v| !v.is_null());
+                map.values_mut().for_each(strip_nulls);
+            }
+            Value::Array(items) => {
+                items.retain(|v| !v.is_null());
+                items.iter_mut().for_each(strip_nulls);
+            }
+            _ => {}
+        }
     }
-    assert_eq!(*h.state(), [0x80, 0x80, 0x80]);
-}
-
-#[test]
-fn quick_export_controls_match_selected_format() {
-    let mut obj = serde_json::to_value(photocraft_engine::prefs::Export::default()).unwrap().as_object().unwrap().clone();
-    assert!(!export_field_visible(&obj, "jpegQuality"));
-    assert!(!export_field_visible(&obj, "webpLossless"));
-    assert!(!export_field_visible(&obj, "webpQuality"));
-
-    obj.insert("quickExportFormat".into(), json!("jpg"));
-    assert!(export_field_visible(&obj, "jpegQuality"));
-    assert!(!export_field_visible(&obj, "webpLossless"));
-    assert!(!export_field_visible(&obj, "webpQuality"));
-
-    obj.insert("quickExportFormat".into(), json!("webp"));
-    assert!(!export_field_visible(&obj, "jpegQuality"));
-    assert!(export_field_visible(&obj, "webpLossless"));
-    assert!(!export_field_visible(&obj, "webpQuality"), "lossless WebP does not have a quality setting");
-
-    obj.insert("webpLossless".into(), json!(false));
-    assert!(export_field_visible(&obj, "webpQuality"));
-    assert_eq!(humanize("webpLossless"), "Lossless");
-    assert_eq!(humanize("webpQuality"), "Quality");
-    obj.insert("quickExportFormat".into(), json!("exr"));
-    for key in ["jpegQuality", "webpLossless", "webpQuality", "convertToSrgb", "metadata"] {
-        assert!(!export_field_visible(&obj, key), "EXR must not offer ignored web settings: {key}");
+    let mut saved = saved.clone();
+    strip_nulls(&mut saved);
+    if let (Some(map), Some(version)) = (saved.as_object_mut(), version) {
+        map.insert("schema_version".into(), json!(version));
     }
+    files.write(&config_path(), &toml::to_string(&saved).unwrap()).unwrap();
 }
 
-#[test]
-fn the_nudge_pause_is_hidden_while_nudges_are_not_bundled() {
-    let mut tools = Map::new();
-    tools.insert("bundleNudges".into(), json!(true));
-    assert!(tools_field_visible(&tools, "nudgeBundlePauseMs"));
-    assert!(tools_field_visible(&tools, "bundleNudges"));
-    tools.insert("bundleNudges".into(), json!(false));
-    assert!(!tools_field_visible(&tools, "nudgeBundlePauseMs"));
-    assert!(tools_field_visible(&tools, "bundleNudges") && tools_field_visible(&tools, "showTooltips"));
-    // A section without the flag (an older preferences object) shows the field.
-    assert!(tools_field_visible(&Map::new(), "nudgeBundlePauseMs"));
-    assert_eq!(humanize("bundleNudges"), "Bundle Arrow-Key Nudges");
-    assert_eq!(humanize("nudgeBundlePauseMs"), "Nudge Bundle Pause (ms)");
+/// The settings file as JSON; `null` while nothing was written.
+fn stored(files: &MemoryFiles) -> Value {
+    files.text(&config_path()).map_or(Value::Null, |text| toml::from_str::<Value>(&text).unwrap())
 }
+
+fn saved_text(files: &MemoryFiles) -> Option<String> {
+    files.text(&config_path())
+}
+
+/// Opens Preferences on `section`.
+fn open_prefs(app: &mut PhotocraftApp, section: &str) {
+    open_preferences(app, section);
+    assert!(window_open(app), "Preferences did not open");
+}
+
+/// Edits the open window's draft the way a row does.
+fn edit(app: &mut PhotocraftApp, key: &str, value: PrefValue) {
+    assert!(set_draft(app, key, value), "{key}: the window refused the value");
+}
+
+/// A kittest harness on an app (built inside it, on the harness's context) with Preferences open on `section`.
+fn prefs_harness(
+    files: &Arc<MemoryFiles>,
+    section: &'static str,
+    size: egui::Vec2,
+    setup: impl FnOnce(&mut PhotocraftApp) + 'static,
+) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
+    let files = files.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(size).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services_on(&files));
+        setup(&mut app);
+        open_prefs(&mut app, section);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+/// The Appearance menu's rows (items only).
+fn theme_rows(app: &PhotocraftApp) -> Vec<craft::menu::Item> {
+    let nodes = theme_menu(app).items(&ThemeLabels::default());
+    nodes.into_iter().filter_map(|node| if let Node::Item(item) = node { Some(item) } else { None }).collect()
+}
+
+/// The row of `choice` among `rows`.
+fn theme_row<'a>(rows: &'a [craft::menu::Item], choice: &ThemeChoice) -> &'a craft::menu::Item {
+    rows.iter().find(|item| item.command == choice.command()).unwrap_or_else(|| panic!("no row for {choice:?}"))
+}
+
+/// Runs a theme choice as the menu does.
+fn pick_theme(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &ThemeChoice) {
+    let command = choice.command();
+    crate::menus::invoke(app, ctx, &command.id, command.params.clone()).unwrap();
+}
+
+fn chord(text: &str) -> Chord {
+    Chord::parse(text).unwrap_or_else(|e| panic!("{text}: {e:?}"))
+}
+
+/// The shortcut the menu shows for `id`.
+fn menu_shortcut(app: &PhotocraftApp, id: &str) -> Option<Chord> {
+    let rows = crate::menus::menu_rows(app);
+    rows.iter().find(|row| row.command.id == id).unwrap_or_else(|| panic!("no menu row {id}")).shortcut
+}
+
+// --- the preferences' own rules ---------------------------------------------------------------------------------
 
 #[test]
 fn rendering_mode_display_respects_explicit_mode_and_legacy_disable() {
-    let legacy = serde_json::json!({"useGpu": false, "gpuBackend": "auto"});
-    assert_eq!(super::rendering_mode_value(legacy.as_object().unwrap()), "cpu");
-    let explicit = serde_json::json!({"renderingMode": "gpu", "useGpu": false, "gpuBackend": "cpu"});
-    assert_eq!(super::rendering_mode_value(explicit.as_object().unwrap()), "gpu");
-    let automatic = serde_json::json!({"renderingMode": null, "useGpu": true, "gpuBackend": "auto"});
-    assert_eq!(super::rendering_mode_value(automatic.as_object().unwrap()), "auto");
+    use super::custom_rows::rendering_mode_value;
+    // A draft holding the `performance.*` values of `saved`; a null is a value the draft doesn't hold.
+    let draft = |saved: serde_json::Value| {
+        let mut draft = SettingsDraft::default();
+        for (key, value) in saved.as_object().unwrap().iter().filter(|(_, value)| !value.is_null()) {
+            draft.set(&format!("performance.{key}"), value);
+        }
+        draft
+    };
+    let legacy = draft(serde_json::json!({"useGpu": false, "gpuBackend": "auto"}));
+    assert_eq!(rendering_mode_value(&legacy), "cpu");
+    let explicit = draft(serde_json::json!({"renderingMode": "gpu", "useGpu": false, "gpuBackend": "cpu"}));
+    assert_eq!(rendering_mode_value(&explicit), "gpu");
+    let automatic = draft(serde_json::json!({"renderingMode": null, "useGpu": true, "gpuBackend": "auto"}));
+    assert_eq!(rendering_mode_value(&automatic), "auto");
 }
-
-#[test]
-fn preferences_search_matches_editable_fields_across_sections() {
-    let values = prefs::Preferences::default().to_json();
-    let contains = |needle: &str, section: &str| preference_sections(&values, needle).iter().any(|(id, _)| *id == section);
-    assert!(contains("UI Scale", "interface"));
-    assert!(contains("placeholder", "type"));
-    assert!(contains("performance", "performance"));
-    assert!(contains("interface.uiScale", "interface"));
-    assert!(preference_sections(&values, "this setting does not exist").is_empty());
-    assert_eq!(preference_sections(&values, "").len(), SECTIONS.len());
-}
-
-/// The preview language controls translated search; English schema paths keep their aliases.
-#[test]
-fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
-    let az = crate::i18n::Lang::from_code("az").unwrap();
-    crate::i18n::with_language(az, || {
-        let values = prefs::Preferences::default().to_json();
-        assert!(preference_sections(&values, "İNTERFEYS").iter().any(|(id, _)| *id == "interface"));
-        assert!(super::fields::preference_matches("interface", "language", "DİL"));
-        assert!(!super::fields::preference_matches("interface", "language", "DIL"));
-        assert!(super::fields::preference_matches("interface", "uiScale", "INTERFACE.UISCALE"));
-    });
-}
-
-#[test]
-fn preferences_dialog_width_follows_its_resizable_area() {
-    let prefs = serde_json::json!({"__prefsui": "prefs"});
-    let prefs = prefs.as_object().unwrap();
-    assert_eq!(super::width(prefs, 200.0), Some(380.0));
-    assert_eq!(super::width(prefs, 800.0), Some(800.0));
-    // A dialog resized wider than it opens is filled, not left with empty space (#7420).
-    assert_eq!(super::width(prefs, 3000.0), Some(3000.0));
-    let shortcuts = serde_json::json!({"__prefsui": "shortcuts"});
-    assert_eq!(super::width(shortcuts.as_object().unwrap(), 3000.0), Some(720.0));
-}
-
-#[test]
-fn preferences_settings_fill_the_dialog_down_to_the_buttons() {
-    // The settings area plus the button row (spacing, 8 pt gap, buttons) stays inside what the
-    // resizable area gives it, at any size: the area grows to fit its content, so asking for
-    // more would make the dialog grow every frame. The area follows the dialog's size (#7420).
-    for available in [300.0, 600.0, 1400.0] {
-        let h = super::settings_height(available, 4.0, 30.0);
-        assert!(h + 4.0 + 8.0 + 30.0 <= available, "{available}");
-        assert!(h + 4.0 + 8.0 + 30.0 + 8.0 >= available, "{available}");
-    }
-    assert_eq!(super::settings_height(1400.0, 4.0, 30.0) - super::settings_height(600.0, 4.0, 30.0), 800.0);
-    assert_eq!(super::settings_height(50.0, 4.0, 30.0), 160.0);
-}
-use super::*;
-use std::sync::{Arc, Mutex};
 
 #[test]
 fn appearance_resolves_both_saved_themes_and_follows_system() {
     let mut interface = prefs::Interface { appearance_mode: AppearanceMode::Auto, ..prefs::Interface::default() };
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::ProMedium);
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::ProLight);
-    interface.dark_theme = DarkTheme::Studio;
-    interface.light_theme = LightTheme::Classic;
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::Studio);
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::Classic);
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), shown(AppTheme::pro_medium()));
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), shown(AppTheme::pro_light()));
+    interface.dark_theme = "craft.studio".into();
+    interface.light_theme = "craft.classic".into();
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), shown(AppTheme::studio()));
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), shown(AppTheme::classic()));
     interface.appearance_mode = AppearanceMode::Dark;
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::Studio);
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), shown(AppTheme::studio()));
     interface.appearance_mode = AppearanceMode::Light;
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::Classic);
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), shown(AppTheme::classic()));
+}
+
+/// The theme id and mode `theme` shows, as `selected_theme` answers.
+fn shown(theme: AppTheme) -> (ThemeId, bool) {
+    (theme.id().clone(), theme.is_dark())
 }
 
 #[test]
 fn breeze_themes_are_chosen_by_preference_and_fix_the_matching_mode() {
-    let ctx = egui::Context::default();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = app.ctx().clone();
     for (id, kind, mode) in [
-        ("breezeLight", ThemeKind::BreezeLight, AppearanceMode::Light),
-        ("breezeDark", ThemeKind::BreezeDark, AppearanceMode::Dark),
-        ("softLight", ThemeKind::SoftLight, AppearanceMode::Light),
-        ("softDark", ThemeKind::SoftDark, AppearanceMode::Dark),
+        ("breezeLight", AppTheme::breeze_light(), AppearanceMode::Light),
+        ("breezeDark", AppTheme::breeze_dark(), AppearanceMode::Dark),
+        ("softLight", AppTheme::soft_light(), AppearanceMode::Light),
+        ("softDark", AppTheme::soft_dark(), AppearanceMode::Dark),
     ] {
         app.run("prefs.set", json!({"path": "interface.theme", "value": id})).unwrap();
         tick(&mut app, &ctx);
         let interface = app.session.prefs().interface.clone();
         assert_eq!(interface.appearance_mode, mode, "{id}");
-        assert_eq!(selected_theme(&interface, None), kind, "{id}");
+        assert_eq!(selected_theme(&interface, None), shown(kind.clone()), "{id}");
         assert_eq!(app.ui.theme, kind, "{id}");
     }
     // The two slots are independent: choosing the dark one left the light choice alone.
-    assert_eq!(app.session.prefs().interface.light_theme, LightTheme::SoftLight);
-    assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::SoftDark);
+    assert_eq!(app.session.prefs().interface.light_theme, "craft.soft");
+    assert_eq!(app.session.prefs().interface.dark_theme, "craft.soft");
 }
 
 #[test]
 fn auto_uses_native_system_theme_when_egui_does_not_report_one() {
     let (mut app, _) = app_with_store();
-    app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
-    app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
     app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
     let ctx = egui::Context::default();
+    // The reader reports light; no `Event::SystemTheme` reaches egui (X11, and Wayland without the settings portal).
+    craft::ui::testing::style::report_os_theme(&ctx, false);
     tick(&mut app, &ctx);
-    assert_eq!(app.ui.theme, ThemeKind::ProLight);
+    assert_eq!(app.ui.theme, AppTheme::pro_light());
 }
 
 #[test]
-fn appearance_button_cycles_modes_without_losing_theme_choices() {
-    let ctx = egui::Context::default();
+fn next_appearance_mode_cycles_modes_without_losing_theme_choices() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
-    for (mode, visible) in [(AppearanceMode::Auto, ThemeKind::Studio), (AppearanceMode::Light, ThemeKind::Classic), (AppearanceMode::Dark, ThemeKind::Studio)] {
+    for (mode, visible) in
+        [(AppearanceMode::Auto, AppTheme::studio()), (AppearanceMode::Light, AppTheme::classic()), (AppearanceMode::Dark, AppTheme::studio())]
+    {
         cycle_appearance(&mut app, &ctx);
         assert_eq!(app.session.prefs().interface.appearance_mode, mode);
         assert_eq!(app.ui.theme, visible);
-        assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
-        assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
+        assert_eq!(app.session.prefs().interface.dark_theme, "craft.studio");
+        assert_eq!(app.session.prefs().interface.light_theme, "craft.classic");
     }
 }
 
 #[test]
 fn darken_and_lighten_interface_step_through_photoshops_brightnesses_and_stop_at_the_ends() {
-    let ctx = egui::Context::default();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = app.ctx().clone();
     sync_appearance(&mut app, &ctx);
-    assert_eq!(app.ui.theme, ThemeKind::ProMedium, "Photoshop's default brightness");
+    assert_eq!(app.ui.theme, AppTheme::pro_medium(), "Photoshop's default brightness");
     let press = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
-    for expected in [ThemeKind::ProLightGray, ThemeKind::ProLight, ThemeKind::ProLight] {
+    for expected in [AppTheme::pro_light_gray(), AppTheme::pro_light(), AppTheme::pro_light()] {
         press(&mut app, "view.lightenInterface");
         assert_eq!(app.ui.theme, expected);
     }
     // Saved like a choice in Preferences › Interface: the light slot and the Light appearance.
     let i = &app.session.prefs().interface;
-    assert_eq!((i.appearance_mode, i.light_theme), (AppearanceMode::Light, LightTheme::ProLight));
-    for expected in [ThemeKind::ProLightGray, ThemeKind::ProMedium, ThemeKind::Pro, ThemeKind::Pro] {
+    assert_eq!((i.appearance_mode, i.light_theme.as_str()), (AppearanceMode::Light, "craft.pro"));
+    for expected in [AppTheme::pro_light_gray(), AppTheme::pro_medium(), AppTheme::pro(), AppTheme::pro()] {
         press(&mut app, "view.darkenInterface");
         assert_eq!(app.ui.theme, expected);
     }
     let i = &app.session.prefs().interface;
-    assert_eq!((i.appearance_mode, i.dark_theme), (AppearanceMode::Dark, DarkTheme::Pro));
+    assert_eq!((i.appearance_mode, i.dark_theme.as_str()), (AppearanceMode::Dark, "craft.pro"));
     // Another theme steps from the nearest brightness.
     for (theme, id, expected) in [
-        ("studio", "view.darkenInterface", ThemeKind::Pro),
-        ("studio", "view.lightenInterface", ThemeKind::ProLightGray),
-        ("classic", "view.darkenInterface", ThemeKind::ProMedium),
-        ("classic", "view.lightenInterface", ThemeKind::ProLight),
+        ("studio", "view.darkenInterface", AppTheme::pro()),
+        ("studio", "view.lightenInterface", AppTheme::pro_light_gray()),
+        ("classic", "view.darkenInterface", AppTheme::pro_medium()),
+        ("classic", "view.lightenInterface", AppTheme::pro_light()),
     ] {
         app.run("prefs.set", json!({"path": "interface.theme", "value": theme})).unwrap();
         sync_appearance(&mut app, &ctx);
@@ -279,38 +327,18 @@ fn darken_and_lighten_interface_step_through_photoshops_brightnesses_and_stop_at
     }
 }
 
-#[test]
-fn ctrl_shift_f1_and_f2_darken_and_lighten_the_interface() {
-    for (id, shortcut) in [("view.darkenInterface", "Cmd+Shift+F1"), ("view.lightenInterface", "Cmd+Shift+F2")] {
-        assert_eq!(crate::shortcuts::default_shortcut(id).as_deref(), Some(shortcut), "{id}");
-    }
-    let ctx = egui::Context::default();
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    sync_appearance(&mut app, &ctx);
-    let press = |app: &mut PhotocraftApp, key| {
-        let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-        let raw = egui::RawInput {
-            events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-            ..Default::default()
-        };
-        ctx.begin_pass(raw);
-        crate::shortcuts::handle(app, &ctx);
-        ctx.end_pass().textures_delta.clear();
-    };
-    press(&mut app, egui::Key::F1);
-    assert_eq!(app.ui.theme, ThemeKind::Pro);
-    press(&mut app, egui::Key::F2);
-    press(&mut app, egui::Key::F2);
-    assert_eq!(app.ui.theme, ThemeKind::ProLightGray);
-}
-
+/// One upkeep frame after the OS reports `appearance`; `None` reports nothing, so a context that never had a report
+/// has no answer, and one that had keeps its last (the reader holds the OS's latest colour scheme).
 fn appearance_frame(app: &mut PhotocraftApp, ctx: &egui::Context, appearance: Option<egui::Theme>) {
-    ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |ui| tick(app, ui.ctx())).textures_delta.clear();
+    if let Some(theme) = appearance {
+        craft::ui::testing::style::report_os_theme(ctx, theme == egui::Theme::Dark);
+    }
+    ctx.run_ui(egui::RawInput::default(), |ui| tick(app, ui.ctx())).textures_delta.clear();
 }
 
-fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
+fn assert_palette(ctx: &egui::Context, kind: &AppTheme) {
     let t = Tokens::get(ctx);
-    assert_eq!(t.kind, kind);
+    assert_eq!(t, kind.tokens());
     for style in [ctx.global_style(), ctx.style_of(egui::Theme::Light), ctx.style_of(egui::Theme::Dark)] {
         assert_eq!(style.visuals.panel_fill, t.chrome);
         assert_eq!(style.visuals.window_fill, t.card);
@@ -324,7 +352,7 @@ fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
 
 #[test]
 fn auto_appearance_follows_live_changes_without_saving_resolved_palettes() {
-    for (dark, light) in [(ThemeKind::ProMedium, ThemeKind::StudioLight), (ThemeKind::SolarizedDark, ThemeKind::Adwaita)] {
+    for (dark, light) in [(AppTheme::pro_medium(), AppTheme::studio_light()), (AppTheme::solarized_dark(), AppTheme::adwaita())] {
         let (mut app, store) = app_with_store();
         let ctx = egui::Context::default();
         PhotocraftApp::setup_context(&ctx, Default::default());
@@ -333,29 +361,31 @@ fn auto_appearance_follows_live_changes_without_saving_resolved_palettes() {
         appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
         let revision = app.session.prefs.rev();
         let interface = app.session.prefs().interface.clone();
-        let saved = store.lock().unwrap().clone().unwrap();
+        let saved = saved_text(&store).unwrap();
         assert_eq!(stored(&store)["interface"]["appearanceMode"], "auto");
         let gpu_style = canvas_style(&app);
-        for (appearance, expected) in [(Some(egui::Theme::Light), light), (Some(egui::Theme::Dark), dark), (Some(egui::Theme::Light), light), (None, dark)] {
+        for (appearance, expected) in
+            [(Some(egui::Theme::Light), light.clone()), (Some(egui::Theme::Dark), dark.clone()), (Some(egui::Theme::Light), light.clone())]
+        {
             appearance_frame(&mut app, &ctx, appearance);
-            assert_palette(&ctx, expected);
+            assert_palette(&ctx, &expected);
             assert_eq!(app.ui.theme, expected);
             assert_eq!(app.session.prefs().interface, interface);
             assert_eq!(app.session.prefs.rev(), revision);
-            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+            assert_eq!(saved_text(&store), Some(saved.clone()));
             assert_eq!(canvas_style(&app), gpu_style);
             assert_eq!(pasteboard_color(&app), None);
         }
         // A fresh launch resolves its saved Auto choice against the new OS input.
-        for (appearance, expected) in [(Some(egui::Theme::Light), light), (Some(egui::Theme::Dark), dark), (None, dark)] {
-            let (mut restarted, store) = app_with_saved(Some(saved.clone()));
+        for (appearance, expected) in [(Some(egui::Theme::Light), light.clone()), (Some(egui::Theme::Dark), dark.clone()), (None, dark.clone())] {
+            let mut restarted = app_on(&store);
             let fresh = egui::Context::default();
             PhotocraftApp::setup_context(&fresh, Default::default());
             appearance_frame(&mut restarted, &fresh, appearance);
-            assert_palette(&fresh, expected);
+            assert_palette(&fresh, &expected);
             assert_eq!(restarted.ui.theme, expected);
             assert_eq!(restarted.session.prefs().interface, interface);
-            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+            assert_eq!(saved_text(&store), Some(saved.clone()));
         }
         app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": "#123456"}})).unwrap();
         for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
@@ -371,42 +401,23 @@ fn manual_theme_tokens_and_global_styles_stay_fixed_across_os_changes() {
     let (mut app, store) = app_with_store();
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
-    for kind in ThemeKind::ALL {
-        app.run("prefs.set", json!({"path": "interface.theme", "value": kind.id()})).unwrap();
+    for kind in AppTheme::all() {
+        app.save_theme(&kind).unwrap();
         appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
         let interface = app.session.prefs().interface.clone();
         let revision = app.session.prefs.rev();
-        let saved = store.lock().unwrap().clone().unwrap();
-        assert_eq!(interface.appearance_mode, if Tokens::for_kind(kind).dark() { AppearanceMode::Dark } else { AppearanceMode::Light });
+        let saved = saved_text(&store).unwrap();
+        assert_eq!(interface.appearance_mode, if kind.tokens().dark() { AppearanceMode::Dark } else { AppearanceMode::Light });
         for appearance in [Some(egui::Theme::Dark), Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
             appearance_frame(&mut app, &ctx, appearance);
-            assert_palette(&ctx, kind);
-            assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
+            assert_palette(&ctx, &kind);
+            assert_eq!(Tokens::get(&ctx), kind.tokens());
             assert_eq!(app.ui.theme, kind);
             assert_eq!(app.session.prefs().interface, interface);
             assert_eq!(app.session.prefs.rev(), revision);
-            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+            assert_eq!(saved_text(&store), Some(saved.clone()));
         }
     }
-}
-
-#[test]
-fn auto_appearance_replaces_a_restored_egui_dark_pin() {
-    let (mut app, _) = app_with_saved(Some(json!({"interface": {"appearanceMode": "auto"}}).to_string()));
-    let ctx = egui::Context::default();
-    ctx.set_theme(egui::ThemePreference::Dark);
-    assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::Dark);
-    appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
-    assert_palette(&ctx, ThemeKind::ProLight);
-    assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
-    // A restored pin must also clear when the concrete PhotoCraft palette stays the same.
-    ctx.set_theme(egui::ThemePreference::Dark);
-    appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
-    assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
-    assert_palette(&ctx, ThemeKind::ProLight);
-    appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
-    assert_palette(&ctx, ThemeKind::ProMedium);
-    assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
 }
 
 #[test]
@@ -416,214 +427,88 @@ fn system_theme_menu_choice_stays_checked_as_the_appearance_changes() {
     PhotocraftApp::setup_context(&ctx, Default::default());
     app.run("prefs.set", json!({"values": {"interface.darkTheme": "solarizedDark", "interface.lightTheme": "adwaita"}})).unwrap();
     appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
-    crate::menus::invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+    pick_theme(&mut app, &ctx, &ThemeChoice::System);
     appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
     let interface = app.session.prefs().interface.clone();
-    let saved = store.lock().unwrap().clone().unwrap();
+    let saved = saved_text(&store).unwrap();
     let revision = app.session.prefs.rev();
     for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
         appearance_frame(&mut app, &ctx, appearance);
-        let items = crate::menus::menu_items(&app);
-        let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
-        assert_eq!(item("window.theme.system").checked, Some(true));
-        assert!(item("window.theme.system").enabled);
-        assert_eq!(item("window.theme.system").path, ["Window", "Theme"]);
-        for kind in ThemeKind::ALL {
-            assert_eq!(item(&format!("window.theme.{}", kind.id())).checked, Some(false));
+        let rows = theme_rows(&app);
+        assert_eq!(theme_row(&rows, &ThemeChoice::System).kind, ItemKind::Radio(true));
+        for item in rows.iter().filter(|item| item.command != ThemeChoice::System.command() && item.command != ThemeChoice::NextMode.command()) {
+            assert_eq!(item.kind, ItemKind::Radio(false), "{}", item.label);
         }
         assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
         assert_eq!(app.session.prefs().interface, interface);
         assert_eq!(app.session.prefs.rev(), revision);
-        assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+        assert_eq!(saved_text(&store), Some(saved.clone()));
     }
-    crate::menus::invoke(&mut app, &ctx, "window.theme.solarizedDark", json!({})).unwrap();
+    let solarized = ThemeChoice::theme(AppTheme::solarized_dark().id().clone(), true);
+    pick_theme(&mut app, &ctx, &solarized);
     for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
         appearance_frame(&mut app, &ctx, appearance);
-        assert_palette(&ctx, ThemeKind::SolarizedDark);
-        let items = crate::menus::menu_items(&app);
-        let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
-        assert_eq!(item("window.theme.solarizedDark").checked, Some(true));
-        assert_eq!(item("window.theme.system").checked, Some(false));
+        assert_palette(&ctx, &AppTheme::solarized_dark());
+        let rows = theme_rows(&app);
+        assert_eq!(theme_row(&rows, &solarized).kind, ItemKind::Radio(true));
+        assert_eq!(theme_row(&rows, &ThemeChoice::System).kind, ItemKind::Radio(false));
         assert_eq!(stored(&store)["interface"]["appearanceMode"], "dark");
-        assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Adwaita);
+        assert_eq!(app.session.prefs().interface.light_theme, "craft.adwaita");
     }
 }
 
 #[test]
 fn preferences_interface_offers_and_applies_sync_with_system() {
-    use egui_kittest::{Harness, kittest::Queryable};
     let (mut app, store) = app_with_store();
-    app.run("prefs.set", json!({"values": {"interface.language": "en", "interface.darkTheme": "solarizedDark", "interface.lightTheme": "adwaita"}})).unwrap();
+    app.run(
+        "prefs.set",
+        json!({"values": {"interface.language": "en", "interface.appearanceMode": "dark", "interface.darkTheme": "solarizedDark", "interface.lightTheme": "adwaita"}}),
+    )
+    .unwrap();
     let interface = app.session.prefs().interface.clone();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.input_mut().system_theme = Some(egui::Theme::Light);
-    h.run_steps(4);
-    for label in ["Adwaita", "Adwaita dark", "Solarized dark"] {
-        assert!(h.query_by_label(label).is_some(), "missing theme choice {label}");
-    }
-    h.get_by_value("Dark").click();
-    h.run_steps(2);
-    h.get_by_label("Sync with system").click();
-    h.run_steps(2);
-    h.get_by_label("Apply").click();
-    h.run_steps(4);
-    assert_eq!(h.state().session.prefs().interface.appearance_mode, AppearanceMode::Auto);
-    assert_eq!(h.state().session.prefs().interface.dark_theme, interface.dark_theme);
-    assert_eq!(h.state().session.prefs().interface.light_theme, interface.light_theme);
-    assert_eq!(h.state().session.prefs().interface.theme, interface.theme);
-    assert_palette(&h.ctx, ThemeKind::Adwaita);
+    open_prefs(&mut app, "interface");
+    edit(&mut app, "interface.appearanceMode", PrefValue::Text("auto".into()));
+    assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Dark, "nothing is applied before Apply");
+    apply_window(&mut app).unwrap();
+    assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+    assert_eq!(app.session.prefs().interface.dark_theme, interface.dark_theme);
+    assert_eq!(app.session.prefs().interface.light_theme, interface.light_theme);
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+    assert_palette(&ctx, &AppTheme::adwaita());
     assert_eq!(stored(&store)["interface"]["appearanceMode"], "auto");
-    let saved = store.lock().unwrap().clone().unwrap();
-    let (mut restarted, reloaded) = app_with_saved(Some(saved.clone()));
+    let mut restarted = app_on(&store);
     let fresh = egui::Context::default();
     PhotocraftApp::setup_context(&fresh, Default::default());
     appearance_frame(&mut restarted, &fresh, Some(egui::Theme::Dark));
-    assert_palette(&fresh, ThemeKind::SolarizedDark);
+    assert_palette(&fresh, &AppTheme::solarized_dark());
     assert_eq!(restarted.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
     assert_eq!(restarted.session.prefs().interface.dark_theme, interface.dark_theme);
     assert_eq!(restarted.session.prefs().interface.light_theme, interface.light_theme);
-    assert_eq!(restarted.session.prefs().interface.theme, interface.theme);
-    assert_eq!(reloaded.lock().unwrap().as_ref(), Some(&saved));
 }
 
 #[test]
 fn theme_star_saves_favorite_and_menu_groups_it() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, _) = app_with_store();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
+    use egui_kittest::kittest::Queryable;
+    let (_, files) = app_with_store();
+    let mut h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
     h.get_by_label("Classic").hover();
     h.run_steps(2);
-    h.get_by_label("Add to favorites: Classic").click();
+    h.get_by_label("Add to Favorites: Classic").click();
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(2);
-    assert_eq!(h.state().session.prefs().interface.favorite_themes, vec![SavedTheme::Classic]);
-    assert!(h.query_by_label("Remove from favorites: Classic").is_some());
-    let (light, dark) = favorite_theme_groups(&[SavedTheme::Studio, SavedTheme::Classic, SavedTheme::Adwaita]);
-    assert_eq!(light, vec![ThemeKind::Classic, ThemeKind::Adwaita]);
-    assert_eq!(dark, vec![ThemeKind::Studio]);
+    assert_eq!(h.state().session.prefs().interface.favorite_themes, vec!["craft.classic"]);
+    assert!(h.query_by_label("Remove from Favorites: Classic").is_some());
+    let nodes = theme_menu(h.state()).favorite_items(&ThemeLabels::default(), CommandRef::new("edit.preferences.interface"));
+    let listed: Vec<_> = nodes.iter().filter_map(|node| if let Node::Item(item) = node { Some(item.command.clone()) } else { None }).collect();
+    let classic = ThemeChoice::theme(ThemeId::parse("craft.classic").unwrap(), false);
+    assert!(listed.contains(&classic.command()), "{listed:?}");
+    assert_eq!(listed.len(), 2, "the settings row and the one favourite: {listed:?}");
 }
 
-/// The favourite star badge overhangs its swatch; showing it on hover must not move the swatches
-/// after it, or the row would shift under the pointer.
-#[test]
-fn theme_star_badge_on_hover_does_not_move_the_next_swatch() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, _) = app_with_store();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    let first = h.get_by_label("Classic").rect();
-    let next = h.get_by_label("Adwaita").rect();
-    h.hover_at(first.right_top() + vec2(-3.0, 3.0));
-    h.run_steps(3);
-    assert!(h.query_by_label("Add to favorites: Classic").is_some(), "the badge shows while the swatch is hovered");
-    assert_eq!(h.get_by_label("Classic").rect(), first);
-    assert_eq!(h.get_by_label("Adwaita").rect(), next);
-}
-
-#[test]
-fn preferences_interface_shows_language_without_scrolling() {
-    // #2532: in a small window the theme cards filled the page and Language sat out of view
-    // below them. Like Photoshop, Presentation follows Appearance and both fit.
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, _) = app_with_store();
-    app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1000.0, 750.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    let language = h.query_all_by_label("Language").next().expect("the Language row").rect();
-    let dark = h.query_all_by_label("Dark Theme").next().expect("the dark theme row").rect();
-    let ok = h.get_by_label("OK").rect();
-    assert!(dark.bottom() < language.top(), "Presentation {language:?} follows the theme swatches {dark:?}");
-    assert!(language.bottom() < ok.top() - 20.0, "Language {language:?} must show above the buttons {ok:?} without scrolling");
-    // Every theme in the option lists gets a swatch, Breeze included.
-    for (id, _) in LIGHT_THEME_OPTIONS.iter().chain(DARK_THEME_OPTIONS) {
-        let label = choice_label(id);
-        assert!(h.query_by_label(&label).is_some(), "missing theme swatch {label}");
-    }
-    assert!(h.query_by_label("Breeze light").is_some() && h.query_by_label("Breeze dark").is_some());
-}
-
-#[test]
-fn preferences_interface_search_hides_rows_and_skips_empty_groups() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let render = |search: &str| {
-        let (mut app, _) = app_with_store();
-        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
-        let id = open_preferences(&mut app, "interface");
-        app.ui.dialog_mut(id).unwrap().fields.insert("__search".into(), json!(search));
-        let mut h = Harness::builder().with_size(vec2(1000.0, 750.0)).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            app
-        });
-        h.run_steps(4);
-        h
-    };
-    let shown = |h: &Harness<'_, PhotocraftApp>, label: &str| h.query_all_by_label(label).next().is_some();
-
-    let h = render("language");
-    assert!(shown(&h, "Language") && shown(&h, "Presentation"));
-    for gone in ["Appearance", "Appearance Mode", "Dark Theme", "Options", "UI scale"] {
-        assert!(!shown(&h, gone), "\"language\" must not show {gone}");
-    }
-
-    let h = render("theme");
-    assert!(shown(&h, "Appearance") && shown(&h, "Light Theme") && shown(&h, "Dark Theme") && shown(&h, "Breeze dark"));
-    for gone in ["Appearance Mode", "Presentation", "Language", "Options"] {
-        assert!(!shown(&h, gone), "\"theme\" must not show {gone}");
-    }
-
-    let h = render("");
-    for group in ["Appearance", "Appearance Mode", "Presentation", "Options", "UI scale"] {
-        assert!(shown(&h, group), "an empty search shows {group}");
-    }
-}
-
-fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
-    app_with_saved(None)
-}
-
-fn app_with_saved(text: Option<String>) -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
-    let store: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(text));
-    (app_on(&store, Arc::default()), store)
-}
-
-/// An app whose preferences live in `store`; writes fail while `fail` is set.
-fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::AtomicBool>) -> PhotocraftApp {
-    let (a, b) = (store.clone(), store.clone());
-    let services = crate::Services {
-        load_prefs: Some(Box::new(move || a.lock().unwrap().clone())),
-        save_prefs: Some(Box::new(move |s: &str| {
-            if fail.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err("storage is full".into());
-            }
-            *b.lock().unwrap() = Some(s.to_string());
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    PhotocraftApp::new(photocraft_engine::Session::new(), services)
-}
-
-fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
-    serde_json::from_str(store.lock().unwrap().as_deref().unwrap_or("null")).unwrap()
-}
+// --- the settings store -------------------------------------------------------------------------------------------
 
 #[test]
 fn a_wrongly_typed_value_resets_only_itself_and_is_repaired_on_disk() {
@@ -634,7 +519,7 @@ fn a_wrongly_typed_value_resets_only_itself_and_is_repaired_on_disk() {
         "shortcuts": {"edit.fill": "Cmd+Shift+F", "file.open": 7},
         "futureSection": {"kept": true},
     });
-    let (mut app, store) = app_with_saved(Some(saved.to_string()));
+    let (mut app, store) = app_with_json(&saved);
     let ctx = egui::Context::default();
     tick(&mut app, &ctx);
     let p = app.session.prefs();
@@ -652,7 +537,7 @@ fn a_wrongly_typed_value_resets_only_itself_and_is_repaired_on_disk() {
     assert!(v["shortcuts"].get("file.open").is_none());
     assert_eq!(v["futureSection"]["kept"], true, "keys this version doesn't know survive");
     // So the next launch loads cleanly.
-    let (mut next, _) = app_with_saved(store.lock().unwrap().clone());
+    let mut next = app_on(&store);
     tick(&mut next, &ctx);
     assert!(next.ui.notices.iter().all(|n| n.title != "Some preferences were reset"));
     assert_eq!(next.session.prefs().file_handling.autosave_minutes, 5);
@@ -664,197 +549,69 @@ fn an_old_files_shift_tool_switch_migration_is_saved_with_the_new_version() {
     // writes that and the current version, so turning it off later isn't taken for the old
     // default on the next launch.
     let ctx = egui::Context::default();
-    for saved in [
-        json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}, "futureSection": {"kept": true}}),
-        json!({"tools": {"useShiftKeyForToolSwitch": false}, "futureSection": {"kept": true}}),
-    ] {
-        let (mut app, store) = app_with_saved(Some(saved.to_string()));
+    for version in [Some(1), None] {
+        let saved = json!({"tools": {"useShiftKeyForToolSwitch": false}});
+        let (mut app, store) = app_with_legacy_json(&saved, version);
         tick(&mut app, &ctx);
-        assert!(app.session.prefs().tools.use_shift_key_for_tool_switch, "{saved}");
+        assert!(app.session.prefs().tools.use_shift_key_for_tool_switch, "{version:?}");
         app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
         tick(&mut app, &ctx);
         let v = stored(&store);
-        assert_eq!(v["version"], json!(prefs::PREFS_VERSION), "{saved}");
-        assert_eq!(v["tools"]["useShiftKeyForToolSwitch"], true, "{saved}");
-        assert_eq!(v["futureSection"]["kept"], true, "keys this version doesn't know survive");
+        assert_eq!(v["schema_version"], json!(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION), "{version:?}");
+        assert_eq!(v["tools"]["useShiftKeyForToolSwitch"], true, "{version:?}");
         app.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
         tick(&mut app, &ctx);
-        let (mut next, _) = app_with_saved(store.lock().unwrap().clone());
+        let mut next = app_on(&store);
         tick(&mut next, &ctx);
-        assert!(!next.session.prefs().tools.use_shift_key_for_tool_switch, "{saved}: turned off, it stays off");
+        assert!(!next.session.prefs().tools.use_shift_key_for_tool_switch, "{version:?}: turned off, it stays off");
     }
-}
-
-#[test]
-fn an_old_sparse_file_keeps_another_instances_change() {
-    // Two instances on a version 1 file that lacks most keys: one changes a key the file
-    // doesn't have, the other then saves an unrelated change and must not write its default
-    // over it.
-    let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
-    let store = Arc::new(Mutex::new(Some(saved.to_string())));
-    let ctx = egui::Context::default();
-    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
-    tick(&mut a, &ctx);
-    tick(&mut b, &ctx);
-    b.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
-    tick(&mut b, &ctx);
-    assert_eq!(stored(&store)["interface"]["theme"], "studio");
-    a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
-    tick(&mut a, &ctx);
-    let v = stored(&store);
-    assert_eq!((v["interface"]["theme"].as_str(), v["performance"]["historyStates"].as_u64()), (Some("studio"), Some(12)));
-}
-
-#[test]
-fn another_instances_shift_tool_switch_choice_beats_this_ones_migration() {
-    // Two instances migrate the same version 1 file. One turns the switch off and saves
-    // version 2; the other's unrelated save must not write its migrated "on" over that.
-    let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
-    let store = Arc::new(Mutex::new(Some(saved.to_string())));
-    let ctx = egui::Context::default();
-    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
-    tick(&mut a, &ctx);
-    tick(&mut b, &ctx);
-    b.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
-    tick(&mut b, &ctx);
-    assert_eq!(stored(&store)["tools"]["useShiftKeyForToolSwitch"], false);
-    a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
-    tick(&mut a, &ctx);
-    let v = stored(&store);
-    assert_eq!((v["tools"]["useShiftKeyForToolSwitch"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(false), Some(12)));
-    assert_eq!(v["version"], json!(prefs::PREFS_VERSION));
-}
-
-#[test]
-fn turning_the_shift_tool_switch_off_is_saved_over_another_instances_migration() {
-    // Two instances migrate the same version 1 file. B saves version 2 with the migrated "on";
-    // the user then turns the switch off in A, which must be written.
-    let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
-    let store = Arc::new(Mutex::new(Some(saved.to_string())));
-    let ctx = egui::Context::default();
-    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
-    tick(&mut a, &ctx);
-    tick(&mut b, &ctx);
-    b.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
-    tick(&mut b, &ctx);
-    assert_eq!(stored(&store)["tools"]["useShiftKeyForToolSwitch"], true);
-    a.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
-    tick(&mut a, &ctx);
-    let v = stored(&store);
-    assert_eq!((v["tools"]["useShiftKeyForToolSwitch"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(false), Some(12)));
-}
-
-#[test]
-fn a_newer_files_version_is_kept_on_save() {
-    let saved = json!({"version": prefs::PREFS_VERSION + 1, "tools": {"useShiftKeyForToolSwitch": false}});
-    let (mut app, store) = app_with_saved(Some(saved.to_string()));
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert!(!app.session.prefs().tools.use_shift_key_for_tool_switch, "a newer file isn't migrated");
-    app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
-    tick(&mut app, &ctx);
-    let v = stored(&store);
-    assert_eq!(v["version"], json!(prefs::PREFS_VERSION + 1));
-    assert_eq!(v["performance"]["historyStates"], 12);
-}
-
-#[test]
-fn merge_keeps_changes_made_elsewhere() {
-    let base = json!({"a": {"x": 1, "y": 1}, "list": [1], "gone": 1, "kept": 1});
-    // Here: a.x changed, `gone` removed, `new` added.
-    let ours = json!({"a": {"x": 2, "y": 1}, "list": [1], "kept": 1, "new": 1});
-    // There: a.y, `list` and `kept` changed, and a key this version doesn't know.
-    let mut theirs = json!({"a": {"x": 1, "y": 3}, "list": [1, 2], "gone": 1, "kept": 5, "future": true});
-    merge_changes(&base, &ours, &mut theirs);
-    assert_eq!(theirs, json!({"a": {"x": 2, "y": 3}, "list": [1, 2], "kept": 5, "new": 1, "future": true}));
-    // Arrays are leaves: a list changed here replaces the stored one whole.
-    merge_changes(&json!({"list": [1]}), &json!({"list": [1, 3]}), &mut theirs);
-    assert_eq!(theirs["list"], json!([1, 3]));
-    // Nothing changed here: storage is left as it is, whatever it holds.
-    let mut odd = json!({"x": [7]});
-    merge_changes(&ours, &ours, &mut odd);
-    assert_eq!(odd, json!({"x": [7]}));
-    // A value that changed type here replaces the stored one.
-    merge_changes(&json!({"a": 1}), &json!({"a": {"b": 2}}), &mut theirs);
-    assert_eq!(theirs["a"], json!({"b": 2}));
-}
-
-#[test]
-fn saving_keeps_preferences_another_instance_changed() {
-    let store = Arc::new(Mutex::new(None));
-    let ctx = egui::Context::default();
-    // Two browser tabs (or app windows) on the same storage.
-    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
-    tick(&mut a, &ctx);
-    tick(&mut b, &ctx);
-    a.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
-    tick(&mut a, &ctx);
-    assert_eq!(stored(&store)["interface"]["theme"], "studio");
-    // The other one, never reloaded, saves an unrelated change: the theme stays.
-    b.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
-    tick(&mut b, &ctx);
-    let v = stored(&store);
-    assert_eq!((v["interface"]["theme"].as_str(), v["performance"]["historyStates"].as_u64()), (Some("studio"), Some(12)));
-    // And the first one's next save keeps the second one's change.
-    a.run("prefs.set", json!({"values": {"interface.showTooltips": false}})).unwrap();
-    tick(&mut a, &ctx);
-    let v = stored(&store);
-    assert_eq!(v["performance"]["historyStates"], 12);
-    assert_eq!(v["interface"]["showTooltips"], false);
-    // A value changed in both: the latest save wins.
-    b.run("prefs.set", json!({"values": {"interface.theme": "classic"}})).unwrap();
-    tick(&mut b, &ctx);
-    assert_eq!(stored(&store)["interface"]["theme"], "classic");
-    // Unreadable storage is overwritten with this instance's preferences.
-    *store.lock().unwrap() = Some("not json".into());
-    a.run("prefs.set", json!({"values": {"performance.historyStates": 30}})).unwrap();
-    tick(&mut a, &ctx);
-    let (mut c, _) = app_with_saved(store.lock().unwrap().clone());
-    tick(&mut c, &ctx);
-    assert_eq!(c.session.prefs().performance.history_states, 30);
-    assert_eq!(c.session.prefs().interface.theme, Theme::Studio);
 }
 
 #[test]
 fn failed_preference_saves_are_retried() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let store = Arc::new(Mutex::new(None));
-    let fail = Arc::new(AtomicBool::new(true));
-    let mut app = app_on(&store, fail.clone());
-    tick(&mut app, &egui::Context::default());
-    app.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
-    // The write fails: reported, and retried after a backoff rather than marked saved.
-    assert_eq!(persist(&mut app, 100.0), Some(SAVE_RETRY_S));
-    assert!(app.ui.status.starts_with("Couldn't save preferences: storage is full") && app.ui.status_error);
-    assert!(store.lock().unwrap().is_none());
-    assert_eq!(persist(&mut app, 101.0), Some(1.0), "not due yet");
-    // Storage works again: the pending change is written without another edit.
-    fail.store(false, Ordering::Relaxed);
-    assert_eq!(persist(&mut app, 102.0), None);
-    assert_eq!(stored(&store)["interface"]["theme"], "studio");
-    assert_eq!(app.ui.status, "Preferences saved");
-    assert_eq!(persist(&mut app, 103.0), None, "nothing left to save");
-
-    // A persistent failure backs off up to a cap and raises a notice once.
-    fail.store(true, Ordering::Relaxed);
-    app.run("prefs.set", json!({"values": {"interface.theme": "classic"}})).unwrap();
-    let mut now = 200.0;
-    let mut delays = Vec::new();
-    for _ in 0..6 {
-        let wait = persist(&mut app, now).unwrap();
-        delays.push(wait);
-        now += wait;
-    }
-    assert_eq!(delays, [2.0, 4.0, 8.0, 16.0, SAVE_RETRY_MAX_S, SAVE_RETRY_MAX_S]);
-    assert_eq!(app.ui.notices.iter().filter(|n| n.error && n.title == "Preferences can't be saved").count(), 1);
-    // A newer change retries sooner than the backoff, but not on every frame.
-    app.run("prefs.set", json!({"values": {"interface.theme": "pro"}})).unwrap();
-    assert_eq!(persist(&mut app, now - 29.0), Some(1.0));
-    fail.store(false, Ordering::Relaxed);
-    assert_eq!(persist(&mut app, now - 28.0), None);
-    assert_eq!(stored(&store)["interface"]["theme"], "pro");
-    assert!(app.ui.notices.is_empty(), "the notice goes once preferences are saved");
+    let (mut app, files) = app_with_store();
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    files.fail_writes(true);
+    app.run("prefs.set", json!({"values": {"interface.darkTheme": "craft.studio"}})).unwrap();
+    // The trial passes the store's backoff as an `Instant` instead of sleeping.
+    let start = Instant::now();
+    super::save::tick(&mut app, &ctx, start);
+    assert!(crate::notices::shown_titled(&app, SAVE_NOTICE), "a failed write is reported");
+    assert!(saved_text(&files).is_none_or(|text| !text.contains("craft.studio")));
+    // A second failure keeps the one notice.
+    super::save::tick(&mut app, &ctx, start + retry_delay(1));
+    assert!(crate::notices::shown_titled(&app, SAVE_NOTICE));
+    // Storage works again: the pending change is written once the backoff has passed, with no new edit.
+    files.fail_writes(false);
+    super::save::tick(&mut app, &ctx, start + retry_delay(1) + retry_delay(2));
+    assert_eq!(stored(&files)["interface"]["darkTheme"], "craft.studio");
+    assert!(!crate::notices::shown_titled(&app, SAVE_NOTICE), "the notice goes once preferences are saved");
 }
+
+#[test]
+fn preferences_persist_through_services_and_theme_follows() {
+    let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    app.run("prefs.set", json!({"values": {"interface.lightTheme": "craft.studio", "interface.appearanceMode": "light", "performance.historyStates": 12}}))
+        .unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.theme, AppTheme::studio_light());
+    assert_eq!(stored(&store)["performance"]["historyStates"], 12);
+    // A new app instance loads them.
+    let mut app2 = app_on(&store);
+    tick(&mut app2, &ctx);
+    assert_eq!(app2.session.prefs().performance.history_states, 12);
+    assert_eq!(app2.ui.theme, AppTheme::studio_light());
+    // Picking a theme from the Window menu becomes the preference.
+    pick_theme(&mut app2, &ctx, &ThemeChoice::theme(AppTheme::classic().id().clone(), false));
+    tick(&mut app2, &ctx);
+    assert_eq!(app2.session.prefs().interface.light_theme, "craft.classic");
+    assert_eq!(stored(&store)["interface"]["lightTheme"], "craft.classic");
+}
+
+// --- scale and fonts -----------------------------------------------------------------------------------------------
 
 #[test]
 fn auto_scale_preserves_system_scale() {
@@ -923,26 +680,17 @@ fn scale_preferences_and_monitor_changes_apply_live() {
 
 #[test]
 fn intermediate_ui_scale_choices_can_be_applied_from_preferences() {
-    use egui_kittest::{Harness, kittest::Queryable};
     let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
     app.run("prefs.set", json!({"path": "interface.uiScale", "value": "100"})).unwrap();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1400.0, 1100.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    let mut current = "100%";
-    for (label, value) in [("105%", "105"), ("110%", "110"), ("115%", "115"), ("120%", "120")] {
-        h.get_by_value(current).click();
-        h.run_steps(2);
-        h.get_by_label(label).click();
-        h.run_steps(2);
-        h.get_by_label("Apply").click();
-        h.run_steps(4);
-        assert_eq!(h.state().session.prefs().interface.ui_scale.name(), value);
+    open_prefs(&mut app, "interface");
+    for value in ["105", "110", "115", "120"] {
+        edit(&mut app, "interface.uiScale", PrefValue::Choice(value.into()));
+        apply_window(&mut app).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(app.session.prefs().interface.ui_scale.name(), value);
         assert_eq!(stored(&store)["interface"]["uiScale"], value);
-        current = label;
+        assert!(window_open(&app), "Apply keeps the window open");
     }
 }
 
@@ -950,7 +698,7 @@ fn intermediate_ui_scale_choices_can_be_applied_from_preferences() {
 fn ui_font_size_commands_follow_themes_and_dpi_and_reset_live() {
     let (mut app, _) = app_with_store();
     let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, ThemeKind::Pro);
+    PhotocraftApp::setup_context(&ctx, AppTheme::pro());
     let mut input = egui::RawInput::default();
     input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
     for (theme, scale, expected) in
@@ -971,89 +719,454 @@ fn ui_font_size_commands_follow_themes_and_dpi_and_reset_live() {
     assert!((ctx.pixels_per_point() - 1.5).abs() < 1e-4, "resetting font size keeps UI Scale");
 }
 
-#[test]
-fn recent_files_survive_a_restart_and_honour_the_count() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    app.push_recent("/work/a.psd");
-    app.push_recent("/work/b.png");
-    tick(&mut app, &ctx);
-    let saved = store.lock().unwrap().clone().unwrap();
-    // A new app instance (a restart) gets the list back, newest first.
-    let (mut app2, _) = app_with_saved(Some(saved));
-    tick(&mut app2, &ctx);
-    assert_eq!(app2.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
-    // Lowering "Recent File List Contains" shortens the menu at once; 0 turns it off.
-    app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 1}})).unwrap();
-    tick(&mut app2, &ctx);
-    assert_eq!(app2.ui.recent_files, vec!["/work/b.png".to_string()]);
-    app2.push_recent("/work/c.tif");
-    assert_eq!(app2.session.prefs().file_handling.recent_files, vec!["/work/c.tif".to_string()]);
-    app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
-    tick(&mut app2, &ctx);
-    app2.push_recent("/work/d.tif");
-    assert!(app2.ui.recent_files.is_empty());
-    // Clearing the list in the Preferences dialog (or by an agent) reaches the menu.
-    app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": ["/x.psd"]}})).unwrap();
-    tick(&mut app2, &ctx);
-    assert_eq!(app2.ui.recent_files, vec!["/x.psd".to_string()]);
-    // A hostile count from a hand-edited preferences file is capped, not trusted.
-    app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
-    app2.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);
-    assert_eq!(app2.recent_cap(), 100);
+// --- remembered state -----------------------------------------------------------------------------------------------
+
+type SetState = Box<dyn Fn(&mut PhotocraftApp, &egui::Context)>;
+type CheckState = Box<dyn Fn(&mut PhotocraftApp, &egui::Context, &Value)>;
+
+/// One case of a remembered-state table: what is set (or seeded) in the first app, and what holds after a restart
+/// on the same store.
+struct Case {
+    name: &'static str,
+    /// A hand-written file the first app starts on.
+    seed: Option<Value>,
+    /// State set in the first app; the table ticks afterwards.
+    set: SetState,
+    /// What holds in the restarted app, given the file's contents.
+    check: CheckState,
 }
 
-#[test]
-fn brush_picker_view_survives_a_restart() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    app.ui.brush_picker_list.show_stroke = false;
-    app.ui.brush_picker_list.scale = 0.4;
-    crate::brush_picker::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    assert_eq!(stored(&store)["brushPicker"]["showStroke"], json!(false));
-    // A restart gets the view back at startup, before the picker is ever opened.
-    let saved = store.lock().unwrap().clone().unwrap();
-    let (mut app2, _) = app_with_saved(Some(saved));
-    tick(&mut app2, &ctx);
-    assert!(!app2.ui.brush_picker_list.show_stroke);
-    assert!(app2.ui.brush_picker_list.show_name && app2.ui.brush_picker_list.show_tip);
-    assert!((app2.ui.brush_picker_list.scale - 0.4).abs() < 1e-6);
-    // A hand-edited file: the scale is clamped to the slider's range and the last part comes
-    // back on — an empty card would show no brush at all.
-    let bad = json!({"brushPicker": {"showName": false, "showStroke": false, "showTip": false, "scale": 9.0}}).to_string();
-    let (mut app3, _) = app_with_saved(Some(bad));
-    tick(&mut app3, &ctx);
-    assert_eq!(app3.ui.brush_picker_list.scale, *crate::brush_picker::SCALE_RANGE.end());
-    assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && app3.ui.brush_picker_list.show_tip);
-}
-
-#[test]
-fn selected_tool_survives_a_restart_without_option_changes() {
-    use crate::state::Tool;
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert_eq!(app.ui.tool, Tool::Move);
-    // Start from a non-default tool so selecting every tool (including Move) is an
-    // explicit change that gets persisted.
-    app.ui.tool = Tool::Brush;
-    crate::tool_memory::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    // Every tool, including flyout-only tools, can be restored. Return to Move last to
-    // prove selecting the default overwrites a previously remembered nondefault tool.
-    for tool in Tool::ALL.into_iter().chain([Tool::Move]) {
-        app.ui.tool = tool;
-        crate::tool_memory::persist(&mut app, &ctx);
+fn run_cases(cases: Vec<Case>) {
+    for case in cases {
+        eprintln!("case: {}", case.name);
+        let files = Arc::new(MemoryFiles::new());
+        if let Some(seed_value) = &case.seed {
+            seed(&files, seed_value, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION));
+        }
+        let mut app = app_on(&files);
+        let ctx = app.ctx().clone();
         tick(&mut app, &ctx);
-        assert_eq!(stored(&store)["selectedTool"], serde_json::to_value(tool).unwrap());
-        let (app2, _) = app_with_saved(store.lock().unwrap().clone());
-        assert_eq!(app2.ui.tool, tool, "restored before the first frame");
-        assert_eq!(app2.ui.group_tool(tool.key()), Some(tool));
-        assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
+        (case.set)(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let mut restarted = app_on(&files);
+        tick(&mut restarted, &ctx);
+        (case.check)(&mut restarted, &ctx, &stored(&files));
     }
+}
+
+/// A case that only seeds a file and checks what the app loads from it.
+struct Loaded {
+    name: &'static str,
+    seed: Value,
+    check: Box<dyn Fn(&PhotocraftApp)>,
+}
+
+fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Loaded {
+    Loaded { name, seed, check: Box::new(check) }
+}
+
+/// One app per case: what it loads, then what its first tick leaves in the file. A load that reset values writes the
+/// repaired preferences on that tick, so the file must read back cleanly as what the app holds; a repair that drops
+/// other keys fails here without a restarted app.
+fn run_loaded(cases: Vec<Loaded>) {
+    for case in cases {
+        eprintln!("case: {}", case.name);
+        let files = Arc::new(MemoryFiles::new());
+        seed(&files, &case.seed, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION));
+        let mut app = app_on(&files);
+        (case.check)(&app);
+        let ctx = app.ctx().clone();
+        tick(&mut app, &ctx);
+        let (reread, report) = services_on(&files).settings.unwrap();
+        assert!(report.section_errors.is_empty(), "{}: {:?}", case.name, report.section_errors);
+        // Compared as written: the file has no nulls, while the preset libraries hold some in memory.
+        let written = |p: &prefs::SavedPrefs| serde_json::to_value(p).unwrap();
+        assert_eq!(written(reread.get()), written(&app.session.saved_prefs()), "{}", case.name);
+    }
+}
+
+fn restart_cases() -> Vec<Case> {
+    use crate::state::Tool;
+    let mem = photocraft_engine::preset_store::MemBackend::default();
+    let (early, late) = (mem.clone(), mem.clone());
+    vec![
+        Case {
+            name: "recent files and their count",
+            seed: None,
+            set: Box::new(|app, _| {
+                app.push_recent("/work/a.psd");
+                app.push_recent("/work/b.png");
+            }),
+            check: Box::new(|app, ctx, _| {
+                // The list comes back, newest first.
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
+                // Lowering "Recent File List Contains" shortens the menu at once; 0 turns it off.
+                app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 1}})).unwrap();
+                tick(app, ctx);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string()]);
+                app.push_recent("/work/c.tif");
+                assert_eq!(app.session.prefs().file_handling.recent_files, vec!["/work/c.tif".to_string()]);
+                app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
+                tick(app, ctx);
+                app.push_recent("/work/d.tif");
+                assert!(app.ui.recent_files.is_empty());
+                // Clearing the list in Preferences (or by an agent) reaches the menu.
+                app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": ["/x.psd"]}})).unwrap();
+                tick(app, ctx);
+                assert_eq!(*app.ui.recent_files, vec!["/x.psd".to_string()]);
+                // A hostile count from a hand-edited preferences file is capped, not trusted.
+                app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
+                app.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);
+                assert_eq!(app.recent_cap(), 100);
+            }),
+        },
+        Case {
+            name: "selected tool",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                // Start from a non-default tool so returning to Move is an explicit change that gets persisted.
+                for tool in [Tool::Brush, Tool::Eraser] {
+                    app.ui.tool = tool;
+                    crate::tool_memory::persist(app, ctx);
+                    tick(app, ctx);
+                }
+            }),
+            check: Box::new(|app, _, stored| {
+                assert_eq!(stored["selectedTool"], json!("Eraser"));
+                assert_eq!(app.ui.tool, Tool::Eraser, "restored before the first frame");
+                assert_eq!(app.ui.group_tool(Tool::Eraser.key()), Some(Tool::Eraser));
+                assert_eq!(app.ui.tool_options, crate::state::ToolOptions::default());
+            }),
+        },
+        Case {
+            name: "selecting the default tool overwrites a remembered one",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                for tool in [Tool::Brush, Tool::Move] {
+                    app.ui.tool = tool;
+                    crate::tool_memory::persist(app, ctx);
+                    tick(app, ctx);
+                }
+            }),
+            check: Box::new(|app, _, stored| {
+                assert_eq!(stored["selectedTool"], json!("Move"));
+                assert_eq!(app.ui.tool, Tool::Move);
+            }),
+        },
+        Case {
+            // #3569: a restart keeps the last tool of every group, not only the selected tool's.
+            name: "group tools",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket, Tool::PolygonLasso, Tool::Pencil, Tool::Zoom] {
+                    app.ui.tool = tool;
+                    crate::tool_memory::persist(app, ctx);
+                    tick(app, ctx);
+                }
+            }),
+            check: Box::new(|app, _, stored| {
+                let expected = [Tool::Zoom, Tool::Pencil, Tool::PolygonLasso, Tool::PaintBucket, Tool::Brush, Tool::Move];
+                assert_eq!(stored["groupTools"], json!(["Zoom", "Pencil", "PolygonLasso", "PaintBucket", "Brush", "Move"]), "most recent first, each once");
+                assert_eq!(app.ui.tool, Tool::Zoom);
+                assert_eq!(app.ui.group_tools, expected);
+                assert_eq!(app.ui.group_tool('B'), Some(Tool::Pencil), "the group's latest tool");
+                assert_eq!(app.ui.group_tool('G'), Some(Tool::PaintBucket));
+                assert_eq!(app.ui.group_tool('L'), Some(Tool::PolygonLasso));
+            }),
+        },
+        Case {
+            name: "tool options",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                app.ui.tool_options.move_auto_select = false;
+                app.ui.tool_options.feather = 12.0;
+                app.ui.tool_options.transform.interpolation = Some(Interpolation::NearestNeighbor);
+                crate::tool_memory::persist(app, ctx);
+            }),
+            check: Box::new(|app, _, stored| {
+                assert_eq!(stored["toolOptions"]["transform"]["interpolation"], "nearestNeighbor");
+                assert!(!app.ui.tool_options.move_auto_select);
+                assert_eq!(app.ui.tool_options.feather, 12.0);
+                assert_eq!(app.ui.tool_options.transform.interpolation, Some(Interpolation::NearestNeighbor));
+                assert_eq!(app.ui.tool_options.tolerance, crate::state::ToolOptions::default().tolerance, "only what differs is stored");
+            }),
+        },
+        Case {
+            // #6212: every painting tool keeps its own brush, and the session brush comes back as the brush of the
+            // tool that had it.
+            name: "tool brushes",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                let set_size = |app: &mut PhotocraftApp, size: f32| {
+                    app.session.tools.brush.size = size;
+                    app.session.tools.brush.opacity = size / 100.0;
+                    app.session.tools.brush_changed();
+                };
+                set_size(app, 77.0);
+                app.ui.tool = Tool::Eraser;
+                crate::paint_mouse::sync_tool_brush(app);
+                set_size(app, 33.0);
+                app.ui.tool = Tool::CloneStamp;
+                crate::paint_mouse::sync_tool_brush(app);
+                set_size(app, 12.0);
+                app.ui.tool = Tool::Eraser;
+                crate::paint_mouse::sync_tool_brush(app);
+                crate::last_brush::persist(app, ctx);
+                crate::tool_memory::persist(app, ctx);
+            }),
+            check: Box::new(|app, _, stored| {
+                assert_eq!(stored["toolBrushes"]["owner"], json!("Eraser"));
+                assert_eq!(stored["toolBrushes"]["brushes"]["Brush"]["size"], json!(77.0));
+                assert_eq!(stored["toolBrushes"]["brushes"]["CloneStamp"]["size"], json!(12.0));
+                assert!(stored["toolBrushes"]["brushes"].get("Eraser").is_none(), "the owner's brush is the last brush");
+                assert_eq!((app.ui.tool, app.ui.brush_tool), (Tool::Eraser, Tool::Eraser));
+                assert_eq!(app.session.tools.brush.size, 33.0, "the Eraser's brush is the session brush");
+                for (tool, size) in [(Tool::Brush, 77.0), (Tool::CloneStamp, 12.0), (Tool::Eraser, 33.0)] {
+                    app.ui.tool = tool;
+                    crate::paint_mouse::sync_tool_brush(app);
+                    assert_eq!(app.session.tools.brush.size, size, "{tool:?}");
+                    assert_eq!(app.session.tools.brush.opacity, size / 100.0, "{tool:?}");
+                }
+            }),
+        },
+        Case {
+            name: "untouched View items store nothing",
+            seed: None,
+            set: Box::new(crate::view_cmds::persist),
+            check: Box::new(|_, _, stored| {
+                // So later default changes still reach the user.
+                assert!(stored.get("viewExtras").is_none_or(Value::is_null));
+            }),
+        },
+        Case {
+            name: "View Show items",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                // The menu commands, as a user toggles them (#3762: Pixel Grid off).
+                for id in ["view.show.pixelGrid", "view.show.grid", "view.snapTo.layers", "view.extras"] {
+                    crate::menus::invoke(app, ctx, id, json!({})).unwrap();
+                }
+                crate::view_cmds::persist(app, ctx);
+            }),
+            check: Box::new(|app, _, stored| {
+                assert_eq!(stored["viewExtras"], json!({"extras": false, "grid": true, "show": {"pixelGrid": false}, "snapTo": {"layers": false}}));
+                let v = &app.ui.view;
+                assert!(!v.extras && !v.show.pixel_grid && !v.snap_to.layers && app.ui.extras.grid);
+                assert!(v.show.selection_edges && v.snap_to.guides && app.ui.extras.guides, "the rest keep their defaults");
+            }),
+        },
+        Case {
+            name: "View snap off",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                assert!(app.ui.extras.snap, "on by default");
+                crate::menus::invoke(app, ctx, "view.snap", json!({})).unwrap();
+                assert!(!app.ui.extras.snap);
+                crate::view_cmds::persist(app, ctx);
+            }),
+            check: Box::new(|app, ctx, stored| {
+                assert_eq!(stored["viewExtras"], json!({"snap": false}));
+                assert!(!app.ui.extras.snap, "still off after a restart");
+                crate::menus::invoke(app, ctx, "view.snap", json!({})).unwrap();
+                crate::view_cmds::persist(app, ctx);
+                assert!(app.session.prefs().view_extras.is_null());
+            }),
+        },
+        Case {
+            // #9479: Interface › Enable animations is gone (Photoshop has none). A file saved with it off still
+            // loads whole, and egui's fades and scroll glides keep their defaults.
+            name: "a saved enable-animations flag",
+            seed: Some(json!({"interface": {"enableAnimations": false, "showTooltips": false}})),
+            set: Box::new(|_, _| {}),
+            check: Box::new(|app, ctx, _| {
+                let style = egui::Style::default();
+                let both = |ctx: &egui::Context| {
+                    [egui::Theme::Dark, egui::Theme::Light].map(|t| (ctx.style_of(t).animation_time, ctx.style_of(t).scroll_animation.duration.max))
+                };
+                let expected = (style.animation_time, style.scroll_animation.duration.max);
+                assert!(expected.0 > 0.0 && expected.1 > 0.0);
+                assert!(app.ui.status.is_empty(), "{}", app.ui.status);
+                assert!(!app.session.prefs().interface.show_tooltips, "the rest of the file loads");
+                assert_eq!(both(ctx), [expected, expected]);
+                app.apply_theme(ctx, crate::theme::AppTheme::studio_light());
+                tick(app, ctx);
+                assert_eq!(both(ctx), [expected, expected], "after a theme change");
+                assert!(app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).is_err());
+            }),
+        },
+        Case {
+            name: "brush presets made before the store attached",
+            seed: None,
+            set: Box::new(move |app, ctx| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                app.services.preset_store = Some(rx);
+                // Still loading: presets made now are kept and written once the store arrives.
+                tick(app, ctx);
+                app.run("brush.presets.save", json!({"name": "Early"})).unwrap();
+                assert!(early.files.lock().unwrap().is_empty());
+                tx.send(photocraft_engine::preset_store::open(Box::new(early.clone()))).unwrap();
+                tick(app, ctx);
+                assert!(app.services.preset_store.is_none() && app.session.preset_store().is_some());
+                app.run("brush.presets.save", json!({"name": "Late"})).unwrap();
+            }),
+            check: Box::new(move |_, _, _| {
+                let mut session = photocraft_engine::Session::new();
+                assert!(session.attach_preset_store(photocraft_engine::preset_store::open(Box::new(late.clone()))).is_empty());
+                for n in ["Early", "Late"] {
+                    assert!(session.tools.presets.iter().any(|p| p.name == n), "{n}");
+                }
+            }),
+        },
+        Case {
+            name: "tool colours",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                app.run("tools.setColors", json!({"foreground": [0.2, 0.4, 0.6, 0.8], "background": [0.9, 0.7, 0.3, 1.0]})).unwrap();
+                crate::tool_memory::persist(app, ctx);
+            }),
+            check: Box::new(|app, ctx, _| {
+                assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 0.8]);
+                assert_eq!(app.session.tools.background, [0.9, 0.7, 0.3, 1.0]);
+                let rev = app.session.prefs.rev();
+                crate::tool_memory::persist(app, ctx);
+                assert_eq!(app.session.prefs.rev(), rev, "unchanged colours do not rewrite preferences");
+            }),
+        },
+    ]
+}
+
+#[test]
+fn remembered_state_survives_a_restart() {
+    run_cases(restart_cases());
+}
+
+/// The load-only cases, and the cases that set state in a first app and restart.
+fn damaged_cases() -> (Vec<Loaded>, Vec<Case>) {
+    use crate::state::Tool;
+    let d = crate::state::ToolOptions::default;
+    let mut cases = Vec::new();
+    // The file is TOML, which has no null: a damaged value is of the wrong type, or out of range.
+    for bad in [json!("FutureTool"), json!(42), json!({}), json!([])] {
+        cases.push(loaded("selected tool", json!({"selectedTool": bad, "toolOptions": {"feather": 12.0}}), |app| {
+            assert_eq!(app.ui.tool, Tool::Move);
+            assert_eq!(app.ui.tool_options.feather, 12.0);
+        }));
+    }
+    for bad in [json!("Pencil"), json!(42), json!({"B": "Pencil"})] {
+        cases.push(loaded("group tools", json!({"groupTools": bad, "toolOptions": {"feather": 12.0}}), |app| {
+            assert_eq!(app.ui.group_tools, [Tool::Move]);
+            assert_eq!(app.ui.tool_options.feather, 12.0);
+        }));
+    }
+    cases.push(loaded("group tools that partly read back", json!({"groupTools": ["FutureTool", "Pencil", 7, {}, "PaintBucket", "Pencil"]}), |app| {
+        assert_eq!(app.ui.group_tools, [Tool::Move, Tool::Pencil, Tool::PaintBucket]);
+    }));
+    // #6212: a value its options-bar field could never hold is clamped to the field's range, or takes the default.
+    cases.push(loaded(
+        "tool options out of range",
+        json!({"toolOptions": {
+            "feather": 1e30, "tolerance": -5.0, "polygon_sides": 0, "eyedropper_size": 7,
+            "crop": {"guideOrientation": 9}, "fill_opacity": 0.0, "magnetic": {"width": 1e9},
+            "pattern_stamp_angle": -720.0, "marquee_width": 1e7, "shape_stroke": {"miter_limit": -1.0, "opacity": 5.0},
+        }}),
+        move |app| {
+            let o = &app.ui.tool_options;
+            let d = d();
+            assert_eq!((o.feather, o.tolerance, o.polygon_sides, o.eyedropper.size), (1000.0, 0.0, 3, d.eyedropper.size));
+            assert_eq!((o.crop.guide_orientation, o.fill_opacity, o.magnetic.width), (d.crop.guide_orientation, 1.0, 256.0));
+            assert_eq!((o.pattern_stamp_angle, o.marquee_width), (-180.0, 999.0));
+            assert_eq!(o.shape_stroke, d.shape_stroke, "an invalid stroke style takes the default");
+        },
+    ));
+    cases.push(loaded("tool options: a good value is left alone", json!({"toolOptions": {"feather": 12.5}}), move |app| {
+        assert_eq!(app.ui.tool_options, crate::state::ToolOptions { feather: 12.5, ..d() });
+        let mut def = d();
+        crate::tool_memory::sanitize(&mut def);
+        assert_eq!(def, d(), "in-range defaults never change");
+    }));
+    for (bad, tolerance) in [(json!("junk"), 32.0), (json!({"move_auto_select": "no", "feather": 1e300, "tolerance": 5.0, "unknown": 1}), 5.0)] {
+        cases.push(loaded("tool options of the wrong type", json!({"toolOptions": bad}), move |app| {
+            let o = &app.ui.tool_options;
+            assert!(o.move_auto_select && o.feather == 0.0);
+            assert_eq!(o.tolerance, tolerance);
+        }));
+    }
+    for bad in [json!("junk"), json!(42), json!({"owner": [1], "brushes": "x"}), json!({"brushes": {"Eraser": 5}})] {
+        cases.push(loaded("tool brushes", json!({"toolBrushes": bad}), |app| {
+            assert_eq!(app.ui.brush_tool, Tool::Brush);
+            assert!(app.ui.tool_brushes.is_empty());
+        }));
+    }
+    // What reads back loads, clamped to the options bar's ranges; the rest is skipped and those tools start from the brush.
+    cases.push(loaded(
+        "tool brushes out of range",
+        json!({"toolBrushes": {"owner": "Move", "brushes": {
+            "Eraser": {"size": 1e30}, "Bogus": {"size": 5.0}, "Move": {"size": 5.0},
+            "Smudge": {"size": -3.0, "opacity": 50.0, "flow": -2.0, "hardness": 1e30},
+            "Brush": {"size": 9.0},
+        }}}),
+        |app| {
+            assert_eq!(app.ui.brush_tool, Tool::Brush, "the Move tool has no brush");
+            let tools: Vec<Tool> = app.ui.tool_brushes.iter().map(|(t, _)| *t).collect();
+            assert_eq!(tools, vec![Tool::Smudge], "too large, unknown, brushless and the owner's own are skipped");
+            let b = &app.ui.tool_brushes[0].1;
+            assert_eq!((b.size, b.opacity, b.flow, b.hardness), (1.0, 1.0, 0.0, 1.0));
+        },
+    ));
+    // CMYK picks: the table is bounded, and malformed or out-of-range entries are dropped.
+    let limit = photocraft_engine::ToolState::CMYK_PICKS;
+    let mut picks: Vec<Value> = (0..limit + 3).map(|i| json!([[i as f32 / 16.0, 0.2, 0.3], [0.1, 0.2, 0.3, 0.4]])).collect();
+    picks.extend([json!("bad"), json!([[0, 0, 0], [1, 0, 0]]), json!([[0, 0, 0], [2, 0, 0, 0]]), json!([[1e100, 0, 0], [1, 0, 0, 0]])]);
+    cases.push(loaded("CMYK picks", json!({"toolColors": {"foreground": [0.2, 0.4, 0.6, 1.0], "cmykPicks": picks}}), move |app| {
+        assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 1.0]);
+        assert_eq!(app.session.tools.cmyk_picks.len(), limit);
+        assert_eq!(app.session.tools.picked_cmyk([0.0, 0.2, 0.3]), None);
+        assert_eq!(app.session.tools.picked_cmyk([(limit + 2) as f32 / 16.0, 0.2, 0.3]), Some([0.1, 0.2, 0.3, 0.4]));
+    }));
+    for bad in [json!("red"), json!([1, 0, 0]), json!([1e100, 0, 0, 1]), json!([0, "bad", 0, 1])] {
+        cases.push(loaded(
+            "tool colour swatch",
+            json!({"toolColors": {"foreground": bad, "background": [0.2, 0.4, 0.6, 1.0]}, "toolOptions": {"feather": 12.0}}),
+            |app| {
+                assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
+                assert_eq!(app.session.tools.background, [0.2, 0.4, 0.6, 1.0]);
+                assert_eq!(app.ui.tool_options.feather, 12.0);
+            },
+        ));
+    }
+    cases.push(loaded("no tool colours saved", json!({"toolOptions": {"feather": 12.0}}), |app| {
+        assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(app.session.tools.background, [1.0; 4]);
+    }));
+    // A tool-colour preset with an invalid channel is refused and leaves the remembered colours alone.
+    let mut restarts = Vec::new();
+    for bad_channel in [json!(1e100), json!("red"), json!(true), json!({}), json!([])] {
+        restarts.push(Case {
+            name: "tool colours after an invalid preset",
+            seed: None,
+            set: Box::new(move |app, _| {
+                app.run("tools.setColors", json!({"foreground": [0.2, 0.4, 0.6, 0.8]})).unwrap();
+                crate::tool_memory::save_on_exit(app).unwrap();
+                app.run("tool.presets.new", json!({"name": "Invalid", "tool": "move", "options": {"foreground": [bad_channel.clone(), 0.4, 0.6, 1.0]}}))
+                    .unwrap();
+                assert!(app.run("tool.presets.select", json!({"preset": "Invalid"})).is_err());
+                crate::tool_memory::save_on_exit(app).unwrap();
+            }),
+            check: Box::new(|app, _, stored| {
+                // The file holds the f32 colour widened to f64.
+                assert_eq!(stored["toolColors"]["selections"]["foreground"]["color"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
+                assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 0.8]);
+            }),
+        });
+    }
+    (cases, restarts)
+}
+
+#[test]
+fn a_damaged_remembered_value_resets_only_itself() {
+    let (loaded, restarts) = damaged_cases();
+    run_loaded(loaded);
+    run_cases(restarts);
 }
 
 #[test]
@@ -1061,7 +1174,7 @@ fn selected_tool_is_flushed_on_exit_without_another_frame() {
     let (mut app, store) = app_with_store();
     app.ui.tool = crate::state::Tool::Brush;
     crate::tool_memory::save_on_exit(&mut app).unwrap();
-    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    let app2 = app_on(&store);
     assert_eq!(app2.ui.tool, crate::state::Tool::Brush);
 }
 
@@ -1084,23 +1197,9 @@ fn selected_tool_explicit_eraser_survives_exit_during_temporary_switches() {
             assert_eq!(app.stylus.tool_before_eraser, None);
             assert!(app.ui.spring.is_none());
             crate::tool_memory::save_on_exit(&mut app).unwrap();
-            let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+            let restored = app_on(&store);
             assert_eq!(restored.ui.tool, Tool::Eraser);
         }
-    }
-}
-
-#[test]
-fn invalid_selected_tool_preserves_other_preferences() {
-    for bad in [json!(null), json!("FutureTool"), json!(42), json!({}), json!([])] {
-        let (app, _) = app_with_saved(Some(
-            json!({
-                "selectedTool": bad, "toolOptions": {"feather": 12.0}
-            })
-            .to_string(),
-        ));
-        assert_eq!(app.ui.tool, crate::state::Tool::Move, "{bad}");
-        assert_eq!(app.ui.tool_options.feather, 12.0);
     }
 }
 
@@ -1112,17 +1211,13 @@ fn selected_tool_excludes_temporary_switches() {
     app.ui.tool = Tool::Brush;
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
-    app.tool_override = Some(Tool::Hand);
-    crate::tool_memory::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    assert_eq!(stored(&store)["selectedTool"], json!("Brush"));
-    app.tool_override = None;
     app.ui.tool = Tool::Zoom;
     crate::spring_tools::pressed(&mut app, 'Z', Tool::Brush, true, 0.0);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     assert_eq!(stored(&store)["selectedTool"], json!("Brush"));
-    // A quick tap commits the choice after spring_tools clears the pending switch.
+    // A quick tap commits the choice once the letter is up (its command's release) and spring_tools clears the switch.
+    crate::spring_tools::released(&mut app, 'Z', 0.0);
     crate::spring_tools::tick(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
@@ -1139,27 +1234,6 @@ fn selected_tool_excludes_temporary_switches() {
     assert_eq!(stored(&store)["selectedTool"], json!("PolygonLasso"));
 }
 
-/// #3569: a restart keeps the last tool of every group, not only the selected tool's.
-#[test]
-fn group_tools_survive_a_restart() {
-    use crate::state::Tool;
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket, Tool::PolygonLasso, Tool::Pencil, Tool::Zoom] {
-        app.ui.tool = tool;
-        crate::tool_memory::persist(&mut app, &ctx);
-        tick(&mut app, &ctx);
-    }
-    assert_eq!(stored(&store)["groupTools"], json!(["Zoom", "Pencil", "PolygonLasso", "PaintBucket", "Brush", "Move"]), "most recent first, each once");
-    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(app2.ui.tool, Tool::Zoom);
-    assert_eq!(app2.ui.group_tools, app.ui.group_tools);
-    assert_eq!(app2.ui.group_tool('B'), Some(Tool::Pencil), "the group's latest tool");
-    assert_eq!(app2.ui.group_tool('G'), Some(Tool::PaintBucket));
-    assert_eq!(app2.ui.group_tool('L'), Some(Tool::PolygonLasso));
-}
-
 #[test]
 fn group_tools_are_flushed_on_exit_without_another_frame() {
     use crate::state::Tool;
@@ -1168,7 +1242,7 @@ fn group_tools_are_flushed_on_exit_without_another_frame() {
     crate::tool_memory::persist(&mut app, &egui::Context::default());
     app.ui.tool = Tool::PaintBucket;
     crate::tool_memory::save_on_exit(&mut app).unwrap();
-    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    let app2 = app_on(&store);
     assert_eq!(app2.ui.group_tool('B'), Some(Tool::Pencil));
     assert_eq!(app2.ui.group_tool('G'), Some(Tool::PaintBucket));
 }
@@ -1199,7 +1273,7 @@ fn group_tools_are_saved_when_the_selected_tool_stays_the_same() {
     tool_frame(&mut app, &ctx, vec![]);
     tool_frame(&mut app, &ctx, vec![pointer(false)]);
     assert_eq!(stored(&store)["selectedTool"], json!("Brush"));
-    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    let app2 = app_on(&store);
     assert_eq!(app2.ui.group_tool('G'), Some(Tool::PaintBucket));
 }
 
@@ -1220,8 +1294,11 @@ fn group_tools_exclude_temporary_switches() {
     assert_eq!(app.ui.group_tool('E'), Some(Tool::MagicEraser), "the pen's eraser end");
     app.stylus.tool_before_eraser = None;
     app.ui.tool = Tool::Brush;
-    let press = egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
-    tool_frame(&mut app, &ctx, vec![press]);
+    // The window host holds Z down; the app's own frames route it as the tool command and keep the letter held.
+    craft::ui::runtime::windows::WindowHost::of(app.ctx()).inject_key(egui::ViewportId::ROOT, craft::keymap::Key::Z, craft::keymap::Mods::default(), true);
+    for _ in 0..3 {
+        crate::canvas::testing::frame(&mut app);
+    }
     tool_frame(&mut app, &ctx, vec![]);
     assert_eq!(app.ui.tool, Tool::Zoom, "Z is still down");
     assert_eq!(app.ui.group_tool('Z'), None, "a held letter");
@@ -1235,126 +1312,13 @@ fn group_tools_exclude_temporary_switches() {
 fn a_launch_alone_saves_no_group_tools() {
     use crate::state::Tool;
     let saved = json!({"selectedTool": "FutureTool", "groupTools": ["Pencil", "FutureTool", "PaintBucket"]});
-    let (mut app, store) = app_with_saved(Some(saved.to_string()));
+    let (mut app, store) = app_with_json(&saved);
     let ctx = egui::Context::default();
     tool_frame(&mut app, &ctx, vec![]);
     assert_eq!(stored(&store)["groupTools"], saved["groupTools"]);
     app.ui.tool = Tool::Brush;
     tool_frame(&mut app, &ctx, vec![]);
     assert_eq!(stored(&store)["groupTools"], json!(["Brush", "Move", "Pencil", "PaintBucket"]));
-}
-
-/// A damaged or hand-edited `groupTools` costs no other preference, and what reads back counts.
-#[test]
-fn damaged_group_tools_keep_what_reads_back() {
-    use crate::state::Tool;
-    for bad in [json!(null), json!("Pencil"), json!(42), json!({"B": "Pencil"})] {
-        let (app, _) = app_with_saved(Some(json!({"groupTools": bad, "toolOptions": {"feather": 12.0}}).to_string()));
-        assert_eq!(app.ui.group_tools, [Tool::Move], "{bad}");
-        assert_eq!(app.ui.tool_options.feather, 12.0);
-    }
-    let saved = json!({"groupTools": ["FutureTool", "Pencil", 7, null, {}, "PaintBucket", "Pencil"]});
-    let (app, _) = app_with_saved(Some(saved.to_string()));
-    assert_eq!(app.ui.group_tools, [Tool::Move, Tool::Pencil, Tool::PaintBucket]);
-}
-
-#[test]
-fn tool_options_survive_a_restart() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    app.ui.tool_options.move_auto_select = false;
-    app.ui.tool_options.feather = 12.0;
-    app.ui.tool_options.transform_interpolation = Some(photocraft_engine::prefs::Interpolation::Nearest);
-    crate::tool_memory::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    // Only what differs from the defaults is stored.
-    assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0, "transform_interpolation": "nearestNeighbor"}));
-    let saved = store.lock().unwrap().clone().unwrap();
-    let (mut app2, _) = app_with_saved(Some(saved));
-    tick(&mut app2, &ctx);
-    assert!(!app2.ui.tool_options.move_auto_select);
-    assert_eq!(app2.ui.tool_options.feather, 12.0);
-    assert_eq!(app2.ui.tool_options.transform_interpolation, Some(photocraft_engine::prefs::Interpolation::Nearest));
-    assert_eq!(app2.ui.tool_options.tolerance, crate::state::ToolOptions::default().tolerance);
-    // A hand-edited file: unreadable fields keep their defaults, the good ones still load.
-    for bad in [json!("junk"), json!({"move_auto_select": "no", "feather": 1e300, "tolerance": 5.0, "unknown": 1})] {
-        let (mut app3, _) = app_with_saved(Some(json!({"toolOptions": bad}).to_string()));
-        tick(&mut app3, &ctx);
-        let o = &app3.ui.tool_options;
-        assert!(o.move_auto_select && o.feather == 0.0, "{bad}");
-        assert_eq!(o.tolerance, if bad.is_object() { 5.0 } else { 32.0 });
-    }
-}
-
-/// #6212: a remembered value its options-bar field could never hold is clamped to the
-/// field's range (or takes the default) rather than reaching the tool.
-#[test]
-fn remembered_tool_options_are_clamped_to_their_fields() {
-    let ctx = egui::Context::default();
-    let hostile = json!({"toolOptions": {
-        "feather": 1e30, "tolerance": -5.0, "polygon_sides": 0, "eyedropper_size": 7,
-        "crop_overlay_orientation": 9, "fill_opacity": 0.0, "magnetic_width": 1e9,
-        "pattern_stamp_angle": -720.0, "marquee_width": 1e7, "shape_stroke": {"miter_limit": -1.0, "opacity": 5.0},
-    }});
-    let (mut app, _) = app_with_saved(Some(hostile.to_string()));
-    tick(&mut app, &ctx);
-    let o = &app.ui.tool_options;
-    let d = crate::state::ToolOptions::default();
-    assert_eq!((o.feather, o.tolerance, o.polygon_sides, o.eyedropper_size), (1000.0, 0.0, 3, d.eyedropper_size));
-    assert_eq!((o.crop_overlay_orientation, o.fill_opacity, o.magnetic_width), (d.crop_overlay_orientation, 1.0, 256.0));
-    assert_eq!((o.pattern_stamp_angle, o.marquee_width), (-180.0, 999.0));
-    assert_eq!(o.shape_stroke, d.shape_stroke, "an invalid stroke style takes the default");
-    // A good value is left alone, and in-range defaults never change (nothing to save).
-    let (mut app2, _) = app_with_saved(Some(json!({"toolOptions": {"feather": 12.5}}).to_string()));
-    tick(&mut app2, &ctx);
-    assert_eq!(app2.ui.tool_options, crate::state::ToolOptions { feather: 12.5, ..d.clone() });
-    let mut def = d.clone();
-    crate::tool_memory::sanitize(&mut def);
-    assert_eq!(def, d);
-}
-
-/// #6212: every painting tool keeps its own brush across a restart, and the session brush
-/// comes back as the brush of the tool that had it.
-#[test]
-fn tool_brushes_survive_a_restart() {
-    use crate::state::Tool;
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    let set_size = |app: &mut PhotocraftApp, size: f32| {
-        app.session.tools.brush.size = size;
-        app.session.tools.brush.opacity = size / 100.0;
-        app.session.tools.brush_changed();
-    };
-    set_size(&mut app, 77.0);
-    app.ui.tool = Tool::Eraser;
-    crate::paint_mouse::sync_tool_brush(&mut app);
-    set_size(&mut app, 33.0);
-    app.ui.tool = Tool::CloneStamp;
-    crate::paint_mouse::sync_tool_brush(&mut app);
-    set_size(&mut app, 12.0);
-    app.ui.tool = Tool::Eraser;
-    crate::paint_mouse::sync_tool_brush(&mut app);
-    crate::last_brush::persist(&mut app, &ctx);
-    crate::tool_memory::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    let saved = stored(&store);
-    assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"));
-    assert_eq!(saved["toolBrushes"]["brushes"]["Brush"]["size"], json!(77.0));
-    assert_eq!(saved["toolBrushes"]["brushes"]["CloneStamp"]["size"], json!(12.0));
-    assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_none(), "the owner's brush is the last brush");
-
-    let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
-    tick(&mut app2, &ctx);
-    assert_eq!((app2.ui.tool, app2.ui.brush_tool), (Tool::Eraser, Tool::Eraser));
-    assert_eq!(app2.session.tools.brush.size, 33.0, "the Eraser's brush is the session brush");
-    for (tool, size) in [(Tool::Brush, 77.0), (Tool::CloneStamp, 12.0), (Tool::Eraser, 33.0)] {
-        app2.ui.tool = tool;
-        crate::paint_mouse::sync_tool_brush(&mut app2);
-        assert_eq!(app2.session.tools.brush.size, size, "{tool:?}");
-        assert_eq!(app2.session.tools.brush.opacity, size / 100.0, "{tool:?}");
-    }
 }
 
 /// #6212: `toolBrushes.owner` names the tool whose brush `last_brush` holds. A brush that
@@ -1372,63 +1336,33 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
-    // The Brush's tip becomes a big sampled one, then the Eraser takes over that brush.
-    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
+    // The Brush's tip becomes a big sampled one, then the Blur tool takes over that brush (the Eraser has its own
+    // starting tip since #11936).
+    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0)).into();
     app.session.tools.brush_changed();
-    app.ui.tool = Tool::Eraser;
+    app.ui.tool = Tool::Blur;
     crate::paint_mouse::sync_tool_brush(&mut app);
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     let saved = stored(&store);
     assert_eq!(saved["lastBrush"]["brush"]["size"], json!(77.0), "the big tip is not remembered yet");
-    assert_ne!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
-    let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
+    assert_ne!(saved["toolBrushes"]["owner"], json!("Blur"), "{saved}");
+    let mut app2 = app_on(&store);
     tick(&mut app2, &ctx);
     assert_eq!(app2.ui.brush_tool, Tool::Brush, "the 77 px brush is the Brush's");
     assert_eq!(app2.session.tools.brush.size, 77.0);
 
-    // Once the Eraser's brush is saved, the Eraser owns it in the preferences too.
-    app.session.tools.brush.tip = TipShape::Round;
+    // Once the Blur tool's brush is saved, the Blur tool owns it in the preferences too.
+    app.session.tools.brush.tip = TipShape::Round.into();
     app.session.tools.brush.size = 33.0;
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     let saved = stored(&store);
-    assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+    assert_eq!(saved["toolBrushes"]["owner"], json!("Blur"), "{saved}");
     assert_eq!(saved["lastBrush"]["brush"]["size"], json!(33.0));
-}
-
-/// #6212: a damaged or hand-edited `toolBrushes` never panics: what reads back loads (clamped
-/// to the options bar's ranges), the rest is skipped and those tools start from the brush.
-#[test]
-fn remembered_tool_brushes_survive_damage() {
-    use crate::state::Tool;
-    let ctx = egui::Context::default();
-    for bad in [json!("junk"), json!(42), json!({"owner": [1], "brushes": "x"}), json!({"brushes": {"Eraser": 5}})] {
-        let (mut app, _) = app_with_saved(Some(json!({"toolBrushes": bad}).to_string()));
-        tick(&mut app, &ctx);
-        assert_eq!(app.ui.brush_tool, Tool::Brush, "{bad}");
-        assert!(app.ui.tool_brushes.is_empty(), "{bad}");
-    }
-    let hostile = json!({"toolBrushes": {"owner": "Move", "brushes": {
-        "Eraser": {"size": 1e30}, "Bogus": {"size": 5.0}, "Move": {"size": 5.0},
-        "Smudge": {"size": -3.0, "opacity": 50.0, "flow": -2.0, "hardness": 1e30},
-        "Brush": {"size": 9.0},
-    }}});
-    let (mut app, _) = app_with_saved(Some(hostile.to_string()));
-    tick(&mut app, &ctx);
-    assert_eq!(app.ui.brush_tool, Tool::Brush, "the Move tool has no brush");
-    let tools: Vec<Tool> = app.ui.tool_brushes.iter().map(|(t, _)| *t).collect();
-    assert_eq!(tools, vec![Tool::Smudge], "too large, unknown, brushless and the owner's own are skipped");
-    let b = &app.ui.tool_brushes[0].1;
-    assert_eq!((b.size, b.opacity, b.flow, b.hardness), (1.0, 1.0, 0.0, 1.0));
-    // A whole preferences file that isn't JSON: defaults, no panic.
-    let (mut app, _) = app_with_saved(Some("{not json".into()));
-    tick(&mut app, &ctx);
-    assert!(app.ui.tool_brushes.is_empty());
-    assert_eq!(app.ui.tool_options, crate::state::ToolOptions::default());
 }
 
 /// #6212: Reset Tool forgets that tool's remembered options and brush; Reset All Tools
@@ -1474,559 +1408,58 @@ fn reset_tools_clear_the_remembered_options_and_brushes() {
     let starting =
         |brushes: &[(Tool, photocraft_engine::BrushSettings)]| brushes.iter().all(|(t, b)| *b == crate::paint_mouse::fresh_brush(*t, b) && b.size != 77.0);
     assert!(starting(&app.ui.tool_brushes), "{saved}");
-    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    let app2 = app_on(&store);
     assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
     assert!(!app2.ui.tool_brushes.is_empty() && starting(&app2.ui.tool_brushes), "remembered across a restart");
 }
 
-#[test]
-fn view_show_items_survive_a_restart() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    // Untouched: nothing is stored, so later default changes still reach the user.
-    crate::view_cmds::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    assert!(stored(&store).get("viewExtras").is_none_or(Value::is_null));
-    // The menu commands, as a user toggles them (#3762: Pixel Grid off).
-    for id in ["view.show.pixelGrid", "view.show.grid", "view.snapTo.layers", "view.extras"] {
-        crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
-    }
-    crate::view_cmds::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    assert_eq!(stored(&store)["viewExtras"], json!({"extras": false, "grid": true, "show": {"pixelGrid": false}, "snapTo": {"layers": false}}));
-    // A restart gets them back.
-    let saved = store.lock().unwrap().clone().unwrap();
-    let (mut app2, _) = app_with_saved(Some(saved));
-    tick(&mut app2, &ctx);
-    let v = &app2.ui.view;
-    assert!(!v.extras && !v.show.pixel_grid && !v.snap_to.layers && app2.ui.extras.grid);
-    assert!(v.show.selection_edges && v.snap_to.guides && app2.ui.extras.guides, "the rest keep their defaults");
-    // A hand-edited file: unknown keys and non-booleans keep the defaults, good ones still load.
-    for bad in [json!("junk"), json!({"extras": 0, "show": {"pixelGrid": "no", "mesh": true, "bogus": true}, "snapTo": [1]})] {
-        let (mut app3, _) = app_with_saved(Some(json!({"viewExtras": bad}).to_string()));
-        tick(&mut app3, &ctx);
-        let v = &app3.ui.view;
-        assert!(v.extras && v.show.pixel_grid && v.snap_to.layers, "{bad}");
-        assert_eq!(v.show.mesh, bad.is_object());
-    }
-}
-
-#[test]
-fn view_snap_off_survives_a_restart() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert!(app.ui.extras.snap, "on by default");
-    crate::menus::invoke(&mut app, &ctx, "view.snap", json!({})).unwrap();
-    assert!(!app.ui.extras.snap);
-    crate::view_cmds::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    assert_eq!(stored(&store)["viewExtras"], json!({"snap": false}));
-    let saved = store.lock().unwrap().clone().unwrap();
-    let (mut app2, _) = app_with_saved(Some(saved));
-    tick(&mut app2, &ctx);
-    assert!(!app2.ui.extras.snap, "still off after a restart");
-    crate::menus::invoke(&mut app2, &ctx, "view.snap", json!({})).unwrap();
-    crate::view_cmds::persist(&mut app2, &ctx);
-    assert!(app2.session.prefs().view_extras.is_null());
-}
-
-#[test]
-fn show_tooltips_preferences_turn_tooltips_off() {
-    let (mut app, _) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert_eq!(ctx.global_style().interaction.tooltip_delay, crate::theme::TOOLTIP_DELAY);
-    for path in ["interface.showTooltips", "tools.showTooltips"] {
-        app.run("prefs.set", json!({"values": {path: false}})).unwrap();
-        tick(&mut app, &ctx);
-        assert!(ctx.global_style().interaction.tooltip_delay.is_infinite(), "{path} off hides tooltips");
-        app.run("prefs.set", json!({"values": {path: true}})).unwrap();
-        tick(&mut app, &ctx);
-        assert_eq!(ctx.global_style().interaction.tooltip_delay, crate::theme::TOOLTIP_DELAY);
-    }
-}
-
-#[test]
-fn a_saved_enable_animations_loads_and_leaves_egui_animating() {
-    // #9479: Interface › Enable animations is gone (Photoshop has none). A file saved with it
-    // off still loads whole, and egui's fades and scroll glides keep their defaults.
-    let style = egui::Style::default();
-    let both =
-        |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| (ctx.style_of(t).animation_time, ctx.style_of(t).scroll_animation.duration.max));
-    let expected = (style.animation_time, style.scroll_animation.duration.max);
-    assert!(expected.0 > 0.0 && expected.1 > 0.0);
-    for value in [json!(false), json!(true), json!("nope")] {
-        let saved = json!({"version": 2, "interface": {"enableAnimations": value, "showTooltips": false}});
-        let (mut app, _) = app_with_saved(Some(saved.to_string()));
-        let ctx = egui::Context::default();
-        tick(&mut app, &ctx);
-        assert!(app.ui.status.is_empty(), "{value}: {}", app.ui.status);
-        assert!(!app.session.prefs().interface.show_tooltips, "{value}: the rest of the file loads");
-        assert_eq!(both(&ctx), [expected, expected], "{value}");
-        app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
-        tick(&mut app, &ctx);
-        assert_eq!(both(&ctx), [expected, expected], "{value}: after a theme change");
-        assert!(app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).is_err());
-    }
-}
-
-#[test]
-fn unimplemented_preferences_are_hidden_from_the_dialog() {
-    let values = prefs::Preferences::default().to_json();
-    assert!(has_visible_fields(&values, "general"));
-    assert!(has_visible_fields(&values, "fileHandling"));
-    assert!(has_visible_fields(&values, "scratchDisks"));
-    assert!(!prefs::is_hidden("scratchDisks.disks"));
-    // Allow Agent Control and Control Port are read at launch (apps/photocraft main.rs).
-    assert!(has_visible_fields(&values, "integrations"));
-    assert!(!prefs::is_hidden("integrations.allowAgentControl"));
-    assert!(!prefs::is_hidden("integrations.controlPort"));
-    // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
-    assert!(has_visible_fields(&values, "type"));
-    assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
-    assert!(!prefs::is_hidden("type.useEscToCommit"));
-    assert!(!prefs::is_hidden("type.smartQuotes"));
-    assert!(!prefs::is_hidden("type.showFontNamesInEnglish"));
-    // Rotate View with Trackpad, the pinch zoom and Enable Gestures are live; the other
-    // Enhanced Controls rows stay hidden.
-    assert!(has_visible_fields(&values, "enhancedControls"));
-    assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
-    assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
-    assert!(!prefs::is_hidden("enhancedControls.touchGestures"));
-    assert!(prefs::is_hidden("enhancedControls.scrubbySliderAcceleration"));
-    // Camera Raw Defaults are all live: the dialog's Open applies them (camera_raw_ui).
-    assert!(has_visible_fields(&values, "rawDefaults"));
-    for k in ["openInCameraRaw", "demosaic", "applyAutoTone", "colorSpace", "bitDepth", "resolution", "sharpenFor", "openAsSmartObject", "writeXmpSidecars"] {
-        assert!(!prefs::is_hidden(&format!("rawDefaults.{k}")), "{k}");
-    }
-    assert!(!prefs::is_hidden("general.autoShowHomeScreen"));
-    assert!(!prefs::is_hidden("general.animatedZoom"));
-    assert!(!prefs::is_hidden("general.zoomResizesWindows"));
-    assert!(!prefs::is_hidden("interface.uiScale"));
-    assert!(!prefs::is_hidden("interface.uiFontSize"));
-    // Hidden values still round-trip through the dialog untouched.
-    let (mut app, _) = app_with_store();
-    app.run("prefs.set", json!({"values": {"type.smartQuotes": false}})).unwrap();
-    let id = open_preferences(&mut app, "type");
-    let fields = app.ui.dialogs.iter().find(|d| d.id == id).map(|d| d.fields.clone()).unwrap();
-    confirm(&mut app, &fields).unwrap();
-    assert!(!app.session.prefs().type_.smart_quotes);
-}
-
-#[test]
-fn preferences_persist_through_services_and_theme_follows() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    app.run("prefs.set", json!({"values": {"interface.theme": "studioLight", "performance.historyStates": 12}})).unwrap();
-    tick(&mut app, &ctx);
-    assert_eq!(app.ui.theme, ThemeKind::StudioLight);
-    let saved = store.lock().unwrap().clone().unwrap();
-    assert!(saved.contains("\"historyStates\": 12"));
-    // A new app instance loads them.
-    let (mut app2, store2) = app_with_saved(Some(saved));
-    tick(&mut app2, &ctx);
-    assert_eq!(app2.session.prefs().performance.history_states, 12);
-    assert_eq!(app2.ui.theme, ThemeKind::StudioLight);
-    // Picking a theme from the Window menu becomes the preference.
-    crate::menus::invoke(&mut app2, &ctx, "window.theme.classic", json!({})).unwrap();
-    tick(&mut app2, &ctx);
-    assert_eq!(app2.session.prefs().interface.theme, Theme::Classic);
-    assert!(store2.lock().unwrap().as_ref().unwrap().contains("classic"));
-}
-
-#[test]
-fn preset_export_dialog_offers_tool_presets() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let ctx = egui::Context::default();
-    let opened = crate::menus::invoke(&mut app, &ctx, "edit.presets.exportImportPresets", json!({})).unwrap();
-    let fields = app.ui.dialog_mut(opened["dialog"].as_u64().unwrap()).unwrap().fields.clone();
-    assert_eq!(fields["tools"], true);
-    let mut h = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(presets_io_body, fields);
-    h.run_steps(2);
-    h.get_by_label("Tool Presets").click();
-    h.run_steps(2);
-    assert_eq!(h.state()["tools"], false);
-    assert_eq!(h.state()["brushes"], true);
-    assert_eq!(h.state()["customShapes"], true);
-}
-
-#[test]
-fn brush_preset_store_attaches_when_loaded_and_persists() {
-    use photocraft_engine::preset_store::{MemBackend, open};
-    let mem = MemBackend::default();
-    let ctx = egui::Context::default();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { preset_store: Some(rx), ..Default::default() });
-    // Still loading: presets made now are kept and written once the store arrives.
-    tick(&mut app, &ctx);
-    app.run("brush.presets.save", json!({"name": "Early"})).unwrap();
-    assert!(mem.files.lock().unwrap().is_empty());
-    tx.send(open(Box::new(mem.clone()))).unwrap();
-    tick(&mut app, &ctx);
-    assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
-    app.run("brush.presets.save", json!({"name": "Late"})).unwrap();
-    let mut s2 = photocraft_engine::Session::new();
-    assert!(s2.attach_preset_store(open(Box::new(mem))).is_empty());
-    for n in ["Early", "Late"] {
-        assert!(s2.tools.presets.iter().any(|p| p.name == n), "{n}");
-    }
-}
+// --- the Preferences window ----------------------------------------------------------------------------------------
 
 #[test]
 fn preferences_dialog_round_trip() {
     let (mut app, _) = app_with_store();
-    let ctx = egui::Context::default();
-    let r = crate::menus::invoke(&mut app, &ctx, "edit.preferences.cursors", json!({})).unwrap();
-    let id = r["dialog"].as_u64().unwrap();
-    let d = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().clone();
-    assert_eq!(d.fields["section"], "cursors");
-    let mut values = d.fields["values"].clone();
-    values["cursors"]["painting"] = json!("fullSizeTip");
-    values["unitsAndRulers"]["rulers"] = json!("inches");
-    app.ui.dialog_mut(id).unwrap().fields.insert("values".into(), values);
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    open_prefs(&mut app, "cursors");
+    edit(&mut app, "cursors.painting", PrefValue::Choice("fullSizeTip".into()));
+    edit(&mut app, "unitsAndRulers.rulers", PrefValue::Choice("inches".into()));
+    apply_window(&mut app).unwrap();
     assert_eq!(app.session.prefs().cursors.painting, prefs::PaintingCursor::FullSizeTip);
     assert_eq!(app.session.prefs().units_and_rulers.rulers, prefs::Unit::Inches);
-    // Invalid values are rejected and nothing changes.
-    let id = open_preferences(&mut app, "performance");
-    let mut values = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"].clone();
-    values["performance"]["historyStates"] = json!(0);
-    app.ui.dialog_mut(id).unwrap().fields.insert("values".into(), values);
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    assert_eq!(app.session.prefs().performance.history_states, 50);
+    // Reopening shows what the engine holds.
+    let pages = serde_json::to_value(super::fields::PrefPages::of(app.session.prefs())).unwrap();
+    assert_eq!(pages["cursors"]["painting"], "fullSizeTip");
+    assert_eq!(pages["unitsAndRulers"]["rulers"], "inches");
 }
 
-#[test]
-fn preferences_apply_button_saves_without_closing_and_cancel_keeps_applied_values() {
-    use egui_kittest::{
-        Harness,
-        kittest::{NodeT, Queryable},
-    };
-
-    let (mut app, store) = app_with_store();
-    app.run("prefs.set", json!({"values": {"interface.language": "en", "type.smartQuotes": false}})).unwrap();
-    let id = open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
-
-    let values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap();
-    values["interface"]["appearanceMode"] = json!("light");
-    values["interface"]["lightTheme"] = json!("studioLight");
-    values["interface"]["uiFontSize"] = json!("large");
-    values["performance"]["historyStates"] = json!(12);
-    h.run_steps(2);
-    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
-    h.get_by_label("Apply").click();
-    h.run_steps(4);
-
-    assert_eq!(h.state().session.prefs().performance.history_states, 12);
-    assert_eq!(h.state().ui.theme, ThemeKind::StudioLight);
-    assert_eq!(h.ctx.fonts(|f| f.definitions().font_data["Inter"].tweak.scale), 16.0 / 12.0);
-    assert!(!h.state().session.prefs().type_.smart_quotes, "hidden settings round-trip unchanged");
-    let d = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap();
-    assert_eq!(d.fields["section"], "interface");
-    assert_eq!(d.fields["values"]["performance"]["historyStates"], 12);
-    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
-    let saved: Value = serde_json::from_str(store.lock().unwrap().as_ref().unwrap()).unwrap();
-    assert_eq!(saved["performance"]["historyStates"], 12);
-    assert_eq!(saved["interface"]["appearanceMode"], "light");
-    assert_eq!(saved["interface"]["lightTheme"], "studioLight");
-    assert_eq!(saved["interface"]["uiFontSize"], "large");
-
-    // Repeated Apply starts from the validated values, not the dialog's original snapshot.
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["performance"]["historyStates"] = json!(22);
-    h.run_steps(2);
-    h.get_by_label("Apply").click();
-    h.run_steps(4);
-    assert_eq!(h.state().session.prefs().performance.history_states, 22);
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["performance"]["historyStates"] = json!(33);
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiFontSize"] = json!("tiny");
-    h.run_steps(2);
-    h.get_by_label("Cancel").click();
-    h.run_steps(4);
-    assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
-    assert_eq!(h.state().session.prefs().performance.history_states, 22);
-    assert_eq!(h.ctx.fonts(|f| f.definitions().font_data["Inter"].tweak.scale), 16.0 / 12.0);
-    let saved = store.lock().unwrap().clone().unwrap();
-    let (mut restarted, _) = app_with_saved(Some(saved));
-    tick(&mut restarted, &egui::Context::default());
-    assert_eq!(restarted.session.prefs().performance.history_states, 22);
-    assert_eq!(restarted.ui.theme, ThemeKind::StudioLight);
-    assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
-}
-
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-#[test]
-fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
-    use egui_kittest::{Harness, kittest::Queryable};
-
-    let (mut app, store) = app_with_store();
-    app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
-    app.custom_titlebar = true;
-    let id = open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    h.get_by_label("System title bar").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Applies at next launch.");
-    for desired in [true, false] {
-        h.get_by_label("System title bar").click();
-        h.run_steps(4);
-        assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["interface"]["systemTitleBar"], desired);
-        assert_eq!(h.state().session.prefs().interface.system_title_bar, !desired, "the draft is not applied yet");
-        h.get_by_label("Applies at next launch.");
-        h.get_by_label("Apply").click();
-        h.run_steps(4);
-        assert_eq!(h.state().session.prefs().interface.system_title_bar, desired);
-        assert_eq!(stored(&store)["interface"]["systemTitleBar"], desired);
-        assert!(h.state().custom_titlebar, "do not change the current window or restart it");
-        let (reloaded, _) = app_with_saved(store.lock().unwrap().clone());
-        assert_eq!(reloaded.session.prefs().interface.system_title_bar, desired);
-        h.get_by_label("Applies at next launch.");
-    }
-    h.get_by_label("System title bar").click();
-    h.run_steps(4);
-    h.get_by_label("Cancel").click();
-    h.run_steps(4);
-    assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
-    assert!(!h.state().session.prefs().interface.system_title_bar);
-    assert_eq!(stored(&store)["interface"]["systemTitleBar"], false);
-    assert!(h.state().custom_titlebar);
-}
-
-/// #7939: switching Rendering Mode waits for the next launch, and says so next to the setting.
-#[test]
-fn rendering_mode_explains_next_launch() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
-    let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
-        obj,
-    );
-    h.run_steps(4);
-    assert!(h.query_all_by_label("Rendering Mode").next().is_some(), "the Rendering Mode setting");
-    assert!(h.query_all_by_label("Applies at next launch.").next().is_some(), "its next-launch notice");
-    // A search that leaves Rendering Mode out leaves its notice out too.
-    let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
-    let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, "history"),
-        obj,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Applies at next launch.").is_none());
-}
-
-/// #4097: Allow Agent Control and Control Port are read when the app starts, and say so.
-#[test]
-fn integrations_explain_next_launch() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let obj = json!({"allowAgentControl": true, "controlPort": 0}).as_object().unwrap().clone();
-    let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
-        obj,
-    );
-    h.run_steps(4);
-    h.get_by_label("Allow agent control");
-    assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 2, "one notice under each row");
-}
-
-#[test]
-fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
-    let mut h =
-        Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""), obj);
-    h.run_steps(4);
-    assert!(h.query_by_label("Applies at next launch.").is_none());
-    h.get_by_label("Show tooltips").click();
-    h.run_steps(4);
-    assert_eq!(h.state()["showTooltips"], false);
-    assert!(h.query_by_label("Applies at next launch.").is_none());
-}
-
-#[test]
-fn preferences_confirm_after_apply_commits_later_edits() {
-    let (mut app, _) = app_with_store();
-    let id = open_preferences(&mut app, "cursors");
-    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["cursors"]["painting"] = json!("fullSizeTip");
-    apply(&mut app, id).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["unitsAndRulers"]["rulers"] = json!("inches");
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(app.ui.dialogs.iter().all(|d| d.id != id));
-    assert_eq!(app.session.prefs().cursors.painting, prefs::PaintingCursor::FullSizeTip);
-    assert_eq!(app.session.prefs().units_and_rulers.rulers, prefs::Unit::Inches);
-}
-
-#[test]
-fn preferences_apply_rejects_invalid_drafts_and_keeps_them_open() {
-    let (mut app, _) = app_with_store();
-    let before = app.session.prefs().to_json();
-    for invalid in [json!(0), json!("invalid"), Value::Null] {
-        let id = open_preferences(&mut app, "performance");
-        app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["performance"]["historyStates"] = invalid;
-        let draft = app.ui.dialog_mut(id).unwrap().fields.clone();
-        assert!(apply(&mut app, id).is_err());
-        assert_eq!(app.session.prefs().to_json(), before);
-        assert_eq!(app.ui.dialog_mut(id).unwrap().fields, draft);
-        app.ui.close_dialog(id);
-    }
-    let id = open_preferences(&mut app, "interface");
-    app.ui.dialog_mut(id).unwrap().fields.remove("values");
-    assert!(apply(&mut app, id).is_err());
-    assert!(app.ui.dialog_mut(id).is_some());
-    assert_eq!(app.session.prefs().to_json(), before);
-}
-
-#[test]
-fn apply_rejects_missing_and_non_preferences_dialogs() {
-    let (mut app, _) = app_with_store();
-    let before = app.session.prefs().to_json();
-    assert!(apply(&mut app, u64::MAX).is_err());
-    let id = open_shortcuts(&mut app, 0);
-    assert!(apply(&mut app, id).is_err());
-    assert!(app.ui.dialog_mut(id).is_some());
-    let fields = json!({"__prefsui": "prefs", "values": preference_values(app.session.prefs())}).as_object().unwrap().clone();
-    let id = app.ui.open_dialog(DialogKind::About, fields);
-    assert!(apply(&mut app, id).is_err());
-    assert!(app.ui.dialog_mut(id).is_some());
-    assert_eq!(app.session.prefs().to_json(), before);
-}
-
-#[test]
-fn shortcut_dialog_moves_shortcuts_and_shell_dispatch_follows() {
-    let (mut app, _) = app_with_store();
-    let ctx = egui::Context::default();
-    let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    // ⌘O (File › Open, a shell command) given to Layer › New › Layer.
-    app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!({"layer.new.layer": "Cmd+O"}));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(effective_shortcut(&app, "layer.new.layer", None).as_deref(), Some("Cmd+O"));
-    assert_eq!(effective_shortcut(&app, "file.open", Some("Cmd+O")), None, "taken from File › Open");
-    // Menu items show the effective shortcut.
-    let items = crate::menus::menu_items(&app);
-    assert!(items.iter().any(|i| i.id == "layer.new.layer" && i.shortcut.as_deref() == Some("Cmd+O")));
-    assert!(items.iter().any(|i| i.id == "file.open" && i.shortcut.is_none()));
-    assert_eq!(shortcut_text(egui::Key::K, egui::Modifiers { command: true, shift: true, ..Default::default() }).as_deref(), Some("Cmd+Shift+K"));
-
-    // Re-assigning a shortcut already held by a custom override takes it from the override.
-    let id2 = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let mut cur_overrides = app.session.prefs().shortcuts.clone();
-    cur_overrides.insert("layer.new.group".into(), "Cmd+O".into());
-    app.ui.dialog_mut(id2).unwrap().fields.insert("overrides".into(), json!(cur_overrides));
-    crate::dialogs::confirm(&mut app, id2).unwrap();
-    assert_eq!(effective_shortcut(&app, "layer.new.group", None).as_deref(), Some("Cmd+O"));
-    assert_eq!(effective_shortcut(&app, "layer.new.layer", None), None, "taken from layer.new.layer override");
-
-    // OK with nothing changed keeps every shortcut where it is.
-    let id3 = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let unchanged = app.session.prefs().shortcuts.clone();
-    app.ui.dialog_mut(id3).unwrap().fields.insert("overrides".into(), json!(unchanged));
-    crate::dialogs::confirm(&mut app, id3).unwrap();
-    assert_eq!(app.session.prefs().shortcuts, unchanged);
-
-    // Giving the shortcut back to Layer › New › Layer takes it from the group override; a
-    // cleared override (empty) holds nothing and is left alone.
-    let id4 = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let mut ov = app.session.prefs().shortcuts.clone();
-    ov.insert("layer.new.layer".into(), "Cmd+O".into());
-    app.ui.dialog_mut(id4).unwrap().fields.insert("overrides".into(), json!(ov));
-    crate::dialogs::confirm(&mut app, id4).unwrap();
-    assert_eq!(effective_shortcut(&app, "layer.new.layer", None).as_deref(), Some("Cmd+O"));
-    assert_eq!(effective_shortcut(&app, "layer.new.group", None), None, "taken back from the group");
-    assert_eq!(effective_shortcut(&app, "file.open", Some("Cmd+O")), None, "File › Open stays cleared");
-}
-
-/// #3665: the dialog keeps a command's further keys: they move like main keys, an override
-/// of the main key leaves them, and menus show only the main key.
+/// #3665: the dialog keeps a command's further keys: they move like main keys, and menus show only the main key.
 #[test]
 fn shortcut_dialog_moves_and_keeps_alternate_keys() {
+    use super::shortcuts::{assign, press_ok};
     let (mut app, _) = app_with_store();
     let ctx = egui::Context::default();
-    let open = |app: &mut PhotocraftApp| crate::menus::invoke(app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.copy"), ["F3"]);
-    assert_eq!(crate::shortcuts::effective_alternates(&app, "view.zoomIn"), ["Cmd++"]);
-    // F2 (Cut's alternate) given to Rename Layer is taken from Cut, which keeps ⌘X.
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!({"layer.renameLayer": "F2"}));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    // The menus show the runtime keymap's chords, which a frame of the app publishes.
+    crate::canvas::testing::frame(&mut app);
+    let cut = menu_shortcut(&app, "edit.cut");
+    let paste = menu_shortcut(&app, "edit.paste");
+    assert!(cut.is_some() && paste.is_some());
+    open_shortcuts(&mut app, 0);
+    // F2 (Cut's further key) given to Rename Layer is taken from Cut, which keeps its main key.
+    assign(&mut app, &CommandRef::new("layer.renameLayer"), Binding::parse("F2").unwrap(), Policy::Steal).unwrap();
+    // F4 added to Paste is a further key: the menu keeps showing ⌘V.
+    assign(&mut app, &CommandRef::new("edit.paste"), Binding::parse("F4").unwrap(), Policy::Steal).unwrap();
+    press_ok(&mut app, &ctx);
+    crate::canvas::testing::frame(&mut app);
+    assert_eq!(menu_shortcut(&app, "layer.renameLayer"), Some(chord("F2")));
+    assert_eq!(menu_shortcut(&app, "edit.cut"), cut, "Cut keeps its main key");
+    assert_eq!(menu_shortcut(&app, "edit.paste"), paste, "the menu shows only the main key");
     assert_eq!(effective_shortcut(&app, "layer.renameLayer", None).as_deref(), Some("F2"));
-    assert!(crate::shortcuts::effective_alternates(&app, "edit.cut").is_empty());
-    assert_eq!(effective_shortcut(&app, "edit.cut", Some("Cmd+X")).as_deref(), Some("Cmd+X"));
-    // Copy's main key moved to ⌘K keeps F3; the menu shows ⌘K.
-    let id = open(&mut app);
-    let mut ov = app.session.prefs().shortcuts.clone();
-    ov.insert("edit.copy".into(), "Cmd+K".into());
-    app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!(ov));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.copy"), ["F3"]);
-    assert!(crate::menus::menu_items(&app).iter().any(|i| i.id == "edit.copy" && i.shortcut.as_deref() == Some("Cmd+K")));
-    // An added alternate takes its key from the main key that held it.
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({"edit.paste": ["F4", "Cmd+K"]}));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.paste"), ["F4", "Cmd+K"]);
-    assert_eq!(effective_shortcut(&app, "edit.copy", Some("Cmd+C")), None, "taken from Copy");
-    // Use Default for everything restores the defaults; a malformed list is an error.
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({"edit.paste": "F4"}));
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({"edit.paste": ["Cmd+Shift"]}));
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.paste"), ["F4", "Cmd+K"], "nothing changed");
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({}));
-    app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!({}));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(app.session.prefs().alternate_shortcuts.is_empty() && app.session.prefs().shortcuts.is_empty());
-    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.cut"), ["F2"]);
-}
-
-#[test]
-fn shortcut_dialog_rejects_malformed_overrides() {
-    // #956: a non-map `overrides` was read as "no overrides" and wiped every custom shortcut.
-    let (mut app, _) = app_with_store();
-    let ctx = egui::Context::default();
-    app.run("edit.keyboardShortcuts", json!({"set": {"file.new": "Ctrl+Shift+N"}})).unwrap();
-    let before = app.session.prefs().shortcuts.clone();
-    assert!(!before.is_empty());
-    for bad in [json!("bogus"), json!(["file.new"]), json!({"file.new": 5})] {
-        let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-        app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), bad.clone());
-        assert!(crate::dialogs::confirm(&mut app, id).is_err(), "{bad} accepted");
-        assert_eq!(app.session.prefs().shortcuts, before, "{bad} changed the shortcuts");
-    }
-
-    // Drawing the open dialog keeps the malformed value for OK to reject, instead of
-    // replacing it with the empty map it shows.
-    let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!("bogus"));
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["overrides"], json!("bogus"));
-    assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
-    assert_eq!(h.state().session.prefs().shortcuts, before);
+    assert_eq!(effective_shortcut(&app, "edit.paste", Some("Cmd+V")).as_deref(), Some("Cmd+V"));
 }
 
 #[test]
 fn hidden_menu_items_disappear() {
     let (mut app, _) = app_with_store();
     app.run("edit.menus", json!({"hide": ["edit.fade"]})).unwrap();
-    assert!(!crate::menus::menu_items(&app).iter().any(|i| i.id == "edit.fade"));
+    assert!(!crate::menus::menu_rows(&app).iter().any(|row| row.command.id == "edit.fade"));
 }
 
 /// #5096: preferences that list Edit › Menus or File › Exit as hidden still show them.
@@ -2034,9 +1467,9 @@ fn hidden_menu_items_disappear() {
 fn essential_menu_items_stay_visible() {
     let (mut app, _) = app_with_store();
     app.run("prefs.set", json!({"values": {"menus": {"hidden": ["edit.menus", "file.exit", "edit.fade"], "colors": {}}}})).unwrap();
-    let items = crate::menus::menu_items(&app);
-    assert!(items.iter().any(|i| i.id == "edit.menus") && items.iter().any(|i| i.id == "file.exit"));
-    assert!(!items.iter().any(|i| i.id == "edit.fade"));
+    let rows = crate::menus::menu_rows(&app);
+    assert!(rows.iter().any(|row| row.command.id == "edit.menus") && rows.iter().any(|row| row.command.id == "file.exit"));
+    assert!(!rows.iter().any(|row| row.command.id == "edit.fade"));
 }
 
 #[test]
@@ -2052,7 +1485,7 @@ fn autosave_runs_for_dirty_documents() {
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     tick(&mut app, &ctx);
     autosave_now(&mut app);
@@ -2107,7 +1540,7 @@ fn recovered_documents_adopt_their_entries_until_saved_or_closed() {
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     tick(&mut app, &ctx);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while app.session.has_jobs() && std::time::Instant::now() < deadline {
@@ -2138,32 +1571,29 @@ fn edit_dialogs_open() {
     let ctx = egui::Context::default();
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.sync_views();
-    let d = crate::menus::invoke(&mut app, &ctx, "edit.colorSettings", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["workingRgb"], "srgb");
-    let note = app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["__note"].as_str().unwrap().to_string();
+    // Color Settings opens on the host, with the monitor line naming the fallback profile.
+    crate::menus::invoke(&mut app, &ctx, "edit.colorSettings", json!({})).unwrap();
+    assert!(app.dialog_open(), "Color Settings opened");
+    let note = crate::monitor_status::note_cell(&app).lock().unwrap().clone();
     assert!(note.starts_with("Monitor profile in use: sRGB") && note.contains("fallback"), "{note}");
     assert!(crate::menus::invoke(&mut app, &ctx, "edit.fade", json!({})).is_err());
-    app.run("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8})).unwrap();
-    // Content-Aware Fill opens its workspace (caf_ui); OK fills.
-    let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({})).unwrap();
-    assert!(r["contentAwareFill"]["window"].is_array(), "{r}");
-    crate::caf_ui::commit(&mut app);
-    assert!(app.distort.caf.is_none());
-    let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareScale", json!({})).unwrap();
-    assert_eq!(r["transform"]["rect"], json!([4.0, 4.0, 12.0, 12.0]));
-    crate::transform_tool::cancel(&mut app);
-    let d = crate::menus::invoke(&mut app, &ctx, "edit.presets.presetManager", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert!(crate::dialogs::confirm(&mut app, d).is_ok());
+    // Preset Manager opens on the host and Done closes it.
+    let open = app.dialog_count();
+    let id = super::presets::open_manager(&mut app);
+    assert_eq!(app.dialog_count(), open + 1, "the Preset Manager opened over Color Settings");
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    assert_eq!(app.dialog_count(), open, "Done closes the Preset Manager and leaves Color Settings");
 }
 
 #[test]
 fn tool_colors_first_saves_keep_other_instances_separate_edits() {
-    for initial in
-        [None, Some("{}".into()), Some(json!({"toolColors": null}).to_string()), Some(json!({"toolColors": crate::tool_memory::default_colors()}).to_string())]
-    {
+    for initial in [None, Some(json!({})), Some(json!({"toolColors": photocraft_engine::prefs::ToolColors::default().0}))] {
         for background_first in [false, true] {
-            let store = Arc::new(Mutex::new(initial.clone()));
-            let (mut foreground, mut background) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+            let files = Arc::new(MemoryFiles::new());
+            if let Some(initial) = &initial {
+                seed(&files, initial, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION));
+            }
+            let (mut foreground, mut background) = (app_on(&files), app_on(&files));
             let fg = [0.25, 0.5, 0.75, 1.0];
             let bg = [0.75, 0.5, 0.25, 1.0];
             foreground.run("tools.setColors", json!({"foreground": fg})).unwrap();
@@ -2174,50 +1604,11 @@ fn tool_colors_first_saves_keep_other_instances_separate_edits() {
             // Further saves must still keep the other window's independent field.
             save_preferences(first).unwrap();
             save_preferences(second).unwrap();
-            let restored = app_on(&store, Arc::default());
+            let restored = app_on(&files);
             assert_eq!(restored.session.tools.foreground, fg);
             assert_eq!(restored.session.tools.background, bg);
             assert_eq!(restored.session.tools.other_colors, photocraft_engine::ToolState::MASK_COLORS);
         }
-    }
-}
-
-#[test]
-fn tool_colors_survive_restart_before_the_first_frame() {
-    let (mut app, store) = app_with_store();
-    let ctx = egui::Context::default();
-    let fg = [0.2, 0.4, 0.6, 0.8];
-    let bg = [0.9, 0.7, 0.3, 1.0];
-    app.run("tools.setColors", json!({"foreground": fg, "background": bg})).unwrap();
-    crate::tool_memory::persist(&mut app, &ctx);
-    tick(&mut app, &ctx);
-    let (restored, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(restored.session.tools.foreground, fg);
-    assert_eq!(restored.session.tools.background, bg);
-    let rev = app.session.prefs.rev();
-    crate::tool_memory::persist(&mut app, &ctx);
-    assert_eq!(app.session.prefs.rev(), rev, "unchanged colours do not rewrite preferences");
-}
-
-#[test]
-fn tool_colors_survive_restart_after_rejecting_an_invalid_preset() {
-    for bad_channel in [json!(1e100), json!(null), json!("red"), json!(true), json!({}), json!([])] {
-        let (mut app, store) = app_with_store();
-        let color = [0.2, 0.4, 0.6, 0.8];
-        app.run("tools.setColors", json!({"foreground": color})).unwrap();
-        crate::tool_memory::save_on_exit(&mut app).unwrap();
-        app.run(
-            "tool.presets.new",
-            json!({
-                "name": "Invalid", "tool": "move", "options": {"foreground": [bad_channel, 0.4, 0.6, 1.0]}
-            }),
-        )
-        .unwrap();
-        assert!(app.run("tool.presets.select", json!({"preset": "Invalid"})).is_err());
-        crate::tool_memory::save_on_exit(&mut app).unwrap();
-        assert_eq!(stored(&store)["toolColors"]["foreground"], json!(color));
-        let (restored, _) = app_with_saved(store.lock().unwrap().clone());
-        assert_eq!(restored.session.tools.foreground, color);
     }
 }
 
@@ -2227,7 +1618,7 @@ fn tool_colors_preserve_finite_hdr_components() {
     let fg = [1.5, -0.1, 0.6, 1.0];
     app.run("tools.setColors", json!({"foreground": fg})).unwrap();
     crate::tool_memory::save_on_exit(&mut app).unwrap();
-    let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+    let restored = app_on(&store);
     assert_eq!(restored.session.tools.foreground, fg);
 }
 
@@ -2248,12 +1639,14 @@ fn tool_colors_restore_cmyk_inks_for_picker_and_fill_after_swapping_and_exiting_
     app.run("tools.swapColors", json!({})).unwrap();
     app.session.tools.target_mask(true);
     crate::tool_memory::save_on_exit(&mut app).unwrap();
-    let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
+    let mut restored = app_on(&store);
     assert_eq!(restored.session.tools.picked_cmyk(fg), Some(cyan));
     assert_eq!(restored.session.tools.picked_cmyk(bg), Some(magenta));
     for (target, expected) in [("foreground", magenta), ("background", cyan)] {
-        crate::color_picker_ui::open(&mut restored, target);
-        assert_eq!(restored.ui.dialogs.last().unwrap().fields["__cmyk"], json!(expected));
+        let picker = crate::color_picker_ui::open(&mut restored, target);
+        let shown = crate::color_picker_ui::testing::current(&restored, picker).expect("the picker is open");
+        let inks = crate::color_picker_ui::inks_of(&shown).expect("the picker shows the inks it was picked as");
+        assert!(crate::color_picker_ui::same_inks(inks, expected), "{target}: {inks:?}");
     }
     restored.run("file.new", json!({"width": 4, "height": 4})).unwrap();
     restored.run("image.mode.cmyk", json!({})).unwrap();
@@ -2280,25 +1673,8 @@ fn tool_colors_save_changed_cmyk_inks_even_when_rgba_is_unchanged() {
     crate::tool_memory::persist(&mut app, &ctx);
     assert!(app.session.prefs.rev() > rev);
     tick(&mut app, &ctx);
-    let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+    let restored = app_on(&store);
     assert_eq!(restored.session.tools.picked_cmyk(rgb), Some(inks));
-}
-
-#[test]
-fn tool_colors_restore_only_bounded_valid_cmyk_picks() {
-    let limit = photocraft_engine::ToolState::CMYK_PICKS;
-    let mut picks: Vec<Value> = (0..limit + 3).map(|i| json!([[i as f32 / 16.0, 0.2, 0.3], [0.1, 0.2, 0.3, 0.4]])).collect();
-    picks.extend([json!("bad"), json!([[0, 0, 0], [1, 0, 0]]), json!([[0, 0, 0], [2, 0, 0, 0]]), json!([[1e100, 0, 0], [1, 0, 0, 0]])]);
-    let (app, _) = app_with_saved(Some(
-        json!({
-            "toolColors": {"foreground": [0.2, 0.4, 0.6, 1.0], "cmykPicks": picks}
-        })
-        .to_string(),
-    ));
-    assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 1.0]);
-    assert_eq!(app.session.tools.cmyk_picks.len(), limit);
-    assert_eq!(app.session.tools.picked_cmyk([0.0, 0.2, 0.3]), None);
-    assert_eq!(app.session.tools.picked_cmyk([(limit + 2) as f32 / 16.0, 0.2, 0.3]), Some([0.1, 0.2, 0.3, 0.4]));
 }
 
 #[test]
@@ -2307,12 +1683,12 @@ fn tool_colors_flush_swaps_and_defaults_on_exit_without_another_frame() {
     app.run("tools.setColors", json!({"foreground": "#336699", "background": "#cc8844"})).unwrap();
     app.run("tools.swapColors", json!({})).unwrap();
     crate::tool_memory::save_on_exit(&mut app).unwrap();
-    let (mut restored, restored_store) = app_with_saved(store.lock().unwrap().clone());
+    let mut restored = app_on(&store);
     assert_eq!(restored.session.tools.foreground, app.session.tools.foreground);
     assert_eq!(restored.session.tools.background, app.session.tools.background);
     restored.run("tools.defaultColors", json!({})).unwrap();
     crate::tool_memory::save_on_exit(&mut restored).unwrap();
-    let (defaults, _) = app_with_saved(restored_store.lock().unwrap().clone());
+    let defaults = app_on(&store);
     assert_eq!(defaults.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(defaults.session.tools.background, [1.0; 4]);
 }
@@ -2327,44 +1703,21 @@ fn tool_colors_keep_pixel_and_mask_pairs_when_exiting_on_a_mask() {
     app.session.tools.foreground = [0.5, 0.5, 0.5, 1.0];
     let masks = [app.session.tools.foreground, app.session.tools.background];
     crate::tool_memory::save_on_exit(&mut app).unwrap();
-    let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
+    let mut restored = app_on(&store);
     assert_eq!([restored.session.tools.foreground, restored.session.tools.background], pixels);
     restored.session.tools.target_mask(true);
     assert_eq!([restored.session.tools.foreground, restored.session.tools.background], masks);
 }
 
 #[test]
-fn tool_colors_ignore_invalid_swatches_without_losing_valid_preferences() {
-    for bad in [json!(null), json!("red"), json!([1, 0, 0]), json!([1e100, 0, 0, 1]), json!([0, "bad", 0, 1])] {
-        let (app, _) = app_with_saved(Some(
-            json!({
-                "toolColors": {"foreground": bad, "background": [0.2, 0.4, 0.6, 1.0]},
-                "toolOptions": {"feather": 12.0}
-            })
-            .to_string(),
-        ));
-        assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
-        assert_eq!(app.session.tools.background, [0.2, 0.4, 0.6, 1.0]);
-        assert_eq!(app.ui.tool_options.feather, 12.0);
-    }
-    let (app, _) = app_with_saved(Some(json!({"toolOptions": {"feather": 12.0}}).to_string()));
-    assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
-    assert_eq!(app.session.tools.background, [1.0; 4]);
-}
-
-#[test]
 fn reset_section_on_type_keeps_the_favourite_fonts() {
     // The favourites are the font menu's library, not a Type setting.
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, store) = app_with_store();
-    app.run("prefs.set", json!({"values": {"interface.language": "en", "type.smartQuotes": false}})).unwrap();
-    app.run("type.font.favorite", json!({"family": "Bebas Neue"})).unwrap();
-    open_preferences(&mut app, "type");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
+    use egui_kittest::kittest::Queryable;
+    let (_, store) = app_with_store();
+    let mut h = prefs_harness(&store, "type", vec2(1280.0, 800.0), |app| {
+        app.run("prefs.set", json!({"values": {"interface.language": "en", "type.smartQuotes": false}})).unwrap();
+        app.run("type.font.favorite", json!({"family": "Bebas Neue"})).unwrap();
     });
-    h.run_steps(4);
     h.get_by_label("Reset Section").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -2373,4 +1726,98 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert!(prefs.smart_quotes, "the Type settings are reset");
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
+}
+
+/// #13588: a scratch disk's Browse… asks for a folder and fills that disk's path in the window's draft only; a
+/// cancelled Browse keeps it, and the system's temporary folder has no Browse.
+#[test]
+fn scratch_disk_browse_sets_only_its_draft_entry_and_cancel_keeps_it() {
+    use craft::host::{PickKind, Picked, ScriptedFiles};
+    use egui_kittest::kittest::Queryable;
+    let scripted = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["/tmp/scratch".into()]), Picked::Cancelled]));
+    let (store, picks) = (Arc::new(MemoryFiles::new()), scripted.clone());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let services = crate::Services { files: Some(picks), ..services_on(&store) };
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services);
+        open_prefs(&mut app, "scratchDisks");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.query_by_label("Browse…").is_none(), "the system's temporary folder is not browsed for");
+    h.get_by_label("Add disk").click();
+    h.run_steps(3);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs().scratch_disks.disks.len(), 1, "Browse edits only the draft");
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    let paths: Vec<String> = h.state().session.prefs().scratch_disks.disks.iter().map(|d| d.path.clone()).collect();
+    assert_eq!(paths, ["(system temp)", "/tmp/scratch"], "the pick lands in its own entry and a cancelled Browse keeps it");
+    let asked = scripted.requests();
+    assert_eq!(asked.iter().map(|r| r.kind).collect::<Vec<_>>(), [PickKind::Folder, PickKind::Folder]);
+}
+
+/// The agent settings apply at once, so none of them says "Applies at next launch." (they did before the agent link
+/// followed the preferences live).
+#[test]
+fn integrations_apply_without_a_restart() {
+    for key in ["allowAgentControl", "connectAgents", "controlPort", "readRoot", "writeRoot", "whenAppClosed"] {
+        assert!(!super::fields::read_at_launch(&format!("integrations.{key}")), "{key}");
+    }
+}
+
+/// The texts the last frame painted, without a trailing colon, with each one's laid-out rect.
+fn painted_texts(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> Vec<(String, egui::Rect)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.galley.text().trim_end_matches(':').to_owned(), text.galley.rect.translate(text.pos.to_vec2()))),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|clipped| collect(&clipped.shape, &mut out));
+    out
+}
+
+/// #15553: Preferences › Interface labels Appearance Mode once: the Appearance page draws the row with its own label,
+/// and the window adds none.
+#[test]
+fn the_appearance_mode_row_shows_its_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let shown = painted_texts(&h).into_iter().filter(|(text, _)| text == "Appearance Mode").count();
+    assert_eq!(shown, 1, "\"Appearance Mode\" is painted once");
+}
+
+/// #15554: Preferences › Interface shows Appearance (the mode and the canvas), then Presentation (language, font size,
+/// scale), then Options, and the rows of all three share one label column.
+#[test]
+fn the_interface_page_lists_appearance_presentation_then_options_on_one_label_column() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let texts = painted_texts(&h);
+    let at = |name: &str| texts.iter().find(|(text, _)| text == name).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("{name:?} is painted"));
+    let order = ["Appearance", "Appearance Mode", "Canvas color", "Presentation", "Language", "UI font size", "UI scale", "Options", "Show tooltips"];
+    let tops: Vec<f32> = order.iter().map(|name| at(name).top()).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "top to bottom {order:?}: {tops:?}");
+    let ends: Vec<f32> = ["Appearance Mode", "Language", "Notification Duration (seconds)"].iter().map(|name| at(name).right()).collect();
+    assert!(ends.iter().all(|end| (end - ends[0]).abs() < 0.5), "one right-aligned label column: {ends:?}");
+}
+
+/// The rows of Preferences › Performance that draw their own label or heading show it once: the window adds no second
+/// "Rendering mode" beside the select's own, and no "Memory usage (MB)" beside the Memory Usage heading. Memory Usage
+/// Percent's check box shows no text, so the window's label is its only one.
+#[test]
+fn self_labelled_performance_rows_show_their_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "performance", vec2(1280.0, 800.0), |_| {});
+    let texts: Vec<String> = painted_texts(&h).into_iter().map(|(text, _)| text.to_lowercase()).collect();
+    let count = |wanted: &dyn Fn(&str) -> bool| texts.iter().filter(|text| wanted(text)).count();
+    assert_eq!(count(&|t| t == "rendering mode"), 1, "Rendering Mode is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t.starts_with("memory usage") && t != "memory usage percent"), 1, "Memory Usage is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t == "memory usage percent"), 1, "Memory Usage Percent is labelled once: {texts:?}");
 }

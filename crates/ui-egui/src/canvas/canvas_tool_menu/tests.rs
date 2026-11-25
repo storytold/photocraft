@@ -1,8 +1,11 @@
 use super::*;
-use egui::{Modifiers, PointerButton, Pos2, vec2};
+use craft::keymap::Mods;
+use craft::ui::dialog::DialogHost;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use egui::{Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
-fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app
@@ -20,15 +23,77 @@ fn work_path(app: &mut PhotocraftApp) {
     .unwrap();
 }
 
-fn choose_open(app: &mut PhotocraftApp, command: &str) {
-    assert!(open(app, &Context::default(), Tool::Pen, [10.0, 10.0]));
-    choose(app, &Context::default(), command);
+/// Opens the menu of `tool` at a fixed screen point for the document point `doc`, as a right-click would.
+pub(super) fn open_here(app: &mut PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
+    open_at(app, tool, Mods::NONE, pos2(10.0, 10.0), doc, None)
 }
 
-fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(super) fn choose_open(app: &mut PhotocraftApp, command: &str) {
+    assert!(open_here(app, Tool::Pen, [10.0, 10.0]));
+    pick(app, command);
+}
+
+/// The labels of `rows`, a separator as `None`.
+pub(super) fn labels(rows: &[Row]) -> Vec<Option<&str>> {
+    rows.iter().map(|row| row.map(|(label, _)| label)).collect()
+}
+
+/// `choose` on the app's own context.
+pub(super) fn pick(app: &mut PhotocraftApp, command: &str) {
+    let ctx = app.ctx().clone();
+    choose(app, &ctx, command);
+}
+
+/// Whether a hosted parameter dialog is open.
+pub(super) fn dialog_open(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.is_open::<HostedParamDialog>()
+}
+
+/// Whether any dialog of the dialog host is open.
+pub(super) fn any_dialog(app: &PhotocraftApp) -> bool {
+    !app.framework.dialogs.is_empty()
+}
+
+/// Closes every open dialog.
+pub(super) fn close_dialogs(app: &mut PhotocraftApp) {
+    app.framework.dialogs = DialogHost::new();
+}
+
+/// The open hosted parameter dialog.
+pub(super) fn hosted(app: &mut PhotocraftApp) -> &mut HostedParamDialog {
+    app.framework.dialogs.get_mut::<HostedParamDialog>().expect("a hosted parameter dialog is open")
+}
+
+/// Presses OK on the open hosted parameter dialog through the app's dialog path: a family that judges a held OK
+/// answers it, then its run takes the result.
+pub(super) fn confirm_hosted(app: &mut PhotocraftApp, ctx: &Context) {
+    try_confirm_hosted(app, ctx).expect("OK was accepted");
+}
+
+/// [`confirm_hosted`] for a run that may be refused: the result of the dialog's OK.
+pub(super) fn try_confirm_hosted(app: &mut PhotocraftApp, ctx: &Context) -> Result<(), String> {
+    let id = app
+        .framework
+        .dialogs
+        .stack()
+        .ids()
+        .find(|id| app.framework.dialogs.get_by_id::<HostedParamDialog>(*id).is_some())
+        .expect("a hosted parameter dialog is open");
+    crate::dialogs::confirm(app, ctx, id)
+}
+
+/// Pen clicks at document points `at`, as on the canvas.
+pub(super) fn pen_clicks(app: &mut PhotocraftApp, at: &[(f64, f64)]) {
+    app.ui.tool = Tool::Pen;
+    for &(x, y) in at {
+        crate::canvas::testing::click(app, [x, y], Modifiers::NONE);
+    }
+}
+
+pub(crate) fn harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -37,12 +102,12 @@ fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::default());
     h.run_steps(4);
     h
 }
 
-fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+pub(crate) fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -53,29 +118,57 @@ fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modi
     h.run_steps(2);
 }
 
-#[test]
-fn canvas_gesture_preserves_selection_and_command_override() {
-    let mut app = app();
-    app.ui.tool = Tool::Lasso;
-    app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
-    let mut h = harness(app);
-    let center = h.state().last_canvas_rect.center();
-    let revision = h.state().session.active().unwrap().revision;
-    right_click(&mut h, center, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.is_some());
-    assert_eq!(h.state().session.active().unwrap().revision, revision, "right-click cannot alter selection");
-    h.key_press(egui::Key::Escape);
+/// The right button goes down at `at` with `mods` held and comes up as `gesture` says.
+fn secondary_press(h: &mut Harness<'static, Box<PhotocraftApp>>, at: Pos2, mods: Modifiers, gesture: Gesture) {
+    let by = match gesture {
+        Gesture::Still => return right_click(h, at, mods),
+        Gesture::Moved => vec2(7.0, 3.0),
+        Gesture::OneFrame => vec2(14.0, 6.0),
+        Gesture::Drag => vec2(14.0, 7.0),
+    };
+    let button = |pos: Pos2, pressed: bool| egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: mods };
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    if gesture == Gesture::OneFrame {
+        // `Harness::event` runs a frame per event, so the three go straight into one frame's input.
+        h.input_mut().events.extend([button(at, true), egui::Event::PointerMoved(at + by), button(at + by, false)]);
+    } else {
+        h.event(button(at, true));
+        h.run_steps(1);
+        for i in 1..=4 {
+            h.event(egui::Event::PointerMoved(at + by * (i as f32 / 4.0)));
+            h.run_steps(1);
+        }
+        h.event(button(at + by, false));
+    }
     h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_none());
-    right_click(&mut h, center, Modifiers::COMMAND);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "command right-click belongs to layer picker");
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+}
+
+pub(super) fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
+    crate::canvas::testing::to_screen(app, [f64::from(doc[0]), f64::from(doc[1])])
+}
+
+/// What a right-click must leave as it was. The journal counts only strokes: the type edit menu reads its spelling
+/// suggestions through `edit.checkSpelling`'s `list`, a journaled read.
+fn document_state(app: &PhotocraftApp) -> impl PartialEq + use<> {
+    let state = app.session.active().unwrap();
+    let strokes = app.session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
+    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers().to_vec(), strokes)
+}
+
+fn view_of(app: &PhotocraftApp) -> Option<(craft::behavior::kurbo::Point, f64)> {
+    crate::canvas::document_display::active_view(app).map(|v| (v.center, v.zoom))
 }
 
 /// A type layer reading "Hello", being edited with every character selected.
 fn editing_type(app: &mut PhotocraftApp) -> u64 {
     app.ui.tool = Tool::Type;
     let id = app.run("type.create", json!({"text": "Hello", "size": 12, "x": 4, "y": 20})).unwrap()["layer"].as_u64().unwrap();
-    crate::menus::invoke(app, &Context::default(), "type.editText", json!({})).unwrap();
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(app, &ctx, "type.editText", json!({})).unwrap();
     id
 }
 
@@ -86,77 +179,6 @@ fn text_of(app: &PhotocraftApp, id: u64) -> Option<photocraft_doc::TextLayer> {
     }
 }
 
-#[test]
-fn right_click_while_typing_opens_the_type_edit_menu_and_esc_keeps_the_edit() {
-    let mut app = app();
-    editing_type(&mut app);
-    app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            // The app's order: shortcuts (inline type's keys among them), then the canvas.
-            crate::shortcuts::handle(app, &ctx);
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
-    h.run_steps(4);
-    let center = h.state().last_canvas_rect.center();
-    right_click(&mut h, center, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().expect("right-click in a type edit opens a menu");
-    assert!(menu.text && !menu.pasteboard && !menu.transform);
-    assert_eq!(rows(&menu), TYPE_EDIT_MENU);
-    let edit = h.state().ui.text_edit.clone().expect("the edit goes on under the menu");
-    assert_eq!((edit.anchor, edit.caret), (0, 5), "the right-click keeps the selection for Cut and Copy");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
-    assert!(h.state().ui.text_edit.is_some(), "and only the menu: the edit isn't committed");
-}
-
-#[test]
-fn type_edit_menu_rows_act_on_the_text_and_the_layer() {
-    let mut app = app();
-    let id = editing_type(&mut app);
-    let ctx = Context::default();
-    let reopen = |app: &mut PhotocraftApp| assert!(open(app, &Context::default(), Tool::Type, [10.0, 10.0]));
-    // Faux Bold toggles the style of the selected characters, and shows checked.
-    reopen(&mut app);
-    let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    assert!(!mode_checked(&app, &menu, FAUX_BOLD) && mode_checked(&app, &menu, "type.antiAlias.smooth"));
-    choose(&mut app, &ctx, FAUX_BOLD);
-    assert!(text_of(&app, id).unwrap().char_runs().iter().all(|r| r.style.faux_bold));
-    assert!(mode_checked(&app, &menu, FAUX_BOLD));
-    // Cut takes the selection out of the text; with nothing selected Copy and Cut grey out.
-    reopen(&mut app);
-    choose(&mut app, &ctx, "edit.cut");
-    assert_eq!(text_of(&app, id).unwrap().text, "");
-    reopen(&mut app);
-    let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    assert!(!entry_enabled(&app, &menu, "edit.copy") && !entry_enabled(&app, &menu, "edit.cut"));
-    app.ui.canvas_tool_menu = None;
-    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
-    assert_eq!(text_of(&app, id).unwrap().text, "Hello");
-    // Select All selects every character, not the canvas.
-    reopen(&mut app);
-    choose(&mut app, &ctx, "select.all");
-    let edit = app.ui.text_edit.clone().unwrap();
-    assert_eq!((edit.anchor, edit.caret), (0, 5));
-    assert!(app.session.active().unwrap().doc.selection.is_none());
-    // Warp Text… opens its dialog; Rasterize Type ends the edit and rasterizes the layer.
-    reopen(&mut app);
-    choose(&mut app, &ctx, "type.warpText");
-    assert!(!app.ui.dialogs.is_empty(), "Warp Text… asks for its settings");
-    app.ui.dialogs.clear();
-    reopen(&mut app);
-    choose(&mut app, &ctx, "type.rasterizeTypeLayer");
-    assert!(app.ui.text_edit.is_none() && text_of(&app, id).is_none(), "the type layer is pixels now");
-}
-
 /// A committed type layer reading "Hello" over the middle of the canvas, no edit running.
 fn committed_type(app: &mut PhotocraftApp) -> u64 {
     app.ui.tool = Tool::Type;
@@ -165,32 +187,322 @@ fn committed_type(app: &mut PhotocraftApp) -> u64 {
     id
 }
 
-#[test]
-fn right_click_on_committed_type_opens_the_type_layer_menu() {
-    use photocraft_doc::text::Orientation;
+/// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
+/// untouched default frame.
+fn crop_app() -> Box<PhotocraftApp> {
     let mut app = app();
-    let id = committed_type(&mut app);
-    assert_eq!(crate::type_tool::hit_layer(&mut app, 16.0, 16.0).map(|l| l.0), Some(id), "the canvas centre is on the type");
-    let mut h = harness(app);
-    let center = h.state().last_canvas_rect.center();
-    right_click(&mut h, center, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().expect("right-click on committed type opens a menu (#7324)");
-    assert!(menu.type_layer && !menu.text && !menu.pasteboard);
-    assert_eq!(rows(&menu), TYPE_LAYER_MENU);
-    assert!(h.state().ui.text_edit.is_none(), "the right-click doesn't start an edit");
-    h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_some(), "the menu stays open without an edit");
-    // An edit started some other way (here, as an agent's Type › Edit Text would) closes the
-    // menu, which has no text edit rows.
-    crate::menus::invoke(h.state_mut(), &Context::default(), "type.editText", json!({})).unwrap();
-    h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "an edit closes the type layer menu");
-    crate::type_tool::commit(h.state_mut());
-    right_click(&mut h, center, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().expect("committed again, the menu opens again");
-    assert!(menu.type_layer && mode_checked(h.state(), &menu, "type.orientation.horizontal"));
-    choose(h.state_mut(), &Context::default(), "type.orientation.vertical");
-    assert_eq!(text_of(h.state(), id).unwrap().orientation, Orientation::Vertical);
+    app.ui.tool = Tool::Crop;
+    app.ui.tool_options.crop.shield.classic_mode = true;
+    app.ui.extras.snap = false;
+    app
+}
+
+/// Draws a crop frame from (4, 4) to (28, 28): a pending crop. Returns the frame.
+fn draw_crop(app: &mut PhotocraftApp) -> [f64; 4] {
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(app, ToolEvent::Down { x: 4.0, y: 4.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Move { x: 16.0, y: 16.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Move { x: 28.0, y: 28.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x: 28.0, y: 28.0 }, Modifiers::NONE);
+    assert!(crate::crop_ui::pending(app), "the drag draws a pending frame");
+    frame_of(app).unwrap()
+}
+
+/// The Crop tool's frame as `[x0, y0, x1, y1]`, `None` while it shows none.
+fn frame_of(app: &PhotocraftApp) -> Option<[f64; 4]> {
+    crate::crop_ui::frame(app).map(|f| [f.rect.x0, f.rect.y0, f.rect.x1, f.rect.y1])
+}
+
+fn aspect(r: [f64; 4]) -> f64 {
+    (r[2] - r[0]) / (r[3] - r[1])
+}
+
+// ---- the routing table ----
+
+#[derive(Clone, Copy, PartialEq)]
+enum Place {
+    Image,
+    Pasteboard,
+    Guide,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Held {
+    Nothing,
+    Space,
+    CmdSpace,
+    AltSpace,
+}
+
+/// How the right button goes down and comes up. `Moved` and `Drag` travel a few pixels over several frames
+/// (a high-DPI mouse's click; a drag within a right-click's reach); `OneFrame` puts press, move and release into one
+/// frame, as a slow frame delivers them.
+#[derive(Clone, Copy, PartialEq)]
+enum Gesture {
+    Still,
+    Moved,
+    OneFrame,
+    Drag,
+}
+
+#[derive(Clone, Copy)]
+enum Setup {
+    Plain,
+    Zoomed,
+    Selection,
+    WorkPath,
+    TextEdit,
+    CommittedType,
+    UntouchedCrop,
+    PendingCrop,
+    Guide,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Want {
+    Nothing,
+    Menu(&'static str),
+    Picker,
+    /// The brush mode menu opens, and its Edit Brush row opens the brush picker.
+    EditBrush,
+}
+
+struct Case {
+    name: &'static str,
+    tool: Tool,
+    mods: Modifiers,
+    place: Place,
+    setup: Setup,
+    held: Held,
+    want: Want,
+    gesture: Gesture,
+}
+
+const fn row(name: &'static str, tool: Tool, mods: Modifiers, place: Place, setup: Setup, held: Held, want: Want) -> Case {
+    Case { name, tool, mods, place, setup, held, want, gesture: Gesture::Still }
+}
+
+impl Case {
+    const fn by(mut self, gesture: Gesture) -> Case {
+        self.gesture = gesture;
+        self
+    }
+}
+
+const NO: Modifiers = Modifiers::NONE;
+
+const ROWS: &[Case] = &[
+    row("selection tool: its selection menu", Tool::Lasso, NO, Place::Image, Setup::Selection, Held::Nothing, Want::Menu("Tool")),
+    row("command right-click is the layer picker", Tool::Lasso, Modifiers::COMMAND, Place::Image, Setup::Selection, Held::Nothing, Want::Menu("Layers")),
+    row("quick selection: selection menu, no picker", Tool::QuickSelection, NO, Place::Image, Setup::Selection, Held::Nothing, Want::Menu("Tool")),
+    row("type edit", Tool::Type, NO, Place::Image, Setup::TextEdit, Held::Nothing, Want::Menu("TypeEdit")),
+    row("committed type", Tool::Type, NO, Place::Image, Setup::CommittedType, Held::Nothing, Want::Menu("TypeLayer")),
+    row("marquee outside the image", Tool::RectMarquee, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Menu("Pasteboard")),
+    row("zoom: view menu", Tool::Zoom, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("View")),
+    row("hand: view menu", Tool::Hand, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("View")),
+    row("zoom outside the image", Tool::Zoom, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Menu("Pasteboard")),
+    row("hand outside the image", Tool::Hand, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Menu("Pasteboard")),
+    row("hand with Space held", Tool::Hand, NO, Place::Image, Setup::Plain, Held::Space, Want::Menu("View")),
+    row("brush with Cmd+Space held", Tool::Brush, Modifiers::COMMAND, Place::Image, Setup::Plain, Held::CmdSpace, Want::Menu("Layers")),
+    row("brush with Alt+Space held", Tool::Brush, Modifiers::ALT, Place::Image, Setup::Plain, Held::AltSpace, Want::Nothing),
+    row("hand with Cmd+Space held", Tool::Hand, Modifiers::COMMAND, Place::Image, Setup::Plain, Held::CmdSpace, Want::Menu("Layers")),
+    row("hand with Alt+Space held", Tool::Hand, Modifiers::ALT, Place::Image, Setup::Plain, Held::AltSpace, Want::Nothing),
+    row("brush: picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker),
+    row("eraser: picker", Tool::Eraser, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker),
+    row("brush outside the image keeps its picker", Tool::Brush, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Picker),
+    row("brush: a press that moved still opens the picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker).by(Gesture::Moved),
+    row("brush: a release in the press's frame still opens the picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker)
+        .by(Gesture::OneFrame),
+    row("brush with Shift: Edit Brush opens the picker", Tool::Brush, Modifiers::SHIFT, Place::Image, Setup::Plain, Held::Nothing, Want::EditBrush),
+    row(
+        "hand: a right drag within a click's reach opens the view menu and pans nothing",
+        Tool::Hand,
+        NO,
+        Place::Image,
+        Setup::Zoomed,
+        Held::Nothing,
+        Want::Menu("View"),
+    )
+    .by(Gesture::Drag),
+    row("brush with Cmd: layer picker", Tool::Brush, Modifiers::COMMAND, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("Layers")),
+    row("move: layer picker", Tool::Move, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("Layers")),
+    row("move on a guide: guide menu", Tool::Move, NO, Place::Guide, Setup::Guide, Held::Nothing, Want::Menu("Guide")),
+    row("move on a guide: a moved right-click opens the guide menu", Tool::Move, NO, Place::Guide, Setup::Guide, Held::Nothing, Want::Menu("Guide"))
+        .by(Gesture::Moved),
+    row("move on a guide: a one-frame right-click opens the guide menu", Tool::Move, NO, Place::Guide, Setup::Guide, Held::Nothing, Want::Menu("Guide"))
+        .by(Gesture::OneFrame),
+    row("pen: path menu", Tool::Pen, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("Tool")),
+    row("path selection: path menu", Tool::PathSelection, NO, Place::Image, Setup::WorkPath, Held::Nothing, Want::Menu("Tool")),
+    row("direct selection: path menu", Tool::DirectSelection, NO, Place::Image, Setup::WorkPath, Held::Nothing, Want::Menu("Tool")),
+    row("convert point: path menu", Tool::ConvertPoint, NO, Place::Image, Setup::WorkPath, Held::Nothing, Want::Menu("Tool")),
+    row("untouched crop frame: no menu", Tool::Crop, NO, Place::Image, Setup::UntouchedCrop, Held::Nothing, Want::Nothing),
+    row("untouched crop frame, outside: pasteboard", Tool::Crop, NO, Place::Pasteboard, Setup::UntouchedCrop, Held::Nothing, Want::Menu("Pasteboard")),
+    row("pending crop: crop menu", Tool::Crop, NO, Place::Image, Setup::PendingCrop, Held::Nothing, Want::Menu("Crop")),
+    row("pending crop outside the image wins over the pasteboard", Tool::Crop, NO, Place::Pasteboard, Setup::PendingCrop, Held::Nothing, Want::Menu("Crop")),
+    row("count keeps its menu", Tool::Count, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("Tool")),
+    row("content-aware move without a selection", Tool::ContentAwareMove, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("Tool")),
+    row("content-aware move outside the selection", Tool::ContentAwareMove, NO, Place::Image, Setup::Selection, Held::Nothing, Want::Menu("Tool")),
+    row("red eye: layer menu", Tool::RedEye, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Menu("Tool")),
+    row("red eye outside the image", Tool::RedEye, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Menu("Pasteboard")),
+    row("a tool without a canvas menu", Tool::Note, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Nothing),
+];
+
+fn kind_name(kind: &MenuKind) -> &'static str {
+    match kind {
+        MenuKind::Tool => "Tool",
+        MenuKind::Pasteboard => "Pasteboard",
+        MenuKind::View => "View",
+        MenuKind::Guide => "Guide",
+        MenuKind::Crop { .. } => "Crop",
+        MenuKind::TypeEdit { .. } => "TypeEdit",
+        MenuKind::TypeLayer { .. } => "TypeLayer",
+        MenuKind::Layers { .. } => "Layers",
+        MenuKind::BrushMode { .. } => "BrushMode",
+    }
+}
+
+fn row_app(row: &Case) -> Box<PhotocraftApp> {
+    let mut app = if matches!(row.setup, Setup::UntouchedCrop | Setup::PendingCrop) { crop_app() } else { self::app() };
+    match row.setup {
+        // Zoomed needs a canvas to run its view command: `context_popup_table` zooms once the canvas shows.
+        Setup::Plain | Setup::UntouchedCrop | Setup::Zoomed => {}
+        Setup::Selection => {
+            app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
+        }
+        Setup::WorkPath => {
+            work_path(&mut app);
+            app.ui.selected_path = Some("work".into());
+        }
+        Setup::TextEdit => {
+            editing_type(&mut app);
+        }
+        Setup::CommittedType => {
+            committed_type(&mut app);
+        }
+        Setup::PendingCrop => {
+            draw_crop(&mut app);
+        }
+        Setup::Guide => {
+            app.run("view.newGuide", json!({"orientation": "vertical", "position": 16})).unwrap();
+        }
+    }
+    app.ui.tool = row.tool;
+    app
+}
+
+/// Each right-click, by tool, modifiers, place and state, opens the menu the routing in `context_popup` picks
+/// (or none), and changes neither the document nor the view.
+#[test]
+fn context_popup_table() {
+    for row in ROWS {
+        let mut h = harness(row_app(row));
+        if matches!(row.setup, Setup::Zoomed) {
+            // A view a pan would move: zoomed in through View › 200%, as a user does; the canvas runs it in its next pass.
+            let ctx = h.ctx.clone();
+            crate::menus::invoke(h.state_mut(), &ctx, "view.twoHundredPercent", json!({})).unwrap();
+            // The pass that applies it, then the zoom's ease to its end.
+            h.run_steps(3);
+        }
+        if row.held != Held::Nothing {
+            h.event(egui::Event::ModifiersChanged(row.mods));
+            h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: row.mods });
+            h.step();
+        }
+        let rect = h.state().last_canvas_rect;
+        let at = match row.place {
+            Place::Image => rect.center(),
+            Place::Pasteboard => rect.min + vec2(5.0, 5.0),
+            Place::Guide => screen_of(h.state(), [16.0, 8.0]),
+        };
+        let before = document_state(h.state());
+        let view = view_of(h.state());
+        secondary_press(&mut h, at, row.mods, row.gesture);
+        let menu = h.state().ui.canvas_tool_menu.as_ref().map(|m| (kind_name(&m.kind), m.tool));
+        let picker = h.state().ui.brush_picker.is_some();
+        match row.want {
+            Want::EditBrush => {
+                assert!(!picker, "{}: no picker beside the mode menu", row.name);
+                assert_eq!(menu.map(|(kind, _)| kind), Some("BrushMode"), "{}", row.name);
+                let journal = h.state().session.journal.len();
+                h.get_by_label("Edit Brush…").click();
+                h.run_steps(2);
+                assert!(h.state().ui.canvas_tool_menu.is_none(), "{}: choosing the row closes the menu", row.name);
+                assert!(h.state().ui.brush_picker.is_some(), "{}: the picker opens", row.name);
+                assert_eq!(h.state().session.journal.len(), journal, "{}: the row runs no command", row.name);
+                h.run_steps(2);
+                assert!(h.state().ui.brush_picker.is_some(), "{}: the picker stays open", row.name);
+            }
+            Want::Nothing => assert!(menu.is_none() && !picker, "{}: no popup, got {menu:?} picker {picker}", row.name),
+            Want::Picker => assert!(menu.is_none() && picker, "{}: the brush picker, got {menu:?}", row.name),
+            Want::Menu(kind) => {
+                assert!(!picker, "{}: no picker beside the menu", row.name);
+                let (got, tool) = menu.unwrap_or_else(|| panic!("{}: right-click opens no menu", row.name));
+                assert_eq!(got, kind, "{}", row.name);
+                if got == "Tool" {
+                    assert_eq!(tool, row.tool, "{}: the menu is the tool's", row.name);
+                }
+            }
+        }
+        assert_eq!(h.state().ui.tool, row.tool, "{}: the tool stays", row.name);
+        assert!(document_state(h.state()) == before, "{}: the right-click edits nothing", row.name);
+        assert_eq!(view_of(h.state()), view, "{}: the view stays", row.name);
+    }
+    // A point that is not finite, or a tool without a menu, opens nothing.
+    let mut app = app();
+    assert!(!open_here(&mut app, Tool::Note, [1.0, 1.0]));
+    assert!(!open_here(&mut app, Tool::Lasso, [f64::NAN, 1.0]));
+    assert!(!open_here(&mut app, Tool::Zoom, [f64::INFINITY, 1.0]));
+    assert!(app.ui.canvas_tool_menu.is_none());
+    assert!(open_here(&mut app, Tool::Zoom, [1.0, 1.0]));
+}
+
+// ---- the rows ----
+
+/// Whether `id` is a row id the menu itself handles (`engine_call` maps it).
+fn menu_local(id: &str) -> bool {
+    [GUIDE_EDIT, GUIDE_CLEAR, FAUX_BOLD, FAUX_ITALIC, PASTEBOARD_PICK].contains(&id)
+        || ["pasteboard.", "crop.", "canvasMenu.eyedropper.size.", "colorSampler.readout."].iter().any(|p| id.starts_with(p))
+        || id.starts_with(SPELLING_REPLACE)
+        || id == SPELLING_ADD
+        || [EYEDROPPER_COPY_HTML, EYEDROPPER_COPY_HEX].contains(&id)
+}
+
+/// A renamed command would leave a dead row unnoticed: every row runs a menu item, an engine command or
+/// a command of the runtime or of the menu itself.
+#[test]
+fn every_canvas_menu_row_runs_a_known_command() {
+    let app = app();
+    let items = crate::menus::menu_rows(&app);
+    type Table<'a> = (&'a str, &'a [Option<(&'a str, &'a str)>]);
+    let tables: [Table<'_>; 16] = [
+        ("SELECTION_MENU", SELECTION_MENU),
+        ("NO_SELECTION_MENU", NO_SELECTION_MENU),
+        ("MEASURED_SELECTION_MENU", MEASURED_SELECTION_MENU),
+        ("COUNT_MENU", COUNT_MENU),
+        ("CAM_INSIDE_SELECTION_MENU", CAM_INSIDE_SELECTION_MENU),
+        ("PEN_MENU", PEN_MENU),
+        ("GUIDE_MENU", GUIDE_MENU),
+        ("PASTEBOARD_MENU", PASTEBOARD_MENU),
+        ("VIEW_MENU", VIEW_MENU),
+        ("HAND_MENU", HAND_MENU),
+        ("TYPE_EDIT_MENU", TYPE_EDIT_MENU),
+        ("TYPE_LAYER_MENU", TYPE_LAYER_MENU),
+        ("TYPE_LAYER_MENU_PARAGRAPH", TYPE_LAYER_MENU_PARAGRAPH),
+        ("TYPE_LAYER_MENU_OTHER", TYPE_LAYER_MENU_OTHER),
+        ("EYEDROPPER_MENU", EYEDROPPER_MENU),
+        ("SAMPLER_MENU", SAMPLER_MENU),
+    ];
+    for (name, table) in tables {
+        for (label, id) in table.iter().flatten() {
+            assert!(
+                menu_local(id)
+                    || items.iter().any(|i| i.command.id == *id)
+                    || crate::shortcut_dispatch::RUNTIME_COMMANDS.iter().any(|(runtime, _)| runtime == id)
+                    || photocraft_engine::commands::find(id).is_some(),
+                "{name}: {label}: unknown command {id}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -198,19 +510,20 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     let mut app = app();
     let id = committed_type(&mut app);
     app.run("layer.new.layer", json!({})).unwrap();
-    let ctx = Context::default();
+    let ctx = app.ctx().clone();
     let active = |app: &PhotocraftApp| app.session.active().unwrap().active_layer.map(|l| l.0);
     assert_ne!(active(&app), Some(id));
-    // Away from the type, or with a Type Mask tool, nothing opens and nothing is selected.
-    assert!(!open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([30.0, 2.0])));
-    assert!(!open_at(&mut app, &ctx, Tool::HorizontalTypeMask, [10.0, 10.0], Some([16.0, 16.0])));
-    assert!(!open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([f64::NAN, 16.0])));
+    // Away from the type the Type tool opens the generic layer menu but selects nothing (#12042);
+    // with a Type Mask tool, nothing opens.
+    assert!(open_here(&mut app, Tool::Type, [30.0, 2.0]));
+    assert!(!open_here(&mut app, Tool::HorizontalTypeMask, [16.0, 16.0]));
+    assert!(!open_here(&mut app, Tool::Type, [f64::NAN, 16.0]));
     assert_ne!(active(&app), Some(id));
     // Over the type: its layer becomes the target, and the menu has no text edit rows.
-    assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([16.0, 16.0])));
+    assert!(open_here(&mut app, Tool::Type, [16.0, 16.0]));
     assert_eq!(active(&app), Some(id));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all", FAUX_BOLD, FAUX_ITALIC] {
+    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all"] {
         assert!(!available(&app, &menu, edit_row), "{edit_row} belongs to the edit menu only");
     }
     assert!(entry_enabled(&app, &menu, "type.convertToParagraphText") && !entry_enabled(&app, &menu, "type.convertToPointText"));
@@ -232,8 +545,8 @@ fn type_layer_menu_in_a_multiselection_acts_on_the_clicked_type() {
     let at = [25.0, 80.0];
     assert_eq!(crate::type_tool::hit_layer(&mut app, at[0], at[1]).map(|l| l.0), Some(bottom));
     assert_eq!(app.session.active().unwrap().active_layer.map(|l| l.0), Some(top));
-    let ctx = Context::default();
-    assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some(at)));
+    let ctx = app.ctx().clone();
+    assert!(open_here(&mut app, Tool::Type, at));
     let st = app.session.active().unwrap();
     assert_eq!(st.active_layer.map(|l| l.0), Some(bottom), "the clicked type is the target");
     assert_eq!(st.selected_layers().len(), 2, "the multiselection stays");
@@ -247,13 +560,13 @@ fn type_edit_menu_lists_spelling_suggestions_for_the_word_under_the_pointer() {
     let mut app = app();
     app.ui.tool = Tool::Type;
     let id = app.run("type.create", json!({"text": "Teh cat", "size": 12, "x": 4, "y": 20})).unwrap()["layer"].as_u64().unwrap();
-    let ctx = Context::default();
+    let ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
     // Away from the misspelling (past the end of the line): no spelling rows.
-    assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([600.0, 15.0])));
+    assert!(open_here(&mut app, Tool::Type, [600.0, 15.0]));
     assert!(spelling_rows(app.ui.canvas_tool_menu.as_ref().unwrap()).is_empty());
     // Over "Teh": its suggestions head the menu, then Add to Dictionary.
-    assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([5.0, 15.0])));
+    assert!(open_here(&mut app, Tool::Type, [5.0, 15.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     let rows = spelling_rows(&menu);
     assert!(rows.iter().any(|(l, _)| l == "The"), "{rows:?}");
@@ -266,216 +579,11 @@ fn type_edit_menu_lists_spelling_suggestions_for_the_word_under_the_pointer() {
     assert_eq!(app.ui.text_edit.as_ref().map(|e| (e.caret, e.anchor)), Some((3, 3)), "the caret lands after the replacement");
     // Add to Dictionary stops flagging a word.
     app.run("type.insertText", json!({"layer": id, "text": " Zqx"})).unwrap();
-    assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([600.0, 15.0])));
+    assert!(open_here(&mut app, Tool::Type, [600.0, 15.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    assert!(menu.spelling.as_ref().is_some_and(|s| s.word == "Zqx"));
+    assert!(matches!(&menu.kind, MenuKind::TypeEdit { spelling: Some(s) } if s.word == "Zqx"));
     choose(&mut app, &ctx, SPELLING_ADD);
     assert!(app.session.prefs().user_dictionary.iter().any(|w| w == "Zqx"));
-}
-
-#[test]
-fn right_click_outside_the_image_picks_the_pasteboard_color() {
-    let mut app = app();
-    app.ui.tool = Tool::RectMarquee;
-    let mut h = harness(app);
-    let rect = h.state().last_canvas_rect;
-    let outside = rect.min + vec2(5.0, 5.0);
-    right_click(&mut h, rect.center(), Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| !m.pasteboard), "inside: the tool's own menu");
-    h.state_mut().ui.canvas_tool_menu = None;
-    right_click(&mut h, outside, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().unwrap();
-    assert!(menu.pasteboard && rows(&menu) == PASTEBOARD_MENU, "outside: the pasteboard menu");
-    let ctx = h.ctx.clone();
-    choose(h.state_mut(), &ctx, "pasteboard.black");
-    assert_eq!(crate::prefs_ui::pasteboard_color(h.state()), Some(egui::Color32::BLACK));
-    // Select Custom Color… opens the Color Picker; OK makes its colour the custom pasteboard.
-    right_click(&mut h, outside, Modifiers::NONE);
-    choose(h.state_mut(), &ctx, PASTEBOARD_PICK);
-    let mut f = h.state().ui.dialogs.last().unwrap().fields.clone();
-    f.insert("color".into(), json!("#123456"));
-    crate::color_picker_ui::confirm(h.state_mut(), &f).unwrap();
-    assert_eq!(crate::prefs_ui::pasteboard_color(h.state()), Some(egui::Color32::from_rgb(0x12, 0x34, 0x56)));
-    // A painting tool keeps its Brush Preset picker there.
-    h.state_mut().ui.tool = Tool::Brush;
-    h.run_steps(2);
-    right_click(&mut h, outside, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.is_none() && h.state().ui.brush_picker.is_some());
-}
-
-/// #2832: right-click over an open Free Transform box: Photoshop's transform menu. Skew
-/// switches the box's mode; Rotate and Flip turn the box about its reference point without
-/// committing it; Content-Aware Scale and Puppet Warp are greyed.
-#[test]
-fn right_click_during_free_transform_switches_modes_rotates_and_flips_the_box() {
-    let mut app = app();
-    app.ui.tool = Tool::RectMarquee;
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("select.rect", json!({"x": 4, "y": 6, "width": 10, "height": 8})).unwrap();
-    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    app.run("select.deselect", json!({})).unwrap();
-    let mut h = harness(app);
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
-    h.run_steps(2);
-    let center = h.state().last_canvas_rect.center();
-    let (revision, journal) = (h.state().session.active().unwrap().revision, h.state().session.journal.len());
-    right_click(&mut h, center, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().expect("the transform menu");
-    assert!(menu.transform && rows(&menu) == TRANSFORM_MENU);
-    for (id, on) in [("edit.contentAwareScale", false), ("edit.puppetWarp", false), ("edit.transform.rotate90Cw", true), ("edit.transform.flipVertical", true)]
-    {
-        assert_eq!(entry_enabled(h.state(), &menu, id), on, "{id}");
-    }
-    choose(h.state_mut(), &ctx, "edit.transform.skew");
-    assert_eq!(h.state().ui.transform.as_ref().unwrap().mode, crate::state::TransformMode::Skew);
-    let t = h.state().ui.transform.clone().unwrap();
-    let (q0, c) = (t.quad, t.pivot);
-    right_click(&mut h, center, Modifiers::NONE);
-    choose(h.state_mut(), &ctx, "edit.transform.flipHorizontal");
-    let q = h.state().ui.transform.as_ref().expect("the box stays open").quad;
-    for (a, b) in q.iter().zip(q0) {
-        assert!((a[0] - (2.0 * c[0] - b[0])).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9, "mirrored about the reference point: {q0:?} -> {q:?}");
-    }
-    right_click(&mut h, center, Modifiers::NONE);
-    choose(h.state_mut(), &ctx, "edit.transform.rotate180");
-    let q = h.state().ui.transform.as_ref().unwrap().quad;
-    for (a, b) in q.iter().zip(q0) {
-        assert!((a[1] - (2.0 * c[1] - b[1])).abs() < 1e-9 && (a[0] - b[0]).abs() < 1e-9, "flipped then turned 180°: {q0:?} -> {q:?}");
-    }
-    let st = h.state().session.active().unwrap();
-    assert_eq!((st.revision, h.state().session.journal.len()), (revision, journal), "nothing is committed");
-}
-
-#[test]
-fn transform_menu_follows_photoshop_order() {
-    assert_eq!(
-        labels(TRANSFORM_MENU),
-        vec![
-            Some("Free Transform"),
-            Some("Scale"),
-            Some("Rotate"),
-            Some("Skew"),
-            Some("Distort"),
-            Some("Perspective"),
-            Some("Warp"),
-            None,
-            Some("Content-Aware Scale"),
-            Some("Puppet Warp"),
-            None,
-            Some("Rotate 180°"),
-            Some("Rotate 90° Clockwise"),
-            Some("Rotate 90° Counter Clockwise"),
-            None,
-            Some("Flip Horizontal"),
-            Some("Flip Vertical"),
-        ]
-    );
-    // Over a box on editable type, Distort and Perspective are greyed (#2630).
-    let mut app = app();
-    app.run("type.create", json!({"x": 2, "y": 20, "text": "Hi", "size": 16})).unwrap();
-    crate::transform_tool::begin(&mut app, &Context::default()).unwrap();
-    assert!(open_transform(&mut app, &Context::default(), [10.0, 10.0]));
-    let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    for (id, on) in [("edit.transform.skew", true), ("edit.transform.distort", false), ("edit.transform.perspective", false)] {
-        assert_eq!(entry_enabled(&app, &menu, id), on, "{id}");
-    }
-}
-
-fn labels(rows: &[Row]) -> Vec<Option<&str>> {
-    rows.iter().map(|row| row.map(|(label, _)| label)).collect()
-}
-
-#[test]
-fn selection_menus_follow_photoshop_order() {
-    assert_eq!(
-        labels(SELECTION_MENU),
-        vec![
-            Some("Deselect"),
-            Some("Select Inverse"),
-            Some("Feather…"),
-            Some("Select and Mask…"),
-            None,
-            Some("Save Selection…"),
-            Some("Make Work Path…"),
-            None,
-            Some("Layer via Copy"),
-            Some("Layer via Cut"),
-            Some("New Layer…"),
-            None,
-            Some("Free Transform"),
-            Some("Transform Selection"),
-            Some("Distort"),
-            Some("Perspective"),
-            None,
-            Some("Delete and Fill Selection"),
-            Some("Fill…"),
-            Some("Stroke…"),
-            Some("Content-Aware Fill…"),
-            None,
-            Some("Last Filter"),
-            None,
-            Some("Fade…"),
-        ]
-    );
-    assert_eq!(labels(NO_SELECTION_MENU), vec![Some("Select All"), Some("Reselect"), Some("Color Range…"), None, Some("Load Selection…")]);
-    // Every row runs a real command: one the menu bar has, or an engine command.
-    let app = app();
-    let items = crate::menus::menu_items(&app);
-    for (label, id) in [SELECTION_MENU, NO_SELECTION_MENU, PEN_MENU, TRANSFORM_MENU].into_iter().flatten().flatten() {
-        assert!(items.iter().any(|i| i.id == *id) || photocraft_engine::commands::find(id).is_some(), "{label}: unknown command {id}");
-    }
-}
-
-#[test]
-fn selection_menu_routes_actions_through_commands() {
-    let mut app = app();
-    app.ui.tool = Tool::RectMarquee;
-    app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
-    assert!(open(&mut app, &Context::default(), Tool::RectMarquee, [10.0, 10.0]));
-    assert_eq!(rows(app.ui.canvas_tool_menu.as_ref().unwrap()), SELECTION_MENU);
-    let before = app.session.journal.len();
-    choose(&mut app, &Context::default(), "select.inverse");
-    assert!(app.ui.canvas_tool_menu.is_none());
-    assert!(app.session.journal[before..].iter().any(|(id, _)| id == "select.inverse"));
-    let before = app.session.journal.len();
-    assert!(open(&mut app, &Context::default(), Tool::RectMarquee, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "select.deselect");
-    assert!(app.session.active().unwrap().doc.selection.is_none());
-    assert!(app.session.journal[before..].iter().any(|(id, _)| id == "select.deselect"));
-    // Nothing selected: the menu that makes a selection.
-    assert!(open(&mut app, &Context::default(), Tool::RectMarquee, [10.0, 10.0]));
-    assert_eq!(rows(app.ui.canvas_tool_menu.as_ref().unwrap()), NO_SELECTION_MENU);
-    choose(&mut app, &Context::default(), "select.reselect");
-    assert!(app.session.active().unwrap().doc.selection.is_some());
-    assert!(app.session.journal.iter().any(|(id, _)| id == "select.reselect"));
-    app.run("select.deselect", json!({})).unwrap();
-    assert!(open(&mut app, &Context::default(), Tool::Lasso, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "select.all");
-    assert!(app.session.active().unwrap().doc.selection.is_some());
-}
-
-#[test]
-fn selection_menu_layer_and_path_actions() {
-    let mut app = app();
-    app.ui.tool = Tool::EllipseMarquee;
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    app.run("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
-    let layers = app.session.active().unwrap().doc.layers.len();
-    assert!(open(&mut app, &Context::default(), Tool::EllipseMarquee, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "layer.new.layerViaCopy");
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "Layer via Copy adds a layer");
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("layer.new.layerViaCopy"));
-    // Make Work Path… asks for the tolerance, then traces the selection.
-    app.run("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
-    assert!(open(&mut app, &Context::default(), Tool::EllipseMarquee, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "select.toWorkPath");
-    let dialog = app.ui.dialogs.last().map(|d| d.id).expect("tolerance dialog");
-    assert!(app.session.active().unwrap().doc.work_path.is_none(), "nothing happens before OK");
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
-    assert!(app.session.active().unwrap().doc.work_path.is_some());
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.toWorkPath"));
 }
 
 #[test]
@@ -483,224 +591,26 @@ fn disabled_selection_rows_do_nothing() {
     let mut app = app();
     app.ui.tool = Tool::MagicWand;
     app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
-    assert!(open(&mut app, &Context::default(), Tool::MagicWand, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::MagicWand, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     // No filter has run and nothing can be faded yet.
     for id in ["filter.lastFilter", "edit.fade"] {
         assert!(!entry_enabled(&app, &menu, id), "{id} is greyed out");
     }
     let before = app.session.journal.len();
-    choose(&mut app, &Context::default(), "edit.fade");
+    pick(&mut app, "edit.fade");
     assert_eq!(app.session.journal.len(), before);
-    assert!(app.ui.dialogs.is_empty());
+    assert!(!any_dialog(&app));
     // Rows of the other variant are not part of this menu.
-    assert!(open(&mut app, &Context::default(), Tool::MagicWand, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "select.all");
+    assert!(open_here(&mut app, Tool::MagicWand, [10.0, 10.0]));
+    pick(&mut app, "select.all");
     assert_eq!(app.session.journal.len(), before);
-}
-
-/// Photoshop's Zoom tool menu is Fit on Screen, 100%, 200%, Print Size, then Zoom In and Zoom
-/// Out after a separator (#6005); Fill Screen (the Hand tool's) keeps its place by Fit on Screen.
-#[test]
-fn view_menu_follows_photoshop_order() {
-    assert_eq!(
-        labels(VIEW_MENU),
-        vec![Some("Fit on Screen"), Some("Fill Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]
-    );
-    // Every row but Fill Screen (the Hand tool's options-bar button) is a View menu command.
-    let app = app();
-    let items = crate::menus::menu_items(&app);
-    for (label, id) in VIEW_MENU.iter().flatten().filter(|(_, id)| *id != FILL_SCREEN) {
-        assert!(items.iter().any(|i| i.id == *id), "{label}: unknown command {id}");
-    }
-}
-
-fn zoom_app(w: u32, h: u32) -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": w, "height": h})).unwrap();
-    app
-}
-
-fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
-    crate::canvas::ViewXform::active(app).unwrap().to_screen(doc[0], doc[1])
-}
-
-#[test]
-fn zoom_and_hand_right_click_opens_the_view_menu() {
-    for tool in [Tool::Zoom, Tool::Hand] {
-        let mut app = zoom_app(400, 300);
-        app.ui.tool = tool;
-        let mut h = harness(app);
-        let zoom = h.state().ui.views[0].zoom;
-        let inside = screen_of(h.state(), [300.0, 100.0]);
-        right_click(&mut h, inside, Modifiers::NONE);
-        let menu = h.state().ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: right-click opens no menu"));
-        assert!(rows(&menu) == VIEW_MENU, "{tool:?}: the view menu");
-        assert_eq!(h.state().ui.views[0].zoom, zoom, "{tool:?}: the right-click alone does not zoom");
-        assert!(entry_enabled(h.state(), &menu, FILL_SCREEN) && entry_enabled(h.state(), &menu, "view.printSize"));
-        // Outside the image the pasteboard colour menu wins, as for the other tools.
-        h.state_mut().ui.canvas_tool_menu = None;
-        let outside = h.state().last_canvas_rect.min + vec2(5.0, 5.0);
-        right_click(&mut h, outside, Modifiers::NONE);
-        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "{tool:?}: pasteboard menu outside");
-    }
-}
-
-#[test]
-fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
-    let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Zoom;
-    let mut h = harness(app);
-    let zoom = h.state().ui.views[0].zoom;
-    let doc = [300.0, 100.0];
-    let p = screen_of(h.state(), doc);
-    right_click(&mut h, p, Modifiers::NONE);
-    // Chosen in the menu itself: the canvas frame that draws the menu must keep the new view.
-    h.get_by_label("Zoom In").click();
-    h.run_steps(3);
-    assert!(h.state().ui.canvas_tool_menu.is_none());
-    let after = h.state().ui.views[0].zoom;
-    assert_eq!(after, crate::zoom_levels::step(zoom, 1, [400, 300]), "one Zoom In step");
-    let s = screen_of(h.state(), doc);
-    assert!((s - p).length() < 1.0, "the right-clicked point stays put: {s:?} vs {p:?}");
-    assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("view.zoomIn"));
-    // Zoom Out returns to where it was.
-    right_click(&mut h, p, Modifiers::NONE);
-    h.get_by_label("Zoom Out").click();
-    h.run_steps(3);
-    assert_eq!(h.state().ui.views[0].zoom, zoom);
-    assert!((screen_of(h.state(), doc) - p).length() < 1.0);
-}
-
-#[test]
-fn animated_zoom_off_view_menu_keeps_the_anchor_without_a_transition() {
-    for command in ["view.zoomIn", "view.zoomOut", FILL_SCREEN] {
-        let mut app = zoom_app(400, 300);
-        app.ui.tool = Tool::Zoom;
-        app.run("prefs.set", json!({"values": {"general.animatedZoom": false, "tools.zoomClickedPointToCenter": false}})).unwrap();
-        let mut h = harness(app);
-        let doc = [300.0, 100.0];
-        let p = screen_of(h.state(), doc);
-        right_click(&mut h, p, Modifiers::NONE);
-        let ctx = h.ctx.clone();
-        choose(h.state_mut(), &ctx, command);
-        assert!(!h.state().ui.views[0].zoom_animating, "{command}");
-        h.step();
-        let v = &h.state().ui.views[0];
-        let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
-        assert_eq!((xf.zoom, xf.center), (v.zoom, v.center), "{command}");
-        assert!(v.zoom_anchor.is_none() && v.zoom_transition.is_none(), "{command}");
-        if command != FILL_SCREEN {
-            assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{command}: preserve the clicked point");
-        }
-    }
-}
-
-#[test]
-fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
-    let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Zoom;
-    let mut h = harness(app);
-    let zoom = h.state().ui.views[0].zoom;
-    let doc = [300.0, 100.0];
-    let p = screen_of(h.state(), doc);
-    right_click(&mut h, p, Modifiers::NONE);
-    let ctx = h.ctx.clone();
-    // Choose without the widget click helper, which runs repaint frames until settled.
-    choose(h.state_mut(), &ctx, "view.zoomIn");
-    h.step();
-    h.input_mut().time = Some(ctx.input(|i| i.time) + 0.11);
-    h.step();
-    let displayed = crate::canvas::ViewXform::active(h.state()).unwrap();
-    assert!(displayed.zoom > zoom && displayed.zoom < h.state().ui.views[0].zoom);
-    assert!(displayed.to_screen(doc[0], doc[1]).distance(p) < 1.0);
-    h.input_mut().time = Some(ctx.input(|i| i.time) + 0.3);
-    h.step();
-    assert!(!h.state().ui.views[0].zoom_animating);
-}
-
-#[test]
-fn view_menu_zoom_in_centres_the_clicked_point_with_the_preference() {
-    let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Hand;
-    app.run("prefs.set", json!({"path": "tools.zoomClickedPointToCenter", "value": true})).unwrap();
-    let mut h = harness(app);
-    let doc = [300.0, 100.0];
-    let p = screen_of(h.state(), doc);
-    right_click(&mut h, p, Modifiers::NONE);
-    h.get_by_label("Zoom In").click();
-    h.run_steps(3);
-    assert_eq!(h.state().ui.views[0].center, doc);
-}
-
-#[test]
-fn view_menu_fits_fills_and_sets_fixed_zooms() {
-    let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Zoom;
-    let mut h = harness(app);
-    let p = screen_of(h.state(), [200.0, 150.0]);
-    let area = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect).size();
-    let ppp = h.state().canvas_ppp();
-    let pick = |h: &mut Harness<'static, PhotocraftApp>, label: &str| {
-        right_click(h, p, Modifiers::NONE);
-        h.get_by_label(label).click();
-        h.run_steps(3);
-        h.state().ui.views[0].zoom
-    };
-    assert_eq!(pick(&mut h, "200%"), 2.0);
-    // Fill Screen: the image covers the whole canvas (one axis can overflow).
-    let fill = pick(&mut h, "Fill Screen") / ppp;
-    assert!(400.0 * fill >= area.x - 1.0 && 300.0 * fill >= area.y - 1.0, "fill {fill} for {area:?}");
-    assert!(400.0 * fill <= area.x + 1.0 || 300.0 * fill <= area.y + 1.0, "fill {fill} for {area:?}");
-    assert_eq!(h.state().ui.views[0].center, [200.0, 150.0]);
-    // Fit on Screen: back to the whole image (capped at 100%, as on open).
-    let fit = pick(&mut h, "Fit on Screen") / ppp;
-    assert!(400.0 * fit <= area.x && 300.0 * fit <= area.y && fit < fill, "fit {fit} fill {fill}");
-}
-
-#[test]
-fn view_menu_needs_finite_points_and_a_view_tool() {
-    let mut app = app();
-    assert!(!open_view(&mut app, &Context::default(), Tool::Brush, [1.0, 1.0], [1.0, 1.0]));
-    assert!(!open_view(&mut app, &Context::default(), Tool::Zoom, [f32::NAN, 1.0], [1.0, 1.0]));
-    assert!(!open_view(&mut app, &Context::default(), Tool::Zoom, [1.0, 1.0], [f64::INFINITY, 1.0]));
-    assert!(app.ui.canvas_tool_menu.is_none());
-    assert!(open_view(&mut app, &Context::default(), Tool::Zoom, [1.0, 1.0], [1.0, 1.0]));
-    let before = app.session.journal.len();
-    choose(&mut app, &Context::default(), "select.all");
-    assert_eq!(app.session.journal.len(), before, "the view menu cannot run another menu's row");
-    // With no document every row is greyed out and choosing one does nothing.
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    assert!(open_view(&mut app, &Context::default(), Tool::Hand, [1.0, 1.0], [1.0, 1.0]));
-    let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    for (_, id) in VIEW_MENU.iter().flatten() {
-        assert!(!entry_enabled(&app, &menu, id), "{id} is greyed out with no document");
-    }
-    choose(&mut app, &Context::default(), FILL_SCREEN);
-    choose(&mut app, &Context::default(), "view.zoomIn");
-}
-
-#[test]
-fn unsupported_tools_and_nonfinite_positions_do_not_open_menu() {
-    let mut app = app();
-    assert!(!open(&mut app, &Context::default(), Tool::Brush, [1.0, 1.0]));
-    assert!(!open(&mut app, &Context::default(), Tool::Lasso, [f32::NAN, 1.0]));
-    assert!(app.ui.canvas_tool_menu.is_none());
-    assert!(open(&mut app, &Context::default(), Tool::MagicWand, [1.0, 1.0]));
-    let before = app.session.journal.len();
-    choose(&mut app, &Context::default(), "file.new");
-    assert_eq!(app.session.journal.len(), before, "context menu cannot invoke an unrelated command");
 }
 
 #[test]
 fn completed_pen_path_right_click_makes_selection() {
     let mut app = app();
-    app.ui.tool = Tool::Pen;
-    for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-        crate::vector_ui::pen_down(&mut app, x, y, false);
-        crate::vector_ui::pen_up(&mut app);
-    }
-    crate::vector_ui::pen_commit(&mut app, true);
+    pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0), (2.0, 2.0)]);
     assert!(app.session.active().unwrap().doc.work_path.is_some());
     let mut h = harness(app);
     let center = h.state().last_canvas_rect.center();
@@ -708,8 +618,7 @@ fn completed_pen_path_right_click_makes_selection() {
     assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.tool == Tool::Pen && m.has_path));
     let ctx = h.ctx.clone();
     choose(h.state_mut(), &ctx, "path.toSelection");
-    let dialog = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
-    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    confirm_hosted(h.state_mut(), &ctx);
     assert!(h.state().session.active().unwrap().doc.selection.is_some());
     assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("path.toSelection"));
     // Like ⌘↩, it deselects and hides the work path, which stays in the document (#6079).
@@ -727,18 +636,14 @@ fn completed_pen_path_right_click_makes_selection() {
 #[test]
 fn pen_menu_finishes_in_progress_path_before_selection() {
     let mut app = app();
-    app.ui.tool = Tool::Pen;
-    for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-        crate::vector_ui::pen_down(&mut app, x, y, false);
-        crate::vector_ui::pen_up(&mut app);
-    }
+    pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)]);
     assert!(app.session.active().unwrap().doc.work_path.is_none());
-    assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
     assert!(entry_enabled(&app, menu, "path.toSelection"));
-    choose(&mut app, &Context::default(), "path.toSelection");
-    let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    let ctx = app.ctx().clone();
+    choose(&mut app, &ctx, "path.toSelection");
+    confirm_hosted(&mut app, &ctx);
     assert!(app.session.active().unwrap().doc.work_path.is_some());
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
@@ -749,168 +654,36 @@ fn pen_menu_finishes_in_progress_path_before_selection() {
 #[test]
 fn pen_options_bar_makes_a_selection_from_the_path() {
     let mut app = app();
+    let ctx = app.ctx().clone();
     app.ui.tool = Tool::Pen;
-    assert!(make_selection(&mut app).is_err(), "no path yet");
-    assert!(app.ui.dialogs.is_empty());
-    for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-        crate::vector_ui::pen_down(&mut app, x, y, false);
-        crate::vector_ui::pen_up(&mut app);
-    }
-    make_selection(&mut app).unwrap();
-    let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(pen_dialogs::make_selection(&mut app).is_err(), "no path yet");
+    assert!(!dialog_open(&app));
+    pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)]);
+    pen_dialogs::make_selection(&mut app).unwrap();
+    confirm_hosted(&mut app, &ctx);
     let st = app.session.active().unwrap();
     assert!(st.doc.work_path.is_some() && st.doc.selection.is_some());
     // That hid the Work Path (#6079): it is not the active path until it is selected in the
     // Paths panel again, and then it is, with no pen path in progress.
     app.run("select.deselect", json!({})).unwrap();
-    assert!(make_selection(&mut app).is_err(), "the hidden Work Path is not the active path");
-    assert!(app.ui.dialogs.is_empty());
+    assert!(pen_dialogs::make_selection(&mut app).is_err(), "the hidden Work Path is not the active path");
+    assert!(!dialog_open(&app));
     app.ui.selected_path = Some("work".into());
-    make_selection(&mut app).unwrap();
-    let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    pen_dialogs::make_selection(&mut app).unwrap();
+    confirm_hosted(&mut app, &ctx);
     assert!(app.session.active().unwrap().doc.selection.is_some());
     // Drawn with a saved path selected, the path is added to that one (#4721): the dialog is
     // for it, not for a Work Path.
     app.run("path.rename", json!({"name": "work", "to": "Cutout"})).unwrap();
     app.ui.selected_path = Some("Cutout".into());
-    for (x, y) in [(4.0, 24.0), (12.0, 24.0), (12.0, 30.0)] {
-        crate::vector_ui::pen_down(&mut app, x, y, false);
-        crate::vector_ui::pen_up(&mut app);
-    }
-    make_selection(&mut app).unwrap();
-    assert_eq!(app.ui.dialogs.last().and_then(|d| d.fields.get("name")), Some(&json!("Cutout")));
+    pen_clicks(&mut app, &[(4.0, 24.0), (12.0, 24.0), (12.0, 30.0)]);
+    pen_dialogs::make_selection(&mut app).unwrap();
+    assert_eq!(hosted(&mut app).fields().text("name"), Some("Cutout"));
 }
 
-/// #1056: the Path Selection and Direct Selection tools' right-click opens the path menu for
-/// the selected path, as the Pen's does, instead of nothing.
-#[test]
-fn path_selection_tools_open_the_path_menu() {
-    for tool in [Tool::PathSelection, Tool::DirectSelection] {
-        let mut app = app();
-        app.ui.tool = Tool::Pen;
-        for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-            crate::vector_ui::pen_down(&mut app, x, y, false);
-            crate::vector_ui::pen_up(&mut app);
-        }
-        crate::vector_ui::pen_commit(&mut app, false);
-        assert!(app.session.active().unwrap().doc.work_path.is_some());
-        app.ui.tool = tool;
-        assert!(applies(tool));
-        assert!(open(&mut app, &Context::default(), tool, [10.0, 10.0]), "{tool:?}");
-        let menu = app.ui.canvas_tool_menu.clone().unwrap();
-        assert_eq!(rows(&menu), PEN_MENU, "{tool:?}");
-        assert!(menu.has_path && entry_enabled(&app, &menu, "path.toSelection"), "{tool:?}");
-        choose(&mut app, &Context::default(), "path.toSelection");
-        let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
-        crate::dialogs::confirm(&mut app, dialog).unwrap();
-        assert!(app.session.active().unwrap().doc.selection.is_some(), "{tool:?}: Make Selection made one");
-    }
-}
-
-#[test]
-fn pen_menu_has_all_reference_rows_in_order_and_guards_unavailable_actions() {
-    let labels: Vec<_> = PEN_MENU.iter().map(|row| row.map(|(label, _)| label)).collect();
-    assert_eq!(
-        labels,
-        vec![
-            Some("Create Vector Mask"),
-            Some("Delete Path"),
-            None,
-            Some("Define Custom Shape…"),
-            None,
-            Some("Make Selection…"),
-            Some("New Guides From Shape"),
-            Some("Fill Path…"),
-            Some("Stroke Path…"),
-            None,
-            Some("Clipping Path…"),
-            None,
-            Some("Free Transform Path"),
-            None,
-            Some("Unite Shapes"),
-            Some("Subtract Front Shape"),
-            Some("Unite Shapes at Overlap"),
-            Some("Subtract Shapes at Overlap"),
-            None,
-            Some("Copy Fill"),
-            Some("Copy Complete Stroke"),
-            None,
-            Some("Paste Fill"),
-            Some("Paste Complete Stroke"),
-            None,
-            Some("Isolate Layers"),
-            None,
-            Some("Make Symmetry Path"),
-            Some("Disable Symmetry Path"),
-        ]
-    );
-    let mut app = app();
-    app.ui.tool = Tool::Pen;
-    assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
-    let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
-    assert!(!entry_enabled(&app, menu, "path.toSelection"));
-    let before = app.session.journal.len();
-    choose(&mut app, &Context::default(), "path.toSelection");
-    assert_eq!(app.session.journal.len(), before);
-    assert!(app.ui.dialogs.is_empty());
-}
-
-#[test]
-fn pen_menu_creates_mask_deletes_path_and_opens_named_path_dialogs() {
-    let mut app = app();
-    app.ui.tool = Tool::Pen;
-    work_path(&mut app);
-    choose_open(&mut app, "layer.vectorMask.fromPath");
-    let st = app.session.active().unwrap();
-    assert!(st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some()));
-    // The new vector mask's path becomes the active one (#4728); pick the Work Path again.
-    assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
-    app.ui.selected_path = Some("work".into());
-    choose_open(&mut app, "edit.defineCustomShape");
-    let id = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    let fields = &app.ui.dialogs.last().unwrap().fields;
-    assert_eq!(fields.get("path"), Some(&json!("work")));
-    app.ui.dialog_mut(id).unwrap().fields.insert("name".into(), json!("Menu Shape"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(app.session.edit_state.custom_shapes.iter().any(|s| s.name == "Menu Shape"));
-    choose_open(&mut app, "path.fill");
-    let id = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    assert_eq!(app.ui.dialogs.last().unwrap().fields.get("name"), Some(&json!("work")));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.fill"));
-    choose_open(&mut app, "path.delete");
-    assert!(app.session.active().unwrap().doc.work_path.is_none());
-}
-
-#[test]
-fn pen_menu_saved_path_clipping_and_numeric_transform() {
-    let mut app = app();
-    app.ui.tool = Tool::Pen;
-    work_path(&mut app);
-    app.run("path.rename", json!({"name": "work", "to": "Cutout"})).unwrap();
-    app.ui.selected_path = Some("Cutout".into());
-    assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
-    assert!(entry_enabled(&app, app.ui.canvas_tool_menu.as_ref().unwrap(), "path.clippingPath.set"));
-    choose(&mut app, &Context::default(), "path.clippingPath.set");
-    let id = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("flatness".into(), json!(2.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.clipping_path.as_ref().map(|p| p.name.as_str()), Some("Cutout"));
-    choose_open(&mut app, "path.transform");
-    let id = app.ui.dialogs.last().map(|d| d.id).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("translateX".into(), json!(5.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.transform"));
-}
-
-// #10527: the Stroke Path dialog's Simulate Pressure checkbox keeps the choice the last OK applied.
-
-/// A document with the Pen tool picked and a Work Path. Every route to the Stroke Path dialog (the
-/// Pen canvas menu, the Paths panel context menu, Alt-click on its Stroke button) ends in the same
-/// `pen_dialog`, so driving the menu route covers the other two.
-fn stroke_app() -> PhotocraftApp {
+/// A document with the Pen tool picked and a Work Path. Every route to the Stroke Path dialog ends in
+/// `pen_dialogs::open`, so driving that covers the Paths panel's routes.
+fn stroke_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.ui.tool = Tool::Pen;
     work_path(&mut app);
@@ -918,136 +691,57 @@ fn stroke_app() -> PhotocraftApp {
     app
 }
 
-/// Open the Stroke Path dialog through the Pen canvas menu and return its id.
-fn open_stroke(app: &mut PhotocraftApp) -> u64 {
-    choose_open(app, "path.stroke");
-    let d = app.ui.dialogs.last().expect("Stroke Path… opens a dialog");
-    assert_eq!(d.fields.get("__command").and_then(Value::as_str), Some("path.stroke"));
-    assert_eq!(d.fields.get("name").and_then(Value::as_str), Some("work"), "the Work Path is stroked");
-    d.id
+fn open_stroke(app: &mut PhotocraftApp) {
+    pen_dialogs::open(app, "path.stroke", "work");
+    assert!(dialog_open(app), "Stroke Path… opens a dialog");
+    assert_eq!(hosted(app).fields().text("name"), Some("work"), "the Work Path is stroked");
 }
 
-/// The Simulate Pressure the freshly opened dialog carries, or `None` when it carries none at all.
-/// The spec body draws a missing field as the schema default (off), so `None` and `Some(false)` look
-/// the same on screen; asserting a seeded `Some(bool)` pins the defensive read, which must never
-/// trust a saved value into a non-bool.
+/// The Simulate Pressure the freshly opened dialog starts with; the dialog is closed again.
 fn pressure_on_open(app: &mut PhotocraftApp) -> Option<bool> {
-    let id = open_stroke(app);
-    let on = app.ui.dialog_mut(id).unwrap().fields.get("simulatePressure").and_then(Value::as_bool);
-    app.ui.close_dialog(id);
+    open_stroke(app);
+    let on = hosted(app).fields().bool("simulatePressure");
+    let ctx = app.ctx().clone();
+    assert!(app.framework.dialogs.cancel::<HostedParamDialog>(&ctx));
     on
 }
 
-/// Tick or untick Simulate Pressure in the open dialog.
-fn set_pressure(app: &mut PhotocraftApp, id: u64, on: bool) {
-    app.ui.dialog_mut(id).unwrap().fields.insert("simulatePressure".into(), json!(on));
+fn set_pressure(app: &mut PhotocraftApp, on: bool) {
+    hosted(app).set_field("simulatePressure", on.into());
 }
 
+fn strokes(app: &PhotocraftApp) -> usize {
+    app.session.journal.iter().filter(|(id, _)| id == "path.stroke").count()
+}
+
+/// OK after a stroke that ran remembers Simulate Pressure for the next opening; Cancel and a failed run
+/// remember nothing.
 #[test]
 fn stroke_path_reopens_with_the_simulate_pressure_that_was_applied() {
     let mut app = stroke_app();
-    // The first one opens off: no remembered choice, and Photoshop's default is off.
-    assert_eq!(pressure_on_open(&mut app), Some(false), "the first Stroke Path opens with a seeded, off checkbox");
-    // Tick Simulate Pressure and press OK: the stroke runs with it.
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, true);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.stroke"), "OK stroked the path");
-    // Re-opening shows the choice that was applied (#10527).
+    let ctx = app.ctx().clone();
+    assert_eq!(pressure_on_open(&mut app), Some(false), "no remembered choice: off");
+    open_stroke(&mut app);
+    set_pressure(&mut app, true);
+    confirm_hosted(&mut app, &ctx);
+    assert_eq!(strokes(&app), 1, "OK stroked the path");
     assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice opens next time");
-    // Unticking it and pressing OK applies off, which is what opens next time.
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, false);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(pressure_on_open(&mut app), Some(false), "an applied off wins over the remembered on");
-}
-
-#[test]
-fn stroke_path_cancel_leaves_the_remembered_simulate_pressure_alone() {
-    let mut app = stroke_app();
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, true);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice opens again");
-    // Untick it and press Cancel: nothing was applied, so the next opening is unchanged.
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, false);
-    crate::dialogs::cancel(&mut app, id).unwrap();
-    assert!(app.ui.dialogs.is_empty(), "Cancel closes the dialog");
-    assert_eq!(app.session.journal.iter().filter(|(id, _)| id == "path.stroke").count(), 1, "Cancel ran no stroke");
-    assert_eq!(pressure_on_open(&mut app), Some(true), "Cancel leaves the remembered choice alone (#10527)");
-    // Cancel can also be the first thing done: still nothing to remember.
-    let mut fresh = stroke_app();
-    let id = open_stroke(&mut fresh);
-    set_pressure(&mut fresh, id, true);
-    crate::dialogs::cancel(&mut fresh, id).unwrap();
-    assert_eq!(pressure_on_open(&mut fresh), Some(false), "a cancelled on never becomes the remembered choice");
-}
-
-#[test]
-fn stroke_path_falls_back_to_off_for_a_corrupt_saved_simulate_pressure() {
-    let mut app = stroke_app();
-    // Saved data is never trusted: anything but a real bool in the remembered choice reopens the
-    // checkbox off rather than showing or applying it.
-    let corrupt =
-        [json!("not an object"), json!(null), json!({}), json!({"simulatePressure": "yes"}), json!({"simulatePressure": 1}), json!({"simulatePressure": null})];
-    for bad in corrupt {
-        app.session.prefs.edit(|p| p.dialogs.insert("path.stroke".into(), bad.clone()));
-        assert_eq!(pressure_on_open(&mut app), Some(false), "{bad} must reopen the checkbox off");
-    }
-    // No remembered key at all: off as well, and one applied OK writes a clean value back.
-    app.session.prefs.edit(|p| p.dialogs.remove("path.stroke"));
-    assert_eq!(pressure_on_open(&mut app), Some(false), "no remembered choice opens off");
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, true);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "only the checkbox is stored");
-    assert_eq!(pressure_on_open(&mut app), Some(true), "and it comes back after a clean write");
-}
-
-#[test]
-fn stroke_path_failed_confirmation_does_not_remember_simulate_pressure() {
-    let mut app = stroke_app();
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, true);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice is remembered");
-    // Untick it, point the dialog at a path that does not exist and press OK: the stroke fails, so
-    // nothing was applied and nothing may be remembered.
-    let id = open_stroke(&mut app);
-    set_pressure(&mut app, id, false);
-    app.ui.dialog_mut(id).unwrap().fields.insert("name".into(), json!("no such path"));
-    assert!(crate::dialogs::confirm(&mut app, id).is_err(), "stroking a missing path fails");
-    assert_eq!(app.session.journal.iter().filter(|(id, _)| id == "path.stroke").count(), 1, "the failed OK ran no stroke");
-    while let Some(d) = app.ui.dialogs.last().map(|d| d.id) {
-        app.ui.close_dialog(d);
-    }
-    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "a failed OK leaves the memory alone");
-    assert_eq!(pressure_on_open(&mut app), Some(true), "the next opening still shows the last applied choice");
-}
-
-#[test]
-fn stroke_path_does_not_remember_its_tool_choice() {
-    // Only Simulate Pressure sticks (#10527). Nobody asked for the tool to be remembered, so the
-    // dialog keeps opening on the spec's default and the engine keeps defaulting to the brush.
-    let mut app = stroke_app();
-    let id = open_stroke(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("tool".into(), json!("pencil"));
-    set_pressure(&mut app, id, true);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.stroke"));
-    let id = open_stroke(&mut app);
-    let (pressure, tool) = {
-        let f = &app.ui.dialog_mut(id).unwrap().fields;
-        (f.get("simulatePressure").cloned(), f.get("tool").cloned())
-    };
-    app.ui.close_dialog(id);
-    assert_eq!(pressure, Some(json!(true)), "the checkbox is remembered");
-    assert_eq!(tool, None, "the tool is not: the dialog opens on the spec default");
-    // The Paths panel's plain Stroke button strokes without a dialog, so it writes nothing: the
-    // remembered choice is still the one the dialog applied.
-    app.run("path.stroke", json!({"name": "work", "tool": "brush"})).unwrap();
-    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "a dialog-less stroke changes no memory");
+    // Cancel applies nothing and leaves the remembered choice alone.
+    open_stroke(&mut app);
+    set_pressure(&mut app, false);
+    assert!(app.framework.dialogs.cancel::<HostedParamDialog>(&ctx));
+    assert_eq!(strokes(&app), 1, "Cancel ran no stroke");
+    assert_eq!(pressure_on_open(&mut app), Some(true), "Cancel remembers nothing");
+    // A run that fails (the path went while the dialog was open) remembers nothing either.
+    open_stroke(&mut app);
+    set_pressure(&mut app, false);
+    app.run("path.delete", json!({"name": "work"})).unwrap();
+    assert!(try_confirm_hosted(&mut app, &ctx).is_err(), "the run has no path to stroke");
+    close_dialogs(&mut app);
+    assert_eq!(strokes(&app), 1, "the failed run stroked nothing");
+    work_path(&mut app);
+    app.ui.selected_path = Some("work".into());
+    assert_eq!(pressure_on_open(&mut app), Some(true), "a failed confirmation remembers nothing");
 }
 
 #[test]
@@ -1062,28 +756,24 @@ fn pen_shape_menu_enables_shape_ops_and_style_copy_only_when_applicable() {
     ]}, "fill":"#ff0000", "stroke":{"width":2,"color":"#000000"}}),
     )
     .unwrap();
-    assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
     assert!(entry_enabled(&app, menu, "layer.combineShapes.unite"));
     assert!(entry_enabled(&app, menu, "path.style.copyFill"));
     assert!(!entry_enabled(&app, menu, "path.style.pasteFill"));
     assert!(!entry_enabled(&app, menu, "path.fill"));
-    choose(&mut app, &Context::default(), "path.style.copyFill");
+    pick(&mut app, "path.style.copyFill");
     assert!(app.session.path_fill_clipboard.is_some());
-    assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     assert!(entry_enabled(&app, app.ui.canvas_tool_menu.as_ref().unwrap(), "path.style.pasteFill"));
 }
 
 #[test]
 fn unfinished_shape_path_disables_actions_that_would_target_the_previous_layer() {
     let mut app = app();
-    app.ui.tool = Tool::Pen;
-    app.ui.tool_options.vector_mode = "shape".into();
-    for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-        crate::vector_ui::pen_down(&mut app, x, y, false);
-        crate::vector_ui::pen_up(&mut app);
-    }
-    assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
+    app.ui.tool_options.vector_mode = craft::draw::ui::VectorMode::Shape;
+    pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)]);
+    assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
     for id in ["layer.vectorMask.fromPath", "path.delete", "path.fill", "path.stroke", "path.clippingPath.set", "view.newGuidesFromShape"] {
         assert!(!entry_enabled(&app, menu, id), "{id} must not act on the layer replaced by the pending shape");
@@ -1091,260 +781,15 @@ fn unfinished_shape_path_disables_actions_that_would_target_the_previous_layer()
     assert!(entry_enabled(&app, menu, "path.toSelection"));
 }
 
-/// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
-/// untouched default frame.
-fn crop_app() -> PhotocraftApp {
-    let mut app = app();
-    app.ui.tool = Tool::Crop;
-    app.ui.tool_options.crop_shield.classic_mode = true;
-    app.ui.extras.snap = false;
-    crate::crop_ui::ensure_frame(&mut app);
-    app
-}
-
-/// Draws a crop frame from (4, 4) to (28, 28): a pending crop. Returns the frame.
-fn draw_crop(app: &mut PhotocraftApp) -> [f64; 4] {
-    use crate::canvas::{ToolEvent, tool_event};
-    tool_event(app, ToolEvent::Down { x: 4.0, y: 4.0, pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Move { x: 16.0, y: 16.0, pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Move { x: 28.0, y: 28.0, pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: 28.0, y: 28.0 }, Modifiers::NONE);
-    assert!(crate::crop_ui::pending(app), "the drag draws a pending frame");
-    app.ui.crop_rect.unwrap()
-}
-
-fn aspect(r: [f64; 4]) -> f64 {
-    (r[2] - r[0]) / (r[3] - r[1])
-}
-
-/// #6561: right-click on a pending crop opens its menu without touching the frame, and a ratio
-/// row refits the frame as the options bar's dropdown does.
-#[test]
-fn right_click_on_a_pending_crop_opens_the_crop_menu_and_a_ratio_refits_the_frame() {
-    let mut app = crop_app();
-    let frame = draw_crop(&mut app);
-    let mut h = harness(app);
-    let center = h.state().last_canvas_rect.center();
-    right_click(&mut h, center, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().expect("right-click on a pending crop opens a menu");
-    assert_eq!(h.state().ui.crop_rect, Some(frame), "the right-click leaves the frame alone");
-    assert!(available(h.state(), &menu, "crop.ratio.16:9"), "the menu lists the options bar's ratios");
-    let ctx = h.ctx.clone();
-    choose(h.state_mut(), &ctx, "crop.ratio.16:9");
-    assert_eq!(h.state().ui.tool_options.crop_ratio, "16:9");
-    let r = h.state().ui.crop_rect.unwrap();
-    assert!((aspect(r) - 16.0 / 9.0).abs() < 1e-9, "the frame is 16 : 9 now: {r:?}");
-    assert!(r[0] >= frame[0] && r[1] >= frame[1] && r[2] <= frame[2] && r[3] <= frame[3], "fitted inside the old frame: {r:?}");
-    assert!(h.state().ui.canvas_tool_menu.is_none());
-}
-
-/// The menu's Crop row, clicked with the mouse, crops; the Crop tool then shows no frame until
-/// the next press, so the applied crop doesn't look still pending.
-#[test]
-fn the_crop_row_crops_and_no_frame_shows_until_the_next_press() {
-    let mut app = crop_app();
-    app.ui.tool_options.crop_shield.classic_mode = false;
-    let mut h = harness(app);
-    // Tall enough for the whole menu, down to its last row.
-    h.set_size(vec2(1000.0, 1400.0));
-    draw_crop(h.state_mut());
-    h.run_steps(2);
-    let r = h.state().ui.crop_rect.unwrap();
-    let center = h.state().last_canvas_rect.center();
-    right_click(&mut h, center, Modifiers::NONE);
-    h.get_by_label("Crop").click();
-    h.run_steps(3);
-    let size = h.state().session.active().unwrap().doc.size;
-    assert_eq!((f64::from(size.width), f64::from(size.height)), ((r[2] - r[0]).round(), (r[3] - r[1]).round()), "cropped to the frame");
-    assert!(h.state().ui.canvas_tool_menu.is_none());
-    assert_eq!(h.state().ui.tool, Tool::Crop);
-    assert_eq!(h.state().ui.crop_rect, None, "no frame around the cropped image");
-    // A click on the canvas brings back a frame around the whole cropped image.
-    let center = h.state().last_canvas_rect.center();
-    h.event(egui::Event::PointerMoved(center));
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
-    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, f64::from(size.width), f64::from(size.height)]), "the click brings a frame back");
-}
-
-#[test]
-fn untouched_crop_frame_has_no_menu_and_a_pending_one_wins_over_the_pasteboard() {
-    let mut h = harness(crop_app());
-    let rect = h.state().last_canvas_rect;
-    let outside = rect.min + vec2(5.0, 5.0);
-    right_click(&mut h, rect.center(), Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "the tool's untouched frame is no crop in progress");
-    right_click(&mut h, outside, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "outside: the pasteboard menu, as before");
-    h.state_mut().ui.canvas_tool_menu = None;
-    draw_crop(h.state_mut());
-    h.run_steps(2);
-    right_click(&mut h, outside, Modifiers::NONE);
-    let menu = h.state().ui.canvas_tool_menu.clone().unwrap();
-    assert!(menu.crop.is_some() && !menu.pasteboard, "with a crop pending, its menu also outside the image");
-}
-
-/// A harness in the app's order: shortcuts (the crop's Esc and ↵ among them), then the canvas.
-fn shortcut_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::shortcuts::handle(app, &ctx);
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
-    h.run_steps(4);
-    h
-}
-
-#[test]
-fn esc_closes_only_the_crop_menu() {
-    let mut app = crop_app();
-    let frame = draw_crop(&mut app);
-    let mut h = shortcut_harness(app);
-    let center = h.state().last_canvas_rect.center();
-    right_click(&mut h, center, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()));
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
-    assert_eq!(h.state().ui.crop_rect, Some(frame), "and only the menu: the crop is not cancelled");
-    assert!(crate::crop_ui::pending(h.state()));
-}
-
-/// ↵ under the open crop menu doesn't commit the crop beneath it.
-#[test]
-fn enter_under_the_crop_menu_does_not_crop() {
-    let mut app = crop_app();
-    let frame = draw_crop(&mut app);
-    let mut h = shortcut_harness(app);
-    let size = h.state().session.active().map(|s| s.doc.size);
-    let center = h.state().last_canvas_rect.center();
-    right_click(&mut h, center, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()));
-    h.key_press(egui::Key::Enter);
-    h.run_steps(2);
-    assert_eq!(h.state().session.active().map(|s| s.doc.size), size, "↵ under the menu doesn't crop");
-    assert_eq!(h.state().ui.crop_rect, Some(frame));
-    assert!(crate::crop_ui::pending(h.state()));
-}
-
-/// A right-click while the left button drags the crop frame opens no menu over the drag, on
-/// the image or outside it (no pasteboard menu either), and the menu opens again once the left
-/// button is up, though egui ended that drag without a release of its own.
-#[test]
-fn no_crop_menu_while_the_left_button_drags_the_frame() {
-    let mut app = crop_app();
-    draw_crop(&mut app);
-    let mut h = harness(app);
-    let rect = h.state().last_canvas_rect;
-    let (center, outside) = (rect.center(), rect.min + vec2(5.0, 5.0));
-    let left = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-    h.event(egui::Event::PointerMoved(center));
-    h.run_steps(1);
-    h.event(left(center, true));
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.event(egui::Event::PointerMoved(center + vec2(8.0 * k as f32, 0.0)));
-        h.run_steps(1);
-    }
-    assert!(h.state().crop.drag.is_some(), "the left button drags the frame");
-    let held = center + vec2(32.0, 0.0);
-    right_click(&mut h, held, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "no crop menu over the drag");
-    right_click(&mut h, outside, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "nor the pasteboard menu outside the image");
-    h.event(egui::Event::PointerMoved(held));
-    h.event(left(held, false));
-    h.run_steps(2);
-    right_click(&mut h, center, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "with the button up the menu opens");
-}
-
-/// The left button down with no crop gesture under way (a press egui doesn't take for a drag
-/// yet, or one whose release was lost to an Alt+Tab or a cancelled touch) doesn't keep the
-/// crop menu shut.
-#[test]
-fn a_left_button_down_without_a_crop_drag_keeps_the_crop_menu() {
-    let mut app = crop_app();
-    draw_crop(&mut app);
-    let mut h = harness(app);
-    let center = h.state().last_canvas_rect.center();
-    h.event(egui::Event::PointerMoved(center));
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    assert!(h.ctx.input(|i| i.pointer.primary_down()) && h.state().crop.drag.is_none(), "down, dragging nothing");
-    right_click(&mut h, center, Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "the crop menu opens");
-}
-
-/// Nor does a right-click open a menu over a Straighten line the left button still draws.
-#[test]
-fn no_crop_menu_while_the_left_button_draws_a_straighten_line() {
-    let mut app = crop_app();
-    draw_crop(&mut app);
-    crate::crop_straighten::toggle(&mut app);
-    let mut h = harness(app);
-    let center = h.state().last_canvas_rect.center();
-    let left = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-    h.event(egui::Event::PointerMoved(center));
-    h.run_steps(1);
-    h.event(left(center, true));
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.event(egui::Event::PointerMoved(center + vec2(8.0 * k as f32, 4.0)));
-        h.run_steps(1);
-    }
-    assert!(h.state().crop.straighten.line.is_some() && h.state().crop.drag.is_none(), "the left button draws a Straighten line");
-    right_click(&mut h, center + vec2(32.0, 4.0), Modifiers::NONE);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "no menu over the line");
-}
-
-/// A finger held still on a pending crop (a touch screen's press-and-hold right-click) opens
-/// the crop menu, though the touch counts as the primary button down.
-#[test]
-fn a_finger_held_on_a_pending_crop_opens_the_crop_menu() {
-    let mut app = crop_app();
-    let frame = draw_crop(&mut app);
-    let mut h = harness(app);
-    let at = h.state().last_canvas_rect.center();
-    let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-    h.input_mut().events.extend([egui::Event::PointerMoved(at), touch(egui::TouchPhase::Start), button(true)]);
-    h.step();
-    // Held past egui's max_click_duration (0.8 s) without moving.
-    for _ in 0..120 {
-        if h.state().ui.canvas_tool_menu.is_some() {
-            break;
-        }
-        h.step();
-    }
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "the held finger opens the crop menu");
-    h.input_mut().events.extend([touch(egui::TouchPhase::End), button(false)]);
-    h.run_steps(2);
-    assert_eq!(h.state().ui.crop_rect, Some(frame), "the hold leaves the frame alone");
-}
-
 #[test]
 fn crop_menu_rows_act_like_the_options_bar() {
-    use crate::crop_overlay::{CropOverlay, OverlayShow};
-    let ctx = Context::default();
+    use craft::behavior::geometry::{CropGuide, GuideShow};
+    use craft::draw::ui::crop::{CropLength, CropRatio, CropSettings};
     let mut app = crop_app();
+    let ctx = app.ctx().clone();
     draw_crop(&mut app);
-    // Space's Hand held over the Crop tool keeps its own right-click.
-    assert!(!open_crop(&mut app, &ctx, Tool::Hand, [10.0, 10.0]));
     let reopen = |app: &mut PhotocraftApp| {
-        assert!(open_crop(app, &Context::default(), Tool::Crop, [10.0, 10.0]));
+        assert!(open_here(app, Tool::Crop, [10.0, 10.0]));
         app.ui.canvas_tool_menu.clone().unwrap()
     };
     // Nothing to save with a free ratio, nothing to delete without saved presets.
@@ -1354,35 +799,41 @@ fn crop_menu_rows_act_like_the_options_bar() {
     // A size preset fills W x H x Resolution, which the menu checks, as the dropdown does.
     choose(&mut app, &ctx, "crop.ratio.preset:4x5in");
     let menu = reopen(&mut app);
-    assert!(mode_checked(&app, &menu, "crop.ratio.whr") && !mode_checked(&app, &menu, "crop.ratio.preset:4x5in"));
-    assert!((aspect(app.ui.crop_rect.unwrap()) - 0.8).abs() < 1e-9);
+    assert_eq!(app.ui.tool_options.crop.ratio, CropRatio::Size);
+    assert!(mode_checked(&app, &menu, "crop.ratio.preset:4x5in") && !mode_checked(&app, &menu, "crop.ratio.whr"));
+    assert!((aspect(frame_of(&app).unwrap()) - 0.8).abs() < 1e-9);
     assert!(entry_enabled(&app, &menu, CROP_NEW));
     // Clear empties W x H x Resolution, as the bar's Clear.
     choose(&mut app, &ctx, CROP_CLEAR);
-    assert_eq!(app.ui.tool_options.crop_width, "");
+    assert_eq!(app.ui.tool_options.crop.size.width, None);
     // Overlays: another overlay starts at its first orientation; when it shows.
-    app.ui.tool_options.crop_overlay = CropOverlay::GoldenSpiral;
-    app.ui.tool_options.crop_overlay_orientation = 2;
+    app.ui.tool_options.crop.guide = CropGuide::GoldenSpiral;
+    app.ui.tool_options.crop.guide_orientation = 2;
     reopen(&mut app);
     choose(&mut app, &ctx, "crop.overlay.triangle");
-    assert_eq!((app.ui.tool_options.crop_overlay, app.ui.tool_options.crop_overlay_orientation), (CropOverlay::Triangle, 0));
+    assert_eq!((app.ui.tool_options.crop.guide, app.ui.tool_options.crop.guide_orientation), (CropGuide::Triangle, 0));
     reopen(&mut app);
     choose(&mut app, &ctx, "crop.overlayShow.never");
-    assert_eq!(app.ui.tool_options.crop_overlay_show, OverlayShow::Never);
+    assert_eq!(app.ui.tool_options.crop.guide_show, GuideShow::Never);
     let menu = reopen(&mut app);
     assert!(mode_checked(&app, &menu, "crop.overlay.triangle") && mode_checked(&app, &menu, "crop.overlayShow.never"));
     // A saved preset is listed by name; picking it refits the frame to its W x H, though the
     // ratio key is "whr" before and after.
     app.ui.canvas_tool_menu = None;
-    app.ui.tool_options.crop_ratio = crate::crop_size::WHR.into();
-    let saved = json!({"crop_ratio": "whr", "crop_width": "300 px", "crop_height": "100 px", "crop_resolution": "72", "crop_resolution_unit": "px/in"});
+    let mut banner_settings = CropSettings::default();
+    banner_settings.ratio = CropRatio::Size;
+    banner_settings.size.width = Some(CropLength::new(300.0, UnitKind::Pixels));
+    banner_settings.size.height = Some(CropLength::new(100.0, UnitKind::Pixels));
+    banner_settings.size.resolution = "72".into();
+    let saved = json!({"crop": banner_settings});
     app.run("tool.presets.new", json!({"name": "Banner", "tool": "crop", "options": {"toolOptions": saved}})).unwrap();
+    assert!(crate::crop_presets::user_presets(&app).iter().any(|p| p.name == "Banner" && p.ratio == CropRatio::Size));
     let menu = reopen(&mut app);
-    let banner = crop_rows(&menu).into_iter().flatten().find(|(l, _)| l == "Banner").expect("the saved preset is a row").1;
+    let banner = crop_rows(&app, &menu).into_iter().flatten().find(|(l, _)| l == "Banner").expect("the saved preset is a row").1;
     assert!(entry_enabled(&app, &menu, CROP_DELETE));
     choose(&mut app, &ctx, &banner);
-    assert_eq!(app.ui.tool_options.crop_width, "300 px");
-    assert!((aspect(app.ui.crop_rect.unwrap()) - 3.0).abs() < 1e-9, "the frame follows the preset: {:?}", app.ui.crop_rect);
+    assert_eq!(app.ui.tool_options.crop.size.width, Some(CropLength::new(300.0, UnitKind::Pixels)));
+    assert!((aspect(frame_of(&app).unwrap()) - 3.0).abs() < 1e-9, "the frame follows the preset: {:?}", frame_of(&app));
     let menu = reopen(&mut app);
     assert!(mode_checked(&app, &menu, &banner));
     // Crop commits as ↵ does: the preset's size.
@@ -1395,7 +846,6 @@ fn crop_menu_rows_act_like_the_options_bar() {
     choose(&mut app, &ctx, CROP_CANCEL);
     assert!(!crate::crop_ui::pending(&app));
     // ...and, as Esc does, hides the frame without cropping (#10370).
-    crate::crop_ui::ensure_frame(&mut app);
-    assert_eq!(app.ui.crop_rect, None);
+    assert_eq!(frame_of(&app), None);
     assert_eq!(app.session.active().unwrap().doc.size, size);
 }

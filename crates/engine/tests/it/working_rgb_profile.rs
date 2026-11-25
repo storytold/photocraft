@@ -1,6 +1,6 @@
 //! Working RGB must support reading and editing for the configured intent.
 
-use photocraft_cms::{
+use craft_cms::{
     Builtin, Curve, Intent, Profile, ProfileClass,
     pipeline::Stage,
     profile::{Lut, LutKind},
@@ -8,6 +8,8 @@ use photocraft_cms::{
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer};
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_geom::Size;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -59,12 +61,12 @@ fn reject_one_way_setting(source: bool, destination: bool, missing_direction: &s
         assert_eq!(file.profile.device_to_pcs(intent).is_ok(), source);
         assert_eq!(file.profile.pcs_to_device(intent).is_ok(), destination);
         let mut s = Session::new();
-        let before = s.color.settings.clone();
+        let before = s.color().settings.clone();
         let error = s.execute("edit.colorSettings", json!({"workingRgb": file.spec(), "intent": intent.id(), "bpc": false})).unwrap_err();
         assert!(error.to_string().contains(missing_direction), "{error}");
-        assert_eq!(s.color.settings, before, "reject the full settings update before any mutation");
+        assert_eq!(s.color().settings, before, "reject the full settings update before any mutation");
         assert!(s.execute("prefs.set", json!({"path": "colorSettings.workingRgb", "value": file.spec()})).is_err());
-        assert_eq!(s.color.settings, before, "individual preference setter also rejects atomically");
+        assert_eq!(s.color().settings, before, "individual preference setter also rejects atomically");
     }
 }
 
@@ -81,15 +83,15 @@ fn a_destination_only_rgb_working_space_is_rejected_atomically() {
 fn legacy_session(file: &ProfileFile, intent: Intent) -> Session {
     let mut s = Session::new();
     s.load_prefs_json(&json!({"colorSettings": {"workingRgb": file.spec(), "intent": intent.id()}}).to_string()).unwrap();
-    assert_eq!(s.color.settings.working_rgb, file.spec(), "legacy preferences still load");
+    assert_eq!(s.color().settings.working_rgb, file.spec(), "legacy preferences still load");
     s
 }
 
 fn display_and_copy(s: &mut Session, depth: SampleType) {
     let target = s.active().unwrap().doc.clone();
-    let display = s.color.display_transform(&target).expect("the destination document must also be a readable display source");
+    let display = s.color().display_transform(&target).expect("the destination document must also be a readable display source");
     let mut displayed = [0.0; 3];
-    display.eval(&[0.35, 0.65, 0.45], &mut displayed);
+    display.eval(&[0.35, 0.65, 0.45], &mut displayed).unwrap();
     assert!(displayed.iter().all(|v| v.is_finite()));
     let mut source = Document::new("Copy source", Size::new(8, 6), ColorMode::Rgb, SampleType::F32);
     source.icc_profile = Some(Builtin::AdobeRgbCompat.profile().to_bytes());
@@ -115,7 +117,7 @@ fn legacy_untagged_workflow(source: bool, destination: bool) {
             assert!(doc.icc_profile.is_none());
             s.open_document(doc, None);
             display_and_copy(&mut s, depth);
-            assert_eq!(s.color.working(ColorMode::Rgb).content_hash(), Builtin::Srgb.profile().content_hash());
+            assert_eq!(s.color().working(ColorMode::Rgb).content_hash(), Builtin::Srgb.profile().content_hash());
             assert!(s.documents()[0].doc.icc_profile.is_none(), "the default working fallback keeps untagged documents untagged");
         }
     }
@@ -162,15 +164,15 @@ fn valid_input_matrix_and_lut_working_profiles_use_the_configured_intent() {
         for intent in Intent::ALL {
             let supported = !colorimetric_only || matches!(intent, Intent::RelativeColorimetric | Intent::AbsoluteColorimetric);
             let mut s = Session::new();
-            let before = s.color.settings.clone();
+            let before = s.color().settings.clone();
             let result = s.execute("edit.colorSettings", json!({"workingRgb": file.spec(), "intent": intent.id()}));
             assert_eq!(result.is_ok(), supported, "{intent:?}/colorimetric_only={colorimetric_only}");
             if !supported {
-                assert_eq!(s.color.settings, before);
+                assert_eq!(s.color().settings, before);
             }
             let s = legacy_session(&file, intent);
             let expected = if supported { &file.profile } else { Builtin::Srgb.profile() };
-            assert_eq!(s.color.working(ColorMode::Rgb).content_hash(), expected.content_hash());
+            assert_eq!(s.color().working(ColorMode::Rgb).content_hash(), expected.content_hash());
         }
     }
 }
@@ -214,8 +216,8 @@ fn valid_cross_field_profile_and_intent_changes_validate_the_final_batch() {
     for (command, params) in cases {
         let mut s = colorimetric_session(&file);
         s.execute(command, params.clone()).unwrap_or_else(|e| panic!("final valid batch must succeed: {command}/{params}: {e}"));
-        assert_eq!(s.color.settings.working_rgb, "display-p3");
-        assert_eq!(s.color.settings.intent, "perceptual");
+        assert_eq!(s.color().settings.working_rgb, "display-p3");
+        assert_eq!(s.color().settings.intent, "perceptual");
     }
 }
 
@@ -256,8 +258,8 @@ fn incompatible_single_intent_reset_preserves_the_original_colour_settings() {
 fn unrelated_preference_batches_still_work_with_legacy_invalid_colour_settings() {
     let invalid = ProfileFile::new(directional_profile(true, false));
     let mut s = legacy_session(&invalid, Intent::RelativeColorimetric);
-    let before = s.color.settings.clone();
+    let before = s.color().settings.clone();
     s.execute("prefs.set", json!({"values": {"cursors.painting": "precise", "performance.historyStates": 17}})).unwrap();
-    assert_eq!(s.color.settings, before);
+    assert_eq!(s.color().settings, before);
     assert_eq!(s.execute("prefs.get", json!({"path": "performance.historyStates"})).unwrap(), json!(17));
 }
