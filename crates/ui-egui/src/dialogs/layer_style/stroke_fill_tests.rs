@@ -17,6 +17,45 @@ fn gradient(paint: &FxPaint) -> &Gradient {
 }
 
 #[test]
+fn saved_stroke_endpoints_survive_open_and_reset_to_default() {
+    let gradient = json!({
+        "fillType": "gradient", "from": "#ff0000", "to": "#0000ff", "opacityStops": [[0, 90], [1, 55]],
+        "style": "reflected", "angle": 43, "scale": 72.5, "reverse": true,
+        "size": 9, "position": "outside", "opacity": 84, "overprint": true
+    });
+    let mut legacy = gradient.clone();
+    legacy.as_object_mut().unwrap().remove("fillType");
+    let mut to_only = gradient.clone();
+    to_only.as_object_mut().unwrap().remove("from");
+    let mut explicit_stops = to_only.clone();
+    explicit_stops.as_object_mut().unwrap().remove("to");
+    explicit_stops["stops"] = json!([[0, "#ff0000"], [0.35, "#00ff00"], [1, "#0000ff"]]);
+    let solid = json!({"color": "#22cc55", "size": 3, "position": "center"});
+    let mut solid_with_inactive_gradient = solid.clone();
+    solid_with_inactive_gradient["fillType"] = json!("color");
+    solid_with_inactive_gradient["from"] = gradient["from"].clone();
+    solid_with_inactive_gradient["to"] = gradient["to"].clone();
+    for (saved, command) in
+        [(&gradient, &gradient), (&legacy, &legacy), (&to_only, &to_only), (&explicit_stops, &explicit_stops), (&solid_with_inactive_gradient, &solid)]
+    {
+        let mut app = app_with_layer(32);
+        let expected = photocraft_engine::layer_style::effect_from_params("stroke", command).unwrap();
+        app.run("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": saved})).unwrap();
+        let id = open(&mut app, Some("stroke")).unwrap();
+        ok(&mut app, id);
+        assert_eq!(layer_effects(&app.session), vec![expected.clone()], "new Stroke from {saved}");
+
+        app.run("layer.layerStyle.stroke", json!({"color": "#abcdef"})).unwrap();
+        let id = open(&mut app, Some("stroke")).unwrap();
+        let mut h = harness(app);
+        h.get_by_role_and_label(Role::Button, "Reset to Default").click();
+        h.run_steps(3);
+        ok(h.state_mut(), id);
+        assert_eq!(layer_effects(&h.state().session), vec![expected], "reset Stroke from {saved}");
+    }
+}
+
+#[test]
 fn stroke_fill_choice_previews_the_gradient_and_commits_a_single_edit() {
     let mut app = app_with_layer(32);
     app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();

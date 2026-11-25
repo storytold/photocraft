@@ -82,12 +82,16 @@ pub(super) fn defaults(values: &mut Value) {
 }
 
 pub(super) fn load_default(values: &mut Value, user: &Value) {
-    // Older automation could save a Stroke default with endpoints or stops and no Fill Type.
-    if user.get(KEY).is_none()
-        && (user.get("from").is_some() || user.get(gradient_field::KEY).is_some())
+    let fill = user.get(KEY);
+    let explicit_gradient = fill.and_then(Value::as_str) == Some(GRADIENT) && ["from", "to", "method"].iter().any(|key| user.get(*key).is_some());
+    let legacy_gradient = fill.is_none() && (user.get("from").is_some() || user.get(gradient_field::KEY).is_some());
+    // Resolve endpoint and interpolation parameters before dropping them from the editable draft.
+    if (explicit_gradient || legacy_gradient)
         && let Some(Effect::Stroke(stroke)) = photocraft_engine::layer_style::effect_from_params("stroke", user)
+        && let FxPaint::Gradient(gradient) = &stroke.paint
     {
-        paint_values(values, &stroke.paint);
+        values[KEY] = json!(GRADIENT);
+        gradient_stop_values(values, gradient);
     }
     if let Some(values) = values.as_object_mut() {
         for key in ["from", "to", "method", "smoothness"] {
@@ -110,10 +114,14 @@ pub(super) fn paint_values(values: &mut Value, paint: &FxPaint) {
     };
 }
 
-fn gradient_values(values: &mut Value, g: &Gradient) {
+fn gradient_stop_values(values: &mut Value, g: &Gradient) {
     let (stops, opacity) = gradient_field::stops_to_json(&gradient_field::stops_of_doc(&g.stops, &g.opacity_stops));
     values[gradient_field::KEY] = stops;
     values[gradient_field::OPACITY_KEY] = opacity;
+}
+
+fn gradient_values(values: &mut Value, g: &Gradient) {
+    gradient_stop_values(values, g);
     values["reverse"] = json!(g.reverse);
     values["style"] = json!(match g.style {
         GradientStyle::Linear => "linear",
