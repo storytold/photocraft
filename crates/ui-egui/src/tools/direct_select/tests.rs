@@ -122,6 +122,10 @@ fn pen_with_command_edits_the_path_being_drawn_in_place() {
 fn shape_layer_paths_are_edited_too() {
     let mut app = app(Tool::DirectSelection);
     let id = app.run("shape.create", json!({"kind": "rect", "rect": [20, 20, 60, 60], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
+    // A live shape asks first (#13216, `live_shape_warning_tests`): this test is about the path edit
+    // itself, so the layer starts converted.
+    let path = app.run("shape.info", json!({"layer": id})).unwrap()["path"].clone();
+    app.run("shape.edit", json!({"layer": id, "path": path})).unwrap();
     drag(&mut app, [80.0, 80.0], [100.0, 90.0], Modifiers::NONE);
     assert_eq!(app.ui.direct_selection.target, Some(PathRef::Layer(id)));
     let info = app.run("shape.info", json!({"layer": id})).unwrap();
