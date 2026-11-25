@@ -106,6 +106,15 @@ pub(crate) fn portable(s: &Session, id: &str, mut params: Value, before: &Before
     if id == "layer.layerMask.moveTo" {
         portable_mask_destination(doc, &mut params);
     }
+    // The group a new layer or group went into, by its name when that names one layer only, so
+    // the replay finds the same group in another document; otherwise by id.
+    if matches!(id, "layer.new.layer" | "layer.new.group")
+        && let Some(group) = params.get("group").and_then(Value::as_u64).and_then(|g| doc.layer(LayerId(g)))
+        && doc.walk().iter().filter(|(_, _, l)| l.name == group.name).count() == 1
+        && let Some(fields) = params.as_object_mut()
+    {
+        fields.insert("group".into(), Value::String(group.name.clone()));
+    }
     let Some(target) = params.get("layer").and_then(Value::as_u64).map(LayerId) else { return params };
     let Some(obj) = params.as_object_mut() else { return params };
     let only_selected = before.selected.len() <= 1;

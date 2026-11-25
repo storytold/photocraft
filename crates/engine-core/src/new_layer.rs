@@ -33,7 +33,7 @@ pub(crate) struct NewLayer {
     neutral: Option<[f32; 3]>,
     below: bool,
     name: Option<String>,
-    group: Option<photocraft_doc::LayerId>,
+    group: Option<GroupRef>,
 }
 
 /// `layer.new.layer`: a pixel layer where Photoshop puts a new one ([`crate::layer_place`]: above
@@ -41,12 +41,13 @@ pub(crate) struct NewLayer {
 /// panel's ⌘/Ctrl-click), joining the clip group it lands in.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let NewLayer { clip, mode, opacity, label, neutral, below, name, group } = parse(p)?;
-    let place = match (group, below) {
+    let place = match (&group, below) {
         (Some(_), _) => crate::layer_place::Place::Into,
         (None, true) => crate::layer_place::Place::Below,
         (None, false) => crate::layer_place::Place::Auto,
     };
     let id = s.edit("New Layer", |doc, active| {
+        let group = group.as_ref().map(|g| g.in_doc(doc, CMD)).transpose()?;
         let name = name.clone().unwrap_or_else(|| doc.next_layer_name("Layer"));
         let mut layer = Layer::raster(name, doc.pixel_format());
         layer.blend = mode;
@@ -84,6 +85,7 @@ pub(crate) fn admit(s: &Session, id: &str, p: &Value) -> Result<()> {
     }
     let Some(group) = group_param(id, p)? else { return Ok(()) };
     let Some(d) = s.active() else { return Ok(()) };
+    let group = group.in_doc(&d.doc, id)?;
     let layer = if id == CMD { Layer::raster(String::new(), d.doc.pixel_format()) } else { Layer::group(String::new(), vec![]) };
     crate::layer_place::check_into(&d.doc, group, &layer).map_err(|msg| EngineError::BadParams { cmd: id.into(), msg })
 }
@@ -138,15 +140,41 @@ pub(crate) fn given_position(p: &Value) -> bool {
     p.get("position").is_some_and(|v| !v.is_null())
 }
 
-/// The `group` param of New Layer and New Group: the id of the group the new layer goes inside,
-/// as its top child.
-pub(crate) fn group_param(cmd: &str, p: &Value) -> Result<Option<photocraft_doc::LayerId>> {
+/// The group a New Layer or New Group goes inside: by id, or by the name a recording keeps when
+/// it names one layer only (see `actions_record::portable`).
+#[derive(Clone, Debug)]
+pub(crate) enum GroupRef {
+    Id(photocraft_doc::LayerId),
+    Name(String),
+}
+
+impl GroupRef {
+    /// The layer it names in `doc`: a name must name exactly one layer.
+    pub(crate) fn in_doc(&self, doc: &photocraft_doc::Document, cmd: &str) -> Result<photocraft_doc::LayerId> {
+        match self {
+            Self::Id(id) => Ok(*id),
+            Self::Name(name) => {
+                let mut named = doc.walk().into_iter().filter(|(_, _, l)| &l.name == name).map(|(_, _, l)| l.id);
+                match (named.next(), named.next()) {
+                    (Some(id), None) => Ok(id),
+                    (None, _) => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("no layer named \"{name}\"") }),
+                    (Some(_), Some(_)) => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("more than one layer is named \"{name}\"; give its id") }),
+                }
+            }
+        }
+    }
+}
+
+/// The `group` param of New Layer and New Group: the group the new layer goes inside, as its top
+/// child.
+pub(crate) fn group_param(cmd: &str, p: &Value) -> Result<Option<GroupRef>> {
     match p.get("group") {
         None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => Ok(Some(GroupRef::Name(name.clone()))),
         Some(v) => v
             .as_u64()
-            .map(|g| Some(photocraft_doc::LayerId(g)))
-            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`group` must be a layer id".into() }),
+            .map(|g| Some(GroupRef::Id(photocraft_doc::LayerId(g))))
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`group` must be a layer id or name".into() }),
     }
 }
 

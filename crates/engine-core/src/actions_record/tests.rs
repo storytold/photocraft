@@ -327,3 +327,28 @@ fn an_in_place_conversion_of_the_selected_layer_stays_in_place_on_replay() {
     assert!(converted, "the replay converts the layer, rather than adding a text layer beside it");
     assert_eq!(after, before, "no other layer is made");
 }
+
+/// A recorded New Layer or New Group into a group keeps that group by its name, so the replay
+/// puts it into the group of that name in another document, whatever its id there.
+#[test]
+fn a_new_layer_into_a_group_replays_into_the_group_of_that_name() {
+    let mut s = session();
+    let group = s.execute("layer.new.group", json!({"name": "Box"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name": "Into Box"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Inside", "group": group})).unwrap();
+    s.execute("layer.new.group", json!({"name": "Sub", "group": group})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    // Other layers first, so the replay's Box has another id.
+    for name in ["One", "Two", "Three"] {
+        new_layer(&mut s, name);
+    }
+    let replay_box = s.execute("layer.new.group", json!({"name": "Box"})).unwrap()["layer"].as_u64().unwrap();
+    assert_ne!(replay_box, group);
+    let played = s.execute("actions.play", json!({"action": "Into Box"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let doc = &s.active().unwrap().doc;
+    let inside: Vec<String> = doc.layer(LayerId(replay_box)).unwrap().children().unwrap().iter().map(|l| l.name.clone()).collect();
+    assert_eq!(inside.len(), 2, "both went into Box: {inside:?}");
+}
