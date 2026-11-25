@@ -33,10 +33,11 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
 /// The Advanced Blending option that keeps `layer` on the CPU compositor, if any. This is
 /// everything `compose::advanced_active` rejects except knockout (`Planner::knocked_out`), Blend
 /// Clipped Layers as Group off (`Planner::clipped_individually`) and Transparency Shapes Layer
-/// off, which the GPU runs itself: the special-eight blends take the content's own alpha as Fill
-/// (`F_SHAPELESS`) and the effects take the whole layer as their shape (`Planner::effects`). A
-/// layer drawn atop its clipping base is still refused for the last one (`clipped_on_cpu`), and
-/// Color Burn, Color Dodge, Vivid Light and Hard Mix with it off in a 16/32-bit document are
+/// off and masks hiding effects (`Planner::effects_hiding`), which the GPU runs itself: the
+/// special-eight blends take the content's own alpha as Fill (`F_SHAPELESS`) and the effects take
+/// the whole layer as their shape (`Planner::effects`). A layer drawn atop its clipping base is
+/// still refused for Transparency Shapes Layer off with effects or such a blend (`clipped_on_cpu`),
+/// and Color Burn, Color Dodge, Vivid Light and Hard Mix with it off in a 16/32-bit document are
 /// refused too (`dividing_shapeless_on_cpu`).
 pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'static str> {
     let a = &layer.advanced;
@@ -47,13 +48,7 @@ pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'stat
         return Some("Transparency Shapes Layer off with Color Burn, Color Dodge, Vivid Light or Hard Mix in a 16/32-bit document");
     }
     let fx = photocraft_compose::effects::has_effects(layer);
-    if a.blend_interior && fx {
-        Some("Blend Interior Effects as Group")
-    } else if photocraft_compose::advanced::hides_effects(layer) {
-        Some("Layer / Vector Mask Hides Effects")
-    } else {
-        None
-    }
+    if a.blend_interior && fx { Some("Blend Interior Effects as Group") } else { None }
 }
 
 /// Whether `layer` blends with the special eight taking its own alpha as Fill: Transparency

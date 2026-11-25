@@ -372,7 +372,7 @@ impl Compositor {
 
     /// How far beyond a page cell the effect maps of `f` must be computed to be exact in it.
     pub(crate) fn fx_apron(doc: &Document, f: &plan::FxLayer<'_>) -> i32 {
-        let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(f.layer).is_none();
+        let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(&f.layer).is_none();
         let progs: Vec<fx::MapProgram> = f
             .layer
             .effects
