@@ -11,7 +11,7 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use photocraft_doc::ShapeLayer;
+use photocraft_doc::{Fill, ShapeLayer};
 use photocraft_engine::presets::PresetsExt;
 
 fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
@@ -323,6 +323,34 @@ fn float_paints_match_preview_creation_native_roundtrip_and_document_depth() {
             assert_eq!(shape(&app), &committed);
         }
     }
+}
+
+#[test]
+fn cmyk_shape_keeps_native_fill_and_stroke_inks() {
+    use photocraft_color::{Color, ColorMode};
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_cmyk_at};
+
+    let mut app = app("cmyk", 8);
+    let cyan = [1.0, 0.0, 0.0, 0.0];
+    let magenta = [0.0, 1.0, 0.0, 0.0];
+    app.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.0, 0.6, 0.9, 1.0], "foregroundCmyk": cyan,
+            "background": [0.9, 0.0, 0.5, 1.0], "backgroundCmyk": magenta,
+        }),
+    )
+    .unwrap();
+    app.ui.tool_options.shape_fill = true;
+    app.ui.tool_options.stroke_width = 8.0;
+    draw(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0]);
+
+    let solid = |c| Fill::Solid(Color { mode: ColorMode::Cmyk, c, alpha: 1.0 });
+    let shape = shape(&app);
+    assert_eq!(shape.fill, Some(solid(cyan)));
+    assert_eq!(shape.stroke.as_ref().unwrap().paint, solid(magenta));
+    let state = app.session.active().unwrap();
+    assert_eq!(sample_cmyk_at(&state.doc, state.active_layer, 60.0, 50.0, 1, None, SampleLayers::Current), Some(cyan));
 }
 
 #[test]
@@ -706,4 +734,97 @@ fn path_mode_radius_leaves_the_active_shape_layer_alone() {
     assert_eq!(h.state().ui.tool_options.corner_radius, 20.0, "the next outline's radius");
     assert_eq!(radii(h.state()), [10.0; 4], "the shape layer keeps its radius");
     assert_eq!(history(h.state()), before, "no edit");
+}
+
+#[test]
+fn align_edges_framework_controls_edit_layers_and_preserve_undo() {
+    for properties in [false, true] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect": [20.5,20.5,80.0,60.0], "useAlignedRendering": false})).unwrap();
+        let original = shape(&app).path.clone();
+        // The tool option starts off too, so the click shows where it lands.
+        app.ui.tool_options.align_edges = false;
+        let mut h = harness(app, properties);
+        h.get_by_label("Align Edges").click();
+        h.run_steps(3);
+        assert!(shape(h.state()).use_aligned_rendering);
+        assert_eq!(shape(h.state()).path, original);
+        assert_eq!(h.state().ui.tool_options.align_edges, !properties);
+        if let Ok(dir) = std::env::var("PHOTOCRAFT_ALIGN_EDGES_SNAPSHOT_DIR") {
+            let name = if properties { "align-edges-properties.png" } else { "align-edges-toolbar.png" };
+            h.render().unwrap().save(std::path::Path::new(&dir).join(name)).unwrap();
+        }
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert!(!shape(h.state()).use_aligned_rendering);
+    }
+}
+
+#[test]
+fn align_edges_framework_creation_and_preview_keep_the_option() {
+    for enabled in [false, true] {
+        let mut app = app("rgb", 8);
+        app.ui.tool_options.align_edges = enabled;
+        let geometry = geometry(Tool::Rectangle, [10.0, 10.0], [30.0, 30.0]);
+        let preview = shapes::shape_preview(&app, shapes::kind_of(Tool::Rectangle), &geometry).unwrap();
+        assert_eq!(preview.use_aligned_rendering, enabled);
+        shapes::create_geometry(&mut app, &geometry, shapes::kind_of(Tool::Rectangle), None).unwrap();
+        assert_eq!(shape(&app).use_aligned_rendering, enabled);
+        assert_eq!(shape(&app).path, preview.path);
+    }
+}
+
+#[test]
+fn align_edges_framework_pen_captures_and_edits_draft_option() {
+    let mut app = app("rgb", 8);
+    app.ui.tool = Tool::Pen;
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
+    app.ui.tool_options.align_edges = true;
+    app.ui.pen = Some(PenPath::corners(&[[20.5, 20.5], [80.5, 60.5]], super::capture_pen_owner(&app)));
+    app.ui.tool_options.align_edges = false;
+    assert!(pen_commit(&mut app, false));
+    assert!(shape(&app).use_aligned_rendering, "the captured draft keeps its option");
+}
+
+#[test]
+fn align_edges_framework_tool_presets_use_the_canonical_key() {
+    for tool in [
+        Tool::Rectangle,
+        Tool::EllipseShape,
+        Tool::Triangle,
+        Tool::Polygon,
+        Tool::Star,
+        Tool::Line,
+        Tool::CustomShape,
+        Tool::Pen,
+        Tool::CurvaturePen,
+        Tool::FreeformPen,
+    ] {
+        assert!(crate::tool_reset::option_keys(tool).contains(&"useAlignedRendering"), "{tool:?}");
+    }
+}
+
+#[test]
+fn align_edges_framework_line_preview_matches_committed_pixels() {
+    let mut app = app("rgb", 8);
+    app.ui.tool_options.align_edges = true;
+    let line = ShapeGeometry::Line { from: craft::behavior::kurbo::Point::new(20.0, 20.0), to: craft::behavior::kurbo::Point::new(80.0, 20.0), weight: 3.0 };
+    let preview = shapes::shape_preview(&app, shapes::kind_of(Tool::Line), &line).unwrap();
+    shapes::finish_drag(&mut app, shapes::kind_of(Tool::Line), &line, Mods::default());
+    let doc = &app.session.active().unwrap().doc;
+    assert_eq!(shape(&app).cache.as_ref().unwrap(), &photocraft_vector::render_shape(&preview, doc.pixel_format(), doc.bounds()));
+}
+
+/// The Properties panel's Fill popover eyedropper samples the screen and applies the colour to the layer's fill.
+#[test]
+fn properties_fill_eyedropper_applies_the_sampled_colour() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"rect": [20,20,80,60], "fill": "#2244aa", "stroke": null})).unwrap();
+    app.services.screen_capture = Some(std::sync::Arc::new(|| Box::new(craft::color_ui::ui::StillCapture::color(Srgba::rgb(1.0, 136.0 / 255.0, 0.0)))));
+    let mut h = harness(app, true);
+    chip(&h, "Fill").click();
+    h.run_steps(3);
+    h.get_by_label("Sample color from the screen").click();
+    h.run_steps(6);
+    let [r, g, b, _] = shape(h.state()).fill.as_ref().and_then(color_of).expect("a solid fill");
+    assert!((r - 1.0).abs() < 0.01 && (g - 136.0 / 255.0).abs() < 0.01 && b < 0.01, "the sampled orange is the fill, got {r} {g} {b}");
 }

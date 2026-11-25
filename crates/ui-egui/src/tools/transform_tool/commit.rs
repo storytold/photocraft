@@ -46,7 +46,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
     let Some(result) = result else { return };
     let rect = [result.rect.x0, result.rect.y0, result.rect.x1, result.rect.y1];
-    let quad = result.state.quad.map(|p| [p.x, p.y]);
+    let quad = result.state.quad.map(|p| [whole_if_noise(p.x), whole_if_noise(p.y)]);
     let interpolation = result.interpolation.id();
     let warp = result.warp.map(|w| w.warp);
     if t.selection {
@@ -111,6 +111,19 @@ pub fn commit(app: &mut PhotocraftApp) {
         Ok(_) => finish(app, document, LayerId(t.layer), made, true),
         Err(e) => keep_open(app, t, preview, e),
     }
+}
+
+/// How far from a whole pixel a box corner may be and still count as on it. The box turns by
+/// sine and cosine, so Rotate 90° and 180° leave a few ulps (about 1e-13 px) on corners that
+/// belong on the grid, and the warp then gives the layer an extra empty row or column (#16759).
+/// A drag at the highest zoom moves the box by hundredths of a pixel, far above this.
+const GRID_NOISE: f64 = 1e-9;
+
+/// `v` rounded to the nearest whole pixel when it is only float noise away from it; any real
+/// fraction is kept.
+fn whole_if_noise(v: f64) -> f64 {
+    let whole = v.round();
+    if (v - whole).abs() < GRID_NOISE { whole } else { v }
 }
 
 /// A click outside the box, at `at` in document units (`ApplyBy::ClickOutside`): clicking the pasteboard or
