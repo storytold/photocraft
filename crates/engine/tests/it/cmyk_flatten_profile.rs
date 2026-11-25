@@ -171,26 +171,37 @@ fn luminosity_copy(s: &mut Session) {
     s.execute("layer.setProps", json!({"blend": "Luminosity"})).unwrap();
 }
 
-#[test]
-fn merge_down_separates_through_the_document_profile() {
+/// Runs the merge `cmd` and checks that it took the copy into the Background: one layer fewer.
+fn merge(s: &mut Session, cmd: &str) {
+    let count = |s: &Session| s.active().unwrap().doc.layers.len();
+    let before = count(s);
+    s.execute(cmd, json!({})).unwrap();
+    assert!(count(s) < before, "{cmd} left {} of {before} layers", count(s));
+}
+
+/// Merges `cmd` over a Luminosity copy at each depth. The separations (row 0) stay within the
+/// profile's round trip. The second row holds inks no separation gives back (K only, solid
+/// cyan...), so going through the RGB composite moves them by more than that. A merge that mixed
+/// the inks directly would keep them, and would pass the first check with no drift at all.
+fn assert_merge_separates_through_the_profile(what: &str, cmd: &str) {
     for depth in [8, 16] {
-        let [d, _] = drift(depth, true, |s| {
+        let [separations, inks] = drift(depth, true, |s| {
             luminosity_copy(s);
-            s.execute("layer.mergeDown", json!({})).unwrap();
+            merge(s, cmd);
         });
-        assert!(d <= ROUND_TRIP, "{depth}-bit Merge Down: inks moved by {d}");
+        assert!(separations <= ROUND_TRIP, "{depth}-bit {what}: inks moved by {separations}");
+        assert!(inks > ROUND_TRIP, "{depth}-bit {what}: inks no separation gives moved only by {inks}, so the merge skipped the RGB composite");
     }
 }
 
 #[test]
+fn merge_down_separates_through_the_document_profile() {
+    assert_merge_separates_through_the_profile("Merge Down", "layer.mergeDown");
+}
+
+#[test]
 fn merge_visible_separates_through_the_document_profile() {
-    for depth in [8, 16] {
-        let [d, _] = drift(depth, true, |s| {
-            luminosity_copy(s);
-            s.execute("layer.mergeVisible", json!({})).unwrap();
-        });
-        assert!(d <= ROUND_TRIP, "{depth}-bit Merge Visible: inks moved by {d}");
-    }
+    assert_merge_separates_through_the_profile("Merge Visible", "layer.mergeVisible");
 }
 
 /// Rasterize Layer Style bakes the layer through the RGB composite and separates the result
