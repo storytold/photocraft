@@ -317,8 +317,14 @@ impl Baked {
         // Each created layer goes beside a recorded neighbour; one whose neighbours are themselves
         // still to come waits for them, so the stack comes out as recorded whatever the id order.
         // A moved layer a changed group already took in needs no place of its own.
-        let mut pending: Vec<&(LayerId, Option<LayerId>, Option<LayerId>)> =
-            self.placed.iter().filter(|(id, _, _)| created.contains(id)).chain(&self.moved).filter(|(id, _, _)| doc.layer(*id).is_none()).collect();
+        // One inside another stored layer comes in with it, never on its own.
+        let mut pending: Vec<&(LayerId, Option<LayerId>, Option<LayerId>)> = self
+            .placed
+            .iter()
+            .filter(|(id, _, _)| created.contains(id))
+            .chain(&self.moved)
+            .filter(|(id, _, _)| doc.layer(*id).is_none() && !self.nested(*id))
+            .collect();
         let mut fallback = false;
         while !pending.is_empty() {
             let before = pending.len();
@@ -405,11 +411,18 @@ impl Baked {
 
     /// Whether a stored layer is `id` or holds it.
     fn holds(&self, id: LayerId) -> bool {
-        fn within(l: &crate::Layer, id: LayerId) -> bool {
-            l.id == id || l.children().is_some_and(|c| c.iter().any(|c| within(c, id)))
-        }
         self.layers.iter().any(|l| within(l, id))
     }
+
+    /// Whether a stored layer holds `id` among its children (at any depth).
+    fn nested(&self, id: LayerId) -> bool {
+        self.layers.iter().any(|l| l.children().is_some_and(|c| c.iter().any(|c| within(c, id))))
+    }
+}
+
+/// Whether `l` is `id` or holds it.
+fn within(l: &crate::Layer, id: LayerId) -> bool {
+    l.id == id || l.children().is_some_and(|c| c.iter().any(|c| within(c, id)))
 }
 
 /// Put the root layers named in `order` back in that order, in the places they hold; any other
@@ -580,20 +593,29 @@ mod tests {
         assert_eq!(doc.layer(gid).unwrap().opacity, 0.5);
     }
 
-    /// A created group with a created child goes in once, the child with it.
+    /// A created group with a created child goes in once, the child with it, whichever has the
+    /// lower id and with or without a neighbour left.
     #[test]
     fn a_created_group_with_a_created_child_goes_in_once() {
-        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
-        before.layers = vec![Layer::raster("A", PixelFormat::RGBA8)].into();
-        let mut after = before.clone();
-        after.layers.push(Layer::group("g", vec![Layer::raster("X", PixelFormat::RGBA8)]));
-        let (created, changed) = layer_changes(&before, &after);
-        assert_eq!(created.len(), 2);
-        let baked = Baked::capture(&before, &after, &created, &changed);
-        let mut doc = before.clone();
-        baked.apply(&mut doc, &created, &changed);
         let ids = |d: &Document| d.walk().into_iter().map(|(_, _, l)| l.id).collect::<Vec<_>>();
-        assert_eq!(ids(&doc), ids(&after));
+        for neighbour in [true, false] {
+            let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+            if neighbour {
+                before.layers = vec![Layer::raster("A", PixelFormat::RGBA8)].into();
+            }
+            // The child made first: the lower id.
+            let x = Layer::raster("X", PixelFormat::RGBA8);
+            let group = Layer::group("g", vec![x.clone()]);
+            assert!(x.id < group.id);
+            let mut after = before.clone();
+            after.layers.push(group);
+            let (created, changed) = layer_changes(&before, &after);
+            assert_eq!(created.len(), 2);
+            let baked = Baked::capture(&before, &after, &created, &changed);
+            let mut doc = before.clone();
+            baked.apply(&mut doc, &created, &changed);
+            assert_eq!(ids(&doc), ids(&after), "neighbour left: {neighbour}");
+        }
     }
 
     /// A step that moves a layer into a group, or out of one to the root, replays the move: the
