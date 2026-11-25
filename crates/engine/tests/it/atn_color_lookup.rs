@@ -199,14 +199,14 @@ fn recorded_cube_input_domain_replays_natively() {
     let d = descriptor("LUTFormatCUBE", cube);
     let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
     assert!(imported.unsupported.is_empty());
-    assert_eq!(imported.actions[0].steps[0].0, "image.adjustments.colorLookup");
+    assert_eq!(imported.actions[0].steps[0].command, "image.adjustments.colorLookup");
     let (out, skipped) = atn_cmds::export("Lookup", &[&imported.actions[0]], &[], false).unwrap();
     assert!(skipped.is_empty());
     assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
     for depth in [8, 16, 32] {
         let mut s = fixture(depth);
         let original = pixels(&s);
-        s.actions.list = imported.actions.clone();
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
         for (got, old) in pixels(&s).iter().zip(&original) {
             for c in 0..3 {

@@ -140,7 +140,6 @@ pub fn lut_domain_effective(min: [f32; 3], max: [f32; 3]) -> ([f32; 3], [f32; 3]
     (lo, hi)
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct LevelsChannel {
     pub in_black: f32,

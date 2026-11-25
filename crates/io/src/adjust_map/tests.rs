@@ -237,8 +237,8 @@ fn roundtrips() {
         domain_max: [1.0; 3],
     });
     // #11620: a declared input domain survives too.
-    let ranged = photocraft_cms::lutfile::LutFile { domain_min: [0.25, 0.0, 0.1], domain_max: [0.75, 1.0, 2.0], ..id };
-    let cube = photocraft_cms::lutfile::write_cube(&ranged).into_bytes();
+    let ranged = craft_cms::lutfile::LutFile { domain_min: [0.25, 0.0, 0.1], domain_max: [0.75, 1.0, 2.0], ..id };
+    let cube = craft_cms::lutfile::write_cube(&ranged).into_bytes();
     let source = Some(LutSource { format: LutFormat::Cube, bytes: std::sync::Arc::new(cube) });
     rt(Adjustment::ColorLookup {
         name: "Ranged.cube".into(),
@@ -474,7 +474,7 @@ fn color_lookup_custom_domains_are_read_and_saved() {
 /// `.cube` it is written as, and a degenerate stored domain is written as the 0..1 it renders as.
 #[test]
 fn color_lookup_domain_is_written_with_the_table() {
-    let id = photocraft_cms::lutfile::LutFile::identity(2).data;
+    let id = craft_cms::lutfile::LutFile::identity(2).unwrap().data;
     let mk = |source: Option<LutSource>, domain_min, domain_max| Adjustment::ColorLookup {
         name: "Ranged.cube".into(),
         lut: Some(std::sync::Arc::new(id.clone())),
@@ -485,7 +485,7 @@ fn color_lookup_domain_is_written_with_the_table() {
         domain_min,
         domain_max,
     };
-    let reread = |a: &Adjustment| photocraft_cms::lutfile::parse("x.cube", raw(&written_clrl(a), "LUT3DFileData")).unwrap();
+    let reread = |a: &Adjustment| craft_cms::lutfile::parse("x.cube", raw(&written_clrl(a), "LUT3DFileData")).unwrap();
     // Made in PhotoCraft: no file, so a `.cube` is written with the domain.
     let made = reread(&mk(None, [0.25, 0.1, 0.0], [0.75, 0.9, 0.5]));
     assert_eq!((made.domain_min, made.domain_max, made.data.as_slice()), ([0.25, 0.1, 0.0], [0.75, 0.9, 0.5], id.as_slice()));

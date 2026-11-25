@@ -809,7 +809,7 @@ fn with_domain(mut adj: Adjustment, min: [f32; 3], max: [f32; 3]) -> Adjustment 
 fn color_lookup_input_domain_matches_cpu() {
     let Some(mut g) = gpu() else { return };
     let n = 5;
-    let id = photocraft_cms::lutfile::LutFile::identity(n).data;
+    let id = craft_cms::lutfile::LutFile::identity(n).unwrap().data;
     for depth in [SampleType::U8, SampleType::F32] {
         let mut d = Document::new("domain", Size::new(4, 1), ColorMode::Rgb, depth);
         let mut bg = Layer::raster("bg", d.pixel_format());
