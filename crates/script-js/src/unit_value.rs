@@ -176,8 +176,16 @@ pub(crate) fn to_document_pixels(v: &JsValue, dpi: f64, default_typ: &str, ctx: 
 /// `v` as a length: its number and unit (`default_typ` for a plain number). The script code a
 /// conversion may run (`valueOf`) runs here, before anything is read for it.
 pub(crate) fn length_of(v: &JsValue, default_typ: &str, ctx: &mut Context) -> JsResult<(f64, String)> {
-    match v.as_object().and_then(|o| o.downcast_ref::<UnitValueData>().map(|d| (d.value, d.typ.clone()))) {
-        Some(d) => Ok(d),
+    match v.as_object().and_then(|o| o.downcast_ref::<UnitValueData>().map(|d| d.clone())) {
+        // A percentage is of the value's base: resolved to inches here, or refused when that base
+        // is itself relative. It is never a count of pixels.
+        Some(d) if d.typ == "%" => {
+            let base = effective_base(&d, ctx);
+            to_inches(d.value, "%", &base).map(|inches| (inches, "in".to_owned())).ok_or_else(|| {
+                typ_err(format!("{} % is not a length here: its base unit, {} {}, is not an absolute length", d.value, base.0, base.1))
+            })
+        }
+        Some(d) => Ok((d.value, d.typ)),
         None => Ok((v.to_number(ctx)?, default_typ.to_owned())),
     }
 }

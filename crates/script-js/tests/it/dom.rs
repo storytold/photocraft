@@ -647,6 +647,23 @@ fn physical_lengths_use_the_resolution_after_every_argument_is_converted() {
     assert_eq!(lines, ["144 144", "144 144"]);
 }
 
+/// A percentage `UnitValue` is a share of its base unit, not a count of pixels; one whose base
+/// is itself relative is refused.
+#[test]
+fn a_percentage_length_is_a_share_of_its_base() {
+    let s = session(100, 50);
+    let lines = run(
+        &s,
+        "var d = app.activeDocument, q = new UnitValue(25, '%'); q.baseUnit = new UnitValue(4, 'in');
+         d.resizeImage(undefined, undefined, 100);
+         d.resizeCanvas(q, undefined, AnchorPosition.TOPLEFT);
+         $.writeln(d.width.as('px'));
+         var r = new UnitValue(25, '%'); r.baseUnit = new UnitValue(10, 'px');
+         try { d.resizeCanvas(r, undefined, AnchorPosition.TOPLEFT); $.writeln('resized'); } catch (e) { $.writeln(e.name); }",
+    );
+    assert_eq!(lines, ["100", "TypeError"]);
+}
+
 /// Text goes only where it can be made: a position past the range `type.create` takes is
 /// refused, so every supported position stays one move away.
 #[test]
