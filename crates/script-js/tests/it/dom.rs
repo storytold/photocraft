@@ -256,10 +256,11 @@ fn documents_are_made_resized_cropped_duplicated_and_closed() {
         try { c.close(); } catch (e) { $.writeln('kept: ', e.message.indexOf('unsaved') >= 0); }
         c.close(SaveOptions.DONOTSAVECHANGES);
         $.writeln(app.documents.length);
-        d.flatten(); d.mergeVisibleLayers === undefined;
+        d.artLayers.add(); var before = d.layers.length;
+        d.flatten(); $.writeln(before > 1, ' ', d.layers.length);
         "#,
     );
-    assert_eq!(lines, ["true Made 2 100 px", "100 pxx50 px", "120 pxx60 px", "50 pxx30 px", "Twin 3", "kept: true", "2"]);
+    assert_eq!(lines, ["true Made 2 100 px", "100 pxx50 px", "120 pxx60 px", "50 pxx30 px", "Twin 3", "kept: true", "2", "true 1"]);
 }
 
 #[test]
@@ -270,7 +271,7 @@ fn saving_needs_a_file_or_folder_the_user_chose_in_the_run() {
     let s = session(16, 16);
     let src = r#"
         var doc = app.activeDocument;
-        try { doc.saveAs(new File('/tmp/made-up.png'), new PNGSaveOptions(), true); } catch (e) { $.writeln('refused'); }
+        try { doc.saveAs(new File('/tmp/made-up.png'), new PNGSaveOptions(), true); } catch (e) { $.writeln(e.message.indexOf('you chose in this run') >= 0 ? 'refused' : 'other: ' + e.message); }
         var f = File.saveDialog('Save');
         var o = new JPEGSaveOptions(); o.quality = 10;
         doc.saveAs(f, o, true);
@@ -662,6 +663,22 @@ fn a_percentage_length_is_a_share_of_its_base() {
          try { d.resizeCanvas(r, undefined, AnchorPosition.TOPLEFT); $.writeln('resized'); } catch (e) { $.writeln(e.name); }",
     );
     assert_eq!(lines, ["100", "TypeError"]);
+}
+
+/// A type size is taken in the engine's range, and in pixels at the resolution read after the
+/// size was converted.
+#[test]
+fn a_type_size_is_in_the_engines_range_at_the_final_resolution() {
+    let s = session(64, 64);
+    let lines = run(
+        &s,
+        "var d = app.activeDocument, t = d.artLayers.add(); t.kind = LayerKind.TEXT; t.textItem.contents = 'Hi';
+         try { t.textItem.size = 2000; $.writeln('set'); } catch (e) { $.writeln(e.name); }
+         app.preferences.typeUnits = TypeUnits.PIXELS;
+         t.textItem.size = { valueOf: function () { d.resizeImage(undefined, undefined, 144); return 24; } };
+         $.writeln(Math.round(t.textItem.size.as('px')));",
+    );
+    assert_eq!(lines, ["RangeError", "24"]);
 }
 
 /// Text goes only where it can be made: a position past the range `type.create` takes is

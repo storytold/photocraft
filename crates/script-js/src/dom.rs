@@ -925,13 +925,15 @@ fn restyle(ctx: &mut Context, t: TextRef, style: Value) -> JsResult<JsValue> {
 
 fn text_set_size(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let t = text_ref(this)?;
-    let d = inspect(ctx, t.doc)?;
-    let r = dpi(&d);
+    // Converted before the resolution is read: a `valueOf` may change it.
     let typ = unit_typ(ctx, TYPE)?;
-    let px = unit_value::to_document_pixels(args.first().unwrap_or(&JsValue::undefined()), r, typ, ctx)?;
-    let pt = px * 72.0 / r;
-    if !(0.01..=10_000.0).contains(&pt) {
-        return Err(JsNativeError::range().with_message("a type size is 0.01 to 10000 points").into());
+    let (value, typ) = unit_value::length_of(args.first().unwrap_or(&JsValue::undefined()), typ, ctx)?;
+    let r = dpi(&inspect(ctx, t.doc)?);
+    let pt = unit_value::length_in_pixels(value, &typ, r)? * 72.0 / r;
+    // The sizes the engine takes, so a size accepted here is one it applies.
+    let (min, max) = (photocraft_engine::type_cmds::TYPE_SIZE_MIN_PT, photocraft_engine::type_cmds::TYPE_SIZE_MAX_PT);
+    if !(min..=max).contains(&pt) {
+        return Err(JsNativeError::range().with_message(format!("a type size is {min} to {max} points")).into());
     }
     restyle(ctx, t, json!({ "size": pt }))
 }

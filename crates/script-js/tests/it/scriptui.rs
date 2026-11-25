@@ -96,6 +96,8 @@ fn run(src: &str, list: Vec<Value>, live: bool) -> (Step, Ui) {
     let mut r = Runner::new(src, Box::new(ui.clone()), Box::new(Unlimited), RunOptions::default()).unwrap();
     loop {
         match r.step() {
+            // A live host answers inside the call: a pause means the run did not use it.
+            Step::Paused(m) if live => panic!("a live run paused at {:?}", m.kind),
             Step::Paused(m) => {
                 let a = ui.answer(m.kind, &m.args);
                 r.answer(a).unwrap();
@@ -904,4 +906,49 @@ fn a_list_reply_is_applied_after_the_controls_getters_and_once() {
         $.writeln(l.selection.text);
     "#;
     assert_eq!(both(src, vec![json!({"event": "click", "id": 2, "values": [{"id": 1, "value": 0}]})]), ["B"]);
+}
+
+/// Small ScriptUI edges a script's own code can reach: an index converted before the list is
+/// read, `removeAll` leaving nothing selected, a read-only field keeping its text, `onClose`
+/// keeping the result it gave, and a control a getter took out not running its handler.
+#[test]
+fn scripts_own_code_cannot_bend_these_controls() {
+    let src = r#"
+        var w = new Window("dialog"), l = w.add("listbox", undefined, ["A"]);
+        l.remove({ valueOf: function () { l.add("item", "B"); return 1; } });
+        $.writeln(l.items.length);
+        l.selection = 0;
+        Object.defineProperty(l, "items", { configurable: true, get: function () { return []; }, set: function (v) { throw new Error("no"); } });
+        try { l.removeAll(); } catch (e) {}
+        $.writeln(l.selection === null);
+        var ro = w.add("edittext", undefined, "fixed", { readonly: true });
+        var b = w.add("button", undefined, "Go"), ran = false, reads = 0;
+        b.onClick = function () { ran = true; };
+        // Read as the window is sent, then as the click is checked: Go goes at that one.
+        Object.defineProperty(b, "enabled", { configurable: true, get: function () { if (++reads == 2) w.remove(b); return true; }, set: function (v) {} });
+        w.onClose = function () { w.close(7); return true; };
+        $.writeln(w.show(), " ", ro.text, " ", ran);
+    "#;
+    // window 0, listbox 1, edittext 2, Go 3. The reply edits the read-only field and clicks Go;
+    // then the close box.
+    let events = vec![json!({"event": "click", "id": 3, "values": [{"id": 2, "value": "edited"}]}), json!({"event": "close"})];
+    assert_eq!(both(src, events), ["1", "true", "7 fixed false"]);
+}
+
+/// A palette update a getter sends while the palette is read for an outer update is the one the
+/// interface keeps: the outer, older reading is not sent after it.
+#[test]
+fn a_nested_palette_update_is_not_overwritten_by_the_outer_one() {
+    let src = r#"
+        var p = new Window("palette"), a = p.add("statictext", undefined, "old"), b = p.add("statictext", undefined, "b"), once = true;
+        p.show();
+        Object.defineProperty(b, "text", { configurable: true, get: function () { if (once) { once = false; a.text = "new"; p.update(); } return "b"; }, set: function (v) {} });
+        p.update();
+        $.writeln("done");
+    "#;
+    let (step, ui) = run(src, vec![], true);
+    assert_eq!(step, Step::Done);
+    let last = ui.windows.borrow().iter().rev().find_map(|(_, w)| w.clone()).expect("a window update");
+    let texts: Vec<Value> = last["children"].as_array().unwrap().iter().map(|c| c["text"].clone()).collect();
+    assert_eq!(texts[0], json!("new"), "the newer update stands: {texts:?}");
 }

@@ -344,10 +344,12 @@ fn sync_children(ctx: &mut Context, id: u32) -> JsResult<()> {
 }
 
 fn sync_items(ctx: &mut Context, id: u32) -> JsResult<()> {
-    let (obj, items) = element(ctx, id, |e| (e.obj.clone(), e.items.clone()))?;
+    let items = element(ctx, id, |e| e.items.clone())?;
     for (i, item) in items.iter().enumerate() {
         set(item, "index", i as f64, ctx)?;
     }
+    // Read again: an `index` setter of the script's may have changed the list meanwhile.
+    let (obj, items) = element(ctx, id, |e| (e.obj.clone(), e.items.clone()))?;
     let values: Vec<JsValue> = items.into_iter().map(JsValue::from).collect();
     let values = JsArray::from_iter(values, ctx);
     element_mut(ctx, id, |e| e.items_array = Some(values.clone().into()))?;
@@ -686,10 +688,12 @@ fn remove(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
     let kind = kind_of(ctx, id)?;
     let what = args.first().cloned().unwrap_or_default();
     if kind.list() {
+        // An index is converted before the items are read: a `valueOf` may change the list.
+        let index = if is_item(&what) { None } else { number_of(&what, ctx)?.filter(|n| *n >= 0.0) };
         let items = element(ctx, id, |e| e.items.clone())?;
         let at = match what.as_object() {
             Some(o) if is_item(&what) => items.iter().position(|i| JsObject::equals(i, &o)),
-            _ => number_of(&what, ctx)?.filter(|n| *n >= 0.0).map(|n| n as usize).filter(|i| *i < items.len()),
+            _ => index.map(|n| n as usize).filter(|i| *i < items.len()),
         };
         let Some(at) = at else { return Ok(JsValue::undefined()) };
         let removed = element_mut(ctx, id, |e| (at < e.items.len()).then(|| e.items.remove(at)))?;
@@ -708,10 +712,11 @@ fn remove(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
     if !kind.container() {
         return Ok(JsValue::undefined());
     }
+    let index = if ui_id(&what).is_some() { None } else { number_of(&what, ctx)?.filter(|n| *n >= 0.0) };
     let children = element(ctx, id, |e| e.children.clone())?;
     let child = match ui_id(&what) {
         Some(c) => children.iter().position(|k| *k == c),
-        None => number_of(&what, ctx)?.filter(|n| *n >= 0.0).map(|n| n as usize).filter(|i| *i < children.len()),
+        None => index.map(|n| n as usize).filter(|i| *i < children.len()),
     };
     if let Some(at) = child {
         let gone = element_mut(ctx, id, |e| (at < e.children.len()).then(|| e.children.remove(at)))?;
@@ -727,12 +732,15 @@ fn remove(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
 fn remove_all(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = this_id(this)?;
     if kind_of(ctx, id)?.list() {
-        let n = element_mut(ctx, id, |e| std::mem::take(&mut e.items).len())?;
+        // Emptied and unselected in one step, before anything of the script's runs: an `items`
+        // setter that throws leaves no removed item selected, and one that adds and selects an
+        // item keeps that selection.
+        let n = element_mut(ctx, id, |e| {
+            e.selection = None;
+            std::mem::take(&mut e.items).len()
+        })?;
         count_items(ctx, -isize::try_from(n).unwrap_or(isize::MAX))?;
         sync_items(ctx, id)?;
-        if let Some(obj) = this.as_object() {
-            set(&obj, "selection", JsValue::null(), ctx)?;
-        }
     }
     Ok(JsValue::undefined())
 }
@@ -1166,9 +1174,11 @@ fn update(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
 
 fn flush(ctx: &mut Context, window: u32) -> JsResult<()> {
     if element(ctx, window, |e| e.palette && e.shown)? {
+        let sent = element(ctx, window, |e| e.visibility)?;
         let tree = serialize(ctx, window)?;
-        // Reading the controls runs the script's getters, which may have closed it.
-        if !element(ctx, window, |e| e.shown)? {
+        // Reading the controls runs the script's getters, which may have closed it, or sent a
+        // newer update of it (`update()` from a getter): this older one is not sent after it.
+        if !element(ctx, window, |e| e.shown && e.visibility == sent)? {
             return Ok(());
         }
         window_update(ctx, window, Some(tree))?;
@@ -1240,13 +1250,27 @@ fn default_click(ctx: &mut Context, id: u32) -> JsResult<()> {
 fn usable(ctx: &mut Context, id: u32) -> JsResult<bool> {
     let mut at = id;
     for _ in 0..=MAX_DEPTH + 1 {
-        let (obj, parent, kind) = element(ctx, at, |e| (e.obj.clone(), e.parent, Kind::from_code(e.kind)))?;
+        let (obj, kind) = element(ctx, at, |e| (e.obj.clone(), Kind::from_code(e.kind)))?;
         if !get(&obj, "enabled", ctx)?.to_boolean() || !get(&obj, "visible", ctx)?.to_boolean() {
             return Ok(false);
         }
+        match element(ctx, at, |e| e.parent)? {
+            Some(p) => at = p,
+            // A control taken out with remove() is no longer in its window; the getters read
+            // on the way may have taken it, or a group it is in, out: checked again natively.
+            None => return Ok(kind == Kind::Window && in_window(ctx, id)?),
+        }
+    }
+    Ok(false)
+}
+
+/// Whether control `id` is still in a window, following only the native parent links.
+fn in_window(ctx: &Context, id: u32) -> JsResult<bool> {
+    let mut at = id;
+    for _ in 0..=MAX_DEPTH + 1 {
+        let (parent, kind) = element(ctx, at, |e| (e.parent, Kind::from_code(e.kind)))?;
         match parent {
             Some(p) => at = p,
-            // A control taken out with remove() is no longer in its window.
             None => return Ok(kind == Kind::Window),
         }
     }
@@ -1273,7 +1297,12 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
             let value = v.get("value").unwrap_or(&Value::Null);
             match kind {
                 Kind::EditText => {
-                    if let Some(t) = value.as_str()
+                    // A read-only field the user could not have edited keeps its text.
+                    let readonly = match get(&obj, "properties", ctx)?.as_object() {
+                        Some(props) => get(&props, "readonly", ctx)?.to_boolean(),
+                        None => false,
+                    };
+                    if let Some(t) = value.as_str().filter(|_| !readonly)
                         && t.encode_utf16().count() <= MAX_TEXT_UNITS
                     {
                         set(&obj, "text", string(t), ctx)?;
@@ -1318,6 +1347,10 @@ fn dispatch(ctx: &mut Context, window: u32, answer: &Value) -> JsResult<()> {
             let keep_open = f.call(&wobj.clone().into(), &[], ctx)?;
             // `onClose` returning false keeps the window open.
             if keep_open.as_boolean() == Some(false) {
+                return Ok(());
+            }
+            // One that closed it itself (`w.close(7)`) keeps the result it gave.
+            if element(ctx, window, |e| e.closed)? {
                 return Ok(());
             }
         }

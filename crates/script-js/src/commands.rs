@@ -55,6 +55,8 @@ const NAME: usize = 1024;
 const TEXT: usize = 1 << 20;
 /// Largest canvas side, as `file.new` takes it.
 pub(crate) const SIDE: f64 = 300_000.0;
+/// Type sizes the engine takes, in points.
+const TYPE_SIZE: (f64, f64) = (photocraft_engine::type_cmds::TYPE_SIZE_MIN_PT, photocraft_engine::type_cmds::TYPE_SIZE_MAX_PT);
 /// Largest index or id.
 const MAX_INDEX: u64 = 1 << 53;
 /// Largest translation or position, in pixels.
@@ -106,7 +108,16 @@ type Spec = (&'static str, &'static [(&'static str, Param, Need)]);
 /// The commands, with every parameter each may take.
 pub const COMMANDS: &[Spec] = &[
     ("session.inspect", &[]),
-    ("document.inspect", &[("document", Index, Optional), ("serial", Index, Optional), ("history", Bool, Optional), ("layers", Bool, Optional), ("unlessRevision", Json, Optional)]),
+    (
+        "document.inspect",
+        &[
+            ("document", Index, Optional),
+            ("serial", Index, Optional),
+            ("history", Bool, Optional),
+            ("layers", Bool, Optional),
+            ("unlessRevision", Json, Optional),
+        ],
+    ),
     ("document.activate", &[("document", Index, Optional), ("serial", Index, Optional)]),
     (
         "file.new",
@@ -179,7 +190,7 @@ pub const COMMANDS: &[Spec] = &[
             ("x", Number(-SIDE, SIDE), Required),
             ("y", Number(-SIDE, SIDE), Required),
             ("text", Text(TEXT), Required),
-            ("size", Number(0.01, 10_000.0), Optional),
+            ("size", Number(TYPE_SIZE.0, TYPE_SIZE.1), Optional),
             ("font", Text(NAME), Optional),
             ("layer", Id, Optional),
         ],
@@ -295,7 +306,7 @@ fn param_ok(rule: Param, v: &Value) -> bool {
             let Some(run) = run.as_object() else { return false };
             let known = run.keys().all(|k| matches!(k.as_str(), "start" | "end" | "size" | "font" | "color"));
             let span = ["start", "end"].iter().all(|k| run.get(*k).is_some_and(|v| param_ok(Int(0, i64::from(u32::MAX)), v)));
-            let size = run.get("size").is_none_or(|s| param_ok(Number(0.01, 10_000.0), s));
+            let size = run.get("size").is_none_or(|s| param_ok(Number(TYPE_SIZE.0, TYPE_SIZE.1), s));
             let font = run.get("font").is_none_or(|f| param_ok(Text(NAME), f));
             let col = run.get("color").is_none_or(color);
             known && span && size && font && col

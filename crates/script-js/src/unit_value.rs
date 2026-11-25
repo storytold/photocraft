@@ -130,6 +130,10 @@ fn from_inches(inches: f64, typ: &str, base: &(f64, String)) -> Option<f64> {
 }
 
 fn convert_num(value: f64, from: &str, to: &str, base: &(f64, String)) -> Option<f64> {
+    // An unknown unit converts to nothing, itself included.
+    if from == "?" || to == "?" {
+        return None;
+    }
     if from == to {
         return Some(value);
     }
@@ -181,9 +185,9 @@ pub(crate) fn length_of(v: &JsValue, default_typ: &str, ctx: &mut Context) -> Js
         // is itself relative. It is never a count of pixels.
         Some(d) if d.typ == "%" => {
             let base = effective_base(&d, ctx);
-            to_inches(d.value, "%", &base).map(|inches| (inches, "in".to_owned())).ok_or_else(|| {
-                typ_err(format!("{} % is not a length here: its base unit, {} {}, is not an absolute length", d.value, base.0, base.1))
-            })
+            to_inches(d.value, "%", &base)
+                .map(|inches| (inches, "in".to_owned()))
+                .ok_or_else(|| typ_err(format!("{} % is not a length here: its base unit, {} {}, is not an absolute length", d.value, base.0, base.1)))
         }
         Some(d) => Ok((d.value, d.typ)),
         None => Ok((v.to_number(ctx)?, default_typ.to_owned())),
@@ -392,6 +396,7 @@ mod tests {
     #[test]
     fn a_pixel_value_converts_to_inches_at_the_default_base() {
         let base = (DEFAULT_BASE_VALUE, DEFAULT_BASE_TYPE.to_owned());
+        assert_eq!(convert_num(3.0, "?", "?", &base), None, "an unknown unit is not even itself");
         let inches = convert_num(1920.0, "px", "in", &base).unwrap();
         assert!((inches - 1920.0 / 72.0).abs() < 1e-10, "{inches}");
         assert_eq!(convert_num(1.0, "in", "px", &base), Some(72.0));
