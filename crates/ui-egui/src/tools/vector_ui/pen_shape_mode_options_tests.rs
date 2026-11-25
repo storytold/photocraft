@@ -112,9 +112,11 @@ fn field<'h>(h: &'h Harness<'static, Box<PhotocraftApp>>, label: &'h str) -> egu
     h.get_by_role_and_label(Role::SpinButton, label)
 }
 
-/// The text the field labelled `label` shows (its accessible value: the bare number).
+/// The number the field labelled `label` shows: its accessible value without the unit after it ("200 px" reads
+/// "200").
 fn field_text(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> String {
-    field(h, label).value().unwrap_or_else(|| panic!("the {label} field shows a value"))
+    let value = field(h, label).value().unwrap_or_else(|| panic!("the {label} field shows a value"));
+    value.split(' ').next().unwrap_or_default().to_owned()
 }
 
 /// The number the view field labelled `label` shows, as a `f64` for the cases whose size comes
