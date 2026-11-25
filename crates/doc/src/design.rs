@@ -32,6 +32,24 @@ impl DesignTimeline {
         self.marker.map_or(self.steps.len(), |m| m.min(self.steps.len()))
     }
 
+    /// This timeline keeping only the checkpoint of the last step in effect (the document it
+    /// belongs to, so it holds no pixels of its own), or `None` when it keeps no other. For an undo
+    /// state: the other checkpoints are caches a later timeline's budget may already have released,
+    /// and no history budget counts the pixels they hold.
+    pub fn without_spare_checkpoints(&self) -> Option<Self> {
+        let keep = self.in_effect().checked_sub(1);
+        let spare = |(i, st): (usize, &DesignStep)| Some(i) != keep && st.checkpoint.0.is_some();
+        self.steps.iter().enumerate().any(spare).then(|| {
+            let mut t = self.clone();
+            for (i, st) in t.steps.iter_mut().enumerate() {
+                if Some(i) != keep {
+                    st.checkpoint = Checkpoint(None);
+                }
+            }
+            t
+        })
+    }
+
     /// The position of the step with id `step`.
     pub fn index_of(&self, step: u64) -> Option<usize> {
         self.steps.iter().position(|s| s.step == step)

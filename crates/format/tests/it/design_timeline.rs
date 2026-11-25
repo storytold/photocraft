@@ -85,6 +85,32 @@ fn a_stale_warning_survives_a_save() {
     assert_eq!(states, [StepState::Ok, StepState::Stale]);
 }
 
+/// A baked step's stored layer comps name a layer that only a replay recreates (no saved tree holds
+/// it): they keep its id rather than a dangling placeholder.
+#[test]
+fn baked_state_layer_comps_keep_their_layer_ids() {
+    let mut doc = with_timeline();
+    let gone = photocraft_doc::LayerId((7 << 24) | 3);
+    let mut state = Document::new("state", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    state.layer_comps = vec![photocraft_doc::LayerComp {
+        id: 1,
+        name: "Comp".into(),
+        comment: String::new(),
+        apply_visibility: true,
+        apply_position: false,
+        apply_appearance: false,
+        states: vec![photocraft_doc::CompLayerState { layer: gone, visible: Some(false), position: None, appearance: None }],
+    }];
+    let mut tl = (**doc.design_timeline.as_ref().unwrap()).clone();
+    let baked = tl.steps[1].baked.as_deref().unwrap().clone();
+    tl.steps[1].baked = Some(Arc::new(Baked { state: Some((Arc::new(state), vec!["layer_comps".into()])), ..baked }));
+    doc.design_timeline = Some(Arc::new(tl));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let tl = back.design_timeline.unwrap();
+    let (state, _) = tl.steps[1].baked.as_deref().unwrap().state.as_ref().unwrap();
+    assert_eq!(state.layer_comps[0].states[0].layer, gone);
+}
+
 #[test]
 fn a_file_without_a_timeline_stays_format_1() {
     let mut doc = with_timeline();

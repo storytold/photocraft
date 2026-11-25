@@ -176,6 +176,12 @@ impl History {
     /// reads `…, before, the former redo states (oldest first), the new step`, so the new step is
     /// appended at the end and every earlier state can still be stepped to.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
+        // An undo state keeps only its own design-timeline checkpoint: the others hold pixels that no
+        // budget here counts, and the current timeline's budget may already have let them go.
+        let before = match before.design_timeline.as_deref().and_then(photocraft_doc::design::DesignTimeline::without_spare_checkpoints) {
+            Some(t) => Arc::new(Document { design_timeline: Some(Arc::new(t)), ..(*before).clone() }),
+            None => before,
+        };
         self.changed();
         if self.max_bytes == 0 {
             self.tiles = None;

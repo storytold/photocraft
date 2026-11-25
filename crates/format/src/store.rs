@@ -483,6 +483,7 @@ fn load_full(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, Vec<
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
         warnings: Vec::new(),
+        as_saved: false,
     };
     let document = loader.document(&m.document)?;
     let warnings = loader.warnings;

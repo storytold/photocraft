@@ -407,6 +407,10 @@ pub(crate) struct Loader<'a> {
     pub tiles: std::collections::HashMap<SampleType, std::collections::HashMap<Hash, Arc<Tile>>>,
     /// What loaded without part of its stored data, for the open's warnings.
     pub warnings: Vec<String>,
+    /// Loading a baked step's stored document state: it holds no layers, so layer comps and
+    /// slices name layers as saved (ids are kept whenever a timeline loads, and the replay
+    /// recreates them) rather than as dangling.
+    pub as_saved: bool,
 }
 
 impl Loader<'_> {
@@ -505,7 +509,11 @@ impl Loader<'_> {
             };
             // States of layers deleted before the save keep their (now dangling) id, which
             // `layerComp.updateWarnings` reports; it must not collide with a live layer.
-            let layer = self.id_map.get(&s.layer).copied().unwrap_or(LayerId(u64::MAX - s.layer.min(u64::MAX / 2)));
+            let layer = match self.id_map.get(&s.layer) {
+                Some(id) => *id,
+                None if self.as_saved => LayerId(s.layer),
+                None => LayerId(u64::MAX - s.layer.min(u64::MAX / 2)),
+            };
             states.push(CompLayerState { layer, visible: s.visible, position: s.position, appearance });
         }
         Ok(LayerComp {
@@ -737,7 +745,12 @@ impl Loader<'_> {
                         None => None,
                     },
                     state: match &b.state {
-                        Some((d, fields)) => Some((Arc::new(self.document_only(d)?), fields.clone())),
+                        Some((d, fields)) => {
+                            self.as_saved = true;
+                            let state = self.document_only(d);
+                            self.as_saved = false;
+                            Some((Arc::new(state?), fields.clone()))
+                        }
                         None => None,
                     },
                     root: b.root.as_ref().map(|ids| ids.iter().map(|id| LayerId(*id)).collect()),
@@ -804,7 +817,7 @@ impl Loader<'_> {
         let mut slices = m.slices.clone();
         for sl in &mut slices.list {
             if let Some(l) = sl.layer {
-                sl.layer = self.id_map.get(&l.0).copied();
+                sl.layer = self.id_map.get(&l.0).copied().or(self.as_saved.then_some(l));
                 if sl.layer.is_none() && sl.origin == photocraft_doc::SliceOrigin::Layer {
                     sl.origin = photocraft_doc::SliceOrigin::User;
                 }

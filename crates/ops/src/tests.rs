@@ -1267,3 +1267,36 @@ fn a_new_step_or_purge_forgets_the_cleared_states() {
     assert!(!h.can_undo() && !h.is_cleared());
     assert!(!h.clear_states(), "a single state can't be cleared");
 }
+
+/// An undo state keeps only the design-timeline checkpoint of its own document: the others hold
+/// pixels the history budget doesn't count, which the current timeline's budget may have released.
+#[test]
+fn an_undo_state_keeps_only_its_own_timeline_checkpoint() {
+    use photocraft_doc::design::{Checkpoint, DesignStep, DesignTimeline};
+    let doc = base();
+    let step = |n: u64| DesignStep {
+        step: n,
+        command: "c".into(),
+        params: Default::default(),
+        label: "c".into(),
+        prelude: Vec::new(),
+        active: None,
+        selected: Vec::new(),
+        created: Vec::new(),
+        changed: Vec::new(),
+        suppressed: false,
+        joins_previous: false,
+        baked: None,
+        rerecord: false,
+        state: Default::default(),
+        checkpoint: Checkpoint(Some(Arc::new(doc.clone()))),
+        patterns: Vec::new(),
+    };
+    let tl = DesignTimeline { base: Arc::new(doc.clone()), steps: vec![step(1), step(2), step(3)], marker: None };
+    let mut cur = Arc::new(Document { design_timeline: Some(Arc::new(tl)), ..doc.clone() });
+    let mut h = History::new(10);
+    edit(&mut h, &mut cur, "Edit", |d| d.resolution_dpi = 300.0);
+    let (undone, _) = h.undo(cur).unwrap();
+    let kept: Vec<bool> = undone.design_timeline.as_ref().unwrap().steps.iter().map(|st| st.checkpoint.0.is_some()).collect();
+    assert_eq!(kept, [false, false, true], "only the last step in effect: the document itself");
+}
