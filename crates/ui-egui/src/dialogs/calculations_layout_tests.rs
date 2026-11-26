@@ -84,7 +84,24 @@ fn messages(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
 /// the whole dialog with OK. The field is emptied first (backspaces, which do nothing once the text
 /// is gone), so the typed digits are the whole value.
 fn type_into(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, text: &str) {
-    field_of(h, label).click();
+    let at = field_of(h, label).rect().center();
+    type_at(h, at, text);
+}
+
+/// The same, clicked at the right edge of the row's node: for a row that draws a slider beside its
+/// number field the node spans both, and a click in the middle moves the slider.
+fn type_into_at_edge(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, text: &str) {
+    let row = field_of(h, label).rect();
+    type_at(h, egui::pos2(row.right() - 4.0, row.center().y), text);
+}
+
+/// Clicks at `at`, clears the field and types `text`, then leaves it with Tab.
+fn type_at(h: &mut Harness<'static, Box<PhotocraftApp>>, at: egui::Pos2, text: &str) {
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.run_steps(1);
     h.key_press(egui::Key::End);
     h.run_steps(1);
@@ -92,9 +109,9 @@ fn type_into(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, text: &s
         h.key_press(egui::Key::Backspace);
     }
     h.run_steps(1);
-    for digit in text.chars() {
-        h.event(egui::Event::Text(digit.to_string()));
-    }
+    // One text event for the whole value: typed character by character, the field writes its own
+    // number back between the keys, so a mark like "." never reaches the draft.
+    h.event(egui::Event::Text(text.into()));
     h.key_press(egui::Key::Tab);
     h.run_steps(4);
 }
@@ -143,14 +160,38 @@ fn scale_and_offset_rows_stand_between_opacity_and_result_for_add_and_subtract()
 
 #[test]
 fn the_opacity_row_is_a_whole_percent_field_whose_arrow_opens_a_slider() {
-    let (h, _) = calculations();
+    let (mut h, id) = calculations();
     assert_eq!(field_of(&h, "Opacity").accesskit_node().numeric_value(), Some(100.0), "Opacity starts at 100");
-    assert!(h.query_all_by_label("%").next().is_some(), "the field shows the percent sign");
-    assert!(h.query_all_by_role(Role::Slider).next().is_none(), "no slider is drawn under the field");
-    assert!(h.query_by_role_and_label(Role::Button, "Slider").is_some(), "the field carries the popup-slider arrow");
+    let row = field_of(&h, "Opacity").rect();
+    let in_row = |node: &egui_kittest::Node<'_>| (node.rect().center().y - row.center().y).abs() < 8.0;
+    assert!(h.query_all_by_label("%").any(|node| in_row(&node)), "the percent sign stands in the Opacity row");
+    assert_eq!(h.query_all_by_role(Role::Slider).filter(|node| in_row(node)).count(), 0, "no slider is drawn in the row");
+    let arrow = h.query_all_by_role_and_label(Role::Button, "Slider").find(|node| in_row(node)).expect("the Opacity row carries the popup-slider arrow");
+    let at = arrow.rect().center();
+    drop(arrow);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_role(Role::Slider).count(), 1, "the arrow opened exactly one slider");
+    let track = h.query_all_by_role(Role::Slider).next().expect("the open slider").rect();
+    let drag_to = |h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32| {
+        let point = egui::pos2(x, track.center().y);
+        h.hover_at(point);
+        h.run_steps(1);
+        h.drag_at(point);
+        h.run_steps(1);
+        h.drop_at(point);
+        h.run_steps(3);
+    };
+    drag_to(&mut h, track.right() - 1.0);
+    assert_eq!(fields(h.state(), id).number("opacity"), Some(100.0), "the slider's top end is 100 %");
+    drag_to(&mut h, track.left() + 1.0);
+    assert_eq!(fields(h.state(), id).number("opacity"), Some(0.0), "and its bottom end is 0 %");
 }
 
-/// Inside the range the field works in whole percents: a typed 56 stands as 56 %, a value the form
 /// Inside the range the field works in whole percents: a typed 56 stands as 56 %, and nothing stands
 /// over the dialog.
 #[test]
@@ -162,23 +203,38 @@ fn the_opacity_field_keeps_whole_percents_without_an_alert() {
     assert_eq!(field_of(&h, "Opacity").accesskit_node().numeric_value(), Some(56.0), "the field shows the whole percent");
 }
 
-/// The measured rounding of an over-precise typed value in a row that keeps fewer digits (Opacity
-/// 55.6 becomes 56 %, Scale 1.23456 becomes 1.235, Offset 10.6 becomes 11) does not land with the
-/// pinned framework: a number row does not parse a typed value with more digits than it keeps, so the
-/// field refuses the edit and the value stays as it was. Asked on #14526; the digit counts themselves
-/// are pinned in `the_scale_and_offset_rows_keep_their_bounds_and_digits` and
-/// `the_opacity_field_keeps_whole_percents_without_an_alert`.
+/// A typed value carrying more digits than the row keeps settles on that row's own grid, as measured:
+/// Opacity 55.6 % becomes 56 %, Scale 1.23456 becomes 1.235 and Offset 10.6 becomes 11. Which decimal
+/// mark a field takes follows the number format of the machine the test runs on (the hosted rows read
+/// through the framework's own codec, which follows the OS region rather than the list
+/// `i18n::decimal_separator` reports), so both marks are tried and the row must end at `want`. Each
+/// row starts at a value other than `want`, so a declined mark cannot pass by leaving it behind.
 #[test]
-#[ignore = "a craft number row will not parse a typed value with more digits than it keeps, to round it"]
-fn a_typed_value_with_too_many_digits_rounds_to_the_rows_digits() {
+fn a_typed_value_with_too_many_digits_settles_on_the_rows_digits() {
     let (mut h, id) = calculations();
-    type_into(&mut h, "Opacity", "55.6");
-    assert_eq!(fields(h.state(), id).number("opacity"), Some(56.0), "55.6 % becomes 56 %");
     write(&mut h, id, "blending", json!("add"));
-    type_into(&mut h, "Scale", "1.23456");
-    assert_eq!(fields(h.state(), id).number("scale"), Some(1.235), "Scale 1.23456 becomes 1.235");
-    type_into(&mut h, "Offset", "10.6");
-    assert_eq!(fields(h.state(), id).number("offset"), Some(11.0), "Offset 10.6 becomes 11");
+    settle(&mut h, id, "Opacity", "opacity", 100.0, "55.6", 56.0, false);
+    settle(&mut h, id, "Scale", "scale", 1.0, "1.23456", 1.235, true);
+    settle(&mut h, id, "Offset", "offset", 0.0, "10.6", 11.0, true);
+    assert!(messages(&h).is_empty(), "settling inside the bounds raises no alert: {:?}", messages(&h));
+}
+
+/// Types `text` into the number field of the row `label` (with both decimal marks in turn, the row
+/// first set to `from`) and asserts it ends at `want`.
+fn settle(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, label: &str, key: &str, from: f64, text: &str, want: f64, at_edge: bool) {
+    for mark in [",", "."] {
+        set(h.state_mut(), id, key, json!(from)).unwrap_or_else(|error| panic!("the {label} row starts at {from}: {error}"));
+        h.run_steps(2);
+        if at_edge {
+            type_into_at_edge(h, label, &text.replace('.', mark));
+        } else {
+            type_into(h, label, &text.replace('.', mark));
+        }
+        if fields(h.state(), id).number(key) == Some(want) {
+            return;
+        }
+    }
+    panic!("neither decimal mark settled {label} {text} to {want}: {:?}", fields(h.state(), id).number(key));
 }
 
 /// Past the range the nearest end is kept: a typed 150 % becomes 100 %. The measured reference shows
@@ -258,16 +314,15 @@ fn another_blending_sends_todays_scale_and_offset() {
     write(&mut h, id, "blending", json!("screen"));
     let params = crate::filter_dialog::command_params(CALCULATIONS, fields(h.state(), id));
     assert_eq!(params["blending"], json!("screen"));
-    assert!(sent(&params, "scale").is_none_or(|scale| scale == 1.0), "no typed Scale goes with Screen: {params}");
-    assert!(sent(&params, "offset").is_none_or(|offset| offset == 0.0), "no typed Offset goes with Screen: {params}");
+    assert_eq!(sent(&params, "scale"), Some(1.0), "the hidden Scale row is back at the command's own 1: {params}");
+    assert_eq!(sent(&params, "offset"), Some(0.0), "and the hidden Offset row at its 0: {params}");
     assert_eq!(sent(&params, "opacity"), Some(100.0), "the other rows are unchanged");
 }
 
 /// The two rows carry the reference's bounds, sliders and digit counts: Scale 1..2 with a drawn
 /// slider whose ends are 1 and 2 and at most three decimals in the field, Offset -255..255 with a
 /// drawn slider centred at 0 whose ends are -255 and 255 and whole numbers in the field. Automation
-/// cannot write past a bound: the row refuses it. Rounding a typed value that carries more digits
-/// than the row keeps is the ignored test above.
+/// cannot write past a bound: the row refuses it.
 #[test]
 fn the_scale_and_offset_rows_keep_their_bounds_and_digits() {
     let (mut h, id) = calculations();
