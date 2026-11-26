@@ -1,7 +1,7 @@
 //! A live stroke shown as a masked colour layer (`LiveStroke::begin_overlay`) draws what its
 //! commit writes: flattening the live document after the last step and the committed document
 //! agree to within the 8-bit dither the commit adds, and the commit itself takes exactly the
-//! pixels `paint.stroke` renders, whether or not the stroke was settled along the way.
+//! pixels `paint.stroke` renders, however the stroke was pushed.
 
 use super::*;
 use crate::brush_cmds::LiveStrokeExt;
@@ -429,13 +429,13 @@ fn a_document_the_preview_would_show_differently_keeps_the_pixel_path() {
     assert!(is_overlay(&scene(8, &*above(|l| l.blend = BlendMode::Multiply))), "Multiply above");
 }
 
-/// A longer stroke than `PTS`, for settling along the way.
+/// A longer stroke than `PTS`, pushed in chunks.
 fn long_stroke() -> Vec<[f64; 3]> {
     (0..40).map(|i| [10.0 + 2.6 * f64::from(i), 40.0 + 24.0 * (f64::from(i) / 5.0).sin(), 0.5 + 0.5 * f64::from((i * 3) % 5) / 4.0]).collect()
 }
 
 #[test]
-fn a_stroke_settled_along_the_way_commits_the_pixels_paint_stroke_renders() {
+fn an_overlay_commit_matches_paint_stroke_across_brush_features() {
     let pts = long_stroke();
     let cases = [
         ("plain", brush(json!({}))),
@@ -446,7 +446,6 @@ fn a_stroke_settled_along_the_way_commits_the_pixels_paint_stroke_renders() {
         ("erase", brush(json!({"erase": true}))),
         ("selection and lock", brush(json!({}))),
     ];
-    let mut backlog = false;
     for (name, mut p) in cases {
         let setup = |s: &mut Session| {
             if name == "selection and lock" {
@@ -456,18 +455,15 @@ fn a_stroke_settled_along_the_way_commits_the_pixels_paint_stroke_renders() {
         };
         let mut fresh: Option<Session> = None;
         p["points"] = json!(pts);
-        // Settled every `every` pushes, a few tiles at a time or until nothing is left.
-        for (every, max) in [(1, 2), (3, 1), (5, usize::MAX)] {
+        // Pushed a point at a time, or in chunks of five.
+        for size in [1, 5] {
             let s = scene(8, &setup);
             let mut q = p.clone();
             q["points"] = json!([pts[0]]);
             let mut live = LiveStroke::begin_overlay(&s, "paint.stroke", &q).unwrap();
             assert!(live.is_overlay(), "{name}");
-            for (n, pt) in pts[1..].iter().enumerate() {
-                live.push(&points(std::slice::from_ref(pt))).unwrap();
-                if n % every == 0 {
-                    backlog |= live.settle(max);
-                }
+            for chunk in pts[1..].chunks(size) {
+                live.push(&points(chunk)).unwrap();
             }
             let seed = live.seed;
             let commit = live.into_commit().unwrap();
@@ -481,18 +477,7 @@ fn a_stroke_settled_along_the_way_commits_the_pixels_paint_stroke_renders() {
             let fresh_surface = surface(fresh);
             // Past the canvas too: the layer's tiles outside it must match.
             let all = Rect::new(0, 0, W, H).union(&commit.surface.tile_bounds()).union(&fresh_surface.tile_bounds());
-            assert!(same_pixels(&commit.surface, &fresh_surface, all), "{name}: settling every {every} pushes ({max} tiles) changed the commit");
+            assert!(same_pixels(&commit.surface, &fresh_surface, all), "{name}: pushing {size} points at a time changed the commit");
         }
     }
-    assert!(backlog, "settle never left a tile for later, so the test did not settle partway");
-}
-
-#[test]
-fn a_stroke_that_is_not_an_overlay_has_nothing_to_settle() {
-    let s = scene(8, &|_| ());
-    let mut p = brush(json!({"mode": "multiply"}));
-    p["points"] = json!(PTS);
-    let mut live = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
-    assert!(!live.is_overlay());
-    assert!(!live.settle(16));
 }

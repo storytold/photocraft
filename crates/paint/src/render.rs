@@ -522,12 +522,6 @@ pub struct CoverageMap {
     nc: usize,
     bounds: Rect,
     dirty: HashSet<(i32, i32)>,
-    /// Tiles changed since a settled copy of the stroke last composited them (see
-    /// [`StrokeRenderer::settle`]), each with the epoch of its latest change. Separate from
-    /// `dirty`, which a live preview consumes.
-    unsettled: FxHashMap<(i32, i32), u64>,
-    /// Counts the pushes (and the finish) fed so far, set by the owning renderer.
-    epoch: u64,
 }
 
 impl CoverageMap {
@@ -587,7 +581,7 @@ impl CoverageMap {
                     let mut tiles: Vec<_> = keys
                         .into_iter()
                         .map(|(key, tr)| {
-                            self.touch(key);
+                            self.dirty.insert(key);
                             (key, tr, self.tiles.remove(&tile_key(key)))
                         })
                         .collect();
@@ -615,14 +609,8 @@ impl CoverageMap {
             let tile = self.tiles.entry(tile_key(key)).or_insert_with(CovTile::new);
             dab.prepare(tile);
             dab.tile(tr, key, tile);
-            self.touch(key);
+            self.dirty.insert(key);
         }
-    }
-
-    /// A tile's coverage changed.
-    fn touch(&mut self, key: (i32, i32)) {
-        self.dirty.insert(key);
-        self.unsettled.insert(key, self.epoch);
     }
 
     fn take_dirty(&mut self) -> Vec<(i32, i32)> {
@@ -635,14 +623,7 @@ impl CoverageMap {
     /// stroke changes it (see [`StrokeRenderer::tail_preview`]), else this map's own.
     fn finished_subset(&self, tail: Option<&Self>, keys: &HashSet<(i32, i32)>) -> Self {
         let tile = |k: &(i32, i32)| tail.and_then(|t| t.tiles.get(&tile_key(*k))).or_else(|| self.tiles.get(&tile_key(*k))).map(|t| (tile_key(*k), t.clone()));
-        Self {
-            tiles: keys.iter().filter_map(tile).collect(),
-            nc: self.nc,
-            bounds: tail.map_or(self.bounds, |t| t.bounds),
-            dirty: HashSet::new(),
-            unsettled: FxHashMap::default(),
-            epoch: 0,
-        }
+        Self { tiles: keys.iter().filter_map(tile).collect(), nc: self.nc, bounds: tail.map_or(self.bounds, |t| t.bounds), dirty: HashSet::new() }
     }
 
     /// Union two passes of the same brush stroke without applying opacity twice where they
@@ -804,12 +785,6 @@ pub struct StrokeRenderer {
     dual_area_left: u64,
     /// A dab was left out for want of budget.
     refused: bool,
-    /// Tiles [`settle`](Self::settle) has yet to composite, taken from `unsettled_keys` when the
-    /// queue was built at `settle_queue_epoch`, so a backlog is drained without rescanning every
-    /// pending tile each batch.
-    settle_queue: Vec<(i32, i32)>,
-    /// The coverage epoch `settle_queue` was built at; `None` when there is no queue.
-    settle_queue_epoch: Option<u64>,
 }
 
 /// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
@@ -966,8 +941,6 @@ impl StrokeRenderer {
                         area_left: p.area_left,
                         dual_area_left: p.dual_area_left,
                         refused: p.refused,
-                        settle_queue: Vec::new(),
-                        settle_queue_epoch: None,
                     })
                 }
                 Some(m) => {
@@ -1024,8 +997,6 @@ impl StrokeRenderer {
             area_left: MAX_STROKE_DAB_AREA,
             dual_area_left: MAX_STROKE_DAB_AREA,
             refused: false,
-            settle_queue: Vec::new(),
-            settle_queue_epoch: None,
         }
     }
 
@@ -1064,14 +1035,6 @@ impl StrokeRenderer {
     /// Union of the dab rectangles so far.
     pub fn bounds(&self) -> Rect {
         self.cov.bounds
-    }
-
-    /// A push or the finish starts: what it changes is newer than anything settled so far.
-    fn next_epoch(&mut self) {
-        self.cov.epoch += 1;
-        if let Some(d) = self.dual.as_mut() {
-            d.epoch = self.cov.epoch;
-        }
     }
 
     fn raster_pending(&mut self) {
@@ -1131,14 +1094,12 @@ impl StrokeRenderer {
 
     /// Feed input points (any chunking gives the same result).
     pub fn push(&mut self, pts: &[StrokePoint]) {
-        self.next_epoch();
         self.generator.push(pts, &mut self.dab_buf, &mut self.dual_buf);
         self.raster_pending();
     }
 
     /// End of stroke (smoothing catch-up, a lone first point).
     pub fn finish(&mut self) {
-        self.next_epoch();
         self.generator.finish(&mut self.dab_buf, &mut self.dual_buf);
         self.raster_pending();
     }
@@ -1179,8 +1140,6 @@ impl StrokeRenderer {
             nc: m.nc,
             bounds: m.bounds,
             dirty: HashSet::new(),
-            unsettled: FxHashMap::default(),
-            epoch: 0,
         };
         let mut t = StrokeRenderer {
             ctx: self.ctx.clone(),
@@ -1200,8 +1159,6 @@ impl StrokeRenderer {
             area_left: self.area_left,
             dual_area_left: self.dual_area_left,
             refused: self.refused,
-            settle_queue: Vec::new(),
-            settle_queue_epoch: None,
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
@@ -1562,81 +1519,6 @@ impl StrokeRenderer {
         *done = tr;
     }
 
-    /// The coverage tiles changed since they were last settled, in order, that the latest
-    /// [`push`](Self::push) left alone (or all of them with `all`): with a Dual Brush, a tile
-    /// counts as changed when either coverage changed, and as touched when either was touched.
-    fn unsettled_keys(&self, all: bool) -> Vec<(i32, i32)> {
-        let epoch = self.cov.epoch;
-        let calm = |e: u64| all || e < epoch;
-        let dual = self.dual.as_ref().map(|d| &d.unsettled);
-        let mut keys: Vec<(i32, i32)> =
-            self.cov.unsettled.iter().filter(|&(k, &e)| calm(e) && dual.is_none_or(|d| d.get(k).is_none_or(|&e| calm(e)))).map(|(&k, _)| k).collect();
-        if let Some(d) = &self.dual {
-            // A Dual Brush tile only shows where the stroke has a tile too.
-            keys.extend(
-                d.unsettled
-                    .iter()
-                    .filter(|&(k, &e)| calm(e) && !self.cov.unsettled.contains_key(k) && self.cov.tiles.contains_key(&tile_key(*k)))
-                    .map(|(&k, _)| k),
-            );
-        }
-        keys
-    }
-
-    fn settled(&mut self, keys: &[(i32, i32)]) {
-        for k in keys {
-            self.cov.unsettled.remove(k);
-            if let Some(d) = self.dual.as_mut() {
-                d.unsettled.remove(k);
-            }
-        }
-    }
-
-    /// Composite up to `max_tiles` of the coverage tiles that changed since an earlier `settle`
-    /// (or the first push) and that the latest [`push`](Self::push) did not touch, onto `target`
-    /// from `pre`: work a live stroke does between pushes, so [`settle_all`](Self::settle_all)
-    /// at the end has little left. The stroke's head is left for later, as the next push is
-    /// likely to change it again. `target` starts as a copy of `pre`; tiles `settle` never
-    /// reaches are written by `settle_all`, and every tile is composited from `pre` with its
-    /// coverage as it is then, so the result is the pixels `composite(.., all = true)` writes.
-    /// Returns how many such tiles remain.
-    ///
-    /// The tiles wait in a queue that is rebuilt only after a push or the finish (the coverage
-    /// epoch moved), so draining a backlog in batches costs a scan of the pending tiles once, not
-    /// once per batch. A queued tile that was settled meanwhile, or that no longer counts as
-    /// changed, is skipped.
-    pub fn settle(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool, max_tiles: usize) -> usize {
-        if self.settle_queue_epoch != Some(self.cov.epoch) {
-            let mut queue = self.unsettled_keys(false);
-            // Popped from the end, so the smallest key comes last in the queue.
-            queue.sort_unstable_by(|a, b| b.cmp(a));
-            self.settle_queue = queue;
-            self.settle_queue_epoch = Some(self.cov.epoch);
-        }
-        let mut keys = Vec::new();
-        while keys.len() < max_tiles {
-            let Some(k) = self.settle_queue.pop() else { break };
-            if self.cov.unsettled.contains_key(&k) || self.dual.as_ref().is_some_and(|d| d.unsettled.contains_key(&k)) {
-                keys.push(k);
-            }
-        }
-        keys.sort_unstable();
-        self.composite_keys(&keys, pre, target, selection, lock_transparency);
-        self.settled(&keys);
-        self.settle_queue.len()
-    }
-
-    /// Composite every coverage tile that changed since it was last settled, whether the latest
-    /// push touched it or not (see [`settle`](Self::settle)); call it after [`finish`](Self::finish).
-    pub fn settle_all(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) {
-        self.settle_queue.clear();
-        self.settle_queue_epoch = None;
-        let mut keys = self.unsettled_keys(true);
-        keys.sort_unstable();
-        self.composite_keys(&keys, pre, target, selection, lock_transparency);
-        self.settled(&keys);
-    }
-
     /// The per-pixel strength [`composite`](Self::composite) would blend with (before Dissolve),
     /// written over the tiles it processes into the single-channel `mask` (see
     /// [`composite_live_mask`](Self::composite_live_mask)); pixels the stroke does not reach in
@@ -1990,7 +1872,7 @@ mod coverage_tests;
 mod budget_tests;
 
 #[cfg(test)]
-mod settle_tests;
+mod mask_tests;
 
 #[cfg(test)]
 #[path = "mip_cache_render_tests.rs"]

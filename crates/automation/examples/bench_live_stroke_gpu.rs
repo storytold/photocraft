@@ -3,7 +3,7 @@
 //! `LiveStroke::begin_overlay`): per frame the stroke's `push`, the compositor's `render` of the
 //! live document over the step's damage, and the wait for the GPU; then the pen-up commit.
 //!
-//! `cargo run --release -p photocraft-automation --features gpu --example bench_live_stroke_gpu -- <old|new> <size> <hardness> <dabs> [--per-frame N] [--settle] [--sanity]`
+//! `cargo run --release -p photocraft-automation --features gpu --example bench_live_stroke_gpu -- <old|new> <size> <hardness> <dabs> [--per-frame N] [--sanity]`
 //!
 //! The document is 4928x3280 with a white background and a pixel layer of non-uniform content
 //! over the whole canvas. The stroke is `stroke_bench`'s zigzag at spacing 0.25, one point per
@@ -11,11 +11,8 @@
 //! 2048x1536 display-sized texture (same format as the chunk, extent clamped), as a canvas
 //! blit would. `--sanity` reads the live document back from the GPU before the pen-up and
 //! compares it with the committed document's GPU render. `--per-frame N` feeds N points per
-//! frame. `--settle` calls `LiveStroke::settle` between frames, 16 tiles at a time up to 64 tiles
-//! a frame, as the paint thread does while the UI renders: its time is `settle_ms`, outside the
-//! frame total but inside `stroke_incl_pen_up_ms`, and the pen-up then has little left to
-//! composite. The pen-up renders what the canvas redraws at release: the relayout damage, plus an
-//! overlay stroke's bounds.
+//! frame. The pen-up renders what the canvas redraws at release: the relayout damage, plus an
+//! overlay stroke's bounds; `stroke_incl_pen_up_ms` is the frame total plus the pen-up.
 use photocraft_engine::Session;
 use photocraft_engine::brush_cmds::{LiveStroke, LiveStrokeExt};
 use photocraft_engine::paint::StrokePoint;
@@ -26,9 +23,6 @@ use std::time::Instant;
 
 const W: i32 = 4928;
 const H: i32 = 3280;
-/// Tiles per `settle` call, and the most a frame's gap settles.
-const SETTLE_BATCH: usize = 16;
-const SETTLE_TILES_PER_FRAME: usize = 64;
 
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
@@ -81,7 +75,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sanity = args.iter().any(|a| a == "--sanity");
     // Points fed per frame (the canvas hands the paint thread what arrived since the last frame).
     let per_frame: usize = args.iter().position(|a| a == "--per-frame").and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
-    let settle = args.iter().any(|a| a == "--settle");
     assert!(matches!(mode.as_str(), "old" | "new"), "mode is old or new");
 
     let adapter = pollster::block_on(
@@ -158,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut live = if mode == "old" { LiveStroke::begin_with(&s, "paint.stroke", &params)? } else { LiveStroke::begin_overlay(&s, "paint.stroke", &params)? };
     assert_eq!(live.is_overlay(), mode == "new", "the stroke is not shown as the requested mode");
 
-    let (mut t_push, mut t_render, mut t_wait, mut t_settle) = (0.0, 0.0, 0.0, 0.0);
+    let (mut t_push, mut t_render, mut t_wait) = (0.0, 0.0, 0.0);
     let mut frames = Vec::new();
     let (mut tiles, mut bytes, mut passes, mut chunks) = (0usize, 0usize, 0usize, 0usize);
     let (mut gpu_ms, mut gpu_n) = (0.0, 0usize);
@@ -176,16 +169,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wait(&device)?;
         let c = ms(t);
         frames.push(ms(frame));
-        if settle {
-            // Between frames, as the paint thread settles while the UI renders.
-            let t = Instant::now();
-            for _ in 0..SETTLE_TILES_PER_FRAME / SETTLE_BATCH {
-                if !live.settle(SETTLE_BATCH) {
-                    break;
-                }
-            }
-            t_settle += ms(t);
-        }
         t_push += a;
         t_render += b;
         t_wait += c;
@@ -231,9 +214,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sorted = frames.clone();
     sorted.sort_by(f64::total_cmp);
     println!(
-        "mode={mode} size={size} hardness={hardness} dabs={dabs} per_frame={per_frame} settle={settle} frames={n}\n\
+        "mode={mode} size={size} hardness={hardness} dabs={dabs} per_frame={per_frame} frames={n}\n\
          totals_ms push={t_push:.1} render={t_render:.1} gpu_wait={t_wait:.1} frame_total={total:.1}\n\
-         settle_ms={t_settle:.1}\n\
          frame_ms mean={mean:.3} p95={:.3} max={:.3}\n\
          pen_up_ms total={pen_up:.1} (offer+commit={commit:.1}, render+wait={render_up:.1}; render uploads {} tiles {:.1} MB)\n\
          stroke_incl_pen_up_ms={:.1}\n\
@@ -243,7 +225,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sorted[n - 1],
         up_tiles,
         up_bytes as f64 / 1e6,
-        total + t_settle + pen_up,
+        total + pen_up,
         bytes as f64 / 1e6,
     );
     if let Some(live_pixels) = live_pixels {

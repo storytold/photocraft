@@ -625,10 +625,6 @@ pub struct LiveStroke {
     /// Set when the doc shows the stroke as a masked colour layer instead of blended pixels (see
     /// [`overlay_path`]).
     overlay: Option<Overlay>,
-    /// An overlay stroke's pixels as far as they are composited: `pre` with the coverage tiles
-    /// that [`settle`](Self::settle) has blended in, which the commit completes (see
-    /// [`into_commit`](Self::into_commit)).
-    shadow: Option<Surface>,
 }
 
 /// Where a live stroke that is shown as a masked layer keeps its mask.
@@ -838,11 +834,9 @@ impl LiveStroke {
             points: Vec::new(),
             base,
             overlay: None,
-            shadow: None,
         };
         if let Some(path) = overlay_at {
             live.enter_overlay(&path, paint, erase, fmt);
-            live.shadow = live.overlay.is_some().then(|| live.pre.clone());
         }
         live.push(&pts)?;
         Ok(live)
@@ -852,14 +846,13 @@ impl LiveStroke {
     pub fn into_commit(mut self) -> Result<LiveCommit> {
         let (surface, bounds) = if self.overlay.is_some() {
             // The doc holds no stroke pixels: blend the stroke into the pre-stroke ones as
-            // `paint.stroke` does. `settle` has done most of it; what is left is the tiles the
-            // last pushes touched and the smoothing tail.
-            let mut surf = self.shadow.take().unwrap_or_else(|| self.pre.clone());
+            // `paint.stroke` does: one composite of every tile of the finished stroke.
+            let mut surf = self.pre.clone();
             let cmyk = self.cmyk.clone();
             let (renderer, pre, sel, lock) = (&mut self.renderer, &self.pre, self.sel.as_ref(), self.lock);
             photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
                 renderer.finish();
-                renderer.settle_all(pre, &mut surf, sel, lock);
+                renderer.composite(pre, &mut surf, sel, lock, true);
             });
             (surf, self.bounds())
         } else {
@@ -868,19 +861,6 @@ impl LiveStroke {
             (surf.clone(), bounds)
         };
         Ok(LiveCommit { mixer: None, cmd: self.cmd, base: self.base, params: self.params, seed: Some(self.seed), points: self.points, surface, bounds })
-    }
-
-    /// Composite up to `max_tiles` of what the stroke has drawn into the pixels the commit will
-    /// take, so [`into_commit`](Self::into_commit) has little left to do on release: work for a
-    /// moment when no points are waiting. It leaves the tiles the latest `push` touched, which
-    /// the next push is likely to change again, and never changes the doc. Returns whether
-    /// more is left to settle. A stroke that is not an overlay has nothing to settle (its doc
-    /// already holds the pixels).
-    pub fn settle(&mut self, max_tiles: usize) -> bool {
-        let Some(shadow) = self.shadow.as_mut() else { return false };
-        let cmyk = self.cmyk.clone();
-        let (renderer, pre, sel, lock) = (&mut self.renderer, &self.pre, self.sel.as_ref(), self.lock);
-        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || renderer.settle(pre, shadow, sel, lock, max_tiles)) > 0
     }
 
     /// Whether the doc shows the stroke as a masked colour layer ([`begin_overlay`](Self::begin_overlay))
