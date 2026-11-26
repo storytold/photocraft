@@ -203,7 +203,9 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
                             .map(|p| p[3])
                             .collect(),
                     ],
-                    // Groups, adjustment and fill layers cover the whole canvas.
+                    // Groups, adjustment and fill layers cover the whole canvas as a channel source (Apply Image,
+                    // Calculations). Loading a group's transparency as a selection loads nothing instead
+                    // (`selection::group_transparency`, #17050).
                     _ => vec![vec![1.0; area.width() as usize * area.height() as usize]],
                 },
             }

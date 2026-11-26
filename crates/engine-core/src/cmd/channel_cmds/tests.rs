@@ -699,8 +699,9 @@ fn selection_bounds(s: &Session) -> Option<(i32, i32, u32, u32)> {
     doc(s).selection.as_ref().map(|m| m.content_bounds()).map(|b| (b.x0, b.y0, b.width(), b.height()))
 }
 
-/// #17050: a group has no pixels of its own. Loading its transparency makes no selection change and no history step,
-/// and says why, however the group is named; a layer inside it and the group's layer mask load as before.
+/// #17050: a group has no pixels of its own. Loading its transparency changes neither the selection nor the history,
+/// and the result says nothing was loaded and why, however the group is named; it isn't an error, so an Action step
+/// plays on. A layer inside it and the group's layer mask load as before.
 #[test]
 fn a_groups_transparency_loads_no_selection() {
     let mut s = crate::session();
@@ -722,8 +723,10 @@ fn a_groups_transparency_loads_no_selection() {
             if let Some(layer) = &layer {
                 p["layer"] = layer.clone();
             }
-            let error = s.execute("select.loadSelection", p).expect_err("a group's transparency is refused").to_string();
-            assert!(error.contains("group"), "{how}, {operation}: the error says why: {error}");
+            let result = s.execute("select.loadSelection", p).unwrap_or_else(|e| panic!("{how}, {operation}: no error: {e}"));
+            assert_eq!(result["loaded"], json!(false), "{how}, {operation}: nothing was loaded: {result}");
+            assert!(result["reason"].as_str().is_some_and(|r| !r.is_empty()), "{how}, {operation}: the result says why: {result}");
+            assert_eq!(result["selected"], json!(kept.is_some()), "{how}, {operation}: the result reports the selection as it is");
             assert_eq!(selection_bounds(&s), kept, "{how}, {operation}: the selection is left as it was");
             assert_eq!(s.active().unwrap().history.past_len(), steps, "{how}, {operation}: no history step");
         }
@@ -734,7 +737,9 @@ fn a_groups_transparency_loads_no_selection() {
     s.execute("select.rect", json!({"x": 100, "y": 50, "width": 60, "height": 40})).unwrap();
     s.execute("layer.select", json!({"layer": group.0, "mode": "replace"})).unwrap();
     s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
-    let _ = s.execute("select.deselect", json!({}));
+    if selection_bounds(&s).is_some() {
+        s.execute("select.deselect", json!({})).unwrap();
+    }
     s.execute("select.loadSelection", json!({"channel": "mask", "layer": group.0})).unwrap();
     assert_eq!(selection_bounds(&s), Some((100, 50, 60, 40)), "the group's layer mask loads");
 }

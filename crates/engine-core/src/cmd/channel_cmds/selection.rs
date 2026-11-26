@@ -86,9 +86,13 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     let p = &targeted;
-    refuse_group_transparency(s, p, cmd)?;
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
     let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
+    if let Some(group) = group_transparency(s, p, cmd)? {
+        let selected = s.active().is_some_and(|st| st.doc.selection.is_some());
+        let reason = format!("\"{group}\" is a group: it has no pixels of its own to load as a selection");
+        return Ok(json!({ "selected": selected, "loaded": false, "reason": reason }));
+    }
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let label = match p.get("channel").and_then(|v| parse_ref(v, doc)) {
         Some(ChanRef::Transparency) => "Load Transparency",
@@ -102,24 +106,20 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "selected": selected }))
 }
 
-/// A group has no pixels of its own (#17050), so its transparency loads no selection, as Ctrl+click on its folder icon
-/// in the Layers panel loads none (#16785). The source layer is resolved as [`source`] resolves it: `layer` by id, name
-/// or `{"background": true}`, else the active layer; the merged transparency (`"layer": "merged"`) isn't a group's.
-/// Artboards, which weren't measured, and Apply Image and Calculations, which read the same transparency, are
-/// unchanged.
-fn refuse_group_transparency(s: &Session, p: &Value, cmd: &str) -> Result<()> {
+/// The group's name when `p` loads a group's transparency. A group has no pixels of its own (#17050), so that loads
+/// nothing: the selection and the history stay as they were and the result says why (`"loaded": false`), as Ctrl+click
+/// on its folder icon in the Layers panel does nothing (#16785). It isn't an error, so an Action step that loads it
+/// plays on. The source layer is resolved as [`source`] resolves it: `layer` by id, name or `{"background": true}`,
+/// else the active layer; the merged transparency (`"layer": "merged"`) isn't a group's. Artboards, which weren't
+/// measured, load as before.
+fn group_transparency(s: &Session, p: &Value, cmd: &str) -> Result<Option<String>> {
     let st = &s.documents()[doc_index(s, p, "document")?];
     let transparency = matches!(p.get("channel").and_then(|v| parse_ref(v, &st.doc)), Some(ChanRef::Transparency));
     if !transparency || p.get("layer").is_some_and(|v| v == "merged") {
-        return Ok(());
+        return Ok(None);
     }
     let layer = source_layer(&st.doc, p, cmd)?.or(st.active_layer).and_then(|id| st.doc.layer(id));
-    match layer {
-        Some(l) if l.is_group() && l.artboard().is_none() => {
-            Err(bad(cmd, format!("\"{}\" is a group: it has no pixels of its own to load as a selection", l.name)))
-        }
-        _ => Ok(()),
-    }
+    Ok(layer.filter(|l| l.is_group() && l.artboard().is_none()).map(|l| l.name.clone()))
 }
 
 // ---------------------------------------------------------------------------------------------
