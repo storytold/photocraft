@@ -1,5 +1,6 @@
-//! Image › Variables (Define… / Data Sets…) and Apply Data Set — Photoshop's data-driven graphics
-//! dialog, hosted on the framework's dialog host as a [`VariablesDialog`]. All saving drives the
+//! Image › Variables (Define… / Data Sets…), the data-driven graphics dialog, hosted on the
+//! framework's dialog host as a [`VariablesDialog`]. Image › Apply Data Set… has its own small
+//! dialog (`apply_data_set_ui`). All saving drives the
 //! headless engine commands (`image.variables.define`, `image.variables.dataSets`,
 //! `image.applyDataSet`), so the control channel drives it with `ui.dialog.set` / `confirm`
 //! exactly like a human.
@@ -11,13 +12,14 @@ use craft::behavior::{DisplayOrder, IconId, ItemSource, SelectionChange};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::Text;
+use craft::ui::layout_components::Row;
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Label, with_env};
 use craft::ui::tabs::{Tab, TabKind, TabStrip};
 use craft::ui::text::TextField;
 use serde::{Deserialize, Serialize};
@@ -191,12 +193,6 @@ impl VariablesState {
         json!({"dataSets": self.data_sets})
     }
 
-    /// Whether the definitions and data sets equal the document's.
-    pub fn same_as_doc(&self, v: &photocraft_doc::Variables) -> bool {
-        let doc = Self::from_doc(v, self.page);
-        self.defs == doc.defs && self.data_sets == doc.data_sets
-    }
-
     /// Keeps `cur` within the rows.
     fn clamp(&mut self) {
         self.cur = self.cur.min(self.data_sets.len().saturating_sub(1));
@@ -225,10 +221,6 @@ impl VariablesState {
 pub struct VariablesAnswer {
     /// The edited state.
     pub state: VariablesState,
-    /// The document (id, revision) the last Apply produced.
-    pub applied_at: Option<(u64, u64)>,
-    /// OK applies the selected row (Apply Data Set).
-    pub apply_on_ok: bool,
 }
 
 /// The Variables dialog, hosted on the framework's dialog host.
@@ -238,15 +230,13 @@ pub struct VariablesDialog {
     layers: Vec<(u64, String, bool)>,
     /// The row an Apply click asked for; [`take`] runs it once.
     apply: Option<usize>,
-    applied_at: Option<(u64, u64)>,
-    apply_on_ok: bool,
     /// The values the dialog opened with, which Alt+Reset restores; handed to the form on its first pass.
     opening: Option<VariablesState>,
 }
 
 impl VariablesDialog {
-    fn new(state: VariablesState, layers: Vec<(u64, String, bool)>, apply_on_ok: bool) -> Self {
-        VariablesDialog { opening: Some(state.clone()), state, layers, apply: None, applied_at: None, apply_on_ok }
+    fn new(state: VariablesState, layers: Vec<(u64, String, bool)>) -> Self {
+        VariablesDialog { opening: Some(state.clone()), state, layers, apply: None }
     }
 }
 
@@ -288,25 +278,29 @@ fn define_page(ui: &mut egui::Ui, layers: &[(u64, String, bool)], state: &mut Va
     let method_entries = entries(METHODS);
     let mut remove = None;
     for (i, def) in state.defs.iter_mut().enumerate() {
-        ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
-                TextField::new(label(tl!("Name")), Bind::bound(&mut def.name)).show(ui);
-                if let Some(layer) = Select::new(label(tl!("Layer")), Bind::given(def.layer), &layer_entries).show(ui).value() {
-                    def.layer = *layer;
-                }
-                if let Some(ty) = Select::new(label(tl!("Type")), Bind::given(def.ty.clone()), &type_entries).show(ui).value() {
-                    def.ty.clone_from(ty);
-                }
-                if def.ty == "pixelReplacement"
-                    && let Some(method) = Select::new(label(tl!("Method")), Bind::given(def.method.clone()), &method_entries).show(ui).value()
-                {
-                    def.method.clone_from(method);
-                }
-                if IconButton::new(IconId::new("minus")).label(label(tl!("Remove Variable"))).show(ui).clicked() {
-                    remove = Some(i);
-                }
-            });
-        });
+        with_env(
+            ui,
+            |env| env.id_salt = Some(egui::Id::unique(i)),
+            |ui| {
+                Row::new().show(ui, |ui, _| {
+                    TextField::new(label(tl!("Name")), Bind::bound(&mut def.name)).show(ui);
+                    if let Some(layer) = Select::new(label(tl!("Layer")), Bind::given(def.layer), &layer_entries).show(ui).value() {
+                        def.layer = *layer;
+                    }
+                    if let Some(ty) = Select::new(label(tl!("Type")), Bind::given(def.ty.clone()), &type_entries).show(ui).value() {
+                        def.ty.clone_from(ty);
+                    }
+                    if def.ty == "pixelReplacement"
+                        && let Some(method) = Select::new(label(tl!("Method")), Bind::given(def.method.clone()), &method_entries).show(ui).value()
+                    {
+                        def.method.clone_from(method);
+                    }
+                    if IconButton::new(IconId::new("minus")).label(label(tl!("Remove Variable"))).show(ui).clicked() {
+                        remove = Some(i);
+                    }
+                });
+            },
+        );
     }
     if let Some(i) = remove {
         state.defs.remove(i);
@@ -327,7 +321,7 @@ fn data_sets_page(ui: &mut egui::Ui, state: &mut VariablesState) -> Option<usize
     state.fill_values();
     state.clamp();
     let total = state.data_sets.len();
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         if IconButton::new(IconId::new("chevron_left")).label(label(tl!("Previous Data Set"))).enabled(state.cur > 0).show(ui).clicked() {
             state.cur -= 1;
         }
@@ -355,19 +349,23 @@ fn data_sets_page(ui: &mut egui::Ui, state: &mut VariablesState) -> Option<usize
     TextField::new(label(tl!("Name")), Bind::bound(&mut set.name)).show(ui);
     for (i, def) in defs.iter().enumerate() {
         let Some(value) = set.values.iter_mut().find(|v| v.variable == def.name) else { continue };
-        ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
-                Text::new(label(&def.name)).show(ui);
-                match &mut value.value {
-                    Cell::Flag(on) => {
-                        Checkbox::new(Bind::bound(on)).label(label(tl!("Visible"))).show(ui);
+        with_env(
+            ui,
+            |env| env.id_salt = Some(egui::Id::unique(i)),
+            |ui| {
+                Row::new().show(ui, |ui, _| {
+                    Text::new(label(&def.name)).show(ui);
+                    match &mut value.value {
+                        Cell::Flag(on) => {
+                            Checkbox::new(Bind::bound(on)).label(label(tl!("Visible"))).show(ui);
+                        }
+                        Cell::Text(text) => {
+                            TextField::new(label(&def.name), Bind::bound(text)).show(ui);
+                        }
                     }
-                    Cell::Text(text) => {
-                        TextField::new(label(&def.name), Bind::bound(text)).show(ui);
-                    }
-                }
-            });
-        });
+                });
+            },
+        );
     }
     Button::new(label(tl!("Apply"))).show(ui).clicked().then_some(cur)
 }
@@ -382,7 +380,7 @@ impl StackDialog for VariablesDialog {
     /// An Apply click files its row in `apply` for [`take`]. A click is the pass's own input, so a second pass
     /// of the frame does not file it again.
     fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<VariablesAnswer>> {
-        let VariablesDialog { state, layers, apply, applied_at, apply_on_ok, opening } = self;
+        let VariablesDialog { state, layers, apply, opening } = self;
         let mut form = FormDialog::new(label(tl!("Variables")), Bind::bound(state));
         if let Some(opening) = opening.take() {
             form = form.opening(opening);
@@ -395,7 +393,7 @@ impl StackDialog for VariablesDialog {
                 .shown(page)
                 .show_items(ui, &Pages, &mut |key, _| Tab::new(label(if *key == 0 { tl!("Define") } else { tl!("Data Sets") })));
             for event in strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     page = key.min(1);
@@ -415,14 +413,14 @@ impl StackDialog for VariablesDialog {
             *apply = asked;
         }
         match (shown.accepted, shown.closed) {
-            (Some(state), _) => Some(DialogResult::Ok(VariablesAnswer { state, applied_at: *applied_at, apply_on_ok: *apply_on_ok })),
+            (Some(state), _) => Some(DialogResult::Ok(VariablesAnswer { state })),
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }
     }
 
     fn confirm(&mut self, _ctx: &egui::Context) -> Option<VariablesAnswer> {
-        Some(VariablesAnswer { state: self.state.clone(), applied_at: self.applied_at, apply_on_ok: self.apply_on_ok })
+        Some(VariablesAnswer { state: self.state.clone() })
     }
 
     fn json_fields(&self) -> Option<Value> {
@@ -452,15 +450,17 @@ fn layer_options(app: &PhotocraftApp) -> Vec<(u64, String, bool)> {
 /// Menu entry points. Returns None for ids this module doesn't own.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let has_params = params.as_object().is_some_and(|o| !o.is_empty());
-    let (page, apply_on_ok) = match id {
-        "image.variables.define" if !has_params => (Page::Define, false),
-        "image.variables.dataSets" if !has_params => (Page::DataSets, false),
-        // No data set named: open the dialog on the Data Sets page to pick one.
-        "image.applyDataSet" if !has_params => (Page::DataSets, true),
+    let page = match id {
+        "image.variables.define" if !has_params => Page::Define,
+        "image.variables.dataSets" if !has_params => Page::DataSets,
+        // No data set named: the Apply Data Set dialog picks one from the list.
+        "image.applyDataSet" if !has_params => {
+            return Some(Ok(json!({"dialog": crate::panels::apply_data_set_ui::open(app).value().to_string()})));
+        }
         _ => return None,
     };
     let state = app.session.active().map(|st| VariablesState::from_doc(&st.doc.variables, page)).unwrap_or(VariablesState { page, ..Default::default() });
-    let opened = app.framework.dialogs.open(VariablesDialog::new(state, layer_options(app), apply_on_ok));
+    let opened = app.framework.dialogs.open(VariablesDialog::new(state, layer_options(app)));
     Some(Ok(json!({"dialog": opened.value().to_string()})))
 }
 
@@ -474,20 +474,10 @@ fn save(app: &mut PhotocraftApp, state: &VariablesState, index: Option<usize>) -
     Ok(())
 }
 
-/// What OK does: saves the definitions and data sets and, for Apply Data Set with a row, applies the selected row.
-/// An unchanged OK after Apply closes without another application or history entry.
+/// What OK does: saves the definitions and data sets. It applies nothing; the Data Sets page's
+/// Apply and Image › Apply Data Set… do.
 fn finish(app: &mut PhotocraftApp, answer: VariablesAnswer) -> Result<(), String> {
-    let VariablesAnswer { state, applied_at, apply_on_ok } = answer;
-    let selected = (apply_on_ok && !state.data_sets.is_empty()).then(|| state.cur.min(state.data_sets.len() - 1));
-    if let Some(index) = selected
-        && let Some(st) = app.session.active()
-        && applied_at == Some((st.doc.id.0, st.revision))
-        && st.doc.variables.active == Some(index)
-        && state.same_as_doc(&st.doc.variables)
-    {
-        return Ok(());
-    }
-    save(app, &state, selected)
+    save(app, &answer.state, None)
 }
 
 /// The dialog's result pump (a `TAKERS` row): runs a pending Apply, then the result of a closed dialog. Each call
@@ -497,12 +487,11 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     if let Some((index, state)) = pending {
         match save(app, &state, Some(index)) {
             Ok(()) => {
-                let applied = app.session.active().map(|st| (VariablesState::from_doc(&st.doc.variables, state.page), (st.doc.id.0, st.revision)));
-                if let (Some((mut fresh, at)), Some(dialog)) = (applied, app.framework.dialogs.get_mut::<VariablesDialog>()) {
+                let applied = app.session.active().map(|st| VariablesState::from_doc(&st.doc.variables, state.page));
+                if let (Some(mut fresh), Some(dialog)) = (applied, app.framework.dialogs.get_mut::<VariablesDialog>()) {
                     fresh.cur = state.cur;
                     fresh.clamp();
                     dialog.state = fresh;
-                    dialog.applied_at = Some(at);
                 }
             }
             Err(error) => app.ui.status = error,

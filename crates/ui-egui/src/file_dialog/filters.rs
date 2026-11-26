@@ -1,9 +1,10 @@
 //! The file types the Open and Save pickers offer, as [`PickRequest`] builders. Extensions are
 //! listed in lower case; the file service adds the case variants a case-sensitive picker needs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use craft::host::PickRequest;
+use photocraft_color::{ColorMode, SampleType};
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
@@ -94,6 +95,50 @@ pub(super) const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("WebP", &["webp"]),
 ];
 
+/// Save a Copy has measured type lists for these mode/depth combinations.
+#[derive(Clone, Copy)]
+pub(super) enum SaveCopyFormats {
+    Rgb8,
+    Rgb32,
+    Cmyk8,
+}
+
+impl SaveCopyFormats {
+    pub(super) fn for_document(mode: ColorMode, depth: SampleType) -> Option<Self> {
+        match (mode, depth) {
+            (ColorMode::Rgb, SampleType::U8) => Some(Self::Rgb8),
+            (ColorMode::Rgb, SampleType::F32) => Some(Self::Rgb32),
+            (ColorMode::Cmyk, SampleType::U8) => Some(Self::Cmyk8),
+            _ => None,
+        }
+    }
+
+    fn includes(self, ext: &str) -> bool {
+        match self {
+            Self::Rgb8 => !matches!(ext, "cin" | "exr" | "hdr"),
+            // JPEG XL can read floats, but its writer reduces them to integer samples.
+            Self::Rgb32 => {
+                matches!(ext, "psd" | "psb" | "pcraft")
+                    || photocraft_codecs::from_extension(ext).is_some_and(|format| {
+                        let caps = format.caps();
+                        caps.write && caps.depths.contains(&photocraft_codecs::SampleType::F32) && caps.layouts.iter().any(|layout| layout.is_rgb())
+                    })
+            }
+            Self::Cmyk8 => matches!(ext, "psd" | "psb" | "pcraft" | "jpg" | "pdf" | "tif"),
+        }
+    }
+
+    fn lists_extension(self, ext: &str) -> bool {
+        SAVE_FILTERS.iter().any(|(_, exts)| self.includes(exts[0]) && exts.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed)))
+    }
+
+    pub(super) fn allows_path(self, path: &Path) -> bool {
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else { return false };
+        // A typed extension can also name a supported codec via an alias, such as .fts for FITS.
+        self.lists_extension(ext) || photocraft_codecs::from_extension(ext).is_some_and(|format| format.caps().write && self.includes(format.extensions()[0]))
+    }
+}
+
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
 /// never swaps their extension for a document format's.
 const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"])];
@@ -121,15 +166,19 @@ fn netpbm_as_pnm(suggested: &str) -> String {
 }
 
 /// Lists the save dialog's file types with the `suggested` type first (added if unlisted), so the dialog keeps that extension instead of .psd.
-fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
-    let ext = Path::new(suggested).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+fn save_filters(suggested: &Path, copy: Option<SaveCopyFormats>) -> Vec<(String, Vec<String>)> {
+    let ext = suggested.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     // A Netpbm subtype's name (an opened .pgm) starts on the Netpbm type as .pnm: the encoder picks
     // the subtype from the image, so the old name could describe other data (CodeRabbit on #9775).
     let ext = if NETPBM_SUBTYPES.contains(&ext.as_str()) { "pnm".to_string() } else { ext };
     if let Some((name, exts)) = OTHER_SAVE_FILTERS.iter().find(|(_, exts)| exts.contains(&ext.as_str())) {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
-    let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
+    let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS
+        .iter()
+        .filter(|(_, exts)| copy.is_none_or(|formats| formats.includes(exts[0])))
+        .map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect()))
+        .collect();
     // The type the extension is first for (`.psb` starts on PSB, not on PSD's second extension),
     // else any type that lists it.
     let own = v.iter().position(|(_, exts)| exts.first() == Some(&ext));
@@ -151,9 +200,14 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
 /// The Save picker for `purpose`, suggesting the file `suggested` (a name, or a path whose folder
 /// the picker starts in) with the types of [`save_filters`]. A name with an extension suggests it
 /// for an answer typed without one.
-pub(super) fn save_request(purpose: &str, suggested: &str) -> PickRequest {
+pub(super) fn save_request(purpose: &str, suggested: &str, copy: Option<SaveCopyFormats>) -> PickRequest {
     let suggested = netpbm_as_pnm(suggested);
-    let path = Path::new(&suggested);
+    let mut path = PathBuf::from(suggested);
+    if let Some(formats) = copy
+        && !path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| formats.lists_extension(ext))
+    {
+        path.set_extension("psd");
+    }
     let mut req = PickRequest::save(purpose);
     if let Some(name) = path.file_name() {
         req = req.file_name(name.to_string_lossy());
@@ -164,7 +218,7 @@ pub(super) fn save_request(purpose: &str, suggested: &str) -> PickRequest {
     if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         req = req.directory(dir);
     }
-    for (name, exts) in save_filters(&suggested) {
+    for (name, exts) in save_filters(&path, copy) {
         let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
         req = req.filter(name, &exts);
     }

@@ -25,7 +25,7 @@ fn zoom(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
 
 /// The highest zoom the ladder allows.
 fn max_zoom() -> f32 {
-    craft::behavior::canvas::ZoomLadder::MAX as f32
+    craft::behavior::canvas::ZoomScheme::PHOTOSHOP.max as f32
 }
 
 /// The values of the dialog opened last, as automation lists them (`ui.inspect`).
@@ -261,9 +261,14 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     h.hover_at(p);
     h.run_steps(2);
     let d0 = doc_at(&h, p);
+    // Frames after each notch (0.25 s each, the harness's default step): a notch lands within two (egui's wheel
+    // smoothing reaches 90 % in 0.1 s and takes the rest under one point at once), and the old clamp pulled the zoom
+    // back on every frame, so three show it: the zoom and centre
+    // after them are the ones the old thirty left.
+    const NOTCH_STEPS: usize = 3;
     for _ in 0..14 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
     assert_eq!(zoom(&h), max_zoom(), "a notch past the limit lands on it exactly");
     let d1 = doc_at(&h, p);
@@ -271,13 +276,13 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     let c = h.state().ui.views[0].center;
     for _ in 0..4 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
     assert_eq!(zoom(&h), max_zoom());
     assert_eq!(h.state().ui.views[0].center, c, "at the limit the image doesn't move");
     // One notch back: 12800 / 1.1, still around the pointer.
     wheel(&h, -1.0, Modifiers::ALT);
-    h.run_steps(30);
+    h.run_steps(NOTCH_STEPS);
     assert!((zoom(&h) - max_zoom() / 1.1).abs() < 1e-2, "{}", zoom(&h));
     let d2 = doc_at(&h, p);
     assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");
@@ -608,10 +613,16 @@ fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     h.state_mut().ui.tool = crate::state::Tool::Move;
     h.state_mut().ui.tool_options.move_show_transform = false;
     let before = h.state().session.active().unwrap().doc.layers.len();
+    // Without ⌥ the Move tool asks for its painted arrow with the cross (#16819), which the window shows as an image.
+    let move_cursor = Some(craft::behavior::Cursor::Painted(craft::behavior::PaintedCursor::pointer_tool(
+        craft::behavior::PointerGlyph::Arrow,
+        crate::icons::tool_icon(crate::state::Tool::Move),
+    )));
+    let requested = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().canvas_tools.last_response.as_ref().and_then(|r| r.cursor.clone());
     let p = h.state().last_canvas_rect.center();
     h.hover_at(p);
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert_eq!(requested(&h), move_cursor);
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy);
@@ -626,7 +637,7 @@ fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy, "releasing Alt does not undo an active copy");
     h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert_eq!(requested(&h), move_cursor, "back to the Move cursor");
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
 }
 

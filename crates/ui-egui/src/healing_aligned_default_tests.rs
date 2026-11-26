@@ -1,7 +1,9 @@
 //! Healing's Aligned default is separate from the Clone Stamp's (#12100).
 use photocraft_engine::Session;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
+use crate::app::framework::BuildApp as _;
 use crate::state::{Tool, ToolOptions};
 use crate::{PhotocraftApp, Services};
 
@@ -39,10 +41,11 @@ fn healing_and_clone_checkboxes_feed_only_their_own_stroke_setting() {
     session.execute("cloneSource.set", json!({"source": [2, 2]})).unwrap();
     let mut app = PhotocraftApp::new(session, Services::default());
     pick_tool(&mut app, Tool::Healing);
-    let mut h = Harness::builder().with_size(egui::vec2(800.0, 100.0)).with_context(app.ctx().clone()).build_ui_state(
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 100.0)).build_app(
         |ui, app| {
             crate::paint_mouse::sync_tool_brush(app);
             crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
         },
         app,
     );
@@ -52,7 +55,7 @@ fn healing_and_clone_checkboxes_feed_only_their_own_stroke_setting() {
     {
         h.state_mut().ui.tool = tool;
         h.run_steps(3);
-        h.get_by_label("Aligned").click();
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Aligned").click();
         h.run_steps(3);
         assert_eq!(h.state().ui.tool_options.healing_aligned, healing);
         assert_eq!(h.state().ui.tool_options.clone_aligned, clone);
@@ -156,16 +159,16 @@ fn omitted_healing_alignment_restarts_the_sample_without_reusing_or_replacing_an
             assert_eq!(aligned["offset"], json!([-16, -16]));
             assert!(aligned["nextSource"].is_null());
         }
-        assert_eq!(default.presets.clone.active().anchor, None);
-        assert_eq!(default.presets.clone.active().last_anchor, Some([44.0, 24.0]));
-        assert_eq!(on.presets.clone.active().anchor, Some([24.0, 24.0]));
+        assert_eq!(default.presets().clone.active().anchor, None);
+        assert_eq!(default.presets().clone.active().last_anchor, Some([44.0, 24.0]));
+        assert_eq!(on.presets().clone.active().anchor, Some([24.0, 24.0]));
         assert_eq!(patch(&default, 24, 24), patch(&default, 44, 24), "depth {depth}: source texture restarts at the same phase");
         assert_eq!(patch(&default, 44, 24), patch(&off, 44, 24));
         assert_ne!(patch(&default, 44, 24), patch(&on, 44, 24), "the aligned control samples past the checker");
 
         let resumed = dab(&mut on, "paint.healingBrush", [44, 30], None);
         assert_eq!(resumed["offset"], json!([-36, -22]), "default off must ignore an existing aligned anchor");
-        assert_eq!(on.presets.clone.active().anchor, Some([24.0, 24.0]), "unaligned bookkeeping must preserve the aligned pairing");
+        assert_eq!(on.presets().clone.active().anchor, Some([24.0, 24.0]), "unaligned bookkeeping must preserve the aligned pairing");
         let mut stamp = sampled_session(depth);
         for at in [[24, 24], [44, 24]] {
             let result = dab(&mut stamp, "paint.cloneStamp", at, None);
@@ -210,7 +213,7 @@ fn pending_retouch_stroke_keeps_its_alignment_after_selection_changes() {
 #[test]
 fn healing_source_mapping_uses_its_own_alignment_without_changing_the_anchor() {
     let mut app = PhotocraftApp::new(sampled_session(8), Services::default());
-    app.session.presets.clone.active_mut().anchor = Some([24.0, 24.0]);
+    app.session.presets_mut().clone.active_mut().anchor = Some([24.0, 24.0]);
     for (healing, clone) in [(false, true), (true, false), (false, false), (true, true)] {
         app.ui.tool_options.healing_aligned = healing;
         app.ui.tool_options.clone_aligned = clone;
@@ -219,7 +222,7 @@ fn healing_source_mapping_uses_its_own_alignment_without_changing_the_anchor() {
             let sample = crate::preset_panels::clone_sample_point(&app, Some([44.0, 24.0])).unwrap();
             let aligned = if tool == Tool::Healing { healing } else { clone };
             assert_eq!(sample, if aligned { [28.0, 8.0] } else { [8.0, 8.0] });
-            assert_eq!(app.session.presets.clone.active().anchor, Some([24.0, 24.0]), "preview must not store a new pairing");
+            assert_eq!(app.session.presets().clone.active().anchor, Some([24.0, 24.0]), "preview must not store a new pairing");
         }
     }
 }
