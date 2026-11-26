@@ -721,7 +721,7 @@ fn update_current_brush_button_overwrites_the_picked_preset_in_place() {
     h.run_steps(2);
     let n = h.state().session.tools.presets.len();
     let at = h.state().session.tools.presets.iter().position(|p| p.name == "Chalk").unwrap();
-    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Enable Scattering").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Enable Scattering").click();
     h.run_steps(3);
     assert!(h.state().session.tools.brush.scattering.enabled);
     // The update button overwrites the picked preset in place: no new preset, position kept.

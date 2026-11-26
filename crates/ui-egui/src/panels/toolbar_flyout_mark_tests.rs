@@ -24,7 +24,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
 /// Right-clicks the shape tools' slot, which opens its flyout.
 fn open_shape_flyout(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     // The slot's button, not its corner mark (a node of a few points) nor the options bar's tool button at the top.
-    let slot = h.query_all_by_label("Rectangle Tool").filter(|node| node.rect().width() >= 16.0).last();
+    let slot = h.query_all_by_label("Rectangle Tool").filter(|node| node.rect().width() >= 16.0).next_back();
     let at = slot.expect("the shape tools' slot is drawn").rect().center();
     h.event(egui::Event::PointerMoved(at));
     h.run_steps(1);
