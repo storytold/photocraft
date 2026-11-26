@@ -74,6 +74,24 @@ fn editable_export_uses_known_indices_and_rejects_unrepresentable_alpha() {
 }
 
 #[test]
+fn an_opaque_indexed_background_can_be_stored_as_default_pixels() {
+    use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{ColorTable, Document};
+    use photocraft_geom::Size;
+
+    let mut doc = Document::with_background("Indexed background", Size::new(2, 1), ColorMode::Indexed, SampleType::U8, Color::WHITE);
+    doc.color_table = Some(ColorTable { colors: vec![[255, 255, 255], [0, 0, 0]], transparent: None });
+    let pixels = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0; 4]);
+    doc.layers[0].content = LayerContent::Raster(pixels);
+    assert!(doc.background().is_some());
+    assert!(doc.layers[0].surface().unwrap().content_bounds().is_empty());
+
+    let bytes = photocraft_io::export(&doc, "aseprite", &Default::default()).unwrap().bytes;
+    let restored = photocraft_io::import("background.aseprite", &bytes).unwrap().document;
+    assert_eq!(restored.layers[0].surface().unwrap().to_interleaved(restored.bounds()), [255; 8]);
+}
+
+#[test]
 fn an_indexed_sprite_refuses_a_grayscale_display_cache() {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use std::sync::Arc;

@@ -168,7 +168,8 @@ fn from_document(doc: &Document) -> Result<Sprite> {
         match &l.content {
             LayerContent::Group(_) => {}
             LayerContent::Raster(pixels) => {
-                let rect = pixels.content_bounds();
+                let content = pixels.content_bounds();
+                let rect = if background { content.union(&doc.bounds()) } else { content };
                 if !rect.is_empty() {
                     let mut cel = SpriteCel {
                         rect,
@@ -308,7 +309,7 @@ fn reserve_transparent_index(palette: &mut Vec<sprite::PaletteEntry>, layers: &[
 fn layers<'a>(doc: &'a Document, sprite: &Sprite) -> Result<Vec<(&'a Layer, usize)>> {
     /// Traverse export layers in source order with bounded group nesting and supported content checks.
     fn walk<'a>(layers: &'a [Layer], sprite: &Sprite, depth: usize, out: &mut Vec<(&'a Layer, usize)>) -> Result<()> {
-        if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        if !layers.is_empty() && depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(invalid("group depth limit exceeded"));
         }
         let mut ordered: Vec<_> = layers.iter().collect();
