@@ -96,3 +96,17 @@ fn type_create_selection_still_combines_for_scripts() {
     assert_eq!(added.union(&rect), added, "the rectangle is kept");
     assert!(added.x0 < rect.x0, "and the text is added");
 }
+
+#[test]
+fn finding_text_in_the_working_mask_keeps_the_mask_edit_active() {
+    let mut app = new_app();
+    mask(&mut app, (100.0, 200.0), "AB");
+    let edit = app.ui.text_edit.as_ref().unwrap();
+    let layer = photocraft_doc::LayerId(edit.layer);
+    let session = edit.session.clone();
+
+    assert!(super::select_find_match(&mut app, layer, 0..2).is_none());
+    let edit = app.ui.text_edit.as_ref().unwrap();
+    assert!(edit.mask && edit.session == session);
+    assert!(app.session.active().unwrap().doc.layer(layer).is_some());
+}

@@ -12,6 +12,37 @@ fn type_layer(s: &mut Session, text: &str) -> u64 {
     s.execute("type.create", json!({"text": text, "x": 4, "y": 20})).unwrap()["layer"].as_u64().unwrap()
 }
 
+#[test]
+fn warning_round_survives_a_locked_match_and_a_hidden_origin() {
+    for hide_origin in [false, true] {
+        let mut s = session();
+        let origin = type_layer(&mut s, "cat origin");
+        let hidden = type_layer(&mut s, "cat hidden");
+        let next = type_layer(&mut s, "cat next");
+        let cursor_layer = type_layer(&mut s, "cat last");
+        set_visible(&mut s, hidden, false);
+        s.execute("layer.select", json!({"layer": origin})).unwrap();
+        let params = json!({"action": "find", "find": "cat"});
+        for expected in [origin, next, cursor_layer] {
+            assert_eq!(s.execute(FIND_REPLACE, params.clone()).unwrap()["found"]["layer"], expected);
+        }
+        let cursor = s.edit_state.find_cursor.clone();
+        let round_start = s.edit_state.find_start;
+        if hide_origin {
+            set_visible(&mut s, origin, false);
+        } else {
+            s.execute("layer.setProps", json!({"layer": cursor_layer, "locked": true})).unwrap();
+            s.execute("type.edit", json!({"layer": origin, "text": "no longer a match"})).unwrap();
+        }
+        let skipped = |id: LayerId, _| [origin, cursor_layer].contains(&id.0);
+        let warning = super::find_replace_warning(&s, &params, cursor.as_ref(), round_start, skipped).unwrap().unwrap();
+        assert_eq!(warning.layer, LayerId(hidden));
+        s.edit_state.find_cursor = cursor;
+        s.edit_state.find_start = round_start;
+        assert_eq!(s.execute(FIND_REPLACE, params).unwrap()["found"]["layer"], next);
+    }
+}
+
 fn group_active(s: &mut Session) -> u64 {
     s.execute("layer.groupLayers", json!({})).unwrap();
     s.active().unwrap().active_layer.unwrap().0

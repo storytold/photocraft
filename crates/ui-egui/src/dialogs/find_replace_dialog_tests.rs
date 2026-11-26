@@ -150,6 +150,29 @@ fn find_next_warns_when_it_reaches_a_blocked_layer() {
 }
 
 #[test]
+fn find_next_skip_all_applies_to_the_rest_of_the_round() {
+    let mut app = app();
+    let first = type_layer(&mut app, "cat first");
+    let hidden = blocked_layer(&mut app, "First hidden", true);
+    let middle = type_layer(&mut app, "cat middle");
+    blocked_layer(&mut app, "Second hidden", true);
+    let last = type_layer(&mut app, "cat last");
+    app.run("layer.select", json!({"layer": first})).unwrap();
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], first);
+    command(&mut app, "find").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], hidden);
+    assert_eq!(command(&mut app, "skipAll").unwrap()["found"]["layer"], middle);
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], last);
+    assert!(command(&mut app, "find").unwrap()["found"].is_null());
+    app.run("layer.select", json!({"layer": first})).unwrap();
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], first);
+    command(&mut app, "find").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], hidden);
+}
+
+#[test]
 fn warning_preference_is_per_kind_and_a_stale_confirmation_rechecks_layer_order() {
     let mut app = app();
     let locked = blocked_layer(&mut app, "Locked", false);
@@ -212,6 +235,59 @@ fn modeless_window_focus_enter_tab_and_escape() {
     h.run_steps(2);
     assert!(inspect(h.state()).is_none());
     assert!(h.state().ui.text_edit.is_none());
+}
+
+#[test]
+fn reopening_after_a_document_switch_searches_the_new_document() {
+    let mut app = app();
+    type_layer(&mut app, "old cat");
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    let new = type_layer(&mut app, "new cat");
+    open(&mut app).unwrap();
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], new);
+}
+
+#[test]
+fn replacing_a_type_match_preserves_the_move_tool_as_the_return_target() {
+    let mut app = app();
+    let first = LayerId(type_layer(&mut app, "cat one"));
+    let second = LayerId(type_layer(&mut app, "cat two"));
+    app.ui.tool = Tool::Move;
+    crate::type_tool::select_find_match(&mut app, first, 0..3).unwrap();
+    crate::type_tool::select_find_match(&mut app, second, 0..3).unwrap();
+    crate::type_tool::commit(&mut app);
+    assert_eq!(app.ui.tool, Tool::Move);
+}
+
+#[test]
+fn enter_to_find_waits_for_a_second_enter_to_skip_a_layer() {
+    use egui::{Key, vec2};
+
+    let mut app = app();
+    let hidden = blocked_layer(&mut app, "Hidden", true);
+    let visible = type_layer(&mut app, "cat");
+    app.run("layer.select", json!({"layer":hidden})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(960.0, 660.0)).build_ui_state(
+        |ui, app| {
+            super::show(app, ui.ctx());
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    open(h.state_mut()).unwrap();
+    set_field(h.state_mut(), "find", json!("cat")).unwrap();
+    h.run_steps(4);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert_eq!(inspect(h.state()).unwrap()["warning"]["layer"], hidden);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    let state = inspect(h.state()).unwrap();
+    assert!(state["warning"].is_null());
+    assert_eq!(state["hasMatch"], true);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(LayerId(visible)));
 }
 
 #[test]

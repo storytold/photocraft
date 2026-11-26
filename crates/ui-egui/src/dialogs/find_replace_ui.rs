@@ -84,23 +84,30 @@ struct CanvasMatch {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Skips {
     layers: Vec<LayerId>,
+    kinds: SkippedKinds,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SkippedKinds {
     hidden: bool,
     locked: bool,
 }
 
-impl Skips {
+impl SkippedKinds {
     fn skip_kind(&mut self, reason: BlockedTextLayer) {
         match reason {
             BlockedTextLayer::Hidden => self.hidden = true,
             BlockedTextLayer::Locked => self.locked = true,
         }
     }
+}
 
+impl Skips {
     fn contains(&self, id: LayerId, reason: BlockedTextLayer) -> bool {
         self.layers.contains(&id)
             || match reason {
-                BlockedTextLayer::Hidden => self.hidden,
-                BlockedTextLayer::Locked => self.locked,
+                BlockedTextLayer::Hidden => self.kinds.hidden,
+                BlockedTextLayer::Locked => self.kinds.locked,
             }
     }
 }
@@ -145,6 +152,7 @@ struct Open {
     anchor: Option<LayerId>,
     cursor: Option<FindCursor>,
     start: Option<LayerId>,
+    round_skips: SkippedKinds,
     canvas_match: Option<CanvasMatch>,
     focus: Option<FocusField>,
     pending: Option<PendingSearch>,
@@ -157,6 +165,7 @@ pub(crate) struct FindReplaceUi {
 }
 
 pub(crate) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
+    sync(app);
     if !app.session.is_enabled(COMMAND) {
         return Err(tl!("Find and Replace Text is not available right now").into());
     }
@@ -171,6 +180,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
             anchor: st.layer_anchor,
             cursor: None,
             start: None,
+            round_skips: SkippedKinds::default(),
             canvas_match: None,
             focus: Some(FocusField::Find),
             pending: None,
@@ -225,6 +235,7 @@ fn update_fields(app: &mut PhotocraftApp, fields: Fields) {
         }
         window.cursor = None;
         window.start = None;
+        window.round_skips = SkippedKinds::default();
         window.canvas_match = None;
         app.ui.find_replace.open = Some(window);
     }
@@ -236,7 +247,7 @@ fn update_fields(app: &mut PhotocraftApp, fields: Fields) {
     app.ui.find_replace.fields = fields;
 }
 
-fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips, from_control: bool) -> Result<Value, String> {
+fn apply(app: &mut PhotocraftApp, action: Action, mut skips: Skips, from_control: bool) -> Result<Value, String> {
     if action == Action::Done {
         return close(app);
     }
@@ -261,6 +272,10 @@ fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips, from_control: bo
         authorize(COMMAND, &params)?;
     }
     let cursor = window.cursor.clone();
+    if action == Action::Find {
+        skips.kinds.hidden |= window.round_skips.hidden;
+        skips.kinds.locked |= window.round_skips.locked;
+    }
     if matches!(action, Action::Find | Action::ChangeAll) {
         let warning = find_replace_warning(&app.session, &params, cursor.as_ref(), window.start, |id, reason| {
             skips.contains(id, reason) || super::alerts::dismissed(app, warning_pref(reason))
@@ -293,6 +308,11 @@ fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips, from_control: bo
     }
     window.cursor = cursor;
     window.start = start;
+    if window.cursor.is_none() {
+        window.round_skips = SkippedKinds::default();
+    } else if action == Action::Find {
+        window.round_skips = skips.kinds;
+    }
     window.canvas_match = show_match(app, &reply["found"]);
     if window.canvas_match.is_some() {
         window.focus = Some(FocusField::Replace);
@@ -306,6 +326,7 @@ fn answer(app: &mut PhotocraftApp, choice: WarningChoice, from_control: bool) ->
     let window = app.ui.find_replace.open.as_mut().ok_or("Find and Replace Text is closed")?;
     let mut pending = window.pending.take().ok_or("there is no layer warning")?;
     if choice == WarningChoice::Cancel {
+        window.round_skips = SkippedKinds::default();
         return Ok(json!({"cancelled": true}));
     }
     let from_control = from_control || pending.from_control;
@@ -314,11 +335,11 @@ fn answer(app: &mut PhotocraftApp, choice: WarningChoice, from_control: bool) ->
     }
     match choice {
         WarningChoice::Skip => pending.skips.layers.push(pending.warning.layer),
-        WarningChoice::SkipAll => pending.skips.skip_kind(pending.warning.reason),
+        WarningChoice::SkipAll => pending.skips.kinds.skip_kind(pending.warning.reason),
         WarningChoice::Cancel => {}
     }
     if pending.dont_show_again {
-        pending.skips.skip_kind(pending.warning.reason);
+        pending.skips.kinds.skip_kind(pending.warning.reason);
     }
     let result = apply(app, pending.action, pending.skips, from_control)?;
     if pending.dont_show_again {
@@ -396,6 +417,7 @@ fn field(ui: &mut egui::Ui, label: &str, buffer: &mut String, focus: bool) -> eg
 
 pub(crate) fn escape(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.find_replace.open.is_some()
+        && app.discard.is_none()
         && app.framework.dialogs.stack().top().is_none()
         && !crate::prefs_ui::shortcuts_open(app)
         && !egui::Popup::is_any_open(ctx)
@@ -414,6 +436,7 @@ pub(crate) fn escape(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Rect> {
     sync(app);
     let window = app.ui.find_replace.open.as_ref()?;
+    let warning_was_open = window.pending.is_some();
     let can_change = has_match(app, window);
     let focus = window.focus;
     let mut fields = app.ui.find_replace.fields.clone();
@@ -482,10 +505,10 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
         app.ui.status = error;
         app.ui.status_error = true;
     }
-    show_warning(app, ctx).or_else(|| response.map(|r| r.response.rect))
+    show_warning(app, ctx, warning_was_open).or_else(|| response.map(|r| r.response.rect))
 }
 
-fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Rect> {
+fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context, accepts_submit: bool) -> Option<egui::Rect> {
     let pending = app.ui.find_replace.open.as_mut()?.pending.as_mut()?;
     let message = warning_message(&pending.warning);
     let id = egui::Id::unique((CONTROL_ID, "layer-warning"));
@@ -514,7 +537,7 @@ fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Re
         ui.add_space(8.0);
         ui.checkbox(&mut pending.dont_show_again, tl!("Don't show again"));
     });
-    if choice.is_none() && warning.is_top_modal && !warning.any_popup_open {
+    if accepts_submit && choice.is_none() && warning.is_top_modal && !warning.any_popup_open {
         use craft::ui::runtime::keys::{Intent, with_window_intents};
         let rtl = crate::i18n::current().dir() == crate::i18n::Dir::Rtl;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) || with_window_intents(ctx, rtl, |intents| intents.take(Intent::Submit)) {

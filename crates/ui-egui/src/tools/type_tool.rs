@@ -142,16 +142,27 @@ mod unchanged_edit_history_tests;
 /// operation, so opening the selection does not re-render an imported type layer or add history.
 pub(crate) fn select_find_match(app: &mut PhotocraftApp, id: LayerId, range: std::ops::Range<usize>) -> Option<(String, usize, usize)> {
     let st = app.session.active()?;
-    let document = st.doc.id.0;
+    let document = st.doc.id;
+    let text = text_layer(&st.doc, id)?;
+    text.text.get(range.clone())?;
+    if app
+        .ui
+        .text_edit
+        .as_ref()
+        .is_some_and(|edit| edit.layer == id.0 && (edit.mask || edit.created && photocraft_engine::type_cmds::commits_as_selection(st.doc.mode, text)))
+    {
+        return None;
+    }
+    commit(app);
+    let st = app.session.active().filter(|st| st.doc.id == document)?;
     let text = text_layer(&st.doc, id)?;
     let selected = text.text.get(range.clone())?;
     let anchor = text.text.get(..range.start)?.chars().count();
     let caret = anchor + selected.chars().count();
     let vertical = text.orientation == photocraft_doc::text::Orientation::Vertical;
     let previous_tool = app.ui.tool;
-    commit(app);
     let session = session_key(app);
-    app.ui.text_edit = Some(TextEdit { layer: id.0, document: Some(document), caret, anchor, session: session.clone(), created: false, mask: false });
+    app.ui.text_edit = Some(TextEdit { layer: id.0, document: Some(document.0), caret, anchor, session: session.clone(), created: false, mask: false });
     app.ui.text_edit_return_tool = (!previous_tool.is_type()).then_some(previous_tool);
     app.ui.type_insertion_style = None;
     app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };

@@ -163,13 +163,9 @@ pub fn find_replace_warning(
     let start = cursor
         .and_then(|c| layers.iter().position(|(id, reason)| *id == c.layer && reason.is_none()))
         .unwrap_or_else(|| if find { start_index(doc, &ids, s.active().and_then(|st| st.active_layer)) } else { 0 });
-    let origin = cursor.and(round_start);
-    let limit = layers.len();
-    for k in 0..limit {
-        let Some(&(id, reason)) = layers.get((start + k) % layers.len().max(1)) else { break };
-        if k > 0 && origin == Some(id) {
-            break;
-        }
+    let origin = cursor.and(round_start).filter(|origin| layers.iter().any(|(id, reason)| id == origin && reason.is_none()));
+    let mut passed_editable_layer = false;
+    for &(id, reason) in layers.iter().cycle().skip(start).take(layers.len()) {
         if let Some(reason) = reason {
             if !skip(id, reason)
                 && let Some(layer) = doc.layer(id)
@@ -178,8 +174,12 @@ pub fn find_replace_warning(
             }
             continue;
         }
+        if passed_editable_layer && origin == Some(id) {
+            break;
+        }
+        passed_editable_layer = true;
         if find {
-            let range = cursor.filter(|c| k == 0 && c.layer == id).map(|c| (c.start, c.end));
+            let range = cursor.filter(|c| c.layer == id).map(|c| (c.start, c.end));
             if text_of(doc, id).is_some_and(|text| query.next_match(text, range).is_some()) {
                 break;
             }
