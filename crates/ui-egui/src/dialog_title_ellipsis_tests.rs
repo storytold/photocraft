@@ -25,7 +25,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
 
 #[test]
 fn dialog_titles_drop_the_menu_ellipsis() {
-    let cases: [(&str, Open); 4] = [
+    let cases: [(&str, Open); 7] = [
         ("Stroke", |app| {
             crate::stroke_ui::open(app);
         }),
@@ -37,6 +37,19 @@ fn dialog_titles_drop_the_menu_ellipsis() {
         }),
         ("New Brush Preset", |app| {
             crate::brush_preset_dialog::open(app, None);
+        }),
+        // Layer › Duplicate Layer… names its window after what is selected (#16349).
+        ("Duplicate Layer", |app| {
+            crate::duplicate_layer_ui::open(app).unwrap();
+        }),
+        ("Duplicate Layers", |app| {
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("select.allLayers", json!({})).unwrap();
+            crate::duplicate_layer_ui::open(app).unwrap();
+        }),
+        ("Duplicate Group", |app| {
+            app.run("layer.groupLayers", json!({})).unwrap();
+            crate::duplicate_layer_ui::open(app).unwrap();
         }),
     ];
     for (title, open) in cases {

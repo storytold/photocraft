@@ -8,6 +8,7 @@
 //!
 //! The Toolbar tab is not here: Edit › Toolbar opens the toolbar drawer.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use craft::behavior::IconId;
@@ -17,10 +18,12 @@ use craft::menu::Row;
 use craft::menu::shortcuts::{Area, ConflictMode, DialogState, DialogTab, Format, Options, Outcome, ShortcutWords, ShortcutsDialog, kys_error_text};
 use craft::ui::buttons::IconButton;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use craft::ui::display::Text;
+use craft::ui::layout_components::Row as LayoutRow;
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::Env;
+use craft::ui::runtime::env::{Env, with_env};
 use craft::ui::runtime::windows;
 use photocraft_engine::keymap_defs;
 use photocraft_engine::menu_sets::{self, MenuSet};
@@ -47,8 +50,18 @@ const DELETE_ASK: &str = "Are you sure you want to send {name} to the recycle bi
 /// Delete box's title is not measured, and this is the title the reference gives the box next to it.
 const BOX_TITLE: &str = "Keyboard Shortcuts and Menus";
 
+/// The number the next dialog session takes: a fresh one for every `open`. See
+/// [`ShortcutsSession::id`].
+static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// The open Keyboard Shortcuts and Menus dialog, at `app.prefs_rt.shortcuts`.
 pub(crate) struct ShortcutsSession {
+    /// Which opening of the dialog this draft belongs to. The dialog's Cancel and `ui.dialog.cancel`
+    /// take the draft away and leave an open question standing, and the next `open` starts a fresh
+    /// draft of the preferences. A question, and a Save dialog it asked for a name through, names
+    /// the session it was opened on, so an answer that arrives late cannot move a draft that never
+    /// saw it (#14450).
+    pub(crate) id: u64,
     /// The dialog's state between passes.
     pub(crate) state: DialogState,
     /// The shortcut sets as the dialog edits them.
@@ -104,8 +117,12 @@ pub(crate) struct MenusDraft {
     /// `Darkroom.MNU` `menu_sets::path_of` would name (#14450).
     pub(crate) file_paths: BTreeMap<String, PathBuf>,
     /// Set by Yes of the Delete question: OK takes that set's `.mnu` file away too, so the folder does
-    /// not offer the set back on the next open (#14450).
-    pub(crate) file_delete: BTreeSet<String>,
+    /// not offer the set back on the next open (#14450). The value is the set's file as the draft knew
+    /// it at that moment - the one its Save dialog had chosen, or the one the folder scan found it in,
+    /// or `None` for the menu-sets folder's own name for the set - taken there so the delete answers
+    /// for that path: a later Save of the same name to a different file cannot spare the file the
+    /// Delete was made for, and the folder would read the deleted set back from it.
+    pub(crate) file_delete: BTreeMap<String, Option<PathBuf>>,
 }
 
 impl MenusDraft {
@@ -222,21 +239,35 @@ impl MenusDraft {
         }
     }
 
+    /// The file of a set, as the draft knows it at this moment: the one its Save dialog answered
+    /// with, or the one the folder scan found it in. `None` leaves it to the folder's own name for
+    /// the set.
+    fn set_file_of(&self, name: &str) -> Option<PathBuf> {
+        match self.file_write.get(name) {
+            Some(Some(path)) => Some(PathBuf::from(path)),
+            _ => self.file_paths.get(name).cloned(),
+        }
+    }
+
     /// Yes of the Delete question: the set it named, if that is still the set in use. The set's file
-    /// goes with it, since the folder is where a saved set lives (#14450).
+    /// goes with it, since the folder is where a saved set lives (#14450). The file is taken here,
+    /// at the moment the Delete was confirmed: a later Save of the same name can send that name to
+    /// another file, and the delete still answers for the file it was made for.
     fn delete_named(&mut self, name: &str) {
         if self.set == name {
             self.delete();
-            self.file_delete.insert(name.to_owned());
+            self.file_delete.insert(name.to_owned(), self.set_file_of(name));
         }
     }
 }
 
 /// The Menus tab's question about unsaved edits, asked when the row picks another set while the
-/// rows differ from the set in use (#14450). Its tag names the set the row picked: the switch each
-/// answer acts on.
+/// rows differ from the set in use (#14450). Its tag names the set the row picked and the session
+/// it was asked on: the switch, and the draft it belongs to.
 pub(crate) struct SetSwitch {
     target: String,
+    /// The [`ShortcutsSession::id`] of the dialog this box was opened for.
+    session: u64,
 }
 
 /// The Menus tab's Delete question (#14450): "Are you sure you want to send <name> to the recycle
@@ -267,7 +298,7 @@ pub(crate) fn profiles_of(prefs: &Preferences) -> Profiles {
 pub(crate) fn draft_keymap(app: &PhotocraftApp) -> Keymap {
     let platform = windows::os_of(app.ctx());
     // The runtime catalog's held rows while they are current; built here before the first frame holds them.
-    let rows = match app.framework.catalog_rows_at(app.session.actions.list.revision()) {
+    let rows = match app.framework.catalog_rows_at(app.session.actions().list.revision()) {
         Some(rows) => rows.to_vec(),
         None => crate::shortcut_dispatch::command_rows(app),
     };
@@ -294,6 +325,7 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
     }
     let prefs = app.session.prefs();
     let session = ShortcutsSession {
+        id: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         state: if tab == 1 { DialogState::new().with_tab("menus") } else { DialogState::new() },
         profiles: profiles_of(prefs),
         keymap: draft_keymap(app),
@@ -401,10 +433,13 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// during the pass, so nothing in the pass reads it through [`recording`].
 fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     let Some(mut session) = app.prefs_rt.shortcuts.take() else { return };
+    // The session this pass belongs to: the question and the Save dialog it opens can be answered
+    // after this draft is gone and another `open` made a new one.
+    let session_id = session.id;
     let rows = crate::menus::base_rows(app);
     let options = options();
     let builtins = builtins();
-    let ShortcutsSession { state, profiles, keymap, menus, pending_import, remembered } = &mut session;
+    let ShortcutsSession { id: _, state, profiles, keymap, menus, pending_import, remembered } = &mut session;
     if let Some(text) = pending_import.take() {
         review(ui, state, dialog(keymap, profiles, &builtins, &options), &text, remembered);
     }
@@ -440,7 +475,7 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     }
     if menus.ask_name {
         menus.ask_name = false;
-        ask_set_name(app, state, &suggested_set_file(app, menus));
+        ask_set_name(app, state, &suggested_set_file(app, menus), session_id);
     }
     // The two questions the Set row raises are opened here, beside the pass's own Save-dialog ask:
     // the row has been drawn and its draft state is settled, and the host draws the box over the
@@ -451,7 +486,7 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
             // unsaved edits go with it, as the reference's "No" does them.
             menus.choose(&target);
         } else {
-            ask_switch_set(app, &target);
+            ask_switch_set(app, &target, session_id);
         }
     }
     if menus.ask_delete {
@@ -586,46 +621,74 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
 /// said together: five broken files are five sets, not one (#14450).
 fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     let Some(dir) = sets_folder(app) else { return };
-    // The file of a set, as the draft knows it: the one its Save dialog answered with, or the one the
-    // folder scan found it in. `None` leaves it to the folder's own name for the set.
-    let own_file = |name: &str| -> Option<PathBuf> {
-        match menus.file_write.get(name) {
-            Some(Some(path)) => Some(PathBuf::from(path)),
-            _ => menus.file_paths.get(name).cloned(),
-        }
-    };
     let mut refused_write = Vec::new();
-    // The two queues are keyed by set name and carry no order of their own, so they are resolved per
-    // name on what the draft ends with: a name whose set is there again at OK - deleted, and made
-    // again under that name before the dialog closed - is written, and its queued delete is skipped.
-    // A name whose set is gone keeps its write skipped, since there is no set left to write, and its
-    // delete runs. Writing every queued file and then deleting every queued file took away the file of
-    // a set the user had just made again (#14450).
-    let mut set_still_there: BTreeSet<&str> = BTreeSet::new();
+    // The two queues carry no order of their own, so they are resolved at OK. The writes are
+    // resolved on what the draft ends with: a name whose set is gone - deleted, and not made again
+    // before the dialog closed - keeps its write skipped, since there is no set left to write. A
+    // write is recorded by what came back, not by what it was aimed at: a save that LANDED records
+    // the path it landed in, and a save that was refused - a name with no file to write to, or a
+    // path that refused the write - records only that that name's save failed. The queued deletes
+    // below step aside for a failed save of their name, and for the very path a landed save wrote.
+    let mut saved_at: BTreeMap<&str, PathBuf> = BTreeMap::new();
+    let mut save_refused: BTreeSet<&str> = BTreeSet::new();
     for name in menus.file_write.keys() {
         let Some(set) = menus.sets.get(name) else { continue };
-        set_still_there.insert(name.as_str());
-        let wrote = match own_file(name) {
-            Some(path) => menu_sets::write_set_at(&path, name, set),
-            None => menu_sets::write_set(&dir, name, set),
+        // Where the write goes: the set's own file, or - spelling out what `write_set` would do -
+        // the menu-sets folder's own name for the set.
+        let to = match menus.set_file_of(name) {
+            Some(path) => Ok(path),
+            None => menu_sets::path_of(&dir, name),
         };
-        if let Err(e) = wrote {
-            refused_write.push(e);
+        match &to {
+            // The result decides what is recorded: the path only for a file that really was written,
+            // the name alone when the write came back refused.
+            Ok(path) => match menu_sets::write_set_at(path, name, set) {
+                Ok(()) => {
+                    saved_at.insert(name.as_str(), path.clone());
+                }
+                Err(e) => {
+                    save_refused.insert(name.as_str());
+                    refused_write.push(e);
+                }
+            },
+            Err(e) => {
+                // The name has no file it could be written to, so there is nothing to land.
+                save_refused.insert(name.as_str());
+                refused_write.push(e.clone());
+            }
         }
     }
     set_lines(app, tl!("The menu set was not saved: {error}"), &refused_write);
     let mut refused_delete = Vec::new();
-    for name in &menus.file_delete {
-        if set_still_there.contains(name.as_str()) {
+    // A queued delete steps aside in two cases, and only in those. A Save of that name that wrote the
+    // very file the delete was made for - the file it stood in when the Delete question was answered,
+    // taken then and not here - rewrote that file, so it is the set's file and not a leftover. A Save
+    // of that name that was refused leaves the file the delete was made for as the one copy of the set
+    // the disk holds: taking it away after a replacement that never landed would leave the set in the
+    // preferences with no file anywhere, and the user would have lost it. A Save that landed
+    // ELSEWHERE spares nothing, and the old file goes with the set that moved: a file left standing in
+    // the folder would offer the deleted set back at the next open (#14450).
+    for (name, target) in &menus.file_delete {
+        if save_refused.contains(name.as_str()) {
+            // The set's replacement never reached the disk: the file this delete was made for is the
+            // only copy of it the folder holds, and it stays for the next open to read. Said by the
+            // refused-save line above, so this delete adds no line of its own.
             continue;
         }
-        // A set's own file is the one to take away, wherever it stands: the file the Save dialog sent
-        // it to, or the one the folder scan found it in. Looking only in the menu-sets folder can find
-        // no file at all, and the set comes back from the folder on the next open.
-        let taken = match own_file(name) {
-            Some(path) => menu_sets::delete_set_at(&path),
-            None => menu_sets::delete_set(&dir, name),
+        let path = match target {
+            Some(path) => path.clone(),
+            None => match menu_sets::path_of(&dir, name) {
+                Ok(path) => path,
+                Err(e) => {
+                    refused_delete.push(e);
+                    continue;
+                }
+            },
         };
+        if saved_at.get(name.as_str()).is_some_and(|written| *written == path) {
+            continue;
+        }
+        let taken = menu_sets::delete_set_at(&path);
         if let Err(e) = taken {
             refused_delete.push(e);
         }
@@ -691,13 +754,13 @@ fn suggested_set_file(app: &PhotocraftApp, draft: &MenusDraft) -> String {
 /// file's name without its extension names the set, and the file itself is written there: a saved set
 /// lives as a `.mnu` file, so a set the dialog answered with is stored with the preferences and in
 /// that file (#14450).
-fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str) {
-    let asked = app.pick_save(suggested, |app, path| {
+fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str, session: u64) {
+    let asked = app.pick_save(suggested, move |app, path| {
         let stem = Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         // The engine's own name rules: a name it would refuse (empty, overlong, the built-in one)
         // is an error line, not a set the row could never select; the dialog stays open either way.
         // Its bars belong to the framework's own tab, so the line goes to the app's status line.
-        let refused = match app.prefs_rt.shortcuts.as_mut() {
+        let refused = match app.prefs_rt.shortcuts.as_mut().filter(|draft| draft.id == session) {
             Some(session) => match set_name(&stem) {
                 Ok(name) => {
                     session.menus.store(&name);
@@ -714,7 +777,8 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
                 }
                 Err(e) => Some(e),
             },
-            // The dialog went away with the session: nothing to name and nothing to write.
+            // The dialog went away with the session, or another one opened since: the name belongs
+            // to the draft that asked, so nothing is named and nothing is written.
             None => None,
         };
         if let Some(e) = refused {
@@ -737,14 +801,14 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
 /// the box's Cancel and answers Escape and the close action, and `Alternate` is No. The footer places
 /// its buttons by role, so Windows stands them Yes, Cancel, No: the reference's literal Yes, No,
 /// Cancel order is not expressible through a hosted `StandardPrompt` (see the PR text).
-fn ask_switch_set(app: &mut PhotocraftApp, target: &str) {
+fn ask_switch_set(app: &mut PhotocraftApp, target: &str, session: u64) {
     let prompt = StandardPrompt::custom(tl!(SWITCH_ASK).to_owned())
         .title(tl!(BOX_TITLE).to_owned())
         .button(PromptChoice::Proceed, tl!("Yes").to_owned())
         .button(PromptChoice::Alternate, tl!("No").to_owned())
         .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
         .dont_show_again()
-        .tag(SetSwitch { target: target.to_owned() });
+        .tag(SetSwitch { target: target.to_owned(), session });
     // An `Err` is a question already open (this one or another family's): the row keeps its set and
     // the next pick asks again.
     let _ = alerts::open_prompt(app, prompt);
@@ -769,11 +833,13 @@ fn ask_delete_set(app: &mut PhotocraftApp, name: &str) {
 /// question: Yes removes the set it named, anything else keeps it. `false` for another family's
 /// answer.
 pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
-    if let Some(SetSwitch { target }) = answer.take_tag::<SetSwitch>() {
+    if let Some(SetSwitch { target, session: asked }) = answer.take_tag::<SetSwitch>() {
         let (choice, skip) = (answer.choice, answer.skip);
         // The dialog can have closed while the box waited (its Cancel, `ui.dialog.cancel`): the
-        // answer then writes nothing, since the draft it belongs to is gone.
-        if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
+        // answer then writes nothing, since the draft it belongs to is gone. A dialog opened again
+        // is another session with a fresh draft, so the answer has to name the session the box was
+        // opened on before it writes into the draft standing now.
+        if let Some(session) = app.prefs_rt.shortcuts.as_mut().filter(|current| current.id == asked) {
             match choice {
                 PromptChoice::Proceed => session.menus.save_then_switch(&target),
                 PromptChoice::Alternate => session.menus.choose(&target),
@@ -885,36 +951,40 @@ fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, height, items.len(), |ui, range| {
         for row in &items[range] {
             let id = row.command.id.as_str();
-            ui.push_id(id, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} › {}", row.path.join(" › "), row.label));
-                    // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no visibility
-                    // control at all, as in the reference application (#5096, #14335).
-                    if MenuCustomization::hideable(id) {
-                        let visible = !draft.hidden.contains(id);
-                        let shown = Checkbox::new(Bind::given(visible)).label(tl!("Visible").to_string()).show(ui);
-                        match shown.events.value() {
-                            Some(&true) => {
-                                draft.hidden.remove(id);
+            with_env(
+                ui,
+                |set| set.id_salt = Some(egui::Id::unique(id)),
+                |ui| {
+                    LayoutRow::new().show(ui, |ui, _| {
+                        Text::new(format!("{} › {}", row.path.join(" › "), row.label)).show(ui);
+                        // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no visibility
+                        // control at all, as in the reference application (#5096, #14335).
+                        if MenuCustomization::hideable(id) {
+                            let visible = !draft.hidden.contains(id);
+                            let shown = Checkbox::new(Bind::given(visible)).label(tl!("Visible").to_string()).show(ui);
+                            match shown.events.value() {
+                                Some(&true) => {
+                                    draft.hidden.remove(id);
+                                }
+                                Some(&false) => {
+                                    draft.hidden.insert(id.to_owned());
+                                }
+                                None => {}
                             }
-                            Some(&false) => {
-                                draft.hidden.insert(id.to_owned());
+                        }
+                        let current = draft.colors.get(id).map_or("none", String::as_str).to_owned();
+                        let current = COLORS.iter().copied().find(|c| *c == current).unwrap_or("none");
+                        let picked = Select::new(tl!("Color").to_string(), Bind::given(current), &colors).show(ui);
+                        if let Some(&color) = picked.events.value() {
+                            if color == "none" {
+                                draft.colors.remove(id);
+                            } else {
+                                draft.colors.insert(id.to_owned(), color.to_owned());
                             }
-                            None => {}
                         }
-                    }
-                    let current = draft.colors.get(id).map_or("none", String::as_str).to_owned();
-                    let current = COLORS.iter().copied().find(|c| *c == current).unwrap_or("none");
-                    let picked = Select::new(tl!("Color").to_string(), Bind::given(current), &colors).show(ui);
-                    if let Some(&color) = picked.events.value() {
-                        if color == "none" {
-                            draft.colors.remove(id);
-                        } else {
-                            draft.colors.insert(id.to_owned(), color.to_owned());
-                        }
-                    }
-                });
-            });
+                    });
+                },
+            );
         }
     });
     *draft != before

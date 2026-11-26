@@ -113,6 +113,14 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
         rows.push(Param::new("set", tl!("Set"), ParamKind::choice(names(&set_names), Some(set))));
     }
     rows.push(Param::new("action", tl!("Action"), ParamKind::choice(names(&action_names), Some(name))));
+    // The Play group (#13709): four checkboxes under the Set and Action choices, all off. The droplet saves them and
+    // hands them to each run.
+    rows.extend([
+        Param::new("overrideOpen", tl!("Override Action \"Open\" Commands"), ParamKind::bool(false)),
+        Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
+        Param::new("suppressOpenOptions", tl!("Suppress File Open Options Dialogs"), ParamKind::bool(false)),
+        Param::new("suppressWarnings", tl!("Suppress Color Profile Warnings"), ParamKind::bool(false)),
+    ]);
     rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))

@@ -268,7 +268,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
     let document = st.doc.id;
     let key = app.ui.alloc_id();
     let settings: PinWarpSettings = memory::saved_value(ctx, &SETTINGS_KEY);
-    let textures = PreviewTextures::new(format!("puppet-{key}"), PreviewPixels::new(image, [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut app.texture_serials, format!("puppet-{key}"), PreviewPixels::new(image, [1.0, 1.0]));
     let solver = PuppetPinSolver::new(surface, bounds, &settings.options);
     if solver.is_empty() {
         return Err("Could not use Puppet Warp: no opaque pixels".into());
