@@ -2,12 +2,15 @@
 //! Layers panel's, so a mode has one key and one shortcut everywhere. Fill, Stroke and Fade grey the modes the active
 //! document's colour mode and depth can't use (#13806, #14647).
 
-use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use photocraft_color::BlendMode;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
+
+const PRESERVE: &str = "preserveTransparency";
 
 /// A blend-mode row `key` over the Layers panel's mode list (`group` adds Pass Through), opening on `current`.
 pub(crate) fn blend_param(key: &str, label: impl Into<Label>, group: bool, current: BlendMode) -> Param {
@@ -31,14 +34,46 @@ pub(crate) fn blend_mode(fields: &DialogFields, key: &str) -> BlendMode {
     fields.text(key).and_then(photocraft_engine::commands::parse_blend).unwrap_or(BlendMode::Normal)
 }
 
-/// The Blending section, Mode, Opacity (percent) and Preserve Transparency: the rows Fill and Stroke share.
-pub(crate) fn blending_rows(app: &PhotocraftApp) -> Vec<Param> {
-    vec![
-        Param::section(tl!("Blending")),
-        document_mode_param(app, tl!("Mode:")),
-        super::new_layer_ui::opacity_param(),
-        Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-    ]
+/// The Blending section, Mode, Opacity (percent) and Preserve Transparency: the rows Fill and Stroke share. A
+/// `forced` Preserve Transparency ([`forced_preserve_transparency`]) shows greyed at that state and is not remembered.
+pub(crate) fn blending_rows(app: &PhotocraftApp, forced: Option<bool>) -> Vec<Param> {
+    let mut preserve = Param::new(PRESERVE, tl!("Preserve Transparency"), ParamKind::bool(forced.unwrap_or(false)));
+    if forced.is_some() {
+        // No value enables it, so neither the user nor automation can change the target's state.
+        preserve = preserve.enabled_when_in(PRESERVE, Vec::<FieldValue>::new()).not_remembered();
+    }
+    vec![Param::section(tl!("Blending")), document_mode_param(app, tl!("Mode:")), super::new_layer_ui::opacity_param(), preserve]
+}
+
+/// The Preserve Transparency that Fill's or Stroke's `target` (as `edit.fill` takes it) forces: off on the Background
+/// layer or other pixels without transparency, on with Lock Transparent Pixels. `None` for other layers, masks and
+/// channels, where the box offers the remembered choice.
+pub(crate) fn forced_preserve_transparency(app: &PhotocraftApp, target: &Value) -> Option<bool> {
+    let st = app.session.active()?;
+    let id = st.active_layer?;
+    if photocraft_engine::channel_cmds::gray_target(&json!({ "target": target })).is_some() {
+        return None;
+    }
+    // The Background also carries the transparency lock, so it is tested first.
+    if st.doc.is_background(id) || st.doc.layer(id)?.surface().is_some_and(|s| !s.format().alpha) {
+        return Some(false);
+    }
+    st.doc.effective_locks(id).transparency.then_some(true)
+}
+
+/// Remembers the choices of `result`. A forced Preserve Transparency is not among them, so the choice remembered
+/// before is kept for the next open.
+pub(crate) fn remember_blending(ctx: &egui::Context, result: &ParamResult) {
+    let key = SaveKey::named(super::params::memory_scope(&result.key));
+    let before = saved_value::<Option<DialogFields>>(ctx, &key).and_then(|saved| saved.get(PRESERVE).cloned());
+    result.remember(ctx);
+    if let Some(before) = before
+        && let Some(mut saved) = saved_value::<Option<DialogFields>>(ctx, &key)
+        && !saved.contains(PRESERVE)
+    {
+        saved.set(PRESERVE, before);
+        set_saved_value(ctx, &key, Some(saved));
+    }
 }
 
 /// The engine params of [`blending_rows`].
