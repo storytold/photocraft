@@ -1,5 +1,6 @@
 //! #12091: a right-click with the Vertical Type Mask tool while no mask is being edited opens a
-//! menu: the selection tools' menu ([`SELECTION_MENU`]) when the document has an active selection,
+//! menu: the measured selection menu ([`MEASURED_SELECTION_MENU`], the rows the Type, Red Eye and
+//! Object Selection tools show) when the document has an active selection,
 //! and the generic layer menu #12042 added for the Horizontal Type tool ([`COUNT_MENU`]) when it has
 //! none. The same rows, the same enablement and the same commands as those tools show today: no new
 //! table and no menu-local rule, which entries are greyed was not measured. The right-click starts
@@ -57,8 +58,10 @@ fn listed_ids(table: &[super::Row]) -> Vec<String> {
 }
 
 #[test]
-fn with_a_selection_the_right_click_opens_the_selection_tools_menu() {
+fn with_a_selection_the_right_click_opens_the_measured_selection_menu() {
     // Inside the selection and outside it: the menu depends on the selection, not on the point.
+    // The rows are the measured selection table (#12042 review on this PR): no Distort or
+    // Perspective, and Delete and Fill Selection after the three fill rows.
     for (x, y, place) in [(42.0, 32.0, "inside"), (30.0, 2.0, "outside")] {
         let (mut app, ctx) = selected_mask_app(Tool::VerticalTypeMask);
         right_click(&mut app, x, y);
@@ -66,9 +69,9 @@ fn with_a_selection_the_right_click_opens_the_selection_tools_menu() {
         assert_eq!(menu.tool, Tool::VerticalTypeMask, "the menu is the Vertical Type Mask tool's");
         assert!(matches!(menu.kind, MenuKind::Tool), "the tool menu, not a type menu: {:?}", menu.kind);
         assert!(menu.has_selection, "the right-click captured the selection, {place} it");
-        assert_eq!(labels(rows(&menu)), labels(SELECTION_MENU), "{place} the selection: the selection tools' rows in their order");
+        assert_eq!(labels(rows(&menu)), labels(MEASURED_SELECTION_MENU), "{place} the selection: the measured selection rows in their order");
         // Reachable over the control channel: `ui.inspect` lists the same entries in the same order.
-        assert_eq!(listed(&mut app, &ctx), listed_ids(SELECTION_MENU), "over the control channel, {place} the selection");
+        assert_eq!(listed(&mut app, &ctx), listed_ids(MEASURED_SELECTION_MENU), "over the control channel, {place} the selection");
         // The menu sits at the pointer.
         let at = screen_of(&app, [x as f32, y as f32]);
         let (dx, dy) = (menu.pos[0] - at.x, menu.pos[1] - at.y);
@@ -77,24 +80,33 @@ fn with_a_selection_the_right_click_opens_the_selection_tools_menu() {
 }
 
 #[test]
-fn the_selection_menu_is_what_the_marquee_shows_in_the_same_document() {
-    // "Entries as the selection tools show them today": the marquee's menu in the same document is
-    // the same table, row for row, and every row is enabled the same way.
+fn the_selection_menu_is_the_table_the_measured_tools_share() {
+    // The rows are the shared measured table, not the marquee's own menu: row for row the Type
+    // tool's selection menu in the same document, and every row enabled the same way.
     let (mut app, _ctx) = selected_mask_app(Tool::VerticalTypeMask);
     right_click(&mut app, 42.0, 32.0);
     let mask = open_menu(&app);
-    let (mut other, _ctx) = selected_mask_app(Tool::RectMarquee);
+    let (mut other, _ctx) = selected_mask_app(Tool::Type);
     right_click(&mut other, 42.0, 32.0);
-    let marquee = open_menu(&other);
-    assert_eq!(labels(rows(&mask)), labels(rows(&marquee)), "the same rows as the marquee's menu");
+    let type_menu = open_menu(&other);
+    assert_eq!(labels(rows(&mask)), labels(rows(&type_menu)), "the same rows as the Type tool's selection menu");
     for (label, id) in rows(&mask).iter().flatten() {
-        assert_eq!(available(&app, &mask, id), available(&other, &marquee, id), "{label} is live as it is in the marquee's menu");
+        assert_eq!(available(&app, &mask, id), available(&other, &type_menu, id), "{label} is live as it is in the Type tool's selection menu");
         // Which entries are greyed was not measured here, so the tool adds no rule of its own:
         // every row follows the menu-bar / Layers-panel rule, as it does for the other tools.
         assert_eq!(entry_enabled(&app, &mask, id), crate::menus::is_enabled(&app, id), "{id} greys as the menu bar greys it");
     }
     assert!(available(&app, &mask, "select.deselect") && available(&app, &mask, "select.transformSelection"), "the selection rows are live with a selection");
     assert!(!available(&app, &mask, "filter.lastFilter") && !available(&app, &mask, "edit.fade"), "no filter has run, so Last Filter and Fade… are greyed");
+    // The marquee keeps its own menu: Distort and Perspective are its rows, and this menu has none.
+    let (mut marquee_app, _ctx) = selected_mask_app(Tool::RectMarquee);
+    right_click(&mut marquee_app, 42.0, 32.0);
+    let marquee = open_menu(&marquee_app);
+    assert_eq!(labels(rows(&marquee)), labels(SELECTION_MENU), "the marquee keeps the selection tools' own table");
+    for id in ["edit.transform.distort", "edit.transform.perspective"] {
+        assert!(rows(&marquee).iter().flatten().any(|(_, row)| *row == id), "Distort and Perspective belong to the marquee's menu");
+        assert!(!rows(&mask).iter().flatten().any(|(_, row)| *row == id), "the mask menu offers no {id}");
+    }
 }
 
 #[test]

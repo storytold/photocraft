@@ -1042,9 +1042,9 @@ pub fn applies(tool: Tool) -> bool {
             // The layer or selection menu away from text (#12042); Vertical Type and the
             // Horizontal Type Mask tool are not measured and stay on their no-menu path.
             | Tool::Type
-            // The selection menu with an active selection, the layer menu without one (#12091).
-            // Only the Vertical Type Mask tool was measured; while its mask is edited the type
-            // edit menu of #12084 comes first.
+            // The measured selection menu with an active selection, the layer menu without one
+            // (#12091). Only the Vertical Type Mask tool was measured; while its mask is edited
+            // the type edit menu of #12084 comes first.
             | Tool::VerticalTypeMask
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
@@ -1203,10 +1203,12 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
             } else if menu.tool == Tool::Count {
                 COUNT_MENU
             } else if menu.tool == Tool::VerticalTypeMask {
-                // #12091: the selection tools' menu when the document has an active selection, the
-                // generic layer menu of #12042 when it has none. Which rows are greyed was not
-                // measured, so this tool adds no rule: `entry_enabled` keeps the menu bar's.
-                if menu.has_selection { SELECTION_MENU } else { COUNT_MENU }
+                // #12091: the measured selection table when the document has an active selection -
+                // the rows the Type, Red Eye and Object Selection branch shows, no Distort or
+                // Perspective - and the generic layer menu of #12042 when it has none. Which rows
+                // are greyed was not measured, so this tool adds no rule: `entry_enabled` keeps the
+                // menu bar's.
+                if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection | Tool::Type) {
                 if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if menu.tool == Tool::Eyedropper {
