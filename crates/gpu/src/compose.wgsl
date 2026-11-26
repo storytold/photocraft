@@ -1079,6 +1079,9 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         // compose: pass-through group + (with clipped − without), premultiplied.
         let c = textureLoad(tex_c, p, 0);
         if ((op.flags & F_HDR) != 0u) {
+            // Preserve A exactly when clipping changes nothing, even if the backend
+            // would reassociate the expression and overflow before subtracting C.
+            if (all(b == c)) { return a; }
             return from_associated(associated(a) + (associated(b) - associated(c)));
         }
         var pm = vec4(a.rgb * a.a, a.a) + vec4(b.rgb * b.a, b.a) - vec4(c.rgb * c.a, c.a);
