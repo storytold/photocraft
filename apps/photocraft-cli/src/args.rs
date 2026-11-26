@@ -22,7 +22,7 @@ use serde_json::Value;
 
 /// photocraft-cli: headless PhotoCraft
 #[derive(Parser)]
-#[command(name = "photocraft-cli", version = photocraft_engine::build_info::long_version_static(), arg_required_else_help = true)]
+#[command(name = "photocraft-cli", version = photocraft_engine::build_info::long_version_static(), propagate_version = true, arg_required_else_help = true)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
@@ -250,13 +250,13 @@ pub(crate) struct BatchArgs {
 pub(crate) struct DropletArgs {
     /// The droplet to run
     #[arg(value_name = "FILE.pcdroplet")]
-    pub(crate) file: String,
+    pub(crate) file: PathBuf,
     /// Images and folders to run it on
     #[arg(value_name = "FILE-OR-DIR", required = true)]
-    pub(crate) inputs: Vec<String>,
+    pub(crate) inputs: Vec<PathBuf>,
     /// The folder to write the results to
     #[arg(long, value_name = "DIR")]
-    pub(crate) out: Option<String>,
+    pub(crate) out: Option<PathBuf>,
 }
 
 /// List the engine command registry

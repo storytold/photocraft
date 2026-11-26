@@ -36,6 +36,9 @@ pub(crate) enum CliError {
     Naming(String),
     #[error("{0}")]
     BatchOption(String),
+    /// A path the engine command takes as JSON text: the command line took it as a native path.
+    #[error("{what} must be valid UTF-8: {path:?}")]
+    PathNotUtf8 { what: &'static str, path: PathBuf },
     #[error("{0} file(s) failed")]
     FilesFailed(usize),
     #[error("invalid value '{0}' for 'PHOTOCRAFT_GPU': expected '1' or '0'")]
