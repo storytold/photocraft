@@ -49,7 +49,7 @@ WORKDIR /src/apps/photocraft-web
 # memory than the release zip's fat LTO; retain the profile's other optimizations.
 ARG CARGO_PROFILE_WASM_RELEASE_LTO=thin
 ARG CARGO_BUILD_JOBS=1
-# Optional build provenance shown in About and `--version` (crates/engine/src/build_info.rs).
+# Optional build provenance shown in About and `--version` (crates/engine-core/src/build_info.rs).
 # .git is not in the build context, so pass it in, e.g.
 #   --build-arg PHOTOCRAFT_BUILD_SHA=$(git rev-parse HEAD) --build-arg PHOTOCRAFT_BUILD_DATE=$(date -u +%F)
 # Left empty, the build reports itself as a dev build.

@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate};
+use super::blur::{blur, dilate, size_one_blur};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -33,8 +33,65 @@ pub(super) fn lut_at(l: &[f32], v: f32) -> f32 {
 /// A glow's coverage transfer: its contour applied over the Range (Photoshop maps the glow's
 /// coverage `v` through `contour(min(v / range, 1))`, so the default 50 % doubles a blurred
 /// edge's 0.5 to full strength). `None` = identity.
-pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
+///
+/// An outer Softer glow from the Edge with Spread 0 and the Linear contour follows
+/// [`softer_edge_lut`] instead, at every Size and Range (#14958, #15871). Precise, Spread, the
+/// Center source and custom contours keep `ranged_lut` exactly.
+///
+/// Inner glows (`inner`) keep one measured exception (#14929, the mirror image of #14958's first
+/// measurement): at the Range-1 % test document (Softer, Size 10, Spread 0, Linear contour, Edge
+/// source) the coverage at the tent's last tap (its reach's outermost pixel, 0.0025 at Size 10)
+/// paints nothing, and the coverage one pixel inside it (0.0125) paints 0.85, measured as 19 of
+/// 128. A linear ramp from that last tap to `range` plus 3/4 of it gives 20; `min(v / range, 1)`
+/// there paints solid one pixel wider and leaves 96 at the pixel the reference stops at. Every
+/// other inner glow keeps `ranged_lut`: their other Sizes and Ranges are measured against it
+/// (`inner_glow_size_one_tests`).
+pub fn glow_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
+    let softer_edge = matches!(g.contour, Contour::Linear) && matches!(g.technique, GlowTechnique::Softer) && g.source == GlowSource::Edge && g.spread == 0.0;
+    if softer_edge && !inner {
+        return Some(softer_edge_lut(g.size, g.range));
+    }
+    if softer_edge && g.size == 10.0 && (g.range - 0.01).abs() < 1e-6 {
+        // `tent_kernel` stores its weights from -r to r and never an empty list, so its last
+        // entry is the tap at the reach's end (for Size 10: 1/400): the straight edge's
+        // coverage at the reach's outermost pixel. `end` 0 (unreachable) leaves today's ramp.
+        let end = super::blur::tent_kernel(g.size).1.last().copied().unwrap_or(0.0);
+        let full = g.range + 0.75 * end;
+        return Some((0..GLOW_LUT_LEN).map(|k| ((k as f32 / (GLOW_LUT_LEN - 1) as f32 - end) / full).clamp(0.0, 1.0)).collect());
+    }
     ranged_lut(&g.contour, g.range)
+}
+
+/// The Linear transfer of an outer Softer Edge glow with Spread 0:
+/// `(v - floor) / (levels · (1 - floor))`, clamped to 0..=1. `levels` is the Range rounded to a
+/// whole 8-bit level, and `floor` is [`softer_edge_floor`]: the coverage a straight edge gives
+/// the reach's outermost pixel at an even Size, which paints nothing. The `1 - floor` keeps full
+/// coverage at full strength.
+///
+/// Measured on the #14958 document (black, Normal 100 %), with the flattened R channel from the
+/// layer edge outwards. Size 10 at Range 1 % (3 levels) gives `0 x8, 39`; at Range 2 % (5 levels)
+/// `0 x8, 125`; Size 20 at Range 1 % gives `0 x17, 93, 201`; Size 5 at Range 1 % gives `0 x4`. Each
+/// is followed by no glow. Size 10 at Range 25, 50 and 100 % keeps the measured profiles. This
+/// rule gives every one of those pixels within 1 level. The plain `min(v / range, 1)` reaches one
+/// pixel further at small Ranges (`0 x8, 96, 223` at Range 2 %) and leaves 252 for 255 at the
+/// end of the Range 100 % profile.
+fn softer_edge_lut(size: f32, range: f32) -> Vec<f32> {
+    let range = if range.is_finite() { range.clamp(0.01, 1.0) } else { 1.0 };
+    let levels = (range * 255.0).round() / 255.0;
+    let floor = softer_edge_floor(size);
+    let full = levels * (1.0 - floor);
+    (0..GLOW_LUT_LEN).map(|k| ((k as f32 / (GLOW_LUT_LEN - 1) as f32 - floor) / full).clamp(0.0, 1.0)).collect()
+}
+
+/// The tent's outermost tap (the box's end tap squared) when the box `blur` runs for `size` ends
+/// in partial taps, else 0. Even Sizes end in half taps (1/400 at Size 10, 1/1600 at Size 20).
+/// Odd Sizes end in whole taps (Size 5's outermost pixel paints in full at Range 1 %), and a
+/// Size of one pixel or less has no falloff.
+fn softer_edge_floor(size: f32) -> f32 {
+    match super::blur::box_end_taps(size) {
+        Some((end, next)) if end < 0.999 * next => end * end,
+        _ => 0.0,
+    }
 }
 
 /// The coverage transfer a glow paints through (CPU `glow_map` and the GPU's `MFinish` stage
@@ -74,7 +131,7 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 /// Inner glows keep `glow_lut` (`inner`): their unreached pixels are the shape's interior, where
 /// Photoshop's behaviour with a high contour is unmeasured. `None` = identity.
 pub fn glow_paint_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
-    let lut = glow_lut(g);
+    let lut = glow_lut(g, inner);
     if inner || matches!(g.contour, Contour::Linear) {
         return lut;
     }
@@ -194,9 +251,16 @@ pub fn hash_noise(x: i64, y: i64) -> f32 {
 }
 
 /// Effect noise (Photoshop's Noise slider): monochrome speckle in the coverage,
-/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. The speckle is
-/// scaled by the coverage, so it fades out with the effect instead of lighting up the blur's
-/// near-zero tail out to the edge of its rectangular reach (#7833).
+/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. In a falloff a
+/// pixel drops out entirely with probability `min(1, amount x (1 - v) x (0.22 + 0.024 / v))`
+/// and otherwise its coverage deepens by up to `1 + 2 x amount` (measured on the Inner Shadow
+/// and Outer Glow falloff bands, #14936 and #14952: the reference application scatters far
+/// stronger than the multiplicative jitter, which never removed a band pixel at Noise 50).
+/// The dropout probability grows as coverage falls, so the speckle fades out with the effect
+/// instead of lighting up the blur's near-zero tail out to the edge of its rectangular reach
+/// (#7833); pixels with no coverage are never touched. Solid coverage (>= 0.95, e.g. a big
+/// drop shadow's interior) keeps today's multiplicative jitter: the issues measure falloff
+/// bands only, and jittering the interior is a behaviour they do not ask to change.
 pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
     if !amount.is_finite() || amount <= 0.0 {
         return;
@@ -208,7 +272,16 @@ pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
                 continue;
             }
             let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
-            *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+            if *v >= 0.95 {
+                *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+                continue;
+            }
+            let kill = (amount * (1.0 - *v) * (0.22 + 0.024 / *v)).min(1.0);
+            if n < kill {
+                *v = 0.0;
+            } else {
+                *v = (*v * (1.0 + 2.0 * amount * n)).clamp(0.0, 1.0);
+            }
         }
     }
 }
@@ -229,6 +302,57 @@ pub(super) fn rgb(c: &photocraft_color::Color) -> [f32; 3] {
 pub(super) fn offset(angle: f32, distance: f32) -> (f32, f32) {
     let a = angle.to_radians();
     ((-a.cos() * distance).round(), (a.sin() * distance).round())
+}
+
+/// Whether an effect's Anti-aliased checkbox moves its source map: only for the contour the
+/// reference application was measured with. #14934 (Inner Shadow) and #14951 (Outer Glow) both
+/// measure Size 10 with the Gaussian contour and leave Anti-aliased with any other contour
+/// unmeasured, so every other contour keeps today's map bit-for-bit. The built-in Gaussian preset
+/// carries that name from the Contour picker and from a PSD import; an edited curve becomes
+/// "Custom" and keeps today's map. Public because the GPU map program asks for the same rule, so
+/// both compositors take the offset or neither does.
+pub fn anti_aliased_contour(c: &Contour) -> bool {
+    matches!(c, Contour::Custom { name, .. } if name.eq_ignore_ascii_case("Gaussian"))
+}
+
+/// Whether Choke / Spread `spread` of a `size` px soft effect leaves the map both issues measured:
+/// one the two compositors build alike, and one whose edge is soft at all. `spread_split` splits
+/// the Size into a dilation radius and a blur width, and both neighbours of the measured split are
+/// degeneracies of that split rather than a guess about an unmeasured picture:
+/// - a radius above 0 makes the CPU recompute its chamfer distance on the offset map
+///   (`blur::dilate`), while the GPU dilates with a distance field of the unshifted shape shifted
+///   by whole pixels only (`fx::builders::spread_blur`), so the two compositors part by exactly
+///   the fraction of a pixel the offset adds. Keep those on today's map.
+/// - a blur width of 1 or less is the identity (`blur::tent` returns at once, because
+///   `tent_kernel(1).0 == 0`), and with the radius at 0 nothing else softens the edge either: at
+///   Size 1, or at Size 2 with half Choke / Spread, the source offset would be the whole map -
+///   coverage on the bottom and right inner edges of an Inner Shadow and one glowing line outside
+///   the top and left of an Outer Glow, which no measurement shows.
+///
+/// Radius 0 with a wider blur is the map both issues measured, whatever the Size: the rule is in
+/// the inputs, not in the measured documents' Size 10.
+fn anti_aliased_geometry(size: f32, spread: f32) -> bool {
+    let (r, bw) = spread_split(size, spread);
+    r <= 0.0 && bw > 1.0
+}
+
+/// The sub-pixel offset towards the top-left that an anti-aliased effect builds its map from,
+/// added to the whole-pixel light offset. Both measured tables sit on a third of a pixel: with the
+/// flag on, the Outer Glow reaches a pixel further at the top and left (its reported bounds grow
+/// there) and a pixel less at the bottom and right, and the Inner Shadow is weaker at the top and
+/// left edge and stronger at the bottom and right. Half a pixel overshoots (it puts the Inner
+/// Shadow 5 levels and the Outer Glow 15 levels off the measured profiles); a third lands the
+/// Inner Shadow within 1.4 levels of every measured pixel, and the glow within 4.6 at four
+/// samples of eighteen and within 3 at the rest, which is where today's off-path profile already
+/// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
+/// reproduces both profiles instead of guessing a rule for the unmeasured cases. The GPU map
+/// program adds the same offset to its shift stage, so both compositors build the same geometry.
+/// Only the configuration the issues measured takes it: the Gaussian contour
+/// (`anti_aliased_contour`) with a Size and Choke / Spread `anti_aliased_geometry` allows, so the
+/// offset is neither keyed to the measured Size nor applied to a map the two compositors build
+/// differently. Every other neighbour keeps today's map bit-for-bit.
+pub fn aa_shift(on: bool, c: &Contour, size: f32, spread: f32) -> f32 {
+    if on && anti_aliased_contour(c) && anti_aliased_geometry(size, spread) { -1.0 / 3.0 } else { 0.0 }
 }
 
 /// The lengths a 100 % gradient at `angle` spans in a `w` × `h` frame: the chord (Linear and
@@ -378,11 +502,23 @@ pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
 pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
+    // #14934: an Anti-aliased Inner Shadow builds its map from the shape off-centre (`aa_shift`).
+    // Only the inner branch was measured, so a Drop Shadow keeps today's map (#14881 is its own),
+    // and `aa_shift` leaves every Choke that dilates and every Size whose blur is the identity.
+    let aa = aa_shift(inner && s.anti_alias, &s.contour, s.size, s.spread);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
-    let mut m = src.shifted(dx, dy, if inner { 1.0 } else { 0.0 });
+    let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
-    blur(&mut m, bw);
+    if inner && s.size == 1.0 && s.spread == 0.0 {
+        // #14933: a Size 1 inner shadow with Choke 0. At that width the box blur is the identity
+        // (`box_width` floors it at 1 px), so the map keeps the hard inverted alpha and the clip to
+        // the layer below removes the shadow completely. The reference application keeps a
+        // quarter-strength shadow on the first pixel inside every edge: `SIZE_ONE_TAPS`.
+        size_one_blur(&mut m);
+    } else {
+        blur(&mut m, bw);
+    }
     let mut m = apply_contour(m, &s.contour);
     noise(&mut m, s.noise, origin.0, origin.1);
     if inner {
@@ -399,6 +535,13 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
     // 1 − the edge glow, for both techniques).
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = match g.technique {
+        GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
+            // A width-one box blur leaves no coverage inside the edge. The Size 1 taps
+            // put quarter coverage on the first pixel, which Range 50% doubles (#14924).
+            let mut m = src;
+            super::blur::size_one_blur(&mut m);
+            m
+        }
         GlowTechnique::Precise => {
             // Coverage falls linearly from 0.5 at the edge to 0 at `size + 1` px (centre to
             // centre), solid within the spread / choke: after the default 50 % Range that is
