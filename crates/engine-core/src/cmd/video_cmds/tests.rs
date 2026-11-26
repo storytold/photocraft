@@ -373,6 +373,36 @@ fn render_video_to_animated_gif() {
     assert_eq!(gif.iter().filter(|&&b| b == 0x2C).count(), 3); // 3 frames
 }
 
+/// #16692: ".gif" and "GIF" are the encoder's GIF, so they give the one animated file "gif" gives,
+/// not a sequence of single-frame files.
+#[test]
+fn render_video_reads_gif_spelt_as_the_encoder_reads_it() {
+    let dir = tmpdir("gifspelling");
+    write_png(&format!("{dir}/a.png"), 10, 8, "#ff0000");
+    write_png(&format!("{dir}/b.png"), 10, 8, "#00ff00");
+    let mut s = session();
+    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": dir})).unwrap();
+    let written = |format: &str| {
+        let mut files = Vec::new();
+        render_video_with(
+            &s,
+            &json!({"format": format}),
+            |name, bytes| {
+                files.push((name.to_string(), bytes.starts_with(b"GIF89a")));
+                Ok(())
+            },
+            |_, _| true,
+        )
+        .unwrap();
+        files
+    };
+    let gif = written("gif");
+    assert_eq!(gif.len(), 1, "one animated file");
+    for format in [".gif", "GIF"] {
+        assert_eq!(written(format), gif, "{format}");
+    }
+}
+
 #[test]
 fn a_fully_transparent_animated_gif_frame_encodes() {
     let px = vec![[0.0f32; 4]; 4];
