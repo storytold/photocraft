@@ -28,10 +28,18 @@ pub(crate) enum SourceCaption {
 
 /// The History Brush's source as the bar names it.
 pub(crate) fn source_caption(app: &PhotocraftApp) -> SourceCaption {
-    use photocraft_engine::history_source_cmds::{HistorySource, source};
+    use photocraft_engine::history_source_cmds::{HistorySource, is_open_snapshot, source};
     let Some(st) = app.session.active() else { return SourceCaption::Deleted };
     let named = || match source(st)? {
-        HistorySource::Snapshot(id) => st.snapshots().iter().find(|s| s.id == id).map(|s| SourceCaption::Named(s.name.clone())),
+        // The default source, the open snapshot (#12845), keeps the bar's opening-state wording;
+        // any other snapshot is named.
+        src @ HistorySource::Snapshot(id) => {
+            if is_open_snapshot(st, src) {
+                Some(SourceCaption::Opening)
+            } else {
+                st.snapshots().iter().find(|s| s.id == id).map(|s| SourceCaption::Named(s.name.clone()))
+            }
+        }
         HistorySource::State(idx) => {
             let entries = st.history.entries();
             let name = if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;

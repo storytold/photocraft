@@ -50,18 +50,20 @@ fn every_background_and_mode_of_file_new_gives_new() {
 }
 
 #[test]
-fn the_first_state_stays_new_through_undo_and_redo_and_is_the_default_brush_source() {
+fn the_first_state_stays_new_through_undo_and_redo_while_the_default_source_is_the_open_snapshot() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     let source = |s: &Session| crate::inspect::document(s.active().unwrap())["historySource"].clone();
-    assert_eq!(source(&s), json!({"state": 0, "label": "New"}));
+    // The default source is the open snapshot (#12845); the "New" state stays the opening state.
+    let opened = |s: &Session| crate::inspect::document(s.active().unwrap())["snapshots"][0]["name"].as_str().unwrap().to_string();
+    assert_eq!(source(&s), json!({"snapshot": 0, "name": opened(&s)}));
     s.execute("layer.new.layer", json!({})).unwrap();
     assert_eq!(history(&s).0, json!(["New", "New Layer"]));
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(history(&s).0, json!(["New"]));
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(history(&s).0, json!(["New", "New Layer"]));
-    assert_eq!(source(&s), json!({"state": 0, "label": "New"}));
+    assert_eq!(source(&s), json!({"snapshot": 0, "name": opened(&s)}));
 }
 
 #[test]

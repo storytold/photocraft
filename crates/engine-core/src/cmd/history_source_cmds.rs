@@ -1,7 +1,9 @@
 //! The History Brush's source (#2966): the History panel's source column, at the left of every
 //! state and snapshot, sets what the History Brush (and Fill › History) restores from. Exactly one
-//! source per document; by default the oldest state held (Photoshop's default is the first
-//! snapshot, the document as opened, which that state is until it falls off the history).
+//! source per document; by default the open snapshot, the first History panel snapshot (the
+//! document as opened, named after it; #12845), which outlives the states (#12618). With History
+//! Options › Automatically Create First Snapshot off there is no open snapshot, and the default
+//! stays the oldest state held; deleting the open snapshot also leaves no source until one is set.
 //!
 //! A state source is kept by state, not by index ([`photocraft_ops::History::set_brush_source`]),
 //! so it stays on its state while older states fall off, and that state is kept when it would fall
@@ -41,12 +43,37 @@ pub enum HistorySource {
     Snapshot(u64),
 }
 
-/// The document's History Brush source, `None` once the source state or snapshot is gone.
+/// The document's History Brush source, `None` once the source state or snapshot is gone. With no
+/// source set it is the open snapshot (the document as opened, #12845); when no open snapshot was
+/// taken (History Options › Automatically Create First Snapshot off) it is the oldest state held,
+/// as before.
 pub fn source(st: &DocState) -> Option<HistorySource> {
-    match st.source_snapshot.or_else(|| st.history.brush_source_snapshot()) {
-        Some(id) => st.snapshots().iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id)),
+    if let Some(id) = st.source_snapshot.or_else(|| st.history.brush_source_snapshot()) {
+        return st.snapshots().iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id));
+    }
+    // A state set in the panel is kept by its state id: it stays the source while older states fall
+    // off and is gone once it is deleted or discarded (#2966). ops'
+    // [`photocraft_ops::History::brush_source`] reads row 0 both for such a set state and for "none
+    // set", so the choice is recorded here in `source_state_id` (#12845).
+    if let Some(id) = st.source_state_id {
+        // Clear History holds a set source back with the states it took off: until its undo, the
+        // current state is the source, as before (#3536).
+        let row = if st.history.is_cleared() { st.history.brush_source() } else { st.history.row_of(id) };
+        return row.map(HistorySource::State);
+    }
+    match st.open_snapshot {
+        // The document as opened outlives the states, so a click still restores it (#12618).
+        // Deleting this snapshot leaves no source, as for any deleted source.
+        Some(id) => st.snapshots().iter().find(|s| s.id == id).map(|s| HistorySource::Snapshot(s.id)),
+        // Not measured (Automatically Create First Snapshot off): today's default.
         None => st.history.brush_source().map(HistorySource::State),
     }
+}
+
+/// Whether `src` is the document's open snapshot, the History panel's first row (the document as
+/// opened): the History Brush's default source (#12845).
+pub fn is_open_snapshot(st: &DocState, src: HistorySource) -> bool {
+    matches!(src, HistorySource::Snapshot(id) if st.open_snapshot == Some(id))
 }
 
 pub fn source_of(st: &DocState, src: HistorySource) -> Option<Arc<Document>> {
@@ -90,11 +117,15 @@ fn set_source(s: &mut Session, p: &Value) -> Result<Value> {
             if !st.history.set_brush_source(i) {
                 return Err(bad(format!("no history state {i}")));
             }
+            // Kept by state id as well, so the open-snapshot default can tell this choice from
+            // ops' never-set default (#12845).
+            st.source_state_id = st.history.row_id(i);
             st.source_snapshot = None;
         }
         Some(HistorySource::Snapshot(id)) => {
             // No state is the source now, so none is kept past its time.
             st.history.reset_brush_source();
+            st.source_state_id = None;
             st.source_snapshot = Some(id);
         }
     }

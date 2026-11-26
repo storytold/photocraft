@@ -124,6 +124,7 @@ mod paint_in_fx_view_cmds;
 mod paint_in_fx_visibility_cmds;
 mod paint_in_gradient_fill_cmds;
 mod paint_in_hidden_target;
+mod paint_in_history_brush_default_source;
 mod paint_in_history_cmds;
 mod paint_in_history_menu_cmds;
 mod paint_in_history_options_cmds;
