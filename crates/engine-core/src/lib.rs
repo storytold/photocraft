@@ -38,6 +38,7 @@ pub mod link_watch;
 pub mod malloc_tuning;
 pub mod memory;
 pub mod memory_gate;
+pub mod menu_sets;
 pub mod new_layer;
 mod param_check;
 pub use param_check::is_incomplete;
@@ -340,3 +341,5 @@ mod tests;
 mod dense_budget_tests;
 
 pub mod command_hints;
+#[cfg(test)]
+mod menu_sets_tests;
