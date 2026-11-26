@@ -432,3 +432,69 @@ fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
         assert_eq!(saved(&app), before, "{bad}");
     }
 }
+
+/// A six-panel group (docked and floating) fits its tabs without overlap and leaves the active
+/// panel unchanged on wheel scroll (`DockConfig::wheel_selects_tabs` stays off by default).
+#[test]
+fn multi_panel_group_tabs_do_not_overlap_and_wheel_keeps_active_panel() {
+    use egui::accesskit::Role;
+    use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, vec2};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let labels = ["Color", "Swatches", "Gradients", "Patterns", "Properties", "Adjustments"];
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.run("window.panel.move", json!({"panel": "properties", "anchor": "color"})).unwrap();
+        app.run("window.panel.move", json!({"panel": "adjustments", "anchor": "color"})).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(probe::group_of(h.state(), "color").len(), 6);
+
+    let check_group_strip = |h: &mut Harness<'_, Box<PhotocraftApp>>, kind: &str| {
+        let rects: Vec<(String, egui::Rect)> = h
+            .query_all_by_role(Role::Tab)
+            .filter_map(|node| {
+                let label = node.accesskit_node().label()?;
+                labels.contains(&label.as_str()).then(|| (label, node.rect()))
+            })
+            .collect();
+        assert!(!rects.is_empty(), "{kind}: at least one group tab is visible");
+        for i in 0..rects.len() {
+            for j in (i + 1)..rects.len() {
+                let overlap = rects[i].1.intersect(rects[j].1);
+                assert!(overlap.width() <= 0.5, "{kind}: tabs {} and {} overlap: {:?} vs {:?}", rects[i].0, rects[j].0, rects[i].1, rects[j].1);
+            }
+        }
+        if rects.len() < labels.len() {
+            assert!(h.query_all_by_label("More tabs").next().is_some(), "{kind}: overflowing tabs expose the overflow picker");
+        }
+        let before = active_tab(h.state(), "color").expect("group has an active panel");
+        h.hover_at(rects[0].1.center());
+        h.event(Event::MouseWheel {
+            source: MouseWheelSource::Unknown,
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -2.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.event(Event::MouseWheel {
+            source: MouseWheelSource::Unknown,
+            unit: MouseWheelUnit::Point,
+            delta: vec2(-40.0, 0.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(active_tab(h.state(), "color").as_deref(), Some(before.as_str()), "{kind}: wheel scrolling leaves the active panel unchanged");
+    };
+
+    check_group_strip(&mut h, "docked");
+
+    h.state_mut().run("window.panel.float", json!({"panel": "color", "group": true, "x": 120.0, "y": 120.0, "width": 260.0, "height": 320.0})).unwrap();
+    h.run_steps(4);
+    assert!(floating(h.state(), "color"));
+    check_group_strip(&mut h, "floating");
+}
