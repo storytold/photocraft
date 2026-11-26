@@ -46,6 +46,23 @@ fn the_shape_flyout_checks_the_shown_tool_and_marks_no_other() {
     let checked: Vec<&str> = rows.iter().filter(|(_, on, _)| *on == Some(Toggled::True)).map(|(name, _, _)| name.as_str()).collect();
     assert_eq!(checked, ["Rectangle Tool"], "only the shown tool is checked: {rows:?}");
     assert!(rows.iter().any(|(name, _, _)| name == "Ellipse Tool"), "the flyout lists the other shape tools: {rows:?}");
+    // What each row paints in its mark column, the room before its tool icon (the row's image): the shown tool's
+    // check (a stroked path), nothing at all for the others. The accessible state alone would not catch a row that
+    // paints a mark it does not report.
+    let shapes = &h.output().shapes;
+    for (name, _, row) in &rows {
+        let inside: Vec<&egui::Shape> =
+            shapes.iter().map(|clipped| &clipped.shape).filter(|shape| row.contains(shape.visual_bounding_rect().center())).collect();
+        let icon = inside.iter().find(|shape| matches!(shape, egui::Shape::Mesh(_))).map(|shape| shape.visual_bounding_rect());
+        let icon = icon.unwrap_or_else(|| panic!("the {name} row paints its tool icon"));
+        let marks: Vec<&&egui::Shape> =
+            inside.iter().filter(|shape| !matches!(shape, egui::Shape::Text(_)) && shape.visual_bounding_rect().max.x <= icon.min.x).collect();
+        if name == "Rectangle Tool" {
+            assert!(matches!(marks[..], [egui::Shape::Path(_)]), "the shown tool's row paints one check before its icon: {marks:?}");
+        } else {
+            assert!(marks.is_empty(), "the {name} row paints nothing before its icon: {marks:?}");
+        }
+    }
     // No empty ring (a stroked circle without fill) inside the flyout's rows.
     let flyout = rows.iter().fold(Rect::NOTHING, |all, (_, _, rect)| all.union(*rect));
     let rings = h
