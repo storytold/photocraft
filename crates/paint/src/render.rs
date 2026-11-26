@@ -1170,6 +1170,51 @@ impl StrokeRenderer {
         (dmg, tail_rect)
     }
 
+    /// [`composite_live`](Self::composite_live) for a preview that shows the stroke as a masked
+    /// layer: instead of blending paint into pixels, writes the stroke's strength into the
+    /// single-channel `mask`, which starts as the "no stroke" value (0, or 1 with `invert`) and
+    /// holds `min(coverage × opacity × selection, 1)` where the stroke paints (or 1 minus that
+    /// with `invert`, for an eraser that scales the layer's own alpha). Only the tiles that
+    /// changed, plus the smoothing tail, are written, so the cost does not depend on the layer's
+    /// size or on the paint's blend. Takes back the previous tail `old`, as `composite_live` does,
+    /// and returns the damage and the new tail's rectangle.
+    ///
+    /// The strength is what [`composite`](Self::composite) feeds its blend for a Normal-mode,
+    /// non-Dissolve stroke, so painting the colour through this mask over the pre-stroke pixels
+    /// gives that composite's pixels (up to the 8-bit dither).
+    pub fn composite_live_mask(&mut self, old: Rect, selection: Option<&Surface>, mask: &mut Surface, invert: bool) -> (Rect, Rect) {
+        let base = if invert { 1.0 } else { 0.0 };
+        let mut tail = self.tail_preview();
+        let redrawn_by_tail: HashSet<u64> = tail.as_ref().map(|t| t.cov.tiles.keys().copied().collect()).unwrap_or_default();
+        if !old.is_empty() {
+            self.mark_dirty(old);
+            let bounds = self.bounds();
+            let tail_bounds = tail.as_ref().map_or(Rect::EMPTY, |t| t.bounds());
+            for ty in old.y0.div_euclid(COV_TILE)..=(old.y1 - 1).div_euclid(COV_TILE) {
+                for tx in old.x0.div_euclid(COV_TILE)..=(old.x1 - 1).div_euclid(COV_TILE) {
+                    let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
+                    let part = tile.intersect(&old);
+                    let written = if redrawn_by_tail.contains(&tile_key((tx, ty))) {
+                        tile.intersect(&tail_bounds)
+                    } else if self.cov.tiles.contains_key(&tile_key((tx, ty))) {
+                        tile.intersect(&bounds)
+                    } else {
+                        Rect::EMPTY
+                    };
+                    if part.is_empty() || written.contains_rect(&part) {
+                        continue;
+                    }
+                    mask.fill_rect(part, &[base]);
+                }
+            }
+        }
+        self.cov.dirty.retain(|k| !redrawn_by_tail.contains(&tile_key(*k)));
+        let mut dmg = old.union(&self.composite_mask(selection, mask, invert, false));
+        let tail_rect = tail.as_mut().map_or(Rect::EMPTY, |t| t.composite_mask(selection, mask, invert, false));
+        dmg = dmg.union(&tail_rect);
+        (dmg, tail_rect)
+    }
+
     /// Mark the coverage tiles over `r` for the next `composite` (e.g. to redraw over a preview).
     pub fn mark_dirty(&mut self, r: Rect) {
         if r.is_empty() {
@@ -1403,6 +1448,71 @@ impl StrokeRenderer {
             for (_, tr, region) in items {
                 if !tr.is_empty() {
                     target.write_region(tr, &region);
+                    dmg = dmg.union(&tr);
+                }
+                pool.push(region);
+            }
+        }
+        self.regions.0 = pool;
+        if all { bounds } else { dmg }
+    }
+
+    /// The per-pixel strength [`composite`](Self::composite) would blend with (before Dissolve),
+    /// written over the tiles it processes into the single-channel `mask` (see
+    /// [`composite_live_mask`](Self::composite_live_mask)); pixels the stroke does not reach in
+    /// those tiles get the "no stroke" value. Returns the damaged rectangle.
+    fn composite_mask(&mut self, selection: Option<&Surface>, mask: &mut Surface, invert: bool, all: bool) -> Rect {
+        let keys: Vec<(i32, i32)> = if all {
+            self.cov.dirty.clear();
+            let mut k: Vec<_> = self.cov.tiles.keys().copied().map(tile_coords).collect();
+            k.sort_unstable();
+            k
+        } else {
+            self.cov.take_dirty()
+        };
+        if let Some(d) = self.dual.as_mut() {
+            d.dirty.clear();
+        }
+        let bounds = self.bounds();
+        let opacity = self.ctx.brush.opacity.clamp(0.0, 1.0);
+        let base = if invert { 1.0 } else { 0.0 };
+        let mut dmg = Rect::EMPTY;
+        const BATCH: usize = 256;
+        let mut pool = std::mem::take(&mut self.regions.0);
+        for batch in keys.chunks(BATCH) {
+            let mut items: Vec<((i32, i32), Rect, Vec<f32>)> = batch.iter().map(|&key| (key, Rect::EMPTY, pool.pop().unwrap_or_default())).collect();
+            let strength_tile = |(key, done, region): &mut ((i32, i32), Rect, Vec<f32>)| {
+                let (tx, ty) = *key;
+                let Some(tile) = self.cov.tiles.get(&tile_key((tx, ty))) else { return };
+                let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&bounds);
+                if tr.is_empty() {
+                    return;
+                }
+                let sel = selection.map(|s| (s.channels(), s.read_region(tr)));
+                let dual = self.dual.as_ref().map(|d| d.tiles.get(&tile_key((tx, ty))));
+                let w = tr.width() as usize;
+                region.clear();
+                region.resize(w * tr.height() as usize, base);
+                for y in tr.y0..tr.y1 {
+                    for x in tr.x0..tr.x1 {
+                        let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
+                        let c = tile.cov[ti];
+                        if c <= 0.0 {
+                            continue;
+                        }
+                        let i = (y - tr.y0) as usize * w + (x - tr.x0) as usize;
+                        let m = self.ctx.stroke_mask_wet(c, tile.depth.get(ti).copied(), dual.map(|t| t.map_or(0.0, |t| t.cov[ti])), x, y);
+                        let s = sel.as_ref().map_or(1.0, |(sc, v)| v[i * sc]);
+                        let k = (m * opacity * s).min(1.0);
+                        region[i] = if invert { 1.0 - k } else { k };
+                    }
+                }
+                *done = tr;
+            };
+            for_each_item(&mut items, batch.len() * (COV_TILE * COV_TILE) as usize, strength_tile);
+            for (_, tr, region) in items {
+                if !tr.is_empty() {
+                    mask.write_region(tr, &region);
                     dmg = dmg.union(&tr);
                 }
                 pool.push(region);
