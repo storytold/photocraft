@@ -514,7 +514,7 @@ fn view_menu_commands_record_append_and_replay_after_resize() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
     let mut camera = app.ui.views[idx].canvas_view(rect, 1.0, false, 1.0);
     for request in &app.ui.views[idx].pending {
-        request.command().apply(&mut camera, &target, None, 1.0);
+        request.command().apply(&mut camera, &target, None, 1.0, &craft::behavior::canvas::ZoomScheme::PHOTOSHOP);
     }
     app.ui.views[idx].set_from(&camera, 1.0);
     assert_eq!(app.ui.views[idx].zoom, 0.75);

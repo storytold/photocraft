@@ -2,6 +2,7 @@
 //! framework's `PresetBrowser` and `PresetPicker`. Rows come from a panel's groups in the panel's folder order; the
 //! browser's events run as the panel's engine commands, through one mapping for every preset panel (`events`).
 
+use craft::behavior::Selection;
 use craft::color_ui::ui::gradient::GradientRamp;
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
@@ -13,8 +14,8 @@ use craft::ui::patterns::presets::{
     CellShape, DefaultOpen, PresetBrowser, PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFns, PresetFooterEvent,
     PresetFooterOptions, PresetMenuAction, PresetPanelMenu, PresetPicker, PresetReorder, PresetRow, PresetSource, PresetState, PresetView, ThumbFn, ThumbInfo,
 };
-use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
+use craft::ui::primitives::{ContentPainterCx, FacePaint};
 use craft::ui::runtime::commands::{CommandSet as _, CommandState};
 use craft::ui::runtime::env::Env;
 use craft::ui::tile_grid::TileZoom;
@@ -142,6 +143,14 @@ impl Swatch {
     fn paint(&self, cx: &ContentPainterCx, rect: Rect) {
         paint_texture(cx, rect, self.texture(cx.painter.ctx()));
     }
+
+    /// The swatch's picture as a face keyed by its texture key, inset by `inset` points on every side.
+    fn face(&self, inset: f32) -> FacePaint {
+        let mut key = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&self.picture, &mut key);
+        let swatch = self.clone();
+        FacePaint::new(std::hash::Hasher::finish(&key), move |cx, rect| swatch.paint(cx, rect.shrink(inset)))
+    }
 }
 
 /// The patterns and styles the preset views draw from, held while the library and the presets are unchanged, so a
@@ -247,7 +256,7 @@ fn show(
     }
     let mut browser = PresetBrowser::new(tl!(panel.label), Bind::bound(&mut state), source);
     if let Some(key) = selected.clone() {
-        browser = browser.selected(key);
+        browser = browser.selection(Bind::given(Selection::single(key)));
     }
     if let Some(height) = look.room_height {
         browser = browser.room_height(height);
@@ -746,10 +755,7 @@ fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<Str
     for (group, shapes) in groups {
         rows.push(PresetRow::group(format!("{SHAPE_GROUP}{group}"), group.clone(), 0));
         for shape in shapes {
-            let swatch = shape.clone();
-            rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
-                swatch.paint(cx, rect.shrink(2.0));
-            }));
+            rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview_face(ThumbAspect::SQUARE, shape.face(2.0)));
         }
     }
     rows
@@ -982,10 +988,7 @@ fn swatch_rows(swatches: &[Swatch], _: &Env) -> Vec<PresetRow<String>> {
     swatches
         .iter()
         .map(|swatch| {
-            let picture = swatch.clone();
-            PresetRow::item(swatch.key.clone(), swatch.name.clone(), 0)
-                .tooltip(swatch.name.clone())
-                .preview(ThumbAspect::SQUARE, move |cx, rect| picture.paint(cx, rect))
+            PresetRow::item(swatch.key.clone(), swatch.name.clone(), 0).tooltip(swatch.name.clone()).preview_face(ThumbAspect::SQUARE, swatch.face(0.0))
         })
         .collect()
 }

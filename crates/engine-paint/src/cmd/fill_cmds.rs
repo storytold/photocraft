@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 
 use crate::commands::{cmyk_param, color_param, layer_param, parse_blend};
 use crate::content_sampling::{content_aware, content_aware_options};
-use crate::pixel_fill::{Blend, Source, blend_into, read_rgba};
+pub use crate::pixel_fill::greyed_modes;
+use crate::pixel_fill::{Blend, Source, blend_into, check_mode_available, read_rgba};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -75,6 +76,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let channel = crate::channel_cmds::is_channel_target(p);
     let id = if channel { None } else { Some(layer_param(s, p)?) };
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    check_mode_available(CMD, &st.doc, mode)?;
     let doc_bounds = st.doc.bounds();
     let sel = st.doc.selection.clone();
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
@@ -102,7 +104,11 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         "pattern" => {
             let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
             let (scale, angle, _, phase) = crate::pattern_cmds::placement(CMD, p)?;
-            let tile = photocraft_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
+            // Where a pattern fill layer and a Pattern Overlay paint the pattern through the grey
+            // profile (an 8- or 16-bit Grayscale document in the default grey space), so does
+            // Edit › Fill (#14975).
+            let space = photocraft_compose::pattern::PatternSpace::of_pixels(&st.doc);
+            let tile = photocraft_compose::pattern::Tile::new_in(&pat, space).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
             // Photoshop's Fill uses the canvas origin.
             let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
             out["pattern"] = json!(pat.id);
@@ -160,3 +166,6 @@ fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mode_by_document_tests;

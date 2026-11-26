@@ -74,6 +74,7 @@ pub use params::nums;
 pub use params::op_from;
 pub use params::pt;
 pub use params::{parse_path, parse_stroke, path_json};
+pub use paths::PEN_STEP_NAMES;
 pub use paths::STROKE_PATH_TOOLS;
 pub use paths::is_work;
 pub use paths::path_mut;

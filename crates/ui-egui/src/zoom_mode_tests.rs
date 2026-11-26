@@ -1,7 +1,7 @@
 //! The Zoom tool on the whole app: the GPU canvas keeps its composite while a zoom eases, and the
 //! temporary and spring zooms ignore the Zoom Out mode of the options bar.
 
-use craft::behavior::canvas::ZoomLadder;
+use craft::behavior::canvas::ZoomScheme;
 use craft::behavior::kurbo::Size;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
@@ -82,7 +82,7 @@ fn temporary_and_spring_zooms_ignore_the_zoom_out_mode() {
         key(&mut h, held, false, Modifiers::NONE);
         h.event(Event::ModifiersChanged(Modifiers::NONE));
         h.run_steps(2);
-        let want = ZoomLadder::step(f64::from(start), dir, doc_size()) as f32;
+        let want = ZoomScheme::PHOTOSHOP.step(f64::from(start), dir, doc_size()) as f32;
         assert!((h.state().current_zoom() - want).abs() < 1e-5, "{name}: {} vs {want}", h.state().current_zoom());
         assert_eq!(h.state().ui.tool, Tool::Brush, "{name}: the selected tool is unchanged");
         assert!(!h.state().ui.tool_options.zoom_in, "{name}: Zoom Out stays selected");
@@ -124,7 +124,7 @@ mod gpu_tests {
         }
         h.state_mut().run("view.zoomIn", json!({})).unwrap();
         // The canvas runs the command in its next pass: the zoom it asks for is the rung after 100 %.
-        let target = craft::behavior::canvas::ZoomLadder::step(1.0, 1, craft::behavior::kurbo::Size::new(400.0, 300.0)) as f32;
+        let target = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.step(1.0, 1, craft::behavior::kurbo::Size::new(400.0, 300.0)) as f32;
         // The ease's length belongs to the framework's motion settings, so the steps are short and the test looks for a
         // frame between the start and the target zoom rather than naming a time for it.
         let mut midway = false;
