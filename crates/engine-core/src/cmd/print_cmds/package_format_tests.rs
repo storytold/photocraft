@@ -4,11 +4,10 @@
 
 use super::*;
 
-fn temp_dir(tag: &str) -> String {
-    let path = std::env::temp_dir().join(format!("photocraft-package-format-{}-{tag}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).unwrap();
-    path.to_string_lossy().replace('\\', "/")
+fn temp_dir(tag: &str) -> (tempfile::TempDir, String) {
+    let root = tempfile::Builder::new().prefix(&format!("photocraft-package-format-{tag}-")).tempdir().unwrap();
+    let path = root.path().to_string_lossy().replace('\\', "/");
+    (root, path)
 }
 
 fn session_saved_as(path: &str) -> Session {
@@ -26,7 +25,7 @@ fn package(s: &mut Session, dir: &str, extra: Value) -> Value {
 
 #[test]
 fn package_uses_the_saved_pcraft_format_by_default() {
-    let dir = temp_dir("pcraft");
+    let (_root, dir) = temp_dir("pcraft");
     let mut s = session_saved_as(&format!("{dir}/Artwork.pcraft"));
     let result = package(&mut s, &format!("{dir}/out"), json!({}));
     assert!(result["document"].as_str().unwrap().ends_with("Artwork/Artwork.pcraft"));
@@ -36,7 +35,7 @@ fn package_uses_the_saved_pcraft_format_by_default() {
 
 #[test]
 fn package_preserves_a_saved_tiff_extension_by_default() {
-    let dir = temp_dir("tiff");
+    let (_root, dir) = temp_dir("tiff");
     let mut s = session_saved_as(&format!("{dir}/Artwork.tif"));
     let result = package(&mut s, &format!("{dir}/out"), json!({}));
     assert!(result["document"].as_str().unwrap().ends_with("Artwork/Artwork.tif"));
@@ -45,7 +44,7 @@ fn package_preserves_a_saved_tiff_extension_by_default() {
 
 #[test]
 fn inferred_psd_package_falls_back_to_pcraft_with_a_warning() {
-    let dir = temp_dir("psd");
+    let (_root, dir) = temp_dir("psd");
     let mut s = session_saved_as(&format!("{dir}/Artwork.psd"));
     let result = package(&mut s, &format!("{dir}/out"), json!({}));
     assert!(result["document"].as_str().unwrap().ends_with("Artwork/Artwork.pcraft"));
@@ -55,7 +54,7 @@ fn inferred_psd_package_falls_back_to_pcraft_with_a_warning() {
 
 #[test]
 fn explicit_package_format_overrides_the_saved_format() {
-    let dir = temp_dir("override");
+    let (_root, dir) = temp_dir("override");
     let mut s = session_saved_as(&format!("{dir}/Artwork.pcraft"));
     let result = package(&mut s, &format!("{dir}/out"), json!({"format": "psd"}));
     assert!(result["document"].as_str().unwrap().ends_with("Artwork/Artwork.psd"));
