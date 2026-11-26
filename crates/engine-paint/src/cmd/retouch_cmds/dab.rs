@@ -1,11 +1,13 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
-    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
-    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
+    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, bad, damage_json, dodge_burn, flag, from_rgba_into,
+    has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 use photocraft_algo::retouch::sponge_rgb;
 use photocraft_color::{ColorMode, SampleType};
+use photocraft_paint::retouch::apply_dab_stroke_until;
+use std::ops::ControlFlow;
 
 // ---------------------------------------------------------------------------------------------
 // Toning (Dodge / Burn / Sponge) and focus (Blur / Sharpen), Smudge
@@ -464,13 +466,16 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         let fmt = surf.format();
         let (mut effect, fault) = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        let dmg = apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
-            Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
-            None => effect(work, fp),
+        let dmg = apply_dab_stroke_until(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| {
+            match &mut sampler {
+                Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
+                None => effect(work, fp),
+            }
+            if fault.is_set() { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
         })
         .map_err(|e| bad(cmd, e.to_string()))?;
         fault.check()?;
-        Ok(dmg)
+        Ok(dmg.unwrap_or(Rect::EMPTY))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
     if from_live {

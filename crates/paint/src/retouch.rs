@@ -14,6 +14,8 @@
 //! All pixel data here is the surface's *native* channels as normalised `f32` (any depth, any colour
 //! model); colour-space-specific work happens in the callbacks.
 
+use std::ops::ControlFlow;
+
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
@@ -272,9 +274,26 @@ pub fn apply_dab_stroke(
     halo: i32,
     mut effect: impl FnMut(&mut Region, &Footprint),
 ) -> Result<Rect, StrokeTooLarge> {
+    let run = apply_dab_stroke_until(target, stroke, selection, lock_transparency, halo, |work, fp| {
+        effect(work, fp);
+        ControlFlow::Continue(())
+    });
+    run.map(|bounds| bounds.unwrap_or(Rect::EMPTY))
+}
+
+/// [`apply_dab_stroke`] whose `effect` can stop the stroke: after a `Break`, no further dab runs,
+/// nothing is mixed back, `target` is left as it was, and the result is `Ok(None)`.
+pub fn apply_dab_stroke_until(
+    target: &mut Surface,
+    stroke: &Stroke,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    halo: i32,
+    mut effect: impl FnMut(&mut Region, &Footprint) -> ControlFlow<()>,
+) -> Result<Option<Rect>, StrokeTooLarge> {
     let ds = dabs(stroke);
     if ds.is_empty() {
-        return Ok(Rect::EMPTY);
+        return Ok(Some(Rect::EMPTY));
     }
     let ctx = crate::BrushContext::new(&stroke.brush);
     let bounds = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
@@ -287,10 +306,12 @@ pub fn apply_dab_stroke(
     let orig = Region::read(target, outer);
     let mut work = orig.clone();
     for (i, d) in ds.iter().enumerate() {
-        effect(&mut work, &ctx.footprint(d, i));
+        if effect(&mut work, &ctx.footprint(d, i)).is_break() {
+            return Ok(None);
+        }
     }
     mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
-    Ok(bounds)
+    Ok(Some(bounds))
 }
 
 /// A sequential-dab stroke whose dense working copy would exceed the memory budget.
@@ -673,6 +694,21 @@ mod tests {
         let mut called = false;
         assert_eq!(apply_dab_stroke(&mut s, &st, None, false, 2, |_, _| called = true), Err(StrokeTooLarge));
         assert!(!called);
+    }
+
+    #[test]
+    fn a_dab_stroke_that_breaks_runs_no_more_dabs_and_paints_nothing() {
+        let mut s = Surface::new(PixelFormat::GRAY8);
+        let st = stroke(&[(10.0, 10.0), (90.0, 10.0)], 6.0, 1.0);
+        let mut seen = Vec::new();
+        let run = apply_dab_stroke_until(&mut s, &st, None, false, 0, |work, fp| {
+            seen.push(fp.index);
+            work.px_mut(fp.rect.x0, fp.rect.y0)[0] = 1.0;
+            if fp.index == 1 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        });
+        assert_eq!(run, Ok(None));
+        assert_eq!(seen, [0, 1]);
+        assert!((0..100).all(|x| s.pixel(x, 10)[0] == 0.0), "nothing mixed back");
     }
 
     #[test]
