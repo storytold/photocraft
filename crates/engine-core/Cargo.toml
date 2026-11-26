@@ -1,0 +1,89 @@
+[package]
+name = "photocraft-engine-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Exposes the allocation failpoints (`allocation::fail_next_for_test`) to other engine crates' tests; only dev-dependencies turn it on.
+failpoints = []
+
+[dependencies]
+craft-tracked = { workspace = true }
+# `#[derive(PlainData)]` for the session areas held in `Tracked`.
+craft-ui-macros = { workspace = true }
+photocraft-geom = { workspace = true }
+photocraft-color = { workspace = true }
+craft-cms = { workspace = true }
+# PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c" }
+photocraft-raster = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-ops = { workspace = true }
+photocraft-compose = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+chrono = { workspace = true }
+web-time = { workspace = true }
+photocraft-paint = { workspace = true }
+photocraft-algo = { workspace = true }
+photocraft-text = { workspace = true }
+photocraft-vector = { workspace = true }
+photocraft-io = { workspace = true }
+craft-xml = { workspace = true }
+craft-psd = { workspace = true }
+photocraft-format = { workspace = true }
+photocraft-plugins = { workspace = true }
+base64 = "0.22"
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+photocraft-codecs = { workspace = true }
+photocraft-formats = { workspace = true }
+flate2 = { workspace = true }
+craft-print = { workspace = true }
+# The framework through its facade: the actions model (`craft::automation`), the `.kys` model
+# (`craft::keymap`), the palette (`craft::color_ui`), preferences storage and autosave
+# (`craft::settings`, `craft::platform`), and `craft::theme::ThemeId`, the theme ids the
+# appearance preferences hold.
+craft = { workspace = true, features = ["automation", "color-ui", "keymap", "platform", "settings"] }
+
+# Release tags use the same semantic versions as Cargo.
+semver = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tempfile = "3"
+# `clock`: the local time that names History Options' snapshot on save (#2966); already in the
+# tree through rmcp. The web build has no local clock here and names it "Snapshot N".
+chrono = { workspace = true, features = ["clock"] }
+
+# `file_cmds::same_file` on Windows: the volume serial number and file index, so a hard link to a
+# file is that file (std's `MetadataExt::file_index` is unstable).
+[target.'cfg(windows)'.dependencies]
+same-file = "1"
+# `file.print` loads Windows.Data.Pdf.dll before calling into it (#5884): the safe binding
+# ui-egui and craft-print already use, pinned to the same version.
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
+
+# Printing on Unix: an IPP client for CUPS (pure Rust); the web build cannot print.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+photocraft-ipp = { workspace = true }
+
+[dev-dependencies]
+craft-affinity = { workspace = true, features = ["synth"] }
+craft-develop-model = { workspace = true }
+photocraft-io = { workspace = true, features = ["testgen"] }
+# Synthetic camera raw files for the open tests.
+photocraft-raw = { workspace = true, features = ["testgen"] }
+photocraft-testkit = { workspace = true }
+exr = { version = "1.73", default-features = false }
+# WebAssembly text -> binary for plug-in test modules (Apache-2.0 WITH LLVM-exception).
+wat = "1.228"
+# Synthetic multi-part EXR fixtures for the parts-commands tests.
+
+# Palette PNGs at 1, 2 and 4 bits and with an eXIf chunk for the Color Table index tests
+# (the png 0.18 already in the tree).
+png = "0.18"

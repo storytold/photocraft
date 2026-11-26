@@ -188,6 +188,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
             // un-premultiplying (dividing each colour by alpha) first.
             background: [255, 255, 255, 255],
             color_replacement: None,
+            // craft-pdf's own default: up to 2^31 coverage values per page.
+            max_coverage: None,
         };
         let rendered = render_page(page, &cache, &options, ctl).map_err(|error| render_error(page_number, dpi, error))?;
         if rendered.diagnostics.image_decode_failed {
@@ -387,8 +389,14 @@ mod tests {
         let pdf = dense_operator_pdf(1_000_000).expect("writing the dense PDF");
         let document = craft_pdf::open_slice_with_options(&pdf, None, &craft_pdf::OpenOptions::default()).expect("the dense PDF opens");
         let cache = RenderCache::new();
-        let options =
-            raster::Options { scale: [1.0, 1.0], size: Some([200, 100]), offset: [0.0, 0.0], background: [255, 255, 255, 255], color_replacement: None };
+        let options = raster::Options {
+            scale: [1.0, 1.0],
+            size: Some([200, 100]),
+            offset: [0.0, 0.0],
+            background: [255, 255, 255, 255],
+            color_replacement: None,
+            max_coverage: None,
+        };
         let polls = AtomicUsize::new(0);
         // `render_page` checks once before spawning; the watcher then polls every 5 ms. Ten
         // polls put the cancellation about 45 ms into a render that takes much longer.
