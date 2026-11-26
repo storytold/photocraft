@@ -83,10 +83,10 @@ pub(crate) fn clone_overlay_key(app: &mut PhotocraftApp, direction: Option<[f64;
     true
 }
 
-/// ⇧⌥-arrows and ⇧⌥-Enter reach [`clone_overlay_key`] wherever keyboard focus is (a frame changed on the timeline
-/// leaves it there, where the arrows would step frames and Enter press a control), unless text is being typed, a
-/// dialog is open or a stroke is under way. A key it uses, and its release, leave the frame's input. Runs from
-/// `raw_input_hook`, before any widget sees the keys.
+/// ⇧⌥-arrows and ⇧⌥-Enter reach [`clone_overlay_key`], and ⇧⌥ < / > and [ / ] reach [`clone_transform_key`],
+/// wherever keyboard focus is (a frame changed on the timeline leaves it there, where the arrows would step frames
+/// and Enter press a control), unless text is being typed, a dialog is open or a stroke is under way. A key it uses,
+/// and its release, leave the frame's input. Runs from `raw_input_hook`, before any widget sees the keys.
 pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Context, raw: &mut egui::RawInput) {
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing)
         || ctx.text_edit_focused()
@@ -98,6 +98,14 @@ pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Contex
     }
     raw.events.retain(|event| {
         let egui::Event::Key { key, pressed, modifiers: m, .. } = event else { return true };
+        let mods = craft::keymap::Mods { cmd: m.mac_cmd, ctrl: m.ctrl, alt: m.alt, shift: m.shift };
+        if let Some(change) = TransformKey::of(*key) {
+            // Ctrl (⌘ on the Mac) makes the step fine.
+            if !(mods.shift && mods.alt) {
+                return true;
+            }
+            return !*pressed || !clone_transform_key(app, change, mods.ctrl || mods.cmd);
+        }
         let direction = match key {
             egui::Key::ArrowLeft => Some([-1.0, 0.0]),
             egui::Key::ArrowRight => Some([1.0, 0.0]),
@@ -106,13 +114,66 @@ pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Contex
             egui::Key::Enter => None,
             _ => return true,
         };
-        let mods = craft::keymap::Mods { cmd: m.mac_cmd, ctrl: m.ctrl, alt: m.alt, shift: m.shift };
         if !*pressed {
             // The release of a key used here: no control acts on it either.
             return !(mods.shift && mods.alt && !mods.ctrl && !mods.cmd);
         }
         !clone_overlay_key(app, direction, mods)
     });
+}
+
+/// What ⇧⌥ with < / > and [ / ] does to the clone source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TransformKey {
+    /// < : turn it counter-clockwise.
+    RotateLeft,
+    /// > : turn it clockwise.
+    RotateRight,
+    /// [ : smaller.
+    Shrink,
+    /// ] : larger.
+    Grow,
+}
+
+impl TransformKey {
+    /// The key egui reports: with ⇧ held, < and > come as the comma and period keys, and [ and ] as the brackets or,
+    /// on some layouts, the curly brackets.
+    fn of(key: egui::Key) -> Option<Self> {
+        match key {
+            egui::Key::Comma => Some(Self::RotateLeft),
+            egui::Key::Period => Some(Self::RotateRight),
+            egui::Key::OpenBracket | egui::Key::OpenCurlyBracket => Some(Self::Shrink),
+            egui::Key::CloseBracket | egui::Key::CloseCurlyBracket => Some(Self::Grow),
+            _ => None,
+        }
+    }
+}
+
+/// Turns the clone source 1° (0.1° `fine`) or scales its W and H by 1 % (0.1 % `fine`), through `cloneSource.set`.
+/// Returns true when the key was used: with a source set.
+pub(crate) fn clone_transform_key(app: &mut PhotocraftApp, change: TransformKey, fine: bool) -> bool {
+    let slot = app.session.presets().clone.active().clone();
+    if slot.source.is_none() {
+        return false;
+    }
+    let step = if fine { 0.1 } else { 1.0 };
+    // Tenths, so steps of 0.1 add up without drift.
+    let tenths = |v: f64| (v * 10.0).round() / 10.0;
+    let params = match change {
+        TransformKey::RotateLeft => json!({"rotation": tenths(slot.rotation + step)}),
+        TransformKey::RotateRight => json!({"rotation": tenths(slot.rotation - step)}),
+        TransformKey::Shrink | TransformKey::Grow => {
+            let d = if change == TransformKey::Grow { step } else { -step };
+            // A flipped side keeps its sign: the step changes its size.
+            let size = slot.scale.map(|v| tenths(v + if v < 0.0 { -d } else { d }));
+            json!({"width": size[0], "height": size[1]})
+        }
+    };
+    if let Err(e) = app.run("cloneSource.set", params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
 }
 
 /// One pixel along an arrow's axis, none across it (`f64::signum` gives 1 for 0).

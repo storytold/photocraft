@@ -919,3 +919,40 @@ fn page_down_and_page_up_step_the_timeline() {
     h.run_steps(2);
     assert!(frame(&h) < on, "Page Up: the previous frame ({on} → {})", frame(&h));
 }
+
+/// ⇧⌥ < / > turn the clone source and ⇧⌥ [ / ] scale it; with Ctrl held each step is finer.
+#[test]
+fn shift_alt_angle_brackets_turn_and_brackets_scale_the_clone_source_with_a_fine_step() {
+    use photocraft_engine::presets::PresetsExt as _;
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::CloneStamp;
+    h.state_mut().run("cloneSource.set", json!({"source": [10, 10]})).unwrap();
+    h.run_steps(2);
+    let slot = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.presets().clone.active().clone();
+    let press = |h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers, key: Key| {
+        h.event(egui::Event::ModifiersChanged(m));
+        h.key_press_modifiers(m, key);
+        h.run_steps(2);
+    };
+    let (coarse, fine) = (Modifiers::SHIFT | Modifiers::ALT, Modifiers::SHIFT | Modifiers::ALT | Modifiers::CTRL);
+
+    let start = slot(&h).rotation;
+    press(&mut h, coarse, Key::Comma);
+    let turned = slot(&h).rotation;
+    assert!(turned > start, "< turns it counter-clockwise: {start} → {turned}");
+    press(&mut h, fine, Key::Comma);
+    let finer = slot(&h).rotation;
+    assert!(finer > turned && finer - turned < turned - start, "Ctrl makes the step finer: {start} → {turned} → {finer}");
+    press(&mut h, coarse, Key::Period);
+    assert!(slot(&h).rotation < finer, "> turns it back clockwise");
+
+    let start = slot(&h).scale;
+    press(&mut h, coarse, Key::CloseBracket);
+    let grown = slot(&h).scale;
+    assert!(grown[0] > start[0] && grown[1] > start[1], "] makes it larger: {start:?} → {grown:?}; status {}", h.state().ui.status);
+    press(&mut h, fine, Key::CloseBracket);
+    let finer = slot(&h).scale;
+    assert!(finer[0] > grown[0] && finer[0] - grown[0] < grown[0] - start[0], "Ctrl makes the step finer: {start:?} → {grown:?} → {finer:?}");
+    press(&mut h, coarse, Key::OpenBracket);
+    assert!(slot(&h).scale[0] < finer[0], "[ makes it smaller");
+}
