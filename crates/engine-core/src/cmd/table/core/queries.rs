@@ -32,6 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             },
             journal: false,
         },
+        crate::cmd::import_report_cmds::spec(),
         CommandSpec {
             id: "document.activate",
             label: "Activate Document",

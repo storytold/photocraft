@@ -93,4 +93,7 @@ mod tiff_save_options;
 mod tiff_type_geometry;
 mod vector;
 mod xcf;
+mod xcf_fuzz_smoke;
+mod xcf_native_text;
+mod xcf_source_evidence;
 mod xmp_export;

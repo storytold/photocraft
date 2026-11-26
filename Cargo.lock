@@ -1363,6 +1363,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabz2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f77ccd2dfd6403f3ff2c5764e49471f390c2a3700777a15bebd88c9606292bd"
+
+[[package]]
 name = "craft"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=5c30761a86c2bb1814098139439be7c5b0a9e31c#5c30761a86c2bb1814098139439be7c5b0a9e31c"
@@ -2576,9 +2582,12 @@ dependencies = [
 [[package]]
 name = "craft-xcf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=5c30761a86c2bb1814098139439be7c5b0a9e31c#5c30761a86c2bb1814098139439be7c5b0a9e31c"
+source = "git+https://github.com/storytold/craft-libs?rev=cb31ba7dead17b8a9f9e9d02702bdd427f63a62e#cb31ba7dead17b8a9f9e9d02702bdd427f63a62e"
 dependencies = [
+ "blake3",
+ "crabz2",
  "flate2",
+ "lzma-rust2",
  "thiserror 2.0.21",
 ]
 
@@ -5310,6 +5319,15 @@ name = "lz4_flex"
 version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+
+[[package]]
+name = "lzma-rust2"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1c46f3fcd2e888afdb01a07efc071cb21300e07c68d32c3e8b01b5c8cb1fcaa"
+dependencies = [
+ "sha2 0.11.1",
+]
 
 [[package]]
 name = "maybe-owned"

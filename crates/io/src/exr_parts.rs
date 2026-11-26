@@ -263,7 +263,7 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     doc.layers = layers.into();
     // OpenEXR holds linear, scene-referred values: tag them linear sRGB, as File › Open does.
     doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document: doc, warnings, source_read_only: false, preview_only: false, historical_xcf_sample_order: None })
 }
 
 /// The additive beauty from the file's AOV groups: premultiplied RGB summed over the

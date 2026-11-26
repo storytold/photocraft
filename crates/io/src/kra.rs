@@ -300,5 +300,12 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if image.assistants || image.reference_images {
         reader.warnings.note("drawing assistants and reference images were left out");
     }
-    Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false })
+    Ok(ImportResult {
+        initial_view: None,
+        document,
+        warnings: reader.warnings.finish(),
+        source_read_only: true,
+        preview_only: false,
+        historical_xcf_sample_order: None,
+    })
 }

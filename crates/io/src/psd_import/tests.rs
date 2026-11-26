@@ -587,6 +587,7 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
+        historical_xcf_digests: Default::default(),
         ctl: photocraft_raster::Interrupt::NONE,
         done: 0,
         uniform: Default::default(),

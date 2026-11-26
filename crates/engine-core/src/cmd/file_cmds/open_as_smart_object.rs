@@ -24,7 +24,13 @@ const LABEL: &str = "Open As Smart Object";
 pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", CMD)?.to_string();
     let name = file_name(&path);
-    let opts = crate::jobs::import_options(s.prefs());
+    let base = crate::jobs::import_options(s.prefs());
+    let mut opts = super::sample_order::import_options_from_params(base, p, CMD)?;
+    if matches!(opts.historical_xcf_order, photocraft_io::HistoricalXcfOrder::RequireExplicit) {
+        // This existing command keeps its compatible policy when no new choice is supplied.
+        // The opt-in historical Open prompt is a separate workflow.
+        opts.historical_xcf_order = base.historical_xcf_order;
+    }
     // An interactive caller (the app) asks before opening a PSD that had damaged data, as File > Open does.
     let confirm_damage = p.get("confirmDamage").and_then(Value::as_bool).unwrap_or(false);
     crate::jobs::run(
@@ -32,30 +38,40 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
         &format!("Opening {name}"),
         false,
         move |ctx| {
-            ctx.progress(0.0, "Reading");
-            let bytes = read_file(&path)?;
-            ctx.check()?;
-            ctx.progress(0.05, "Decoding");
-            let (r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
-            ctx.check()?;
-            ctx.progress(0.9, "Flattening");
-            // The file as one image: the smart object's rendered contents.
-            let pixels = flattened_checked(&r.document, r.document.pixel_format(), CMD)?;
-            Ok((path, name, Arc::new(bytes), r, pixels, confirm_damage && damaged))
+            let prepared = prepare(&path, &name, opts, confirm_damage, ctx)?;
+            Ok((path, name, prepared))
         },
-        |s, (path, name, bytes, r, pixels, damaged)| apply(s, &path, &name, bytes, r, pixels, damaged),
+        |s, (path, name, prepared)| apply(s, &path, &name, prepared),
     )
 }
 
-fn apply(
-    s: &mut Session,
-    path: &str,
-    file: &str,
+/// One admitted encoded snapshot and the pixels/options evidence derived from it.
+struct PreparedSource {
     bytes: Arc<Vec<u8>>,
-    r: photocraft_io::ImportResult,
+    imported: photocraft_io::ImportResult,
     pixels: photocraft_raster::Surface,
     damaged: bool,
-) -> Result<Value> {
+}
+
+fn prepare(path: &str, name: &str, opts: photocraft_io::ImportOptions, confirm_damage: bool, ctx: &crate::jobs::JobCtx) -> Result<PreparedSource> {
+    ctx.progress(0.0, "Reading");
+    let bytes = read_file(path)?;
+    ctx.check()?;
+    ctx.progress(0.05, "Decoding");
+    let (imported, damaged) = import_result_for_open(name, &bytes, &opts)?;
+    ctx.check()?;
+    ctx.progress(0.9, "Flattening");
+    let pixels = flattened_checked(&imported.document, imported.document.pixel_format(), CMD)?;
+    ctx.check()?;
+    Ok(PreparedSource { bytes: Arc::new(bytes), imported, pixels, damaged: confirm_damage && damaged })
+}
+
+fn apply(s: &mut Session, path: &str, file: &str, prepared: PreparedSource) -> Result<Value> {
+    let PreparedSource { bytes, imported: r, pixels, damaged } = prepared;
+    let order = r.historical_xcf_sample_order.map(|order| match order {
+        photocraft_io::HistoricalXcfSampleOrder::BigEndian => photocraft_doc::HistoricalXcfSampleOrder::BigEndian,
+        photocraft_io::HistoricalXcfSampleOrder::LittleEndian => photocraft_doc::HistoricalXcfSampleOrder::LittleEndian,
+    });
     let warnings = r.warnings;
     let mut src = r.document;
     super::tag_exr_colorspace(s, file, &mut src);
@@ -72,7 +88,8 @@ fn apply(
 
     // Embedded (not linked): the original file name keeps its extension, so Edit Contents opens it.
     let source = SmartSource::Embedded { file_name: file.to_string(), bytes };
-    let so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
+    let mut so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
+    so.historical_xcf_sample_order = order;
     let layer = Layer::new(layer_name, LayerContent::Smart(so));
     let layer_id = layer.id;
     crate::layer_place::insert_new(&mut doc, None, layer, Place::AutoEditable);
@@ -114,3 +131,6 @@ pub fn admit_as_smart_object(s: &mut Session, mut doc: Document) -> usize {
     }
     index
 }
+
+#[cfg(test)]
+mod historical_order_tests;

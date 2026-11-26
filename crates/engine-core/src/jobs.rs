@@ -610,6 +610,8 @@ fn reap_draining(draining: &mut Vec<Draining>) -> bool {
 
 /// The session's job table (see the module docs).
 pub struct Jobs {
+    historical_opens: Vec<historical_open::Held>,
+    next_historical_open: u64,
     next: u64,
     /// Set while [`Session::start`] runs a command: [`run`] spawns instead of running inline.
     spawn: bool,
@@ -638,6 +640,8 @@ impl Default for Jobs {
     /// No jobs, spawning off; a session steps its jobs itself (cooperative) on wasm only.
     fn default() -> Self {
         Self {
+            historical_opens: Vec::new(),
+            next_historical_open: 0,
             next: 0,
             spawn: false,
             pending: None,
@@ -955,6 +959,16 @@ pub enum OpenSource {
     Path(String),
 }
 
+/// Decoded Open payload retained while the host answers a color or damage question.
+/// Its source origin is runtime-only protection, never a file-access permission.
+#[derive(Debug)]
+pub struct HeldImportedDocument {
+    pub document: Document,
+    pub source_read_only: bool,
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
+    pub protected_import_source: Option<String>,
+}
+
 /// The command id open jobs report (there is no engine command: opening is the shell's).
 pub const OPEN_JOB: &str = "file.open";
 
@@ -1073,6 +1087,10 @@ impl Session {
 
     /// Most bytes of file data pending approvals may keep alive together.
     ///
+    /// Shared by published PSD preflights and historical XCF decisions. Running
+    /// workers and uncollected results still use the separate job/read bounds;
+    /// this pending-source cap is not a total process-memory reservation.
+    ///
     /// This is a retention bound for the *sources* of files waiting for an answer, not a pixel
     /// budget and not an admission limit: only an [`OpenSource::Bytes`] source holds data (a path
     /// streams from its file once opened), the allocation's capacity is charged rather than its
@@ -1097,7 +1115,7 @@ impl Session {
     /// [`Self::store_pending_preflight`] with an explicit retention cap (tests use a tiny one so
     /// the boundary is exercised without holding a gigabyte).
     pub(crate) fn store_pending_preflight_with_limit(&mut self, mut preflight: PendingPsdPreflight, byte_limit: u64) -> Result<u64> {
-        if self.pending_preflights.len() >= Self::MAX_PENDING_PREFLIGHTS {
+        if self.pending_preflights.len().saturating_add(self.jobs.historical_opens.len()) >= Self::MAX_PENDING_PREFLIGHTS {
             return Err(EngineError::Other("too many pending high-memory preflights waiting for confirmation".into()));
         }
         let held = self.pending_preflight_bytes_with(&preflight.source)?;
@@ -1128,6 +1146,7 @@ impl Session {
     /// checked before the list is changed.
     fn pending_preflight_bytes_with(&self, incoming: &OpenSource) -> Result<u64> {
         let mut sources: Vec<&OpenSource> = self.pending_preflights.iter().map(|p| &p.source).collect();
+        sources.extend(self.jobs.historical_opens.iter().map(|held| &held.source));
         sources.push(incoming);
         Self::retained_source_bytes(sources)
     }
@@ -1197,7 +1216,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1210,7 +1229,7 @@ impl Session {
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
     /// [`Session::take_held_open`] once answered.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true)
+        self.start_open_inner(name, source, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1223,7 +1242,7 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background)
+        self.start_open_inner(name, source, true, false, None, None, background, None)
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1257,18 +1276,38 @@ impl Session {
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        historical: Option<historical_open::Settings>,
     ) -> Result<Started> {
+        let native_authorization = self.authorize;
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
-        let mut opts = import_options(self.prefs());
-        // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
-        opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
+        // Only an actual path source supplies an origin. A display name for bytes
+        // must not acquire filesystem identity or permission through this handoff.
+        let source_path = historical.as_ref().and_then(|settings| settings.origin.clone()).or_else(|| match &source {
+            OpenSource::Path(path) => Some(path.clone()),
+            OpenSource::Bytes(_) => None,
+        });
+        let mut opts = historical.as_ref().map_or_else(|| import_options(self.prefs()), |settings| settings.options);
+        // Only legacy entrypoints derive this option from preferences; an opt-in
+        // continuation preserves the caller's captured policy exactly.
+        if historical.is_none() {
+            opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
+        }
+        let historical_enabled = historical.is_some();
+        let as_ext = historical.as_ref().and_then(|settings| settings.as_ext.clone());
+        #[cfg(any(unix, windows))]
+        let retained = Self::retained_source_bytes(
+            self.pending_preflights.iter().map(|pending| &pending.source).chain(self.jobs.historical_opens.iter().map(|held| &held.source)),
+        )?;
+        #[cfg(any(unix, windows))]
+        let capture_limit = Self::MAX_PENDING_PREFLIGHT_BYTES.saturating_sub(retained);
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),
+            HistoricalNeeded { source: OpenSource, question: photocraft_io::HistoricalXcfSampleOrderRequest },
             PreflightNeeded { required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64>, source: OpenSource, fingerprint: SourceFingerprint },
         }
         self.start_job_with_spawn(
@@ -1300,9 +1339,16 @@ impl Session {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");
-                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
+                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| {
+                            crate::file_cmds::with_native_xcf_import_authority(native_authorization, || {
+                                photocraft_io::import_for_open_with_as(&name_w, &bytes, as_ext.as_deref(), &opts, ctl)
+                            })
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
+                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if historical_enabled => {
+                                WorkResult::HistoricalNeeded { source: OpenSource::Bytes(bytes), question }
+                            }
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
                                 // The buffer cannot change while it is decoded, so the identity
                                 // captured before reading is still exact.
@@ -1318,9 +1364,36 @@ impl Session {
                     }
                     OpenSource::Path(p) => {
                         let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                        #[cfg(any(unix, windows))]
+                        let mut capture = photocraft_io::HistoricalXcfSourceCapture::new(capture_limit);
+                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| {
+                            crate::file_cmds::with_native_xcf_import_authority(native_authorization, || {
+                                #[cfg(any(unix, windows))]
+                                if historical_enabled {
+                                    return historical_open::import_path(
+                                        &name_w,
+                                        &p,
+                                        as_ext.as_deref(),
+                                        &opts,
+                                        expected_fingerprint.as_ref(),
+                                        ctl,
+                                        &mut opened,
+                                        &mut capture,
+                                    );
+                                }
+                                import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened)
+                            })
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
+                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if historical_enabled => {
+                                #[cfg(any(unix, windows))]
+                                let bytes = capture.take();
+                                #[cfg(not(any(unix, windows)))]
+                                let bytes = None::<Arc<Vec<u8>>>;
+                                let bytes = bytes.ok_or_else(|| EngineError::Other("the verified historical source was not retained".into()))?;
+                                WorkResult::HistoricalNeeded { source: OpenSource::Bytes(bytes), question }
+                            }
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
                                 // This identity is the one read from the handle that was
                                 // estimated, and the verified import refused a handle that is
@@ -1339,7 +1412,7 @@ impl Session {
                 };
 
                 match &outcome {
-                    WorkResult::PreflightNeeded { .. } => Ok(outcome),
+                    WorkResult::PreflightNeeded { .. } | WorkResult::HistoricalNeeded { .. } => Ok(outcome),
                     WorkResult::Decoded(imported) => {
                         ctx.progress(0.95, "Preparing layers");
                         warm_layer_bounds(&imported.0.document, || ctx.check())?;
@@ -1353,6 +1426,10 @@ impl Session {
                 }
             },
             move |s, outcome| match outcome {
+                WorkResult::HistoricalNeeded { source, question } => {
+                    let settings = historical.ok_or_else(|| EngineError::Other("historical Open was not requested".into()))?;
+                    s.hold_historical_open(name_a, source, question, settings, Self::MAX_PENDING_PREFLIGHT_BYTES)
+                }
                 WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source, fingerprint } => {
                     // The warning follows the capacity measured for this estimate: an unknown
                     // capacity carries no fabricated number, and above the threshold it also
@@ -1381,26 +1458,37 @@ impl Session {
                         "uncertainCapacityWarning": uncertain_capacity,
                     }))
                 }
-                WorkResult::Decoded(imported) => {
-                    let (mut r, damaged) = *imported;
-                    crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
-                    crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
-                    let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-                    let damaged = confirm_damage && damaged;
-                    let question = s.color().open_question(&r.document).filter(|_| !raw);
-                    if damaged || question.is_some() {
-                        let held = s.hold_open(r.document, r.source_read_only);
-                        return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
-                    }
-                    let (index, color) = s.open_document(r.document, None);
-                    let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
-                    if let Some(st) = s.active_mut() {
-                        st.source_read_only = r.source_read_only;
-                    }
-                    Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
-                }
+                WorkResult::Decoded(imported) => s.finish_open_import(&name_a, source_path, *imported, confirm_damage),
             },
         )
+    }
+
+    /// Finish decoded native data only after the normal job publication checks.
+    fn finish_open_import(
+        &mut self,
+        name: &str,
+        source_path: Option<String>,
+        imported: (photocraft_io::ImportResult, bool),
+        confirm_damage: bool,
+    ) -> Result<Value> {
+        let (mut r, damaged) = imported;
+        let protected_source = source_path.filter(|_| r.source_read_only);
+        crate::file_cmds::tag_exr_colorspace(self, name, &mut r.document);
+        crate::file_cmds::raw_defaults(self, &r.warnings, &mut r.document);
+        let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
+        let damaged = confirm_damage && damaged;
+        let question = self.color().open_question(&r.document).filter(|_| !raw);
+        if damaged || question.is_some() {
+            let held = self.hold_open_with_view(r.document, r.source_read_only, r.initial_view, protected_source);
+            return Ok(json!({"held": held, "name": name, "warnings": r.warnings, "color": question, "damaged": damaged}));
+        }
+        let color = self.color().open_policy(&mut r.document, self.prefs().file_handling.ignore_exif_profile_tag);
+        // Keep the worker's existing path=None admission. Only a read-only
+        // source passes its origin, which admission protects rather than saving to.
+        let (index, warning) = self.admit_import_with_initial_view(r.document, protected_source, r.source_read_only, r.initial_view);
+        r.warnings.extend(warning);
+        let id = self.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
+        Ok(json!({"document": index, "docId": id.0, "name": name, "warnings": r.warnings, "color": color}))
     }
 
     /// Start a job that isn't an engine command (opening a file, a shell operation, a test's fake
@@ -2237,6 +2325,9 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod open_initial_view_tests;
+
 #[cfg(test)]
 #[path = "../../io/tests/support/recovery_psd.rs"]
 pub(crate) mod psd_open_fixture;
@@ -2286,3 +2377,10 @@ mod psd_open_confirmation_tests {
         }
     }
 }
+
+mod historical_open;
+pub(crate) use historical_open::answer_command as answer_historical_open;
+
+#[cfg(test)]
+#[path = "jobs/historical_open/tests/fixture.rs"]
+pub(crate) mod historical_fixture;

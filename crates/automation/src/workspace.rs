@@ -115,6 +115,24 @@ impl AuthorizedWorkspace {
         })
     }
 
+    /// Identity of a save destination beneath the held write capability, for
+    /// source-protection comparisons only. This grants no write permission;
+    /// `write_stream` still resolves and authorizes the actual operation.
+    pub fn write_location(&self, path: &str) -> Result<PathBuf, AutomationError> {
+        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        let relative = request_path(path, Some(root))?;
+        let resolved = match root.dir.canonicalize(&relative) {
+            Ok(resolved) => resolved,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let parent = relative.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+                let parent = root.dir.canonicalize(parent).map_err(|error| file_error("locate save parent", path, error))?;
+                parent.join(relative.file_name().ok_or_else(|| path_error(path, "save path has no file name"))?)
+            }
+            Err(error) => return Err(file_error("locate save", path, error)),
+        };
+        Ok(root.path.join(resolved))
+    }
+
     fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
         if self.read.is_empty() {
             return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));

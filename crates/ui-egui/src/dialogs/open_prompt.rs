@@ -30,8 +30,11 @@ pub(crate) struct MemoryTag {
 /// A file read and decoded, waiting to open.
 pub struct Held {
     pub doc: Document,
-    /// The source is read-only (an Affinity file): Save doesn't write back to it.
+    /// The source is import-only: Save does not write back to it.
     pub read_only: bool,
+    /// Optional source view and origin survive confirmation until one-time admission.
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
+    pub protected_import_source: Option<String>,
     /// Ask whether to continue before adding a damaged PSD or showing its profile prompt.
     /// Discarded after the answer: it does not become a document or save restriction.
     pub damage_pending: bool,
@@ -362,23 +365,40 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
-    let index = if question.is_some() || policy_applied {
+    let Held {
+        mut doc,
+        read_only,
+        damage_pending: _,
+        name,
+        path,
+        mut warnings,
+        bytes,
+        slot,
+        order,
+        question,
+        policy_applied,
+        smart_object,
+        initial_view,
+        protected_import_source,
+    } = held;
+    if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color().resolve_open(&mut doc, action)
         {
             app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
-        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
-    } else if smart_object {
-        // A damage-only hold has no colour question: apply the policy as the engine's open does,
-        // then admit it as the smart object document it is (name, history label, snapshot).
+    } else {
+        // A damage-only hold has no colour question: apply the ordinary open policy.
         let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
         app.session.color().open_policy(&mut doc, ignore_exif);
+    }
+    let index = if smart_object {
         photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
     } else {
-        app.session.open_document(doc, None).0
+        let (index, warning) = app.session.admit_import_with_initial_view(doc, protected_import_source, read_only, initial_view);
+        warnings.extend(warning);
+        index
     };
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;

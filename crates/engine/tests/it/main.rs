@@ -83,6 +83,7 @@ mod hdr_gamma_direction;
 mod huge_doc_flatten;
 mod image_size_scale_styles;
 mod image_size_scale_styles_atn;
+mod import_initial_view;
 mod integration_batch;
 mod jpeg_exif_resolution;
 mod keyboard_shortcut_bulk;

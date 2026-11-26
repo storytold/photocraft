@@ -13,7 +13,7 @@ use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Knockout, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
-use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
+use super::{authorize_source, authorized_source_bytes, decode_source_with_order, detach_psd, other, placement, shift_layer, smart};
 use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
@@ -22,7 +22,8 @@ use crate::{EngineError, Result, Session};
 fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
-    let mut src = decode_source(&name, &bytes)?;
+    super::rendering::check_historical_link(sm, &bytes)?;
+    let mut src = decode_source_with_order(&name, &bytes, sm.historical_xcf_sample_order)?;
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {
         crate::color_cmds::convert_document(&mut src, &crate::color_cmds::document_profile(doc), intent, bpc)?;
@@ -40,27 +41,31 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
             l.name = "Layer 0".into();
             l.locks = Default::default();
         }
-        embed_nested(&src.metadata, l);
+        embed_nested(&src.metadata, l)?;
     }
     Ok(layers)
 }
 
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
 /// behind: embed those sources so the nested smart objects keep rendering in the document.
-fn embed_nested(meta: &Metadata, l: &mut Layer) {
+fn embed_nested(meta: &Metadata, l: &mut Layer) -> Result<()> {
     let found = match &l.content {
         LayerContent::Smart(SmartObject { source: SmartSource::Linked { path }, .. }) => photocraft_io::linked::find_linked_file(meta, path),
         _ => None,
     };
     if let Some(f) = found {
         if let LayerContent::Smart(sm) = &mut l.content {
+            super::rendering::check_historical_link(sm, &f.bytes)?;
+            sm.historical_xcf_link_digest = None;
+            sm.linked_source_baseline = None;
             sm.source = SmartSource::Embedded { file_name: f.file_name, bytes: Arc::new(f.bytes) };
         }
         detach_psd(l);
     }
     for c in l.children_mut().into_iter().flatten() {
-        embed_nested(meta, c);
+        embed_nested(meta, c)?;
     }
+    Ok(())
 }
 
 /// Moves unpacked layers from source pixels to where the smart object placed them: an exact
@@ -98,7 +103,7 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
     }
     for l in layers {
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
-        crate::transform_cmds::refresh_text(doc, l);
+        crate::transform_cmds::refresh_transformed_content(doc, l, affine);
     }
     Ok(())
 }

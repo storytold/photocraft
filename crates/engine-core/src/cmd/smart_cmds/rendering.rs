@@ -1,7 +1,5 @@
 use super::filters::smart;
-use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale,
-};
+use super::source::{SourceImage, cache_get, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
     SmartSource, Stage, StageKey, Surface, Value, affine_homography, other, placement, stack_cache,
@@ -12,12 +10,19 @@ use std::sync::{Mutex, Weak};
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`super::source_image`], keyed by mode.
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
-    stack_image_classified(file_name, bytes, fmt, mode, None)
+    stack_image_classified(file_name, bytes, fmt, mode, None, None)
 }
 
-fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, svg: Option<bool>) -> Result<SourceImage> {
+fn stack_image_classified(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    mode: photocraft_doc::StackMode,
+    svg: Option<bool>,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
-    let mut key = cache_key(bytes, fmt);
+    let mut key = super::source::source_cache_key_with_order(file_name, bytes, fmt, svg, order);
     // Keep the filename in the key because fallback import uses it to choose a format.
     // Use a separate domain from entries that predate plain SVG completeness checks.
     key.0 = *blake3::hash(&[&key.0[..], b"stack-source-v3:", blake3::hash(file_name.as_bytes()).as_bytes(), mode.id().as_bytes()].concat()).as_bytes();
@@ -25,7 +30,7 @@ fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode:
         return Ok(img);
     }
     let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
-    let doc = super::decode_source_classified(file_name, bytes, svg)?;
+    let doc = super::decode_source_classified_with_order(file_name, bytes, svg, order)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -217,10 +222,12 @@ fn place_with_svg(
         });
     }
     let img = match sm.stack_mode {
-        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg))?, doc)?,
+        Some(mode) if is_svg => {
+            convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg), sm.historical_xcf_sample_order)?, doc)?
+        }
         None if is_svg => svg(bytes, 1.0)?,
-        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg))?,
-        None => super::source::source_image_classified(name, bytes, fmt, is_svg)?,
+        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), sm.historical_xcf_sample_order)?,
+        None => super::source::source_image_classified_with_order(name, bytes, fmt, is_svg, sm.historical_xcf_sample_order)?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -341,6 +348,17 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
         .map_or_else(|| bytes.clone(), |preview| preview.svg.clone())
 }
 
+/// Reject annotations on linked bytes before classification, preview substitution or cache lookup.
+pub(crate) fn check_historical_link(sm: &SmartObject, bytes: &[u8]) -> Result<()> {
+    if matches!(sm.source, SmartSource::Linked { .. }) && sm.historical_xcf_sample_order.is_some() {
+        let expected = sm
+            .historical_xcf_link_digest
+            .ok_or_else(|| EngineError::HistoricalXcfLinkChanged("the historical XCF link needs a verified sample-order choice".into()))?;
+        photocraft_io::linked::check_historical_xcf_digest(Some(expected), bytes).map_err(|message| EngineError::HistoricalXcfLinkChanged(message.into()))?;
+    }
+    Ok(())
+}
+
 /// The box of a smart object's source in source pixels (what its warp's `us`/`vs` span), or `None`
 /// when the source can't be read.
 ///
@@ -350,12 +368,17 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// keeps the strict layered import it renders with.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
+    check_historical_link(sm, &bytes).ok()?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
-        Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => super::source::source_image(&name, &bytes, fmt).ok()?.bounds,
+        Some(mode) => stack_image_classified(&name, &bytes, fmt, mode, None, sm.historical_xcf_sample_order).ok()?.bounds,
+        None => {
+            super::source::source_image_classified_with_order(&name, &bytes, fmt, photocraft_io::svg::is_svg(&bytes), sm.historical_xcf_sample_order)
+                .ok()?
+                .bounds
+        }
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -368,6 +391,7 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 
 /// Command-only rendering that retains usable SVG artwork and reports omitted embedded images.
 /// Its local source cache never enters the strict process-wide source/filter caches.
+#[cfg(test)]
 pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(Option<Surface>, Vec<String>)> {
     render_with_warnings_using(sm, &mut WarningRenderSources::new(doc))
 }
@@ -476,10 +500,21 @@ impl<'a> WarningRenderSources<'a> {
 /// Reuse only warning-aware source pixels during one shared-content update.
 pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
     let doc = sources.document;
+    let Some(snapshot) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
+    render_with_warnings_snapshot(sm, sources, snapshot)
+}
+
+pub(crate) fn render_with_warnings_snapshot(
+    sm: &SmartObject,
+    sources: &mut WarningRenderSources<'_>,
+    snapshot: (String, Arc<Vec<u8>>),
+) -> Result<(Option<Surface>, Vec<String>)> {
+    let doc = sources.document;
     if sm.vector_preview.is_some() || sm.stack_mode.is_some() {
-        return render(doc, sm).map(|surface| (surface, Vec::new()));
+        return render_in_with_source(doc, sm, &JobCtx::new(), Some(snapshot)).map(|surface| (surface, Vec::new()));
     }
-    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
+    let (name, bytes) = snapshot;
+    check_historical_link(sm, &bytes)?;
     if !photocraft_io::svg::is_svg(&bytes) {
         // Keep the same source snapshot for fallback, including authorized linked reads.
         return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes))).map(|surface| (surface, Vec::new()));
@@ -505,12 +540,34 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
 }
 
 fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<Surface>> {
+    Ok(render_capturing_source(doc, sm, ctx, snapshot)?.map(|rendered| rendered.surface))
+}
+
+struct RenderedSource {
+    surface: Surface,
+    snapshot: (String, Arc<Vec<u8>>),
+}
+
+/// Keep the exact source private until authorization and rendering both succeed. Refresh uses
+/// this same seam, so capturing a freshness baseline never reads ahead of filter authorization.
+fn render_capturing_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<RenderedSource>> {
+    ctx.check()?;
     // A trusted UI render may have populated these stages. Check authority even on a hit.
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
-    let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
-    let bytes = display_source(sm, &original);
+    ctx.check()?;
+    let Some(snapshot) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
+    ctx.check()?;
+    let surface = render_authorized_snapshot(doc, sm, ctx, &snapshot)?;
+    ctx.check()?;
+    Ok(Some(RenderedSource { surface, snapshot }))
+}
+
+fn render_authorized_snapshot(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: &(String, Arc<Vec<u8>>)) -> Result<Surface> {
+    let (name, original) = snapshot;
+    check_historical_link(sm, original)?;
+    let bytes = display_source(sm, original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     // Plain SVG uses the original strict vector path. Gzip sources use ordinary
     // file import and native-size pixels, as existing saved objects expect.
@@ -527,14 +584,14 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
+        let surface = place_with_svg(name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
         Ok(stage)
     };
     let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
     if filters.is_empty() {
-        return Ok(Some(placed()?.surface));
+        return Ok(placed()?.surface);
     }
     let keys: Vec<StageKey> = filters
         .iter()
@@ -564,10 +621,10 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         stack_cache::put(*key, &cur);
     }
     ctx.progress(1.0, "");
-    Ok(Some(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
+    Ok(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
         Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
         None => cur.surface,
-    }))
+    })
 }
 
 /// Bytes held by rendered smart filter stages.
@@ -590,6 +647,14 @@ pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Re
     render(doc, &below)
 }
 
+pub(crate) fn linked_source_baseline(sm: &SmartObject, source: Option<&(String, Arc<Vec<u8>>)>) -> Option<photocraft_doc::LinkedSourceBaseline> {
+    let SmartSource::Linked { path } = &sm.source else { return None };
+    if sm.historical_xcf_sample_order.is_some() {
+        return None;
+    }
+    Some(photocraft_doc::LinkedSourceBaseline { path: path.clone(), digest: *blake3::hash(&source?.1).as_bytes() })
+}
+
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
 /// unavailable or a visible filter can't be applied (the cache is then left alone).
 pub fn refresh_layer(doc: &Document, l: &mut Layer) -> Result<bool> {
@@ -609,13 +674,13 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
-    match render_in(doc, sm, ctx)? {
-        Some(px) => {
-            sm.cache = Some(px);
-            Ok(true)
-        }
-        None => Ok(false),
-    }
+    let Some(rendered) = render_capturing_source(doc, sm, ctx, None)? else { return Ok(false) };
+    ctx.check()?;
+    let baseline = linked_source_baseline(sm, Some(&rendered.snapshot));
+    ctx.check()?;
+    sm.cache = Some(rendered.surface);
+    sm.linked_source_baseline = baseline;
+    Ok(true)
 }
 
 /// Re-renders the smart object `id` of `doc`.
@@ -639,6 +704,22 @@ pub(super) fn refresh_or_fail(doc: &mut Document, id: LayerId) -> Result<()> {
     refresh_or_fail_in(doc, id, &JobCtx::new())
 }
 
+/// A source-changing transaction renders every instance from its one verified read.
+pub(super) fn refresh_or_fail_from_source(doc: &mut Document, id: LayerId, ctx: &JobCtx, source: (String, Arc<Vec<u8>>)) -> Result<()> {
+    ctx.check()?;
+    let mut layer = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(object) = &mut layer.content else { return Err(other("the layer is not a smart object")) };
+    let surface = render_in_with_source(doc, object, ctx, Some(source.clone()))?.ok_or_else(|| other("the smart object's contents could not be rendered"))?;
+    ctx.check()?;
+    let baseline = linked_source_baseline(object, Some(&source));
+    ctx.check()?;
+    object.linked_source_baseline = baseline;
+    object.cache = Some(surface);
+    let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    target.content = layer.content;
+    Ok(())
+}
+
 pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<()> {
     if refresh_in(doc, id, ctx)? {
         return Ok(());
@@ -654,3 +735,68 @@ pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) 
 #[cfg(test)]
 #[path = "tests/source_work.rs"]
 mod source_work_tests;
+
+#[cfg(test)]
+mod refresh_authorization_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! { static SOURCE_REQUESTS: Cell<usize> = const { Cell::new(0) }; }
+
+    fn gate(command: &str, _: &Value) -> Result<()> {
+        if command == "layer.smartObjects.updateModifiedContent" {
+            SOURCE_REQUESTS.with(|count| count.set(count.get() + 1));
+        }
+        if command == "image.adjustments.invert" {
+            return Err(other("filter denied before linked read"));
+        }
+        Ok(())
+    }
+
+    fn linked_layer(path: &std::path::Path) -> Layer {
+        let mut smart = SmartObject::new(SmartSource::Linked { path: path.to_str().unwrap().into() }, Affine::IDENTITY, Some(Surface::new(PixelFormat::RGBA8)));
+        smart.linked_source_baseline = Some(photocraft_doc::LinkedSourceBaseline { path: path.to_str().unwrap().into(), digest: [9; 32] });
+        Layer::new("Preserved linked pixels", LayerContent::Smart(smart))
+    }
+
+    #[test]
+    fn a_refused_visible_filter_precedes_refresh_source_read_and_baseline_capture() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("linked.svg");
+        std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#).unwrap();
+        let doc = Document::new("Refresh authority", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut layer = linked_layer(&path);
+        let LayerContent::Smart(smart) = &mut layer.content else { panic!("smart layer") };
+        smart.smart_filters.push(SmartFilter {
+            command: "image.adjustments.invert".into(),
+            params: serde_json::json!({}),
+            blend: BlendMode::Normal,
+            opacity: 1.,
+            visible: true,
+        });
+        let before = layer.clone();
+        SOURCE_REQUESTS.with(|count| count.set(0));
+        let _authority = crate::jobs::render_authorization_scope(Some(gate));
+        let error = refresh_layer_in(&doc, &mut layer, &JobCtx::new()).unwrap_err();
+        assert!(error.to_string().contains("filter denied"));
+        assert_eq!(SOURCE_REQUESTS.with(Cell::get), 0);
+        assert_eq!(layer, before);
+    }
+
+    #[test]
+    fn cancelled_refresh_does_not_request_linked_bytes_or_replace_its_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("linked.svg");
+        std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#).unwrap();
+        let doc = Document::new("Cancelled refresh", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut layer = linked_layer(&path);
+        let before = layer.clone();
+        let ctx = JobCtx::new();
+        ctx.cancel();
+        SOURCE_REQUESTS.with(|count| count.set(0));
+        let _authority = crate::jobs::render_authorization_scope(Some(gate));
+        assert!(matches!(refresh_layer_in(&doc, &mut layer, &ctx), Err(EngineError::Cancelled)));
+        assert_eq!(SOURCE_REQUESTS.with(Cell::get), 0);
+        assert_eq!(layer, before);
+    }
+}

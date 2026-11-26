@@ -28,6 +28,7 @@ mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
 pub mod hooks;
+mod import_initial_view;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -291,9 +292,10 @@ pub struct Session {
     symmetry_map: Option<photocraft_geom::Affine>,
     /// Each open document's linked smart objects' files: size and modification time when last
     /// seen ([`link_watch`]).
-    pub link_stamps: std::collections::HashMap<(u64, String), state::Stamp>,
+    pub link_stamps: std::collections::HashMap<(u64, String), state::LinkStamp>,
     /// The stamps being taken on a worker thread ([`LinkWatchExt::start_link_scan`](crate::link_watch::LinkWatchExt::start_link_scan)).
     pub link_scan: Option<state::LinkScan>,
+    link_scan_worker: Option<link_watch::ScanWorker>,
     /// Each open document's linked smart objects' files that were not there when last looked at
     /// ([`LinkWatchExt::missing_links`](crate::link_watch::LinkWatchExt::missing_links)). Written only when the set changes, so its revision says when the list did.
     link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
@@ -302,8 +304,8 @@ pub struct Session {
     pub live_commit: Option<state::LiveCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
-    /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
-    held_opens: Vec<(u64, Document, bool)>,
+    /// payload)`. View-aware hosts take it with [`Session::take_held_open_with_view`].
+    held_opens: Vec<(u64, jobs::HeldImportedDocument)>,
     next_held_open: u64,
     pub(crate) pending_preflights: Vec<jobs::PendingPsdPreflight>,
     next_pending_preflight: u64,

@@ -381,6 +381,9 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
             return Err(bad(UPDATE, "SVG placement caches exceed the 24 million pixel limit"));
         }
         sm.source = source.clone();
+        sm.historical_xcf_sample_order = None;
+        sm.historical_xcf_link_digest = None;
+        sm.linked_source_baseline = None;
         sm.vector_preview = vector_preview.clone();
         replacements.push(replacement);
     }

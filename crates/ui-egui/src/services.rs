@@ -343,6 +343,10 @@ pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, 
 /// when no read root holds it.
 pub type AutomationLocateFn = Box<dyn Fn(&str) -> Option<String>>;
 
+/// Resolve a destination through the authorized write root for source identity
+/// checks. Read locations must never substitute for this write-side resolver.
+pub type AutomationWriteLocationFn = Box<dyn Fn(&str) -> Result<String, String>>;
+
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Same policy as [`AutomationCommandFn`] for each step a command runs (`actions.play`).
@@ -357,6 +361,7 @@ pub struct AutomationServices {
     pub write: Option<AutomationWriteFn>,
     pub open_pcraft: Option<AutomationOpenPcraftFn>,
     pub locate: Option<AutomationLocateFn>,
+    pub write_location: Option<AutomationWriteLocationFn>,
     pub save: Option<SaveFileFn>,
     pub command: Option<AutomationCommandFn>,
     pub authorize: Option<AutomationAuthorizeFn>,
@@ -563,6 +568,7 @@ pub struct Services {
     /// Where an automation open's file is on disk, for Open Recent. Without it an automation
     /// open is not listed there.
     pub automation_locate: Option<AutomationLocateFn>,
+    pub automation_write_location: Option<AutomationWriteLocationFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -681,6 +687,7 @@ impl Services {
         self.automation_write = a.write;
         self.automation_open_pcraft = a.open_pcraft;
         self.automation_locate = a.locate;
+        self.automation_write_location = a.write_location;
         self.automation_save = a.save;
         self.automation_command = a.command;
         self.automation_authorize = a.authorize;
