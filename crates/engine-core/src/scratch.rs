@@ -172,7 +172,8 @@ pub(crate) fn configure(prefs: &Preferences) {
 /// The folder the `(system temp)` scratch disk names: the system's temporary folder, except on
 /// Linux when that is kept in memory (a `tmpfs` /tmp), where spilling would free nothing. Then it
 /// is `/var/tmp` when that is writable and on disk, else `$XDG_CACHE_HOME/photocraft/scratch`.
-/// Worked out once per process.
+/// Worked out once per process; the Linux lookups that take longer than [`linux::LOOKUP_WAIT`]
+/// (a stuck mount) leave the system's temporary folder as it is.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn system_temp_dir() -> std::path::PathBuf {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -180,11 +181,14 @@ pub fn system_temp_dir() -> std::path::PathBuf {
         let temp = std::env::temp_dir();
         #[cfg(target_os = "linux")]
         {
-            let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-            let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
-            let var_tmp = real(std::path::Path::new("/var/tmp"));
-            let writable = || tempfile::Builder::new().prefix(".photocraft-").tempfile_in(&var_tmp).is_ok();
-            if let Some(dir) = linux::disk_backed_temp(&real(&temp), &var_tmp, &mountinfo, writable, linux::cache_home()) {
+            let (send, answer) = std::sync::mpsc::channel();
+            let probe = temp.clone();
+            let spawned = std::thread::Builder::new().name("scratch-temp-lookup".into()).spawn(move || {
+                let _ = send.send(linux::disk_backed_system_temp(&probe));
+            });
+            if spawned.is_ok()
+                && let Ok(Some(dir)) = answer.recv_timeout(linux::LOOKUP_WAIT)
+            {
                 return dir;
             }
         }
@@ -197,22 +201,36 @@ pub fn system_temp_dir() -> std::path::PathBuf {
 mod linux {
     use photocraft_raster::memory::system::memory_backed_in;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    /// How long the folder lookups may take: the wait the scratch disk gives a slow folder.
+    pub(super) const LOOKUP_WAIT: Duration = Duration::from_secs(2);
+
+    /// [`disk_backed_temp`] on this system's mount table and folders.
+    pub(super) fn disk_backed_system_temp(temp: &Path) -> Option<PathBuf> {
+        let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+        let writable = |dir: &Path| tempfile::Builder::new().prefix(".photocraft-").tempfile_in(dir).is_ok();
+        disk_backed_temp(&real(temp), || real(Path::new("/var/tmp")), &mountinfo, writable, cache_home())
+    }
 
     /// The disk-backed folder to spill to instead of the memory-backed `temp`, or `None` when
-    /// `temp` is on disk (or nothing better is known). `var_tmp` must be canonical, since a
-    /// `/var/tmp` symlinked into a `tmpfs` /tmp is memory-backed too.
+    /// `temp` is on disk (or nothing better is known). `var_tmp` gives the canonical `/var/tmp`,
+    /// since one symlinked into a `tmpfs` /tmp is memory-backed too; it and `writable` are only
+    /// asked once `temp` proves memory-backed.
     pub(super) fn disk_backed_temp(
         temp: &Path,
-        var_tmp: &Path,
+        var_tmp: impl FnOnce() -> PathBuf,
         mountinfo: &str,
-        var_tmp_writable: impl FnOnce() -> bool,
+        writable: impl FnOnce(&Path) -> bool,
         cache_home: Option<PathBuf>,
     ) -> Option<PathBuf> {
         if !memory_backed_in(mountinfo, temp) {
             return None;
         }
-        if !memory_backed_in(mountinfo, var_tmp) && var_tmp_writable() {
-            return Some(var_tmp.to_path_buf());
+        let var_tmp = var_tmp();
+        if !memory_backed_in(mountinfo, &var_tmp) && writable(&var_tmp) {
+            return Some(var_tmp);
         }
         cache_home.map(|cache| cache.join("photocraft").join("scratch"))
     }
@@ -237,7 +255,16 @@ mod linux {
         }
 
         fn resolve(mountinfo: &str, writable: bool) -> Option<PathBuf> {
-            disk_backed_temp(Path::new("/tmp"), Path::new("/var/tmp"), mountinfo, || writable, Some(PathBuf::from("/home/u/.cache")))
+            disk_backed_temp(Path::new("/tmp"), || PathBuf::from("/var/tmp"), mountinfo, |_| writable, Some(PathBuf::from("/home/u/.cache")))
+        }
+
+        /// A disk-backed /tmp is kept without looking `/var/tmp` up, which could hang on a stuck mount.
+        fn kept(mountinfo: &str) -> bool {
+            fn looked_up<T>(what: &str) -> T {
+                panic!("{what} looked up for a disk-backed /tmp")
+            }
+            disk_backed_temp(Path::new("/tmp"), || looked_up("/var/tmp"), mountinfo, |_| looked_up("writability"), Some(PathBuf::from("/home/u/.cache")))
+                .is_none()
         }
 
         #[test]
@@ -248,7 +275,7 @@ mod linux {
             assert_eq!(resolve(&table(&[("/tmp", "tmpfs")]), false), Some(cache.clone()), "a /var/tmp that can't be written is skipped");
             assert_eq!(resolve(&table(&[("/tmp", "tmpfs"), ("/var/tmp", "tmpfs")]), true), Some(cache.clone()), "memory-backed /var/tmp");
             assert_eq!(
-                disk_backed_temp(Path::new("/tmp"), Path::new("/tmp"), &table(&[("/tmp", "tmpfs")]), || true, None),
+                disk_backed_temp(Path::new("/tmp"), || PathBuf::from("/tmp"), &table(&[("/tmp", "tmpfs")]), |_| true, None),
                 None,
                 "a /var/tmp linked into /tmp and no cache folder: nothing better than /tmp"
             );
@@ -256,10 +283,10 @@ mod linux {
 
         #[test]
         fn a_disk_backed_tmp_is_kept() {
-            assert_eq!(resolve(&table(&[]), true), None, "/tmp on the root disk");
-            assert_eq!(resolve(&table(&[("/tmp", "ext4")]), true), None, "/tmp on its own disk");
-            assert_eq!(resolve(&table(&[("/tmp", "tmpfs"), ("/tmp", "xfs")]), true), None, "a later mount over a tmpfs /tmp covers it");
-            assert_eq!(resolve(&table(&[("/tmpfs", "tmpfs"), ("/run", "tmpfs")]), true), None, "only the mount holding /tmp counts");
+            assert!(kept(&table(&[])), "/tmp on the root disk");
+            assert!(kept(&table(&[("/tmp", "ext4")])), "/tmp on its own disk");
+            assert!(kept(&table(&[("/tmp", "tmpfs"), ("/tmp", "xfs")])), "a later mount over a tmpfs /tmp covers it");
+            assert!(kept(&table(&[("/tmpfs", "tmpfs"), ("/run", "tmpfs")])), "only the mount holding /tmp counts");
         }
     }
 }
