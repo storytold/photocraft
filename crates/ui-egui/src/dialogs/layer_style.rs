@@ -486,7 +486,6 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     if let Some(last) = app.last_satin.as_ref() {
         user.insert("satin".into(), last.clone());
     }
-    app.opened_on_satin = select == Some("satin");
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
@@ -509,6 +508,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
             }
         }
     }
+    app.opened_on_satin = matches!(draft.page, LayerStylePage::Effect(id) if draft.style.effect(id).is_some_and(|effect| effect.kind == EffectKind::Satin));
     let channels = channel_names(mode).into_iter().map(String::from).collect();
     let hosted = HostedLayerStyle::new(tl!("Layer Style").to_string(), draft, channels)
         .specs(specs)
@@ -1049,6 +1049,23 @@ mod tests;
 #[cfg(test)]
 mod satin_last_values_tests {
     use super::*;
+
+    #[test]
+    fn confirming_the_initial_satin_page_remembers_its_existing_values() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("layer.layerStyle.satin", json!({"opacity": 60.0, "size": 15.0})).unwrap();
+        let existing = open(&mut app, None).unwrap();
+        crate::dialogs::testing::confirm(&mut app, existing).unwrap();
+
+        app.run("layer.new.layer", json!({})).unwrap();
+        let fresh = open(&mut app, Some("satin")).unwrap();
+        let dialog = app.framework.dialogs.get_by_id::<HostedLayerStyle>(fresh).unwrap();
+        let satin = dialog.draft().style.effects.iter().find(|effect| effect.kind == EffectKind::Satin).unwrap();
+        assert_eq!(satin.params.number("opacity"), Some(60.0));
+        assert_eq!(satin.params.number("size"), Some(15.0));
+    }
 
     #[test]
     fn confirmed_satin_seeds_a_new_layer() {
