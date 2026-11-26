@@ -167,7 +167,7 @@ impl Sprite {
         let mut tiles = std::collections::HashSet::new();
         let mut palettes = std::collections::HashSet::new();
         let mut index_tiles = std::collections::HashSet::new();
-        for frame in &self.frames {
+        for (frame_index, frame) in self.frames.iter().enumerate() {
             let mut projected = 0usize;
             count = count.checked_add(frame.cels.len()).ok_or("sprite cel count overflow")?;
             chunk_count = chunk_count.checked_add(frame.metadata.len()).ok_or("sprite chunk count overflow")?;
@@ -183,6 +183,9 @@ impl Sprite {
                 }
             }
             for chunk in &frame.metadata {
+                if chunk.kind == 0x2004 && frame_index != 0 {
+                    return Err("sprite tilemap layer descriptors must be in the first frame".into());
+                }
                 if match chunk.target {
                     MetadataTarget::Layer(id) => !ids.contains(&id),
                     MetadataTarget::Cel(id) => !frame.cels.contains_key(&id),

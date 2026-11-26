@@ -10,6 +10,9 @@ pub(super) fn projection(cel: &SpriteCel) -> Result<Surface, String> {
     if w <= 0 || h <= 0 {
         return Err("precise reference dimensions must be positive".into());
     }
+    if cel.rect.is_empty() {
+        return Ok(Surface::new(cel.pixels.format()));
+    }
     let rect = bounds([x, y, w, h]);
     pixels::checked_rect(rect, cel.pixels.format().bytes_per_pixel())?;
     let channels = cel.pixels.format().channels();

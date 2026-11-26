@@ -85,6 +85,24 @@ fn group_opacity_is_valid_without_the_image_layer_opacity_flag() {
     assert_eq!(contents.children[0].opacity, 1.0);
 }
 
+#[test]
+fn a_precise_reference_with_an_empty_source_displays_no_pixels() {
+    use std::sync::Arc;
+
+    let mut doc = photocraft_io::import("layers.aseprite", LAYERS).unwrap().document;
+    let sprite = doc.sprite.as_mut().unwrap();
+    let frame = Arc::make_mut(&mut sprite.frames[0]);
+    let (&id, cel) = frame.cels.iter_mut().next().unwrap();
+    let cel = Arc::make_mut(cel);
+    let source = cel.rect;
+    cel.pixels.write_pixel(source.x0, source.y0, &[1.0; 4]);
+    cel.rect = photocraft_geom::Rect::from_xywh(source.x0, source.y0, 0, source.height());
+    cel.precise = Some([0, 0, 4 << 16, 4 << 16]);
+    sprite.layers.iter_mut().find(|layer| layer.id == id).unwrap().flags |= 64;
+    doc.restore_sprite_frame().unwrap();
+    assert!(doc.layer(id).unwrap().surface().unwrap().content_bounds().is_empty());
+}
+
 /// Compare every imported/native/re-exported frame with original application-rendered PNG oracles.
 #[test]
 fn aseprite_application_authored_frames_and_tilemaps_match_application_rendered_oracles() {
