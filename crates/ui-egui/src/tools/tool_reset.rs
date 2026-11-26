@@ -1,8 +1,8 @@
 //! Reset Tool and Reset All Tools (#2825), as in Photoshop: right-click the tool icon at the far
 //! left of the options bar. Reset Tool puts the current tool's options back to their defaults
 //! (all but the few it keeps, [`kept_by_reset_tool`]);
-//! Reset All Tools asks first ("Reset all tools to the default settings?", under the app's name
-//! with a warning icon), then resets every tool's options.
+//! Reset All Tools asks first ("Restore the defaults for every tool?", under the app's name with
+//! a warning icon), then resets every tool's options.
 //!
 //! Both are shell commands (`tool.reset`, `tool.resetAll`) that the control channel can run.
 //! `tool.resetAll` opens the confirmation as a hosted prompt (`ui.dialog.confirm` /
@@ -46,7 +46,7 @@ pub fn invoke(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Resul
             Some(Ok(json!({"reset": "all"})))
         }
         RESET_ALL => {
-            let prompt = StandardPrompt::custom(tl!("Reset all tools to the default settings?"))
+            let prompt = StandardPrompt::custom(tl!("Restore the defaults for every tool?"))
                 .title(tl!("PhotoCraft"))
                 .icon(IconId::new("warning"))
                 .button(PromptChoice::Proceed, tl!("OK"))

@@ -1,6 +1,6 @@
-//! #16798: the Reset All Tools confirmation reads "Reset all tools to the default settings?" under
-//! the app's name, with a warning icon beside the text, as the reference does. OK stays the default
-//! button (Enter resets every tool) and Escape resets nothing.
+//! #16798: the Reset All Tools confirmation asks "Restore the defaults for every tool?" under the
+//! app's name, with a warning icon beside the text. OK stays the default button (Enter resets every
+//! tool) and Escape resets nothing.
 
 use egui::Key;
 use egui::accesskit::Role;
@@ -12,7 +12,7 @@ use crate::PhotocraftApp;
 use crate::state::ToolOptions;
 use crate::tool_reset::RESET_ALL;
 
-const MESSAGE: &str = "Reset all tools to the default settings?";
+const MESSAGE: &str = "Restore the defaults for every tool?";
 
 type H = Harness<'static, Box<PhotocraftApp>>;
 
@@ -39,7 +39,7 @@ fn ask(h: &mut H) {
 }
 
 #[test]
-fn the_question_reads_the_reference_text_under_the_app_name_with_a_warning_icon() {
+fn the_question_is_asked_under_the_app_name_with_a_warning_icon() {
     let mut h = harness();
     ask(&mut h);
     h.get_by_role_and_label(Role::Dialog, "PhotoCraft");
