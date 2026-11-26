@@ -385,7 +385,8 @@ pub fn tone_map(px: &mut [[f32; 4]], w: usize, h: usize, method: &ToneMethod) {
                     q[c] *= k;
                 }
             }
-            crate::tone::hdr_toning(px, w, h, p);
+            // Today's merge radiance keeps the mean-anchored map until #14023 moves it (#14723).
+            crate::tone::hdr_toning_mean_anchored(px, w, h, p);
             for q in px.iter_mut() {
                 for c in 0..3 {
                     q[c] = linear_to_srgb(q[c].clamp(0.0, 1.0));

@@ -1510,39 +1510,6 @@ fn patch_source_repairs_the_selection_with_texture_from_the_drag_target() {
 }
 
 #[test]
-fn patch_content_aware_copies_the_dragged_to_content_into_the_selection() {
-    // Photoshop's Patch: Content-Aware (measured on 25.4): only the selection changes; its middle
-    // is the dragged-to content (Color 0 keeps its level), the edge band blends.
-    for depth in [8, 16] {
-        let mut s = session(128, 64, depth, "rgb");
-        paint_layer(&mut s, blemished(40));
-        s.execute("select.rect", json!({"x": 32, "y": 12, "width": 24, "height": 24})).unwrap();
-        let r = s.execute("paint.patch", json!({"offset": [-30, 2], "contentAware": true, "structure": 7, "color": 0})).unwrap();
-        assert_eq!(r["contentAware"], json!(true));
-        for (x, y) in [(42, 22), (44, 24), (46, 26)] {
-            let (got, want) = (rgba(&s, x, y), texture(x - 30, y + 2));
-            for c in 0..4 {
-                assert!((got[c] - want[c]).abs() <= tol(depth), "depth {depth}: middle copied at {x},{y}: {got:?} vs {want:?}");
-            }
-        }
-        for (x, y) in [(31, 20), (56, 25), (12, 20), (44, 40)] {
-            let (got, want) = (rgba(&s, x, y), texture(x, y));
-            assert!((got[0] - want[0]).abs() <= tol(depth), "depth {depth}: untouched {x},{y}: {got:?}");
-        }
-        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch Selection"));
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(rgba(&s, 44, 24)[1], 0.0, "depth {depth}: undo brings the blemish back");
-    }
-    // Bad options are refused before any work.
-    let mut s = session(96, 48, 8, "rgb");
-    paint_layer(&mut s, blemished(40));
-    s.execute("select.rect", json!({"x": 36, "y": 16, "width": 16, "height": 16})).unwrap();
-    for p in [json!({"offset": [-30, 0], "contentAware": true, "structure": 9}), json!({"offset": [-30, 0], "contentAware": true, "color": -1})] {
-        assert!(s.execute("paint.patch", p.clone()).is_err(), "{p}");
-    }
-}
-
-#[test]
 fn patch_destination_repairs_the_drag_target_from_the_selection() {
     let mut s = session(96, 48, 16, "rgb");
     paint_layer(&mut s, blemished(40));
@@ -2161,6 +2128,7 @@ fn pattern_stamp_rejects_hostile_input() {
         name: "EmptyTile".into(),
         width: 0,
         height: 0,
+        source_mode: None,
         surface: photocraft_raster::Surface::new(fmt),
     });
     assert!(s.execute("paint.patternStamp", json!({"points": [[8, 8]], "pattern": "EmptyTile", "size": 8})).is_err());

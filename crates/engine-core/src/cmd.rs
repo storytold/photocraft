@@ -31,6 +31,8 @@ pub mod artboard_cmds;
 pub mod atn_cmds;
 pub mod automate_cmds;
 pub mod background_cmds;
+#[cfg(test)]
+mod brightness_contrast_refusals_tests;
 pub mod brush_preset_cmds;
 pub mod channel_cmds;
 pub mod color_cmds;

@@ -161,8 +161,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost,
         // `command_guide_at` had it, so a plain marquee drag over a guide still draws a marquee.
         .moves_with_command(takes && tool != Tool::Move && moves_with_command(app, tool))
         .bounds(page);
-    if let Some(key) = selected {
-        guides = guides.selected_guide(key);
+    if let Some(key) = &selected {
+        guides = guides.selected_guides(std::slice::from_ref(key));
     }
     let output = guides.show_at(ui, content);
     // A preview's guides are not the document's: nothing they report is an edit.

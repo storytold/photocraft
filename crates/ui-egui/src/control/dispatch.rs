@@ -290,7 +290,9 @@ fn screenshot(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply 
     // (modals, popups) have settled (craft-automation's screenshot queue).
     let token = app.ui.alloc_id();
     ctx.request_repaint();
-    Reply::screenshot(token, path, viewport)
+    let mut params = craft::automation::screenshot::ScreenshotParams::default();
+    params.path = path;
+    Reply::screenshot(token, params, viewport)
 }
 
 /// `ui.notice.post {title, lines?, tone?}`: shows a notice in the named tone and replies its id.
@@ -997,7 +999,7 @@ impl ViewSet {
         }
         if let Some(z) = self.zoom {
             let size = app.session.documents().get(i).map_or(Size::ZERO, |st| Size::new(f64::from(st.doc.size.width), f64::from(st.doc.size.height)));
-            app.ui.views[i].zoom = craft::behavior::canvas::ZoomLadder::clamp(z, size) as f32;
+            app.ui.views[i].zoom = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.clamp(z, size) as f32;
             app.ui.views[i].clear_pending();
         }
         if let Some(c) = self.center {

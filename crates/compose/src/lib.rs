@@ -62,7 +62,7 @@ use content::empty_in;
 use content::render_content;
 #[cfg(test)]
 use content::render_fill;
-pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
+pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, render_fill_content_in, stroke_frame, surface_to_buffer};
 use ctx::{Ctx, prepare_effects};
 #[cfg(test)]
 use ctx::{LayerKeys, PREPARE_DEPTH, effect_layers, prepare_tones};

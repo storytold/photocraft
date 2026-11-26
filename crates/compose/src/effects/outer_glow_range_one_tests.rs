@@ -5,11 +5,12 @@
 //! Spread 0, Size 10, Contour Linear, Anti-aliased off, Noise 0. Profiles list the R channel of
 //! the flattened image from the layer edge outwards (255 = no glow, 0 = full black glow); the
 //! reference application gives `0 x8, 39, 255` at Range 1 % on all four edges (within 3 levels).
-//! Range 25/50/100 keep today's profiles (the measured values, within 4 levels). The cases the
-//! issue marks *not measured* (Range 2, other Sizes at Range 1, Precise at Range 1, Range 1 with
-//! Spread, a custom contour at Range 1, the Inner Glow Center source at Range 1) pin today's
-//! output. The last inner test mirrors #14929's measured Inner Glow Range-1 profile `0 x8, 19,
-//! 128` through the shared table as a cross-check; it does not claim that issue's item.
+//! Range 25/50/100 keep today's profiles (the measured values, within 4 levels). #15871 measured
+//! Range 2 and Sizes 20 and 5 at Range 1 on the same document (within 3 levels). The cases still
+//! *not measured* (Precise at Range 1, Range 1 with Spread, a custom contour at Range 1, the
+//! Inner Glow Center source at Range 1) pin today's output. The inner test mirrors #14929's
+//! measured Inner Glow Range-1 profile `0 x8, 19, 128` as a cross-check; it does not claim that
+//! issue's item.
 
 use super::{Contour, Effect, FxPaint, Glow, GlowSource, GlowTechnique, Rect};
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -147,19 +148,26 @@ fn outer_glow_range_one_with_spread_keeps_todays_profile() {
     assert_all_edges(&measured_doc(g, false), 0, false, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 155, 255, 255], 1, "spread 20 % at Range 1 %");
 }
 
-/// Not measured, keeps today's behaviour: another Size at Range 1 % (Size 20: solid through 17
-/// px, then 48, 175, 239, then no glow).
+/// #15871 Done when 1: Size 20 at Range 1 % gives seventeen solid pixels, then 93, 201, then no
+/// glow, within 3 levels. Before, the glow reached one pixel further: 48, 175, 239.
 #[test]
-fn outer_glow_range_one_other_sizes_keep_todays_profile() {
+fn outer_glow_range_one_at_size_20_gives_the_measured_profile() {
     let g = Glow { size: 20.0, ..glow(0.01) };
-    assert_all_edges(&measured_doc(g, false), 0, false, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 48, 175, 239, 255], 1, "size 20 at Range 1 %");
+    assert_all_edges(&measured_doc(g, false), 0, false, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 93, 201, 255, 255], 3, "size 20 at Range 1 %");
 }
 
-/// Not measured, keeps today's behaviour: a whole-number Range next to 1 (2 %: solid through 8
-/// px, then 96, 223, then no glow).
+/// #15871 Done when 1: Size 5 at Range 1 % gives four solid pixels, then no glow.
 #[test]
-fn outer_glow_range_two_keeps_todays_profile() {
-    assert_all_edges(&measured_doc(glow(0.02), false), 0, false, &[0, 0, 0, 0, 0, 0, 0, 0, 96, 223, 255, 255], 1, "Range 2 %");
+fn outer_glow_range_one_at_size_5_gives_the_measured_profile() {
+    let g = Glow { size: 5.0, ..glow(0.01) };
+    assert_all_edges(&measured_doc(g, false), 0, false, &[0, 0, 0, 0, 255, 255], 3, "size 5 at Range 1 %");
+}
+
+/// #15871 Done when 1: Range 2 % at Size 10 gives eight solid pixels, then 125, then no glow,
+/// within 3 levels. Before, it gave 96, 223.
+#[test]
+fn outer_glow_range_two_gives_the_measured_profile() {
+    assert_all_edges(&measured_doc(glow(0.02), false), 0, false, &[0, 0, 0, 0, 0, 0, 0, 0, 125, 255, 255, 255], 3, "Range 2 %");
 }
 
 /// Not measured, keeps today's behaviour: a custom (flat) contour at Range 1 % keeps the
