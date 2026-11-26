@@ -51,6 +51,20 @@ fn native_sprite_preserves_exact_indices_delays_metadata_and_remaps_all_layer_re
     doc.restore_sprite_frame().unwrap();
     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let back = photocraft_format::load_from_bytes_with(&bytes, &photocraft_format::LoadOptions { preserve_ids: false, ..Default::default() }).unwrap();
+    let archive = photocraft_format::zip::ZipReader::new(&bytes).unwrap();
+    let mut with_stale_projection = photocraft_format::zip::ZipWriter::new();
+    for entry in &archive.entries {
+        let mut data = archive.read(entry, usize::MAX).unwrap();
+        if entry.name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            let opacity = manifest.pointer_mut("/document/layers/0/opacity").unwrap();
+            *opacity = serde_json::json!(1.0);
+            data = serde_json::to_vec(&manifest).unwrap();
+        }
+        with_stale_projection.add(&entry.name, &data).unwrap();
+    }
+    let restored = photocraft_format::load_from_bytes(&with_stale_projection.finish().unwrap()).unwrap();
+    assert_eq!(restored.layers[0].opacity, doc.layers[0].opacity, "the selected cel restores the layer opacity");
     let loaded_id = back.layers[0].id;
     assert_ne!(loaded_id, id);
     let sprite = back.sprite.as_ref().unwrap();

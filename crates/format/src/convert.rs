@@ -744,6 +744,7 @@ impl Loader<'_> {
             let pixels = doc.layer(layer)?.surface()?.clone();
             Some(ColorIndices { layer, pixels, indices: self.surface(&c.indices).ok()? })
         });
+        doc.restore_sprite_frame().map_err(FormatError::corrupt)?;
         Ok(doc)
     }
 
