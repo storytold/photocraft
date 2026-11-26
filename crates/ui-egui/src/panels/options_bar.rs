@@ -142,6 +142,11 @@ fn answer(app: &mut PhotocraftApp, ui: &egui::Ui, tool: Tool, end: End, out: &Ba
 /// The bar's members in order: Home, the tool icon, then the active tool's options.
 fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     lead(app, ui);
+    // A Layer Style page a drag on the image edits says so (#14985).
+    if let Some(h) = crate::dialogs::canvas_input::drag_hint(app) {
+        crate::option_cells::hint(ui, h);
+        return;
+    }
     if app.ui.transform.is_some() {
         crate::transform_tool::options_bar(app, ui);
         return;

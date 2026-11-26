@@ -46,6 +46,8 @@ mod drop_shadow_last_values_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod satin_canvas_drag_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
