@@ -4413,6 +4413,7 @@ fn effect_cache_follows_a_group_child_being_rasterized() {
     let bottom = solid_layer("pale", rect, [1.0, 1.0, 1.0, 0.5]);
     let mut text = solid_layer("text", rect, [0.0, 0.0, 0.0, 0.5]);
     let raster = text.content.clone();
+    let text_id = text.id;
     text.content = LayerContent::Text(photocraft_doc::TextLayer { cache: text.surface().cloned(), ..Default::default() });
     let mut top = solid_layer("blend if", rect, [0.2, 0.6, 0.0, 1.0]);
     top.blend_if.set(0, [FULL, range([0, 0], [100, 100])]);
@@ -4420,8 +4421,7 @@ fn effect_cache_follows_a_group_child_being_rasterized() {
     group.effects.items = vec![Effect::DropShadow(Shadow { size: 2.0, spread: 0.0, ..shadow(3.0, 90.0) })];
     doc.layers.push(group);
     let before = render(&doc, doc.bounds());
-    let LayerContent::Group(group) = &mut doc.layers[1].content else { unreachable!() };
-    group.children[1].content = raster;
+    doc.layer_mut(text_id).unwrap().content = raster;
     let warm = render(&doc, doc.bounds());
     purge_effect_cache();
     let cold = render(&doc, doc.bounds());
