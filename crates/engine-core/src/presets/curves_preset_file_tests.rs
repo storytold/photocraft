@@ -560,6 +560,42 @@ fn a_green_plus_blue_target_refuses_a_preset_that_moves_red() {
 }
 
 #[test]
+fn a_straight_line_written_with_extra_points_on_it_is_still_no_curve() {
+    let mut s = crate::session();
+    // The neutral adjustment holds the straight line as two points. Three points that lie on that
+    // line are the same straight line, so a file that spells it out that way names no curve of its
+    // own - and comparing point lists would read it as one.
+    let straight = json!({
+        "points": [[0.0, 0.0], [128.0, 128.0], [255.0, 255.0]],
+        "red": [[0.0, 0.0], [64.0, 64.0], [192.0, 192.0], [255.0, 255.0]],
+    });
+    let data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Straight lines".into(), curves: straight }).expect("a preset writes"));
+    // Nothing here is a curve: the preset fits any colour mode, and a dialog aimed at one component,
+    // which lists no composite curve of its own.
+    assert!(load(&mut s, &json!({"data": data.clone(), "space": "cmyk"})).is_ok(), "a file of straight lines is no channel curve of another mode");
+    assert!(
+        load(&mut s, &json!({"data": data.clone(), "space": "rgb", "channel": "green"})).is_ok(),
+        "and its straight composite fits a dialog aimed at green"
+    );
+    // One point off the line is a curve, and it is refused where it has no place, naming it.
+    let bent_composite = json!({
+        "points": [[0.0, 0.0], [128.0, 130.0], [255.0, 255.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+    });
+    let bent_data =
+        photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Bent composite".into(), curves: bent_composite }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": bent_data, "space": "rgb", "channel": "green"})).unwrap_err().to_string();
+    assert!(err.contains("composite"), "the refusal names the composite curve it cannot show: {err}");
+    let bent_channel = json!({
+        "points": [[0.0, 0.0], [128.0, 128.0], [255.0, 255.0]],
+        "red": [[0.0, 0.0], [64.0, 70.0], [255.0, 255.0]],
+    });
+    let channel_data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Bent red".into(), curves: bent_channel }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": channel_data, "space": "cmyk"})).unwrap_err().to_string();
+    assert!(err.contains("red"), "and a channel off its line is a curve of its mode: {err}");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();

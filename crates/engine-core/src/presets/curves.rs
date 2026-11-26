@@ -129,6 +129,35 @@ pub fn to_bytes(preset: &CurvePreset) -> Result<Vec<u8>> {
     serde_json::to_vec_pretty(&file).map_err(|e| EngineError::Other(format!("cannot write the curve preset: {e}")))
 }
 
+/// The two numbers of the point at `at` in `points`: `None` when that entry is not a pair of numbers.
+fn point_at(points: &[Value], at: usize) -> Option<(f64, f64)> {
+    let pair = points.get(at)?.as_array()?;
+    Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?))
+}
+
+/// Whether `here` is the straight line `plain` describes, whatever points along it the file spells
+/// out: every one of its points answers with the line's value at that input. The neutral adjustment
+/// holds the line as two points; a hand-written curve that adds a point on the same line is that
+/// same line, and comparing point lists would read it as a curve of its own.
+fn on_the_line(here: &Value, plain: &Value) -> bool {
+    let (Some(points), Some(line)) = (here.as_array(), plain.as_array()) else {
+        return here == plain;
+    };
+    if line.is_empty() {
+        return points.is_empty();
+    }
+    let (Some((x0, y0)), Some((x1, y1))) = (point_at(line, 0), point_at(line, line.len() - 1)) else {
+        return here == plain;
+    };
+    points.iter().all(|point| match point.as_array().map(|pair| (pair.first().and_then(Value::as_f64), pair.get(1).and_then(Value::as_f64))) {
+        Some((Some(input), Some(output))) => {
+            let expected = if (x1 - x0).abs() < 1e-9 { y0 } else { y0 + (y1 - y0) * (input - x0) / (x1 - x0) };
+            (output - expected).abs() < 1e-6
+        }
+        _ => false,
+    })
+}
+
 /// Whether `curves` moves the composite curve: its `points` differ from the straight line the
 /// neutral Curves adjustment holds. A drawn (pencil) curve is one map - the curve of the channel the
 /// dialog edits - so a pencil preset moves no composite curve of its own.
@@ -140,7 +169,7 @@ fn moves_composite(curves: &Value) -> bool {
         return false;
     };
     match (curves.get("points"), adjust_params::to_params(&plain).get("points")) {
-        (Some(here), Some(straight)) => here != straight,
+        (Some(here), Some(straight)) => !on_the_line(here, straight),
         (Some(_), None) => true,
         _ => false,
     }
@@ -155,9 +184,9 @@ fn space_mode(space: ToneSpace) -> photocraft_doc::ColorMode {
     }
 }
 
-/// The channels of `space` that `curves` actually moves: a channel equal to the straight line the
-/// neutral Curves adjustment holds is no curve at all, and a preset of only the straight lines of
-/// one colour mode can be applied in any other.
+/// The channels of `space` that `curves` actually moves: a channel that is the straight line the
+/// neutral Curves adjustment holds - however many points along it the file spells out - is no curve
+/// at all, and a preset of only the straight lines of one colour mode can be applied in any other.
 fn moved_channels(space: ToneSpace, curves: &Value) -> Vec<&'static str> {
     let Ok(plain) = adjust_params::default_for("curves", space_mode(space)) else {
         return Vec::new();
@@ -166,7 +195,7 @@ fn moved_channels(space: ToneSpace, curves: &Value) -> Vec<&'static str> {
     adjust_params::channel_keys(space)
         .iter()
         .filter(|key| match (curves.get(*key), neutral.get(*key)) {
-            (Some(here), Some(plain)) => here != plain,
+            (Some(here), Some(plain)) => !on_the_line(here, plain),
             (Some(_), None) => true,
             _ => false,
         })
