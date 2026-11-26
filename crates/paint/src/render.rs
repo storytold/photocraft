@@ -804,6 +804,12 @@ pub struct StrokeRenderer {
     dual_area_left: u64,
     /// A dab was left out for want of budget.
     refused: bool,
+    /// Tiles [`settle`](Self::settle) has yet to composite, taken from `unsettled_keys` when the
+    /// queue was built at `settle_queue_epoch`, so a backlog is drained without rescanning every
+    /// pending tile each batch.
+    settle_queue: Vec<(i32, i32)>,
+    /// The coverage epoch `settle_queue` was built at; `None` when there is no queue.
+    settle_queue_epoch: Option<u64>,
 }
 
 /// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
@@ -877,6 +883,29 @@ impl StrokeRenderer {
         }
     }
 
+    /// The tiles whose pixels a redraw must write: the stroke's changed tiles, sorted, and the Dual
+    /// Brush's changed tiles that have stroke coverage (a Dual Brush tile only shows there, and a
+    /// push can change just that); forgets both.
+    fn take_dirty_keys(&mut self) -> Vec<(i32, i32)> {
+        let mut keys = self.cov.take_dirty();
+        if let Some(d) = self.dual.as_mut() {
+            let cov = &self.cov;
+            keys.extend(d.dirty.drain().filter(|k| cov.tiles.contains_key(&tile_key(*k))));
+            keys.sort_unstable();
+            keys.dedup();
+        }
+        keys
+    }
+
+    /// Forgets the changed tiles in `redrawn` (keys of coverage tiles), which a redraw that follows
+    /// writes anyway.
+    fn forget_dirty_in(&mut self, redrawn: &HashSet<u64>) {
+        self.cov.dirty.retain(|k| !redrawn.contains(&tile_key(*k)));
+        if let Some(d) = self.dual.as_mut() {
+            d.dirty.retain(|k| !redrawn.contains(&tile_key(*k)));
+        }
+    }
+
     /// Every coverage tile (stroke and Dual Brush), into `keys`.
     fn keys_into(&self, keys: &mut HashSet<(i32, i32)>) {
         keys.extend(self.cov.tiles.keys().copied().map(tile_coords));
@@ -937,6 +966,8 @@ impl StrokeRenderer {
                         area_left: p.area_left,
                         dual_area_left: p.dual_area_left,
                         refused: p.refused,
+                        settle_queue: Vec::new(),
+                        settle_queue_epoch: None,
                     })
                 }
                 Some(m) => {
@@ -993,6 +1024,8 @@ impl StrokeRenderer {
             area_left: MAX_STROKE_DAB_AREA,
             dual_area_left: MAX_STROKE_DAB_AREA,
             refused: false,
+            settle_queue: Vec::new(),
+            settle_queue_epoch: None,
         }
     }
 
@@ -1167,6 +1200,8 @@ impl StrokeRenderer {
             area_left: self.area_left,
             dual_area_left: self.dual_area_left,
             refused: self.refused,
+            settle_queue: Vec::new(),
+            settle_queue_epoch: None,
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
@@ -1210,7 +1245,7 @@ impl StrokeRenderer {
                 }
             }
         }
-        self.cov.dirty.retain(|k| !redrawn_by_tail.contains(&tile_key(*k)));
+        self.forget_dirty_in(&redrawn_by_tail);
         let mut dmg = old.union(&self.composite(pre, target, selection, lock_transparency, false));
         let tail_rect = tail.as_mut().map_or(Rect::EMPTY, |t| t.composite(pre, target, selection, lock_transparency, false));
         dmg = dmg.union(&tail_rect);
@@ -1255,7 +1290,7 @@ impl StrokeRenderer {
                 }
             }
         }
-        self.cov.dirty.retain(|k| !redrawn_by_tail.contains(&tile_key(*k)));
+        self.forget_dirty_in(&redrawn_by_tail);
         let mut dmg = old.union(&self.composite_mask(selection, mask, invert, false));
         let tail_rect = tail.as_mut().map_or(Rect::EMPTY, |t| t.composite_mask(selection, mask, invert, false));
         dmg = dmg.union(&tail_rect);
@@ -1281,13 +1316,9 @@ impl StrokeRenderer {
     /// to redraw.
     pub fn take_dirty_rect(&mut self) -> Rect {
         let r = self
-            .cov
-            .take_dirty()
+            .take_dirty_keys()
             .into_iter()
             .fold(Rect::EMPTY, |acc, (tx, ty)| acc.union(&Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE)));
-        if let Some(d) = self.dual.as_mut() {
-            d.dirty.clear();
-        }
         r.intersect(&self.bounds())
     }
 
@@ -1350,15 +1381,15 @@ impl StrokeRenderer {
     pub fn composite(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool, all: bool) -> Rect {
         let keys: Vec<(i32, i32)> = if all {
             self.cov.dirty.clear();
+            if let Some(d) = self.dual.as_mut() {
+                d.dirty.clear();
+            }
             let mut k: Vec<_> = self.cov.tiles.keys().copied().map(tile_coords).collect();
             k.sort_unstable();
             k
         } else {
-            self.cov.take_dirty()
+            self.take_dirty_keys()
         };
-        if let Some(d) = self.dual.as_mut() {
-            d.dirty.clear();
-        }
         let dmg = self.composite_keys(&keys, pre, target, selection, lock_transparency);
         if all { self.bounds() } else { dmg }
     }
@@ -1569,22 +1600,37 @@ impl StrokeRenderer {
     /// reaches are written by `settle_all`, and every tile is composited from `pre` with its
     /// coverage as it is then, so the result is the pixels `composite(.., all = true)` writes.
     /// Returns how many such tiles remain.
+    ///
+    /// The tiles wait in a queue that is rebuilt only after a push or the finish (the coverage
+    /// epoch moved), so draining a backlog in batches costs a scan of the pending tiles once, not
+    /// once per batch. A queued tile that was settled meanwhile, or that no longer counts as
+    /// changed, is skipped.
     pub fn settle(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool, max_tiles: usize) -> usize {
-        let mut keys = self.unsettled_keys(false);
-        let remaining = keys.len().saturating_sub(max_tiles);
-        if keys.len() > max_tiles {
-            keys.select_nth_unstable(max_tiles);
-            keys.truncate(max_tiles);
+        if self.settle_queue_epoch != Some(self.cov.epoch) {
+            let mut queue = self.unsettled_keys(false);
+            // Popped from the end, so the smallest key comes last in the queue.
+            queue.sort_unstable_by(|a, b| b.cmp(a));
+            self.settle_queue = queue;
+            self.settle_queue_epoch = Some(self.cov.epoch);
+        }
+        let mut keys = Vec::new();
+        while keys.len() < max_tiles {
+            let Some(k) = self.settle_queue.pop() else { break };
+            if self.cov.unsettled.contains_key(&k) || self.dual.as_ref().is_some_and(|d| d.unsettled.contains_key(&k)) {
+                keys.push(k);
+            }
         }
         keys.sort_unstable();
         self.composite_keys(&keys, pre, target, selection, lock_transparency);
         self.settled(&keys);
-        remaining
+        self.settle_queue.len()
     }
 
     /// Composite every coverage tile that changed since it was last settled, whether the latest
     /// push touched it or not (see [`settle`](Self::settle)); call it after [`finish`](Self::finish).
     pub fn settle_all(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) {
+        self.settle_queue.clear();
+        self.settle_queue_epoch = None;
         let mut keys = self.unsettled_keys(true);
         keys.sort_unstable();
         self.composite_keys(&keys, pre, target, selection, lock_transparency);
@@ -1598,15 +1644,15 @@ impl StrokeRenderer {
     fn composite_mask(&mut self, selection: Option<&Surface>, mask: &mut Surface, invert: bool, all: bool) -> Rect {
         let keys: Vec<(i32, i32)> = if all {
             self.cov.dirty.clear();
+            if let Some(d) = self.dual.as_mut() {
+                d.dirty.clear();
+            }
             let mut k: Vec<_> = self.cov.tiles.keys().copied().map(tile_coords).collect();
             k.sort_unstable();
             k
         } else {
-            self.cov.take_dirty()
+            self.take_dirty_keys()
         };
-        if let Some(d) = self.dual.as_mut() {
-            d.dirty.clear();
-        }
         let bounds = self.bounds();
         let opacity = self.ctx.brush.opacity.clamp(0.0, 1.0);
         let base = if invert { 1.0 } else { 0.0 };

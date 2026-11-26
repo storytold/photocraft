@@ -665,6 +665,20 @@ pub use photocraft_engine_core::LiveCommit;
 ///   clipped to it (its clipping base would become the group);
 /// - its layer mask is disabled, has a density below 100 % or a feather: the group takes the mask,
 ///   and only a plain one reads the same on it;
+/// - a group above the layer has effects: the stroke's layer is canvas-sized, so it widens the
+///   group's bounds, and effects laid out on those bounds (a Gradient Overlay) would change while
+///   the stroke is drawn;
+/// - the layer's Fill is below 100 % in a mode that uses Fill inside its blend formula: the group
+///   folds Fill into Opacity, which these modes do not do;
+/// - the document has artboards and the layer is not inside one: the canvas cuts the pasteboard's
+///   openings for loose layers from their composite bounds and takes a canvas-sized fill for
+///   backdrop, so a stroke past the layer's own bounds would stay hidden until it is released;
+/// - the layer is the Background and a layer in the document knocks out: deep knockout renders the
+///   Background alone, without the stroke's colour layer above it;
+/// - a layer in the document is thresholded (Hard Mix, Lighter or Darker Color, Blend If, a
+///   Threshold or Posterize adjustment): the preview blends the stroke in floating point and the
+///   commit rounds it to the layer's depth, so a difference below one level could flip a pixel
+///   (Hard Mix turning black to white);
 /// - the group would pass the deepest nesting a document may hold.
 fn overlay_path(
     doc: &photocraft_doc::Document,
@@ -710,7 +724,26 @@ fn overlay_path(
         return None;
     }
     // A frame holds its image in a fixed slot, which a group would take.
-    if (1..path.len()).any(|n| path.get(..n).and_then(|q| doc.layer_at(q)).is_some_and(|l| l.frame.is_some())) {
+    // A group's effects are laid out on its bounds, which the canvas-sized stroke layer widens.
+    if (1..path.len())
+        .any(|n| path.get(..n).and_then(|q| doc.layer_at(q)).is_some_and(|l| l.frame.is_some() || !l.effects.items.is_empty() || l.effects.psd_raw.is_some()))
+    {
+        return None;
+    }
+    if layer.fill_opacity < 1.0 && photocraft_compose::psblend::fill_is_special(layer.blend) {
+        return None;
+    }
+    if doc.has_artboards() && doc.artboard_of(id).is_none() {
+        return None;
+    }
+    if doc.is_background(id) && any_layer(&doc.layers, &|l| l.advanced.knockout != photocraft_doc::Knockout::None) {
+        return None;
+    }
+    if any_layer(&doc.layers, &|l| {
+        matches!(l.blend, BlendMode::HardMix | BlendMode::LighterColor | BlendMode::DarkerColor)
+            || !l.blend_if.is_default()
+            || matches!(&l.content, LayerContent::Adjustment(photocraft_doc::Adjustment::Threshold { .. } | photocraft_doc::Adjustment::Posterize { .. }))
+    }) {
         return None;
     }
     let (&at, parent) = path.split_last()?;
@@ -719,6 +752,11 @@ fn overlay_path(
         return None;
     }
     Some(path)
+}
+
+/// Whether `f` holds for any layer in `layers` or inside their groups.
+fn any_layer(layers: &[photocraft_doc::Layer], f: &dyn Fn(&photocraft_doc::Layer) -> bool) -> bool {
+    layers.iter().any(|l| f(l) || l.children().is_some_and(|c| any_layer(c, f)))
 }
 
 impl LiveStroke {

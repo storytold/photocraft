@@ -59,8 +59,11 @@ fn worst(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> f32 {
     cpu.iter()
         .zip(gpu)
         .map(|(p, q)| {
-            let d = (0..3).map(|c| (p[c] * p[3] - q[c] * q[3]).abs()).chain([(p[3] - q[3]).abs()]).fold(0.0f32, f32::max);
-            if d.is_nan() { 9.0 } else { d }
+            // `f32::max` drops a NaN, so a pixel with a non-finite channel is scored before comparing.
+            if p.iter().chain(q).any(|v| !v.is_finite()) {
+                return 9.0;
+            }
+            (0..3).map(|c| (p[c] * p[3] - q[c] * q[3]).abs()).chain([(p[3] - q[3]).abs()]).fold(0.0f32, f32::max)
         })
         .fold(0.0, f32::max)
 }
@@ -100,6 +103,8 @@ fn the_gpu_draws_the_overlay_as_the_committed_stroke() {
     };
     let mut comp = match ctx.create_compositor() {
         Ok(c) => c,
+        // A compositor that fails to set up on a working GPU is a bug, not a missing GPU.
+        Err(e @ photocraft_gpu::GpuContextError::Compositor(_)) => panic!("the GPU compositor could not be set up: {e}"),
         Err(e) => {
             assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "no GPU compositor: {e}");
             eprintln!("skipping the overlay GPU test: {e}");

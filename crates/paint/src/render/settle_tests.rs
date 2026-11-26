@@ -100,3 +100,29 @@ fn settle_leaves_the_tiles_the_latest_push_touched() {
     assert!(!same(&shadow, &pre), "the first push's tiles settled");
     assert_eq!(shadow.rgba(240, 100), pre.rgba(240, 100), "the latest push's tiles did not");
 }
+
+/// A mask after every live step is what a full redraw of the stroke so far writes, so a step that
+/// adds Dual Brush dabs over tiles the stroke already covers shows them too.
+#[test]
+fn a_dual_brush_only_step_redraws_the_live_mask() {
+    // Far-apart stroke dabs and close Dual Brush dabs: most pushes add only the latter.
+    let b = brush(json!({"size": 40, "spacing": 2.0, "dualBrush": {"enabled": true, "size": 6, "spacing": 0.2}}));
+    let mut r = StrokeRenderer::new(&b, None, 1.0);
+    let canvas = Rect::new(0, 0, W, H);
+    let mut live = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    let (mut old, mut dual_only) = (Rect::EMPTY, 0);
+    for p in path() {
+        r.push(&[p]);
+        let covered = r.dual.as_ref().is_some_and(|d| d.dirty.iter().any(|k| r.cov.tiles.contains_key(&tile_key(*k))));
+        dual_only += usize::from(r.cov.dirty.is_empty() && covered);
+        old = r.composite_live_mask(old, None, &mut live, false).1;
+        let mut again = r.clone();
+        let mut fresh = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+        again.composite_mask(None, &mut fresh, false, true);
+        if let Some(mut tail) = again.tail_preview() {
+            tail.composite_mask(None, &mut fresh, false, false);
+        }
+        assert_eq!(live.read_region(canvas), fresh.read_region(canvas), "after the push at x = {}", p.x);
+    }
+    assert!(dual_only > 0, "no push added only Dual Brush dabs, so the test did not cover them");
+}

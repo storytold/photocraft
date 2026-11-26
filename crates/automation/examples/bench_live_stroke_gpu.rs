@@ -160,7 +160,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut frames = Vec::new();
     let (mut tiles, mut bytes, mut passes, mut chunks) = (0usize, 0usize, 0usize, 0usize);
     let (mut gpu_ms, mut gpu_n) = (0.0, 0usize);
-    let mut bounds = Rect::EMPTY;
     for chunk in pts[1..].chunks(per_frame) {
         let frame = Instant::now();
         let t = Instant::now();
@@ -196,21 +195,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             gpu_ms += g.ms;
             gpu_n += 1;
         }
-        bounds = bounds.union(&damage);
     }
     let live_pixels = if sanity { Some(photocraft_gpu::render_to_vec(&mut comp, &device, &queue, &live.doc, live.doc.bounds())?) } else { None };
 
     // Pen-up: the commit takes the live stroke's pixels, then the canvas shows the committed doc.
     params["points"] = json!(pts);
     params["seed"] = json!(live.seed);
+    // What the canvas redraws at release (`commit_brush_stroke`): where laying effects out again moved
+    // a frame, and an overlay stroke's bounds, which showed no dither.
+    let overlay_bounds = live.overlay_bounds();
+    let before = s.active().unwrap().doc.clone();
     let t = Instant::now();
     s.offer_live_stroke(live)?;
     let result = s.execute("paint.stroke", params)?;
     let commit = ms(t);
     let doc = s.active().unwrap().doc.clone();
+    let damage_up = photocraft_compose::relayout_damage(&before, &doc).union(&overlay_bounds.unwrap_or(Rect::EMPTY));
     let t = Instant::now();
-    let stats = comp.render(&device, &queue, &doc, bounds, |e, o| display.sink(&device, e, o))?;
-    wait(&device)?;
+    let (up_tiles, up_bytes) = if damage_up.is_empty() {
+        (0, 0)
+    } else {
+        let stats = comp.render(&device, &queue, &doc, damage_up, |e, o| display.sink(&device, e, o))?;
+        wait(&device)?;
+        (stats.tiles_uploaded, stats.bytes_uploaded)
+    };
     let render_up = ms(t);
     let pen_up = commit + render_up;
     assert!(result.get("fromLive").is_some(), "the commit did not take the live pixels");
@@ -231,9 +239,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
          upload tiles={tiles} bytes={bytes} MB={:.1} passes={passes} chunks={chunks}",
         pct(&sorted, 0.95),
         sorted[n - 1],
-        stats.tiles_uploaded,
-        stats.bytes_uploaded as f64 / 1e6,
-        total + pen_up,
+        up_tiles,
+        up_bytes as f64 / 1e6,
+        total + t_settle + pen_up,
         bytes as f64 / 1e6,
     );
     if let Some(live_pixels) = live_pixels {

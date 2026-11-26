@@ -353,6 +353,82 @@ fn a_layer_the_group_would_blend_differently_keeps_the_pixel_path() {
     }
 }
 
+/// Whether a stroke on `s`'s active layer is shown as an overlay.
+fn is_overlay(s: &Session) -> bool {
+    let mut p = brush(json!({}));
+    p["points"] = json!(PTS);
+    LiveStroke::begin_overlay(s, "paint.stroke", &p).unwrap().is_overlay()
+}
+
+#[test]
+fn a_document_the_preview_would_show_differently_keeps_the_pixel_path() {
+    use photocraft_color::BlendMode;
+    use photocraft_doc::{Adjustment, Artboard, ArtboardBackground, Group, Knockout, LayerContent};
+    // What each case changes is the only thing that takes the overlay away.
+    let group_effects = t(|s| {
+        grouped(s);
+        s.edit("effects", |doc, _| {
+            doc.layers.last_mut().unwrap().effects.items.push(photocraft_doc::effects::Effect::default_drop_shadow());
+            Ok(())
+        })
+        .unwrap();
+    });
+    let board = t(|s| {
+        s.edit("artboard", |doc, _| {
+            let a = Artboard { rect: Rect::new(0, 0, 20, 20), background: ArtboardBackground::Transparent, preset: String::new() };
+            let g = Group { children: vec![], expanded: true, artboard: Some(a), frame_stroke: None };
+            doc.layers.push(Layer::new("board", LayerContent::Group(g)));
+            Ok(())
+        })
+        .unwrap();
+    });
+    let background_under_knockout = t(|s| {
+        let target = active(s);
+        s.edit("background", |doc, active| {
+            let base = doc.layers[0].id;
+            doc.remove(base).unwrap();
+            let bg = doc.layers.first_mut().unwrap();
+            bg.locks.transparency = true;
+            bg.locks.position = true;
+            let mut knocker = doc.layers[0].clone();
+            knocker.id = LayerId::fresh();
+            knocker.advanced.knockout = Knockout::Deep;
+            doc.layers.push(knocker);
+            *active = Some(target);
+            Ok(())
+        })
+        .unwrap();
+    });
+    let above = |f: fn(&mut Layer)| {
+        t(move |s| {
+            let below = active(s);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            tweak(s, f);
+            s.edit("select", |_, active| {
+                *active = Some(below);
+                Ok(())
+            })
+            .unwrap();
+        })
+    };
+    let cases: Vec<(&str, Tweak)> = vec![
+        ("a group with effects", group_effects),
+        ("Fill below 100% in Color Burn", t(|s| tweak(s, |l| (l.blend, l.fill_opacity) = (BlendMode::ColorBurn, 0.5)))),
+        ("a loose layer next to an artboard", board),
+        ("the Background under a knockout", background_under_knockout),
+        ("Hard Mix above", above(|l| l.blend = BlendMode::HardMix)),
+        ("Darker Color above", above(|l| l.blend = BlendMode::DarkerColor)),
+        ("Threshold above", above(|l| l.content = LayerContent::Adjustment(Adjustment::Threshold { level: 0.5 }))),
+        ("Posterize above", above(|l| l.content = LayerContent::Adjustment(Adjustment::Posterize { levels: 4 }))),
+    ];
+    for (name, setup) in cases {
+        assert!(!is_overlay(&scene(8, &*setup)), "{name}");
+    }
+    // The same layers without the change that matters stay overlays.
+    assert!(is_overlay(&scene(8, &|s| tweak(s, |l| (l.blend, l.fill_opacity) = (BlendMode::Multiply, 0.5)))), "Fill below 100% in Multiply");
+    assert!(is_overlay(&scene(8, &*above(|l| l.blend = BlendMode::Multiply))), "Multiply above");
+}
+
 /// A longer stroke than `PTS`, for settling along the way.
 fn long_stroke() -> Vec<[f64; 3]> {
     (0..40).map(|i| [10.0 + 2.6 * f64::from(i), 40.0 + 24.0 * (f64::from(i) / 5.0).sin(), 0.5 + 0.5 * f64::from((i * 3) % 5) / 4.0]).collect()
@@ -402,10 +478,10 @@ fn a_stroke_settled_along_the_way_commits_the_pixels_paint_stroke_renders() {
                 f.execute("paint.stroke", p.clone()).unwrap();
                 f
             });
-            assert!(
-                same_pixels(&commit.surface, &surface(fresh), Rect::new(0, 0, W, H)),
-                "{name}: settling every {every} pushes ({max} tiles) changed the commit"
-            );
+            let fresh_surface = surface(fresh);
+            // Past the canvas too: the layer's tiles outside it must match.
+            let all = Rect::new(0, 0, W, H).union(&commit.surface.tile_bounds()).union(&fresh_surface.tile_bounds());
+            assert!(same_pixels(&commit.surface, &fresh_surface, all), "{name}: settling every {every} pushes ({max} tiles) changed the commit");
         }
     }
     assert!(backlog, "settle never left a tile for later, so the test did not settle partway");
