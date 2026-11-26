@@ -651,7 +651,7 @@ pub fn refresh(doc: &Document, t: &mut TextLayer) {
 pub fn refresh_at(dpi: f32, format: PixelFormat, t: &mut TextLayer) {
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let (layout, r) = eng.render(t, dpi, format);
-    t.cache = Some(r.surface);
+    t.set_rendered_cache(r.surface);
     t.psd_raw = photocraft_text::psd::build_tysh(t, dpi, layout.bounds()).map(Arc::new);
 }
 
@@ -818,6 +818,9 @@ fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Co
 /// as Photoshop does, unless the user typed that name (`typed`, #9023).
 pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
     let LayerContent::Text(t) = &l.content else { return false };
+    if t.keep_layer_name {
+        return false;
+    }
     let auto = layer_name(&t.text);
     // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
     l.name == auto || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))

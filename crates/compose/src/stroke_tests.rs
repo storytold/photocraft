@@ -323,3 +323,43 @@ fn outside_stroke_on_partial_fill_raster_layer_keeps_interior_free_of_stroke() {
     let stroke_pixel = px(&d, 13, 20);
     assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue: {stroke_pixel:?}");
 }
+
+#[test]
+fn authoritative_stroked_shape_composites_like_its_saved_pixels() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::new("saved shape", Size::new(8, 6), ColorMode::Rgb, depth);
+        let mut sh = gradient_shape(8, 6);
+        sh.stroke.as_mut().unwrap().align = StrokeAlign::Outside;
+        let mut saved = photocraft_raster::Surface::new(d.pixel_format());
+        saved.fill_rect(d.bounds(), &[0.8, 0.1, 0.3, 0.75]);
+        saved.fill_rect(Rect::new(2, 1, 6, 5), &[0.1, 0.7, 0.4, 1.0]);
+        sh.cache = Some(saved.clone());
+        // Warm the split cache with precisely the same source and vector identities.
+        assert!(shape_split::split(&sh, d.bounds(), depth).is_some());
+        sh.cache_preserves_appearance = true;
+        assert!(shape_split::split(&sh, d.bounds(), depth).is_none());
+        let mut inside = sh.clone();
+        inside.stroke.as_mut().unwrap().align = StrokeAlign::Inside;
+        let authoritative = Layer::new("saved inside stroke", LayerContent::Shape(inside.clone()));
+        assert!(!uses_vector_effects(&authoritative));
+        assert!(effect_outline(&authoritative).is_none());
+        // With no saved pixels the vector model remains usable, even with a stale flag.
+        inside.cache = None;
+        let uncached = Layer::new("uncached", LayerContent::Shape(inside));
+        assert!(uses_vector_effects(&uncached));
+        assert!(effect_outline(&uncached).is_some());
+        let layer = Layer::new("saved shape", LayerContent::Shape(sh));
+        let mut clipped = Layer::raster("clipped", d.pixel_format());
+        clipped.surface_mut().unwrap().fill_rect(Rect::new(1, 0, 7, 6), &[0.2, 0.3, 0.9, 0.6]);
+        clipped.clipped = true;
+        d.layers = vec![layer, clipped].into();
+        for with_effect in [false, true] {
+            if with_effect {
+                d.layers[0].effects.items = vec![stroke(1.0, StrokePosition::Outside, blue())];
+            }
+            let mut raster = d.clone();
+            raster.layers[0].content = LayerContent::Raster(saved.clone());
+            assert_eq!(render(&d, d.bounds()).px, render(&raster, raster.bounds()).px, "{depth:?}, effect={with_effect}");
+        }
+    }
+}

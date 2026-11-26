@@ -96,6 +96,12 @@ pub fn effect_source_bounds(layer: &Layer, canvas: Rect) -> Rect {
     }
 }
 
+/// Whether effects derive their outline from editable vector geometry. An authoritative
+/// whole-shape cache instead supplies its own alpha, just like saved raster pixels.
+pub fn uses_vector_effects(layer: &Layer) -> bool {
+    matches!(&layer.content, LayerContent::Shape(sh) if !(sh.cache_preserves_appearance && sh.cache.is_some()))
+}
+
 /// The path a shape layer's effects are shaped by: its fill path. Photoshop builds a filled
 /// shape's layer effects from its vector outline, not from its pixels: a stroke runs along the
 /// whole path even where a gradient fill fades out (psd-tools stroke-effects). `None` for other
@@ -103,6 +109,9 @@ pub fn effect_source_bounds(layer: &Layer, canvas: Rect) -> Rect {
 /// past the path (their pixels give the outline: psd-tools double-stroke-effects), and shapes
 /// with a density or feather.
 pub fn effect_outline(layer: &Layer) -> Option<&photocraft_doc::vector::Path> {
+    if !uses_vector_effects(layer) {
+        return None;
+    }
     let LayerContent::Shape(sh) = &layer.content else { return None };
     let stroke_inside = sh.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.align == photocraft_doc::vector::StrokeAlign::Inside);
     // A soft (feathered or less dense) fill's own alpha is its outline.

@@ -3886,10 +3886,16 @@ fn exposure_text_near_one_second_is_not_one_over_one() {
 /// A folder batch picks up GIMP's gzipped `.xcf.gz`, whose last extension alone (`gz`) says nothing.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
+fn folder_listing_recognises_all_xcf_transport_suffixes() {
     assert!(super::openable_name("/scans/page 01.xcf.gz"));
     assert!(super::openable_name("C:\\scans\\PAGE.XCF.GZ"));
     assert!(super::openable_name("page.xcfgz"));
+    for name in ["page.xcf.bz2", "page.XCFBZ2", "page.XCF.XZ", "page.xcfxz"] {
+        assert!(super::openable_name(name), "{name}");
+    }
+    for name in ["archive.tar.bz2", "archive.tar.xz", "backup.xcf.xz.tmp"] {
+        assert!(!super::openable_name(name), "{name}");
+    }
     assert!(super::openable_name("page.PNG"));
     assert!(!super::openable_name("archive.tar.gz"));
     assert!(!super::openable_name("notes.txt"));
@@ -4585,4 +4591,33 @@ fn save_and_close_refuses_a_read_only_source() {
         assert!(error.contains("cannot replace this source"), "overrideOpen {override_open}: {result}");
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "overrideOpen {override_open}: the source is unchanged");
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn flat_and_recursive_folders_discover_wrapped_xcf_files_without_selecting_archives_or_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input");
+    let output = temp.path().join("output");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::create_dir(&output).unwrap();
+    let names = ["one.xcf.bz2", "two.XCFBZ2", "three.XCF.XZ", "four.xcfxz"];
+    for name in names {
+        std::fs::write(input.join(name), b"").unwrap();
+    }
+    for name in ["archive.tar.bz2", "archive.tar.xz", "backup.xcf.xz.tmp"] {
+        std::fs::write(input.join(name), b"").unwrap();
+    }
+    std::fs::create_dir(input.join("folder.xcf.xz")).unwrap();
+    let flat = super::list_images(input.to_str().unwrap()).unwrap();
+    assert_eq!(flat.len(), names.len());
+    for name in names {
+        assert!(flat.iter().any(|path| std::path::Path::new(path).file_name().unwrap() == name));
+    }
+    let nested = input.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("nested.xcf.bz2"), b"").unwrap();
+    let recursive = super::list_images_tree(input.to_str().unwrap(), output.to_str().unwrap(), "file.batch").unwrap();
+    assert_eq!(recursive.len(), names.len() + 1);
+    assert!(recursive.iter().any(|entry| std::path::Path::new(&entry.path).file_name().unwrap() == "nested.xcf.bz2"));
 }

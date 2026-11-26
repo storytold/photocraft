@@ -10,7 +10,8 @@
 
 use photocraft_color::SampleType;
 use photocraft_doc::LayerMask;
-use photocraft_raster::Surface;
+use photocraft_geom::Rect;
+use photocraft_raster::{AllocationError, Interrupt, Surface};
 
 /// `filtered` mixed over `base` (the unfiltered pixels) through `mask`: premultiplied, any
 /// channel layout. Pixels the mask hides entirely are `base`'s.
@@ -41,45 +42,153 @@ pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
         o.resize(b.len(), 0.0f32);
         for (i, ((bp, fp), op)) in b.chunks_exact(n).zip(f.chunks_exact(n)).zip(o.chunks_exact_mut(n)).enumerate() {
             let m = k.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0);
-            if fmt.sample == SampleType::F32 {
-                // Native float colors can be signed or HDR. Weighted F64 sums also avoid overflowing
-                // the difference between opposite finite F32 extremes before applying coverage.
-                let m = f64::from(m);
-                if fmt.alpha {
-                    let a = n - 1;
-                    let before = f64::from(bp[a]) * (1.0 - m);
-                    let after = f64::from(fp[a]) * m;
-                    let alpha = before + after;
-                    op[a] = alpha as f32;
-                    for c in 0..a {
-                        op[c] = if alpha > 0.0 { ((f64::from(bp[c]) * before + f64::from(fp[c]) * after) / alpha) as f32 } else { 0.0 };
-                    }
-                } else {
-                    for c in 0..n {
-                        op[c] = (f64::from(bp[c]) * (1.0 - m) + f64::from(fp[c]) * m) as f32;
-                    }
-                }
-                continue;
-            }
-            if !fmt.alpha {
-                for c in 0..n {
-                    op[c] = bp[c] + (fp[c] - bp[c]) * m;
-                }
-                continue;
-            }
-            let a = n - 1;
-            let oa = bp[a] + (fp[a] - bp[a]) * m;
-            op[a] = oa;
-            for c in 0..a {
-                let pm = bp[c] * bp[a] + (fp[c] * fp[a] - bp[c] * bp[a]) * m;
-                op[c] = if oa > 0.0 { (pm / oa).clamp(0.0, 1.0) } else { 0.0 };
-            }
+            mix_pixel(fmt.sample, fmt.alpha, bp, fp, op, m);
         }
         out.write_region(area, &o);
     }
     out.prune();
     out
 }
+
+// Keep the hot unchecked loop and the fallible import path on identical native
+// arithmetic. Inline preserves the original per-pixel branch structure.
+#[inline]
+fn mix_pixel(sample: SampleType, alpha: bool, bp: &[f32], fp: &[f32], op: &mut [f32], m: f32) {
+    if sample == SampleType::F32 {
+        // Native float colors can be signed or HDR. Weighted F64 sums also avoid overflowing
+        // the difference between opposite finite F32 extremes before applying coverage.
+        let m = f64::from(m);
+        if alpha {
+            let a = op.len() - 1;
+            let before = f64::from(bp[a]) * (1.0 - m);
+            let after = f64::from(fp[a]) * m;
+            let alpha = before + after;
+            op[a] = alpha as f32;
+            for c in 0..a {
+                op[c] = if alpha > 0.0 { ((f64::from(bp[c]) * before + f64::from(fp[c]) * after) / alpha) as f32 } else { 0.0 };
+            }
+        } else {
+            for c in 0..op.len() {
+                op[c] = (f64::from(bp[c]) * (1.0 - m) + f64::from(fp[c]) * m) as f32;
+            }
+        }
+        return;
+    }
+    if !alpha {
+        for c in 0..op.len() {
+            op[c] = bp[c] + (fp[c] - bp[c]) * m;
+        }
+        return;
+    }
+    let a = op.len() - 1;
+    let oa = bp[a] + (fp[a] - bp[a]) * m;
+    op[a] = oa;
+    for c in 0..a {
+        let pm = bp[c] * bp[a] + (fp[c] * fp[a] - bp[c] * bp[a]) * m;
+        op[c] = if oa > 0.0 { (pm / oa).clamp(0.0, 1.0) } else { 0.0 };
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MixError {
+    Cancelled,
+    Allocation(AllocationError),
+    FormatMismatch,
+    InvalidDensity,
+    NonFiniteSample,
+}
+impl std::fmt::Display for MixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("Filter coverage mixing cancelled"),
+            Self::Allocation(error) => error.fmt(f),
+            Self::FormatMismatch => f.write_str("Filter coverage input formats differ"),
+            Self::InvalidDensity => f.write_str("Filter mask density must be finite and normalized"),
+            Self::NonFiniteSample => f.write_str("Filter coverage samples must be finite"),
+        }
+    }
+}
+impl std::error::Error for MixError {}
+impl From<AllocationError> for MixError {
+    fn from(error: AllocationError) -> Self {
+        Self::Allocation(error)
+    }
+}
+
+/// Fallible, cancellable native filter-mask mixing over an admitted extent.
+/// The caller owns extent/storage/work admission. Scratch is bounded to one
+/// native tile; cancellation is checked before every tile and pixel row. No
+/// source is changed or partly published on failure. The ordinary `mix` API retains its loop and scratch reuse; both paths
+/// use the same per-pixel arithmetic.
+pub fn mix_in(base: &Surface, filtered: &Surface, mask: &LayerMask, area: Rect, ctl: &Interrupt<'_>) -> Result<Surface, MixError> {
+    let check = || ctl.check().map_err(|_| MixError::Cancelled);
+    check()?;
+    let fmt = base.format();
+    if filtered.format() != fmt {
+        return Err(MixError::FormatMismatch);
+    }
+    if !mask.density.is_finite() || !(0.0..=1.0).contains(&mask.density) {
+        return Err(MixError::InvalidDensity);
+    }
+    let channels = fmt.channels();
+    let mask_channels = mask.surface.channels();
+    if channels == 0 || mask_channels == 0 {
+        return Err(MixError::FormatMismatch);
+    }
+    let mut out = filtered.clone();
+    let same_default = base.default_pixel() == filtered.default_pixel();
+    let total_pixels = (u64::from(area.width()) * u64::from(area.height())).max(1);
+    let mut completed_pixels = 0u64;
+    for tile in area.tiles() {
+        check()?;
+        let rect = tile.rect().intersect(&area);
+        let bare = !base.has_tiles_in(rect) && !filtered.has_tiles_in(rect);
+        if rect.is_empty() || (bare && (fmt.alpha || same_default)) {
+            continue;
+        }
+        let b = base.try_read_region(rect)?;
+        let f = filtered.try_read_region(rect)?;
+        let k = if mask.enabled { Some(mask.surface.try_read_region(rect)?) } else { None };
+        let mut values = Vec::new();
+        let bytes = b.len().checked_mul(std::mem::size_of::<f32>()).ok_or(AllocationError::SizeOverflow)?;
+        values.try_reserve_exact(b.len()).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
+        values.resize(b.len(), 0.);
+        let width = rect.width() as usize;
+        for (i, ((bp, fp), op)) in b.chunks_exact(channels).zip(f.chunks_exact(channels)).zip(values.chunks_exact_mut(channels)).enumerate() {
+            if i % width == 0 {
+                check()?;
+            }
+            if bp.iter().chain(fp).any(|value| !value.is_finite()) {
+                return Err(MixError::NonFiniteSample);
+            }
+            let raw = match &k {
+                Some(k) => i.checked_mul(mask_channels).and_then(|index| k.get(index)).copied().ok_or(MixError::FormatMismatch)?,
+                None => 1.,
+            };
+            if !raw.is_finite() {
+                return Err(MixError::NonFiniteSample);
+            }
+            let m = if mask.enabled && mask.density < 1. { 1. - mask.density * (1. - raw) } else { raw };
+            mix_pixel(fmt.sample, fmt.alpha, bp, fp, op, m.clamp(0., 1.));
+            if op.iter().any(|value| !value.is_finite()) {
+                return Err(MixError::NonFiniteSample);
+            }
+            if (i + 1) % width == 0 {
+                completed_pixels = completed_pixels.saturating_add(width as u64);
+                ctl.progress((completed_pixels as f64 / total_pixels as f64) as f32);
+            }
+        }
+        check()?;
+        out.try_write_region(rect, &values)?;
+    }
+    check()?;
+    out.prune();
+    check()?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod checked_tests;
 
 /// The mask value below which a pixel's filtered value is taken to be unknown: [`unmix`] gives the
 /// unfiltered value there, which the mask shows (almost) none of anyway.

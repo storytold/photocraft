@@ -1694,3 +1694,15 @@ fn save_types_list_the_document_formats_then_the_rest_by_name() {
     let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
     assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
 }
+
+#[test]
+fn open_picker_covers_every_xcf_transport_in_all_formats_and_its_format_filter() {
+    let filters = open_filters(PickRequest::open("document"), &[]).filters;
+    let all = filters.iter().find(|filter| filter.name == "All Formats").unwrap();
+    let xcf = filters.iter().find(|filter| filter.name == "GIMP").unwrap();
+    for name in ["drawing.xcf", "drawing.xcf.gz", "drawing.xcfgz", "drawing.xcf.bz2", "drawing.xcfbz2", "drawing.xcf.xz", "drawing.xcfxz"] {
+        let extension = std::path::Path::new(name).extension().unwrap().to_str().unwrap();
+        assert!(all.extensions.iter().any(|ext| ext == extension), "All Formats hides {name}");
+        assert!(xcf.extensions.iter().any(|ext| ext == extension), "XCF filter hides {name}");
+    }
+}

@@ -90,11 +90,11 @@ pub(super) fn isolated_curve_channel_at(st: &DocState, layers_panel_mask: bool, 
         };
     }
     if (matches!(st.channel_view.target, ChannelTarget::Color(_)) || (st.channel_view.target == ChannelTarget::Composite && doc.quick_mask.is_none()))
-        && crate::mask_view_cmds::current(st).is_some_and(|v| v.filter)
+        && crate::mask_view_cmds::editing(st).is_some_and(|v| v.filter)
     {
         return filter_mask_curve_channel_at(st, layer);
     }
-    if matches!(st.channel_view.target, ChannelTarget::Color(_)) && (crate::mask_view_cmds::current(st).is_some() || layers_panel_mask) {
+    if matches!(st.channel_view.target, ChannelTarget::Color(_)) && (crate::mask_view_cmds::editing(st).is_some() || layers_panel_mask) {
         return layer_mask_curve_channel_at(st, layer);
     }
     if let Some(colors) = st.channel_view.color_selection(color_count(doc)) {
@@ -120,8 +120,8 @@ pub(super) fn isolated_curve_channel_at(st: &DocState, layers_panel_mask: bool, 
             gray: Some(GraySurface::QuickMask),
         }),
         ChannelTarget::LayerMask => layer_mask_curve_channel_at(st, layer),
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => filter_mask_curve_channel_at(st, layer),
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() || layers_panel_mask => layer_mask_curve_channel_at(st, layer),
+        ChannelTarget::Composite if crate::mask_view_cmds::editing(st).is_some_and(|v| v.filter) => filter_mask_curve_channel_at(st, layer),
+        ChannelTarget::Composite if crate::mask_view_cmds::editing(st).is_some() || layers_panel_mask => layer_mask_curve_channel_at(st, layer),
         _ => None,
     }
 }

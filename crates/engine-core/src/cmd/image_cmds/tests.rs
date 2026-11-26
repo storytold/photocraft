@@ -1035,3 +1035,40 @@ fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic
     assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
     assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
 }
+
+#[test]
+fn image_size_keeps_nearest_resampled_imported_shape_pixels() {
+    use photocraft_color::{ColorMode, SampleType};
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = Document::new("Imported shape", Size::new(4, 4), mode, depth);
+            let mut cache = Surface::new(doc.pixel_format());
+            let color = if mode == ColorMode::Grayscale { vec![0.5, 1.] } else { vec![1., 0., 0., 1.] };
+            cache.fill_rect(Rect::new(1, 1, 2, 2), &color);
+            let expected = cache.pixel(1, 1);
+            let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(1., 1.), (2., 1.), (2., 2.), (1., 2.)])]);
+            let shape = photocraft_doc::ShapeLayer {
+                path,
+                fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+                cache: Some(cache),
+                cache_preserves_appearance: true,
+                ..Default::default()
+            };
+            doc.layers.push(Layer::new("Source shape", LayerContent::Shape(shape)));
+            resample_doc(&mut doc, "image.imageSize", 8, 8, Resample::Nearest).unwrap();
+            let LayerContent::Shape(shape) = &doc.layers[0].content else { panic!("editable shape") };
+            assert!(shape.cache_preserves_appearance);
+            let cache = shape.cache.as_ref().unwrap();
+            assert_eq!(cache.content_bounds(), Rect::new(2, 2, 4, 4));
+            assert_eq!(cache.pixel(2, 2), expected);
+            assert_eq!(cache.pixel(3, 3), expected);
+            assert!(cache.pixel(4, 3).iter().all(|v| *v == 0.));
+            // A later vector appearance edit intentionally discards the source pixels.
+            let snapshot = doc.clone();
+            let LayerContent::Shape(shape) = &mut doc.layers[0].content else { panic!("shape") };
+            crate::vector_cmds::refresh_shape(&snapshot, shape);
+            assert!(!shape.cache_preserves_appearance);
+            assert_ne!(shape.cache.as_ref().unwrap().pixel(2, 2), expected);
+        }
+    }
+}

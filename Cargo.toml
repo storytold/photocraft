@@ -61,7 +61,7 @@ craft-pcraft-bundle = { git = "https://github.com/storytold/craft-libs", rev = "
 craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c" }
 craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c" }
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c" }
-craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c" }
+craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "cb31ba7dead17b8a9f9e9d02702bdd427f63a62e" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c" }
 # Keep the shared embedded-image validation API until the framework revision includes it.
 craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "5c30761a86c2bb1814098139439be7c5b0a9e31c", features = ["tree-render", "tree-render-system-fonts"] }

@@ -22,12 +22,11 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
-    // Only GIMP's compound suffix is an image; an arbitrary .gz is not a batch input.
-    let gzipped_xcf = p.file_name().is_some_and(|name| name.to_string_lossy().to_ascii_lowercase().ends_with(".xcf.gz"));
-    p.is_file() && (gzipped_xcf || p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase())))
+    let xcf = p.file_name().is_some_and(|name| photocraft_io::is_xcf_input_name(&name.to_string_lossy()));
+    p.is_file() && (xcf || p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase())))
 }
 
 /// Drops the Save and view steps the desktop records from `action` (Batch saves each result
@@ -303,14 +302,27 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn batch_inputs_recognize_gimp_xcf_names_but_not_arbitrary_gzip() {
+    fn batch_inputs_recognize_all_xcf_transports_and_choose_writable_same_outputs() {
         let dir = tempfile::tempdir().unwrap();
-        for name in ["plain.xcf", "upper.XCF", "alias.xcfgz", "upper-alias.XCFGZ", "compressed.xcf.gz", "upper-compressed.XCF.GZ", "ordinary.PNG"] {
+        for name in [
+            "plain.xcf",
+            "upper.XCF",
+            "alias.xcfgz",
+            "upper-alias.XCFGZ",
+            "compressed.xcf.gz",
+            "upper-compressed.XCF.GZ",
+            "compressed.xcf.bz2",
+            "alias.XCFBZ2",
+            "compressed.XCF.XZ",
+            "alias.xcfxz",
+            "ordinary.PNG",
+        ] {
             let path = dir.path().join(name);
             std::fs::write(&path, b"").unwrap();
             assert!(is_input(&path), "{name} should be selected");
+            assert_eq!(photocraft_engine::file_cmds::batch_same_format(name), if name == "ordinary.PNG" { "png" } else { "psd" }, "{name}");
         }
-        for name in ["notes.txt.gz", "archive.tar.gz", "backup.xcf.gz.tmp", "notes.txt"] {
+        for name in ["notes.txt.gz", "archive.tar.gz", "archive.tar.bz2", "archive.tar.xz", "backup.xcf.bz2.tmp", "backup.xcf.gz.tmp", "notes.txt"] {
             let path = dir.path().join(name);
             std::fs::write(&path, b"").unwrap();
             assert!(!is_input(&path), "{name} should be skipped");
