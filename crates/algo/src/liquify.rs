@@ -230,6 +230,10 @@ const PARALLEL_DAB_NODES: usize = 16_384;
 /// Bound completed output buffers independently of the document's size.
 const RENDER_BATCH_TILES: usize = 64;
 
+/// A replayed stroke checks for cancellation once per this many segments (between its points):
+/// cheap next to the dabs they lay, and a stroke shorter than this adds no check of its own.
+pub const STROKE_CHECK_SEGMENTS: usize = 256;
+
 /// Distance between dabs along a stroke for brush radius `r`: a twentieth of the radius, so a
 /// drag is many small pushes and its edge stays smooth.
 fn dab_spacing(r: f64) -> f64 {
@@ -326,10 +330,17 @@ impl LiquifyField {
 
     /// Applies one stroke. Returns the document rectangle whose output changed.
     pub fn apply_stroke(&mut self, s: &LiquifyStroke) -> Rect {
+        // Nothing cancels `Interrupt::NONE`, so the stroke always completes.
+        self.apply_stroke_with(s, &Interrupt::NONE).unwrap_or(Rect::EMPTY)
+    }
+
+    /// [`Self::apply_stroke`], checking `ctl` every [`STROKE_CHECK_SEGMENTS`] segments of a long
+    /// stroke; `None` once it is cancelled (the field then holds part of the stroke).
+    fn apply_stroke_with(&mut self, s: &LiquifyStroke, ctl: &Interrupt) -> Option<Rect> {
         self.cursor = None;
         self.tail = None;
         match s.tool {
-            LiquifyTool::LassoMask => return self.apply_lasso(s),
+            LiquifyTool::LassoMask => return Some(self.apply_lasso(s)),
             LiquifyTool::ReconstructAll => {
                 let k = (s.amount.unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32;
                 for (v, f) in self.d.iter_mut().zip(&self.freeze) {
@@ -337,7 +348,7 @@ impl LiquifyField {
                     v[0] *= m;
                     v[1] *= m;
                 }
-                return self.bounds;
+                return Some(self.bounds);
             }
             LiquifyTool::FreezeAll => self.freeze.fill(1.0),
             LiquifyTool::ThawAll => self.freeze.fill(0.0),
@@ -345,14 +356,17 @@ impl LiquifyField {
             _ => {}
         }
         if s.tool.is_global() {
-            return self.bounds;
+            return Some(self.bounds);
         }
         // Each point with its live time (the fourth number), if it has one.
         let pts: Vec<([f64; 3], Option<f64>)> =
             s.points.iter().filter(|p| p.len() >= 2).map(|p| ([p[0], p[1], p.get(2).copied().unwrap_or(1.0)], p.get(3).copied())).collect();
-        let Some(&(first, _)) = pts.first() else { return Rect::EMPTY };
+        let Some(&(first, _)) = pts.first() else { return Some(Rect::EMPTY) };
         let mut dirty = self.stroke_begin(s, first);
-        for w in pts.windows(2) {
+        for (i, w) in pts.windows(2).enumerate() {
+            if i > 0 && i % STROKE_CHECK_SEGMENTS == 0 && ctl.cancelled() {
+                return None;
+            }
             let ((a, _), (b, ms)) = (w[0], w[1]);
             let d = match ms {
                 Some(ms) => self.stroke_segment_live(s, a, b, ms),
@@ -360,7 +374,7 @@ impl LiquifyField {
             };
             dirty = dirty.union(&d);
         }
-        dirty
+        Some(dirty)
     }
 
     /// Lasso: sets the freeze mask to `amount` (1.0 when none; 0.0 thaws) at every field node
@@ -760,11 +774,26 @@ impl LiquifyField {
 
     /// Replays strokes on a fresh field.
     pub fn from_strokes(bounds: Rect, cell: f64, strokes: &[LiquifyStroke]) -> Self {
-        let mut f = LiquifyField::new(bounds, cell);
-        for s in strokes {
-            f.apply_stroke(s);
+        // Nothing cancels `Interrupt::NONE`, so the replay always completes.
+        Self::from_strokes_with(bounds, cell, strokes, &Interrupt::NONE).unwrap_or_else(|| LiquifyField::new(bounds, cell))
+    }
+
+    /// [`Self::from_strokes`], checking `ctl` before the field is allocated, between strokes and
+    /// every [`STROKE_CHECK_SEGMENTS`] segments of a long stroke; `None` once it is cancelled, so
+    /// a Cancel during the replay stops it instead of replaying the rest of the strokes (#210).
+    /// `strokes.len()` checks when every stroke is shorter than that.
+    pub fn from_strokes_with(bounds: Rect, cell: f64, strokes: &[LiquifyStroke], ctl: &Interrupt) -> Option<Self> {
+        if ctl.cancelled() {
+            return None;
         }
-        f
+        let mut f = LiquifyField::new(bounds, cell);
+        for (i, s) in strokes.iter().enumerate() {
+            if i > 0 && ctl.cancelled() {
+                return None;
+            }
+            f.apply_stroke_with(s, ctl)?;
+        }
+        Some(f)
     }
 
     /// Catmull-Rom (bicubic) displacement at grid coordinates.

@@ -858,3 +858,57 @@ fn apply_liquify_with_stops_when_cancelled() {
     assert!(calls < tiles);
     assert_eq!(reported.load(SeqCst), 0, "no batch was finished");
 }
+
+/// Replays `strokes` on [`bounds`] under a check that cancels at its `trip`th call (0: never);
+/// the field and how many checks were made.
+fn replay_counting(strokes: &[LiquifyStroke], trip: usize) -> (Option<LiquifyField>, usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let calls = AtomicUsize::new(0);
+    let check = || {
+        let n = calls.fetch_add(1, SeqCst) + 1;
+        trip != 0 && n >= trip
+    };
+    let field = LiquifyField::from_strokes_with(bounds(), 2.0, strokes, &Interrupt::cancel_only(&check));
+    (field, calls.load(SeqCst))
+}
+
+#[test]
+fn a_cancelled_replay_stops_between_strokes() {
+    // #210: six 50 px drags of a 20 px brush (dabs half a pixel apart: a hundred each).
+    let strokes: Vec<LiquifyStroke> = (0..6)
+        .map(|i| {
+            let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 20.0);
+            let y = 8.0 + 8.0 * i as f64;
+            s.points = vec![vec![10.0, y], vec![60.0, y + 2.0]];
+            s
+        })
+        .collect();
+    // Not cancelled: one check before the field is allocated and one between strokes, and the
+    // same field as the replay nothing cancels.
+    let (field, calls) = replay_counting(&strokes, 0);
+    let field = field.expect("not cancelled");
+    assert_eq!(calls, strokes.len(), "one check before the field, one between strokes");
+    assert!(!field.is_identity(), "the strokes displace the field");
+    assert!(field == LiquifyField::from_strokes(bounds(), 2.0, &strokes), "the same field as from_strokes");
+    // Cancelled at check k + 1: k strokes were replayed, then nothing more was asked (or done).
+    for k in 0..strokes.len() {
+        let (field, calls) = replay_counting(&strokes, k + 1);
+        assert!(field.is_none(), "cancelled after {k} strokes");
+        assert_eq!(calls, k + 1, "stopped after {k} strokes: no later stroke was replayed");
+    }
+}
+
+#[test]
+fn a_cancelled_replay_stops_inside_a_long_stroke() {
+    // One stroke of 600 points (599 segments) checks at segments 256 and 512.
+    let mut long = LiquifyStroke::new(LiquifyTool::ForwardWarp, 20.0);
+    long.points = (0..600).map(|i| vec![5.0 + 0.1 * i as f64, 30.0]).collect();
+    let strokes = [long];
+    let (field, calls) = replay_counting(&strokes, 0);
+    assert_eq!(calls, 1 + 598 / STROKE_CHECK_SEGMENTS, "one before the field, one per {STROKE_CHECK_SEGMENTS} segments");
+    assert!(field.expect("not cancelled") == LiquifyField::from_strokes(bounds(), 2.0, &strokes), "the same field as from_strokes");
+    // Cancelled at the stroke's first check: the rest of the stroke is not walked.
+    let (field, calls) = replay_counting(&strokes, 2);
+    assert!(field.is_none());
+    assert_eq!(calls, 2, "stopped at segment {STROKE_CHECK_SEGMENTS}");
+}

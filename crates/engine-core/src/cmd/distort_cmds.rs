@@ -283,7 +283,7 @@ pub fn apply_to_surface_with(id: &str, params: &Value, surf: &Surface, canvas: R
     match id {
         LIQUIFY => {
             let (strokes, cell) = liquify_params(id, params, canvas).ok()?;
-            let field = LiquifyField::from_strokes(canvas, cell, &strokes);
+            let Some(field) = LiquifyField::from_strokes_with(canvas, cell, &strokes, ctl) else { return Some(Err(EngineError::Cancelled)) };
             Some(cancelled().and_then(|()| apply_liquify_with(surf, &field, ctl).ok_or(EngineError::Cancelled)))
         }
         // A stored warp too far to render leaves the smart object as it is (#1019).
@@ -463,7 +463,9 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
         p,
         false,
         Box::new(move |surf, sel, _, ctl| {
-            let field = LiquifyField::from_strokes(canvas, cell, &strokes);
+            // Checked before the field is allocated and between strokes, so Cancel stops the
+            // replay instead of waiting for the rest of the strokes.
+            let field = LiquifyField::from_strokes_with(canvas, cell, &strokes, ctl).ok_or(EngineError::Cancelled)?;
             let _ = report.set(field.max_displacement());
             if field.is_identity() {
                 return Ok(None);
@@ -476,7 +478,7 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
         }),
         None,
         Some(Box::new(move |ctl: &Interrupt| {
-            let field = LiquifyField::from_strokes(canvas, cell, &smart_strokes);
+            let field = LiquifyField::from_strokes_with(canvas, cell, &smart_strokes, ctl).ok_or(EngineError::Cancelled)?;
             if ctl.cancelled() {
                 return Err(EngineError::Cancelled);
             }

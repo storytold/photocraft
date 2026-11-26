@@ -753,6 +753,47 @@ fn liquify_cancelled_mid_blend_leaves_the_document_and_history() {
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
 }
 
+#[test]
+fn liquify_cancelled_while_replaying_its_strokes_leaves_the_document_and_history() {
+    // #210: `n` strokes of a 30 px brush, each dragged 25 px (dabs 0.75 px apart: over thirty
+    // per stroke, so none is an identity at full pressure).
+    let strokes = |n: usize, pressure: u32| {
+        let s: Vec<Value> =
+            (0..n).map(|i| json!({"tool": "forwardWarp", "size": 30, "pressure": pressure, "points": [[20, 12 + 3 * i], [45, 14 + 3 * i]]})).collect();
+        json!({"strokes": s})
+    };
+    let n = 8;
+    let checks = |p: Value| {
+        let mut s = session(8);
+        let ctx = crate::jobs::JobCtx::new();
+        let r = run_inline(&mut s, &ctx, LIQUIFY, p).unwrap();
+        (ctx.checks(), r["changed"] == true)
+    };
+    // At zero pressure the field stays an identity and the job returns right after the replay:
+    // the job's first check, one before the field is allocated and one between strokes.
+    let (one, _) = checks(strokes(1, 0));
+    let (idle, _) = checks(strokes(n, 0));
+    assert!(one == 2 && idle == one + n - 1, "{one} {idle}: expected 2 and {} (n {n})", 1 + n);
+    // At full pressure the warp's own checks follow: the first is check `idle + 1`.
+    let (full, changed) = checks(strokes(n, 100));
+    assert!(changed && full > idle + 2, "{full} {idle} {changed}: the warp checks after the replay");
+    // Cancelled at the check before stroke n / 2: half the strokes replayed, half never were,
+    // and the warp never started.
+    let trip = one + n / 2;
+    assert!(trip < idle, "{trip} {idle}: the trip lands in the replay");
+    let mut s = session(8);
+    let doc = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.cancel_at_check(trip);
+    let r = run_inline(&mut s, &ctx, LIQUIFY, strokes(n, 100));
+    let made = ctx.checks();
+    assert!(made == trip, "{made} {trip}: no check after the cancel (idle {idle}, full {full})");
+    assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "the document is unchanged");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
+}
+
 /// 600×600 document whose new layer holds a pattern over (20, 20)–(580, 580): its warps draw
 /// into several of the canvas's nine 256 px tiles. `tint` makes the pixels (and so a smart
 /// object made of them, which the smart filter stage cache keys by) the caller's own.
