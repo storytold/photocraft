@@ -120,6 +120,7 @@ fn gpu() -> Option<Gpu> {
         }
     };
     eprintln!("GPU parity backend: {:?} ({}, {:?})", info.backend, info.name, info.device_type);
+    eprintln!("GPU parity identity: vendor={:04x} device={:04x}", info.vendor, info.device);
     // Exact parity needs 32-bit float targets. Adapters without them (e.g. GL software
     // rasterizers) use the CPU compositor in the app, so there is nothing to compare there.
     if Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
