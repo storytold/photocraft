@@ -18,7 +18,7 @@ fn windowed() -> H {
         use craft::window::policy::{CaptionFamily, Captions, Decision, Desktop, DesktopKind, Frame};
         let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout: craft::window::Layout::default() });
         let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-        PhotocraftApp::setup_window(&cc.egui_ctx, crate::theme::AppTheme::pro(), Decision { frame, overridden: None, desktop });
+        PhotocraftApp::setup_window(&cc.egui_ctx, crate::theme::AppTheme::pro(), Decision { frame, overridden: None, desktop }, None);
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.background_jobs = false;
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
