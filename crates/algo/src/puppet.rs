@@ -1135,14 +1135,28 @@ const MAX_MESH_COVERAGE: f64 = 16.0;
 /// that isn't finite), one whose deformed box spans more than [`MAX_WARP_PIXELS`] or whose
 /// triangles cover that box more than [`MAX_MESH_COVERAGE`] times.
 pub fn warp_with_mesh(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: &[[f64; 2]], interp: Interp) -> Option<Surface> {
+    warp_with_mesh_with(src, bounds, mesh, deformed, interp, &Interrupt::NONE).ok().flatten()
+}
+
+/// [`warp_with_mesh`], checking `ctl` before drawing and per destination tile while drawing;
+/// `Err(Cancelled)` once it is cancelled (#210).
+pub fn warp_with_mesh_with(
+    src: &Surface,
+    bounds: Rect,
+    mesh: &PuppetMesh,
+    deformed: &[[f64; 2]],
+    interp: Interp,
+    ctl: &Interrupt,
+) -> Result<Option<Surface>, Cancelled> {
+    ctl.check()?;
     let n = mesh.verts.len();
     if mesh.tris.is_empty() || deformed.len() != n || mesh.tris.iter().flatten().any(|&i| i >= n) {
-        return None;
+        return Ok(None);
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in mesh.verts.iter().chain(deformed) {
         if !(p[0].is_finite() && p[1].is_finite()) {
-            return None;
+            return Ok(None);
         }
     }
     for p in deformed {
@@ -1150,7 +1164,7 @@ pub fn warp_with_mesh(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: 
     }
     let area = (x1 - x0 + 1.0) * (y1 - y0 + 1.0);
     if area > MAX_WARP_PIXELS {
-        return None;
+        return Ok(None);
     }
     let covered: f64 = mesh
         .tris
@@ -1162,10 +1176,10 @@ pub fn warp_with_mesh(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: 
         })
         .sum();
     if covered > MAX_MESH_COVERAGE * area {
-        return None;
+        return Ok(None);
     }
     let order: Vec<usize> = (0..mesh.tris.len()).collect();
-    Some(render(src, bounds, mesh, deformed, &order, interp))
+    render_with(src, bounds, mesh, deformed, &order, interp, ctl).ok_or(Cancelled).map(Some)
 }
 
 /// [`puppet_warp`], also moving `mask` (a one-channel layer mask linked to `src`) with the same

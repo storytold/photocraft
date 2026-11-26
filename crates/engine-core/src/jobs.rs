@@ -107,6 +107,12 @@ struct Shared {
     batch_decision: Condvar,
     batch_preview: Mutex<Option<BatchPreview>>,
     batch_preview_generation: std::sync::atomic::AtomicU64,
+    /// Tests: [`JobCtx::cancelled`] calls so far, and the call that cancels the job (0: none);
+    /// see [`JobCtx::cancel_at_check`].
+    #[cfg(test)]
+    checks: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    trip_at: std::sync::atomic::AtomicUsize,
 }
 
 /// The current folder Batch input, published as an immutable snapshot for the desktop canvas.
@@ -168,7 +174,33 @@ impl JobCtx {
 
     /// Has the job been cancelled? Long loops check this and stop early.
     pub fn cancelled(&self) -> bool {
+        #[cfg(test)]
+        self.count_check();
         self.shared.state.load(Ordering::Acquire) & CANCEL_REQUESTED != 0
+    }
+
+    /// Tests: cancel the job at its `n`th cancellation check from now on (counting every
+    /// [`JobCtx::cancelled`] call, from any thread), as a Cancel arriving mid-work would.
+    #[cfg(test)]
+    pub(crate) fn cancel_at_check(&self, n: usize) {
+        let done = self.shared.checks.load(Ordering::SeqCst);
+        self.shared.trip_at.store(done + n.max(1), Ordering::SeqCst);
+    }
+
+    /// Tests: how many times [`JobCtx::cancelled`] has been asked.
+    #[cfg(test)]
+    pub(crate) fn checks(&self) -> usize {
+        self.shared.checks.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn count_check(&self) {
+        let n = self.shared.checks.fetch_add(1, Ordering::SeqCst) + 1;
+        let at = self.shared.trip_at.load(Ordering::SeqCst);
+        if at != 0 && n >= at {
+            // As `try_cancel`, without waking a Batch (tests that trip a cancel run no Batch).
+            let _ = self.shared.state.try_update(Ordering::AcqRel, Ordering::Acquire, |state| (state & COMMITTED == 0).then_some(state | CANCEL_REQUESTED));
+        }
     }
 
     /// Ask the job to stop (idempotent). Does nothing once it has [committed](Self::commit).

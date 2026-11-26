@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, apply_liquify_with, auto_cell};
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
-use photocraft_algo::puppet::{PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetWarp, puppet_warp, puppet_warp_with_mask_with, warp_with_mesh};
+use photocraft_algo::puppet::{PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetWarp, puppet_warp_with_mask_with, warp_with_mesh_with};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::warp::{Fold, warp_mesh_gray_ctl, warp_mesh_surface_with};
 use photocraft_color::PixelFormat;
@@ -159,41 +159,51 @@ fn interp(p: &Value) -> Interp {
 
 // ---------- pixel operations ----------
 
-/// Rows [`mix_by_selection`] blends between cancel checks.
-const MIX_BAND_ROWS: usize = 64;
+/// Rows [`mix_by_selection`] reads, blends and writes at a time, checking for a cancel before each.
+const MIX_BAND_ROWS: i32 = 64;
+
+/// Tiles [`mix_by_selection`] prunes between cancel checks.
+const MIX_PRUNE_TILES: usize = 64;
 
 /// Mixes `new` over `old` by the selection's coverage (premultiplied when there is alpha).
 ///
 /// Where the selection covers nothing the result is `old`, so only the part of the content
 /// bounds the selection reaches is blended into a copy of `old`: a small selection over distant
-/// sparse content no longer expands the empty space between them. Refused, before any dense
-/// buffer, when that part would still pass the working budget. Checks `ctl` once per band of
-/// [`MIX_BAND_ROWS`] rows; `Err(Cancelled)` once it is cancelled (#210).
+/// sparse content no longer expands the empty space between them. Refused, before any pixel is
+/// read, when that part would still pass the working budget. Works in bands of
+/// [`MIX_BAND_ROWS`] rows: each band reads its rows of both inputs, blends them and writes them
+/// into the result, so no full-area buffer is held. Checks `ctl` before the first band, before
+/// each band and between batches of the final prune; `Err(Cancelled)` once it is cancelled (#210).
 fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface, ctl: &Interrupt) -> Result<Surface> {
+    let cancelled = || if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) };
+    cancelled()?;
     let content = old.content_bounds().union(&new.content_bounds());
     // Outside its tiles the selection's coverage is its default: an empty default lets the
     // blend keep to the selection's bounds.
     let sel_default_empty = sel.default_pixel().first().is_none_or(|v| *v <= 0.0);
     let area = if sel_default_empty { content.intersect(&sel.content_bounds()) } else { content };
-    let mut out = old.clone();
     if area.is_empty() {
-        return Ok(out);
+        return Ok(old.clone());
     }
     let fmt = old.format();
     let n = fmt.channels();
+    // The same refusal as when the whole area was read at once: the blended area still becomes
+    // dense tiles of the result.
     crate::allocation::check_dense(area, (n as u64).saturating_mul(12), "blending Liquify through the selection")?;
-    let (o, w) = (old.read_region(area), new.read_region(area));
-    let mut r = vec![0.0f32; o.len()];
+    // Shares `old`'s tiles until a band writes to them.
+    let mut out = old.clone();
     let aw = area.width() as usize;
-    let band = aw * n * MIX_BAND_ROWS;
-    for (j, ((ob, nb), rb)) in o.chunks(band).zip(w.chunks(band)).zip(r.chunks_mut(band)).enumerate() {
-        if ctl.cancelled() {
-            return Err(EngineError::Cancelled);
-        }
-        let first = j * aw * MIX_BAND_ROWS;
-        for (i, ((op, np), rp)) in ob.chunks_exact(n).zip(nb.chunks_exact(n)).zip(rb.chunks_exact_mut(n)).enumerate() {
-            let i = first + i;
-            let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0).clamp(0.0, 1.0);
+    let (mut o, mut w, mut r) = (Vec::new(), Vec::new(), Vec::new());
+    let mut y0 = area.y0;
+    while y0 < area.y1 {
+        cancelled()?;
+        let band = Rect::new(area.x0, y0, area.x1, y0.saturating_add(MIX_BAND_ROWS).min(area.y1));
+        old.read_region_into(band, &mut o);
+        new.read_region_into(band, &mut w);
+        r.clear();
+        r.resize(o.len(), 0.0f32);
+        for (i, ((op, np), rp)) in o.chunks_exact(n).zip(w.chunks_exact(n)).zip(r.chunks_exact_mut(n)).enumerate() {
+            let k = sel.sample_channel(band.x0 + (i % aw) as i32, band.y0 + (i / aw) as i32, 0).clamp(0.0, 1.0);
             if !fmt.alpha {
                 for c in 0..n {
                     rp[c] = op[c] + (np[c] - op[c]) * k;
@@ -208,10 +218,16 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface, ctl: &Interrupt
                 rp[c] = if oa > 0.0 { (pm / oa).clamp(0.0, 1.0) } else { 0.0 };
             }
         }
+        out.write_region(band, &r);
+        y0 = band.y1;
     }
-    out.write_region(area, &r);
-    out.prune();
-    Ok(out)
+    let mut cursor = out.prune_cursor();
+    loop {
+        cancelled()?;
+        if out.prune_batch(&mut cursor, MIX_PRUNE_TILES) {
+            return Ok(out);
+        }
+    }
 }
 
 /// Liquifies a surface over `canvas` (the field's extent).
@@ -223,11 +239,18 @@ pub fn liquify_surface(surf: &Surface, strokes: &[LiquifyStroke], cell: f64, can
 /// Puppet-warps a surface's content; `None` when the result would span more than
 /// [`photocraft_algo::puppet::MAX_WARP_PIXELS`].
 pub fn puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Option<Surface> {
+    puppet_surface_with(surf, w, interp, &Interrupt::NONE).ok().flatten()
+}
+
+/// [`puppet_surface`], checking `ctl` around the solve and per destination tile while drawing;
+/// `Err(Cancelled)` once it is cancelled.
+pub fn puppet_surface_with(surf: &Surface, w: &PuppetWarp, interp: Interp, ctl: &Interrupt) -> Result<Option<Surface>> {
     let b = surf.content_bounds();
     if w.is_identity() || b.is_empty() {
-        return Some(surf.clone());
+        return Ok(Some(surf.clone()));
     }
-    puppet_warp(surf, b, w, interp)
+    let warped = puppet_warp_with_mask_with(surf, b, w, interp, None, ctl).map_err(|_| EngineError::Cancelled)?;
+    Ok(warped.map(|(out, _)| out))
 }
 
 /// Perspective-warps a surface's content.
@@ -248,24 +271,40 @@ pub fn perspective_surface_with(surf: &Surface, planes: &[Plane], interp: Interp
 /// Smart-filter hook: re-applies a stored Liquify / Puppet / Perspective Warp to a rendered
 /// smart object (`None` for other ids).
 pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) -> Option<Surface> {
+    // Nothing cancels `Interrupt::NONE`, so the warp always completes.
+    apply_to_surface_with(id, params, surf, canvas, &Interrupt::NONE).map(|r| r.unwrap_or_else(|_| surf.clone()))
+}
+
+/// [`apply_to_surface`] under the replaying job's `ctl` (#210): the warp checks it as it goes and
+/// gives `Some(Err(Cancelled))` once it is cancelled, so Cancel reaches a smart object's
+/// re-render mid-warp as it reaches a pixel layer's.
+pub fn apply_to_surface_with(id: &str, params: &Value, surf: &Surface, canvas: Rect, ctl: &Interrupt) -> Option<Result<Surface>> {
+    let cancelled = || if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) };
     match id {
         LIQUIFY => {
             let (strokes, cell) = liquify_params(id, params, canvas).ok()?;
-            Some(liquify_surface(surf, &strokes, cell, canvas))
+            let field = LiquifyField::from_strokes(canvas, cell, &strokes);
+            Some(cancelled().and_then(|()| apply_liquify_with(surf, &field, ctl).ok_or(EngineError::Cancelled)))
         }
         // A stored warp too far to render leaves the smart object as it is (#1019).
         PUPPET | PUPPET_SMART => {
             // A mesh stored with the filter (from a Photoshop file) is drawn as it is; one that
             // can't be drawn leaves the pins to solve.
             let b = surf.content_bounds();
-            if let Some((mesh, deformed)) = stored_puppet_mesh(params).filter(|_| !b.is_empty())
-                && let Some(out) = warp_with_mesh(surf, b, &mesh, &deformed, interp(params))
-            {
-                return Some(out);
+            if let Some((mesh, deformed)) = stored_puppet_mesh(params).filter(|_| !b.is_empty()) {
+                match warp_with_mesh_with(surf, b, &mesh, &deformed, interp(params), ctl) {
+                    Err(_) => return Some(Err(EngineError::Cancelled)),
+                    Ok(Some(out)) => return Some(Ok(out)),
+                    Ok(None) => {}
+                }
             }
-            Some(puppet_surface(surf, &puppet_params(id, params).ok()?, interp(params)).unwrap_or_else(|| surf.clone()))
+            let w = puppet_params(id, params).ok()?;
+            Some(puppet_surface_with(surf, &w, interp(params), ctl).map(|out| out.unwrap_or_else(|| surf.clone())))
         }
-        PERSPECTIVE | PERSPECTIVE_SMART => Some(perspective_surface(surf, &perspective_params(id, params).ok()?, interp(params))),
+        PERSPECTIVE | PERSPECTIVE_SMART => {
+            let planes = perspective_params(id, params).ok()?;
+            Some(perspective_surface_with(surf, &planes, interp(params), ctl).ok_or(EngineError::Cancelled))
+        }
         _ => None,
     }
 }
