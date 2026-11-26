@@ -623,8 +623,6 @@ pub(crate) const COMMAND_SOURCES: &[CommandSource] = &[
     CommandSource { name: "artboard", states: crate::artboard_tool::source_states, run: crate::artboard_tool::run_fired },
     // Space+F: the pasteboard colour keys of the held Hand.
     CommandSource { name: "canvasColor", states: no_states, run: crate::canvas_tool_menu::run_canvas_color },
-    // The Home screen rail's Home row fires `window.home` (#16802), which no menu item makes available.
-    CommandSource { name: "home", states: no_states, run: run_home },
     // The options bar's engine-command buttons: their commands run through `shortcuts::handle`.
     CommandSource { name: "selection", states: crate::panels::options_bar::selection::source_states, run: |_, _, _| false },
 ];
@@ -688,16 +686,6 @@ fn command_states(app: &PhotocraftApp, held: &mut HeldStates) {
 
 #[cfg(test)]
 mod catalog_tests;
-
-/// `window.home`, fired by the Home screen rail's Home row: leaves Home for the open documents, as the options bar's
-/// Home button does, and does nothing with no document open ([`crate::canvas::start_screen::toggle_home`]).
-fn run_home(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
-    if command.id != "window.home" {
-        return false;
-    }
-    crate::canvas::start_screen::toggle_home(app);
-    true
-}
 
 /// Selects the tool a tool command names.
 fn run_tool(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {

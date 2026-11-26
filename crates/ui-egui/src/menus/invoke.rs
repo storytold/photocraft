@@ -854,6 +854,8 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
                 app.run("document.activate", json!({"document": next}))?;
             }
             app.jobs.focus = None;
+            // Next and Previous Document show the document they choose, so they leave Home too (#16802).
+            app.ui.chrome.home = None;
             Ok(json!({"document": next}))
         })()),
         _ if id.starts_with(DOCUMENT_ITEM) => Some((|| {

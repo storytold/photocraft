@@ -47,11 +47,18 @@ fn the_rails_home_row_returns_to_the_open_document() {
     let mut h = harness(1);
     show_home(&mut h);
     assert!(home(&mut h), "Home is up over the document");
-    let doc = h.state().session.active().map(|d| d.doc.id);
+    let (doc, open) = (h.state().session.active().map(|d| d.doc.id), h.state().session.documents().len());
     click_home_row(&mut h);
     assert!(!home(&mut h), "the Home row leaves Home: {}", h.state().ui.status);
-    assert_eq!(h.state().session.active().map(|d| d.doc.id), doc, "back on the same document, unchanged");
-    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().session.active().map(|d| d.doc.id), doc, "back on the same document");
+    assert_eq!(h.state().session.documents().len(), open, "nothing opened or closed");
+}
+
+/// Chooses Window menu item `id`, through the gate a menu click passes (its enabled state included).
+fn choose(h: &mut H, id: &str) {
+    let ctx = h.ctx.clone();
+    crate::shortcut_dispatch::dispatch(h.state_mut(), &ctx, id);
+    h.run_steps(4);
 }
 
 #[test]
@@ -60,11 +67,21 @@ fn choosing_an_open_document_in_the_window_menu_leaves_home() {
     let first = h.state().session.documents()[0].doc.id;
     show_home(&mut h);
     assert!(home(&mut h));
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "window.document.0", json!({})).unwrap();
-    h.run_steps(4);
-    assert!(!home(&mut h), "choosing the document leaves Home");
+    choose(&mut h, "window.document.0");
+    assert!(!home(&mut h), "choosing the document leaves Home: {}", h.state().ui.status);
     assert_eq!(h.state().session.active().map(|d| d.doc.id), Some(first), "and shows that document");
+}
+
+#[test]
+fn next_and_previous_document_leave_home() {
+    for id in ["window.nextDocument", "window.previousDocument"] {
+        let mut h = harness(2);
+        let before = h.state().session.active().map(|d| d.doc.id);
+        show_home(&mut h);
+        choose(&mut h, id);
+        assert!(!home(&mut h), "{id} leaves Home: {}", h.state().ui.status);
+        assert_ne!(h.state().session.active().map(|d| d.doc.id), before, "{id} shows the other document");
+    }
 }
 
 #[test]

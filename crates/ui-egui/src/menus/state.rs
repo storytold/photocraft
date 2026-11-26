@@ -84,6 +84,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "window.togglePanels" => true,
         // With one document open the key stays quiet, as in Photoshop, rather than reporting why.
         "window.nextDocument" | "window.previousDocument" => app.session.active().is_some(),
+        // Home over the open documents, or back to them (the Home rail's Home row fires it, #16802). With no document
+        // open there is nothing behind Home.
+        "window.home" => !app.session.documents().is_empty(),
         i if panel_alias(i).is_some() || workspace_id(i).is_some() => true,
         i if proof_preset(i).is_some() => app.session.active().is_some(),
         // "Custom…" is the full Proof Setup dialog.
