@@ -141,6 +141,12 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
 
 /// [`park`], returning the id of the dialog it opened.
 pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<DialogId, String> {
+    park_seeded(app, path, copy, record, None)
+}
+
+/// [`park_dialog`] starting at `seed`, a played step's recorded answer (#15945): its compression,
+/// pyramid, transparency and, for a layered document, Discard Layers.
+pub(crate) fn park_seeded(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str, seed: Option<TiffChoice>) -> Result<DialogId, String> {
     let doc = app.active_doc_id()?;
     let st = app.session.active().ok_or("no document")?;
     let layered = photocraft_engine::file_cmds::tiff_would_write_layers(&st.doc);
@@ -153,6 +159,12 @@ pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'
     options.compression = ui_compression(compression);
     options.pyramid = pyramid;
     options.transparency = transparency;
+    if let Some(seed) = seed {
+        options.compression = ui_compression(seed.compression);
+        options.pyramid = seed.pyramid;
+        options.transparency = seed.transparency.unwrap_or(transparency);
+        options.discard_layers = layered && seed.layers == Some(false);
+    }
     let dialog =
         HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Tiff).initial(FormatOptions::Tiff(options)).tiff_document(layered, has_transparency, layer_note);
     let parked = Parked { layered, has_transparency, layer_note };

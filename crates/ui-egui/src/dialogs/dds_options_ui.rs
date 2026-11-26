@@ -42,9 +42,29 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
 
 /// [`park`], returning the id of the dialog it opened: it starts uncompressed without mipmaps.
 pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<DialogId, String> {
+    park_seeded(app, path, copy, record, None)
+}
+
+/// [`park_dialog`] starting at `seed`, a played step's recorded options (#15945).
+pub(crate) fn park_seeded(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str, seed: Option<DdsOptions>) -> Result<DialogId, String> {
     let doc = app.active_doc_id()?;
-    let dialog = HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Dds).initial(FormatOptions::Dds(UiDdsOptions::default()));
+    let mut start = UiDdsOptions::default();
+    if let Some(seed) = seed {
+        start.compression = ui_compression(seed.compression);
+        start.mipmaps = seed.mipmaps;
+    }
+    let dialog = HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Dds).initial(FormatOptions::Dds(start));
     format_prompts::park(app, ParkedSave { doc, path, copy, record, format: ParkedFormat::Dds }, dialog)
+}
+
+/// The framework's compression for the codec's.
+fn ui_compression(c: DdsCompression) -> UiDdsCompression {
+    match c {
+        DdsCompression::Bc1 => UiDdsCompression::Bc1,
+        DdsCompression::Bc2 => UiDdsCompression::Bc2,
+        DdsCompression::Bc3 => UiDdsCompression::Bc3,
+        _ => UiDdsCompression::None,
+    }
 }
 
 /// The codec's compression for the framework's.

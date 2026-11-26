@@ -753,15 +753,17 @@ pub(super) fn suggested_copy_name(doc_name: &str, has_file: bool, copy_suffix: &
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let suggested = suggested_copy_name(&st.doc.name, st.path.is_some(), app.session.prefs().file_handling.copy_suffix());
-    save_a_copy_from(app, &suggested, |_, _| Ok(()))
+    save_a_copy_from(app, &suggested, crate::FormatChoices::default(), |_, _| Ok(()))
 }
 
 /// [`save_a_copy`] with the dialog opening on `suggested`: a played Save a Copy step with its
-/// dialog on suggests the file it recorded (#15945). `ready` gets the chosen file before anything
-/// is written, and its error writes nothing.
+/// dialog on suggests the file it recorded (#15945), and its format prompt starts at the answers in
+/// `seed` (its recorded ones; none for the menu command). `ready` gets the chosen file before
+/// anything is written, and its error writes nothing.
 pub(crate) fn save_a_copy_from(
     app: &mut PhotocraftApp,
     suggested: &str,
+    seed: crate::FormatChoices,
     ready: impl FnOnce(&mut PhotocraftApp, &str) -> Result<(), String> + 'static,
 ) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
@@ -773,19 +775,19 @@ pub(crate) fn save_a_copy_from(
         // prompt.
         let parked = app.with_document(doc.id, |app| {
             if crate::targa_options_ui::wants_prompt(app, &path) {
-                crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                crate::targa_options_ui::park_seeded(app, path.clone(), true, "file.saveACopy", seed.tga_bits)?;
                 return Ok(true);
             }
             if crate::dds_options_ui::wants_prompt(&path) {
-                crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                crate::dds_options_ui::park_seeded(app, path.clone(), true, "file.saveACopy", seed.dds)?;
                 return Ok(true);
             }
             if crate::jpeg_options_ui::wants_prompt(app, &path) {
-                crate::jpeg_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                crate::jpeg_options_ui::park_seeded(app, path.clone(), true, "file.saveACopy", seed.jpeg)?;
                 return Ok(true);
             }
             if crate::tiff_options_ui::wants_prompt(app, &path) {
-                crate::tiff_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                crate::tiff_options_ui::park_seeded(app, path.clone(), true, "file.saveACopy", seed.tiff)?;
                 return Ok(true);
             }
             Ok(false)
@@ -793,7 +795,7 @@ pub(crate) fn save_a_copy_from(
         if parked {
             return Ok(json!({"path": path, "warnings": []}));
         }
-        let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
+        let r = write_copy(app, &doc, &path, crate::FormatChoices { maximize_compatibility: seed.maximize_compatibility, ..crate::FormatChoices::default() })?;
         let step = json!({"path": path});
         photocraft_engine::actions_cmds::note_automation_step(&mut app.session, "file.saveACopy", &step);
         app.session.journal.push(("file.saveACopy".into(), step));

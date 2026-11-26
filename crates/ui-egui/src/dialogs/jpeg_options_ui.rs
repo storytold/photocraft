@@ -249,8 +249,19 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
 
 /// [`park`], returning the id of the dialog it opened.
 pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<DialogId, String> {
+    park_seeded(app, path, copy, record, None)
+}
+
+/// [`park_dialog`] starting at `seed`, a played step's recorded answer (#15945). The opened file's
+/// own encoder quality stands only while the dialog starts on the quality it was rounded to.
+pub(crate) fn park_seeded(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str, seed: Option<JpegChoice>) -> Result<DialogId, String> {
     let doc = app.active_doc_id()?;
     let Start { quality, own_quality, format } = Start::for_active(app);
+    let (quality, own_quality, format) = match seed {
+        Some(JpegChoice { quality: Some(recorded), format }) if recorded != quality => (recorded, None, format),
+        Some(JpegChoice { format, .. }) => (quality, own_quality, format),
+        None => (quality, own_quality, format),
+    };
     let mut options = JpegOptions::new(quality.min(MAX_QUALITY));
     options.format = ui_format(format);
     let dialog = HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(options));

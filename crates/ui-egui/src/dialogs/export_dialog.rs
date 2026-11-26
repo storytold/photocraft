@@ -271,12 +271,16 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
 /// remembered settings neither replace the recorded ones nor take them on, as when the step plays without its dialog.
 pub(crate) fn open_recorded(app: &mut PhotocraftApp, params: &Value) -> Result<DialogId, String> {
     if app.export_open.is_some() {
-        return Err("Export As is already open".into());
+        return Err(tl!("Export As is already open").into());
     }
     let st = app.session.active().ok_or("no document")?;
     let path = params.get("path").and_then(Value::as_str).map(std::path::Path::new);
     let stem = path.and_then(std::path::Path::file_stem).map_or_else(|| stem_of(&st.doc.name), |s| s.to_string_lossy().into_owned());
-    let folder = path.and_then(std::path::Path::parent).filter(|dir| !dir.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
+    // A recorded folder that is gone leaves the save dialog to start where Export As does.
+    let folder = path
+        .and_then(std::path::Path::parent)
+        .filter(|dir| !dir.as_os_str().is_empty() && crate::file_dialog::folder_exists(dir))
+        .map(std::path::Path::to_path_buf);
     let options = options_of(&params.as_object().map(settings_of).unwrap_or_default());
     let size = st.doc.size;
     open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new(), Some((options, folder)))

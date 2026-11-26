@@ -282,6 +282,12 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        self.save_to_seeded(path, choices, FormatChoices::default())
+    }
+
+    /// [`Self::save_to`] whose format prompts start at `seed`'s answers where it has one (a
+    /// played step's recorded answers, #15945) instead of their defaults.
+    pub(crate) fn save_to_seeded(&mut self, path: String, choices: FormatChoices, seed: FormatChoices) -> Result<Value, String> {
         if self.smart_svg.modal_open() {
             return Err("Answer Edit SVG Contents before starting a save".into());
         }
@@ -291,23 +297,23 @@ impl PhotocraftApp {
         // once answered.
         if choices.tga_bits.is_none() && targa_options_ui::wants_prompt(self, &path) {
             let copy = self.saves_copy(&path, None)?;
-            targa_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            targa_options_ui::park_seeded(self, path.clone(), copy, "file.saveAs", seed.tga_bits)?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
             let copy = self.saves_copy(&path, None)?;
-            dds_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            dds_options_ui::park_seeded(self, path.clone(), copy, "file.saveAs", seed.dds)?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         if choices.jpeg.is_none() && jpeg_options_ui::wants_prompt(self, &path) {
             let copy = self.saves_copy(&path, None)?;
-            jpeg_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            jpeg_options_ui::park_seeded(self, path.clone(), copy, "file.saveAs", seed.jpeg)?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         // A TIFF asks for TIFF Options (compression, pyramid, transparency, layers); the save
         // continues from the prompt, which records the step once answered.
         if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone(), false, "file.saveAs")?;
+            tiff_options_ui::park_seeded(self, path.clone(), false, "file.saveAs", seed.tiff)?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         let tiff_layers = choices.tiff.and_then(|t| t.layers);
@@ -478,17 +484,22 @@ impl PhotocraftApp {
 
     /// A played `file.saveAs` step with its dialog on (#15945): the save dialog opens on the file
     /// the step would write, and the chosen file is saved as File › Save As saves it, its format's
-    /// options prompt included. Continues on a later frame, like [`Self::save_as`]; `ready` gets
-    /// the chosen file before anything is written, and its error writes nothing.
+    /// options prompt included, which starts at the step's recorded answer as its silent replay
+    /// writes it. A recorded folder that is gone leaves the dialog to start where Save As does.
+    /// Continues on a later frame, like [`Self::save_as`]; `ready` gets the chosen file before
+    /// anything is written, and its error writes nothing.
     pub(crate) fn save_as_dialog(&mut self, params: &Value, ready: impl FnOnce(&mut Self, &str) -> Result<(), String> + 'static) -> Result<Value, String> {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
-        let suggested = self.recorded_save_path(params)?;
+        let suggested = crate::file_dialog::in_existing_folder(&self.recorded_save_path(params)?);
+        // A recorded answer the replay would refuse just isn't a starting value here.
+        let seed = FormatChoices::from_step(params, "file.saveAs").unwrap_or_default();
+        let choices = FormatChoices { maximize_compatibility: seed.maximize_compatibility, ..FormatChoices::default() };
         let doc = self.session.active().ok_or("no document")?.doc.id;
         self.pick_save(&suggested, move |app, path| {
             ready(app, &path)?;
-            app.with_document(doc, |app| app.save_to(path, FormatChoices::default()))
+            app.with_document(doc, |app| app.save_to_seeded(path, choices, seed))
         })
     }
 

@@ -469,13 +469,24 @@ fn web_picked(answer: Option<FileDialogAnswer>) -> Picked {
 
 /// Whether `dir` is a folder on disk. The web has no file system, so nothing is remembered there.
 #[cfg(not(target_arch = "wasm32"))]
-fn folder_exists(dir: &Path) -> bool {
+pub(crate) fn folder_exists(dir: &Path) -> bool {
     dir.is_dir()
 }
 
 #[cfg(target_arch = "wasm32")]
-fn folder_exists(_dir: &Path) -> bool {
+pub(crate) fn folder_exists(_dir: &Path) -> bool {
     false
+}
+
+/// `path` to suggest in a save dialog: as it is when its folder exists (or it names none), else
+/// just its file name, so the dialog starts where it would for a new file instead of in a folder
+/// that is gone (a played step's recorded file, #15945).
+pub(crate) fn in_existing_folder(path: &str) -> String {
+    let p = Path::new(path);
+    match (p.parent().filter(|dir| !dir.as_os_str().is_empty()), p.file_name()) {
+        (Some(dir), Some(name)) if !folder_exists(dir) => name.to_string_lossy().into_owned(),
+        _ => path.to_owned(),
+    }
 }
 
 /// The folder an export dialog starts in (#10192): the `remembered` folder of the last export

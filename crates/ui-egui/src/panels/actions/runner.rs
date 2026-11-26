@@ -449,7 +449,7 @@ impl ActionRunner for ShellRunner<'_> {
         }
         // A save step's dialogs: the save dialog on the recorded file (or Export As on its recorded
         // settings), then the format's options; a file written continues the action (#15945).
-        if show_dialog && interactive && save_dialog::asks(id) && !actions_cmds::saves_smart_contents(&self.app.session, id) {
+        if show_dialog && interactive && save_dialog::asks(id) {
             return match save_dialog::pause(self.app, action, i, id, &p) {
                 Ok(()) => self.pause(json!({"step": i, "id": id, "dialog": save_dialog::SAVE_DIALOG})),
                 Err(error) => StepOutcome::Failed(error),

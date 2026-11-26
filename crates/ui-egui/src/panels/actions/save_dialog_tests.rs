@@ -74,6 +74,17 @@ fn after_ran(app: &PhotocraftApp) -> bool {
     app.session.active().unwrap().doc.walk().into_iter().any(|(_, _, l)| l.name == "after")
 }
 
+/// `name` in a folder that exists (the system's temporary folder), as a recorded step's file.
+fn existing(name: &str) -> String {
+    std::env::temp_dir().join(name).to_string_lossy().into_owned()
+}
+
+/// The value of `field` in the newest open dialog (a format's options).
+fn newest_dialog_field(app: &PhotocraftApp, field: &str) -> Value {
+    let fields = app.framework.dialogs.open_dialogs().last().and_then(|d| d.fields.clone()).unwrap_or(Value::Null);
+    fields.get(field).cloned().unwrap_or(Value::Null)
+}
+
 /// The file the one open save dialog suggests, as `(folder, name)`.
 fn suggested(files: &ScriptedFiles) -> (Option<PathBuf>, Option<String>) {
     assert_eq!(files.open(), 1, "one save dialog is open");
@@ -84,10 +95,10 @@ fn suggested(files: &ScriptedFiles) -> (Option<PathBuf>, Option<String>) {
 
 #[test]
 fn a_save_as_step_with_its_dialog_on_asks_where_to_save_and_continues_after_the_save() {
-    let (mut app, files, written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
+    let (mut app, files, written) = setup(("file.saveAs", json!({"path": existing("played.psd")})));
     let v = play(&mut app);
     assert_eq!(v["paused"]["dialog"], SAVE_DIALOG, "{v}");
-    assert_eq!(suggested(&files), (Some(PathBuf::from("/out")), Some("played.psd".into())), "the dialog opens on the recorded file");
+    assert_eq!(suggested(&files), (Some(std::env::temp_dir()), Some("played.psd".into())), "the dialog opens on the recorded file");
     assert!(written.borrow().is_empty(), "nothing is written before the dialog is answered");
     assert!(!after_ran(&app), "the steps after the save wait for its dialog");
     // The frames while the dialog is up change nothing.
@@ -121,6 +132,12 @@ fn cancel_in_the_save_dialog_writes_nothing_and_stops_the_action() {
     play(&mut app);
     answer(&mut app, &files, Picked::Cancelled);
     assert_eq!(app.ui.status, "Action playback stopped");
+    // Nor does an error reported while the dialog is open that isn't the step's write.
+    play(&mut app);
+    app.ui.status = "Something else failed".into();
+    app.ui.status_error = true;
+    answer(&mut app, &files, Picked::Cancelled);
+    assert_eq!(app.ui.status, "Action playback stopped");
 }
 
 #[test]
@@ -150,10 +167,10 @@ fn the_action_waits_through_the_format_options_and_stops_at_their_cancel() {
 
 #[test]
 fn a_save_a_copy_step_with_its_dialog_on_writes_a_copy_where_chosen() {
-    let (mut app, files, written) = setup(("file.saveACopy", json!({"path": "/out/copy.psd"})));
+    let (mut app, files, written) = setup(("file.saveACopy", json!({"path": existing("copy.psd")})));
     let v = play(&mut app);
     assert_eq!(v["paused"]["dialog"], SAVE_DIALOG, "{v}");
-    assert_eq!(suggested(&files), (Some(PathBuf::from("/out")), Some("copy.psd".into())));
+    assert_eq!(suggested(&files), (Some(std::env::temp_dir()), Some("copy.psd".into())));
     answer(&mut app, &files, chose("/out/other copy.psd"));
     assert_eq!(*written.borrow(), ["/out/other copy.psd"]);
     assert_eq!(app.session.active().unwrap().path, None, "a copy leaves the document's own file alone");
@@ -224,7 +241,7 @@ fn a_failed_write_keeps_its_error_and_stops_the_action() {
     let (mut app, files, _written) = setup_writing(("file.saveAs", json!({"path": "/out/played.psd"})), false);
     app.background_jobs = true;
     play(&mut app);
-    assert!(!app.background_jobs, "the dialog's save is written in the frame it is answered, as the silent replay writes");
+    assert!(app.background_jobs, "background jobs stay on while the step's dialog only waits for the person");
     answer(&mut app, &files, chose("/out/chosen.psd"));
     assert!(!after_ran(&app), "a save that failed doesn't continue the action");
     assert!(app.ui.status_error && app.ui.status.contains("the disk is full"), "the write's error stays: {}", app.ui.status);
@@ -289,6 +306,21 @@ fn a_save_made_another_way_while_the_dialog_is_open_doesnt_continue_a_cancelled_
     assert!(!after_ran(&app), "Cancel stops the action: the JPEG save wasn't the dialog's");
     assert_eq!(app.ui.status, "Action playback stopped");
 
+    // A save journaled by another request while the step's own JPEG Options is open isn't the
+    // step's: Cancel in JPEG Options still stops.
+    let (mut app, files, written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
+    play(&mut app);
+    answer(&mut app, &files, chose("/out/chosen.jpg"));
+    assert!(app.save_options_open());
+    app.session.journal.push((crate::export_dialog::COMMAND.into(), json!({"path": "/elsewhere/web.png"})));
+    let ctx = app.ctx().clone();
+    let id = app.framework.dialogs.open_dialogs().last().map(|d| d.id).expect("JPEG Options is open");
+    app.framework.dialogs.cancel_by_id(&ctx, id);
+    crate::format_prompts::take(&mut app, &ctx);
+    save_dialog::tick(&mut app);
+    assert!(written.borrow().is_empty() && !after_ran(&app), "Cancel stops the action: that save wasn't the step's");
+    assert_eq!(app.ui.status, "Action playback stopped");
+
     // The same with another Export As finishing while the step's save dialog is open.
     let (mut app, files, _written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
     play(&mut app);
@@ -329,4 +361,33 @@ fn a_format_options_write_is_checked_again_when_it_is_confirmed() {
     assert!(!after_ran(&app));
     assert!(app.ui.status_error && app.ui.status.contains("denied"), "{}", app.ui.status);
     assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
+}
+
+#[test]
+fn a_format_prompt_opens_on_the_steps_recorded_answer() {
+    for (id, recorded, chosen) in
+        [("file.saveAs", existing("played.jpg"), existing("chosen.jpg")), ("file.saveACopy", existing("copy.jpg"), existing("chosen copy.jpg"))]
+    {
+        let (mut app, files, written) = setup((id, json!({"path": recorded, "quality": 3, "jpegFormat": "progressive"})));
+        play(&mut app);
+        answer(&mut app, &files, chose(&chosen));
+        assert!(app.save_options_open(), "{id}: JPEG Options asks");
+        assert_eq!(newest_dialog_field(&app, "quality"), json!(3), "{id}: JPEG Options starts at the recorded quality, as the silent replay writes it");
+        confirm_jpeg_options(&mut app);
+        assert_eq!(*written.borrow(), [chosen.as_str()]);
+        assert!(after_ran(&app), "{id}: {}", app.ui.status);
+    }
+}
+
+#[test]
+fn a_recorded_folder_that_is_gone_isnt_where_the_dialog_starts() {
+    let gone = std::env::temp_dir().join("photocraft-15945-no-such-folder");
+    assert!(!gone.exists());
+    for id in ["file.saveAs", "file.saveACopy"] {
+        let (mut app, files, _written) = setup((id, json!({"path": gone.join("played.psd").to_string_lossy()})));
+        play(&mut app);
+        let (folder, name) = suggested(&files);
+        assert_ne!(folder, Some(gone.clone()), "{id}: the dialog doesn't start in a folder that is gone");
+        assert_eq!(name.as_deref(), Some("played.psd"), "{id}: it still suggests the recorded name");
+    }
 }

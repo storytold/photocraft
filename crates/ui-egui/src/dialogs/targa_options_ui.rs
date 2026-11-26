@@ -40,8 +40,14 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
 
 /// [`park`], returning the id of the dialog it opened.
 pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<DialogId, String> {
+    park_seeded(app, path, copy, record, None)
+}
+
+/// [`park_dialog`] starting at `seed`, a played step's recorded bits (#15945), instead of the
+/// document's default.
+pub(crate) fn park_seeded(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str, seed: Option<TgaBits>) -> Result<DialogId, String> {
     let doc = app.active_doc_id()?;
-    let bits = app.session.active().map_or(TgaBits::Bits24, |st| photocraft_io::tga_default_bits(&st.doc));
+    let bits = seed.unwrap_or_else(|| app.session.active().map_or(TgaBits::Bits24, |st| photocraft_io::tga_default_bits(&st.doc)));
     let dialog = HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Targa).initial(FormatOptions::Targa(TargaOptions::new(bits.bits())));
     format_prompts::park(app, ParkedSave { doc, path, copy, record, format: ParkedFormat::Targa }, dialog)
 }

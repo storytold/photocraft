@@ -1,23 +1,28 @@
 //! A recorded save step with its dialog on (#15945). A person's playback shows the step's own
 //! dialogs and waits for them: Save As and Save a Copy open the save dialog on the recorded file,
-//! then the chosen format's options as the menu commands do; Export As opens on its recorded
-//! settings. A file written continues the action after the step. Cancel in any of those dialogs
-//! writes nothing and stops the action, as Cancel in a filter's step dialog does. Agents, scripts
-//! and a step with its dialog off keep the silent replay (`PhotocraftApp::replay_save`).
+//! then the chosen format's options on the recorded answers, as the menu commands do; Export As
+//! opens on its recorded settings. A file written continues the action after the step. Cancel in
+//! any of those dialogs writes nothing and stops the action, as Cancel in a filter's step dialog
+//! does. Agents, scripts and a step with its dialog off keep the silent replay
+//! (`PhotocraftApp::replay_save`).
+
+use std::path::Path;
 
 use serde_json::{Value, json};
 
 use photocraft_doc::DocId;
-use photocraft_engine::actions_cmds::{self, Action};
+use photocraft_engine::actions_cmds::Action;
 
 use super::runner;
-use crate::PhotocraftApp;
+use crate::{FormatChoices, PhotocraftApp};
 
 /// A paused playback's `dialog` while it waits at a save step's dialogs.
 pub(crate) const SAVE_DIALOG: &str = "__saveDialog";
 
 /// Why a waiting save step writes nothing once another document is active.
-const DOCUMENT_CHANGED: &str = "the active document changed while the save step's dialog was open";
+fn document_changed() -> String {
+    tl!("the active document changed while the save step's dialog was open").to_string()
+}
 
 /// The playback waiting at a save step's dialogs.
 #[derive(Debug)]
@@ -28,22 +33,26 @@ pub(crate) struct Waiting {
     /// step writing there ([`admit`]).
     id: String,
     params: Value,
-    /// The journal's length when the dialogs last let a write through ([`admit_step`]): only a
-    /// save journaled from there on is the dialog's own. A save made some other way while the
-    /// save dialog was still open (a control request) doesn't count, so Cancel still stops.
+    /// The journal's length when the dialogs last let a write through ([`admit_step`]). Only a step
+    /// journaled from there on can be the dialog's own.
     admitted: Option<usize>,
-    /// The file the step's save dialog returned: a format's options writing anything else are
-    /// another save's, which this step neither judges nor counts ([`admit_answered`]).
+    /// The file the step's save dialog returned. Only a journaled step that wrote it is the step's
+    /// save, and a format's options writing anything else are another save's, which this step
+    /// neither judges nor counts ([`admit_answered`]).
     chosen: Option<String>,
     /// Set when Export As has written its files: several Scale All sizes journal no step.
     exported: bool,
+    /// Set when the step's own write was refused (another document active, or a gate): its reason
+    /// stays in the status bar when the action ends.
+    refused: bool,
     /// The document the step saves. Nothing is written once another one is active ([`admit_step`]),
     /// and the action goes on only while it is still the active one.
     doc: Option<DocId>,
-    /// Whether background jobs were on. They are off while the dialogs are open, as for the
-    /// step's silent replay, so a save is written by the time its step is journaled and a failed
-    /// write journals nothing.
-    background: bool,
+    /// Whether background jobs were on before the step's write. They are switched off when a write
+    /// is let through, as for the step's silent replay, so the save is written by the time its step
+    /// is journaled and a failed write journals nothing; while the dialogs only wait for the person,
+    /// they stay as they were.
+    background: Option<bool>,
 }
 
 /// Whether step `id` shows dialogs of its own when its dialog toggle is on.
@@ -55,7 +64,7 @@ pub(super) fn asks(id: &str) -> bool {
 /// playback until they end ([`tick`]).
 pub(super) fn pause(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str, params: &Value) -> Result<(), String> {
     if app.paused_playbacks.save.is_some() {
-        return Err("another action is waiting at a save dialog".into());
+        return Err(tl!("another action is waiting at a save dialog").into());
     }
     let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
     app.paused_playbacks.save = Some(Waiting {
@@ -65,12 +74,10 @@ pub(super) fn pause(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str
         admitted: None,
         chosen: None,
         exported: false,
+        refused: false,
         doc: app.session.active().map(|d| d.doc.id),
-        background: std::mem::replace(&mut app.background_jobs, false),
+        background: None,
     });
-    // An error reported from here on is this step's: a failed write keeps it ([`tick`]), even when
-    // its text is the one already in the status bar.
-    app.ui.status_error = false;
     let opened = match id {
         // Save As renames the document: like a filter's step dialog, it binds the action's history
         // before it writes (`runner::prepare_history`), so the rest of the action plays on.
@@ -81,19 +88,18 @@ pub(super) fn pause(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str
             })
             .map(drop),
         // A copy and an export leave the document as it is.
-        "file.saveACopy" => params
-            .get("path")
-            .and_then(Value::as_str)
-            .filter(|p| !p.is_empty())
-            .ok_or_else(|| "Save a Copy needs a `path`".to_string())
-            .and_then(|suggested| crate::view_cmds::save_a_copy_from(app, suggested, admit))
-            .map(drop),
+        "file.saveACopy" => match params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+            Some(recorded) => {
+                // A recorded answer the replay would refuse just isn't a starting value here.
+                let seed = FormatChoices::from_step(params, id).unwrap_or_default();
+                crate::view_cmds::save_a_copy_from(app, &crate::file_dialog::in_existing_folder(recorded), seed, admit).map(drop)
+            }
+            None => Err(tl!("Save a Copy needs a `path`").into()),
+        },
         _ => crate::export_dialog::open_recorded(app, params).map(drop),
     };
     if let Err(error) = opened {
-        if let Some(waiting) = app.paused_playbacks.save.take() {
-            app.background_jobs = waiting.background;
-        }
+        app.paused_playbacks.save = None;
         app.paused_playbacks.paused.remove(&token);
         return Err(error);
     }
@@ -148,21 +154,28 @@ fn recorded_at(params: &Value, path: &str) -> Value {
 /// The write a waiting save step's dialog is about to make, as the step with `params`: refused
 /// once another document is active, then judged by the gate the playback paused under and the
 /// current one, as an edited step dialog's values are. Called right before each write the step's
-/// own dialogs make ([`admit`], [`admit_answered`], [`admit_export`]); a write it lets through is
-/// the one whose save continues the action.
+/// own dialogs make ([`admit`], [`admit_answered`], [`admit_export`]). A write it lets through runs
+/// with background jobs off, and an error reported from then on is that write's.
 fn admit_step(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
     let Some(waiting) = app.paused_playbacks.save.as_ref() else { return Ok(()) };
-    if waiting.doc.is_some() && waiting.doc != app.session.active().map(|d| d.doc.id) {
-        return Err(DOCUMENT_CHANGED.into());
+    let (id, token, doc) = (waiting.id.clone(), waiting.token, waiting.doc);
+    let verdict = if doc.is_some() && doc != app.session.active().map(|d| d.doc.id) {
+        Err(document_changed())
+    } else {
+        let gate = app.paused_playbacks.paused.get(&token).and_then(|p| p.gate);
+        runner::authorize_owned(app, &id, &params, gate, false)
+    };
+    let (journal, background) = (app.session.journal.len(), app.background_jobs);
+    let Some(waiting) = app.paused_playbacks.save.as_mut() else { return verdict };
+    if verdict.is_err() {
+        waiting.refused = true;
+        return verdict;
     }
-    let id = waiting.id.clone();
-    let gate = app.paused_playbacks.paused.get(&waiting.token).and_then(|p| p.gate);
-    runner::authorize_owned(app, &id, &params, gate, false)?;
-    let journal = app.session.journal.len();
-    if let Some(waiting) = app.paused_playbacks.save.as_mut() {
-        waiting.admitted = Some(journal);
-    }
-    Ok(())
+    waiting.admitted = Some(journal);
+    waiting.background.get_or_insert(background);
+    app.background_jobs = false;
+    app.ui.status_error = false;
+    verdict
 }
 
 /// Export As wrote its files: a waiting Export As step continues. Another export, finished while a
@@ -173,6 +186,18 @@ pub(crate) fn exported(app: &mut PhotocraftApp) {
     }
 }
 
+/// Whether journaled step `params` wrote `file`: its `path`, or for a Save As that kept the
+/// document's own name, its `folder` and `extension` (`PhotocraftApp::save_as_record`).
+fn wrote(params: &Value, file: &str) -> bool {
+    if let Some(path) = params.get("path").and_then(Value::as_str) {
+        return path == file;
+    }
+    let file = Path::new(file);
+    let folder = params.get("folder").and_then(Value::as_str);
+    let extension = params.get("extension").and_then(Value::as_str);
+    folder.is_some_and(|folder| file.parent() == Some(Path::new(folder))) && extension.is_some_and(|e| file.extension().is_some_and(|x| x == e))
+}
+
 /// Whether the dialogs a save step opened are still up: its save dialog, a format's options, the
 /// Export As dialog, or the write they started.
 fn open(app: &PhotocraftApp) -> bool {
@@ -180,22 +205,25 @@ fn open(app: &PhotocraftApp) -> bool {
 }
 
 /// Every frame: once the dialogs of the waiting save step are gone, the action continues after the
-/// step when they wrote a file on the document it was playing on, and stops there otherwise.
+/// step when they wrote its file on the document it was playing on, and stops there otherwise.
 pub(crate) fn tick(app: &mut PhotocraftApp) {
     if app.paused_playbacks.save.is_none() || open(app) {
         return;
     }
     let Some(waiting) = app.paused_playbacks.save.take() else { return };
-    app.background_jobs = waiting.background;
-    let saved = waiting.exported
-        || waiting
-            .admitted
-            .and_then(|from| app.session.journal.get(from..))
-            .is_some_and(|steps| steps.iter().any(|(id, _)| actions_cmds::shell_save_command(id)));
+    if let Some(background) = waiting.background {
+        app.background_jobs = background;
+    }
+    let saved = if waiting.id == crate::export_dialog::COMMAND {
+        waiting.exported
+    } else {
+        let own = |(id, params): &(String, Value)| *id == waiting.id && waiting.chosen.as_deref().is_some_and(|file| wrote(params, file));
+        waiting.admitted.and_then(|from| app.session.journal.get(from..)).is_some_and(|steps| steps.iter().any(own))
+    };
     if !saved {
-        // A failed or refused write keeps its own error in the status bar; Cancel says the action
-        // stopped.
-        if app.ui.status_error {
+        // The step's own refused or failed write keeps its reason in the status bar; Cancel, and
+        // anything else that happened meanwhile, says the action stopped.
+        if waiting.refused || (waiting.admitted.is_some() && app.ui.status_error) {
             runner::abandoned(app, waiting.token);
         } else {
             runner::stopped(app, waiting.token);
@@ -205,7 +233,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
     if waiting.doc.is_some() && waiting.doc != app.session.active().map(|d| d.doc.id) {
         let step = app.paused_playbacks.paused.get(&waiting.token).map_or(0, |p| p.from.saturating_sub(1));
         runner::abandoned(app, waiting.token);
-        runner::report_play(app, &json!({"failed": {"step": step, "id": waiting.id, "error": DOCUMENT_CHANGED}}));
+        runner::report_play(app, &json!({"failed": {"step": step, "id": waiting.id, "error": document_changed()}}));
         return;
     }
     // `resume` reports a failure of the rest in the status bar.
