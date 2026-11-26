@@ -16,7 +16,7 @@ fn pattern(name: &str) -> Pattern {
     let mut s = Surface::new(PixelFormat::RGBA8);
     s.fill_rect(Rect::new(0, 0, 8, 8), &[0.8, 0.8, 0.8, 1.0]);
     s.fill_rect(Rect::new(0, 0, 4, 4), &[0.2, 0.4, 0.9, 1.0]);
-    Pattern { id: "059289fb-0000-4000-8000-000000000001".into(), name: name.into(), width: 8, height: 8, surface: s }
+    Pattern { id: "059289fb-0000-4000-8000-000000000001".into(), name: name.into(), width: 8, height: 8, source_mode: None, surface: s }
 }
 
 /// One Pattern Fill layer per name; the name's length moves the descriptor's size by two bytes

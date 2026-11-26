@@ -352,7 +352,7 @@ fn arrange_layouts_floating_windows_and_matching() {
 /// below the zoom at which its shorter side is 2 px, even when the source view is lower.
 #[test]
 fn match_zoom_clamps_to_each_documents_zoom_range() {
-    let lowest = craft::behavior::canvas::ZoomLadder::min(craft::behavior::kurbo::Size::new(10.0, 10.0)) as f32;
+    let lowest = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.min(craft::behavior::kurbo::Size::new(10.0, 10.0)) as f32;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
     app.run("file.new", json!({"width": 2000, "height": 2000})).unwrap();

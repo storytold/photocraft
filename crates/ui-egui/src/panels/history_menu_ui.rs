@@ -135,10 +135,10 @@ mod tests {
         }
     }
 
-    /// Step Backward after a Pen path was closed gives it back to the Pen, open, rather than
-    /// deleting it; Step Forward closes it again (#6619), as Edit › Undo and Redo do.
+    /// Step Backward over a finished Pen path takes its closing click back: the open path stays in the Work Path,
+    /// and Step Forward closes it again (#12890, as Edit › Undo and Redo do).
     #[test]
-    fn steps_over_a_finished_pen_path_give_it_back_to_the_pen() {
+    fn steps_over_a_finished_pen_path_step_the_clicks() {
         use crate::canvas::testing::click;
         let mut app = app();
         app.ui.tool = crate::state::Tool::Pen;
@@ -146,12 +146,17 @@ mod tests {
             click(&mut app, at, egui::Modifiers::NONE);
         }
         assert!(app.ui.pen.is_none(), "the path is closed");
+        let work = |app: &crate::PhotocraftApp| {
+            let sub = app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].clone();
+            (sub.closed, sub.knots.len())
+        };
+        assert_eq!(work(&app), (true, 3));
         fire(&mut app, "history.stepBackward");
-        assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(3), "the open path is back on the Pen");
-        assert!(app.session.active().unwrap().doc.work_path.is_none());
+        assert_eq!(work(&app), (false, 3), "the closing click is taken back, the anchors stay");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(3), "the open path is back on the Pen (#6619)");
         fire(&mut app, "history.stepForward");
-        assert!(app.ui.pen.is_none());
-        assert!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
+        assert!(app.ui.pen.is_none(), "Step Forward finishes it again");
+        assert_eq!(work(&app), (true, 3), "Step Forward closes it again");
     }
 
     /// A drawn crop frame greys the items that move the document under it (#9285).

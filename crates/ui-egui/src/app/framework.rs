@@ -30,9 +30,14 @@ use craft::ui::runtime::install::WheelModifiers;
 use craft::ui::runtime::{InstallError, InstallSpec};
 use craft::ui::shell::embed;
 use craft::window::policy::Decision;
-use craft::window::system::SystemWindows;
+// Tests run headless: the desktop pointer Windows tells is the mouse of the machine running them, not the test's
+// pointer, so tests see no desktop services on any platform, as on Linux.
+#[cfg(test)]
+use craft::window::system::NoWindows as Desktop;
+#[cfg(not(test))]
+use craft::window::system::SystemWindows as Desktop;
 use photocraft_engine::Session;
-use photocraft_engine::prefs::{AppearanceMode, Preferences};
+use photocraft_engine::prefs::{AppearanceMode, Preferences, UiDensity};
 use serde_json::Value;
 
 use super::PhotocraftApp;
@@ -40,20 +45,40 @@ use crate::i18n;
 use crate::state::Tool;
 use crate::theme::AppTheme;
 
-/// Installs the runtime on `ctx` with `fonts` and the root window's decided `frame` (`None` where
-/// the platform decides none), unless it is there already (`setup_window` again for the same
-/// context). Only `theme::install_runtime` calls it.
-pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>) {
+/// The store the dialogs that open their own window (RAW Develop, Vanishing Point) keep their size and place in:
+/// `window.json` in the settings folder `settings`. Without a settings folder (tests, the web) there is none, and those
+/// windows open at their default size each time.
+pub(crate) fn placement_store(settings: Option<&std::path::Path>) -> Option<Arc<Mutex<craft::window::restore::Store>>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        settings.map(|dir| Arc::new(Mutex::new(craft::window::restore::Store::at(&dir.join(craft::window::restore::FILE_NAME)))))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = settings;
+        None
+    }
+}
+
+/// Installs the runtime on `ctx` with `fonts`, the root window's decided `frame` (`None` where
+/// the platform decides none) and the window placement store of the settings folder `settings`
+/// ([`placement_store`]), unless it is there already (`setup_window` again for the same context).
+/// Only `theme::install_runtime` calls it.
+pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>, settings: Option<&std::path::Path>) {
     // The wheel zooms with the canvas's own keys and scrolls sideways with Shift or Command, as
     // PhotoCraft's input always has.
     let wheel = WheelModifiers::new(egui::Modifiers::NONE, egui::Modifiers::SHIFT | egui::Modifiers::COMMAND);
     let wake = ctx.clone();
-    let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(SystemWindows))
+    let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(Desktop))
         .wheel(wheel)
         .app_id(crate::os_window::app_id())
         .system(SystemReader::start(move || wake.request_repaint()));
     if let Some(decision) = frame {
         spec = spec.frame(decision);
+    }
+    // Without it a dialog's own window saves its size and place nowhere and opens at its default each time (#17012).
+    if let Some(store) = placement_store(settings) {
+        spec = spec.placement(store);
     }
     // The platform's pen readings: the app writes them into this feed, the runtime pairs them with the pointer moves.
     let pen = crate::stylus::StylusFeed::default();
@@ -157,25 +182,31 @@ impl ThemeUnavailable {
     }
 }
 
-/// The preferences that choose the theme: the appearance mode and the theme id of each slot.
+/// The preferences that choose the theme: the appearance mode, the theme id of each slot and the size.
 #[derive(Clone, Debug, PartialEq)]
 struct ThemePrefs {
     mode: AppearanceMode,
     dark: String,
     light: String,
+    size: UiDensity,
 }
 
 impl ThemePrefs {
     fn of(prefs: &Preferences) -> Self {
         let i = &prefs.interface;
-        ThemePrefs { mode: i.appearance_mode, dark: i.dark_theme.clone(), light: i.light_theme.clone() }
+        ThemePrefs { mode: i.appearance_mode, dark: i.dark_theme.clone(), light: i.light_theme.clone(), size: i.density }
     }
 
     /// What the suite shows: its chosen fields, else PhotoCraft's defaults.
     fn of_suite(choice: &SuiteChoice) -> Self {
         let defaults = defaults();
         let shown = choice.with_defaults(&defaults);
-        ThemePrefs { mode: app_mode(shown.mode), dark: shown.theme.dark.as_str().to_owned(), light: shown.theme.light.as_str().to_owned() }
+        ThemePrefs {
+            mode: app_mode(shown.mode),
+            dark: shown.theme.dark.as_str().to_owned(),
+            light: shown.theme.light.as_str().to_owned(),
+            size: app_density(shown.size),
+        }
     }
 
     /// The suite fields that differ between `self` and `before`.
@@ -185,6 +216,7 @@ impl ThemePrefs {
             theme_dark: (self.dark != before.dark).then(|| id(&self.dark)).flatten(),
             theme_light: (self.light != before.light).then(|| id(&self.light)).flatten(),
             mode: (self.mode != before.mode).then(|| mode_choice(self.mode)),
+            size: (self.size != before.size).then(|| suite_size(self.size)),
             ..SelectionChange::default()
         }
     }
@@ -203,6 +235,21 @@ fn mode_choice(mode: AppearanceMode) -> ModeChoice {
         AppearanceMode::Auto => ModeChoice::System,
         AppearanceMode::Dark => ModeChoice::Dark,
         AppearanceMode::Light => ModeChoice::Light,
+    }
+}
+
+fn app_density(size: Size) -> UiDensity {
+    match size {
+        Size::Comfortable => UiDensity::Comfortable,
+        _ => UiDensity::Compact,
+    }
+}
+
+/// The suite's size for PhotoCraft's density preference; the root resolves its tokens under it.
+fn suite_size(density: UiDensity) -> Size {
+    match density {
+        UiDensity::Compact => Size::Compact,
+        UiDensity::Comfortable => Size::Comfortable,
     }
 }
 
@@ -243,6 +290,9 @@ fn base_root() -> RootEnv {
     root.tab_toggles_chrome = true;
     // Tab in a dialog moves between its fields, as in Photoshop.
     root.dialog_tab = TabReach::Fields;
+    // The title bar keeps the arrow, also over the menu titles on it, as an OS title bar does: the default open hand
+    // shows as Windows' four-way Move cursor (#16993).
+    root.values.set(craft::ui::contract::MoveBandCursor::Arrow);
     root
 }
 
@@ -350,7 +400,8 @@ impl Framework {
         let mut root = root
             .mode(if theme.is_dark() { ModeChoice::Dark } else { ModeChoice::Light })
             .scale(Scale::new(crate::prefs_ui::interface_zoom(session.prefs().interface.ui_scale, ctx)))
-            .direction(if rtl { Direction::Rtl } else { Direction::Ltr });
+            .direction(if rtl { Direction::Rtl } else { Direction::Ltr })
+            .density(suite_size(session.prefs().interface.density));
         // Read each frame, so a preference change shows at once.
         root.canvas_pattern = session.prefs().interface.show_canvas_dots;
         root.values.set(craft::ui::canvas::ShowReadouts(session.prefs().tools.show_transformation_values));
@@ -422,6 +473,11 @@ impl Framework {
                     None if mine.mode != blank.mode => change.mode = Some(mode_choice(mine.mode)),
                     None => {}
                 }
+                match chosen.size {
+                    Some(size) => start.size = app_density(size),
+                    None if mine.size != blank.size => change.size = Some(suite_size(mine.size)),
+                    None => {}
+                }
                 self.suite.change(change);
                 start
             }
@@ -440,6 +496,7 @@ impl Framework {
                 p.interface.appearance_mode = agreed.mode;
                 p.interface.dark_theme = agreed.dark.clone();
                 p.interface.light_theme = agreed.light.clone();
+                p.interface.density = agreed.size;
             });
         }
         let changed = moved || previous.as_ref() != Some(&agreed);
@@ -810,7 +867,7 @@ impl SectionStore for PrefSections {
 #[cfg(test)]
 pub(crate) fn close_path_frame(app: &mut PhotocraftApp, input: egui::RawInput) -> egui::FullOutput {
     let ctx = app.ctx().clone();
-    install(&ctx, &UiFonts::new(&craft::ui::fonts::I18nScripts), None);
+    install(&ctx, &UiFonts::new(&craft::ui::fonts::I18nScripts), None, None);
     ctx.run_ui(input, |ui| embed::logic(ui.ctx(), || crate::discard_ui::close_decision(app)))
 }
 
@@ -855,6 +912,26 @@ pub(crate) fn keys_pass(app: &mut PhotocraftApp, ctx: &egui::Context, input: egu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dialogs' own windows keep their place in the settings folder's `window.json` and find it there on the next
+    /// launch; without a settings folder nothing is kept (#17012).
+    #[test]
+    fn dialog_windows_keep_their_placement_in_the_settings_folder() {
+        use craft::window::restore::FILE_NAME;
+        let dir = tempfile::tempdir().unwrap();
+        let key = "craft_imaging.raw_develop.window";
+        let placement = craft::behavior::placement::Placement::new([1400.0, 900.0], 1.25);
+        let store = placement_store(Some(dir.path())).expect("a settings folder has a placement store");
+        {
+            let mut store = store.lock().unwrap();
+            store.set(key, &placement);
+            store.save().unwrap();
+        }
+        assert!(dir.path().join(FILE_NAME).is_file());
+        let reopened = placement_store(Some(dir.path())).unwrap();
+        assert_eq!(reopened.lock().unwrap().get(key).map(|p| p.normal.size), Some([1400.0, 900.0]), "the next launch reads it");
+        assert!(placement_store(None).is_none());
+    }
 
     fn table(n: i64) -> toml::Table {
         let mut t = toml::Table::new();

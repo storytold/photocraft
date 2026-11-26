@@ -83,7 +83,10 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let source = p.get("contents").or_else(|| p.get("source")).and_then(Value::as_str).unwrap_or("foreground");
     let pattern = if source == "pattern" {
         let pat = crate::pattern_cmds::resolve_param(s, "paint.bucket", p)?;
-        let tile = photocraft_compose::pattern::Tile::new(&pat)
+        // Through the grey profile where Edit › Fill and a pattern fill layer paint so (#14975).
+        use photocraft_compose::pattern::PatternSpace;
+        let space = s.active().map_or(PatternSpace::Mode(photocraft_color::ColorMode::Rgb), |d| PatternSpace::of_pixels(&d.doc));
+        let tile = photocraft_compose::pattern::Tile::new_in(&pat, space)
             .ok_or_else(|| EngineError::BadParams { cmd: "paint.bucket".into(), msg: "the pattern is empty or too large to paint".into() })?;
         let (scale, angle, _, phase) = crate::pattern_cmds::placement("paint.bucket", p)?;
         Some((tile, scale, angle, phase))

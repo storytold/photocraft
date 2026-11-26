@@ -151,8 +151,11 @@ pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bo
     // Present but inert: what it does was not measured.
     let choose = tl!("Choose an object and have the adjustment applied to it");
     IconButton::new(IconId::new("square-dashed-mouse-pointer")).label(choose).tooltip(choose).enabled(false).show(ui);
-    // Its tint over the painted mask is its own item (#12520).
-    Checkbox::new(Bind::bound(&mut app.ui.tool_options.adjustment_brush_overlay)).label(tl!("Overlay").to_owned()).show(ui);
+    // On, the canvas tints what the active adjustment layer's mask reveals (`raster_source::MaskTint`, #12520).
+    Checkbox::new(Bind::bound(&mut app.ui.tool_options.adjustment_brush_overlay))
+        .label(tl!("Overlay").to_owned())
+        .tooltip(tl!("Show or hide the painted mask areas").to_owned())
+        .show(ui);
     Divider::vertical().show(ui);
 
     let mut alerts = Vec::new();

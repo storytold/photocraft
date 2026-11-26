@@ -430,6 +430,83 @@ fn recording_document_activation_uses_opening_order_offset() {
     assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("document.activate", json!({"offset": -1}))]);
 }
 
+/// #10769 "Playing on another document": recording is not tied to an open document. It starts
+/// with none open, and the commands that create and edit a document land in the action.
+#[test]
+fn recording_starts_with_no_document_open() {
+    let mut s = crate::session();
+    s.execute("actions.record", json!({"name": "Open and ink"})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    assert_eq!(s.execute("actions.stop", json!({})).unwrap()["steps"], 2);
+    assert_eq!(s.execute("actions.get", json!({"action": "Open and ink"})).unwrap()["steps"][0][0], "file.new");
+}
+
+/// A document with layers X, Y and Z: none of the layer names a recording on A, B, C refers to.
+fn other_names_document(s: &mut Session) {
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    for name in ["X", "Y", "Z"] {
+        s.execute("layer.new.layer", json!({"name": name})).unwrap();
+    }
+}
+
+/// The active document's layer names, bottom to top, without the Background.
+fn played_layer_names(s: &Session) -> Vec<String> {
+    s.active().unwrap().doc.walk().into_iter().filter(|(_, _, layer)| layer.name != "Background").map(|(_, _, layer)| layer.name.clone()).collect()
+}
+
+/// "Playing on another document" (#10769): a step that names a layer the playing document does
+/// not have stops the playback there and names the layer in its error; it must not act on another
+/// layer, and the steps after it must not run. The panel's Continue / Stop ask builds on this stop.
+/// A name the playing document does not have covers both cases: one it never had, and one deleted
+/// from the document the recording was made on.
+#[test]
+fn a_step_naming_a_missing_layer_stops_instead_of_acting_on_the_wrong_layer() {
+    let mut s = crate::session();
+    other_names_document(&mut s);
+    s.actions_mut()
+        .list
+        .push(Action::new("On B", vec![ActionStep::new("layer.select", json!({"name": "B"})), ActionStep::new("layer.new.layer", json!({"name": "Made"}))]))
+        .unwrap();
+    let played = s.execute("actions.play", json!({"action": "On B"})).unwrap();
+    assert_eq!(played["failed"]["step"], 0, "{played}");
+    assert_eq!(played["failed"]["id"], "layer.select", "{played}");
+    assert!(played["failed"]["error"].as_str().is_some_and(|error| error.contains('B')), "{played}");
+    assert_eq!(played_layer_names(&s), ["X", "Y", "Z"], "the playback stopped at the step naming B, on no wrong layer, and ran no later step");
+}
+
+/// The eye-icon step keeps its layer by `_actionLayer`; on a document without that name it stops
+/// there without hiding one of the present layers.
+#[test]
+fn an_eye_step_naming_a_missing_layer_stops_without_hiding_another_layer() {
+    let mut s = crate::session();
+    other_names_document(&mut s);
+    s.actions_mut()
+        .list
+        .push(Action::new("Hide B", vec![ActionStep::new("layer.setProps", json!({"visible": false, "_actionLayer": {"name": "B", "ordinal": 0}}))]))
+        .unwrap();
+    let played = s.execute("actions.play", json!({"action": "Hide B"})).unwrap();
+    assert_eq!(played["failed"]["step"], 0, "{played}");
+    assert!(played["failed"]["error"].as_str().is_some_and(|error| error.contains("recorded layer `B`")), "{played}");
+    let doc = s.active().unwrap().doc.clone();
+    assert!(doc.walk().into_iter().filter(|(_, _, layer)| layer.name != "Background").all(|(_, _, layer)| layer.visible), "X, Y and Z stay visible");
+}
+
+/// A step on the target (no layer reference) does not stop on another document: it acts on
+/// whatever layer is selected there, as the reference records it (Ctrl+J copied Z).
+#[test]
+fn a_target_step_acts_on_the_selected_layer_of_another_document() {
+    let mut s = crate::session();
+    other_names_document(&mut s);
+    s.actions_mut().list.push(Action::new("Dim", vec![ActionStep::new("layer.setProps", json!({"opacity": 0.5}))])).unwrap();
+    let played = s.execute("actions.play", json!({"action": "Dim"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let doc = s.active().unwrap().doc.clone();
+    let opacity = |name: &str| doc.walk().into_iter().find(|(_, _, layer)| layer.name == name).map(|(_, _, layer)| layer.opacity);
+    assert_eq!(opacity("Z"), Some(0.5), "the active layer Z took the step");
+    assert_eq!(opacity("X"), Some(1.0), "the others are untouched");
+}
+
 #[test]
 fn recorded_point_text_position_scales_with_the_playback_canvas() {
     let mut s = crate::session();
