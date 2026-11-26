@@ -289,6 +289,15 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
+    /// Composite up to `max_tiles` of what the stroke has drawn ahead of its commit (see
+    /// `LiveStroke::settle`); whether more is left. Only the Brush's overlay has anything to
+    /// settle. It changes nothing the canvas shows.
+    pub(super) fn settle(&mut self, max_tiles: usize) -> bool {
+        match self {
+            Self::Brush(s) => s.settle(max_tiles),
+            Self::Retouch(_) | Self::Dab(_) | Self::Mixer(_) => false,
+        }
+    }
     pub(super) fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
@@ -511,7 +520,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
+        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_overlay(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
@@ -801,10 +810,14 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
         return;
     };
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
-    if let EngineStroke::Brush(stroke) = stroke
-        && app.session.offer_live_stroke(*stroke).is_err()
-    {
-        app.session.clear_live_stroke();
+    // An overlay stroke showed a masked colour layer, without the 8-bit dither the commit adds:
+    // the canvas redraws its bounds from the committed document.
+    let mut undithered = DRect::EMPTY;
+    if let EngineStroke::Brush(stroke) = stroke {
+        undithered = stroke.overlay_bounds().unwrap_or(DRect::EMPTY);
+        if app.session.offer_live_stroke(*stroke).is_err() {
+            app.session.clear_live_stroke();
+        }
     }
     let started = crate::gpu_canvas::now_ms();
     let result = app.run(stroke_command(app, d.tool), p);
@@ -815,7 +828,7 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
     if r.get("fromLive").and_then(serde_json::Value::as_bool) == Some(true)
         && let Some((revision, after)) = after
     {
-        let relayout = before.map_or(DRect::EMPTY, |b| photocraft_compose::relayout_damage(&b, &after));
+        let relayout = before.map_or(DRect::EMPTY, |b| photocraft_compose::relayout_damage(&b, &after)).union(&undithered);
         app.committed_stroke = Some(CommittedStroke { doc, revision, key, damage, relayout });
     } else {
         // Rendered again from scratch: the commit's damage rect refreshes the stroke.
