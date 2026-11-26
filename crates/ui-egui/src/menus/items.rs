@@ -258,6 +258,13 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
     if let Some(item) = find(&mut rows, "layer.smartObjects.revealInFinder") {
         item.label = reveal_label().into();
     }
+    // Window › Arrange: the last entry names the active document, as in Photoshop (#16888).
+    // With no document open the catalog's fixed label stays as it was.
+    if let Some(st) = app.session.active()
+        && let Some(item) = find(&mut rows, "window.arrange.newWindowForDocument")
+    {
+        item.label = format!("New Window for {}", st.doc.name);
+    }
     // File › Open Recent: a dynamic submenu of recently opened files, after Open as Smart Object… (#14053).
     if let Some(after) = rows.iter().position(|i| i.command.id == "file.openAsSmartObject").or_else(|| rows.iter().position(|i| i.command.id == "file.openAs"))
     {
