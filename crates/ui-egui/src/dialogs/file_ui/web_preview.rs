@@ -85,19 +85,20 @@ pub struct EncodedPreview {
     pub height: u32,
 }
 
-/// Encodes the proxy `source` makes with `p`; `source` gets the settings of `p` without the palette edits. Palette
+/// Encodes the proxy `source` makes with `p`, each colour of `shifted` replaced by the colour it shifts to. Palette
 /// replacements reuse the cached index buffer (kept under `key` while `signature` and the other options are
-/// unchanged): picker drags do not re-quantize or re-encode the proxy, and `source` does not run then. The GIF payload length is unchanged by RGB table replacements. The edits
-/// (`colorTableEdits`) index the palette the encode chose, unless `p` fixes a `colorTable` of its own.
+/// unchanged): picker drags do not re-quantize or re-encode the proxy, and `source` does not run then. The GIF payload
+/// length is unchanged by RGB table replacements. The shifts edit the palette the encode chose, unless `p` fixes a
+/// `colorTable` of its own.
 pub fn optimized(
     ctx: &egui::Context,
     key: egui::Id,
     signature: &str,
     p: &Value,
+    shifted: &[([u8; 3], [u8; 3])],
     source: impl FnOnce(&WebSettings) -> Result<(Vec<[f32; 4]>, u32, u32), String>,
 ) -> Result<EncodedPreview, String> {
-    let mut base = p.clone();
-    let edits = base.as_object_mut().and_then(|m| m.remove("colorTableEdits"));
+    let base = p.clone();
     let signature = format!("{signature}|{base}");
     let key = key.with("indexed-source");
     let cached: Option<(String, Arc<Optimized>)> = ctx.data(|d| d.get_temp(key));
@@ -114,12 +115,16 @@ pub fn optimized(
         encoded
     };
     let mut full = base;
+    let fixed: Option<Vec<[u8; 3]>> =
+        full.get("colorTable").and_then(Value::as_array).map(|table| table.iter().filter_map(|c| c.as_str().and_then(super::web::parse_hex)).collect());
+    let palette = fixed.unwrap_or_else(|| encoded.color_table.clone());
     // A format without a palette has nothing to edit.
-    if let Some(edits) = edits.filter(|_| full.get("colorTable").is_some() || !encoded.color_table.is_empty()) {
+    let edits = super::web::shift_edits(&palette, shifted);
+    if !edits.is_empty() {
         if full.get("colorTable").is_none() {
             full["colorTable"] = json!(encoded.color_table.iter().map(|c| web_cmds::rgb_hex(*c)).collect::<Vec<_>>());
         }
-        full["colorTableEdits"] = edits;
+        full["colorTableEdits"] = Value::Object(edits);
     }
     let settings = WebSettings::from_params(&full, "preview").map_err(|e| e.to_string())?;
     let rgba = if settings.color_table_edits.is_empty() || !settings.format.indexed() {
@@ -154,13 +159,12 @@ mod tests {
         let ctx = egui::Context::default();
         let key = egui::Id::unique("test-web-preview");
         let px = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
-        let run = |p: &Value| optimized(&ctx, key, "fixture", p, |_| Ok((px.clone(), 2, 1))).unwrap().rgba;
+        let p = json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"});
+        let run = |shifted: &[([u8; 3], [u8; 3])]| optimized(&ctx, key, "fixture", &p, shifted, |_| Ok((px.clone(), 2, 1))).unwrap().rgba;
         let cached = || ctx.data(|d| d.get_temp::<(String, Arc<Optimized>)>(key.with("indexed-source"))).unwrap().1;
-        let mut p = json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"});
-        assert_eq!(run(&p), [255, 0, 0, 255, 0, 0, 255, 255]);
+        assert_eq!(run(&[]), [255, 0, 0, 255, 0, 0, 255, 255]);
         let before = cached();
-        p["colorTableEdits"] = json!({"0": "#00ff00"});
-        assert_eq!(run(&p), [0, 255, 0, 255, 0, 0, 255, 255]);
+        assert_eq!(run(&[([255, 0, 0], [0, 255, 0])]), [0, 255, 0, 255, 0, 0, 255, 255], "red shifted to green");
         assert!(Arc::ptr_eq(&before, &cached()), "picker drag must not re-encode");
     }
 

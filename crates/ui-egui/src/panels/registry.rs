@@ -7,7 +7,7 @@
 
 use craft::behavior::Axis;
 use craft::behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
-use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMenu};
+use craft::color_ui::ui::{ColorPanelCommand, ColorPanelLayout, ColorPanelMenu, ColorPanelShown};
 use craft::ui::contract::{Scroll, ShowContainer as _};
 use craft::ui::docking::DockHeights;
 use craft::ui::layout_components::Stack;
@@ -105,7 +105,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     // The Color panel sizes its field to the group and scrolls its slider modes itself (#6000).
     PanelEntry {
         heights: Some(COLOR_HEIGHTS),
-        rows: |_| ColorPanelMenu::rows(),
+        rows: |_| ColorPanelMenu::rows(ColorPanelLayout::ForegroundBackground),
         states: color_source_states,
         run: color_run,
         ..panel("color", || tl!("Color").to_string(), "palette", LEAST, super::color::panel)
@@ -228,7 +228,12 @@ pub(crate) static PANELS: &[PanelEntry] = &[
 
 /// The Color panel menu's states, from the panel's own state.
 fn color_states(app: &PhotocraftApp) -> SourceStates {
-    ColorPanelMenu::states(&app.ui.color_panel.panel).into_iter().map(|(command, state)| (command.into(), state)).collect()
+    let state = &app.ui.color_panel.panel;
+    // Photoshop's layout: the views follow the state's mode, and the foreground and background always hold a colour.
+    ColorPanelMenu::states(ColorPanelLayout::ForegroundBackground, state, &ColorPanelShown::Mode(state.mode), true)
+        .into_iter()
+        .map(|(command, state)| (command.into(), state))
+        .collect()
 }
 
 /// [`color_states`], derived from the panel's state.

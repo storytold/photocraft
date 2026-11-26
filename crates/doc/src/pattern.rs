@@ -2,7 +2,7 @@
 //! and brush textures. Pure data; rendering lives in `photocraft-compose`, the PSD mapping
 //! (`Patt`/`Pat2`/`Pat3` global blocks) in `photocraft-io`.
 
-use photocraft_color::SampleType;
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_geom::Rect;
 use photocraft_raster::{AllocationError, Interrupt, Surface};
 
@@ -67,6 +67,15 @@ pub struct Pattern {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    /// The colour mode of the source this pattern was made from, when that is known: Edit ›
+    /// Define Pattern names the document's mode. The pixels keep their own format either way (an
+    /// Indexed source stores an RGB surface), so this is the only place the mode survives. `None`
+    /// for a pattern whose source is not a document of a known mode: the built-ins, and patterns
+    /// read from a `.pat` or PSD block, which say what their pixels are but not what they came
+    /// from. Not part of the id: the same pixels keep one id whatever their source, and the id is
+    /// how the library and a document dedupe, so defining pixels that are already stored keeps the
+    /// source mode of the pattern that got there first.
+    pub source_mode: Option<ColorMode>,
     pub surface: Surface,
 }
 
@@ -118,7 +127,7 @@ impl Pattern {
         ctl.check().map_err(|_| PatternBuildError::Cancelled)?;
         let h2 = fnv(h1 ^ 0x9e37_79b9_7f4a_7c15, format!("{:?}", surface.format()).as_bytes());
         let id = format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", (h1 >> 32) as u32, (h1 >> 16) as u16, h1 as u16, (h2 >> 48) as u16, h2 & 0xffff_ffff_ffff);
-        Ok(Pattern { id, name, width, height, surface })
+        Ok(Pattern { id, name, width, height, source_mode: None, surface })
     }
 
     /// A pattern with an id derived from its name and pixels (same content → same id, so
@@ -140,7 +149,7 @@ impl Pattern {
         }
         let h2 = fnv(h1 ^ 0x9e37_79b9_7f4a_7c15, format!("{:?}", surface.format()).as_bytes());
         let id = format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", (h1 >> 32) as u32, (h1 >> 16) as u16, h1 as u16, (h2 >> 48) as u16, h2 & 0xffff_ffff_ffff);
-        Pattern { id, name, width, height, surface }
+        Pattern { id, name, width, height, source_mode: None, surface }
     }
 
     /// The name shown in UIs: Photoshop's localisation keys (`$$$/Patterns/…=Water`) show
@@ -343,8 +352,14 @@ mod tests {
 
     #[test]
     fn working_bytes_keep_a_pattern_exact_in_less_memory() {
-        let sparse =
-            |format: PixelFormat, width: u32, height: u32| Pattern { id: String::new(), name: String::new(), width, height, surface: Surface::new(format) };
+        let sparse = |format: PixelFormat, width: u32, height: u32| Pattern {
+            id: String::new(),
+            name: String::new(),
+            width,
+            height,
+            source_mode: None,
+            surface: Surface::new(format),
+        };
         let float = PixelFormat::new(photocraft_color::ColorMode::Rgb, SampleType::F32, true);
         // What fits is expanded as before.
         assert_eq!(sparse(PixelFormat::RGBA8, 10, 10).working_bytes(), 1600);
@@ -362,8 +377,14 @@ mod tests {
 
     #[test]
     fn a_pattern_that_paints_nothing_says_why() {
-        let sparse =
-            |format: PixelFormat, width: u32, height: u32| Pattern { id: String::new(), name: String::new(), width, height, surface: Surface::new(format) };
+        let sparse = |format: PixelFormat, width: u32, height: u32| Pattern {
+            id: String::new(),
+            name: String::new(),
+            width,
+            height,
+            source_mode: None,
+            surface: Surface::new(format),
+        };
         let float = PixelFormat::new(photocraft_color::ColorMode::Rgb, SampleType::F32, true);
         assert_eq!(sparse(PixelFormat::RGBA8, 8000, 8000).paint_problem(), None);
         assert_eq!(sparse(PixelFormat::RGBA8, 0, 4).paint_problem().as_deref(), Some("it is empty"));

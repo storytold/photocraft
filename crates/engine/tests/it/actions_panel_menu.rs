@@ -117,7 +117,8 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     });
     let result = s.execute("actions.duplicate", json!({"set":"S"})).unwrap();
     assert_eq!(result["set"], "S copy");
-    assert_eq!(actions_edit_cmds::set_names(&s), ["S", "T", "S copy"]);
+    // The copy goes right after its source set, like the reference application.
+    assert_eq!(actions_edit_cmds::set_names(&s), ["S", "S copy", "T"]);
     // The copies go after the set's last action, so a call to an action before that point keeps its target.
     assert_eq!(s.actions().list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["A", "Other", "B", "A copy", "B copy"]);
     for a in s.actions().list.actions() {

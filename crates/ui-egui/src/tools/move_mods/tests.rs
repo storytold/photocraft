@@ -472,7 +472,7 @@ fn arrow_keys_ignored_during_text_edit() {
 /// 100 % and above, up to 1600 %); ⇧ is 10 document pixels at any zoom.
 #[test]
 fn a_nudge_is_one_screen_pixel() {
-    let lowest = craft::behavior::canvas::ZoomLadder::min(craft::behavior::kurbo::Size::new(12_000.0, 12_000.0));
+    let lowest = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.min(craft::behavior::kurbo::Size::new(12_000.0, 12_000.0));
     // Below 0.1 % a large document still nudges one screen pixel: 6000 document pixels at a
     // 12,000 × 12,000 px document's lowest zoom, and the ladder's f32 rungs (0.1 %, 0.2 %) give
     // whole steps (1000, not 999). 0.3333334 is just above a third, off the ladder (pinch, Zoom

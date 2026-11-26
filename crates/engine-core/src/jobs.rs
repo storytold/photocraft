@@ -1980,6 +1980,13 @@ impl Session {
         for after in &hooks.after_command {
             after(self, id, &params);
         }
+        // A command that left the document as it was (Content-Aware Fill with the whole canvas
+        // selected, #14253) made no step for Edit › Fade to fade.
+        if !before.kept(self) {
+            for after in &hooks.after_edit {
+                after(self, id, &params);
+            }
+        }
         if !journal {
             return;
         }

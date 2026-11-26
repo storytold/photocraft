@@ -1,0 +1,318 @@
+{
+  "schema": "craft-nightly-release-policy/v3",
+  "repository": "storytold/photocraft",
+  "repository_id": 1398080271,
+  "producer_workflow_id": 428462603,
+  "producer_workflow_path": ".github/workflows/nightly.yml",
+  "producer_tooling_revision": "fc7124a1defa96813aee060031dc8b4d2afa3652",
+  "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@fc7124a1defa96813aee060031dc8b4d2afa3652",
+  "signer_workflow_path": ".github/workflows/nightly-sign.yml",
+  "signer_tooling_revision": "fc7124a1defa96813aee060031dc8b4d2afa3652",
+  "release_branch": "nightly-signer",
+  "manual_actors": [
+    "bflatastic",
+    "dylanmtaylor",
+    "echelon",
+    "FredApps",
+    "skylartaylor"
+  ],
+  "max_age_seconds": 86400,
+  "candidate_policy": {
+    "schema": "craft-nightly-candidate-policy/v3",
+    "epoch": "photocraft-nightly-20261124-sonar-19880b44",
+    "repository": "storytold/photocraft",
+    "branch": "main",
+    "required_workflows": [
+      {
+        "workflow_id": 371199934,
+        "workflow_path": ".github/workflows/ci.yml",
+        "jobs": [
+          {
+            "name": "gate / build (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "gate / lint (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "gate / test 1/4 (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "gate / test 2/4 (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "gate / test 3/4 (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "gate / test 4/4 (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "gate / gate (artcraft-k8s-main)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / build (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / lint (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / test 1/6 (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / test 2/6 (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / test 3/6 (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / test 4/6 (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / test 5/6 (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / test 6/6 (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "windows / gate (windows-latest)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "test (without heif)",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "web build and wasm size gate",
+            "app_id": 15368,
+            "applicability": "required"
+          },
+          {
+            "name": "git-sources / Git dependencies come from storytold",
+            "app_id": 15368,
+            "applicability": "required"
+          }
+        ]
+      }
+    ],
+    "sonar": {
+      "organization": "storytold",
+      "project": "storytold_photocraft",
+      "app_id": 12526,
+      "check_name": "SonarCloud Code Analysis",
+      "details_url": "https://sonarcloud.io/dashboard?id=storytold_photocraft&branch=main",
+      "issue_types": [
+        "VULNERABILITY"
+      ],
+      "accepted_conditions": [
+        {
+          "metric": "new_security_rating",
+          "comparator": "GT",
+          "error_threshold": "1",
+          "maximum": "5"
+        }
+      ],
+      "required_conditions": [
+        {
+          "metric": "new_reliability_rating",
+          "comparator": "GT",
+          "error_threshold": "1"
+        },
+        {
+          "metric": "new_maintainability_rating",
+          "comparator": "GT",
+          "error_threshold": "1"
+        },
+        {
+          "metric": "new_coverage",
+          "comparator": "LT",
+          "error_threshold": "80"
+        },
+        {
+          "metric": "new_duplicated_lines_density",
+          "comparator": "GT",
+          "error_threshold": "3"
+        },
+        {
+          "metric": "new_security_hotspots_reviewed",
+          "comparator": "LT",
+          "error_threshold": "100"
+        }
+      ],
+      "debt": [
+        {
+          "key": "AaH1WeAcw8X7W_XJjFL4",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/engine_split/table_fragments.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "ea661b416fc9e77cc01a1cd666c7aba7"
+        },
+        {
+          "key": "AaH2gwW4UgvRZIAygJFb",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/engine_split/install_tables.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "487390be64dd83ce33912f980c863775"
+        },
+        {
+          "key": "AaH2uKhnARfBzs_vH5to",
+          "rule": "pythonsecurity:S2083",
+          "component": "storytold_photocraft:scripts/ci-test-times.py",
+          "type": "VULNERABILITY",
+          "severity": "BLOCKER",
+          "hash": "49be67b6e92adfd1925fe265def3f32f"
+        },
+        {
+          "key": "AaH2uKhnARfBzs_vH5tp",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/ci-test-times.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "6a6738fcb83ed1ea94deed5a43a29fd7"
+        },
+        {
+          "key": "AaHqp1duL-O9RuIeaDi5",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/ci-windows-gpu-tests.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "10901e814d7d4924eaa841ec13d856aa"
+        },
+        {
+          "key": "AaHw0Xe3UBxgr8mqv_tO",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/ci-gpu-lavapipe.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "cfd2441d77cd3d2583f62e26cd1693e0"
+        },
+        {
+          "key": "AaIFcrPcNZCHnXHFAj7e",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/engine_split/rust_source.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "487390be64dd83ce33912f980c863775"
+        },
+        {
+          "key": "AaIHa6n2yYr6oFqv42Kk",
+          "rule": "pythonsecurity:S8705",
+          "component": "storytold_photocraft:scripts/engine_split/rust_source.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "ccba4e415c24601f3c90259cda892a5f"
+        },
+        {
+          "key": "AaIKwgPdp41A3KPnYjkm",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/rust_source.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "1e3597d53ca2697cd24474f23f3dd9df"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjkn",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "8d5b0e969b98008acf17068d5f1f7f29"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjko",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "8d5b0e969b98008acf17068d5f1f7f29"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjkp",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "652c184165d354f1c10afab33097fd11"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjkq",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "2dc7df4b6ee7f1302d680852231f2836"
+        },
+        {
+          "key": "AaIKwgSRp41A3KPnYjkw",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/move_tests.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "ff32a731f85beee97a8bf8c7b1ccaa92"
+        },
+        {
+          "key": "AaIKwgSRp41A3KPnYjkx",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/move_tests.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "d6d2642646179ec403ab491e0cbcd899"
+        }
+      ]
+    }
+  },
+  "max_artifact_bytes": 2147483648,
+  "automatic_signer_actors": [],
+  "platforms": {
+    "windows-x86_64": {
+      "unsigned_artifact_name": "nightly-unsigned-windows-x86_64",
+      "trust": {
+        "publisher_subject": "CN=Learning Machines Inc, O=Learning Machines Inc, L=Atlanta, S=Georgia, C=US"
+      }
+    },
+    "linux-x86_64": {
+      "unsigned_artifact_name": "nightly-unsigned-linux-x86_64",
+      "trust": {
+        "fingerprint": "2B76741B414AAD6CD33E631213A005C0B9D7C3ED"
+      }
+    },
+    "macos-aarch64": {
+      "unsigned_artifact_name": "nightly-unsigned-macos-aarch64",
+      "trust": {
+        "apple_team_id": "DJ6XS33FX8"
+      }
+    }
+  }
+}
