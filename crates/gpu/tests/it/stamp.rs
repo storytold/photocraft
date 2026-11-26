@@ -190,14 +190,16 @@ fn stamped_coverage_matches_the_cpu() {
         for precision in precisions(&g) {
             let (worst, used) = worst_difference(&mut g, &brush, &path(n), Some(precision));
             assert_eq!(used, precision);
-            // R32F: only the shader's float arithmetic against the rasteriser's (measured at a
-            // few 1e-6 on an RTX 4060, tip profile and a hundred overlapping blends included).
+            // R32F: only the shader's float arithmetic against the rasteriser's (a few 1e-6 on an
+            // RTX 4060, 6e-8 on lavapipe, tip profile and a hundred overlapping blends included).
             // R16F: each blend rounds to a half (an 11-bit significand, a step of 2^-11 near 1),
-            // so the error is the sum of those roundings (measured up to 2.2e-3 over 19 000
-            // overlapping dabs): under one 8-bit step, the 1/255 the preview is held to.
+            // so the error is the sum of those roundings over the dabs that overlap a pixel,
+            // about 1 / spacing of them. A GPU rounding to nearest stays under 2.2e-3 (4 dabs per
+            // pixel and more); lavapipe measured 6.6e-3 at 10 (a step and a third per dab, as if
+            // it rounded down). The limit allows two steps per overlapping dab.
             let limit = match precision {
                 MaskPrecision::Full => 2e-4,
-                MaskPrecision::Half => 4e-3,
+                MaskPrecision::Half => 2.0 * (1.0 / 2048.0) / spacing,
             };
             eprintln!("stamp size {size} hardness {hardness} roundness {roundness} flow {flow} {precision:?}: worst difference {worst:.2e}");
             assert!(
