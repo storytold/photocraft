@@ -887,10 +887,11 @@ fn blend_px(p: vec2<i32>, b: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     var fill = op.fill;
     if ((op.flags & F_SHAPELESS) != 0u) {
         // compose::blend_layer_into: `src` carries alpha × mask; split them again. Coverage is
-        // opacity × mask, and the content's own alpha joins Fill inside the blend.
+        // opacity × mask, and the content's own alpha joins Fill inside the blend. An opaque
+        // texel gives exactly 1, as the CPU's m / m does (a shader's division may not).
         let m = mask_value(doc_px(p));
         if (s.a <= 0.0 || m <= 0.0) { return b; }
-        fill = op.fill * clamp(s.a / m, 0.0, 1.0);
+        fill = op.fill * select(clamp(s.a / m, 0.0, 1.0), 1.0, s.a >= m);
         s = vec4(s.rgb, m);
     }
     if (s.a <= 0.0) { return b; }

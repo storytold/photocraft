@@ -346,7 +346,20 @@ impl Compositor {
     /// larger than the limit are built per page cell.
     pub fn supports(&self, doc: &Document) -> Result<(), Unsupported> {
         let p = plan(doc)?;
+        self.check_accumulation(&p)?;
         self.check_fx(doc, &p)
+    }
+
+    /// Half-float accumulation keeps Hard Mix with Transparency Shapes Layer off on the CPU: below
+    /// full Fill its formula divides by `1 − fill`, which the content's alpha is part of, so the
+    /// precision the slots lose shows. A layer with effects takes its alpha through the effect passes
+    /// instead, which this does not refuse.
+    pub(crate) fn check_accumulation(&self, p: &Plan<'_>) -> Result<(), Unsupported> {
+        let hard_mix = |pass: &plan::Pass<'_>| pass.flags & plan::F_SHAPELESS != 0 && pass.mode == photocraft_color::BlendMode::HardMix;
+        if self.acc_format == wgpu::TextureFormat::Rgba16Float && p.passes.iter().any(hard_mix) {
+            return Err(Unsupported("Hard Mix with Transparency Shapes Layer off on half-float accumulation (composited on the CPU)".into()));
+        }
+        Ok(())
     }
 
     /// Whether the maps of an effect region are built per page cell (it exceeds the limit).

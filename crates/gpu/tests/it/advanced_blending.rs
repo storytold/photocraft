@@ -362,8 +362,6 @@ fn individually_blended_clipped_layers_without_transparency_shapes_match_the_cpu
         }
         layers.insert(1, c);
         d.layers.extend(layers);
-        let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
-        assert!(st.is_ok(), "planned on the GPU ({blend:?})");
         check(&mut g, &d, &format!("individually clipped, Transparency Shapes Layer off, {blend:?}, fill {fill}, effects {fx}"));
     }
 }
@@ -424,8 +422,9 @@ fn shapeless_special_blends_match_the_cpu() {
                     l.fill_opacity = fill;
                     l.advanced.transparency_shapes = false;
                     if mode == BlendMode::HardMix {
-                        // Hard Mix below 100 % Fill divides by 1 − alpha × Fill: an alpha just under
-                        // 1 turns 8-bit rounding noise into visible differences on either compositor.
+                        // Hard Mix below 100 % Fill divides by 1 − alpha × Fill: on noise, an alpha
+                        // just under 1 turns rounding into visible differences on either compositor.
+                        // `hard_mix_shapeless_near_opaque_matches_the_cpu` pins near-opaque alpha.
                         let (r, ch) = (Rect::new(6, 5, 42, 35), d.pixel_format().channels());
                         let surf = l.surface_mut().unwrap();
                         let mut px = surf.read_region(r);
@@ -453,19 +452,97 @@ fn shapeless_special_blends_match_the_cpu() {
     check(&mut g, &d, "Multiply without transparency shapes");
 }
 
-/// A near-opaque alpha uploads as 1.0 at 16/32 bits, where Hard Mix's Fill formula flips to its
-/// binary branch: such a document stays on the CPU.
+/// Hard Mix without Transparency Shapes Layer around an opaque alpha at 8 bits: where source and
+/// backdrop sit on the threshold (source = 1 − backdrop), an opaque pixel at full Fill takes the
+/// binary branch and gives 1, while any lower alpha (or Fill) divides its way back to the
+/// backdrop. Half-float accumulation leaves the document to the CPU.
+#[test]
+fn hard_mix_shapeless_near_opaque_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    // Mid-range backdrop levels, where neither side of the threshold is near a corner case.
+    let level = |x: i32, y: i32, c: i32| 64 + (x * 7 + y * 13 + c * 31) % 128;
+    let thin = {
+        let mut m = LayerMask::reveal_all();
+        m.surface = Surface::with_default(PixelFormat::GRAY8, &[254.0 / 255.0]);
+        m.density = 0.01;
+        m
+    };
+    let masks = [("none", None), ("near-opaque", Some(thin)), ("noise", Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4)))];
+    for fill in [1.0, 0.5] {
+        for opacity in [1.0, 0.7] {
+            for (mask_name, layer_mask) in &masks {
+                let what = format!("near-opaque Hard Mix, fill {fill}, opacity {opacity}, mask {mask_name}");
+                let mut d = doc(SampleType::U8, false);
+                let r = d.bounds();
+                let pixels = || (r.y0..r.y1).flat_map(move |y| (r.x0..r.x1).map(move |x| (x, y)));
+                let mut bg = Layer::raster("Background", d.pixel_format());
+                bg.locks.transparency = true;
+                bg.locks.position = true;
+                let under: Vec<f32> = pixels().flat_map(|(x, y)| [level(x, y, 0), level(x, y, 1), level(x, y, 2), 255].map(|v| v as f32 / 255.0)).collect();
+                bg.surface_mut().unwrap().write_region(r, &under);
+                d.layers.push(bg);
+                // Alpha cycles 255, 254, 253 along a row. Even rows sit on the threshold; the
+                // others are noise.
+                let mut l = Layer::raster("hard mix", d.pixel_format());
+                let source: Vec<f32> = pixels()
+                    .flat_map(|(x, y)| {
+                        let colour = |c: i32| if y % 2 == 0 { 255 - level(x, y, c) } else { (x * 53 + y * 29 + c * 97) % 256 };
+                        [colour(0), colour(1), colour(2), 255 - x % 3].map(|v| v as f32 / 255.0)
+                    })
+                    .collect();
+                l.surface_mut().unwrap().write_region(r, &source);
+                l.blend = BlendMode::HardMix;
+                l.fill_opacity = fill;
+                l.opacity = opacity;
+                l.advanced.transparency_shapes = false;
+                l.mask = layer_mask.clone();
+                d.layers.push(l);
+                let cpu = photocraft_compose::render(&d, r);
+                for ((x, y), (out, back)) in pixels().zip(cpu.px.iter().zip(under.as_chunks::<4>().0)) {
+                    if y % 2 != 0 {
+                        continue;
+                    }
+                    let moved = out[0] - back[0];
+                    if fill >= 1.0 && x % 3 == 0 {
+                        assert!(moved > 4.0 / 255.0, "{what}: an opaque pixel at ({x},{y}) goes to 1: {moved}");
+                    } else {
+                        assert!(moved.abs() < 1.0 / 255.0, "{what}: the pixel at ({x},{y}) keeps the backdrop: {moved}");
+                    }
+                }
+                check(&mut g, &d, &what);
+                let e = photocraft_gpu::render_to_vec_stats(&mut half, &g.device, &g.queue, &d, r)
+                    .expect_err("half-float accumulation must refuse Hard Mix without transparency shapes");
+                assert!(e.to_string().contains("Hard Mix"), "{what}: {e}");
+                assert!(half.supports(&d).is_err(), "{what}");
+            }
+        }
+    }
+}
+
+/// Half floats can't keep a near-opaque alpha, and Hard Mix's Fill formula divides by
+/// 1 − alpha × Fill: a 16/32-bit document stays on the CPU.
 #[test]
 fn hard_mix_shapeless_at_16_and_32_bits_stays_on_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    for depth in [SampleType::U16, SampleType::F32] {
-        let mut d = doc(depth, true);
-        let mut l = noise_layer("shapeless", d.pixel_format(), Rect::new(6, 5, 42, 35), 3, 0.2);
+    for (depth, near) in [(SampleType::U16, 65534.0 / 65535.0), (SampleType::F32, 0.9999)] {
+        let mut d = doc(depth, false);
+        let mut under = Layer::raster("under", d.pixel_format());
+        under.surface_mut().unwrap().fill_rect(d.bounds(), &[0.25, 0.25, 0.25, 1.0]);
+        // On the threshold: opaque on the left, near-opaque on the right.
+        let mut l = Layer::raster("shapeless", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 24, 40), &[0.75, 0.75, 0.75, 1.0]);
+        l.surface_mut().unwrap().fill_rect(Rect::new(24, 0, 48, 40), &[0.75, 0.75, 0.75, near]);
         l.blend = BlendMode::HardMix;
         l.advanced.transparency_shapes = false;
-        d.layers.push(l);
+        d.layers.extend([under, l]);
+        let cpu = photocraft_compose::render(&d, d.bounds());
+        let (opaque, nearly) = (cpu.px[0][0], cpu.px[47][0]);
+        assert!(opaque - nearly > 0.5, "{depth:?}: opaque {opaque}, near-opaque {nearly}");
         let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
             .expect_err("the GPU must refuse Hard Mix without transparency shapes at 16/32 bits");
+        assert!(e.to_string().contains("Hard Mix"), "{depth:?}: {e}");
+        let e = g.comp.supports(&d).expect_err("supports() agrees");
         assert!(e.to_string().contains("Hard Mix"), "{depth:?}: {e}");
     }
 }
