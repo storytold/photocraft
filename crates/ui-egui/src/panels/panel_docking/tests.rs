@@ -434,28 +434,37 @@ fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
 }
 
 #[test]
-fn actions_panel_rows_can_scroll_inside_the_panel_popup() {
+fn the_short_actions_panel_menu_opens_the_atn_picker() {
+    use std::sync::Arc;
+
     use crate::app::framework::BuildApp;
-    use craft::ui::contract::{Show as _, ShowContainer as _, Trigger};
-    use craft::ui::menu::{Menu, PanelMenu};
+    use craft::behavior::dock::{Group, Workspace};
+    use craft::host::{PickKind, ScriptedFiles};
+    use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    let mut h = Harness::builder().with_size(egui::vec2(600.0, 240.0)).build_app(
-        |ui, app| {
-            let button = craft::ui::buttons::Button::new("Open Actions menu").show(ui);
-            let panel = registry::entry("actions").unwrap();
-            Menu::new("Actions menu").opened_by(&button, Trigger::Click).show(ui, |ui, _| {
-                PanelMenu::new((panel.rows)(app), Vec::new()).show(ui);
-            });
-        },
-        app(),
-    );
+    let files = Arc::new(ScriptedFiles::held());
+    let services = crate::Services { files: Some(files.clone()), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let dock = Node::dock(DockEdge::End, vec![Column::new(vec![Group::new(vec!["actions".to_owned()], 0)])]);
+    app.ui.docking = Arc::new(Workspace::new(Layout::new(Some(dock), Vec::new())));
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 240.0)).build_app(|ui, app| show(app, ui, false), app);
     h.run_steps(3);
-    h.get_by_label("Open Actions menu").click();
+    h.get_by_role_and_label(Role::Button, "Panel Menu").click();
     h.run_steps(4);
     let top = h.get_by_label("New Action…").rect().center();
     h.hover_at(top);
     for _ in 0..12 {
+        if let Some(row) = h.query_by_label("Load Actions…").filter(|row| h.ctx.content_rect().contains(row.rect().center())) {
+            row.click();
+            h.run_steps(4);
+            let requests = files.requests();
+            assert!(
+                matches!(requests.as_slice(), [request] if request.kind == PickKind::OpenMany && request.filters.len() == 1 && request.filters[0].extensions == ["atn"]),
+                "{requests:?}"
+            );
+            return;
+        }
         h.event(egui::Event::MouseWheel {
             source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
@@ -464,9 +473,6 @@ fn actions_panel_rows_can_scroll_inside_the_panel_popup() {
             phase: egui::TouchPhase::Move,
         });
         h.run_steps(3);
-        if h.query_by_label("Load Actions…").is_some_and(|row| h.ctx.content_rect().contains(row.rect().center())) {
-            return;
-        }
     }
     panic!("Load Actions is outside the short window after scrolling");
 }
