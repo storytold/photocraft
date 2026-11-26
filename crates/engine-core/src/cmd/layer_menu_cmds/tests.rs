@@ -858,6 +858,45 @@ fn transfer_effects_moves_or_copies_between_layers() {
 }
 
 #[test]
+fn a_dropped_effect_adds_an_instance_of_a_kind_that_allows_several() {
+    let mut s = session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let a = active(&s).id;
+    s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.layerStyle.satin", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let b = active(&s).id;
+    s.execute("layer.layerStyle.colorOverlay", json!({"color": "#0000ff"})).unwrap();
+    s.execute("layer.layerStyle.satin", json!({"color": "#0000ff"})).unwrap();
+    let effects = |s: &Session, id| s.active().unwrap().doc.layer(id).unwrap().effects.items.clone();
+    let (src, before) = (effects(&s, a), effects(&s, b));
+
+    // Alt-drag of A's Color Overlay row: B keeps its own overlay and gains A's (#16909).
+    s.execute("layer.layerStyle.transferEffects", json!({"from": a.0, "to": b.0, "effect": 0, "copy": true})).unwrap();
+    assert_eq!(effects(&s, b), [before.clone(), vec![src[0].clone()]].concat());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(effects(&s, b), before);
+
+    // A kind a layer has one of (Satin) still replaces the target's.
+    s.execute("layer.layerStyle.transferEffects", json!({"from": a.0, "to": b.0, "effect": 1, "copy": true})).unwrap();
+    assert_eq!(effects(&s, b), [before[0].clone(), src[1].clone()]);
+
+    // A layer with the most strokes refuses another, and nothing changes.
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    s.execute("layer.layerStyle.stroke", json!({})).unwrap();
+    for _ in 1..crate::layer_style::MAX_STROKES {
+        s.execute("layer.layerStyle.stroke", json!({"add": true})).unwrap();
+    }
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.layerStyle.stroke", json!({})).unwrap();
+    let full = effects(&s, b);
+    let steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("layer.layerStyle.transferEffects", json!({"from": a.0, "to": b.0, "effect": 2, "copy": true})).is_err());
+    assert_eq!(effects(&s, b), full);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
 fn applying_a_feathered_mask_preserves_its_soft_composite() {
     for depth in DEPTHS {
         let mut s = session(depth, "rgb");
