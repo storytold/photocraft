@@ -366,8 +366,6 @@ mod tests {
                 }
                 dispatch(state.handle(19, [(0, 10.0)]));
                 dispatch(state.handle(99, [(2, value)]));
-                let pressure = h.state().stylus.pressure();
-                assert!((f64::from(pressure) - value / 65536.0).abs() < 1e-6);
                 let x = 10.0 + index as f64 * 40.0;
                 let pos = at(&h, x);
                 h.event(egui::Event::PointerMoved(pos));
@@ -376,23 +374,34 @@ mod tests {
                     h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
                     h.run_steps(1);
                 }
+                let pressure = h.state().stylus.pressure();
+                assert!((f64::from(pressure) - value / 65536.0).abs() < 1e-6);
             }
             dispatch(state.handle(19, [(2, 0.0)]));
             dispatch(state.handle(19, []));
-            assert_eq!(h.state().stylus.pressure(), 0.0, "a lift is not mouse pressure");
             let pos = at(&h, 90.0);
             h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
             h.run_steps(4);
+            assert_eq!(h.state().stylus.pressure(), 0.0, "a lift is not mouse pressure");
             let app = h.state_mut();
             let (_, stroke) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").unwrap();
             for (index, value) in raw.into_iter().enumerate() {
                 assert_eq!(stroke["points"][index][2], json!((value / 65536.0) as f32 as f64));
             }
             dispatch(state.handle(12, [(0, 1.0)]));
-            assert_eq!(app.stylus.pressure(), 1.0, "a genuine mouse remains full strength");
-            app.stylus.use_pressure = false;
+            let pos = at(&h, 10.0);
+            h.event(egui::Event::PointerMoved(pos));
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+            assert_eq!(h.state().stylus.pressure(), 1.0, "a genuine mouse remains full strength");
+            h.state_mut().session.execute("prefs.set", json!({"path": "tools.useTabletPressure", "value": false})).unwrap();
             dispatch(state.handle(19, [(2, 53107.0)]));
-            assert_eq!(app.stylus.pressure(), 1.0, "the preference still disables pressure");
+            let pos = at(&h, 50.0);
+            h.event(egui::Event::PointerMoved(pos));
+            h.run_steps(1);
+            assert_eq!(h.state().stylus.pressure(), 1.0, "the preference still disables pressure");
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
         }
     }
 
