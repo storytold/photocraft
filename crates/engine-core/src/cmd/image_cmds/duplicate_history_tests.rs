@@ -9,7 +9,13 @@ fn layered_source(depth: u32) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "oracle", "background": "white", "depth": depth})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.edit("fill", |doc, _| {
+        let bounds = doc.bounds();
+        let surface = doc.layers.last_mut().unwrap().surface_mut().unwrap();
+        surface.fill_rect(bounds, &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
     s
 }
 
