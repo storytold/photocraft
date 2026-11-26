@@ -111,7 +111,7 @@ fn style_queries_validate_explicit_targets_without_a_selection() {
 }
 
 #[test]
-fn background_refusal_preserves_a_pending_floating_selection() {
+fn refused_style_targets_preserve_a_pending_floating_selection() {
     for background in [false, true] {
         for (id, mut params) in style_commands() {
             let mut s = white_document();
@@ -121,21 +121,27 @@ fn background_refusal_preserves_a_pending_floating_selection() {
             s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
             s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
             s.execute("select.float", json!({"dx": 3, "dy": 0})).unwrap();
-            params["layer"] = json!(bg);
             let st = s.active().unwrap();
             let before = Arc::clone(&st.doc);
             let revision = st.revision;
             let history = st.history.entries();
             let parts = Arc::clone(&crate::float_cmds::floating(st).unwrap().parts);
-            let result = if background { s.start(&id, params.clone()).map(|_| ()) } else { s.execute(&id, params.clone()).map(|_| ()) };
-            assert!(matches!(result, Err(EngineError::Disabled(_, why)) if why.contains("Background")), "{id}");
-            let st = s.active().unwrap();
-            assert!(Arc::ptr_eq(&before, &st.doc), "{id}: background={background}");
-            assert_eq!(st.revision, revision);
-            assert_eq!(st.history.entries(), history);
-            let floating = crate::float_cmds::floating(st).unwrap();
-            assert_eq!(floating.offset, (3, 0));
-            assert!(Arc::ptr_eq(&parts, &floating.parts));
+            for target in [bg, u64::MAX] {
+                params["layer"] = json!(target);
+                let result = if background { s.start(&id, params.clone()).map(|_| ()) } else { s.execute(&id, params.clone()).map(|_| ()) };
+                if target == bg {
+                    assert!(matches!(result, Err(EngineError::Disabled(_, why)) if why.contains("Background")), "{id}");
+                } else {
+                    assert!(matches!(result, Err(EngineError::UnknownLayer { id: missing, .. }) if missing.0 == target), "{id}");
+                }
+                let st = s.active().unwrap();
+                assert!(Arc::ptr_eq(&before, &st.doc), "{id}: target={target}, background={background}");
+                assert_eq!(st.revision, revision);
+                assert_eq!(st.history.entries(), history);
+                let floating = crate::float_cmds::floating(st).unwrap();
+                assert_eq!(floating.offset, (3, 0));
+                assert!(Arc::ptr_eq(&parts, &floating.parts));
+            }
             params["layer"] = json!(paint);
             s.execute(&id, params).unwrap();
             let st = s.active().unwrap();
