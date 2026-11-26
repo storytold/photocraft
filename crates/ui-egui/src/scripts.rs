@@ -34,12 +34,26 @@ pub struct ScriptStart {
 
 /// A dialog a run waits at. Its arguments are the script's, as text: `[message, title]` for
 /// an alert, `[message, noAsDefault, title]` for a confirmation, `[message, default, title]` for
-/// a prompt, each but the message optional.
+/// a prompt, each but the message optional. A file picker's are `{"prompt", "filter",
+/// "multiple"}` (only those its kind takes), and its answer is a path, a list of paths, or `null`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptDialog {
     Alert,
     Confirm,
     Prompt,
+    /// `File.openDialog`: one file, or several with `multiple`.
+    OpenFile,
+    /// `File.saveDialog`.
+    SaveFile,
+    /// `Folder.selectDialog`.
+    SelectFolder,
+}
+
+impl ScriptDialog {
+    /// Whether it is a file picker: the app's file dialog, not one on the dialog stack.
+    fn picker(self) -> bool {
+        matches!(self, Self::OpenFile | Self::SaveFile | Self::SelectFolder)
+    }
 }
 
 /// What a run needs from the interface.
@@ -74,16 +88,75 @@ pub(crate) const NO_SCRIPTS: &str = "This build of PhotoCraft can't run JavaScri
 /// Where a run's commands go: the app's own command path ([`PhotocraftApp::run`]), with its
 /// authorization and handling, never a bare session.
 pub trait ScriptCommands {
-    /// Run session command `id`.
+    /// Run session command `id`. A command naming its document ([`ON_DOCUMENT`]) runs on that
+    /// document, made active in the same call.
     ///
     /// # Errors
     /// The command's error, for the script.
     fn execute(&mut self, id: &str, params: Value) -> Result<Value, String>;
 }
 
-/// Time one run may take of the app for its commands, whose memory and time are the app's (the
-/// script's own time is bounded by its host, which also caps how many commands it asks for).
+/// The parameter a script command names its document by: the document's serial. The same
+/// name as `photocraft_script_js::commands::ON_DOCUMENT` (the desktop app checks they match).
+pub const ON_DOCUMENT: &str = "onDocument";
+
+/// What one run may do through the app. The script's own time is bounded by its host, which
+/// also caps how many commands it asks for; this bounds the work it asks the app for, whose
+/// memory and time are the app's.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct RunBudget {
+    layers: u32,
+    documents: u32,
+    app_time: Duration,
+}
+
+/// Layers one run may make.
+const MAX_RUN_LAYERS: u32 = 10_000;
+/// Documents one run may make.
+const MAX_RUN_DOCUMENTS: u32 = 64;
+/// Time one run may take of the app for its commands.
 const MAX_RUN_APP_TIME: Duration = Duration::from_secs(30 * 60);
+
+impl RunBudget {
+    /// Whether the run may still have the app run command `id` at all: app time left. Deleting
+    /// a layer is let through without it, so a script's cleanup of a copy it couldn't place
+    /// (`duplicate` of a group into itself) never leaves the copy behind; it makes nothing.
+    fn open(&self, id: &str) -> Result<(), String> {
+        if self.app_time >= MAX_RUN_APP_TIME && id != "layer.delete" {
+            return Err(tl!("The script has used all the time PhotoCraft gives a script's commands.").into());
+        }
+        Ok(())
+    }
+
+    /// Charge command `id`, which makes `copies` layers when it duplicates them (a group with
+    /// everything in it, or a whole document), or say why the run may not run it.
+    fn charge(&mut self, id: &str, params: &Value, copies: u32) -> Result<(), String> {
+        self.open(id)?;
+        let layers = match id {
+            "layer.new.layer" | "layer.new.group" | "type.create" => 1,
+            "layer.duplicate" => copies.max(1),
+            // A move with `copy` duplicates the layer where it goes.
+            "layer.moveTo" if copying(params) => copies.max(1),
+            "image.duplicate" => copies,
+            _ => 0,
+        };
+        let document = matches!(id, "file.new" | "image.duplicate");
+        if layers > 0 && self.layers.saturating_add(layers) > MAX_RUN_LAYERS {
+            return Err(crate::i18n::fmt(tl!("A script can make at most {count} layers."), &[("count", &MAX_RUN_LAYERS.to_string())]));
+        }
+        if document && self.documents >= MAX_RUN_DOCUMENTS {
+            return Err(crate::i18n::fmt(tl!("A script can make at most {count} documents."), &[("count", &MAX_RUN_DOCUMENTS.to_string())]));
+        }
+        self.layers = self.layers.saturating_add(layers);
+        self.documents = self.documents.saturating_add(u32::from(document));
+        Ok(())
+    }
+}
+
+/// Whether `layer.moveTo` params copy the layer rather than move it.
+fn copying(params: &Value) -> bool {
+    params.get("copy").and_then(Value::as_bool) == Some(true)
+}
 
 /// The engine's command gate a run was started under, if any.
 type Gate = Option<crate::services::AutomationAuthorizeFn>;
@@ -95,22 +168,65 @@ struct AppCommands<'a> {
     app: &'a mut PhotocraftApp,
     automation: bool,
     gate: Gate,
-    /// The app's time the run's commands have taken so far.
-    app_time: &'a mut Duration,
+    /// What the run's commands have taken of the app so far.
+    budget: &'a mut RunBudget,
+}
+
+impl AppCommands<'_> {
+    /// The layers command `id` copies in the document with serial `target` (or the active one):
+    /// `layer.duplicate`'s layer and all it holds (and a copying `layer.moveTo`'s), every layer
+    /// for `image.duplicate` (one when merged).
+    fn copies(&self, id: &str, target: Option<u64>, params: &Value) -> u32 {
+        fn count(l: &photocraft_doc::Layer) -> u32 {
+            1u32.saturating_add(l.children().map_or(0, |ch| ch.iter().map(count).fold(0, u32::saturating_add)))
+        }
+        let session = &self.app.session;
+        let doc = match target {
+            Some(serial) => session.documents().iter().map(|d| &**d).find(|d| d.serial == serial),
+            None => session.active(),
+        };
+        match id {
+            // A move that copies nothing makes no layers: nothing to count.
+            "layer.moveTo" if !copying(params) => 0,
+            "layer.duplicate" | "layer.moveTo" => {
+                let layer = params["layer"].as_u64().map(photocraft_doc::LayerId);
+                doc.zip(layer).and_then(|(d, id)| d.doc.layer(id)).map_or(1, count)
+            }
+            // A merged duplicate is one layer.
+            "image.duplicate" if params["mergedOnly"].as_bool() == Some(true) => 1,
+            "image.duplicate" => doc.map_or(0, |d| d.doc.layers.iter().map(count).fold(0, u32::saturating_add)),
+            _ => 0,
+        }
+    }
 }
 
 impl ScriptCommands for AppCommands<'_> {
-    fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        if *self.app_time >= MAX_RUN_APP_TIME {
-            return Err(tl!("The script has used all the time PhotoCraft gives a script's commands.").into());
-        }
+    fn execute(&mut self, id: &str, mut params: Value) -> Result<Value, String> {
+        let target = params.as_object_mut().and_then(|m| m.remove(ON_DOCUMENT)).and_then(|v| v.as_u64());
+        // Counting the copies walks the layers: checked first, and its time is the app's too.
+        self.budget.open(id)?;
+        let started = web_time::Instant::now();
+        let copies = self.copies(id, target, &params);
+        self.budget.app_time += started.elapsed();
+        self.budget.charge(id, &params, copies)?;
         let started = web_time::Instant::now();
         let was = std::mem::replace(&mut self.app.automation_input, self.automation);
         let was_programmatic = std::mem::replace(&mut self.app.programmatic_playback, true);
         let was_gate = std::mem::replace(&mut self.app.session.authorize, self.gate);
         // A command that panics leaves the app's input provenance as it was, too: the panic goes
         // on to the run's guard once it is put back.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.app.run(id, params)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(serial) = target
+                && !self.app.session.active().is_some_and(|d| d.serial == serial)
+            {
+                if !self.app.session.documents().iter().any(|d| d.serial == serial) {
+                    return Err(tl!("The document is no longer open.").to_owned());
+                }
+                // Refused for another reason (automation's policy): that reason, not a closed document.
+                self.app.run("document.activate", json!({ "serial": serial }))?;
+            }
+            self.app.run(id, params)
+        }));
         self.app.automation_input = was;
         self.app.programmatic_playback = was_programmatic;
         self.app.session.authorize = was_gate;
@@ -118,7 +234,7 @@ impl ScriptCommands for AppCommands<'_> {
             Ok(result) => result,
             Err(panic) => std::panic::resume_unwind(panic),
         };
-        *self.app_time += started.elapsed();
+        self.budget.app_time += started.elapsed();
         result
     }
 }
@@ -159,8 +275,8 @@ struct Active {
     /// The engine's gate it was started under (the control channel's, an agent's): its commands
     /// run under it.
     gate: Gate,
-    /// The app's time its commands have taken.
-    app_time: Duration,
+    /// What its commands have taken of the app.
+    budget: RunBudget,
     started_ms: f64,
     /// It has written a line: the output window opened for it.
     wrote: bool,
@@ -169,7 +285,10 @@ struct Active {
 #[derive(Clone, Copy)]
 struct Open {
     kind: ScriptDialog,
-    id: DialogId,
+    /// Its place on the dialog stack; `None` for a file picker.
+    id: Option<DialogId>,
+    /// Numbers it among every script dialog: a picker's late answer names the one it is for.
+    token: u64,
 }
 
 impl Runtime {
@@ -216,7 +335,7 @@ pub(crate) fn start(app: &mut PhotocraftApp, start: ScriptStart) -> Result<Value
         dialog: None,
         automation,
         gate,
-        app_time: Duration::ZERO,
+        budget: RunBudget::default(),
         started_ms: crate::gpu_canvas::now_ms(),
         wrote: false,
     });
@@ -377,7 +496,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (automation, gate) = (active.automation, active.gate);
     app.scripts.pumping = true;
     let pumped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        active.run.pump(&mut AppCommands { app: &mut *app, automation, gate, app_time: &mut active.app_time }, PUMP_BUDGET)
+        active.run.pump(&mut AppCommands { app: &mut *app, automation, gate, budget: &mut active.budget }, PUMP_BUDGET)
     }));
     app.scripts.pumping = false;
     let events = match pumped {
@@ -439,12 +558,13 @@ fn held(app: &PhotocraftApp) -> bool {
 fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: Result<(), String>) {
     let Some(active) = app.scripts.run.take() else { return };
     // A run that ended at its dialog takes the dialog with it.
-    if let Some(open) = active.dialog {
-        app.framework.dialogs.cancel_by_id(ctx, open.id);
+    // A picker's late answer finds no run, and is nobody's.
+    if let Some(Open { kind, id: Some(id), .. }) = active.dialog {
+        app.framework.dialogs.cancel_by_id(ctx, id);
         // An alert's or a confirmation's result is kept by its instance, and nothing else takes
         // it; a prompt's goes to its family, which finds no run to answer.
-        if open.kind != ScriptDialog::Prompt {
-            let _ = app.framework.dialogs.take_by_id::<StandardPrompt>(open.id);
+        if kind != ScriptDialog::Prompt {
+            let _ = app.framework.dialogs.take_by_id::<StandardPrompt>(id);
         }
     }
     match &result {
@@ -466,8 +586,13 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: Result<(), Strin
 
 /// Answer the dialog the run waits at, when `id` is that dialog.
 fn answer(app: &mut PhotocraftApp, id: DialogId, value: Value) {
+    reply(app, |open| open.id == Some(id), value);
+}
+
+/// Answer the dialog the run waits at, when `is` says it is the one answered.
+fn reply(app: &mut PhotocraftApp, is: impl Fn(&Open) -> bool, value: Value) {
     let Some(a) = app.scripts.run.as_mut() else { return };
-    if a.dialog.is_none_or(|open| open.id != id) {
+    if a.dialog.as_ref().is_none_or(|open| !is(open)) {
         return;
     }
     a.dialog = None;
@@ -503,7 +628,7 @@ fn prompt_footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, act
 /// End the run waiting at dialog `id`, without answering it.
 fn stop_at(app: &mut PhotocraftApp, id: DialogId) {
     if let Some(a) = app.scripts.run.as_mut()
-        && a.dialog.is_some_and(|open| open.id == id)
+        && a.dialog.is_some_and(|open| open.id == Some(id))
     {
         a.dialog = None;
         a.run.cancel();
@@ -541,7 +666,14 @@ fn open_dialog(app: &mut PhotocraftApp, kind: ScriptDialog, args: &Value) {
     let Some(name) = app.scripts.run.as_ref().map(|a| a.name.clone()) else { return };
     let arg = |i: usize| args.get(i).and_then(Value::as_str).unwrap_or_default().to_owned();
     app.scripts.dialogs += 1;
-    let instance = ("script-dialog", app.scripts.dialogs);
+    let token = app.scripts.dialogs;
+    if kind.picker() {
+        if let Some(a) = app.scripts.run.as_mut() {
+            a.dialog = Some(Open { kind, id: None, token });
+        }
+        return ask_picker(app, token, kind, args);
+    }
+    let instance = ("script-dialog", token);
     let id = match kind {
         ScriptDialog::Alert => {
             // Escape is OK, as before Stop Script was offered: stopping is asked for by name.
@@ -574,33 +706,107 @@ fn open_dialog(app: &mut PhotocraftApp, kind: ScriptDialog, args: &Value) {
                     .extra_buttons(vec![(STOP_ACTION.to_owned(), FooterButton::new(tl!(STOP_SCRIPT).to_string(), DialogRole::Other))])
             })
         }
+        ScriptDialog::OpenFile | ScriptDialog::SaveFile | ScriptDialog::SelectFolder => return,
     };
     if let Some(a) = app.scripts.run.as_mut() {
-        a.dialog = Some(Open { kind, id });
+        a.dialog = Some(Open { kind, id: Some(id), token });
+    }
+}
+
+/// The extensions a script's `filter` names (`"*.jpg;*.png"`, `"Images:*.jpg,*.tif"`), or `None`
+/// for every file: no filter, one that names none, or one that allows any (`*.*`).
+fn filter_extensions(filter: Option<&str>) -> Option<Vec<String>> {
+    let filter = filter?;
+    let mut out: Vec<String> = Vec::new();
+    for part in filter.split([',', ';', ':', ' ']) {
+        let Some(ext) = part.trim().strip_prefix("*.") else { continue };
+        if ext.is_empty() || ext == "*" {
+            return None;
+        }
+        if ext.chars().all(|c| c.is_ascii_alphanumeric()) && !out.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+            out.push(ext.to_ascii_lowercase());
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The file picker a script's `kind` of picker asks for, with its `filter` (Open and Save File)
+/// as the file types offered: every file without one. The script's prompt is the picker's
+/// title, where the platform shows one.
+fn picker_request(kind: ScriptDialog, args: &Value) -> PickRequest {
+    let multiple = args.get("multiple").and_then(Value::as_bool).unwrap_or(false);
+    let request = match kind {
+        ScriptDialog::OpenFile if multiple => PickRequest::open_many("script"),
+        ScriptDialog::OpenFile => PickRequest::open("script"),
+        ScriptDialog::SaveFile => PickRequest::save("script").file_name(tl!("Untitled")),
+        _ => PickRequest::folder("script"),
+    };
+    let request = match args.get("prompt").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+        Some(prompt) => request.title(prompt),
+        None => request,
+    };
+    if !matches!(kind, ScriptDialog::OpenFile | ScriptDialog::SaveFile) {
+        return request;
+    }
+    match filter_extensions(args.get("filter").and_then(Value::as_str)) {
+        Some(exts) => request.filter(tl!("Files"), &exts.iter().map(String::as_str).collect::<Vec<_>>()),
+        None => request,
+    }
+}
+
+/// Show the app's file dialog for picker `token`, and answer the run with what the user chose.
+fn ask_picker(app: &mut PhotocraftApp, token: u64, kind: ScriptDialog, args: &Value) {
+    let multiple = args.get("multiple").and_then(Value::as_bool).unwrap_or(false);
+    let request = picker_request(kind, args);
+    let request = if kind == ScriptDialog::SaveFile { request } else { in_last_dir(app, request) };
+    let asked = app.ask_file_answer(request, move |app, chosen| {
+        let text = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+        let value = match chosen {
+            Picked::Paths(paths) if multiple => json!(paths.into_iter().map(text).collect::<Vec<_>>()),
+            Picked::Paths(paths) => json!(paths.into_iter().next().map(text)),
+            // Save File's answer: the file chosen (on the web, its name).
+            Picked::Saved { path, .. } => json!(text(path)),
+            // The web gives a file's name and contents, not a path: the script gets the name.
+            Picked::Contents(files) if multiple => json!(files.into_iter().map(|(n, _)| n).collect::<Vec<_>>()),
+            Picked::Contents(files) => json!(files.into_iter().next().map(|(n, _)| n)),
+            Picked::Unavailable(why) | Picked::Failed(why) => {
+                app.ui.status = why;
+                app.ui.status_error = true;
+                Value::Null
+            }
+            Picked::Cancelled | Picked::Downloaded(_) => Value::Null,
+        };
+        // The run was stopped meanwhile (and maybe another started): then the answer is nobody's.
+        reply(app, |open| open.token == token, value);
+        Ok(Value::Null)
+    });
+    if asked.is_err() {
+        // No file dialog here, or another is open: the script sees a cancelled picker.
+        reply(app, |open| open.token == token, Value::Null);
     }
 }
 
 /// The dialog the run waits at, if any.
 pub(crate) fn waits_at(app: &PhotocraftApp) -> Option<DialogId> {
-    app.scripts.run.as_ref().and_then(|a| a.dialog).map(|open| open.id)
+    app.scripts.run.as_ref().and_then(|a| a.dialog).and_then(|open| open.id)
 }
 
 /// A `TAKERS` row: the answer of an alert or a confirmation the run waits at (a prompt's comes
 /// through [`PROMPT_FAMILY`]). A dialog closed from outside answers as Escape would.
 pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
-    let Some(open) = app.scripts.run.as_ref().and_then(|a| a.dialog) else { return };
-    if open.kind == ScriptDialog::Prompt {
+    let Some(Open { kind, id: Some(id), .. }) = app.scripts.run.as_ref().and_then(|a| a.dialog) else { return };
+    if kind == ScriptDialog::Prompt {
         return;
     }
-    let yes = match app.framework.dialogs.take_by_id::<StandardPrompt>(open.id) {
-        Some(DialogResult::Ok(answer)) if answer.choice == PromptChoice::Alternate => return stop_at(app, open.id),
+    let yes = match app.framework.dialogs.take_by_id::<StandardPrompt>(id) {
+        Some(DialogResult::Ok(answer)) if answer.choice == PromptChoice::Alternate => return stop_at(app, id),
         Some(DialogResult::Ok(answer)) => answer.choice == PromptChoice::Proceed,
         Some(_) => false,
-        None if app.framework.dialogs.stack().ids().any(|id| id == open.id) => return,
+        None if app.framework.dialogs.stack().ids().any(|d| d == id) => return,
         None => false,
     };
-    let value = if open.kind == ScriptDialog::Confirm { Value::Bool(yes) } else { Value::Null };
-    answer(app, open.id, value);
+    let value = if kind == ScriptDialog::Confirm { Value::Bool(yes) } else { Value::Null };
+    answer(app, id, value);
 }
 
 // ---------- drawing ----------

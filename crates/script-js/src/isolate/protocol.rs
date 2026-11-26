@@ -70,6 +70,9 @@ pub enum DialogKind {
     Alert,
     Confirm,
     Prompt,
+    OpenFile,
+    SaveFile,
+    SelectFolder,
 }
 
 impl From<ModalKind> for DialogKind {
@@ -78,6 +81,9 @@ impl From<ModalKind> for DialogKind {
             ModalKind::Alert => Self::Alert,
             ModalKind::Confirm => Self::Confirm,
             ModalKind::Prompt => Self::Prompt,
+            ModalKind::OpenFile => Self::OpenFile,
+            ModalKind::SaveFile => Self::SaveFile,
+            ModalKind::SelectFolder => Self::SelectFolder,
         }
     }
 }
@@ -88,6 +94,9 @@ impl From<DialogKind> for ModalKind {
             DialogKind::Alert => Self::Alert,
             DialogKind::Confirm => Self::Confirm,
             DialogKind::Prompt => Self::Prompt,
+            DialogKind::OpenFile => Self::OpenFile,
+            DialogKind::SaveFile => Self::SaveFile,
+            DialogKind::SelectFolder => Self::SelectFolder,
         }
     }
 }
@@ -301,6 +310,25 @@ pub fn check_dialog_args(kind: DialogKind, args: &Value) -> Result<(), String> {
             }
             Ok(())
         }
+        // An object of exactly the keys the script globals set: text (or `null`) for the
+        // prompt and filter, a flag for several files, and only where that kind takes them.
+        DialogKind::OpenFile | DialogKind::SaveFile | DialogKind::SelectFolder => {
+            let Value::Object(m) = args else { return Err("file dialog arguments that are not an object".into()) };
+            for (key, v) in m {
+                let allowed = match key.as_str() {
+                    "prompt" => true,
+                    "filter" => kind != DialogKind::SelectFolder,
+                    "multiple" => kind == DialogKind::OpenFile,
+                    _ => false,
+                };
+                match (allowed, key.as_str(), v) {
+                    (true, "prompt" | "filter", Value::String(t)) => check_text(t).map_err(|e| format!("file dialog {key} {e}"))?,
+                    (true, "prompt" | "filter", Value::Null) | (true, "multiple", Value::Bool(_)) => {}
+                    _ => return Err(format!("unexpected file dialog argument {key}")),
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -366,6 +394,35 @@ mod tests {
         ] {
             let shown = args.to_string();
             assert!(check_dialog_args(DialogKind::Alert, &args).is_err(), "{}", cut(&shown, 80));
+        }
+    }
+
+    /// A file picker's arguments are exactly what the script globals send for its kind.
+    #[test]
+    fn file_dialog_arguments_are_the_keys_their_kind_takes() {
+        use DialogKind::{OpenFile, SaveFile, SelectFolder};
+        let ok = [
+            (OpenFile, json!({"prompt": "Open", "filter": "*.jpg", "multiple": true})),
+            (OpenFile, json!({"prompt": null, "filter": null})),
+            (SaveFile, json!({"prompt": "Save", "filter": "*.png"})),
+            (SelectFolder, json!({"prompt": "Where?"})),
+            (SelectFolder, json!({})),
+        ];
+        for (kind, args) in ok {
+            assert_eq!(check_dialog_args(kind, &args), Ok(()), "{kind:?} {args}");
+        }
+        let bad = [
+            (OpenFile, json!(["Open"])),
+            (OpenFile, json!({"multiple": "yes"})),
+            (OpenFile, json!({"path": "/etc/passwd"})),
+            (SaveFile, json!({"multiple": true})),
+            (SelectFolder, json!({"filter": "*.jpg"})),
+            (SelectFolder, json!({"prompt": 1})),
+            (SaveFile, json!({"prompt": "x".repeat(MAX_TEXT_UNITS + 1)})),
+        ];
+        for (kind, args) in bad {
+            let shown = args.to_string();
+            assert!(check_dialog_args(kind, &args).is_err(), "{kind:?} {}", cut(&shown, 80));
         }
     }
 

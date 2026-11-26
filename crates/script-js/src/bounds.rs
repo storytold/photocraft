@@ -41,6 +41,21 @@ impl Bounds {
             None => Ok(()),
         }
     }
+
+    /// Whether `calls` more host calls fit, before calls that must not be split: the first is
+    /// not made when a later one would cross the bound.
+    ///
+    /// # Errors
+    /// The named error of the call bound, or of the bound already crossed.
+    pub fn room_for(&self, calls: usize) -> Result<(), String> {
+        if let Some(m) = &self.overflow {
+            return Err(m.clone());
+        }
+        if self.calls.saturating_add(calls) > MAX_CALLS {
+            return Err(format!("The script was stopped: it made more than {MAX_CALLS} host calls (output lines, dialogs and commands)."));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

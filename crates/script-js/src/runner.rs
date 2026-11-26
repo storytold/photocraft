@@ -55,6 +55,13 @@ pub enum ModalKind {
     Confirm,
     /// `prompt(message, preset, title)`.
     Prompt,
+    /// `File.openDialog(prompt, filter, multiSelect)`: `{"prompt", "filter", "multiple"}`;
+    /// the answer is a path, a list of paths, or `null`.
+    OpenFile,
+    /// `File.saveDialog(prompt, filter)`: `{"prompt", "filter"}`; the answer is a path or `null`.
+    SaveFile,
+    /// `Folder.selectDialog(prompt)`: `{"prompt"}`; the answer is a path or `null`.
+    SelectFolder,
 }
 
 /// A dialog the UI must answer before the run can continue.

@@ -137,7 +137,7 @@ fn settle(app: &mut PhotocraftApp) {
 
 /// The dialog the run waits at.
 fn open_id(app: &PhotocraftApp) -> DialogId {
-    app.scripts.run.as_ref().and_then(|a| a.dialog).expect("the run waits at a dialog").id
+    app.scripts.run.as_ref().and_then(|a| a.dialog).and_then(|d| d.id).expect("the run waits at a dialog on the stack")
 }
 
 /// A control-channel request, answered at once.
@@ -458,6 +458,26 @@ fn escape_on_a_scripts_alert_answers_it() {
     assert_eq!(log.cancels.get(), 0);
 }
 
+/// A script's file pickers open the app's file dialog; the run gets the path chosen, the paths
+/// of several, or `null` for a cancel.
+#[test]
+fn a_scripts_file_picker_answers_with_what_the_user_chose() {
+    let cases = [
+        (ScriptDialog::SaveFile, json!({"prompt": "Save"}), Picked::Saved { path: "/tmp/out.png".into(), file_type: None }, json!("/tmp/out.png")),
+        (ScriptDialog::OpenFile, json!({"multiple": true}), Picked::Paths(vec!["/tmp/a.jpg".into(), "/tmp/b.jpg".into()]), json!(["/tmp/a.jpg", "/tmp/b.jpg"])),
+        (ScriptDialog::SelectFolder, json!({}), Picked::Paths(vec!["/tmp".into()]), json!("/tmp")),
+        (ScriptDialog::OpenFile, json!({}), Picked::Cancelled, Value::Null),
+    ];
+    for (kind, args, picked, want) in cases {
+        let log = Log::default();
+        let mut h = harness(vec![vec![dialog(kind, args)]], &log, vec![picked]);
+        start_named(h.state_mut(), "pick.jsx");
+        h.run_steps(6);
+        assert_eq!(*log.answers.borrow(), std::slice::from_ref(&want), "{kind:?}");
+        assert!(!h.state().scripts.running(), "{kind:?}");
+    }
+}
+
 /// `file.scripts.run` starts a run however it is reached: the menu, or `engine.execute`'s path
 /// through the app; so does `file.scripts.browse` of a `.jsx`, and one PhotoCraft can't run is
 /// refused with its reason. Without a script service it says no script can run.
@@ -603,4 +623,112 @@ fn a_run_that_panics_while_pumping_leaves_scripts_usable() {
     assert!(!app.scripts.running());
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert!(app.ui.status.contains("next.jsx"), "{}", app.ui.status);
+}
+
+/// [`AppCommands`] for a run the user started: no gate, the app's input provenance.
+fn commands<'a>(app: &'a mut PhotocraftApp, budget: &'a mut RunBudget) -> AppCommands<'a> {
+    AppCommands { app, automation: false, gate: None, budget }
+}
+
+/// A command naming its document runs there, whichever document is active when it arrives.
+#[test]
+fn a_command_naming_its_document_runs_on_that_document() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16, "name": "First"})).unwrap();
+    let first = app.session.active().unwrap().serial;
+    app.run("file.new", json!({"width": 16, "height": 16, "name": "Second"})).unwrap();
+    let mut budget = RunBudget::default();
+    commands(&mut app, &mut budget).execute("layer.new.layer", json!({"name": "There", ON_DOCUMENT: first})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.name, "First");
+    assert_eq!(layer_names(&app)[0], "There");
+    let gone = commands(&mut app, &mut budget).execute("layer.new.layer", json!({ON_DOCUMENT: 9999})).unwrap_err();
+    assert!(gone.contains("no longer open"), "{gone}");
+}
+
+/// A document the policy won't switch to is refused with the policy's reason.
+#[test]
+fn a_refused_switch_to_the_target_document_keeps_its_reason() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16, "name": "First"})).unwrap();
+    let first = app.session.active().unwrap().serial;
+    app.run("file.new", json!({"width": 16, "height": 16, "name": "Second"})).unwrap();
+    app.services.automation_command = Some(Box::new(|id, _| if id == "document.activate" { Err("no switching".into()) } else { Ok(()) }));
+    let mut budget = RunBudget::default();
+    let mut commands = AppCommands { app: &mut app, automation: true, gate: None, budget: &mut budget };
+    let err = commands.execute("layer.new.layer", json!({ON_DOCUMENT: first})).unwrap_err();
+    assert!(err.contains("no switching"), "{err}");
+}
+
+/// The work a run asks of the app is bounded, whatever the script's own time.
+#[test]
+fn a_runs_work_in_the_app_is_bounded() {
+    let mut budget = RunBudget { layers: MAX_RUN_LAYERS - 1, documents: MAX_RUN_DOCUMENTS, ..RunBudget::default() };
+    assert_eq!(budget.charge("layer.new.layer", &Value::Null, 0), Ok(()));
+    assert!(budget.charge("layer.duplicate", &Value::Null, 1).unwrap_err().contains("layers"));
+    assert!(budget.charge("file.new", &Value::Null, 0).unwrap_err().contains("documents"));
+    assert_eq!(budget.charge("layer.setProps", &Value::Null, 0), Ok(()), "other commands still run");
+    budget.app_time = MAX_RUN_APP_TIME;
+    assert!(budget.charge("layer.setProps", &Value::Null, 0).is_err());
+    // Deleting a layer makes nothing, and cleans up a copy a script couldn't place.
+    assert_eq!(budget.charge("layer.delete", &Value::Null, 0), Ok(()));
+}
+
+/// Duplicating a group or a document copies everything in it, and the run pays for each copy.
+#[test]
+fn duplicating_a_group_counts_every_layer_it_copies() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let group = app.run("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    for name in ["a", "b"] {
+        app.run("layer.new.layer", json!({"name": name, "group": group})).unwrap();
+    }
+    let serial = app.session.active().unwrap().serial;
+    let mut budget = RunBudget { layers: MAX_RUN_LAYERS - 2, ..RunBudget::default() };
+    let mut commands = commands(&mut app, &mut budget);
+    assert_eq!(commands.copies("layer.duplicate", Some(serial), &json!({"layer": group})), 3);
+    let err = commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap_err();
+    assert!(err.contains("layers"), "{err}");
+    // So does a move that copies the group; one that only moves it makes nothing.
+    assert_eq!(commands.copies("layer.moveTo", Some(serial), &json!({"layer": group, "copy": true})), 3);
+    assert_eq!(commands.copies("layer.moveTo", Some(serial), &json!({"layer": group})), 0, "a plain move is not walked");
+    let copy = json!({"layer": group, "target": group, "position": "above", "copy": true, ON_DOCUMENT: serial});
+    let err = commands.execute("layer.moveTo", copy).unwrap_err();
+    assert!(err.contains("layers"), "{err}");
+    // A duplicated document copies every layer: background, the group and its two layers.
+    assert_eq!(commands.copies("image.duplicate", Some(serial), &json!({"mergedOnly": false})), 4);
+    assert_eq!(commands.copies("image.duplicate", Some(serial), &json!({"mergedOnly": true})), 1);
+    let err = commands.execute("image.duplicate", json!({"name": "copy", "mergedOnly": false, ON_DOCUMENT: serial})).unwrap_err();
+    assert!(err.contains("layers"), "{err}");
+}
+
+/// What a duplicate is charged is what it makes: the layers the document gains, or the layers
+/// of the new document.
+#[test]
+fn duplicates_are_charged_the_layers_they_make() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let group = app.run("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    for name in ["a", "b"] {
+        app.run("layer.new.layer", json!({"name": name, "group": group})).unwrap();
+    }
+    let serial = app.session.active().unwrap().serial;
+    let layers = |app: &PhotocraftApp| u32::try_from(app.session.active().unwrap().doc.layer_count()).unwrap();
+    let mut budget = RunBudget::default();
+    let mut commands = commands(&mut app, &mut budget);
+    let before = layers(commands.app);
+    commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap();
+    assert_eq!(layers(commands.app) - before, commands.budget.layers, "a group and the two layers in it");
+    let (before, charged) = (layers(commands.app), commands.budget.layers);
+    commands.execute("layer.moveTo", json!({"layer": group, "target": group, "position": "below", "copy": true, ON_DOCUMENT: serial})).unwrap();
+    assert_eq!(layers(commands.app) - before, commands.budget.layers - charged, "a copying move: the same three");
+    for merged in [false, true] {
+        let charged = commands.budget.layers;
+        commands.execute("image.duplicate", json!({"name": "copy", "mergedOnly": merged, ON_DOCUMENT: serial})).unwrap();
+        assert_ne!(commands.app.session.active().unwrap().serial, serial, "the copy is active");
+        assert_eq!(layers(commands.app), commands.budget.layers - charged, "merged: {merged}");
+    }
 }

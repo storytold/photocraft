@@ -15,6 +15,10 @@ mod abort;
 pub mod bounds;
 pub mod budget;
 pub mod commands;
+mod descriptor;
+mod dom;
+pub mod files;
+pub mod grants;
 pub mod host;
 pub mod isolate;
 mod jobs;
@@ -22,6 +26,7 @@ mod natives;
 pub mod preprocess;
 mod runner;
 mod scan;
+mod unit_value;
 mod value;
 
 pub use budget::{Budget, Now, SystemNow, Unlimited, WallClock};

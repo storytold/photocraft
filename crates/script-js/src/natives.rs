@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use boa_engine::object::builtins::{JsArray, JsFunction};
+use boa_engine::object::builtins::JsFunction;
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
 use boa_engine::property::{Attribute, PropertyDescriptor};
 use boa_engine::{Context, Finalize, JsData, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Trace, js_string};
@@ -97,19 +97,36 @@ fn count(ctx: &mut Context, output: usize) -> JsResult<()> {
 /// Run a session command. Only the commands in [`crate::commands`] with the parameters they
 /// allow get through, the same check the script host's supervisor applies.
 pub(crate) fn command(ctx: &mut Context, id: &str, params: Value) -> JsResult<Value> {
+    command_charged(ctx, id, params, (true, true))
+}
+
+/// Stop the run now unless `calls` more host calls fit in its bounds: before calls that must not
+/// be split, so the first is not made when a later one would be refused.
+pub(crate) fn room_for(ctx: &mut Context, calls: usize) -> JsResult<()> {
+    let room = shared(ctx)?.borrow().bounds.room_for(calls);
+    room.map_err(|m| stop(ctx, Stop::Fault(m)))
+}
+
+/// [`command`], with the budget charged (and a stop taken) before and after it only as
+/// `charged` says. Two commands that must not be split by a stop run with the charge between
+/// them left out: the first not charged after, the second not before.
+pub(crate) fn command_charged(ctx: &mut Context, id: &str, params: Value, charged: (bool, bool)) -> JsResult<Value> {
     crate::commands::check_command(id, &params).map_err(error)?;
-    checkpoint(ctx)?;
+    if charged.0 {
+        checkpoint(ctx)?;
+    }
     count(ctx, 0)?;
     let result = shared(ctx)?.borrow_mut().host.execute(id, params);
     // A slow command counts too: charge again once it returned.
-    checkpoint(ctx)?;
+    if charged.1 {
+        checkpoint(ctx)?;
+    }
     result.map_err(|e| error(e.0))
 }
 
-/// Open a modal dialog of `kind` with the script's arguments as text, and return the user's
-/// answer, waited for in the host call.
-fn modal(ctx: &mut Context, kind: ModalKind, args: &[JsValue]) -> JsResult<JsValue> {
-    let args = Value::Array(value::texts(args, ctx)?.into_iter().map(Value::String).collect());
+/// Open a modal dialog of `kind` with `args` (as [`ModalKind`] describes them for that kind) and
+/// return the user's answer, waited for in the host call.
+pub(crate) fn modal_value(ctx: &mut Context, kind: ModalKind, args: Value) -> JsResult<Value> {
     checkpoint(ctx)?;
     count(ctx, 0)?;
     let s = shared(ctx)?;
@@ -117,7 +134,14 @@ fn modal(ctx: &mut Context, kind: ModalKind, args: &[JsValue]) -> JsResult<JsVal
     s.borrow_mut().budget.pause();
     let answer = s.borrow_mut().host.modal(kind, &args);
     s.borrow_mut().budget.resume();
-    let answer = answer.map_err(|e| stop(ctx, Stop::Fault(e.0)))?;
+    answer.map_err(|e| stop(ctx, Stop::Fault(e.0)))
+}
+
+/// Open a modal dialog of `kind` with the script's arguments as text, and return the user's
+/// answer, waited for in the host call.
+fn modal(ctx: &mut Context, kind: ModalKind, args: &[JsValue]) -> JsResult<JsValue> {
+    let args = Value::Array(value::texts(args, ctx)?.into_iter().map(Value::String).collect());
+    let answer = modal_value(ctx, kind, args)?;
     match (kind, answer) {
         (ModalKind::Confirm, v) => Ok(JsValue::from(v.as_bool().unwrap_or(false))),
         (ModalKind::Prompt, Value::String(s)) => Ok(JsValue::from(JsString::from(s.as_str()))),
@@ -157,32 +181,42 @@ pub(crate) fn session_inspect(ctx: &mut Context) -> JsResult<Value> {
     command(ctx, "session.inspect", json!({}))
 }
 
-/// Most document objects one context keeps.
-pub(crate) const MAX_OBJECTS: usize = 1 << 16;
-
 pub(crate) fn document_object(id: DocKey, ctx: &mut Context) -> JsObject {
     let key = (id.id, id.serial);
     let cached = ctx.realm().host_defined().get::<DocCache>().and_then(|c| c.0.get(&key).cloned());
     if let Some(obj) = cached {
         return obj;
     }
-    let getters: [(JsString, Native); 3] = [(js_string!("name"), doc_name), (js_string!("resolution"), doc_resolution), (js_string!("saved"), doc_saved)];
-    let accessors: Vec<(JsString, JsFunction)> = getters.into_iter().map(|(k, f)| (k, getter(ctx, f))).collect();
+    let getters: [(JsString, Native); 5] = [
+        (js_string!("name"), doc_name),
+        (js_string!("width"), doc_width),
+        (js_string!("height"), doc_height),
+        (js_string!("resolution"), doc_resolution),
+        (js_string!("saved"), doc_saved),
+    ];
+    let mut accessors: Vec<(JsString, JsFunction, Option<JsFunction>)> = getters.into_iter().map(|(k, f)| (k, getter(ctx, f), None)).collect();
+    for (k, g, s) in crate::dom::DOC_ACCESSORS {
+        let set = s.map(|s| FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(s)).length(1).build());
+        accessors.push((JsString::from(*k), getter(ctx, *g), set));
+    }
     let mut init = ObjectInitializer::with_native_data(DocRef(id), ctx);
-    for (k, g) in accessors {
-        init.accessor(k, Some(g), None, Attribute::ENUMERABLE | Attribute::CONFIGURABLE);
+    for (k, g, s) in accessors {
+        init.accessor(k, Some(g), s, Attribute::ENUMERABLE | Attribute::CONFIGURABLE);
     }
     init.function(NativeFunction::from_fn_ptr(doc_to_string), js_string!("toString"), 0);
+    for (k, f, len) in crate::dom::DOC_METHODS {
+        init.function(NativeFunction::from_fn_ptr(*f), JsString::from(*k), *len);
+    }
     let obj = init.build();
     let realm = ctx.realm().clone();
     let mut data = realm.host_defined_mut();
     if data.get::<DocCache>().is_none() {
         data.insert(DocCache::default());
     }
-    // Bounded: past the limit a document object is not kept, and identity comparisons of
-    // documents opened after it fail.
+    // Bounded as the layer objects are: past the limit a document object is not kept, and
+    // identity comparisons of documents opened after it fail.
     if let Some(cache) = data.get_mut::<DocCache>()
-        && (cache.0.len() < MAX_OBJECTS || cache.0.contains_key(&key))
+        && (cache.0.len() < crate::dom::MAX_OBJECTS || cache.0.contains_key(&key))
     {
         cache.0.insert(key, obj.clone());
     }
@@ -209,20 +243,75 @@ pub(crate) fn entry_id(entry: &Value) -> JsResult<DocKey> {
     }
 }
 
-/// The `session.inspect` entry of document `id`.
-fn resolve(id: DocKey, ctx: &mut Context) -> JsResult<Value> {
+/// The current tab index and `session.inspect` entry of document `id`.
+pub(crate) fn resolve(id: DocKey, ctx: &mut Context) -> JsResult<(usize, Value)> {
     let s = session_inspect(ctx)?;
     s["documents"]
         .as_array()
-        .and_then(|docs| docs.iter().find(|d| entry_id(d).ok() == Some(id)))
-        .cloned()
+        .and_then(|docs| docs.iter().enumerate().find(|(_, d)| entry_id(d).ok() == Some(id)))
+        .map(|(i, d)| (i, d.clone()))
         .ok_or_else(|| error("the document is no longer open"))
 }
 
-/// The document's own values (its name and resolution): neither its layers nor its History are
+/// The document's own values (name, size, resolution): neither its layers nor its History are
 /// read, whatever their size.
 fn this_doc(this: &JsValue, ctx: &mut Context) -> JsResult<Value> {
     let id = doc_id(this).ok_or_else(|| JsNativeError::typ().with_message("not a Document"))?;
+    inspect_brief(id, ctx)
+}
+
+/// The last full inspection of each document this run read, by serial and whether it holds the
+/// History rows, with the `stateRevision` it had. Bounded by [`MAX_KEPT_INSPECTIONS`].
+#[derive(Default, Trace, Finalize, JsData)]
+// Sound: JSON values and integers only, no GC pointers.
+#[boa_gc(unsafe_empty_trace)]
+struct Inspections(HashMap<(u64, bool), Value>);
+
+/// Most inspections kept: past it they are dropped and read whole again.
+const MAX_KEPT_INSPECTIONS: usize = 128;
+
+/// `document.inspect` of document `id` with its layer tree, by its serial: one call, so a tab
+/// closed or moved in the meantime can't make it read another document. The last answer is
+/// kept, and asked for again only by its revision, which the host answers briefly while the
+/// document is unchanged: a script reading a large document's collections over and over doesn't
+/// have the whole tree sent each time.
+pub(crate) fn inspect_document(id: DocKey, history: bool, ctx: &mut Context) -> JsResult<Value> {
+    let kept = ctx.realm().host_defined().get::<Inspections>().and_then(|k| k.0.get(&(id.serial, history)).cloned());
+    let mut params = json!({ "serial": id.serial, "history": history });
+    if let Some(revision) = kept.as_ref().and_then(|d| d.get("stateRevision")).filter(|r| r.is_object()) {
+        params["unlessRevision"] = revision.clone();
+    }
+    let d = query_document(id, params, ctx)?;
+    if d.get("unchanged").and_then(Value::as_bool) == Some(true) {
+        // Only for the revision it was asked about; anything else is a host that answers wrong.
+        return match kept {
+            Some(kept) if kept.get("stateRevision") == d.get("stateRevision") => Ok(kept),
+            _ => Err(error("the document was reported unchanged since a reading this run does not have")),
+        };
+    }
+    let realm = ctx.realm().clone();
+    let mut data = realm.host_defined_mut();
+    if data.get::<Inspections>().is_none() {
+        data.insert(Inspections::default());
+    }
+    if let Some(k) = data.get_mut::<Inspections>() {
+        if k.0.len() >= MAX_KEPT_INSPECTIONS && !k.0.contains_key(&(id.serial, history)) {
+            k.0.clear();
+        }
+        k.0.insert((id.serial, history), d.clone());
+    }
+    Ok(d)
+}
+
+/// `document.inspect` of document `id` without its layer tree or History, but with layer `layer`
+/// (what it holds included) as `layer` and its group as `parent`: reading one layer costs that
+/// layer, not the document's whole tree.
+pub(crate) fn inspect_layer(id: DocKey, layer: u64, ctx: &mut Context) -> JsResult<Value> {
+    query_document(id, json!({ "serial": id.serial, "history": false, "layers": false, "layer": layer }), ctx)
+}
+
+/// `document.inspect` of document `id`'s own values: neither its layers nor its History.
+pub(crate) fn inspect_brief(id: DocKey, ctx: &mut Context) -> JsResult<Value> {
     query_document(id, json!({ "serial": id.serial, "history": false, "layers": false }), ctx)
 }
 
@@ -244,6 +333,20 @@ fn doc_name(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     field(&d, "name", ctx)
 }
 
+/// The document's width in the ruler unit (`app.preferences.rulerUnits`).
+fn doc_width(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let d = this_doc(this, ctx)?;
+    let w = d["width"].as_f64().ok_or_else(|| error("the session did not report a document size"))?;
+    crate::dom::ruler_length(ctx, w, d["resolution"].as_f64().unwrap_or(72.0))
+}
+
+/// The document's height in the ruler unit.
+fn doc_height(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let d = this_doc(this, ctx)?;
+    let h = d["height"].as_f64().ok_or_else(|| error("the session did not report a document size"))?;
+    crate::dom::ruler_length(ctx, h, d["resolution"].as_f64().unwrap_or(72.0))
+}
+
 fn doc_resolution(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let d = this_doc(this, ctx)?;
     field(&d, "resolution", ctx)
@@ -251,7 +354,7 @@ fn doc_resolution(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 fn doc_saved(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = doc_id(this).ok_or_else(|| JsNativeError::typ().with_message("not a Document"))?;
-    let entry = resolve(id, ctx)?;
+    let (_, entry) = resolve(id, ctx)?;
     let dirty = entry.get("dirty").and_then(Value::as_bool).ok_or_else(|| error("the session did not report whether the document is saved"))?;
     let has_path = entry.get("path").is_some_and(Value::is_string);
     Ok(JsValue::from(!dirty && has_path))
@@ -261,7 +364,14 @@ fn app_documents(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     let s = session_inspect(ctx)?;
     let ids = s["documents"].as_array().map_or(Ok(Vec::new()), |docs| docs.iter().map(entry_id).collect::<JsResult<Vec<_>>>())?;
     let docs: Vec<JsValue> = ids.into_iter().map(|id| document_object(id, ctx).into()).collect();
-    Ok(JsArray::from_iter(docs, ctx).into())
+    crate::dom::live_collection(ctx, crate::dom::documents_key(), docs, |arr, ctx| {
+        let methods: [(&str, Native, usize); 2] = [("add", crate::dom::documents_add, 6), ("getByName", crate::dom::documents_get_by_name, 1)];
+        for (k, f, len) in methods {
+            let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f)).name(JsString::from(k)).length(len).build();
+            arr.create_data_property_or_throw(JsString::from(k), f, ctx)?;
+        }
+        Ok(())
+    })
 }
 
 fn app_active_document(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -283,9 +393,9 @@ fn app_set_active_document(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
 }
 
 /// Properties of `app` a script may name as globals, as in Photoshop.
-const APP_GLOBALS: &[&str] = &["activeDocument", "documents"];
+const APP_GLOBALS: &[&str] = &["activeDocument", "documents", "preferences", "displayDialogs"];
 /// Those of them `app` takes a value for.
-const APP_SETTABLE: &[&str] = &["activeDocument"];
+const APP_SETTABLE: &[&str] = &["activeDocument", "displayDialogs"];
 
 fn app_global_get(_: &JsValue, _: &[JsValue], key: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
     let app = ctx.global_object().get(js_string!("app"), ctx)?;
@@ -348,8 +458,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         // The window is always in front of a script the user ran from it.
         .function(NativeFunction::from_fn_ptr(no_op), js_string!("bringToFront"), 0)
         .build();
+    crate::dom::install(ctx, &app)?;
+    crate::descriptor::install(ctx, &app)?;
     ctx.register_global_property(js_string!("app"), app, Attribute::all())?;
-    // Photoshop scripts name these without `app.` (`activeDocument.name`, `documents.length`).
+    // Photoshop scripts name these without `app.` (`activeDocument.name`, `preferences.rulerUnits`).
     for key in APP_GLOBALS {
         let key = JsString::from(*key);
         let get = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(app_global_get, key.clone())).length(0).build();
@@ -365,6 +477,24 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .build();
     ctx.register_global_property(js_string!("$"), dollar, Attribute::all())?;
 
+    crate::unit_value::install(ctx)?;
+    crate::files::install(ctx)?;
+    Ok(())
+}
+
+/// Make `proto` the fixed `prototype` of constructor `ctor`, and `ctor` its `constructor`, as a
+/// built-in constructor's are.
+pub(crate) fn link_prototype(ctor: &JsObject, proto: &JsObject, ctx: &mut Context) -> JsResult<()> {
+    ctor.define_property_or_throw(
+        js_string!("prototype"),
+        PropertyDescriptor::builder().value(proto.clone()).writable(false).enumerable(false).configurable(false),
+        ctx,
+    )?;
+    proto.define_property_or_throw(
+        js_string!("constructor"),
+        PropertyDescriptor::builder().value(ctor.clone()).writable(true).enumerable(false).configurable(true),
+        ctx,
+    )?;
     Ok(())
 }
 

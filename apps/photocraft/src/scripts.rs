@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use photocraft_script_js::grants::PathGrants;
 use photocraft_script_js::isolate::{
     COMMAND_REPLY_LIMIT, DEFAULT_MEMORY_LIMIT, DIALOG_REPLY_LIMIT, Event, HelperCommand, IsolateOptions, IsolatedJob, QUEUE_GRACE, Reply,
 };
@@ -59,7 +60,7 @@ pub(crate) fn start_run(helper: PathBuf, start: ScriptStart) -> Result<Box<dyn S
         queue_grace: QUEUE_GRACE,
     };
     let job = IsolatedJob::spawn(start.source, options).map_err(|f| f.message)?;
-    Ok(Box::new(HostRun { job, waiting: false }))
+    Ok(Box::new(HostRun { job, waiting: None, grants: PathGrants::default() }))
 }
 
 fn dialog_kind(kind: ModalKind) -> ScriptDialog {
@@ -67,13 +68,18 @@ fn dialog_kind(kind: ModalKind) -> ScriptDialog {
         ModalKind::Alert => ScriptDialog::Alert,
         ModalKind::Confirm => ScriptDialog::Confirm,
         ModalKind::Prompt => ScriptDialog::Prompt,
+        ModalKind::OpenFile => ScriptDialog::OpenFile,
+        ModalKind::SaveFile => ScriptDialog::SaveFile,
+        ModalKind::SelectFolder => ScriptDialog::SelectFolder,
     }
 }
 
 struct HostRun {
     job: IsolatedJob,
-    /// It waits at a dialog: nothing to pump until it is answered.
-    waiting: bool,
+    /// The dialog it waits at: nothing to pump until it is answered.
+    waiting: Option<ModalKind>,
+    /// Where the user said this run may write, kept here: the host is not trusted with them.
+    grants: PathGrants,
 }
 
 impl ScriptRun for HostRun {
@@ -89,12 +95,19 @@ impl ScriptRun for HostRun {
             replied = false;
             // At a dialog the host waits for the answer and sends nothing, but it may still end
             // (killed, out of memory): that ends the run and its dialog.
-            if self.waiting && !matches!(event, Event::Finished(_)) {
+            if self.waiting.is_some() && !matches!(event, Event::Finished(_)) {
                 continue;
             }
             match event {
                 Event::Execute { id, params } => {
-                    let result = commands.execute(&id, params);
+                    // A write goes only where the user chose, in a dialog of this run.
+                    let result = match self.grants.check(&id, &params) {
+                        Ok(()) => commands.execute(&id, params.clone()),
+                        Err(e) => Err(e),
+                    };
+                    if result.is_ok() {
+                        self.grants.wrote(&id, &params);
+                    }
                     // A reply the host can't take ends the run; that arrives as `Finished`.
                     replied = self.job.reply(Reply::Executed(result)).is_ok();
                 }
@@ -104,12 +117,12 @@ impl ScriptRun for HostRun {
                     replied = true;
                 }
                 Event::Dialog(modal) => {
-                    self.waiting = true;
+                    self.waiting = Some(modal.kind);
                     out.push(ScriptEvent::Dialog { kind: dialog_kind(modal.kind), args: modal.args });
                     break;
                 }
                 Event::Finished(result) => {
-                    self.waiting = false;
+                    self.waiting = None;
                     out.push(ScriptEvent::Finished(result.map_err(|f| f.message)));
                     break;
                 }
@@ -122,12 +135,14 @@ impl ScriptRun for HostRun {
     }
 
     fn answer(&mut self, answer: Value) -> Result<(), String> {
-        self.waiting = false;
+        if let Some(kind) = self.waiting.take() {
+            self.grants.record(kind, &answer);
+        }
         self.job.reply(Reply::Dialog(answer))
     }
 
     fn cancel(&mut self) {
-        self.waiting = false;
+        self.waiting = None;
         self.job.cancel();
     }
 }

@@ -424,8 +424,9 @@ fn an_untrusted_host_cannot_reach_other_commands_or_oversize_the_app() {
         ("other command", frame(&json!({"type": "execute", "id": "file.revert", "params": {}})), Some("is not available to scripts")),
         // In the table, with params it doesn't take.
         ("bad params", frame(&json!({"type": "execute", "id": "document.activate", "params": {"offset": 1}})), Some("is not one it takes")),
-        // Neither is a message the protocol has: a file picker, or a window.
-        ("file picker", frame(&json!({"type": "dialog", "kind": "save_file", "args": {}})), None),
+        // A file picker with an argument its kind doesn't take (only Open takes `multiple`).
+        ("file picker", frame(&json!({"type": "dialog", "kind": "save_file", "args": {"multiple": true}})), None),
+        // Nor is a message the protocol doesn't have: a window.
         ("window", frame(&json!({"type": "window", "id": 0, "window": null})), None),
         ("own history key", frame(&json!({"type": "execute", "id": "session.inspect", "params": {"coalesce": "someone-else"}})), None),
         ("oversize", vec![0xFF, 0xFF, 0xFF, 0x7F], None),

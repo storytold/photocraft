@@ -81,7 +81,7 @@ pub use craft::window::{
 #[cfg(target_arch = "wasm32")]
 pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
-pub use scripts::{ScriptCommands, ScriptDialog, ScriptEvent, ScriptRun, ScriptStart, StartScriptFn};
+pub use scripts::{ON_DOCUMENT, ScriptCommands, ScriptDialog, ScriptEvent, ScriptRun, ScriptStart, StartScriptFn};
 pub use state::{Tool, UiState};
 
 mod app;
