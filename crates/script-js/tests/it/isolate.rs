@@ -370,7 +370,8 @@ fn fixture(path: &std::path::Path, bytes: &[u8]) {
 /// reach the interface.
 #[cfg(unix)]
 fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], settle: Settle) -> Seen {
-    let dir = std::env::temp_dir().join(format!("script-host-{name}-{}-{}", std::process::id(), frames.len()));
+    // Absolute: the host starts in the temporary folder, so a relative `TMPDIR` would not reach it.
+    let dir = std::env::temp_dir().canonicalize().unwrap().join(format!("script-host-{name}-{}-{}", std::process::id(), frames.len()));
     fixture(&dir, frames);
     let mut opts = options(name);
     let mut paths = vec![dir.as_path()];
@@ -473,7 +474,7 @@ fn a_memory_marker_read_after_the_host_exited_still_counts() {
     // to deliver the marker late, as a pipe being drained would. The host aborts once the writer
     // says it runs, and the writer writes once the host is gone: ordered, not timed.
     let exe = std::env::current_exe().unwrap();
-    let ready = std::env::temp_dir().join(format!("script-host-late-marker-ready-{}", std::process::id()));
+    let ready = std::env::temp_dir().canonicalize().unwrap().join(format!("script-host-late-marker-ready-{}", std::process::id()));
     drop(std::fs::remove_file(&ready));
     let script = format!(
         "{LATE_MARKER}=\"$3\" {LATE_MARKER_HOST}=$$ \"$2\" --exact {} --quiet >/dev/null & i=0; while [ ! -e \"$3\" ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; kill -ABRT $$",
@@ -523,7 +524,7 @@ fn shell_host_within(name: &str, files: &[(&str, Vec<u8>)], script: &str, limit:
     let mut script = script.to_owned();
     let mut paths = Vec::new();
     for (i, (key, bytes)) in files.iter().enumerate() {
-        let path = std::env::temp_dir().join(format!("script-host-{name}-{key}-{}", std::process::id()));
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!("script-host-{name}-{key}-{}", std::process::id()));
         fixture(&path, bytes);
         script = script.replace(&format!("{{{key}}}"), &format!("\"${}\"", i + 1));
         paths.push(path);

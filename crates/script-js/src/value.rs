@@ -317,16 +317,21 @@ pub fn error_text(e: &JsError) -> String {
             Lookup::Unknown => false,
         };
         if !small(&name) || !small(&message) {
-            let name = name.string().map_or_else(
-                || "Error".to_owned(),
+            // The name is held to 100 characters and the whole to the limit; one marker, at the
+            // end, says either was cut.
+            let (name, name_cut) = name.string().map_or_else(
+                || ("Error".to_owned(), false),
                 |n| {
                     let (n, shortened) = short(&n);
-                    marked(&n, 100, shortened)
+                    match n.char_indices().nth(100) {
+                        Some((at, _)) => (n[..at].to_owned(), true),
+                        None => (n, shortened),
+                    }
                 },
             );
             return match message.string().map(|m| short(&m)) {
-                Some((m, shortened)) if !m.is_empty() => marked(&format!("{name}: {m}"), MAX_ERROR_CHARS, shortened),
-                _ => name,
+                Some((m, shortened)) if !m.is_empty() => marked(&format!("{name}: {m}"), MAX_ERROR_CHARS, shortened || name_cut),
+                _ => marked(&name, MAX_ERROR_CHARS, name_cut),
             };
         }
     }
@@ -375,7 +380,8 @@ impl Lookup {
 /// one met on the way counts as [`Lookup::Unknown`], as does a proxy.
 pub(crate) fn data_on_chain(obj: &JsObject, key: &PropertyKey) -> Lookup {
     let mut at = Some(obj.clone());
-    for _ in 0..MAX_PROTO_HOPS {
+    // The receiver, then its first `MAX_PROTO_HOPS` prototypes.
+    for _ in 0..=MAX_PROTO_HOPS {
         let Some(o) = at else { return Lookup::Absent };
         if JsProxy::from_object(o.clone()).is_ok() {
             return Lookup::Unknown;

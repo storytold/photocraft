@@ -74,7 +74,9 @@ fn lines_of(src: &str) -> Vec<String> {
 fn app_name_defaults_and_takes_the_run_override() {
     assert_eq!(lines_of("$.writeln(app.name, ' ', app.version)"), ["PhotoCraft 15.0.0"]);
     let options = RunOptions { app_name: Some("Tagged".into()), ..RunOptions::default() };
-    assert_eq!(run_probe("$.writeln(app.name)", Probe::default(), Box::new(Unlimited), options).lines, ["Tagged"]);
+    let seen = run_probe("$.writeln(app.name)", Probe::default(), Box::new(Unlimited), options);
+    assert_eq!(seen.result, Ok(()));
+    assert_eq!(seen.lines, ["Tagged"]);
 }
 
 #[test]
@@ -95,7 +97,9 @@ fn dialogs_wait_for_their_answers_in_order() {
 
 #[test]
 fn prompt_cancel_is_null() {
-    assert_eq!(answering("$.writeln(prompt('q') === null)", &[Value::Null]).lines, ["true"]);
+    let seen = answering("$.writeln(prompt('q') === null)", &[Value::Null]);
+    assert_eq!(seen.result, Ok(()));
+    assert_eq!(seen.lines, ["true"]);
 }
 
 #[test]
@@ -401,9 +405,12 @@ fn dialog_arguments_are_shown_as_text() {
     }
     // A date shows like String(date), in the local time zone.
     let seen = answering("$.writeln(String(new Date(0))); alert(new Date(0));", &[]);
+    assert_eq!(seen.result, Ok(()));
     assert_eq!(seen.dialogs[0].args, json!([seen.lines[0]]));
     // Every argument is text.
-    assert_eq!(answering("confirm('Sure?', true); ", &[]).dialogs[0].args, json!(["Sure?", "true"]));
+    let seen = answering("confirm('Sure?', true); ", &[]);
+    assert_eq!(seen.result, Ok(()));
+    assert_eq!(seen.dialogs[0].args, json!(["Sure?", "true"]));
 }
 
 #[test]
@@ -532,7 +539,8 @@ fn an_error_whose_name_hides_behind_a_long_prototype_chain_has_a_fixed_text() {
     // itself: formatting it fully would recurse. The run fails with a bounded text.
     let src = "var e = new Error('x'); var p = { name: e }; for (var i = 0; i < 33; i++) { p = Object.create(p); } Object.setPrototypeOf(e, p); throw e;";
     let f = failure_of(src);
-    assert!(f.starts_with("Error: x") || f.starts_with("Error"), "{f}");
+    // The name is left out; the message, safe to show, is kept.
+    assert!(f.starts_with("Error: x"), "{f}");
     assert!(f.len() < 4000, "{f}");
 }
 
@@ -629,12 +637,16 @@ fn a_long_thrown_text_is_marked_as_cut() {
         // Cut again with its prefix: still one marker, whole, at the end.
         "throw new Error('\u{1F600}'.repeat(10) + 'x'.repeat(5000))",
         "throw { message: '\u{1F600}'.repeat(25) + 'x'.repeat(5000) }",
+        // A long name and a long message, or a long name alone: one marker, at the end.
+        "var e = new Error('m'.repeat(2100)); e.name = 'N'.repeat(150); throw e",
+        "var e = new Error(''); e.name = 'N'.repeat(2100); throw e",
     ] {
         let seen = run_probe(src, Probe::default(), Box::new(Unlimited), RunOptions::default());
         let message = seen.result.unwrap_err();
         let tail: String = message.chars().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
         assert_eq!(message.matches("(cut)").count(), 1, "{src}: …{tail}");
         assert_eq!(message.matches('…').count(), 1, "{src}: …{tail}");
+        assert!(message.ends_with("… (cut)"), "the marker ends the text: {src}: …{tail}");
         assert!(!message.contains("\\u"), "no half of a pair is shown: {src}: …{tail}");
     }
 }
