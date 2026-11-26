@@ -3,6 +3,7 @@ use super::descriptors::{desc, enm, jstr};
 use super::fields::{Mapped, step};
 use super::tables::lookup_back;
 use super::{D, Descriptor, Map, Value};
+use crate::EngineError;
 
 const CMD: &str = "edit.contentAwareFill";
 const SOURCE: &str = "_atnCafDescriptor";
@@ -99,10 +100,12 @@ fn descriptor(p: &Value) -> Option<Descriptor> {
 
 /// Resolve an empty recorded step: the remembered settings fill what the step doesn't name, and
 /// before any were remembered it writes to a new layer. Playing never changes what is remembered.
-pub(crate) fn caf_remembered(p: &mut Value, prefs: &crate::prefs::Preferences) {
-    let Some(object) = p.as_object_mut() else { return };
+/// Remembered Custom sampling is refused: its area is painted in the workspace, which keeps none
+/// (Custom reopens empty), and the step must not sample another area instead.
+pub(crate) fn caf_remembered(p: &mut Value, prefs: &crate::prefs::Preferences) -> Result<(), EngineError> {
+    let Some(object) = p.as_object_mut() else { return Ok(()) };
     if object.remove(REMEMBERED).and_then(|v| v.as_bool()) != Some(true) {
-        return;
+        return Ok(());
     }
     let saved = prefs.dialogs.get(CAF_WORKSPACE_PREFS);
     for (param, flag) in PARAMS.iter().map(|param| (*param, matches!(*param, "sampleAllLayers" | "scale" | "mirror"))) {
@@ -113,6 +116,11 @@ pub(crate) fn caf_remembered(p: &mut Value, prefs: &crate::prefs::Preferences) {
         }
     }
     object.entry("output").or_insert_with(|| "new".into());
+    if object.get("sampling").and_then(Value::as_str) == Some("custom") && !["area", "channel", "samplingStrokes"].iter().any(|key| object.contains_key(*key)) {
+        let msg = "this step plays with the remembered settings, and their Custom sampling area isn't remembered: fill once with Auto or Rectangular sampling in Content-Aware Fill, then play it again";
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: msg.into() });
+    }
+    Ok(())
 }
 
 /// Import the verified seven-field form, retaining noncanonical wire data for an unchanged save.

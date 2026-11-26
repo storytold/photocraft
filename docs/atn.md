@@ -430,7 +430,9 @@ step with dialogs on (#14254); the enumeration type IDs are explicit in
 An empty descriptor (no keys) plays with the settings the fill workspace remembers
 (`prefs.dialogs["edit.contentAwareFill.workspace"]`), New Layer before any are remembered; it
 imports as `{"_atnCafRemembered": true}`, which `playback_params` resolves, and saves back
-empty. Playing a step never changes what is remembered.
+empty. Playing a step never changes what is remembered. When the remembered sampling is Custom,
+the step stops with a message instead of filling: the workspace doesn't remember the painted
+Custom area (Custom reopens empty), and the step must not sample another area instead.
 
 Descriptor types, source identity and key order survive save while its native settings are
 unchanged. Editing a supported setting exports the new values in canonical form instead of

@@ -376,6 +376,27 @@ fn settings_closed_without_a_fill_are_not_carried_forward() {
     assert_eq!(play_empty_recorded_step(&mut restarted), 1, "New Layer: no fill has run");
 }
 
+/// After a confirmed Custom fill an empty recorded step stops and says why, instead of filling from another area: the
+/// workspace remembers Custom but not its painted area (Custom reopens empty), so the step has none (#14254).
+#[test]
+fn an_empty_recorded_step_after_a_custom_fill_stops_and_says_why() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"sampling": "custom", "output": "current"})).unwrap();
+    ui(&mut app, json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}})).unwrap();
+    ui(&mut app, json!({"commit": true})).unwrap();
+    close_all(&mut app);
+    let remembered = app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS).cloned().unwrap();
+    assert_eq!(remembered["sampling"], "custom", "the confirmed fill remembers Custom: {remembered}");
+    let revision = app.session.active().unwrap().revision;
+    let result = play_empty_step(&mut app);
+    assert_eq!(result["ran"], 0, "{result}");
+    let error = result["failed"]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("Custom sampling area isn't remembered"), "{result}");
+    assert_eq!(app.session.active().unwrap().revision, revision, "the document is unchanged");
+    assert_eq!(app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS), Some(&remembered), "playing remembers nothing");
+}
+
 /// A new app over the saved preferences `prefs`, moved as startup does.
 fn restart(prefs: photocraft_engine::prefs::Preferences) -> Box<PhotocraftApp> {
     let mut restarted = app_with_selection();
@@ -386,6 +407,14 @@ fn restart(prefs: photocraft_engine::prefs::Preferences) -> Box<PhotocraftApp> {
 
 /// Plays an action of one empty recorded Content-Aware Fill step and returns how many layers it added.
 fn play_empty_recorded_step(app: &mut PhotocraftApp) -> usize {
+    let layers = app.session.active().unwrap().doc.layers.len();
+    let result = play_empty_step(app);
+    assert_eq!(result["ran"], 1, "{result}");
+    app.session.active().unwrap().doc.layers.len() - layers
+}
+
+/// Plays an action of one empty recorded Content-Aware Fill step and returns what `actions.play` answers.
+fn play_empty_step(app: &mut PhotocraftApp) -> Value {
     use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
     use craft_psd::descriptor::{Descriptor, UnicodeString};
     let item = AtnItem {
@@ -401,10 +430,7 @@ fn play_empty_recorded_step(app: &mut PhotocraftApp) -> usize {
     };
     let imported = photocraft_engine::atn_cmds::import(&craft_psd::atn::write(&file).unwrap()).unwrap();
     app.session.actions_mut().list.push(imported.actions.into_iter().next().unwrap()).unwrap();
-    let layers = app.session.active().unwrap().doc.layers.len();
-    let result = app.session.execute("actions.play", json!({"action": 0})).unwrap();
-    assert_eq!(result["ran"], 1, "{result}");
-    app.session.active().unwrap().doc.layers.len() - layers
+    app.session.execute("actions.play", json!({"action": 0})).unwrap()
 }
 
 /// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill area.
