@@ -8,7 +8,7 @@ use crate::PhotocraftApp;
 pub(crate) struct Runtime {
     /// The one checker: the startup prompt, the manual check, the installation and the last update's outcome.
     #[cfg(not(target_arch = "wasm32"))]
-    updater: craft::update::updater::Updater,
+    updater: Option<craft::update::updater::Updater>,
     /// The check-result dialog on the dialog host, while one is open.
     #[cfg(not(target_arch = "wasm32"))]
     result_dialog: Option<craft::ui::dialog::DialogId>,
@@ -20,11 +20,18 @@ pub(crate) struct Runtime {
     signed_error: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn stable_updater<T>(identity: crate::os_window::LaunchIdentity, make: impl FnOnce() -> T) -> Option<T> {
+    crate::os_window::stable_services_for(identity).then(make)
+}
+
 impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: craft::update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION),
+            updater: stable_updater(crate::os_window::identity(), || {
+                craft::update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION)
+            }),
             #[cfg(not(target_arch = "wasm32"))]
             result_dialog: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -89,7 +96,8 @@ fn hand_signed_install(app: &mut PhotocraftApp) -> Result<(), String> {
 /// Help ▸ Check for Updates: starts a check whose outcome the result window shows.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn check(app: &mut PhotocraftApp, _ctx: &egui::Context, _params: Value) -> Result<Value, String> {
-    app.updates_rt.updater.check_now();
+    let updater = app.updates_rt.updater.as_mut().ok_or("Nightly updates are managed by ArtCraft Launcher")?;
+    updater.check_now();
     app.ui.updates_open = true;
     Ok(serde_json::json!({"status": "checking"}))
 }
@@ -105,12 +113,13 @@ pub(crate) fn check(_app: &mut PhotocraftApp, _ctx: &egui::Context, _params: Val
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tick(app: &mut PhotocraftApp) {
     use craft::update::updater::Status;
+    let Some(updater) = app.updates_rt.updater.as_mut() else { return };
     if app.session.prefs().general.automatically_check_updates {
-        app.updates_rt.updater.check_at_start();
+        updater.check_at_start();
     } else {
-        app.updates_rt.updater.read_last_update();
+        updater.read_last_update();
     }
-    if !app.updates_rt.outcome_announced && matches!(app.updates_rt.updater.status(), Status::Updated(_) | Status::InstallFailed(_)) {
+    if !app.updates_rt.outcome_announced && matches!(updater.status(), Status::Updated(_) | Status::InstallFailed(_)) {
         app.updates_rt.outcome_announced = true;
         app.ui.updates_open = true;
     }
@@ -134,8 +143,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // An update starts, and a ready one asks the app to close, only while no work is unsaved.
     let clean = !app.has_unsaved_work();
     install_signed_request(app);
-    app.updates_rt.updater.tick(ctx);
-    match app.updates_rt.updater.run(&mut app.framework.dialogs, clean) {
+    let action = match app.updates_rt.updater.as_mut() {
+        Some(updater) => {
+            updater.tick(ctx);
+            updater.run(&mut app.framework.dialogs, clean)
+        }
+        None => return,
+    };
+    match action {
         Action::None => {}
         Action::OpenUrl(url) => {
             let _ = crate::links::open(app, ctx, &url);
@@ -150,14 +165,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<craft::update::stack_dialogs::UpdatePromptDialog>(prompt_id())
     {
         dialog.set_status(Some(error));
-    } else if !app.updates_rt.updater.prompt_open() {
+    } else if !app.updates_rt.updater.as_ref().is_some_and(|updater| updater.prompt_open()) {
         app.updates_rt.signed_error = None;
     }
 
     // A cancelled result (the dialog withdrawn below) answers nothing.
     if let Some(choice) = app.framework.dialogs.take::<UpdateCheckDialog>().and_then(|result| result.ok()) {
         app.updates_rt.result_dialog = None;
-        let updater = &mut app.updates_rt.updater;
+        let Some(updater) = app.updates_rt.updater.as_mut() else { return };
         match choice {
             CheckChoice::CheckNow | CheckChoice::CheckAgain => updater.check_now(),
             CheckChoice::RestartToUpdate => updater.restart_to_update(),
@@ -170,7 +185,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 
     // An available release shows in the updater's prompt instead of the result window.
-    let updater = &app.updates_rt.updater;
+    let Some(updater) = app.updates_rt.updater.as_ref() else { return };
     let wanted = app.ui.updates_open && *updater.status() != Status::Idle && !updater.prompt_open();
     let status = updater.status().clone();
     let dialogs = &mut app.framework.dialogs;
@@ -189,7 +204,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The updater's installation progress or error line, for `ui.inspect`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn status_message(app: &PhotocraftApp) -> Option<String> {
-    app.updates_rt.updater.status_message()
+    app.updates_rt.updater.as_ref()?.status_message()
 }
 
 /// The web build has no updater, so no message.
@@ -201,7 +216,8 @@ pub(crate) fn status_message(_app: &PhotocraftApp) -> Option<String> {
 /// Offers `version` as an available release, as a check at start would, for the snapshot example.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn preview_release(app: &mut PhotocraftApp, version: &str, url: &str) {
-    app.updates_rt.updater.offer(craft::update::Release {
+    let Some(updater) = app.updates_rt.updater.as_mut() else { return };
+    updater.offer(craft::update::Release {
         tag: format!("v{version}"),
         version: craft::update::parse_version(version),
         name: format!("PhotoCraft {version}"),
@@ -233,17 +249,17 @@ mod tests {
             Err("offline".into())
         });
         let mut app = app();
-        app.updates_rt.updater = craft::update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION).with_source(source);
+        app.updates_rt.updater = Some(craft::update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION).with_source(source));
         app.session.edit_prefs(|p| p.general.automatically_check_updates = false);
 
         tick(&mut app);
         assert!(checks.recv_timeout(Duration::from_millis(100)).is_err(), "no automatic check while the preference is off");
-        assert_eq!(*app.updates_rt.updater.status(), craft::update::updater::Status::Idle);
+        assert_eq!(*app.updates_rt.updater.as_ref().unwrap().status(), craft::update::updater::Status::Idle);
 
         let ctx = app.ctx().clone();
         menus::invoke(&mut app, &ctx, "help.checkForUpdates", serde_json::json!({})).unwrap();
         assert!(app.ui.updates_open);
-        assert_ne!(*app.updates_rt.updater.status(), craft::update::updater::Status::Idle);
+        assert_ne!(*app.updates_rt.updater.as_ref().unwrap().status(), craft::update::updater::Status::Idle);
         assert!(checks.recv_timeout(Duration::from_secs(5)).is_ok(), "the manual check ran");
     }
 
@@ -298,5 +314,29 @@ mod tests {
         assert!(app.ui.updates_open);
         assert_eq!(call(&mut app, "ui.set", serde_json::json!({"updatesOpen": false}))["ok"], true);
         assert!(!app.ui.updates_open);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod profile_tests {
+    use super::*;
+    use crate::os_window::LaunchIdentity;
+    #[test]
+    fn a_nightly_never_even_constructs_the_stable_updater() {
+        let calls = std::cell::Cell::new(0);
+        let nightly = stable_updater(LaunchIdentity::NightlyV1, || {
+            calls.set(calls.get() + 1);
+            42
+        });
+        assert_eq!(nightly, None);
+        assert_eq!(calls.get(), 0, "Updater::new reads stable installed-version state");
+        assert_eq!(
+            stable_updater(LaunchIdentity::Stable, || {
+                calls.set(calls.get() + 1);
+                42
+            }),
+            Some(42)
+        );
+        assert_eq!(calls.get(), 1);
     }
 }

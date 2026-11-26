@@ -121,7 +121,7 @@ pub(crate) fn deselect_hidden(app: &mut PhotocraftApp, before: &LayerFilter) {
     let Some(select) = select else { return };
     let Some(st) = app.session.active() else { return };
     let mut actions = Vec::new();
-    super::layers_events::selection_actions(select.change, &st.selected_layers(), &mut actions);
+    super::layers_events::selection_actions(select.change, st.selected_layers(), &mut actions);
     for (id, params) in actions {
         let _ = app.run(&id, params);
     }

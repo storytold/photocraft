@@ -1,3 +1,4 @@
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft::behavior::PixelSize;
@@ -201,7 +202,7 @@ fn open_session(
         Coverage::None => None,
     };
     let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
-    let display = app.session.color.canvas_display(&st.doc).map_err(|e| e.to_string())?;
+    let display = app.session.color().canvas_display(&st.doc).map_err(|e| e.to_string())?;
     let lab_transform = craft::cms::cached(&source, craft::cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
     let scope_transform = craft::cms::cached(&source, craft::cms::Builtin::Srgb.profile(), Default::default()).map_err(|e| e.to_string())?;
     let float = surf.format().sample == photocraft_color::SampleType::F32;

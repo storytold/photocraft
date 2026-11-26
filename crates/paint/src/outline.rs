@@ -25,7 +25,7 @@ pub fn tip_outline(b: &BrushSettings, full: bool) -> Option<Vec<Vec<[f32; 2]>>> 
     let ro = b.roundness.clamp(0.0, 1.0).max(0.5 / (b.size / 2.0)).min(1.0);
     let (sn, cs) = b.angle.to_radians().sin_cos();
     let (fx, fy) = (if b.flip_x { -1.0 } else { 1.0 }, if b.flip_y { -1.0 } else { 1.0 });
-    match &b.tip {
+    match &*b.tip {
         TipShape::Round => {
             // The normal cursor is the 50 % contour, matching the plain-circle path (#2744):
             // the soft tip falls off as (1 - t²)⁴, not the old smoothstep midpoint.
@@ -300,12 +300,12 @@ mod tests {
             let (dx, dy) = (x as f32 - 15.5, y as f32 - 15.5);
             (1.0 - (dx * dx + dy * dy).sqrt() / 16.0).clamp(0.0, 1.0)
         });
-        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(disc), ..Default::default() };
+        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(disc).into(), ..Default::default() };
         let rings = tip_outline(&b, false).expect("a sampled disc traces");
         assert!(rings.iter().all(|r| r.len() >= 3));
         assert!(rings.iter().flatten().all(|p| p[0].is_finite() && p[1].is_finite() && p[0].hypot(p[1]) <= 1.001));
         let blank = GrayTile::from_fn(8, 8, |_, _| 0.0);
-        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(blank), ..Default::default() };
+        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(blank).into(), ..Default::default() };
         assert!(tip_outline(&b, false).is_none());
     }
 

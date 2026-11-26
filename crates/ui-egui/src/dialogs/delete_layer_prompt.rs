@@ -22,7 +22,8 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
     }
     let state = app.session.active()?;
     let selected = state.selected_layers();
-    let ids = if let Some(id) = params.get("layer").and_then(Value::as_u64) { vec![photocraft_doc::LayerId(id)] } else { selected.clone() };
+    let explicit = params.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId);
+    let ids = explicit.as_ref().map_or(selected, std::slice::from_ref);
     if ids.is_empty() {
         return None;
     }

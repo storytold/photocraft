@@ -20,7 +20,7 @@ pub struct TypeInsertionStyle {
 }
 
 /// In-progress inline type editing (Type tool). Offsets are character indices.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 pub struct TextEdit {
     /// The edited layer.
     pub layer: u64,
