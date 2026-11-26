@@ -396,6 +396,36 @@ fn a_named_browse_of_a_script_is_judged_as_running_it() {
     assert!(log.starts.borrow().is_empty());
 }
 
+/// Script Output opens at a run's first line; closed by the user, more lines don't reopen it.
+#[test]
+fn closed_output_stays_closed_while_the_run_writes() {
+    let log = Log::default();
+    let program =
+        vec![Act::Emit(ScriptEvent::Output("one".into())), dialog(ScriptDialog::Alert, json!(["wait"])), Act::Emit(ScriptEvent::Output("two".into()))];
+    let mut app = app(vec![program], &log);
+    start_named(&mut app, "chatty.jsx");
+    settle(&mut app);
+    assert!(app.scripts.output_open);
+    app.scripts.output_open = false;
+    let id = open_id(&app);
+    crate::dialogs::confirm(&mut app, &egui::Context::default(), id).unwrap();
+    settle(&mut app);
+    assert!(!app.scripts.output_open, "closed by the user");
+    assert!(app.scripts.log.iter().any(|l| l == "two"), "the line is kept");
+}
+
+/// A picked JSXBIN is refused for what it is, whatever its bytes.
+#[test]
+fn a_picked_jsxbin_is_refused_for_its_format_before_its_text_is_read() {
+    let log = Log::default();
+    let mut h = harness(vec![], &log, vec![Picked::Contents(vec![("legacy.jsxbin".into(), vec![0xff, 0xfe, 0x00])])]);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.scripts.browse", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(log.starts.borrow().is_empty());
+    assert!(h.state().ui.status.contains("compiled ExtendScript"), "{}", h.state().ui.status);
+}
+
 /// `file.scripts.run` starts a run however it is reached: the menu, or `engine.execute`'s path
 /// through the app; so does `file.scripts.browse` of a `.jsx`, and one PhotoCraft can't run is
 /// refused with its reason. Without a script service it says no script can run.

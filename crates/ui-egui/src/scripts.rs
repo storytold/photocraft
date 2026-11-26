@@ -161,6 +161,8 @@ struct Active {
     /// The app's time its commands have taken.
     app_time: Duration,
     started_ms: f64,
+    /// It has written a line: the output window opened for it.
+    wrote: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -207,8 +209,16 @@ pub(crate) fn start(app: &mut PhotocraftApp, start: ScriptStart) -> Result<Value
     // a run it starts is automation's all the same, and keeps the app's command policy too.
     let automation = app.automation_input || app.session.authorize.is_some();
     let gate = app.session.authorize.or(if automation { app.services.automation_authorize } else { None });
-    app.scripts.run =
-        Some(Active { run, name: name.clone(), dialog: None, automation, gate, app_time: Duration::ZERO, started_ms: crate::gpu_canvas::now_ms() });
+    app.scripts.run = Some(Active {
+        run,
+        name: name.clone(),
+        dialog: None,
+        automation,
+        gate,
+        app_time: Duration::ZERO,
+        started_ms: crate::gpu_canvas::now_ms(),
+        wrote: false,
+    });
     let template = "Running script {name}…";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
     app.ui.status_error = false;
@@ -288,9 +298,10 @@ fn browse(app: &mut PhotocraftApp) -> Result<Value, String> {
         let automation = opened.0 || app.automation_input;
         let gate = opened.1.or(app.session.authorize).or(if app.automation_input { app.services.automation_authorize } else { None });
         let was = (std::mem::replace(&mut app.automation_input, automation), std::mem::replace(&mut app.session.authorize, gate));
-        let ran = run_picked(app, picked);
+        // Put back on a panic too: a later frame must not keep this pick's gates.
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_picked(app, picked)));
         (app.automation_input, app.session.authorize) = was;
-        ran
+        ran.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
 }
 
@@ -312,6 +323,8 @@ fn run_picked(app: &mut PhotocraftApp, picked: Picked) -> Result<Value, String> 
         Picked::Contents(files) => {
             let Some((name, bytes)) = files.into_iter().next() else { return Err(crate::file_dialog::CANCELLED.into()) };
             if is_js(&name) {
+                // A script PhotoCraft can't run says so before its text is read.
+                photocraft_engine::script_cmds::runnable("file.scripts.run", &name).map_err(|e| e.to_string())?;
                 let template = "{name} is not UTF-8 text.";
                 let source = String::from_utf8(bytes).map_err(|_| crate::i18n::fmt(tl!(template), &[("name", &name)]))?;
                 app.run("file.scripts.run", json!({ "name": name, "source": source }))
@@ -384,7 +397,12 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         match event {
             ScriptEvent::Output(line) => {
                 app.scripts.log_line(&line);
-                app.scripts.output_open = true;
+                // The window opens at a run's first line; closed after that, it stays closed.
+                if let Some(a) = app.scripts.run.as_mut()
+                    && !std::mem::replace(&mut a.wrote, true)
+                {
+                    app.scripts.output_open = true;
+                }
             }
             ScriptEvent::Dialog { kind, args } => open_dialog(app, kind, &args),
             ScriptEvent::Finished(result) => {
