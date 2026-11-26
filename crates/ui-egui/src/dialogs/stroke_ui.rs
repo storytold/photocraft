@@ -11,7 +11,7 @@ use craft::ui::runtime::memory::SaveKey;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::dialogs::blend_options::{blending_params, blending_rows};
+use crate::dialogs::blend_options::{blending_params, blending_rows, forced_preserve_transparency, remember_blending};
 use crate::dialogs::fill_ui::hex;
 use crate::dialogs::params::{captured, open_param};
 
@@ -20,15 +20,15 @@ pub const COMMAND: &str = "edit.stroke";
 const REMEMBER: &str = "photocraft.dialog.edit.stroke";
 const LOCATIONS: [(&str, &str); 3] = [("inside", "Inside"), ("center", "Center"), ("outside", "Outside")];
 
-/// The dialog's rows.
-fn rows(app: &PhotocraftApp, foreground: [f32; 3]) -> Vec<Param> {
+/// The dialog's rows, with the Preserve Transparency the target forces.
+fn rows(app: &PhotocraftApp, foreground: [f32; 3], preserve: Option<bool>) -> Vec<Param> {
     let locations = LOCATIONS.iter().map(|(k, l)| (k.to_string(), Label::from(tl!(l)))).collect();
     let mut rows = vec![
         Param::new("width", tl!("Width:"), ParamKind::number(Some(1.0), Some(250.0), 1.0, 1.0, 0)).unit(UnitKind::Pixels),
         Param::new("color", tl!("Color:"), ParamKind::color(Some(foreground))),
         Param::new("location", tl!("Location:"), ParamKind::radio(locations, Some("center".into()))),
     ];
-    rows.extend(blending_rows(app));
+    rows.extend(blending_rows(app, preserve));
     rows
 }
 
@@ -36,13 +36,14 @@ fn rows(app: &PhotocraftApp, foreground: [f32; 3]) -> Vec<Param> {
 pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let target = app.with_mask_target(COMMAND, json!({}));
     let target = target.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app));
+    let preserve = forced_preserve_transparency(app, &target);
     let mut held = json!({ "target": target });
     if let Some(st) = app.session.active() {
         held["document"] = json!(st.doc.id.0);
         held["layer"] = json!(st.active_layer);
     }
     let [r, g, b, _] = app.session.tools.foreground;
-    let rows = rows(app, [r, g, b]);
+    let rows = rows(app, [r, g, b], preserve);
     let title = Label::from(tl!("Stroke"));
     open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
         ParamDialog::new(COMMAND, title.clone(), Cow::Owned(rows.clone())).values(Bind::bound(fields)).remember(SaveKey::named(REMEMBER))
@@ -86,7 +87,7 @@ pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(),
 pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
     let captured = captured(app, &result.key);
     match app.run(COMMAND, params(&result.fields, &captured)) {
-        Ok(_) => result.remember(ctx),
+        Ok(_) => remember_blending(ctx, &result),
         Err(e) => crate::notices::error(app, e),
     }
 }
