@@ -34,6 +34,12 @@ fn is_context_task_bar(id: &str) -> bool {
     matches!(id, "window.panel.contextualTaskBar" | "window.toggle.contextualTaskBar")
 }
 
+/// The Window item and its shell command for the options bar, which is a bar of the window, not a dock panel
+/// (#16795).
+fn is_options_bar(id: &str) -> bool {
+    matches!(id, "window.panel.options" | "window.toggle.options")
+}
+
 /// Ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
     if let Some(k) = id.strip_prefix("view.show.") {
@@ -59,6 +65,7 @@ pub fn handles(id: &str) -> bool {
     }
     PANEL_IDS.contains(&id)
         || is_context_task_bar(id)
+        || is_options_bar(id)
         || matches!(
             id,
             "view.extras" | "view.flipHorizontal" | "view.pixelAspectRatioCorrection" | "view.patternPreview" | "view.pixelArtPreview" | "view.rotateView"
@@ -141,6 +148,9 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     if is_context_task_bar(id) {
         return Some(app.ui.panels.context_task_bar);
+    }
+    if is_options_bar(id) {
+        return Some(app.ui.panels.options_bar);
     }
     if PANEL_IDS.contains(&id) {
         return Some(crate::panel_docking::toggle_panel(id).is_some_and(|panel| crate::panel_docking::is_checked(app, panel)));
@@ -299,6 +309,14 @@ fn run(app: &mut PhotocraftApp, id: &str, p: &Value) -> Result<Value, String> {
         let bar = &mut app.ui.panels.context_task_bar;
         *bar = flag_param(p, *bar);
         return Ok(json!(*bar));
+    }
+    if is_options_bar(id) {
+        let show = match p.get("show").or_else(|| p.get("on")) {
+            None | Some(Value::Null) => !app.ui.panels.options_bar,
+            Some(value) => value.as_bool().ok_or("show must be a boolean")?,
+        };
+        app.ui.panels.options_bar = show;
+        return Ok(json!(show));
     }
     let o = &mut app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {

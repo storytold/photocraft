@@ -159,6 +159,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             })
         }),
         "panels": legacy.get("panels").cloned().unwrap_or_else(|| json!(app.ui.panels)),
+        // Window › Options (#16795): whether the options bar is on.
+        "optionsBar": json!({"enabled": app.ui.panels.options_bar}),
         // The contextual task bar (#10890): Window › Contextual Task Bar, whether it shows now and
         // where (screen points), and its place (pinned, dragged-to corner).
         "taskBar": json!({
