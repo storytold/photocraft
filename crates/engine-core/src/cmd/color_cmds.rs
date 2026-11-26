@@ -319,12 +319,13 @@ impl serde::Serialize for ColorSettings {
 impl<'de> serde::Deserialize<'de> for ColorSettings {
     /// Reads the settings, and settings saved before the checkbox (#14243): those held one number,
     /// `blendTextGamma`, with 1 meaning off. A 1 there loads as the box off with 1.45 in the
-    /// field, any other number as the box on with that number.
+    /// field, any other number as the box on with that number (one out of range is then reported
+    /// by the saved-preferences check, as in the new format).
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let raw = Value::deserialize(deserializer)?;
         let legacy = raw.as_object().is_some_and(|m| m.contains_key("blendTextGamma") && !m.contains_key("blendTextGammaOn"));
         let mut settings = ColorSettings::deserialize(raw).map_err(serde::de::Error::custom)?;
-        if legacy && settings.blend_text_gamma <= MIN_TEXT_GAMMA {
+        if legacy && settings.blend_text_gamma == MIN_TEXT_GAMMA {
             settings.blend_text_gamma = photocraft_compose::psblend::TEXT_GAMMA;
             settings.blend_text_gamma_on = false;
         }

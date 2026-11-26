@@ -146,3 +146,17 @@ fn settings_saved_as_one_number_still_load() {
     assert!(reopened.execute(CMD, json!({"bpc": false})).is_ok(), "later edits are accepted");
     s.execute(CMD, json!({"reset": true})).unwrap();
 }
+
+#[test]
+fn a_legacy_number_below_1_is_reported_not_read_as_off() {
+    let _process = crate::lock(&crate::PROCESS);
+    // Only 1 meant off in the one-number format; the command never took less, so a smaller
+    // number is a hand-edited file and is reported like any other value out of range.
+    let mut s = Session::new();
+    for gamma in ["0.5", "0", "-2"] {
+        let invalid = s.load_prefs_json(&format!(r#"{{"colorSettings": {{"blendTextGamma": {gamma}}}}}"#)).unwrap();
+        assert!(invalid.iter().any(|i| i.keys == ["colorSettings", "blendTextGamma"]), "{gamma}: {invalid:?}");
+        assert_eq!((s.color().settings.blend_text_gamma_on, s.color().settings.blend_text_gamma), (true, TEXT_GAMMA), "{gamma}");
+    }
+    s.execute(CMD, json!({"reset": true})).unwrap();
+}
