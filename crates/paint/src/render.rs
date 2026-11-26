@@ -207,6 +207,80 @@ pub fn texture_combine(mode: MaskMode, v: f32, t: f32, d: f32) -> f32 {
     if r.is_finite() { r.clamp(0.0, 1.0) } else { 0.0 }
 }
 
+/// A plain computed dab as a GPU evaluates it (see [`BrushContext::tip_geometry`]): the numbers
+/// [`BrushContext::rasterize_into`] derives from the dab and the brush, once per dab.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TipGeometry {
+    /// The pixels the dab can touch (`dab_rect`).
+    pub rect: Rect,
+    /// Dab centre in document pixels.
+    pub cx: f32,
+    pub cy: f32,
+    /// Roundness clamped as the rasteriser clamps it, and the minor radius `max(r·ro, 0.5)` the
+    /// tip profile is built for.
+    pub ro: f32,
+    pub rm: f32,
+    /// The tip profile: full inside `core`, then a falling edge of width `shoulder`.
+    pub core: f32,
+    pub shoulder: f32,
+    /// Squared distances (in the tip's space) at which the value is cut to 0.
+    pub reach2: f32,
+    pub small_reach2: f32,
+    /// Cosine and sine of the dab angle, and the flips as ±1.
+    pub cs: f32,
+    pub sn: f32,
+    pub fx: f32,
+    pub fy: f32,
+    /// Brush Projection: direction cosine and sine and the stretch `k`; `k` is 0 without it.
+    pub proj: [f32; 3],
+    /// A tip a few pixels across takes each pixel's covered area (a 4×4 grid).
+    pub small: bool,
+    /// Per-dab build-up (flow) and the opacity ceiling it builds towards.
+    pub flow: f32,
+    pub ceil: f32,
+}
+
+impl TipGeometry {
+    /// A pixel offset from the dab centre (`dx`, `dy`, y down) in tip space, as `rasterize_into`
+    /// maps it: to y-up, project, rotate by minus the angle, flip.
+    pub fn to_tip(&self, dx: f32, dy: f32) -> (f32, f32) {
+        let (mut ux, mut uy) = (dx, -dy);
+        let [ax, ay, k] = self.proj;
+        let t = (ux * ax + uy * ay) * k;
+        ux += t * ax;
+        uy += t * ay;
+        ((ux * self.cs + uy * self.sn) * self.fx, (-ux * self.sn + uy * self.cs) * self.fy)
+    }
+
+    /// The tip profile at distance `d` from the centre.
+    pub fn falloff(&self, d: f32) -> f32 {
+        TipProfile { core: self.core, shoulder: self.shoulder, reach: 0.0 }.falloff(d)
+    }
+
+    /// The dab's value (before flow) at the pixel whose centre is `(dx, dy)` from the dab's.
+    pub fn value(&self, dx: f32, dy: f32) -> f32 {
+        let dist2 = |dx: f32, dy: f32| {
+            let (u, v) = self.to_tip(dx, dy);
+            (u * self.ro).powi(2) + v * v
+        };
+        if self.small {
+            if dist2(dx, dy) >= self.small_reach2 {
+                return 0.0;
+            }
+            let mut sum = 0.0;
+            for sy in SUBPIXEL {
+                for sx in SUBPIXEL {
+                    sum += self.falloff(dist2(dx + sx, dy + sy).sqrt());
+                }
+            }
+            sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32
+        } else {
+            let d2 = dist2(dx, dy);
+            if d2 >= self.reach2 { 0.0 } else { self.falloff(d2.sqrt()) }
+        }
+    }
+}
+
 /// A stroke-ready brush: the settings plus prepared tip mips and texture.
 #[derive(Clone, Debug)]
 pub struct BrushContext {
@@ -300,6 +374,92 @@ impl BrushContext {
             }
             None => square,
         }
+    }
+
+    /// Why a GPU preview cannot stamp this brush's dabs as [`tip_geometry`](Self::tip_geometry)
+    /// describes them, or `Ok` when it can. Only a plain computed round tip qualifies: nothing
+    /// that changes a dab's value per pixel beyond its tip profile (a sampled tip, Dual Brush,
+    /// texture, noise, Wet Edges), nothing that makes a pixel's colour or its ceiling vary (colour
+    /// dynamics, Transfer, pressure opacity), no mode but Normal over the target, no smoothing
+    /// tail and no airbrush build-up (neither is a dab list a push ends with).
+    pub fn gpu_stampable(brush: &BrushSettings) -> Result<(), &'static str> {
+        if !matches!(*brush.tip, TipShape::Round) {
+            return Err("a sampled tip");
+        }
+        let checks = [
+            (brush.dual_brush.enabled, "Dual Brush"),
+            (brush.texture.enabled, "Texture"),
+            (brush.noise, "Noise"),
+            (brush.wet_edges, "Wet Edges"),
+            (brush.scattering.enabled, "Scattering"),
+            (brush.color_dynamics.enabled, "Color Dynamics"),
+            (brush.transfer.enabled, "Transfer"),
+            (brush.pressure_opacity, "pressure opacity"),
+            (brush.aliased, "an aliased tip"),
+            (brush.erase, "the eraser"),
+            (brush.behind, "Behind mode"),
+            (brush.mode != BlendMode::Normal, "a blend mode other than Normal"),
+            (brush.build_up, "Build-up"),
+            (brush.smoothing.enabled && brush.smoothing.amount > 0.0, "smoothing"),
+        ];
+        match checks.iter().find(|(on, _)| *on) {
+            Some((_, what)) => Err(what),
+            None => Ok(()),
+        }
+    }
+
+    /// What a GPU needs to evaluate `d` as [`rasterize_into`](Self::rasterize_into) does for a
+    /// plain computed tip (see [`gpu_stampable`](Self::gpu_stampable)): the pixel at (x, y) takes
+    /// `value × flow`, where `value` is
+    ///
+    /// - with `small` clear: [`TipGeometry::falloff`] at `sqrt((u·ro)² + v²)` where `(u, v)` is
+    ///   [`TipGeometry::to_tip`] of `(x + 0.5 − cx, y + 0.5 − cy)`, and 0 once that squared
+    ///   distance reaches `reach2`;
+    /// - with `small` set (a tip a few pixels across): the mean of that falloff over a 4×4 grid of
+    ///   offsets of ±0.125 and ±0.375 pixel around the pixel centre, and 0 when the squared
+    ///   distance at the centre reaches `small_reach2`.
+    ///
+    /// `None` when the brush is not stampable or the dab has a value the maths does not hold
+    /// (non-finite).
+    pub fn tip_geometry(&self, d: &Dab) -> Option<TipGeometry> {
+        let b = &self.brush;
+        if Self::gpu_stampable(b).is_err() || !(d.radius.is_finite() && d.radius > 0.0 && d.roundness.is_finite() && d.angle.is_finite()) {
+            return None;
+        }
+        if !(d.center.x.is_finite() && d.center.y.is_finite() && d.alpha.is_finite() && d.opacity.is_finite() && d.proj_scale.is_finite()) {
+            return None;
+        }
+        let r = d.radius;
+        let ro = d.roundness.max(0.5 / r).min(1.0);
+        let rm = (r * ro).max(0.5);
+        let profile = TipProfile::new(rm, b.hardness);
+        let reach = profile.reach().max(rm);
+        let (sn, cs) = d.angle.sin_cos();
+        let proj = if d.proj_scale < 0.999 {
+            let (ps, pc) = d.proj_angle.sin_cos();
+            [pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0]
+        } else {
+            [0.0; 3]
+        };
+        Some(TipGeometry {
+            rect: self.dab_rect(d, false),
+            cx: d.center.x as f32,
+            cy: d.center.y as f32,
+            ro,
+            rm,
+            core: profile.core,
+            shoulder: profile.shoulder,
+            reach2: (reach + 0.5) * (reach + 0.5),
+            small_reach2: (reach + 0.75) * (reach + 0.75),
+            cs,
+            sn,
+            fx: if d.flip_x { -1.0 } else { 1.0 },
+            fy: if d.flip_y { -1.0 } else { 1.0 },
+            proj,
+            small: rm < SMALL_TIP_RADIUS,
+            flow: d.alpha,
+            ceil: d.opacity,
+        })
     }
 
     /// Half the width and height of the pixels a sampled dab can paint: the tip's sampled area

@@ -211,3 +211,78 @@ fn texture_at_scaled_is_the_bilinear_of_the_wrapped_texels() {
         assert!((got - want).abs() < 1e-5, "({x}, {y}): {got} vs {want}");
     }
 }
+
+/// What a GPU stamps (`TipGeometry::value` × flow, the maths its shader repeats) is what
+/// `rasterize_into` writes for a plain computed dab: round and elliptical, rotated and flipped,
+/// projected, small (sampled by area) and large, soft and hard.
+#[test]
+fn tip_geometry_gives_the_rasterisers_values() {
+    let cases = [
+        // size, hardness, roundness, angle (radians), flips, projection (scale, angle)
+        (3.0, 0.0, 1.0, 0.0, (false, false), (1.0, 0.0)),
+        (5.0, 1.0, 0.6, 0.7, (true, false), (1.0, 0.0)),
+        (9.0, 0.5, 1.0, 1.1, (false, false), (1.0, 0.0)),
+        (40.0, 0.0, 1.0, 0.0, (false, false), (1.0, 0.0)),
+        (40.0, 0.7, 0.4, 0.9, (false, true), (1.0, 0.0)),
+        (120.0, 0.3, 0.5, -2.0, (true, true), (0.6, 0.5)),
+        (300.0, 0.0, 1.0, 0.0, (false, false), (1.0, 0.0)),
+        (300.0, 1.0, 1.0, 0.4, (false, false), (1.0, 0.0)),
+    ];
+    for (size, hardness, roundness, angle, (flip_x, flip_y), (proj_scale, proj_angle)) in cases {
+        let brush = BrushSettings { size, hardness, ..BrushSettings::default() };
+        let ctx = BrushContext::new(&brush);
+        for (cx, cy) in [(60.0, 60.0), (60.37, 60.81), (60.5, 60.5)] {
+            let d = Dab { angle, roundness, flip_x, flip_y, proj_scale, proj_angle, ..Dab::round(photocraft_geom::Point { x: cx, y: cy }, size / 2.0, 0.7) };
+            let g = ctx.tip_geometry(&d).expect("a plain computed tip");
+            let rect = ctx.dab_rect(&d, false);
+            assert_eq!(g.rect, rect);
+            let mut cpu = Vec::new();
+            ctx.rasterize(&d, false, rect, &mut cpu);
+            let mut worst = 0.0f32;
+            for y in rect.y0..rect.y1 {
+                for x in rect.x0..rect.x1 {
+                    let v = g.value(x as f32 + 0.5 - g.cx, y as f32 + 0.5 - g.cy) * g.flow;
+                    worst = worst.max((v - cpu[pixel_index(rect, x, y)]).abs());
+                }
+            }
+            // The same arithmetic; a rotation or a reordering by the rasteriser's fast paths moves a distance by about 1e-5 px.
+            assert!(worst <= 1e-4, "size {size} hardness {hardness} roundness {roundness} angle {angle}: worst {worst}");
+        }
+    }
+}
+
+/// The dabs a push generates do not depend on rasterising them: a generator on its own makes the
+/// stroke renderer's dabs, whatever the chunking.
+#[test]
+fn a_dab_generator_makes_the_renderers_dabs() {
+    let brush = BrushSettings { size: 30.0, hardness: 0.4, spacing: 0.2, ..BrushSettings::default() };
+    let pts: Vec<StrokePoint> = (0..40).map(|i| StrokePoint::new(10.0 + i as f64 * 7.3, 50.0 + (i as f64 * 0.4).sin() * 30.0, 1.0)).collect();
+    let mut renderer = StrokeRenderer::new(&brush, None, 1.0).record_dabs();
+    renderer.push(&pts);
+    let mut generator = DabGenerator::new(&brush, 1.0);
+    let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+    for chunk in pts.chunks(3) {
+        generator.push(chunk, &mut dabs, &mut dual);
+    }
+    assert!(dabs.len() > 40);
+    assert_eq!(dabs, renderer.dabs());
+}
+
+/// Brushes the GPU cannot stamp say why; a plain one passes.
+#[test]
+fn only_plain_computed_brushes_are_stampable() {
+    assert!(BrushContext::gpu_stampable(&BrushSettings::default()).is_ok());
+    let plain = BrushSettings::default();
+    for brush in [
+        BrushSettings { wet_edges: true, ..plain.clone() },
+        BrushSettings { noise: true, ..plain.clone() },
+        BrushSettings { erase: true, ..plain.clone() },
+        BrushSettings { aliased: true, ..plain.clone() },
+        BrushSettings { pressure_opacity: true, ..plain.clone() },
+        BrushSettings { mode: BlendMode::Multiply, ..plain.clone() },
+        BrushSettings { smoothing: crate::Smoothing { amount: 0.5, ..plain.smoothing.clone() }, ..plain.clone() },
+    ] {
+        assert!(BrushContext::gpu_stampable(&brush).is_err());
+        assert!(BrushContext::new(&brush).tip_geometry(&Dab::round(photocraft_geom::Point { x: 5.0, y: 5.0 }, 4.0, 1.0)).is_none());
+    }
+}
