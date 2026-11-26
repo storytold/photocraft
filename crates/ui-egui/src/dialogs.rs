@@ -171,8 +171,9 @@ pub(crate) mod params {
                 None => dialog,
             }
         });
-        // A family without a check closes at OK; one with a check holds OK until `answer_held` judged it.
-        let dialog = if family_for(key).is_some_and(|family| family.check.is_some()) { dialog.held_ok() } else { dialog };
+        // Keep Artboards to Files open for the destination check in `answer_held`, too.
+        let hold_ok = key == "file.export.artboardsToFiles" || family_for(key).is_some_and(|family| family.check.is_some());
+        let dialog = if hold_ok { dialog.held_ok() } else { dialog };
         app.framework.captured.insert(key.to_owned(), captured);
         app.framework.dialogs.open(dialog)
     }

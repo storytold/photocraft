@@ -1025,7 +1025,6 @@ fn collision_key(stem: &str) -> String {
 /// `<prefix>.pdf`.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = artboards_destination(p)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let (save, board) = export_options::parse(s, p, cmd)?;
     let border = name_border_param(p, cmd)?.filter(|_| !keeps_layers(&format));
@@ -1038,6 +1037,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     if boards.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
+    let dir = artboards_destination(p)?;
     if let Some(o) = &border {
         for one in &mut boards {
             add_name_border(one, o, cmd)?;
@@ -1054,7 +1054,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
                 pages.push((one.size.width, one.size.height, 72.0, jpeg_page(one, save.quality.or(Some(10.0)), cmd)?));
             }
             let name = if prefix.is_empty() { stem(&doc.name) } else { prefix };
-            let path = join(&dir, &format!("{}.pdf", sanitize(&name)));
+            let path = join(dir, &format!("{}.pdf", sanitize(&name)));
             guard.check()?;
             write_file(&path, &raster_pdf(&pages))?;
             return Ok(json!({"files": [path], "warnings": []}));
@@ -1071,7 +1071,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     for (mut one, name) in boards.into_iter().zip(stems) {
         // Export Options of the file type (#13636): PNG-8 and PNG-24 take PNG's.
         board.apply(&mut one, extension);
-        let path = join(&dir, &format!("{name}.{extension}"));
+        let path = join(dir, &format!("{name}.{extension}"));
         let (bytes, warned) = match &ext {
             Some(_) if truecolour && one.mode != ColorMode::Rgb => encode(&rgb_copy(&one)?, &path, save)?,
             Some(_) => encode(&one, &path, save)?,

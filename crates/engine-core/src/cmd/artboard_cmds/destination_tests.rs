@@ -32,6 +32,19 @@ fn missing_destination_names_the_path_without_creating_anything() {
 }
 
 #[test]
+fn invalid_board_geometry_is_reported_before_a_missing_destination() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 32, "height": 16})).unwrap();
+    s.execute("layer.new.artboard", json!({"x": i32::MIN, "width": 16, "height": 16, "name": "Far"})).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let missing = parent.path().join("missing");
+
+    let error = s.execute(EXPORT, json!({"dir": missing})).unwrap_err().to_string();
+    assert!(error.contains(&i32::MIN.to_string()), "{error}");
+    assert!(!missing.exists());
+}
+
+#[test]
 fn successful_export_preserves_the_document_selection_and_history() {
     let mut s = session();
     s.execute("select.rect", json!({"x": 17, "y": 1, "width": 4, "height": 6})).unwrap();

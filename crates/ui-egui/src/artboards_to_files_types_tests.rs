@@ -110,6 +110,32 @@ fn ok_with_png8_writes_indexed_pngs_and_pdf_one_file() {
 }
 
 #[test]
+fn run_preserves_the_form_until_a_valid_destination_is_entered() {
+    let mut h = harness();
+    let dialog = open(&mut h, ARTBOARDS);
+    let parent = tempfile::tempdir().unwrap();
+    let missing = parent.path().join("missing");
+    set(&mut h, dialog, "dir", json!(missing));
+    set(&mut h, dialog, "prefix", json!("trial"));
+    set(&mut h, dialog, "format", json!("png24"));
+
+    h.get_by_role_and_label(Role::Button, "Run").click();
+    h.run_steps(4);
+    assert!(!missing.exists());
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(4);
+    assert_eq!(field(&h, dialog, "dir"), Some(json!(missing)));
+    assert_eq!(field(&h, dialog, "prefix"), Some(json!("trial")));
+    assert_eq!(field(&h, dialog, "format"), Some(json!("png24")));
+
+    set(&mut h, dialog, "dir", json!(parent.path()));
+    h.get_by_role_and_label(Role::Button, "Run").click();
+    h.run_steps(4);
+    assert_eq!(field(&h, dialog, "dir"), None);
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 2);
+}
+
+#[test]
 fn layer_comps_to_files_keeps_its_list() {
     let mut h = harness();
     let dialog = open(&mut h, "file.export.layerCompsToFiles");
