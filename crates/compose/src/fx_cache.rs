@@ -163,7 +163,7 @@ fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
 /// (or anything else rendering children over a wider area) gets the whole region.
 pub(crate) fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool) {
     let m = effects::margin(layer);
-    let region = effect_source_bounds(layer, cx.canvas).inflate(m).intersect(&cx.canvas.inflate(m));
+    let region = whole_effect_region(layer, cx.canvas, m);
     let clip = *cx.fx_clip.lock().unwrap_or_else(|e| e.into_inner());
     match clip {
         Some(c) if c.contains_rect(&rect) && (advanced::shapeless(layer) || cx.fx_over_budget) && effects::maps_are_local(layer) => {
@@ -172,6 +172,16 @@ pub(crate) fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool)
         }
         _ => (region, false),
     }
+}
+
+/// Where `layer`'s unclipped effect maps span: its effect source grown by `margin`, clamped to
+/// `canvas` grown by the same `margin`. Returns [`Rect::EMPTY`] when the source or canvas is empty.
+pub fn whole_effect_region(layer: &Layer, canvas: Rect, margin: i32) -> Rect {
+    let source = effect_source_bounds(layer, canvas);
+    if source.is_empty() || canvas.is_empty() {
+        return Rect::EMPTY;
+    }
+    source.inflate(margin).intersect(&canvas.inflate(margin))
 }
 
 /// Whether the effect maps of the visible layers of `layers` (groups included), each over its
@@ -183,16 +193,18 @@ pub(crate) fn fx_over_budget(layers: &[Layer], canvas: Rect) -> bool {
     fx_region_bytes(layers, canvas) > effect_cache_budget() as u64
 }
 
-/// The bytes [`fx_over_budget`] compares with the budget.
+/// Raw whole-region bytes [`fx_over_budget`] compares with the budget. Regions above
+/// [`MAX_FX_BUILD_BYTES`] stay included so oversized local maps trigger clipping before the
+/// build cap runs.
 pub(crate) fn fx_region_bytes(layers: &[Layer], canvas: Rect) -> u64 {
     fn bytes(layers: &[Layer], canvas: Rect, depth: u32) -> u64 {
         let mut total = 0u64;
         for l in layers.iter().filter(|l| l.visible) {
             if effects::has_effects(l) {
                 let m = effects::margin(l);
-                let region = effect_source_bounds(l, canvas).inflate(m).intersect(&canvas.inflate(m));
+                let region = whole_effect_region(l, canvas, m);
                 let maps = effects::map_count(l) as u64;
-                let px = u64::from(region.width()) * u64::from(region.height());
+                let px = region.size().area();
                 total = total.saturating_add(maps.saturating_mul(px).saturating_mul(4));
             }
             if let LayerContent::Group(g) = &l.content
@@ -206,8 +218,108 @@ pub(crate) fn fx_region_bytes(layers: &[Layer], canvas: Rect) -> u64 {
     bytes(layers, canvas, 0)
 }
 
+/// Worst-case clipped effect-map rectangle built for any horizontal band of height `band_rows`
+/// (or the full `render` rectangle when `band_rows <= 0`) intersecting `region`.
+fn worst_band_clipped_region(region: Rect, render: Rect, margin: i32, band_rows: i32) -> Rect {
+    if region.is_empty() || render.is_empty() {
+        return Rect::EMPTY;
+    }
+    let pad = margin.saturating_mul(2);
+    let padded = region.intersect(&render.inflate(pad));
+    if padded.is_empty() {
+        return Rect::EMPTY;
+    }
+    if band_rows <= 0 {
+        return padded;
+    }
+    let band_h = u64::from(u32::try_from(band_rows).unwrap_or(u32::MAX)).min(u64::from(render.height()));
+    let max_h = band_h.saturating_add(u64::from(pad.max(0) as u32).saturating_mul(2));
+    let clipped_h = u64::from(padded.height()).min(max_h).min(u64::from(u32::MAX)) as u32;
+    Rect::from_xywh(padded.x0, padded.y0, padded.width(), clipped_h)
+}
+
+/// Estimates the peak effect-map bytes retained while rendering `layers` over `render` in
+/// horizontal bands of `band_rows` (or a single pass when `band_rows <= 0`), descending up to
+/// [`photocraft_doc::MAX_GROUP_DEPTH`].
+///
+/// Visibility follows [`super::ctx::effect_layers`] (hidden layers and layers clipped to a hidden
+/// base are skipped). Local maps clipped to bands reserve only their worst-case band slice; a
+/// styled group's children also reserve their whole maps because building the parent group's shape
+/// may composite them outside a band. Returns `None` when [`MAX_FX_BUILD_BYTES`] would force the
+/// renderer to omit any effect map needed for `render`, so callers that require complete effects
+/// can refuse before allocating.
+pub fn estimated_effect_map_bytes(layers: &[Layer], canvas: Rect, render: Rect, band_rows: i32) -> Option<u64> {
+    if render.is_empty() {
+        return Some(0);
+    }
+    let over_budget = fx_over_budget(layers, canvas);
+    estimate_layers(layers, canvas, render, band_rows, over_budget, false, photocraft_doc::MAX_GROUP_DEPTH)
+}
+
+/// Recursive implementation of [`estimated_effect_map_bytes`].
+fn estimate_layers(layers: &[Layer], canvas: Rect, render: Rect, band_rows: i32, over_budget: bool, in_styled_group: bool, depth_left: usize) -> Option<u64> {
+    let mut total = 0u64;
+    let mut base_visible = true;
+    for l in layers {
+        if !l.clipped {
+            base_visible = l.visible;
+        }
+        if !l.visible || !base_visible {
+            continue;
+        }
+        let has_fx = effects::has_effects(l);
+        if has_fx {
+            let src = advanced::effects_source(l);
+            let m = effects::margin(&src);
+            let region = whole_effect_region(&src, canvas, m);
+            let reaches_render = !region.intersect(&render).is_empty();
+            if !region.is_empty() && (in_styled_group || reaches_render) {
+                let local = effects::maps_are_local(&src);
+                let clips_to_band = local && (advanced::shapeless(&src) || over_budget);
+                let needs_whole = !clips_to_band || in_styled_group;
+                let needs_clipped = clips_to_band && reaches_render;
+                let mut pixels = 0u64;
+                if needs_whole {
+                    let built = effect_build_region(&src, region);
+                    if built.is_empty() {
+                        return None;
+                    }
+                    pixels = pixels.saturating_add(built.size().area());
+                }
+                if needs_clipped {
+                    let clipped = worst_band_clipped_region(region, render, m, band_rows);
+                    if !clipped.is_empty() && (!needs_whole || clipped != region) {
+                        let built = effect_build_region(&src, clipped);
+                        if built.is_empty() {
+                            return None;
+                        }
+                        pixels = pixels.saturating_add(built.size().area());
+                    }
+                }
+                let maps = effects::map_count(&src) as u64;
+                total = total.saturating_add(maps.saturating_mul(pixels).saturating_mul(std::mem::size_of::<f32>() as u64));
+            }
+        }
+        if let LayerContent::Group(g) = &l.content
+            && depth_left > 0
+        {
+            total = total.saturating_add(estimate_layers(&g.children, canvas, render, band_rows, over_budget, in_styled_group || has_fx, depth_left - 1)?);
+        }
+    }
+    Some(total)
+}
+
 /// Most bytes one layer's effect maps and source may take to build, whatever the cache budget.
 const MAX_FX_BUILD_BYTES: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 512 << 20 };
+
+/// Applies [`MAX_FX_BUILD_BYTES`] to one layer's build region, returning [`Rect::EMPTY`] when
+/// building the maps and shape array would exceed the cap.
+fn effect_build_region(layer: &Layer, region: Rect) -> Rect {
+    // Non-local effects keep their whole source region, which a few distant pixels stretch over
+    // the canvas: past the cap the effects are left out instead of allocating it.
+    let region_px = region.size().area();
+    if (effects::map_count(layer) as u64 + 1).saturating_mul(region_px).saturating_mul(4) > MAX_FX_BUILD_BYTES { Rect::EMPTY } else { region }
+}
 
 /// The layer's effect maps over its region (layer bounds grown by the effect reach, within the
 /// canvas grown likewise; see [`effect_region`]), built once per layer state and shared by every
@@ -221,13 +333,8 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
 
 pub(crate) fn effect_maps_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<std::sync::Arc<effects::FxMaps>, A::Error> {
     use std::hash::{Hash, Hasher};
-    let (mut region, clipped) = effect_region(layer, rect, cx);
-    // Non-local effects keep their whole source region, which a few distant pixels stretch over
-    // the canvas: past the cap the effects are left out instead of allocating it.
-    let region_px = u64::from(region.width()) * u64::from(region.height());
-    if (effects::map_count(layer) as u64 + 1).saturating_mul(region_px).saturating_mul(4) > MAX_FX_BUILD_BYTES {
-        region = Rect::EMPTY;
-    }
+    let (region, clipped) = effect_region(layer, rect, cx);
+    let region = effect_build_region(layer, region);
     static NO_CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *NO_CACHE.get_or_init(|| std::env::var_os("PHOTOCRAFT_FX_NOCACHE").is_some()) {
         let shape = if region.is_empty() { Vec::new() } else { effect_shape_with(layer, region, cx, alloc)? };
@@ -346,4 +453,94 @@ fn cached_effect_maps_with<A: BufferAlloc>(layer: &Layer, region: Rect, key: u64
     // Evict the oldest entries over budget (never the one just used).
     evict_fx_cache_over_budget(key);
     Ok(maps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::{BlendMode, Color, PixelFormat};
+    use photocraft_doc::{Effect, FxCommon};
+
+    fn styled_layer(blend: BlendMode) -> Layer {
+        let mut layer = Layer::raster("styled", PixelFormat::RGBA8);
+        layer.advanced.transparency_shapes = false;
+        layer.effects.enabled = true;
+        layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(blend, 1.0), color: Color::BLACK });
+        layer
+    }
+
+    #[test]
+    fn whole_effect_region_is_empty_for_empty_source_or_canvas() {
+        let mut empty = Layer::raster("empty", PixelFormat::RGBA8);
+        empty.effects.enabled = true;
+        empty.effects.items.push(Effect::default_drop_shadow());
+        assert_eq!(whole_effect_region(&empty, Rect::new(0, 0, 128, 128), effects::margin(&empty)), Rect::EMPTY);
+        let shapeless = styled_layer(BlendMode::Normal);
+        assert_eq!(whole_effect_region(&shapeless, Rect::EMPTY, effects::margin(&shapeless)), Rect::EMPTY);
+    }
+
+    #[test]
+    fn effect_map_admission_skips_clipped_subtrees_with_hidden_bases() {
+        let canvas = Rect::new(0, 0, 32, 24);
+        let styled = styled_layer(BlendMode::Normal);
+        let expected = estimated_effect_map_bytes(std::slice::from_ref(&styled), canvas, canvas, 0).unwrap();
+        assert!(expected > 0);
+        let mut hidden = Layer::raster("hidden base", PixelFormat::RGBA8);
+        hidden.visible = false;
+        let mut clipped_group = Layer::group("clipped", vec![styled.clone()]);
+        clipped_group.clipped = true;
+        let mut layers = vec![hidden, clipped_group];
+        assert_eq!(estimated_effect_map_bytes(&layers, canvas, canvas, 0), Some(0));
+        assert_eq!(fx_region_bytes(&layers, canvas), expected, "raw cache sizing preserves its clipping decision");
+        layers.push(styled);
+        assert_eq!(estimated_effect_map_bytes(&layers, canvas, canvas, 0), Some(expected), "a new base restores visibility");
+    }
+
+    #[test]
+    fn effect_map_admission_applies_the_build_limit_per_region_and_band() {
+        let canvas = Rect::new(0, 0, 300_000, 300_000);
+        let render = Rect::new(100, 100, 116, 116);
+        let local = styled_layer(BlendMode::Normal);
+        let layers = std::slice::from_ref(&local);
+        let whole = whole_effect_region(&local, canvas, effects::margin(&local));
+        assert_eq!(effect_build_region(&local, whole), Rect::EMPTY);
+        assert!(fx_region_bytes(layers, canvas) > MAX_FX_BUILD_BYTES, "raw sizing must still trigger clipping");
+        assert_eq!(estimated_effect_map_bytes(layers, canvas, canvas, 0), None);
+        // Banded rendering clips local maps to one band plus twice the margin, fitting within the cap.
+        let band_rows = 256;
+        let band_clipped = worst_band_clipped_region(whole, canvas, effects::margin(&local), band_rows);
+        assert_eq!(estimated_effect_map_bytes(layers, canvas, canvas, band_rows), Some(band_clipped.size().area() * 4));
+        let clipped = whole.intersect(&render.inflate(2 * effects::margin(&local)));
+        assert_eq!(estimated_effect_map_bytes(layers, canvas, render, 0), Some(clipped.size().area() * 4));
+
+        // Non-local effects always build their whole region, even when banded or rendered over a small rect.
+        let non_local = styled_layer(BlendMode::Dissolve);
+        assert!(!effects::maps_are_local(&non_local));
+        assert_eq!(estimated_effect_map_bytes(std::slice::from_ref(&non_local), canvas, render, band_rows), None);
+    }
+
+    #[test]
+    fn effect_map_admission_skips_layers_outside_render_and_checks_styled_group_children() {
+        let canvas = Rect::new(0, 0, 300_000, 300_000);
+        let local = styled_layer(BlendMode::Normal);
+        // Outside the render rectangle, a top-level layer builds no maps and does not trigger refusal.
+        let disjoint = Rect::new(400_000, 400_000, 400_016, 400_016);
+        assert_eq!(estimated_effect_map_bytes(std::slice::from_ref(&local), canvas, disjoint, 256), Some(0));
+
+        // Inside a styled group, building the parent group's shape can request the child's whole map.
+        let mut parent = Layer::group("styled parent", vec![local]);
+        parent.effects.enabled = true;
+        parent.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::WHITE });
+        let render = Rect::new(100, 100, 116, 116);
+        assert_eq!(estimated_effect_map_bytes(std::slice::from_ref(&parent), canvas, render, 256), None);
+    }
+
+    #[test]
+    fn effect_map_build_limit_accepts_its_exact_boundary() {
+        let layer = styled_layer(BlendMode::Normal);
+        let pixels = MAX_FX_BUILD_BYTES / ((effects::map_count(&layer) as u64 + 1) * 4);
+        let at_limit = Rect::new(0, 0, pixels as i32, 1);
+        assert_eq!(effect_build_region(&layer, at_limit), at_limit);
+        assert_eq!(effect_build_region(&layer, Rect::new(0, 0, pixels as i32 + 1, 1)), Rect::EMPTY);
+    }
 }

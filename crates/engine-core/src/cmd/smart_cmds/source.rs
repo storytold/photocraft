@@ -128,6 +128,12 @@ pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
     Some(img)
 }
 
+/// Whether `surface` fits inside the source cache byte budget (so callers can avoid allocating a
+/// translated copy only for [`cache_put`] to discard it).
+pub(super) fn can_cache(surface: &Surface) -> bool {
+    super::stack_cache::surface_bytes(surface) <= CACHE_BYTES
+}
+
 pub(super) fn cache_put(key: CacheKey, image: SourceImage) {
     cache_put_within(key, image, CACHE_BYTES);
 }
