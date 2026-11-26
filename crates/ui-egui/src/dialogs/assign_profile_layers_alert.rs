@@ -1,9 +1,11 @@
 //! Edit › Assign Profile on a document with layers first asks whether to go on (#14235): giving the document another
-//! profile can change how its layers look. OK (the default) and Cancel, and a "Don't show again" box kept with the
-//! other dialog preferences. OK opens the Assign Profile dialog; Cancel or Escape ends the command with nothing changed.
-//! A document with only a Background layer never asks, nor does `edit.assignProfile` run with params (scripts,
-//! actions, agents, the control channel), which the menu arm leaves to the command.
+//! profile can change how its layers look. A warning icon beside the text (#16683), OK (the default) and Cancel, and a
+//! "Don't show again" box kept with the other dialog preferences. OK opens the Assign Profile dialog; Cancel or Escape
+//! ends the command with nothing changed. A document with only a Background layer never asks, nor does
+//! `edit.assignProfile` run with params (scripts, actions, agents, the control channel), which the menu arm leaves to
+//! the command.
 
+use craft::behavior::IconId;
 use craft::ui::dialog::{DialogId, PromptAnswer, PromptChoice, StandardPrompt};
 
 use super::alerts;
@@ -30,6 +32,7 @@ pub fn asks(app: &PhotocraftApp) -> bool {
 pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let prompt = StandardPrompt::custom(tl!(QUESTION).to_owned())
         .title(tl!("Assign Profile").to_owned())
+        .icon(IconId::new("warning"))
         .button(PromptChoice::Proceed, tl!("OK").to_owned())
         .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
         .dont_show_again()
