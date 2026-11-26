@@ -1099,3 +1099,15 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     assert!(kept.windows(b"secret".len()).any(|w| w == b"secret"));
     assert_eq!(doc, before);
 }
+
+/// A prepare whose document changed lets go of a composite of another document only: the active
+/// document's own stays.
+#[test]
+fn only_a_composite_of_another_document_is_released() {
+    let new = || Arc::new(Document::new("d", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8));
+    let (old, active) = (new(), new());
+    let kept: LayerSource = (old.clone(), vec![(photocraft_doc::LayerId(1), old.clone())]);
+    assert!(kept_for_another_document(&kept, Some(&active)));
+    assert!(kept_for_another_document(&kept, None));
+    assert!(!kept_for_another_document(&kept, Some(&old)));
+}

@@ -630,13 +630,10 @@ fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> R
             let selected = app.session.active().and_then(|document| document.active_layer).ok_or("no active layer")?;
             if layer == "layer.exportAs" {
                 // Several layers (artboards, say) selected: one file each (#3629).
-                let layers = app.session.active().map(|document| document.selected_layers()).unwrap_or_default();
-                if layers.len() > 1 {
-                    let layers = layers.to_vec();
-                    Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?.value()})))
-                } else {
-                    Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?.value()})))
-                }
+                // Composited on a worker before the dialog opens (with background jobs).
+                let layers = app.session.active().map(|document| document.selected_layers().to_vec()).unwrap_or_default();
+                let layers = if layers.len() > 1 { layers } else { vec![selected] };
+                Some(crate::export_dialog::open_selected_layers(app, layers))
             } else {
                 Some(crate::export_dialog::quick_export_selected_layers_png(app))
             }

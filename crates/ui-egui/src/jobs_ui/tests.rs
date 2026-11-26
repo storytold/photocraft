@@ -1198,6 +1198,152 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     control.assert_untouched(&app);
 }
 
+/// A harness whose file dialogs stay open until the test answers them.
+fn export_harness() -> (Harness<'static, Box<PhotocraftApp>>, Arc<craft::host::ScriptedFiles>) {
+    let files = Arc::new(craft::host::ScriptedFiles::held());
+    let h = app_harness_with(crate::Services { files: Some(files.clone()), ..Default::default() });
+    (h, files)
+}
+
+/// Layer › Export As from the menu: waits for the dialog (composited on a worker first), then
+/// exports as PNG to `path` (a file, or the folder several layers go into).
+fn export_layer_as(h: &mut Harness<'static, Box<PhotocraftApp>>, files: &craft::host::ScriptedFiles, path: &str) {
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert_eq!(r["pending"], true, "the layers are composited on a worker: {r}");
+    step_until(h, |a| crate::export_dialog::open_dialog(a).is_some());
+    let id = crate::export_dialog::open_dialog(h.state()).expect("the dialog opens once the layers are ready");
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "format", json!("png")).unwrap();
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+    files.answer(craft::host::Picked::Paths(vec![path.into()])).expect("Export asks for a destination");
+    h.state_mut().poll_file_dialog();
+    // The dialog's next pass takes the answered path and exports.
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+}
+
+/// Layer › Export As composites the layer on a worker before its dialog opens, and Export writes
+/// the file on a worker like a save does: on a large storyboard each took over 17 s on the UI
+/// thread, and the compositor closed the frozen window.
+#[test]
+fn layer_export_as_prepares_and_writes_in_the_background() {
+    let path = "/tmp/photocraft-test/layer.png";
+    let (mut h, files) = export_harness();
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    export_layer_as(&mut h, &files, path);
+    // Encoding waits on its gate: a window close meanwhile waits for the export.
+    step_until(&mut h, PhotocraftApp::exporting);
+    assert!(h.state().exporting(), "a close waits while the export writes");
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| a.ui.status.starts_with("Exported"));
+    assert!(!h.state().exporting());
+    assert_eq!(gates.written(), [path], "written by the worker save");
+    assert!(h.state().ui.status.starts_with(&format!("Exported {path}")), "{}", h.state().ui.status);
+    assert!(noticed(&h, "a warning"), "the export warnings are shown");
+}
+
+/// Several selected layers, one of them empty: the prepare leaves the empty one out on its worker
+/// (#14806), and the others go into the chosen folder as `<layer name>.png` (#14808), written by
+/// the worker save. Nothing is kept once they are written.
+#[test]
+fn layer_export_as_of_several_layers_skips_an_empty_one_and_writes_in_the_background() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let (mut h, files) = export_harness();
+    let gates = Gates::open();
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let active = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().active_layer.unwrap();
+    let filled = active(&h);
+    h.state_mut().run("layer.new.layer", json!({"name": "Empty"})).unwrap();
+    let empty = active(&h);
+    h.state_mut().run("layer.new.layer", json!({"name": "Top"})).unwrap();
+    h.state_mut().run("edit.fill", json!({"color": "#cc3366"})).unwrap();
+    let top = active(&h);
+    *h.state_mut().session.active_mut().unwrap().selection_mut() = vec![filled, empty, top];
+    let st = h.state().session.active().unwrap();
+    let (doc, filled_name) = (st.doc.clone(), st.doc.layer(filled).unwrap().name.clone());
+    export_layer_as(&mut h, &files, &folder);
+    step_until(&mut h, |a| a.ui.status.starts_with("Exported"));
+    let want: Vec<String> = [format!("{filled_name}.png"), "Top.png".to_string()].iter().map(|n| dir.path().join(n).to_string_lossy().into_owned()).collect();
+    assert_eq!(gates.written(), want, "written by the worker save, the empty layer left out");
+    assert!(!crate::export_dialog::layer_composite_kept(&doc, filled), "let go once written");
+}
+
+/// Cancelling a layer's Export As dialog lets go of the layers composited for it.
+#[test]
+fn cancelling_a_layers_export_as_lets_go_of_its_composites() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    step_until(&mut h, |a| crate::export_dialog::open_dialog(a).is_some());
+    let st = h.state().session.active().unwrap();
+    let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
+    assert!(crate::export_dialog::layer_composite_kept(&doc, layer), "kept for the dialog");
+    let id = crate::export_dialog::open_dialog(h.state()).unwrap();
+    crate::dialogs::cancel(h.state_mut(), &ctx, id).unwrap();
+    h.run_steps(2);
+    assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go with the dialog");
+}
+
+/// Without background jobs Export As composites and writes on this thread, as before, and lets
+/// go of the layer it composited before writing: nothing keeps it (gigabytes for a storyboard).
+#[test]
+fn layer_export_as_without_jobs_keeps_no_composite() {
+    let (mut h, files) = export_harness();
+    h.state_mut().background_jobs = false;
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert!(r.get("dialog").is_some(), "opened at once: {r}");
+    let st = h.state().session.active().unwrap();
+    let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
+    let id = crate::export_dialog::open_dialog(h.state()).unwrap();
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+    files.answer(craft::host::Picked::Paths(vec!["/tmp/photocraft-test/sync.png".into()])).expect("Export asks for a destination");
+    h.state_mut().poll_file_dialog();
+    // No exporter in these services: the write fails, after the composite was let go.
+    let _ = crate::dialogs::confirm(h.state_mut(), &ctx, id);
+    h.run_steps(4);
+    assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go before writing");
+}
+
+/// A window close held while an export writes doesn't close the window over the export's error,
+/// as with saves.
+#[test]
+fn a_failed_export_does_not_close_the_window_over_its_error() {
+    let (mut h, files) = export_harness();
+    let gates = Gates::default();
+    h.state_mut().services.save_file = Some(gates.save(Some("disk full")));
+    let st = h.state_mut().session.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    export_layer_as(&mut h, &files, "/tmp/photocraft-test/fail.png");
+    step_until(&mut h, PhotocraftApp::exporting);
+    assert!(press_window_close(h.state_mut()), "the close waits for the export");
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.exporting());
+    h.run_steps(2);
+    assert!(noticed(&h, "disk full"), "the error is shown");
+    assert!(!h.state().jobs.close_after_saves, "the window stays open to show the error");
+}
+
+/// A prepare that lands after the active document changed opens no dialog and keeps nothing of
+/// the old document (`kept_for_another_document` decides what stays).
+#[test]
+fn a_prepare_for_a_document_no_longer_active_keeps_nothing_of_it() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    let st = h.state().session.active().unwrap();
+    let (first, layer) = (st.doc.clone(), st.active_layer.unwrap());
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    // Kept for the old document, as its worker keeps it (its result isn't polled before the
+    // next frame).
+    crate::export_dialog::keep_layer_composite(&first, layer);
+    h.state_mut().run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    step_until(&mut h, |a| a.ui.status.contains("the document changed"));
+    assert!(crate::export_dialog::open_dialog(h.state()).is_none(), "no dialog for the old document");
+    assert!(!crate::export_dialog::layer_composite_kept(&first, layer), "the old document's composite is let go");
+}
+
 #[test]
 fn asynchronous_place_completion_displays_result_warnings() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

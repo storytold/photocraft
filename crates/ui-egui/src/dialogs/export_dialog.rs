@@ -260,6 +260,333 @@ fn stem_of(name: &str) -> String {
     name.rsplit_once('.').map_or(name, |(a, _)| a).to_string()
 }
 
+/// The background job that composites layers for Export As before its dialog opens
+/// ([`open_selected_layers`]).
+pub(crate) const PREPARE_JOB: &str = "file.export.prepareLayer";
+/// The background job that composites, encodes and writes Export As's files ([`start_export`]).
+pub(crate) const EXPORT_JOB: &str = "file.export.write";
+
+/// Layers' export documents ([`layer_menu_cmds::layer_document`]) with the document they were
+/// made from, each with its layer.
+///
+/// [`layer_menu_cmds::layer_document`]: photocraft_engine::layer_menu_cmds::layer_document
+type LayerSource = (Arc<Document>, Vec<(LayerId, Arc<Document>)>);
+
+/// The layers last composited for export, all of one document. The dialog's size fields, its
+/// preview, its size estimate and the export itself each composited a layer again, on the CPU:
+/// about 17 s each for a large storyboard, the first and last on the UI thread.
+static LAYER_SOURCE: std::sync::Mutex<Option<LayerSource>> = std::sync::Mutex::new(None);
+
+/// Moves on each time [`forget_layer_source`] lets the kept layers go: a composite started before
+/// that (a preview worker still running after the export) isn't kept.
+static LAYER_SOURCE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Layer `id` of `doc` as kept composited for export, if it is.
+fn kept_layer(kept: Option<&LayerSource>, doc: &Arc<Document>, id: LayerId) -> Option<Arc<Document>> {
+    let (_, layers) = kept.filter(|(d, _)| Arc::ptr_eq(d, doc))?;
+    layers.iter().find(|(l, _)| *l == id).map(|(_, out)| out.clone())
+}
+
+/// Layer `id` of `doc` composited for export, if [`layer_source`] or a prepare kept it.
+fn cached_layer_source(doc: &Arc<Document>, id: LayerId) -> Option<Arc<Document>> {
+    let kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    kept_layer(kept.as_ref(), doc, id)
+}
+
+/// Layer `id` of `doc` composited for export, kept for the next call with the same document and
+/// layer ([`LAYER_SOURCE`]).
+fn layer_source(doc: &Arc<Document>, id: LayerId) -> Result<Arc<Document>, String> {
+    composite_for(None, doc, id).map_err(|e| e.to_string())
+}
+
+/// [`layer_source`] with the engine's error, so an empty layer can be told apart
+/// ([`photocraft_engine::layer_menu_cmds::is_empty_layer`]). On a job's worker (`job`), a job
+/// cancelled while it composited keeps nothing.
+fn composite_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Document>, id: LayerId) -> Result<Arc<Document>, photocraft_engine::EngineError> {
+    // The generation is read under the lock the clean-up takes: a clean-up either comes before
+    // the read or moves the generation compared below.
+    let (cached, generation) = {
+        let kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (kept_layer(kept.as_ref(), doc, id), LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire))
+    };
+    if let Some(out) = cached {
+        return Ok(out);
+    }
+    let out = Arc::new(photocraft_engine::layer_menu_cmds::layer_document(doc, id)?);
+    let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let forgotten = LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire) != generation;
+    if !forgotten && !job.is_some_and(photocraft_engine::jobs::JobCtx::cancelled) {
+        // Kept beside the other layers of the same document; another document's are let go.
+        if !kept.as_ref().is_some_and(|(d, _)| Arc::ptr_eq(d, doc)) {
+            *kept = Some((doc.clone(), Vec::new()));
+        }
+        if let Some((_, layers)) = kept.as_mut() {
+            layers.retain(|(l, _)| *l != id);
+            layers.push((id, out.clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// Keep `layers`, composited for export from `doc`, replacing whatever was kept.
+fn keep_layer_sources(doc: Arc<Document>, layers: Vec<(LayerId, Arc<Document>)>) {
+    *LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((doc, layers));
+}
+
+/// Let go of the kept layers unless they were composited from `active`, the document as it is
+/// now: a prepare whose document changed keeps nothing, and the active document's own composites
+/// stay.
+fn release_layer_source_unless(active: Option<&Arc<Document>>) {
+    let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if kept.as_ref().is_some_and(|kept| kept_for_another_document(kept, active)) {
+        *kept = None;
+    }
+}
+
+/// Whether `kept` was composited from a document other than `active` (or none is active).
+fn kept_for_another_document(kept: &LayerSource, active: Option<&Arc<Document>>) -> bool {
+    !active.is_some_and(|a| Arc::ptr_eq(&kept.0, a))
+}
+
+/// Let go of the kept layers (each can be gigabytes) once their export is over, or their dialog
+/// closed.
+fn forget_layer_source() {
+    let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *kept = None;
+    LAYER_SOURCE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+/// Whether exports are written on a worker ([`start_export`]): with background jobs and a save
+/// service that writes there.
+fn exports_in_background(app: &PhotocraftApp) -> bool {
+    app.background_jobs && app.services.save_file.is_some()
+}
+
+/// Layer › Export As… from the menu, for the selected `layers` ([`open_layers`]). With
+/// background jobs the layers are composited on a worker before the dialog opens: on a large
+/// storyboard that took about 17 s a layer, and the frozen window was closed by the compositor.
+/// Empty layers are left out there (#14806), so the dialog and its export composite nothing again.
+pub fn open_selected_layers(app: &mut PhotocraftApp, layers: Vec<LayerId>) -> Result<Value, String> {
+    let first = *layers.first().ok_or("no selected layers")?;
+    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    if !app.background_jobs || layers.iter().all(|id| cached_layer_source(&doc, *id).is_some()) {
+        return Ok(json!({"dialog": open_layers(app, &layers)?.value()}));
+    }
+    let name = doc.layer(first).map(|l| l.name.clone()).unwrap_or_default();
+    let template = "Preparing Export As: {name}";
+    let label = crate::i18n::fmt(tl!(template), &[("name", &name)]);
+    let params = json!({"layers": layers.iter().map(|l| l.0).collect::<Vec<_>>()});
+    let source = doc.clone();
+    let selected = layers.clone();
+    let started = app
+        .session
+        .start_job(
+            PREPARE_JOB,
+            params,
+            &label,
+            false,
+            move |ctx| exportable_composites(ctx, &source, &layers),
+            // Kept here, on the UI thread, and only for the document as it still is: the
+            // dialog then opens from them. A cancelled or failed prepare never gets here.
+            move |session, kept| {
+                let ready = session.active().is_some_and(|st| Arc::ptr_eq(&st.doc, &doc));
+                let ids: Vec<u64> = kept.iter().map(|(id, _)| id.0).collect();
+                if ready {
+                    keep_layer_sources(doc, kept);
+                }
+                Ok(json!({"layers": ids, "ready": ready}))
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    match started {
+        photocraft_engine::jobs::Started::Done(_) => Ok(json!({"dialog": open_layers(app, &selected)?.value()})),
+        photocraft_engine::jobs::Started::Job(job) => {
+            // The status bar's progress readout names the job.
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            Ok(json!({"job": job.0, "pending": true}))
+        }
+    }
+}
+
+/// The export documents of the `ids` of `doc` that have pixels, in order, made on a prepare job's
+/// worker without keeping them: its apply step keeps them for the document as it still is. Empty,
+/// adjustment and off-canvas layers are left out (#14806); any other failure, or nothing left, is
+/// the prepare's error, as [`open_layers`] reports it.
+fn exportable_composites(
+    ctx: &photocraft_engine::jobs::JobCtx,
+    doc: &Document,
+    ids: &[LayerId],
+) -> Result<Vec<(LayerId, Arc<Document>)>, photocraft_engine::EngineError> {
+    let mut out = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        ctx.check()?;
+        ctx.progress(i as f32 / ids.len().max(1) as f32, "");
+        match photocraft_engine::layer_menu_cmds::layer_document(doc, *id) {
+            Ok(d) => out.push((*id, Arc::new(d))),
+            Err(e) if photocraft_engine::layer_menu_cmds::is_empty_layer(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if out.is_empty() {
+        return Err(photocraft_engine::EngineError::Other(tl!(NO_VALID_ASSET).into()));
+    }
+    Ok(out)
+}
+
+/// A finished [`PREPARE_JOB`] opens its dialog; a finished [`EXPORT_JOB`] reports its files.
+/// Failures and cancellations are reported like any job's. True when `e` was handled here.
+pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
+    use photocraft_engine::jobs::JobOutcome;
+    match (e.command.as_str(), &e.outcome) {
+        (PREPARE_JOB, JobOutcome::Done(v)) => {
+            let layers: Vec<LayerId> =
+                v.get("layers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(LayerId).collect()).unwrap_or_default();
+            // Opened only for the document the layers were composited from: anything else would
+            // composite them again here, on the UI thread.
+            if !v.get("ready").and_then(Value::as_bool).unwrap_or(false) {
+                release_layer_source_unless(app.session.active().map(|st| &st.doc));
+                let message = "Export As: the document changed while the layer was prepared; choose Export As again";
+                app.ui.status = tl!(message).to_string();
+                app.ui.status_error = false;
+            } else if let Err(err) = open_layers(app, &layers) {
+                crate::notices::error(app, err);
+            } else {
+                app.ui.status.clear();
+            }
+            true
+        }
+        (EXPORT_JOB, JobOutcome::Done(v)) => {
+            forget_layer_source();
+            let files = v.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
+            for file in &files {
+                let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
+                let warnings: Vec<String> = file
+                    .get("warnings")
+                    .and_then(Value::as_array)
+                    .map(|w| w.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
+                let template = "Exported {path}";
+                let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
+                crate::notices::io_warnings(app, &what, &warnings);
+            }
+            app.ui.status = match files.as_slice() {
+                [one] => {
+                    let template = "Exported {path} ({size})";
+                    crate::i18n::fmt(
+                        tl!(template),
+                        &[
+                            ("path", one.get("path").and_then(Value::as_str).unwrap_or_default()),
+                            ("size", &crate::sizing::human_bytes(one.get("bytes").and_then(Value::as_u64).unwrap_or(0) as f64)),
+                        ],
+                    )
+                }
+                many => {
+                    let template = "Exported {n} files";
+                    crate::i18n::fmt(tl!(template), &[("n", &many.len().to_string())])
+                }
+            };
+            app.ui.status_error = false;
+            true
+        }
+        (EXPORT_JOB, _) => {
+            forget_layer_source();
+            // A failed or cancelled export doesn't close the window over its notice, as with saves.
+            app.jobs.close_after_saves = false;
+            false
+        }
+        (PREPARE_JOB, _) => {
+            // A failed or cancelled prepare never opens its dialog: nothing needs the kept layers.
+            forget_layer_source();
+            false
+        }
+        _ => false,
+    }
+}
+
+/// The files an export writes: each export document with its path, as the job's `plan` makes
+/// them on its worker (compositing a layer there if it has to).
+type ExportPlan = Box<dyn FnOnce(&photocraft_engine::jobs::JobCtx) -> Result<Vec<(Arc<Document>, String)>, String> + Send>;
+
+/// Write the files `plan` names on a worker, as a save does (`Services::save_file`, #2017): with
+/// the dialog's settings `f`, or with none (Quick Export of several layers writes each composited
+/// layer as it is). Encoding a large export took seconds on the UI thread, long enough for the
+/// compositor to close the window. Only while [`exports_in_background`]. `record`, a
+/// whole-document export's action step, is recorded once every file is written, never for an
+/// export that failed or was cancelled. `first` (the chosen path) names the job.
+fn start_export(
+    app: &mut PhotocraftApp,
+    first: &str,
+    plan: ExportPlan,
+    f: Option<Map<String, Value>>,
+    settings: ExportSettings,
+    source_profile: Arc<Profile>,
+    record: Option<Value>,
+) -> Result<Value, String> {
+    let save = app.services.save_file.clone().ok_or("no worker save configured")?;
+    let template = "Exporting {name}";
+    let label = crate::i18n::fmt(tl!(template), &[("name", &crate::file_open::display_name(first))]);
+    let work = move |ctx: &photocraft_engine::jobs::JobCtx| {
+        let mut written = Vec::new();
+        let files = plan(ctx);
+        let n = files.as_ref().map_or(1, Vec::len).max(1) as f32;
+        let count = files.as_ref().map_or(0, Vec::len);
+        let result = files.and_then(|files| {
+            files.iter().enumerate().try_for_each(|(i, (doc, path))| {
+                // A cancel between files stops the rest.
+                ctx.check().map_err(|e| e.to_string())?;
+                ctx.progress(i as f32 / n, "");
+                let converted;
+                let out: &Document = match &f {
+                    Some(f) => {
+                        converted = export_document(doc, f, None, &source_profile)?;
+                        &converted
+                    }
+                    None => doc,
+                };
+                crate::app::ensure_memory_to_save(out, path)?;
+                let warnings = save(out, path.as_str(), &settings, &crate::jobs_ui::SaveCtl { job: ctx.clone() })?;
+                // The save committed before replacing this file; the next file can be cancelled
+                // again. The last one stays committed: the job runs to its end, as a save does.
+                if i + 1 < count {
+                    ctx.end_commit();
+                }
+                let bytes = std::fs::metadata(path).map_or(0, |m| m.len());
+                written.push(json!({"path": path, "bytes": bytes, "warnings": warnings}));
+                Ok::<(), String>(())
+            })
+        });
+        match result {
+            Ok(()) => Ok(json!({"files": written})),
+            Err(_) if ctx.cancelled() => Err(photocraft_engine::EngineError::Cancelled),
+            Err(e) => Err(photocraft_engine::EngineError::Other(e)),
+        }
+    };
+    let apply = move |session: &mut photocraft_engine::CoreSession, v: Value| {
+        if let Some(step) = record {
+            record_export(session, step);
+        }
+        Ok(v)
+    };
+    let started = app.session.start_job(EXPORT_JOB, json!({}), &label, false, work, apply).map_err(|e| e.to_string())?;
+    Ok(match started {
+        photocraft_engine::jobs::Started::Done(v) => v,
+        photocraft_engine::jobs::Started::Job(job) => {
+            // Its action step (a whole-document export's) goes to the recording active now.
+            app.session.record_job_in_take(job);
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            json!({"job": job.0, "pending": true})
+        }
+    })
+}
+
+/// Record Export As's action `step` (#7207), as the export's command.
+fn record_export(session: &mut photocraft_engine::CoreSession, step: Value) {
+    photocraft_engine::actions_cmds::note_automation_step(session, COMMAND, &step);
+    session.journal.push((COMMAND.into(), step));
+}
+
 /// File › Export › Export As…
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -315,7 +642,8 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
 pub fn open_layer(app: &mut PhotocraftApp, layer: LayerId) -> Result<DialogId, String> {
     let st = app.session.active().ok_or("no document")?;
-    let ldoc = photocraft_engine::layer_menu_cmds::layer_document(&st.doc, layer).map_err(|e| e.to_string())?;
+    // Kept for the dialog: its size fields, preview and export use this composite.
+    let ldoc = layer_source(&st.doc, layer)?;
     // The size fields follow the layer's trimmed size, so the dialog shows and edits the size
     // the layer exports at.
     let template = "Export As: {name}";
@@ -349,10 +677,11 @@ const NO_VALID_ASSET: &str = "No valid asset to export. Please resolve any warni
 /// The export documents of the selected `ids` that have pixels on the canvas, in order. Empty,
 /// adjustment and off-canvas layers are skipped (#14806); any other failure is still an error,
 /// and so is a selection with nothing left to export.
-fn exportable_layers(doc: &Document, ids: &[LayerId]) -> Result<Vec<Document>, String> {
+fn exportable_layers(doc: &Arc<Document>, ids: &[LayerId]) -> Result<Vec<Arc<Document>>, String> {
     let mut docs = Vec::new();
     for id in ids {
-        match photocraft_engine::layer_menu_cmds::layer_document(doc, *id) {
+        // Kept ([`LAYER_SOURCE`]): from the dialog they were made before it opened.
+        match composite_for(None, doc, *id) {
             Ok(d) => docs.push(d),
             Err(e) if photocraft_engine::layer_menu_cmds::is_empty_layer(&e) => {}
             Err(e) => return Err(e.to_string()),
@@ -390,20 +719,53 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     if layers.is_empty() {
         return Err("no selected layers".into());
     }
+    let (source, layers) = (st.doc.clone(), layers.to_vec());
+    let suggested = format!("{}.png", export_name(&source.name));
+    let settings = ExportSettings { xmp_all: false, ..Default::default() };
+    if exports_in_background(app) {
+        // The document as it is now is exported, so changing the selection or document while the
+        // save dialog is open changes nothing; its layers are composited on the export's worker.
+        let profile = effective_source_profile(app, &source);
+        return app.pick_export(&suggested, move |app, path| {
+            if !path.to_ascii_lowercase().ends_with(".png") {
+                return Err("Quick Export as PNG writes .png files".into());
+            }
+            let first = path.clone();
+            let plan: ExportPlan = Box::new(move |ctx: &photocraft_engine::jobs::JobCtx| {
+                let mut docs = Vec::new();
+                for id in &layers {
+                    ctx.check().map_err(|e| e.to_string())?;
+                    match composite_for(Some(ctx), &source, *id) {
+                        Ok(d) => docs.push(d),
+                        Err(e) if photocraft_engine::layer_menu_cmds::is_empty_layer(&e) => {}
+                        Err(e) => return Err(e.to_string()),
+                    }
+                }
+                if docs.is_empty() {
+                    return Err(tl!(NO_VALID_ASSET).into());
+                }
+                let paths = batch_paths(&first, &docs);
+                Ok(docs.into_iter().zip(paths).collect())
+            });
+            start_export(app, &path, plan, None, settings, profile, None)
+        });
+    }
     // Capture all sources before showing the dialog: changing selection or document while it
     // is open cannot change which layers get exported.
-    let docs = exportable_layers(&st.doc, layers)?;
-    let suggested = format!("{}.png", export_name(&st.doc.name));
+    let docs = exportable_layers(&source, &layers)?;
     app.pick_export(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
             return Err("Quick Export as PNG writes .png files".into());
         }
+        // The exports hold their own references: the kept composites aren't needed after them.
+        forget_layer_source();
         let paths = batch_paths(&path, &docs);
         let mut exported = Vec::new();
         for (doc, path) in docs.iter().zip(paths) {
+            let doc: &Document = doc;
             crate::app::ensure_memory_to_save(doc, &path)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-            let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
+            let (bytes, warnings) = export(doc, &path, &settings)?;
             let write = app.services.write.as_mut().ok_or("no writer configured")?;
             write(&path, &bytes)?;
             crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
@@ -437,7 +799,7 @@ fn layer_export_name(name: &str) -> String {
 
 /// The files a multi-layer export writes: the chosen path, then numbered siblings named after
 /// each layer, in the chosen path's format.
-fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
+fn batch_paths<D: std::borrow::Borrow<Document>>(path: &str, docs: &[D]) -> Vec<String> {
     let first = std::path::Path::new(path);
     let parent = first.parent().unwrap_or_else(|| std::path::Path::new(""));
     let stem = first.file_stem().and_then(|s| s.to_str()).unwrap_or("layers");
@@ -448,7 +810,7 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
             if i == 0 {
                 return path.to_string();
             }
-            let name = export_name(&doc.name);
+            let name = export_name(&doc.borrow().name);
             let candidate = parent.join(format!("{stem}-{}-{name}.{ext}", i + 1));
             // The first file's overwrite is handled by the Save dialog; never overwrite sibling
             // files silently on desktop. Downloads on the web are named by the browser.
@@ -472,7 +834,8 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
 /// The document a dialog exports: the whole image, or one layer (`__layer`).
 fn source_document_from(doc: Arc<Document>, f: &Map<String, Value>) -> Result<Arc<Document>, String> {
     match f.get("__layer").and_then(Value::as_u64) {
-        Some(id) => photocraft_engine::layer_menu_cmds::layer_document(&doc, photocraft_doc::LayerId(id)).map(Arc::new).map_err(|e| e.to_string()),
+        // Kept ([`LAYER_SOURCE`]): the dialog's size fields, preview, estimate and export share one composite.
+        Some(id) => layer_source(&doc, LayerId(id)),
         None => Ok(doc),
     }
 }
@@ -829,7 +1192,11 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
             }
             return false;
         }
-        Some(_) => return false,
+        Some(_) => {
+            // Cancelled: nothing needs the layers kept composited for it.
+            forget_layer_source();
+            return false;
+        }
         None => {}
     }
     let Some(dialog) = app.framework.dialogs.get_mut::<HostedExportAs>() else { return false };
@@ -900,7 +1267,7 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
 
 /// The documents a Layer › Export As of several `layers` writes, one per layer with pixels (#14806); empty for one
 /// layer or the whole document.
-fn layer_documents(app: &PhotocraftApp, layers: &[LayerId]) -> Vec<Document> {
+fn layer_documents(app: &PhotocraftApp, layers: &[LayerId]) -> Vec<Arc<Document>> {
     if layers.len() < 2 {
         return Vec::new();
     }
@@ -1047,15 +1414,27 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, open: &ExportOpen, resul
 /// `f`. A whole-document export is kept by an action being recorded, with its destination and
 /// settings (#7207); a layer's isn't, since its layer is this document's.
 fn export_to(app: &mut PhotocraftApp, f: &Map<String, Value>, path: &str) -> Result<Value, String> {
-    let doc = source_document(app, f)?;
-    let source_profile = effective_source_profile(app, &doc);
-    let r = write_export(app, &doc, f, path, &source_profile)?;
-    if !f.contains_key("__layer") {
+    let step = (!f.contains_key("__layer")).then(|| {
         let mut step = settings_of(f);
         step.insert("path".into(), json!(path));
-        let step = Value::Object(step);
-        photocraft_engine::actions_cmds::note_automation_step(&mut app.session, COMMAND, &step);
-        app.session.journal.push((COMMAND.into(), step));
+        Value::Object(step)
+    });
+    if exports_in_background(app) {
+        // Composited (a layer not kept yet), converted, encoded and written on the export's worker.
+        let doc = app.session.active().ok_or("no document")?.doc.clone();
+        let source_profile = effective_source_profile(app, &doc);
+        let (fields, target) = (f.clone(), path.to_string());
+        let plan: ExportPlan = Box::new(move |_: &photocraft_engine::jobs::JobCtx| Ok(vec![(source_document_from(doc, &fields)?, target)]));
+        return start_export(app, path, plan, Some(f.clone()), settings(f), source_profile, step);
+    }
+    let doc = source_document(app, f);
+    // The export holds its own reference: the kept composite isn't needed after it.
+    forget_layer_source();
+    let doc = doc?;
+    let source_profile = effective_source_profile(app, &doc);
+    let r = write_export(app, &doc, f, path, &source_profile)?;
+    if let Some(step) = step {
+        record_export(&mut app.session, step);
     }
     Ok(r)
 }
@@ -1107,7 +1486,10 @@ fn batch_file_names(stem: &str, ext: &str, rows: &[ScaleRow]) -> Result<Vec<Stri
 /// any entry at a target path (a file, or a link the writer would follow) stops the whole batch before
 /// the first write.
 fn export_sizes(app: &mut PhotocraftApp, f: &Map<String, Value>, rows: &[ScaleRow], dir: &str) -> Result<Value, String> {
-    let doc = source_document(app, f)?;
+    let doc = source_document(app, f);
+    // The export holds its own reference: the kept composite isn't needed after it.
+    forget_layer_source();
+    let doc = doc?;
     let source_profile = effective_source_profile(app, &doc);
     let stem = stem_of(&doc.name);
     let stem = export_name(&if f.contains_key("__layer") { layer_export_name(&stem) } else { stem });
@@ -1183,8 +1565,43 @@ fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId
     if ids.is_empty() {
         return Err("no selected layers".into());
     }
-    let docs = exportable_layers(&st.doc, ids)?;
+    let source = st.doc.clone();
     let settings = settings(f);
+    if exports_in_background(app) {
+        // Each layer is composited (unless kept), converted and written on the export's worker.
+        let (ids, ext, target) = (ids.to_vec(), s_fmt(f), path.to_string());
+        let plan: ExportPlan = Box::new(move |ctx: &photocraft_engine::jobs::JobCtx| {
+            let mut docs = Vec::new();
+            for id in &ids {
+                ctx.check().map_err(|e| e.to_string())?;
+                match composite_for(Some(ctx), &source, *id) {
+                    Ok(d) => docs.push(d),
+                    Err(e) if photocraft_engine::layer_menu_cmds::is_empty_layer(&e) => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            if docs.is_empty() {
+                return Err(tl!(NO_VALID_ASSET).into());
+            }
+            let folder = docs.len() > 1;
+            let paths: Vec<String> = if folder {
+                layer_file_names(&docs, &ext).into_iter().map(|name| std::path::Path::new(&target).join(name).to_string_lossy().into_owned()).collect()
+            } else {
+                batch_paths(&target, &docs)
+            };
+            if folder {
+                for path in &paths {
+                    replace_link(std::path::Path::new(path))?;
+                }
+            }
+            Ok(docs.into_iter().zip(paths).collect())
+        });
+        return start_export(app, path, plan, Some(f.clone()), settings, source_profile, None);
+    }
+    let docs = exportable_layers(&source, ids);
+    // The exports hold their own references: the kept composites aren't needed after them.
+    forget_layer_source();
+    let docs = docs?;
     let folder = docs.len() > 1 && !cfg!(target_arch = "wasm32");
     let paths: Vec<String> = if folder {
         layer_file_names(&docs, &s_fmt(f)).into_iter().map(|name| std::path::Path::new(path).join(name).to_string_lossy().into_owned()).collect()
@@ -1239,7 +1656,7 @@ fn layer_file_stem(name: &str) -> String {
 /// (so a final sigma `ς` and `σ`, and `K` and the Kelvin sign, are one name),
 /// as a case-insensitive destination (a default Windows or macOS volume) treats `Logo` and `logo`
 /// as one file, which a second write would silently replace.
-fn layer_file_names(docs: &[Document], ext: &str) -> Vec<String> {
+fn layer_file_names<D: std::borrow::Borrow<Document>>(docs: &[D], ext: &str) -> Vec<String> {
     // A name is taken when its upper-cased or its lower-cased form is: upper-casing joins `σ` and `ς`
     // (Windows folds that way), lower-casing joins `K` and the Kelvin sign `K` (which APFS treats as
     // one name). Neither folding alone catches both.
@@ -1247,7 +1664,7 @@ fn layer_file_names(docs: &[Document], ext: &str) -> Vec<String> {
     let mut used = std::collections::HashSet::new();
     let mut names = vec![String::new(); docs.len()];
     for (i, doc) in docs.iter().enumerate().rev() {
-        let stem = layer_file_stem(&doc.name);
+        let stem = layer_file_stem(&doc.borrow().name);
         let mut name = format!("{stem}.{ext}");
         let mut n = 1u64;
         while taken(&used, &name) {
@@ -1309,6 +1726,24 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     let template = "Exported {path}";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("path", r["path"].as_str().unwrap_or_default())]);
     Ok(r)
+}
+
+#[cfg(test)]
+/// Composite layer `layer` of `doc` for export and keep it, as the dialog does ([`layer_source`]).
+pub(crate) fn keep_layer_composite(doc: &Arc<Document>, layer: LayerId) {
+    layer_source(doc, layer).expect("the layer composites");
+}
+
+#[cfg(test)]
+/// Whether layer `layer` of `doc` is still kept composited for export ([`LAYER_SOURCE`]).
+pub(crate) fn layer_composite_kept(doc: &Arc<Document>, layer: LayerId) -> bool {
+    cached_layer_source(doc, layer).is_some()
+}
+
+#[cfg(test)]
+/// The open Export As dialog, if one is.
+pub(crate) fn open_dialog(app: &PhotocraftApp) -> Option<DialogId> {
+    app.export_open.as_ref().map(|open| open.dialog)
 }
 
 #[cfg(test)]

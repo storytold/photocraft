@@ -135,9 +135,9 @@ pub fn close_decision(app: &mut PhotocraftApp) -> CloseDecision {
     if !app.allow_close && intercept(app, EXIT, &Value::Null) {
         return CloseDecision::Hold;
     }
-    // A save or print worker must finish its external side effect before the process exits;
-    // `jobs_ui` repeats the close after completion and keeps errors visible.
-    if app.saving() || app.printing() {
+    // A save, print or export worker must finish its external side effect before the process
+    // exits; `jobs_ui` repeats the close after completion and keeps errors visible.
+    if app.saving() || app.printing() || app.exporting() {
         app.jobs.close_after_saves = true;
         return CloseDecision::Hold;
     }
