@@ -42,6 +42,27 @@ fn sampler_commands_record_undoable_history() {
 }
 
 #[test]
+fn sampler_undo_crosses_a_gap_after_the_pinned_history_source() {
+    let mut s = session();
+    s.active_mut().unwrap().history.max_states = 2;
+    s.execute("history.setSource", json!({"state": 0})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 3, "y": 4})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 8, "y": 9})).unwrap();
+    let before_move = samplers(&mut s);
+    s.execute("view.colorSamplers.move", json!({"index": 1, "x": 12, "y": 14})).unwrap();
+    let after_move = samplers(&mut s);
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(samplers(&mut s), before_move);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(samplers(&mut s), json!([]));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(samplers(&mut s), before_move);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(samplers(&mut s), after_move);
+}
+
+#[test]
 fn refused_sampler_edits_leave_undo_and_redo_intact() {
     let mut s = session();
     for x in 0..10 {

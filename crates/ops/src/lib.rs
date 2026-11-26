@@ -148,7 +148,26 @@ struct LastRecord {
     /// that moment (not always the front: the History Brush's source is never dropped).
     /// Their tiles are no longer counted; they are only held until the next change to the
     /// list, so a rollback can put them back where they were.
-    evicted: Vec<(usize, HistoryState)>,
+    evicted: Vec<EvictedState>,
+}
+
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
+struct EvictedState {
+    index: usize,
+    state: HistoryState,
+    /// The following state's original sampler change, kept only when eviction rewrote it.
+    following_samplers: Option<Option<ColorSamplerChange>>,
+}
+
+impl EvictedState {
+    fn new(index: usize, state: HistoryState, following: Option<&mut HistoryState>) -> Self {
+        let following_samplers = state.color_samplers.as_ref().zip(following).map(|(earlier, next)| {
+            let original = next.color_samplers.take();
+            next.color_samplers = combine_sampler_changes(Some(earlier.clone()), original.clone());
+            original
+        });
+        Self { index, state, following_samplers }
+    }
 }
 
 /// The undo and redo states [`History::clear_states`] removed, and the History Brush source set
@@ -282,7 +301,10 @@ impl History {
             if let Some(tiles) = &mut self.tiles {
                 tiles.remove(&state.doc);
             }
-            evicted.push((at, state));
+            // The pinned state remains reachable, so its next surviving step must include the
+            // sampler edits from the removed step. Dropping the oldest state leaves a new baseline.
+            let following = if pinned { self.undo.get_mut(at) } else { None };
+            evicted.push(EvictedState::new(at, state, following));
         }
         self.last_record = Some(LastRecord { before, color_samplers, moved, evicted, visibility_capture_before: self.visibility_capture.clone() });
     }
@@ -676,11 +698,14 @@ impl History {
         self.visibility_capture = visibility_capture_before;
         self.note_color_sampler_change(color_samplers.is_some());
         // Put each back where it was taken off, the last one taken off first.
-        for (at, state) in evicted.into_iter().rev() {
+        for EvictedState { index, state, following_samplers } in evicted.into_iter().rev() {
+            if let Some((change, following)) = following_samplers.zip(self.undo.get_mut(index)) {
+                following.color_samplers = change;
+            }
             if let Some(tiles) = &mut self.tiles {
                 tiles.add(&state.doc);
             }
-            self.undo.insert(at.min(self.undo.len()), state);
+            self.undo.insert(index.min(self.undo.len()), state);
         }
         for _ in 0..moved {
             // Tiles stay counted: they only move back to the redo side.
@@ -932,8 +957,10 @@ impl History {
                 dropped += 1;
                 // Held for a rollback of the step that pushed them out. Taking them off from the
                 // highest index down keeps each index valid, so a rollback can insert them back.
+                let following = if source.is_some_and(|source| source < i) { kept.front_mut() } else { None };
+                let evicted = EvictedState::new(i, state, following);
                 if let Some(held) = &mut self.last_record {
-                    held.evicted.push((i, state));
+                    held.evicted.push(evicted);
                 }
             }
         }

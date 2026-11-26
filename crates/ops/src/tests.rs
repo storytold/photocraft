@@ -596,6 +596,46 @@ fn rollback_puts_states_back_behind_the_pinned_brush_source() {
 }
 
 #[test]
+fn sampler_history_through_pinned_eviction_survives_rollback() {
+    for byte_budget in [false, true] {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        assert!(h.set_brush_source(0));
+        let samplers: [&[[f64; 2]]; 4] = [&[], &[[1.5, 1.5]], &[[1.5, 1.5], [2.5, 2.5]], &[[1.5, 1.5], [3.5, 3.5]]];
+        for (i, pair) in samplers.windows(2).enumerate() {
+            if i == 2 {
+                if byte_budget {
+                    h.max_bytes = 1;
+                } else {
+                    h.max_states = 2;
+                }
+            }
+            let before = cur.clone();
+            let mut doc = (*cur).clone();
+            doc.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            cur = Arc::new(doc);
+            h.record_with_color_samplers(["Add A", "Add B", "Move B"][i], before, LayerTarget::default(), Some(ColorSamplerChange::new(pair[0], pair[1])));
+        }
+        if byte_budget {
+            assert_eq!(h.trim(&cur), 1);
+        }
+        assert_eq!(h.entries(), ["Open", "Add B", "Move B"]);
+        let mut undo = h.clone();
+        undo.undo(cur).unwrap();
+        assert_eq!(undo.current_color_sampler_change().unwrap().before(), samplers[0]);
+        assert_eq!(undo.current_color_sampler_change().unwrap().after(), samplers[2]);
+
+        let before_move = h.rollback().unwrap().0;
+        assert_eq!(h.entries(), ["Open", "Add A", "Add B"]);
+        assert_eq!(h.current_color_sampler_change().unwrap().before(), samplers[1]);
+        assert_eq!(h.current_color_sampler_change().unwrap().after(), samplers[2]);
+        if byte_budget {
+            assert_counter(&h, &before_move);
+        }
+    }
+}
+
+#[test]
 fn max_states_bound() {
     let mut h = History::new(3);
     let mut cur = Arc::new(base());
