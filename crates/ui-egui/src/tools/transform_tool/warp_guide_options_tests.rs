@@ -2,13 +2,15 @@
 //! Opacity, Density and the three Show Guides rows - what each choice does to the lines the grid
 //! draws, and how the four values are remembered. The lines themselves are the framework's
 //! `WarpGrid` paint and are pinned in storytold/craft-libs' `tests/it/warp.rs`; here the popup's
-//! wiring and the values that reach the grid are.
+//! wiring and the values that reach the grid are, plus two neighbour pins: what the Density field
+//! shows once the mesh is cut, and that a Cylinder warp's canvas never reaches a grid at all.
 
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::*;
+use crate::canvas::document_display::active_view;
 use crate::state::{Tool, ToolOptions, WarpGuideOptions, WarpGuideShow};
 
 /// The options bar of an open Warp over a 640 px document.
@@ -159,4 +161,84 @@ fn reset_tool_and_a_damaged_file_give_back_the_starting_guides() {
     crate::tool_memory::sanitize(&mut o);
     assert_eq!((o.warp_guides.opacity, o.warp_guides.density), (100.0, Some(10.0)), "a file outside either field's range is clamped");
     assert_eq!(o.warp_guides.color, None, "a colour outside the channels the picker answers is dropped, so the theme's own line shows");
+}
+
+/// The number the popup's Density field shows, as a person reads it off the field.
+fn density_shown(h: &Harness) -> f32 {
+    h.query_all_by_role(Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Density"))
+        .expect("the Density field")
+        .accesskit_node()
+        .value()
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or(f32::NAN)
+}
+
+/// The Density field shows the grid's own count, not a standing number: two on an uncut mesh, and
+/// after one armed Split cuts it - the grid's own rule then draws no thin lines, the patch
+/// boundaries are all there is - it shows 0. `options_bar` asks the framework for that count
+/// (`own_guide_count`) rather than repeating a rule here.
+#[test]
+fn the_density_field_shows_the_grids_own_count_on_a_cut_warp_mesh() {
+    let mut h = warp_bar();
+    h.run_steps(4);
+    h.query_by_label("Set warp guide line display options").expect("the guide-line gear").click();
+    h.run_steps(3);
+    assert_eq!(density_shown(&h), 2.0, "an uncut grid shows its own two lines in the field");
+    // Arm the Split button and cut once, the way the armed grid reports a click on the canvas.
+    h.state_mut().transform_preview.as_mut().unwrap().split = Some(WarpSplit::Vertical);
+    let before = session_warp(h.state()).mesh.clone();
+    let cut = before.split(WarpSplit::Vertical, 0, 0, 0.5, 0.5);
+    let mut events = EditEvents::new();
+    events.push(EditEvent::set(Mixed::Same(before), cut, "Split warp".into(), None));
+    grid_edit(h.state_mut(), &events, true);
+    assert_eq!(session_warp(h.state()).mesh.own_guide_count(), 0, "a cut grid draws no thin lines of its own: its painted lines are the boundaries");
+    h.run_steps(4);
+    if !shown_as(&h, Role::SpinButton, "Density") {
+        h.query_by_label("Set warp guide line display options").expect("the guide-line gear").click();
+        h.run_steps(3);
+    }
+    assert_eq!(density_shown(&h), 0.0, "the field shows the cut grid's own count");
+    assert_eq!(h.state().ui.tool_options.warp_guides.density, None, "showing a count is not picking a number: the grid keeps its own rule");
+}
+
+/// A Cylinder warp's bar carries the same gear, but the cylinder's canvas never reaches the grid:
+/// `show_warp` returns after the cylinder's own controls, before a grid is built or handed the
+/// guide options. Pinned at the canvas: with all four options set to loud values, a drag answers
+/// as the cylinder's surface (the whole cylinder follows, its shape untouched) and never as a
+/// guide-drawing grid, which would turn the warp Custom.
+#[test]
+fn the_guide_options_reach_nothing_on_a_cylinder_warp_canvas() {
+    let mut app = app_with_square(640, photocraft_geom::Rect::new(80, 80, 560, 560));
+    let ctx = app.ctx().clone();
+    begin_warp(&mut app, &ctx).unwrap();
+    let cyl = cylinder_start(rect_of(open(&app)));
+    set_warp(&mut app, cyl);
+    settle(&mut app);
+    app.ui.tool_options.warp_guides = WarpGuideOptions { color: Some([1.0, 0.0, 0.0]), opacity: 40.0, density: Some(9.0), show: WarpGuideShow::Never };
+    let mut h = harness(app, egui::vec2(1400.0, 900.0));
+    h.run_steps(4);
+    assert_eq!(session_warp(h.state()).warp.style, WarpStyle::Cylinder, "the session holds a cylinder warp");
+    let (before, at) = (cylinder_of(h.state()), active_view(h.state()).unwrap().to_screen(Point::new(320.0, 320.0)));
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(at + egui::vec2(10.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(at + egui::vec2(40.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(
+        session_warp(h.state()).warp.style,
+        WarpStyle::Cylinder,
+        "the cylinder answered the canvas, not a grid: its bar's guide options reach nothing there"
+    );
+    let after = cylinder_of(h.state());
+    assert!(after[0] > before[0] + 5.0 && after[2] > before[2] + 5.0, "the whole cylinder moved with the drag: {before:?} -> {after:?}");
+    for i in 4..7 {
+        assert!((after[i] - before[i]).abs() < 1e-6, "its shape stayed: {before:?} -> {after:?}");
+    }
 }
