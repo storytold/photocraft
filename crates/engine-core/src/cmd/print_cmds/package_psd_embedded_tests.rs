@@ -6,16 +6,15 @@ use super::*;
 use photocraft_doc::{Affine, Layer, SmartObject, SmartSource};
 use std::sync::Arc;
 
-fn temp_dir() -> String {
-    let path = std::env::temp_dir().join(format!("photocraft-package-psd-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).unwrap();
-    path.to_string_lossy().replace('\\', "/")
+fn temp_dir() -> (tempfile::TempDir, String) {
+    let root = tempfile::Builder::new().prefix("photocraft-package-psd-").tempdir().unwrap();
+    let path = root.path().to_string_lossy().replace('\\', "/");
+    (root, path)
 }
 
 #[test]
 fn package_skips_psd_embedded_sources_but_collects_external_links() {
-    let dir = temp_dir();
+    let (_root, dir) = temp_dir();
     let external = format!("{dir}/external.png");
     let mut source = crate::session();
     source.execute("file.new", json!({"width": 4, "height": 4, "background": "#336699"})).unwrap();
@@ -56,4 +55,6 @@ fn package_skips_psd_embedded_sources_but_collects_external_links() {
         })
         .collect();
     assert_eq!(embedded_sources, vec!["embedded-uuid"]);
+    let (_, payload) = photocraft_io::linked::embedded_payload(&packaged.metadata, "embedded-uuid").expect("the embedded payload survives packaging");
+    assert_eq!(payload, [1, 2, 3]);
 }
