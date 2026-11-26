@@ -49,9 +49,13 @@ fn luma(p: [f32; 4]) -> f32 {
     0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
 }
 
+/// Whether `p` is a visible red-eye pixel. A pixel with zero (or NaN) alpha is never one, whatever
+/// RGB it still holds after erasing: otherwise it could join the pupil's region and run it out to
+/// the window edge, where [`is_pupil_shaped`] rejects the whole region (#16148 review). Alpha is
+/// the normalised 0..=1 value at every bit depth, and 1 on a layer without alpha.
 fn is_red_eye(p: [f32; 4]) -> bool {
     let (r, g, b) = (p[0], p[1], p[2]);
-    if !(r.is_finite() && g.is_finite() && b.is_finite()) {
+    if !(r.is_finite() && g.is_finite() && b.is_finite() && p[3] > 0.0) {
         return false;
     }
     if r <= g + 0.15 || r <= b + 0.15 {
@@ -419,6 +423,23 @@ mod tests {
         assert_eq!(apply(&mut px, w, w, (2, 2), (0, 0), 50.0, 50.0), 0);
         assert_eq!(px, sample(w, w, red));
         assert!(apply(&mut px, w, w, (16, 16), (0, 0), 50.0, 50.0) > 0, "a click on the pupil still corrects it");
+    }
+
+    #[test]
+    fn transparent_red_around_a_pupil_does_not_join_it() {
+        // Erased pixels still hold red RGB under zero alpha and run out to the edge of a window
+        // clipped to a small canvas. Only visible pixels are candidates, so the opaque pupil is still
+        // corrected and the erased pixels keep their values (#16148 review).
+        let w = 40usize;
+        let erased = [0.95, 0.10, 0.10, 0.0];
+        let f = |x, y| if disc(x, y, 20.0, 20.0, 6.0) { [0.95, 0.10, 0.10, 1.0] } else { erased };
+        let mut px = sample(w, w, f);
+        let n = apply(&mut px, w, w, (20, 20), (0, 0), 50.0, 50.0);
+        assert!(n > 0, "the opaque pupil is corrected, changed {n}");
+        let p = px[20 * w + 20];
+        assert!((p[0] - p[1]).abs() < 1e-5 && p[3] == 1.0, "pupil {p:?}");
+        assert_eq!(px[0], erased);
+        assert_eq!(px[20 * w + 30], erased);
     }
 
     #[test]

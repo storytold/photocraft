@@ -138,3 +138,37 @@ fn a_click_on_skin_filling_a_small_canvas_leaves_it_alone() {
         assert_eq!(rgb8(&s, x, y), [200, 150, 120], "({x},{y})");
     }
 }
+
+#[test]
+fn erased_red_around_a_pupil_does_not_stop_the_correction_at_every_depth() {
+    // Pixels erased to zero alpha keep their red RGB and reach the edge of the 64×64 canvas. They
+    // are not visible, so they do not join the pupil's region, and the opaque pupil is corrected
+    // (#16148 review).
+    for depth in [8u64, 16, 32] {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 64, "height": 64, "mode": "rgb", "depth": depth, "background": "transparent"})).unwrap();
+        s.edit("setup", |doc, active| {
+            let b = doc.bounds();
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let fmt = surf.format();
+            assert!(fmt.alpha, "depth {depth}: the layer has alpha");
+            let mut data = Vec::new();
+            for y in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    let a = if ((x - 32) as f32).hypot((y - 32) as f32) <= 8.0 { 1.0 } else { 0.0 };
+                    data.extend(photocraft_raster::from_rgba(&fmt, [0.95, 0.10, 0.10, a]));
+                }
+            }
+            surf.write_region(b, &data);
+            Ok(())
+        })
+        .unwrap();
+        let r = s.execute("paint.redEye", json!({"x": 32, "y": 32})).unwrap();
+        assert!(r["pixels"].as_u64().unwrap_or(0) > 0, "depth {depth}: {r}");
+        let p = rgb8(&s, 32, 32);
+        assert!(neutral(p) && p[0] < 120, "depth {depth}: pupil {p:?}");
+        let d = s.active().unwrap();
+        let edge = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(0, 0);
+        assert!(edge[3] == 0.0 && edge[0] > 0.9, "depth {depth}: erased pixel {edge:?}");
+    }
+}
