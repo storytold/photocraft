@@ -68,6 +68,9 @@ pub fn available_with_swap() -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
+pub use linux::memory_backed_in;
+
+#[cfg(target_os = "linux")]
 pub(super) mod linux {
     use super::SystemMemory;
     use std::path::{Path, PathBuf};
@@ -314,6 +317,18 @@ pub(super) mod linux {
             });
         }
         mounts
+    }
+
+    /// Whether the mount holding the absolute `path` in `mountinfo` is memory-backed (`tmpfs`,
+    /// `ramfs`): the deepest mount point containing it and, of several at that point, the last
+    /// listed, which covers the others. A table with no mount for the path reads as disk-backed.
+    pub fn memory_backed_in(mountinfo: &str, path: &Path) -> bool {
+        let depth = |mount: &Mount| Path::new(&mount.mount_point).components().count();
+        let holder = parse_mountinfo(mountinfo)
+            .into_iter()
+            .filter(|mount| path.starts_with(&mount.mount_point))
+            .reduce(|deepest, mount| if depth(&mount) >= depth(&deepest) { mount } else { deepest });
+        holder.is_some_and(|mount| matches!(mount.fstype.as_str(), "tmpfs" | "ramfs"))
     }
 
     /// Finds the mount for `fstype`/`controller` and joins the process's cgroup path to it.

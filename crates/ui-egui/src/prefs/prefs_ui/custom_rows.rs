@@ -361,6 +361,12 @@ fn scratch_disks_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
                 PathSetting::new(tl!("Path"), &path_key, draft, craft::host::PickRequest::folder("scratch")).show(ui);
             }
         });
+        // Which folder that names: on Linux a /tmp kept in memory gives way to one on disk.
+        #[cfg(not(target_arch = "wasm32"))]
+        if path.trim() == SYSTEM_TEMP {
+            let dir = photocraft_engine::system_temp_dir().display().to_string();
+            help(ui, &crate::i18n::fmt(tl!("System temp folder: {path}"), &[("path", &dir)]));
+        }
     }
     if Button::new(tl!("Add disk")).show(ui).clicked() {
         let mut disks: Vec<Value> = draft.get(SCRATCH_DISKS).unwrap_or_default();

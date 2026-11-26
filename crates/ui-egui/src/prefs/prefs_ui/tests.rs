@@ -1787,6 +1787,23 @@ fn scratch_disk_browse_sets_only_its_draft_entry_and_cancel_keeps_it() {
     assert_eq!(asked.iter().map(|r| r.kind).collect::<Vec<_>>(), [PickKind::Folder, PickKind::Folder]);
 }
 
+/// #17132: the system's temporary folder entry names the folder it resolves to, which on Linux is a disk-backed one
+/// in place of a /tmp kept in memory.
+#[test]
+fn scratch_disks_page_names_the_system_temp_folder() {
+    use egui_kittest::kittest::Queryable;
+    let store = Arc::new(MemoryFiles::new());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services_on(&store));
+        open_prefs(&mut app, "scratchDisks");
+        app
+    });
+    h.run_steps(4);
+    let line = format!("System temp folder: {}", photocraft_engine::system_temp_dir().display());
+    assert!(h.query_by_label(&line).is_some(), "the page shows {line:?}");
+}
+
 /// The agent settings apply at once, so none of them says "Applies at next launch." (they did before the agent link
 /// followed the preferences live).
 #[test]
