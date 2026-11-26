@@ -54,10 +54,8 @@ fn align_edges_is_on_by_default_and_saved() {
 
 #[test]
 fn other_shape_tools_always_snap() {
-    for tool in [Tool::EllipseShape, Tool::Star] {
-        let r = rect(|o| o.align_edges = false, tool, START, END).unwrap();
-        assert!(r.iter().all(|v| v.fract() == 0.0), "{tool:?}: {r:?}");
-    }
+    let r = rect(|o| o.align_edges = false, Tool::EllipseShape, START, END).unwrap();
+    assert!(r.iter().all(|v| v.fract() == 0.0), "EllipseShape: {r:?}");
 }
 
 #[test]

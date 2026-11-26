@@ -811,5 +811,9 @@ mod clone_stamp_no_source_alert_tests;
 mod remove_options_bar_labels_tests;
 
 #[cfg(test)]
+#[path = "../smudge_bar_angle_tests.rs"]
+mod smudge_bar_angle_tests;
+
+#[cfg(test)]
 #[path = "../healing_aligned_default_tests.rs"]
 mod healing_aligned_default_tests;
