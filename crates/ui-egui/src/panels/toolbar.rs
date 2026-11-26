@@ -198,7 +198,8 @@ struct FooterProps<'a> {
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
     let version = super::region_versions::toolbar_footer(app);
     let props = FooterProps { version, columns: rail.columns, app };
-    let _ = MemoView::new("photocraft.toolbar_footer", props, |props: &mut FooterProps<'_>, ui: &mut egui::Ui| footer_now(props.app, ui, props.columns)).show(ui);
+    let _ =
+        MemoView::new("photocraft.toolbar_footer", props, |props: &mut FooterProps<'_>, ui: &mut egui::Ui| footer_now(props.app, ui, props.columns)).show(ui);
 }
 
 /// The footer's content: the colour chips, then the Quick Mask and Screen Mode buttons.
