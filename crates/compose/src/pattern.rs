@@ -77,9 +77,10 @@ impl<'a> PreparedPatterns<'a> {
         self
     }
 
-    /// The colour mode the patterns are painted into.
-    pub(crate) fn mode(&self) -> ColorMode {
-        self.mode
+    /// How the patterns' colours are painted: a colour mode's pixel-format conversion, or grey
+    /// through the grey profile. Two spaces of the same mode can sample different pixels.
+    pub(crate) fn space(&self) -> PatternSpace {
+        self.space
     }
 
     pub(crate) fn source(&self) -> &'a [Pattern] {

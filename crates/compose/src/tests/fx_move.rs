@@ -75,10 +75,27 @@ fn stripes() -> photocraft_doc::pattern::Pattern {
     p
 }
 
+/// Blue and red stripes under the same id and name as [`stripes`]: colours whose greys differ
+/// between the ordinary Grayscale preparation (luma: 29 and 76 of 255) and the profile-aware one
+/// (69 and 129, #14975).
+fn colour_stripes() -> photocraft_doc::pattern::Pattern {
+    let mut sf = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    sf.fill_rect(Rect::new(0, 0, 5, 2), &[0.0, 0.0, 1.0, 1.0]);
+    sf.fill_rect(Rect::new(0, 2, 5, 5), &[1.0, 0.0, 0.0, 1.0]);
+    let mut p = photocraft_doc::pattern::Pattern::new("stripes", sf, 5, 5);
+    p.id = "stripes".into();
+    p
+}
+
 /// A 128² document with one layer: an opaque block with a half-covered column (so the shape
 /// isn't flat), holding `fx`.
 fn moving_doc(depth: SampleType, block: Rect, fx: Vec<Effect>) -> Document {
-    let mut d = Document::with_background("t", Size::new(128, 128), ColorMode::Rgb, depth, Color::WHITE);
+    moving_doc_in(ColorMode::Rgb, depth, block, fx)
+}
+
+/// [`moving_doc`] in colour mode `mode`.
+fn moving_doc_in(mode: ColorMode, depth: SampleType, block: Rect, fx: Vec<Effect>) -> Document {
+    let mut d = Document::with_background("t", Size::new(128, 128), mode, depth, Color::WHITE);
     d.patterns.push(stripes());
     let f = d.pixel_format();
     let mut l = Layer::raster("fx", f);
@@ -300,6 +317,59 @@ fn a_redefined_texture_pattern_is_not_reused_after_a_move() {
     let warm = flatten(&d);
     assert_eq!(fx_builds(id) - before, 1, "maps built from the old pattern are not reused");
     assert!(warm.px == cold(&d, d.bounds()).px, "renders like a cold build with the new pattern");
+}
+
+/// A linked texture in a Grayscale document is prepared in the document's whole pattern space:
+/// untagged, through the grey profile; tagged with another grey profile, by the luma formula.
+/// Both are `ColorMode::Grayscale`, so a key on the mode alone would lend one's maps to the other.
+#[test]
+fn moved_texture_maps_follow_the_grayscale_pattern_space() {
+    use crate::pattern::PatternSpace;
+    let _g = held();
+    let ordinary = || Some(craft_cms::Builtin::GrayGamma22.profile().to_bytes());
+    let gray_doc = |profile| {
+        let mut d = moving_doc_in(ColorMode::Grayscale, SampleType::U8, Rect::new(30, 30, 70, 60), vec![bevel(BevelTechnique::Smooth, Some(texture(true)))]);
+        d.patterns[0] = colour_stripes();
+        d.icc_profile = profile;
+        let i = d.layers.len() - 1;
+        d.layers[i].effects.reference = Some((30.0, 30.0));
+        d
+    };
+    let i = gray_doc(None).layers.len() - 1;
+    assert_eq!(PatternSpace::of(&gray_doc(None)), PatternSpace::ProfileGray);
+    assert_eq!(PatternSpace::of(&gray_doc(ordinary())), PatternSpace::Mode(ColorMode::Grayscale));
+    // The two preparations texture the bevel differently, or this test would prove nothing.
+    let (a, b) = (gray_doc(None), gray_doc(ordinary()));
+    assert!(cold(&a, a.bounds()).px != cold(&b, b.bounds()).px, "the profile-aware and the ordinary greys differ");
+    // Each space on its own: the moved maps are reused and equal a fresh build bit for bit.
+    for (what, profile) in [("profile-aware", None), ("ordinary", ordinary())] {
+        let (d, builds, same) = warm_then_move(gray_doc(profile), 10, 7);
+        assert_eq!(builds, 0, "{what}: reused");
+        assert!(same, "{what}: renders like a cold build");
+        let entries = fx_entries(top_id(&d));
+        let mut fresh = d.clone();
+        fresh.layers[i].id = Layer::raster("fresh", fresh.pixel_format()).id;
+        let _ = flatten(&fresh);
+        let built = fx_entries(top_id(&fresh));
+        assert_eq!(built.len(), 1, "{what}");
+        let (f, _) = &built[0];
+        let rebased = entries.iter().find(|(m, _)| m.rect() == f.rect()).map(|(m, _)| m.clone());
+        let rebased = rebased.unwrap_or_else(|| panic!("{what}: an entry at {:?}", f.rect()));
+        assert!(rebased.same_arrays(f), "{what}: rebased maps equal a fresh build");
+    }
+    // Moved while the document switches between the two preparations: same mode, other greys,
+    // so the old maps are not reused.
+    for (what, from, to) in [("profile-aware to ordinary", None, ordinary()), ("ordinary to profile-aware", ordinary(), None)] {
+        let mut d = gray_doc(from);
+        let id = top_id(&d);
+        let _ = flatten(&d);
+        let before = fx_builds(id);
+        d.icc_profile = to;
+        moved(&mut d.layers[i], 10, 7);
+        let warm = flatten(&d);
+        assert_eq!(fx_builds(id) - before, 1, "{what}: rebuilt");
+        assert!(warm.px == cold(&d, d.bounds()).px, "{what}: renders like a cold build");
+    }
 }
 
 #[test]

@@ -407,8 +407,10 @@ fn move_key(layer: &Layer, region: Rect, clipped: bool, cx: &Ctx) -> Option<u64>
 }
 
 /// Identity of what the enabled bevels' textures resolve to: each pattern's size and pixels (its
-/// tile addresses, passed to `pin` as in [`layer_identity`]) and the colour mode they are painted
-/// in. The cached entry pins those tiles, so a redefined pattern can't take their addresses.
+/// tile addresses, passed to `pin` as in [`layer_identity`]) and the whole
+/// [`crate::pattern::PatternSpace`] they are painted in, not only its colour mode: the ordinary
+/// and the profile-aware Grayscale preparation share a mode but sample different greys. The
+/// cached entry pins those tiles, so a redefined pattern can't take their addresses.
 fn texture_identity(layer: &Layer, cx: &Ctx, h: &mut std::collections::hash_map::DefaultHasher, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) {
     use std::hash::Hash;
     let mut any = false;
@@ -420,7 +422,7 @@ fn texture_identity(layer: &Layer, cx: &Ctx, h: &mut std::collections::hash_map:
         }
     }
     if any {
-        (cx.mode, cx.patterns.mode()).hash(h);
+        (cx.mode, cx.patterns.space()).hash(h);
     }
 }
 
