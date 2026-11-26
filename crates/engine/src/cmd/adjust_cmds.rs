@@ -397,6 +397,12 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface, histogram_
     };
     let mut out = surf.clone();
     if kind == "replaceColor" {
+        // Localized clusters, extra samples, and Lab bounds are refused before a smart filter
+        // is recorded. A stored action that still carries them must not replay as a global
+        // replace that drops those restrictions; leaving the pixels alone matches an unknown filter.
+        if replace_color_replay_would_drop_samples(p) {
+            return Ok(None);
+        }
         let Ok((c, fuzz, h, sat, l)) = replace_color_params("image.adjustments.replaceColor", p, [0.0, 0.0, 0.0, 1.0]) else { return Ok(None) };
         process_surface(&mut out, None, &mut |px, _| {
             tone::replace_color(px, [c[0], c[1], c[2]], fuzz, h, sat, l);
@@ -449,6 +455,21 @@ fn shadows_highlights_params(p: &Value) -> ShadowsHighlights {
         black_clip: num(p, "blackClip", d.black_clip).clamp(0.0, 50.0),
         white_clip: num(p, "whiteClip", d.white_clip).clamp(0.0, 50.0),
     }
+}
+
+/// True when replaying `replaceColor` as one global colour would ignore a restriction the
+/// command refuses to record on a smart object.
+fn replace_color_replay_would_drop_samples(p: &Value) -> bool {
+    if p.get("localized").and_then(Value::as_bool).unwrap_or(false) {
+        return true;
+    }
+    if p.get("points").and_then(Value::as_array).is_some_and(|a| a.len() > 1) {
+        return true;
+    }
+    if p.get("subtractPoints").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
+        return true;
+    }
+    p.get("labMinimum").is_some() || p.get("labMaximum").is_some()
 }
 
 fn replace_color_params(cmd: &str, p: &Value, default_color: [f32; 4]) -> Result<([f32; 4], f32, f32, f32, f32)> {

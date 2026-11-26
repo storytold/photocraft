@@ -605,6 +605,27 @@ fn multi_sample_replace_color_is_refused_on_a_smart_object() {
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
 }
 
+/// A stored Replace Color that still asks for localized clusters, several samples, or Lab bounds
+/// does not replay as a global replace. A one-colour filter still does.
+#[test]
+fn a_stored_localized_replace_color_is_not_replayed_as_a_global_replace() {
+    let s = session(8, "rgb");
+    let active = s.active().unwrap();
+    let surf = active.doc.layer(active.active_layer.unwrap()).unwrap().surface().unwrap();
+    let before = surf.rgba(3, 3);
+    for p in [
+        json!({"localized": true, "points": [[3, 3]], "hue": 120.0}),
+        json!({"points": [[1, 1], [2, 2]], "hue": 120.0}),
+        json!({"subtractPoints": [[1, 1]], "hue": 120.0}),
+        json!({"labMinimum": [0.0, 0.0, 0.0], "labMaximum": [100.0, 0.0, 0.0]}),
+    ] {
+        assert!(adjust_as_filter("replaceColor", &p, surf, None).unwrap().is_none(), "{p}");
+    }
+    let out = adjust_as_filter("replaceColor", &json!({"color": "#4d66cc", "fuzziness": 200, "hue": 90, "saturation": 30}), surf, None).unwrap();
+    let out = out.expect("a one-colour replace still replays");
+    assert!(changed(before, out.rgba(3, 3)) > 1e-3);
+}
+
 /// Localized Replace Color is refused only for the smart object's own pixels: an alpha channel,
 /// or an explicit `layer` that is not a smart object, edits as usual while a smart object is active.
 #[test]
