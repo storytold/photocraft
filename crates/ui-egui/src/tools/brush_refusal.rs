@@ -152,7 +152,8 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
 /// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
 /// behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::Burn | Tool::RedEye | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
+    locks.all
+        || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::Burn | Tool::RedEye | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
 }
 
 /// A Spot Healing press on an empty pixel layer with Sample All Layers off (#12581): when that layer is hidden, the
@@ -198,5 +199,7 @@ mod art_history_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../burn_refusal_alert_tests.rs"]
 mod burn_refusal_alert_tests;
+
+#[cfg(test)]
 #[path = "../red_eye_refusal_alerts_tests.rs"]
 mod red_eye_refusal_alerts_tests;
