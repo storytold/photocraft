@@ -49,6 +49,9 @@ fn painted(name: &str, fmt: PixelFormat, rgba: [f32; 4]) -> Layer {
 fn vector_masks_match_the_cpu() {
     let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(mut g) = gpu() else { return };
+    // Layer effects use the CPU compositor on the GL backend, so the effect layer this test
+    // samples its vector mask on has nothing to compare there; the mask cases below still run.
+    let gl = g.0.adapter_info().backend == wgpu::Backend::Gl;
     for depth in [SampleType::U8, SampleType::U16] {
         for (inverted, density) in [(false, 1.0), (true, 1.0), (false, 0.6)] {
             let mut d = Document::with_background("v", Size::new(44, 34), ColorMode::Rgb, depth, Color::WHITE);
@@ -80,7 +83,9 @@ fn vector_masks_match_the_cpu() {
             fx.surface_mut().unwrap().fill_rect(Rect::new(8, 8, 30, 26), &photocraft_raster::from_rgba(&fmt, [0.2, 0.8, 0.3, 1.0]));
             fx.vector_mask = Some(tri(inverted, density));
             fx.effects.items = vec![Effect::default_drop_shadow()];
-            d.layers.push(fx);
+            if !gl {
+                d.layers.push(fx);
+            }
             check(&mut g, &d, &format!("{depth:?} inverted {inverted} density {density}"));
             // Editing the path re-rasterises the mask.
             if let Some(vm) = &mut d.layers[1].vector_mask {

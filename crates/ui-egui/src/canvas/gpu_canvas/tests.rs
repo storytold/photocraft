@@ -395,6 +395,16 @@ fn shaders_validate() {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // A vertex result that is a struct holding only `@builtin(position)` becomes GLSL that
+        // Intel's Windows OpenGL driver rejects, so every vertex entry returns the position
+        // itself (or a struct that also carries other data, like the mip pass's UV).
+        for ep in module.entry_points.iter().filter(|ep| ep.stage == naga::ShaderStage::Vertex) {
+            if let Some(result) = ep.function.result.as_ref()
+                && let naga::TypeInner::Struct { members, .. } = &module.types[result.ty].inner
+            {
+                assert!(members.len() > 1, "{name}: {} returns a position-only struct", ep.name);
+            }
+        }
     }
 }
 
