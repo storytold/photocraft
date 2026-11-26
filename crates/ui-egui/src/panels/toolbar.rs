@@ -18,6 +18,9 @@ use super::tool_commands;
 #[path = "toolbar_docking_tests.rs"]
 mod toolbar_docking_tests;
 #[cfg(test)]
+#[path = "toolbar_flyout_mark_tests.rs"]
+mod toolbar_flyout_mark_tests;
+#[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
 
