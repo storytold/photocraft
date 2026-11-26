@@ -839,6 +839,9 @@ pub(crate) mod testing {
 mod navigator_gpu_tests;
 
 #[cfg(test)]
+mod overlay_gpu_tests;
+
+#[cfg(test)]
 mod color_swatch_tests;
 #[cfg(test)]
 mod dialog_title_ellipsis_tests;
