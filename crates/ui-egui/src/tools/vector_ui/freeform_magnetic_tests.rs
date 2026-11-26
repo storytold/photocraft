@@ -20,7 +20,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::Tool;
+use crate::state::{Tool, ToolOptions};
 
 /// The fixtures' top edge, in document y: the painted band runs from y = 100 to y = 250.
 const TOP: f64 = 100.0;
@@ -91,15 +91,28 @@ fn drag(app: &mut PhotocraftApp, pts: &[[f64; 2]], pressure: f32, mods: Modifier
     }
 }
 
-/// Press, drag along `pts`, release, with the stylus reading `pressure` (1 for a mouse).
-fn stroke_with(app: &mut PhotocraftApp, pts: &[[f64; 2]], pressure: f32) {
-    let (Some(first), Some(last)) = (pts.first(), pts.last()) else { return };
+/// The gesture the reference application measures (#12693, as the review of this PR measured it):
+/// a click places the first point where it was pressed, the pointer then walks `pts` with the button
+/// UP, and the trace is left running.
+fn traced_along(app: &mut PhotocraftApp, pts: &[[f64; 2]], pressure: f32) {
+    let Some(first) = pts.first() else { return };
     tool_event(app, ToolEvent::Down { x: first[0], y: first[1], pressure }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x: first[0], y: first[1] }, Modifiers::NONE);
     drag(app, pts, pressure, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: last[0], y: last[1] }, Modifiers::NONE);
 }
 
-/// Press, drag along `pts`, release with a mouse.
+/// Enter, the key that ends a magnetic trace.
+fn finish(app: &mut PhotocraftApp) {
+    crate::canvas::testing::key(app, egui::Key::Enter, Modifiers::NONE);
+}
+
+/// The measured gesture along `pts` with the stylus reading `pressure`, then Enter.
+fn stroke_with(app: &mut PhotocraftApp, pts: &[[f64; 2]], pressure: f32) {
+    traced_along(app, pts, pressure);
+    finish(app);
+}
+
+/// The measured gesture along `pts` with a mouse, then Enter.
 fn stroke(app: &mut PhotocraftApp, pts: &[[f64; 2]]) {
     stroke_with(app, pts, 1.0);
 }
@@ -126,9 +139,7 @@ fn fastened(with: fn() -> Box<PhotocraftApp>, pts: &[[f64; 2]], width: f32, cont
     o.freeform_magnetic.width = width;
     o.freeform_magnetic.contrast = contrast;
     o.freeform_magnetic.frequency = frequency;
-    let Some(first) = pts.first() else { return Vec::new() };
-    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
-    drag(&mut app, pts, 1.0, Modifiers::NONE);
+    traced_along(&mut app, pts, 1.0);
     app.canvas_tools.vector.freeform.draft.points().iter().map(|p| [p.x, p.y]).collect()
 }
 
@@ -157,10 +168,18 @@ fn magnetic(with: fn() -> Box<PhotocraftApp>, pts: &[[f64; 2]], width: f32, cont
     anchors(&app)
 }
 
-/// A stroke with Magnetic off: the freehand anchors of the same gesture.
+/// Today's freehand gesture, held press-drag-release: what the tool does with Magnetic off.
+fn held_stroke(app: &mut PhotocraftApp, pts: &[[f64; 2]]) {
+    let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) else { return };
+    tool_event(app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
+    drag(app, pts, 1.0, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x: last[0], y: last[1] }, Modifiers::NONE);
+}
+
+/// A stroke with Magnetic off: the freehand anchors of today's gesture.
 fn freehand(pts: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let mut app = app();
-    stroke(&mut app, pts);
+    held_stroke(&mut app, pts);
     anchors(&app)
 }
 
@@ -264,17 +283,110 @@ fn escape_cancels_a_magnetic_trace_with_no_path_and_no_history_step() {
 fn a_right_click_during_a_magnetic_trace_opens_no_menu_and_the_trace_goes_on() {
     let mut app = app();
     app.ui.tool_options.freeform_magnetic_on = true;
-    let pts = [[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]];
-    let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) else { return };
-    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(&mut app, ToolEvent::Move { x: 200.0, y: 92.0, pressure: 1.0 }, Modifiers::NONE);
-    crate::canvas::testing::secondary_click(&mut app, [200.0, 92.0], Modifiers::NONE);
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "the trace is in flight");
+    crate::canvas::testing::secondary_click(&mut app, [260.0, 92.0], Modifiers::NONE);
     let opened = app.ui.canvas_tool_menu.as_ref().map(|m| m.tool);
     assert!(opened.is_none(), "the right-click opens no menu over a trace in flight: {opened:?}");
-    assert!(app.canvas_tools.vector.freeform.draft.is_down(), "and the trace is still running");
-    tool_event(&mut app, ToolEvent::Up { x: last[0], y: last[1] }, Modifiers::NONE);
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "and the trace is still running");
+    finish(&mut app);
     let points = anchors(&app);
     assert!(edge_deviation(&points, TOP) < 2.0, "the finished path still rides the edge: {points:?}");
+}
+
+/// The measured gesture: one click begins the trace, and the fastening points come from the pointer
+/// moving with the button up — the release leaves the trace running.
+#[test]
+fn a_magnetic_trace_begins_at_a_click_and_fastens_while_the_button_is_up() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    let pts = [[140.0, 94.0], [200.0, 94.0], [260.0, 94.0]];
+    let Some(first) = pts.first() else { return };
+    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
+    let points = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    assert_eq!(points.len(), 1, "the press of the click places one point");
+    assert!((points[0].y - first[1]).abs() < 0.5, "the starting point is where it was clicked, not on the edge: {:?}", points[0]);
+    tool_event(&mut app, ToolEvent::Up { x: first[0], y: first[1] }, Modifiers::NONE);
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "the release does not end the trace");
+    assert!(app.session.active().unwrap().doc.work_path.is_none(), "and commits nothing");
+    drag(&mut app, &pts, 1.0, Modifiers::NONE);
+    let lived = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    assert!(lived.len() > points.len(), "the pointer's moves with the button up lay fastening points: {} → {}", points.len(), lived.len());
+    let on_edge = lived.iter().filter(|p| (p.y - TOP).abs() < 2.0).count();
+    assert!(on_edge >= 2, "and they sit on the edge, not on the pointer's line: {lived:?}");
+}
+
+/// Enter ends the trace as one History step, leaves the path open, and puts the end anchor where the
+/// pointer last was on the edge.
+#[test]
+fn enter_ends_a_magnetic_trace_open_as_one_history_step() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    let n = app.session.active().unwrap().history.past_len();
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    finish(&mut app);
+    assert_eq!(app.session.active().unwrap().history.past_len(), n + 1, "one History step for the trace");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Magnetic Pen"), "the step the reference names");
+    let path = app.session.active().and_then(|st| st.doc.work_path.clone()).expect("a Work Path");
+    let sub = path.subpaths.first().expect("one subpath");
+    assert!(!sub.closed, "Enter ends the path open: {sub:?}");
+    let last = sub.knots.last().expect("an end anchor");
+    assert!((last.anchor.x - 260.0).abs() < 2.0, "its end anchor is where the pointer was: {last:?}");
+    assert!((last.anchor.y - TOP).abs() < 2.0, "on the edge under it: {last:?}");
+}
+
+/// A double-click ends the trace and closes the path it made.
+#[test]
+fn a_double_click_ends_a_magnetic_trace_and_closes_the_path() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    let n = app.session.active().unwrap().history.past_len();
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    crate::canvas::testing::double_click(&mut app, [260.0, 92.0], Modifiers::NONE);
+    let path = app.session.active().and_then(|st| st.doc.work_path.clone()).expect("the double-click commits a Work Path");
+    let sub = path.subpaths.first().expect("one subpath");
+    assert!(sub.closed, "and closes it: {sub:?}");
+    assert_eq!(app.session.active().unwrap().history.past_len(), n + 1, "as one History step");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Magnetic Pen"), "under the name the reference gives");
+    assert!(!app.canvas_tools.vector.freeform.draft.is_open(), "the trace is over");
+}
+
+/// A single click on the point the trace began with closes the path.
+#[test]
+fn a_magnetic_click_on_the_start_point_closes_the_path() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    let pts = [[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]];
+    traced_along(&mut app, &pts, 1.0);
+    let Some(first) = pts.first() else { return };
+    crate::canvas::testing::click(&mut app, [first[0], first[1]], Modifiers::NONE);
+    let path = app.session.active().and_then(|st| st.doc.work_path.clone()).expect("the click on the start commits a Work Path");
+    let sub = path.subpaths.first().expect("one subpath");
+    assert!(sub.closed, "a click on the start point closes the path: {sub:?}");
+}
+
+/// Backspace (and Delete) takes the last fastening point back, again and again, and the trace stays
+/// live between the presses.
+#[test]
+fn backspace_takes_magnetic_fastening_points_back_one_at_a_time_and_keeps_the_trace_live() {
+    let mut app = app();
+    let o = &mut app.ui.tool_options;
+    o.freeform_magnetic_on = true;
+    // A close cadence, so the walk along the edge lays a whole row of points to take back.
+    o.freeform_magnetic.frequency = 100.0;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    let laid = app.canvas_tools.vector.freeform.draft.points().len();
+    assert!(laid >= 8, "the trace fastened points by itself: {laid}");
+    for want in [laid - 1, laid - 2] {
+        crate::canvas::testing::key(&mut app, egui::Key::Backspace, Modifiers::NONE);
+        let have = app.canvas_tools.vector.freeform.draft.points().len();
+        assert_eq!(have, want, "Backspace takes one fastening point back ({laid} → {want})");
+        assert!(app.canvas_tools.vector.freeform.draft.is_open(), "and the trace stays live");
+        assert!(app.session.active().unwrap().doc.work_path.is_none(), "and commits nothing");
+    }
+    finish(&mut app);
+    let points = anchors(&app);
+    assert!(edge_deviation(&points, TOP) < 2.0, "the shortened trace still rides the edge: {points:?}");
 }
 
 /// A hand-edited or damaged preferences file cannot start the tool with a value its own fields
@@ -310,11 +422,81 @@ fn remembered_detection_values_past_their_ranges_load_clamped_as_the_lasso_s_do(
     assert_eq!((low.width, low.contrast, low.frequency), (width_min, 1.0, 0.0), "the low end clamps too: {low:?}");
 }
 
+/// ⌥-click inside a magnetic trace goes where the pointer clicked and joins the two ends with a
+/// straight segment; a plain click fastens to the edge.
+#[test]
+fn an_alt_click_in_a_magnetic_trace_adds_a_straight_segment_where_it_was_clicked() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0]], 1.0);
+    crate::canvas::testing::press(&mut app, [260.0, 80.0], Modifiers::ALT);
+    crate::canvas::testing::release(&mut app, [260.0, 80.0], Modifiers::ALT);
+    let points = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    let last = points.last().copied().unwrap_or_default();
+    assert!((last.y - 80.0).abs() < 1.0, "the ⌥-clicked point is where it was clicked, not on the edge: {last:?}");
+    let straight = app.canvas_tools.vector.freeform.draft.straight().to_vec();
+    assert!(straight.contains(&(points.len() - 1)), "and its incoming segment is straight: {points:?} / {straight:?}");
+}
+
+/// ⌥-drag inside a magnetic trace draws freehand from the pointer, and letting go of both goes back
+/// to tracing along the edge.
+#[test]
+fn an_alt_drag_in_a_magnetic_trace_draws_freehand_and_goes_back_to_magnetic() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0]], 1.0);
+    let free = [[220.0, 70.0], [240.0, 70.0], [260.0, 70.0]];
+    let Some(first) = free.first() else { return };
+    crate::canvas::testing::press(&mut app, [first[0], first[1]], Modifiers::ALT);
+    drag(&mut app, &free, 1.0, Modifiers::ALT);
+    crate::canvas::testing::release(&mut app, [260.0, 70.0], Modifiers::ALT);
+    let points = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    let off_edge = points.iter().filter(|p| (p.y - 70.0).abs() < 1.0).count();
+    assert!(off_edge >= 3, "the ⌥-drag drew freehand where the pointer went: {points:?}");
+    drag(&mut app, &[[260.0, 70.0], [300.0, 94.0]], 1.0, Modifiers::NONE);
+    let lived = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    let last = lived.last().copied().unwrap_or_default();
+    assert!((last.y - TOP).abs() < 2.0, "and with the button up and no ⌥ it fastens to the edge again: {last:?}");
+}
+
+/// Pen Pressure starts on for this tool, and Reset Tool turns it back on.
+#[test]
+fn pen_pressure_starts_on_for_the_magnetic_pen_and_reset_tool_turns_it_back_on() {
+    let fresh = ToolOptions::default();
+    assert!(fresh.freeform_magnetic.pressure_width, "the Freeform Pen's Magnetic starts with Pen Pressure on");
+    assert!(!fresh.magnetic.pressure_width, "and the Magnetic Lasso keeps its own default");
+    let mut o = ToolOptions::default();
+    o.freeform_magnetic.pressure_width = false;
+    crate::tools::tool_reset::reset_options(&mut o, Tool::FreeformPen);
+    assert!(o.freeform_magnetic.pressure_width, "Reset Tool turns it back on");
+}
+
+/// A remembered row that names some of its fields keeps the ones it names and takes the framework's
+/// own default for the ones it does not, exactly as the Lasso's row does.
+#[test]
+fn a_remembered_row_without_pen_pressure_keeps_the_framework_default_for_that_field() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.prefs.edit(|p| p.tool_options = json!({ "freeform_magnetic": { "width": 20.0 } }));
+    crate::tool_memory::restore(&mut app);
+    let o = app.ui.tool_options.freeform_magnetic;
+    assert_eq!(o.width, 20.0, "the width the file remembers");
+    assert_eq!(o.pressure_width, MagneticSettings::default().pressure_width, "and the framework's default for the field the file does not name: {o:?}");
+    let mut bare = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    bare.session.prefs.edit(|p| p.tool_options = json!({ "tolerance": 40.0 }));
+    crate::tool_memory::restore(&mut bare);
+    assert!(bare.ui.tool_options.freeform_magnetic.pressure_width, "a file that never mentions the row keeps this tool's default");
+}
+
 #[test]
 fn magnetic_off_leaves_the_trace_where_the_pointer_ran() {
     let mut app = app();
     assert!(!app.ui.tool_options.freeform_magnetic_on, "Magnetic is off to start");
-    stroke(&mut app, &[[140.0, 94.0], [280.0, 94.0]]);
+    // With the mode off the tool keeps today's gesture exactly: press, drag, release.
+    let pts = [[140.0, 94.0], [280.0, 94.0]];
+    let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) else { return };
+    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
+    drag(&mut app, &pts, 1.0, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: last[0], y: last[1] }, Modifiers::NONE);
     let points = anchors(&app);
     assert!(edge_deviation(&points, 94.0) < 1.0, "the freehand trace keeps the pointer's line: {points:?}");
     assert!(edge_deviation(&points, TOP) > 4.0, "and does not go to the edge: {points:?}");

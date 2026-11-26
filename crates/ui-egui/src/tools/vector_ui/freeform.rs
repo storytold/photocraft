@@ -6,7 +6,7 @@ use craft::behavior::kurbo::Point;
 use craft::behavior::{CancelReason, Cursor, CursorBadge, CursorIcon, PaintedCursor, PointerButton};
 use craft::imaging::ui::select::paint_outline;
 use craft::imaging::ui::select::{EdgeTracer, MagneticSettings};
-use craft::keymap::Mods;
+use craft::keymap::{Chord, Key, Mods};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 use egui::Vec2;
@@ -67,6 +67,9 @@ pub(crate) struct FreeformPenTool {
     edges: PcEdges,
     /// Magnetic: the pointer's path since the trace began, the guide the border is searched along.
     guide: Vec<Point>,
+    /// Magnetic: the edge point the live segment last found by the pointer, and the zoom it was
+    /// taken at. Enter ends the trace with an anchor there, which is where the reference's end sits.
+    live_end: Option<(Point, f64)>,
 }
 
 impl Default for FreeformPenTool {
@@ -86,9 +89,15 @@ impl Default for FreeformPenTool {
             magnetic: None,
             edges: PcEdges::default(),
             guide: Vec::new(),
+            live_end: None,
         }
     }
 }
+
+/// Plain Enter, claimed while a Magnetic trace is open: the reference ends a magnetic trace with the
+/// key (#12693), and the tool host hands a claimed single chord to [`CanvasTool::key`] as
+/// [`ToolKey::Kept`]. The freehand tool's trace ends on the release and leaves Enter to the app.
+const TRACE_KEYS: &[Chord] = &[Chord::plain(Key::Enter)];
 
 /// Refuse a Freeform stroke before drawing when its selected shape cannot be edited.
 pub(crate) fn freeform_locked_shape(app: &PhotocraftApp) -> bool {
@@ -114,19 +123,35 @@ impl FreeformPenTool {
     fn magnetic_pass(&mut self, app: &PhotocraftApp) {
         let o = &app.ui.tool_options;
         self.magnetic = o.freeform_magnetic_on.then_some(o.freeform_magnetic);
+        // The measured Magnetic Pen is a click-and-move outline, not a held drag: one click places a
+        // point, the pointer then moves with the button UP and the trace fastens to the edge, and a
+        // release leaves the trace running. The framework's click-a-vertex draft follows exactly those
+        // rules — a release waits for the next click, a key or a click on the start ends it — so the
+        // draft changes kind with the mode, and only between traces, never under an open one.
+        let kind = if self.magnetic.is_some() { DraftKind::Polygonal } else { DraftKind::Mixed };
+        if self.draft.kind() != kind && !self.draft.is_open() {
+            self.draft = OutlineDraft::new(kind, DraftReach::new(0.0, 0.0));
+        }
         self.edges.sync(&app.session);
     }
 
     /// Magnetic: the border found between the trace's last point and the edge near the pointer, with
     /// one point placed every [`MagneticSettings::spacing`] along it — the Magnetic Lasso's own
     /// cadence for fastening points, and here the points the trace (and so the path's anchors) is
-    /// built from. `end` also places the border's last point, which is how a release puts the final
-    /// anchor on the edge under the pointer.
-    fn follow_edges(&mut self, pointer: &ToolPointer, at: DraftPoint, end: bool) -> Option<DraftEvent> {
+    /// built from. The edge point the pointer is over now is kept as the trace's live end, which is
+    /// where Enter puts the last anchor.
+    fn follow_edges(&mut self, pointer: &ToolPointer, at: DraftPoint) -> Option<DraftEvent> {
         let settings = self.magnetic?;
         let search = settings.search(stylus_pressure(pointer));
         let spacing = settings.spacing(at.zoom).max(1.0);
         let target = self.edges.snap(at.at, search).unwrap_or(at.at);
+        self.live_end = Some((target, at.zoom));
+        // A sample that repeats the pointer's last position lays nothing: a fastening point the user
+        // took back with Backspace must not come right back while the pointer has not moved, which is
+        // the rule the Magnetic Lasso applies to its own trail.
+        if self.guide.last() == Some(&at.at) {
+            return None;
+        }
         let from = self.draft.points().last().copied().unwrap_or(at.at);
         self.guide.push(at.at);
         // `PcEdges` reads its own snapshot: the guide is handed over while it is searched.
@@ -147,14 +172,14 @@ impl FreeformPenTool {
         for i in 1..border.len() {
             let (Some(before), Some(next)) = (border.get(i - 1), border.get(i)) else { continue };
             along += next.distance(*before);
-            let last = i + 1 == border.len();
-            if along < spacing && !(end && last) {
+            if along < spacing {
                 continue;
             }
             let placed = *next;
-            // The fastening point goes in as a freehand sample of the draft, so the trace, its
-            // painting and its fit stay the machinery they are.
-            if self.draft.drag(DraftPoint::new(placed, at.mods, at.zoom)).is_some() {
+            // A fastening point is placed as the draft's own click would place one: the reference's
+            // magnetic trace is a chain of anchors along the edge, and the fit, the painting and the
+            // retract stay the machinery they are.
+            if self.fasten(placed, at.mods, at.zoom).is_some() {
                 event = Some(DraftEvent::Changed);
             }
             along = 0.0;
@@ -166,6 +191,49 @@ impl FreeformPenTool {
             self.guide = std::iter::once(placed).chain(rest).collect();
         }
         event
+    }
+
+    /// Magnetic: place one point in the draft the way a click places one, then let the button up
+    /// again. The draft's press is what adds the vertex, and a fastening the tracer lays down by
+    /// itself is not a held button: with the button up the trace sits between its clicks, which is
+    /// where it takes Enter, Backspace and the next click.
+    fn fasten(&mut self, at: Point, mods: Mods, zoom: f64) -> Option<DraftEvent> {
+        let sample = DraftPoint::new(at, mods, zoom);
+        self.draft.press(sample, false);
+        self.draft.release(sample)
+    }
+
+    /// Magnetic: put the live end in as the trace's last point, which is how Enter ends the trace with
+    /// an anchor at the pointer rather than at the last point that happened to fasten.
+    fn place_live_end(&mut self) -> Option<DraftEvent> {
+        let (at, zoom) = self.live_end?;
+        self.fasten(at, Mods::NONE, zoom)
+    }
+
+    /// End the trace: a Magnetic one first puts its live end in at the pointer, then the draft closes
+    /// and the finished trace goes to the commit the host runs after the pass.
+    fn finish_trace(&mut self) {
+        if self.magnetic.is_some() {
+            let lived = self.place_live_end();
+            self.apply(lived);
+        }
+        let event = self.draft.close();
+        self.apply(event);
+    }
+
+    /// Magnetic: is this press on the point the trace began with? The draft's own close radii are off
+    /// while the mode is on, because a fastening point landing near the last one must not end a trace
+    /// the user never clicked on; this is the click that does.
+    fn on_the_start(&self, pointer: &ToolPointer, cx: &ToolContext<'_>) -> bool {
+        let (Some(first), Some(space)) = (self.draft.points().first().copied(), cx.space()) else { return false };
+        space.view.to_screen(first).distance(pointer.pos) <= cx.slop
+    }
+
+    /// Magnetic: bring the trace back to the point it began with, so the fit joins its ends and the
+    /// committed path is closed (a click on the start, or a double-click).
+    fn join_the_start(&mut self, at: DraftPoint) {
+        let Some(first) = self.draft.points().first().copied() else { return };
+        self.fasten(first, at.mods, at.zoom);
     }
 
     /// The measured case is a normal Freeform trace into the displayed Work Path.
@@ -235,9 +303,20 @@ impl FreeformPenTool {
     }
 
     /// Magnetic: the trace's walk along the edges is over, so the next trace starts its guide from
-    /// nothing.
+    /// nothing and has no live end to place.
     fn drop_trace(&mut self) {
         self.guide.clear();
+        self.live_end = None;
+    }
+}
+
+/// Whether a key ends the trace: the window's Enter as the tool host offers it, or the plain Enter
+/// chord a Magnetic trace claims (#12693).
+fn ends_trace(key: &ToolKey) -> bool {
+    match key {
+        ToolKey::Submit => true,
+        ToolKey::Kept(chord) => *chord == TRACE_KEYS[0],
+        _ => false,
     }
 }
 
@@ -258,7 +337,12 @@ fn stylus_pressure(pointer: &ToolPointer) -> Option<f32> {
 impl CanvasTool for FreeformPenTool {
     /// Takes the reach and passes a change of the held modifiers to the draft (releasing ⌥ with the button up closes).
     fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
-        self.draft.set_reach(DraftReach::new(f64::from(cx.slop), f64::from(cx.slop)));
+        // The draft's close radii are for a click that aims at the outline's start. A Magnetic trace
+        // places its own fastening points, and one of those may land near the last point without the
+        // user meaning anything by it, so the radii are off while the mode is on; the click that
+        // closes a Magnetic trace is recognized in [`press`](Self::press) instead.
+        let reach = if self.magnetic.is_some() { DraftReach::new(0.0, 0.0) } else { DraftReach::new(f64::from(cx.slop), f64::from(cx.slop)) };
+        self.draft.set_reach(reach);
         if cx.mods != self.mods {
             self.mods = cx.mods;
             let event = self.draft.mods_changed(cx.mods);
@@ -267,7 +351,13 @@ impl CanvasTool for FreeformPenTool {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.draft.takes_retract() { ToolClaims::NONE.keyboard().deletes() } else { ToolClaims::NONE }
+        if !self.draft.takes_retract() {
+            return ToolClaims::NONE;
+        }
+        // Between clicks the trace takes its own keys: Backspace and Delete for its last point, and a
+        // Magnetic trace also takes plain Enter, which is how the reference ends one — a freehand
+        // trace ends on the release and leaves Enter to the app, as today.
+        if self.magnetic.is_some() { ToolClaims::NONE.keyboard().deletes().keys(TRACE_KEYS) } else { ToolClaims::NONE.keyboard().deletes() }
     }
 
     /// The primary button always, the secondary between straight-segment clicks (it retracts the last vertex).
@@ -298,11 +388,27 @@ impl CanvasTool for FreeformPenTool {
                 None => None,
             };
         }
+        // Magnetic: a click inside a running trace fastens to the edge near the pointer, except under
+        // ⌥, which asks for the straight segment to where the pointer actually clicked; and a click on
+        // the point the trace began with, like a double-click anywhere, brings the trace back to its
+        // start so the finished path closes.
+        let tracing = self.magnetic.is_some() && self.draft.is_open();
+        let closing = tracing && (pointer.clicks >= 2 || self.on_the_start(pointer, cx));
+        let at = match (tracing, closing, self.magnetic) {
+            (true, false, Some(settings)) if !at.mods.alt => {
+                DraftPoint::new(self.edges.snap(at.at, settings.search(stylus_pressure(pointer))).unwrap_or(at.at), at.mods, at.zoom)
+            }
+            _ => at,
+        };
+        if closing {
+            self.join_the_start(at);
+        }
         // With nothing selected, ⌥ starts straight segments at once: the Freeform Pen never subtracts.
-        let event = if self.draft.is_open() && pointer.clicks >= 2 { self.draft.close() } else { self.draft.press(at, false) };
+        let event = if self.draft.is_open() && (pointer.clicks >= 2 || closing) { self.draft.close() } else { self.draft.press(at, false) };
         if matches!(event, Some(DraftEvent::Started { .. })) {
             // A Magnetic trace begins at the click, unsnapped, and follows the edges from there.
             self.guide = vec![at.at];
+            self.live_end = None;
         }
         self.apply(event);
         ToolAction::Claimed
@@ -310,35 +416,35 @@ impl CanvasTool for FreeformPenTool {
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         if let Some(at) = sample(pointer, cx) {
-            // With Magnetic on the samples come from the edges near the pointer, not from the pointer.
-            let event = if self.magnetic.is_some() && self.draft.is_down() { self.follow_edges(pointer, at, false) } else { self.draft.drag(at) };
+            // Magnetic: a held ⌥ draws freehand from the pointer, as the reference measures; a plain
+            // drag is traced along the edges, which is what the button-up moves do in [`hover`].
+            let event = if self.magnetic.is_some() && self.draft.is_open() && !at.mods.alt { self.follow_edges(pointer, at) } else { self.draft.drag(at) };
             self.apply(event);
         }
     }
 
     /// The release closes a freehand trace unless straight segments are on; a click draws nothing.
+    /// Magnetic: the draft is the click-a-vertex one, so a release leaves the trace running and the
+    /// pointer's next move, with the button up, fastens along the edge.
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         if let Some(at) = sample(pointer, cx) {
-            if self.magnetic.is_some() && self.draft.is_down() {
-                // `OutlineDraft::release` only moves the rubber band, so the border's end point goes in
-                // first: the trace ends on the edge under the pointer.
-                let edge = self.follow_edges(pointer, at, true);
-                self.apply(edge);
-            }
             let event = self.draft.release(at);
             self.apply(event);
         }
     }
 
-    /// Between clicks the rubber band follows the pointer; it never adds a vertex.
+    /// Between clicks the rubber band follows the pointer; it never adds a vertex. Magnetic: this is
+    /// the measured gesture — the pointer moves with the button up, the live segment snaps to the edge
+    /// and fastening points lay themselves down along the way.
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        let Some(mut at) = sample(pointer, cx) else { return };
-        if let Some(settings) = self.magnetic
-            && !self.draft.is_down()
-        {
-            // Magnetic between clicks: the live end sits on the edge near the pointer, as the
-            // Magnetic Lasso's live segment does. It still adds no vertex.
-            at.at = self.edges.snap(at.at, settings.search(stylus_pressure(pointer))).unwrap_or(at.at);
+        let Some(at) = sample(pointer, cx) else { return };
+        let mut at = at;
+        if self.magnetic.is_some() && self.draft.is_open() && !self.draft.is_down() {
+            let event = self.follow_edges(pointer, at);
+            self.apply(event);
+            if let Some((edge, zoom)) = self.live_end {
+                at = DraftPoint::new(edge, at.mods, zoom);
+            }
         }
         if self.draft.hover(at).is_some() {
             cx.request_repaint();
@@ -360,10 +466,7 @@ impl CanvasTool for FreeformPenTool {
             return false;
         }
         match key {
-            ToolKey::Submit => {
-                let event = self.draft.close();
-                self.apply(event);
-            }
+            ToolKey::Submit | ToolKey::Kept(_) if ends_trace(key) => self.finish_trace(),
             ToolKey::Cancel => {
                 self.draft.cancel();
                 self.owner = None;
@@ -374,8 +477,10 @@ impl CanvasTool for FreeformPenTool {
             ToolKey::Delete { .. } => {
                 self.draft.retract();
                 if self.magnetic.is_some() {
-                    // Magnetic: the next border is searched from the point the trace kept.
-                    self.guide = self.draft.points().last().copied().into_iter().collect();
+                    // Magnetic: the point taken back must not come straight back while the pointer
+                    // stands still, and the next border is searched from the point the trace kept —
+                    // which `follow_edges` reads from the draft, so the pointer's trail stays as it is.
+                    self.live_end = None;
                 }
             }
             _ => return false,
