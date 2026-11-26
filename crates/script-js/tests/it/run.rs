@@ -457,6 +457,21 @@ fn deep_arrays_are_a_named_error_when_converted_to_text() {
     assert_eq!(lines_of("var a = 1; for (var i = 0; i < 128; i++) { a = [a]; } $.writeln(a);"), ["1"]);
     let src = "var a = 1; for (var i = 0; i < 129; i++) { a = [a]; } try { $.writeln(a); } catch (e) { $.writeln(e instanceof RangeError); }";
     assert_eq!(lines_of(src), ["true"]);
+    // The intrinsic toString or join as `Symbol.toPrimitive` is held to the same bound.
+    for method in ["Array.prototype.toString", "Array.prototype.join"] {
+        let src = format!(
+            "var a = 1; for (var i = 0; i < 129; i++) {{ a = [a]; }} a[Symbol.toPrimitive] = {method};
+             try {{ $.writeln(a); }} catch (e) {{ $.writeln(e instanceof RangeError, ' ', e.message); }}"
+        );
+        assert_eq!(lines_of(&src), ["true value is nested too deeply to convert to text (more than 128 levels)"], "{method}");
+    }
+    // Its text is the engine's: the intrinsic join takes the hint, `"string"`, as its separator.
+    for method in ["Array.prototype.toString", "Array.prototype.join"] {
+        let src = format!("var a = [1, [2, 3]]; a[Symbol.toPrimitive] = {method}; var engine = String(a); alert(a); $.writeln(engine);");
+        let seen = answering(&src, &[]);
+        assert_eq!(seen.result, Ok(()), "{method}");
+        assert_eq!(seen.dialogs[0].args, json!([seen.lines[0]]), "{method}");
+    }
 }
 
 #[test]

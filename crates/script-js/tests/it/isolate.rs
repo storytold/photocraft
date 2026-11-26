@@ -472,7 +472,9 @@ fn a_memory_marker_read_after_the_host_exited_still_counts() {
     // in a process group of its own (started by this test binary, `late_marker_writer`, as
     // nothing but `sh` is on every Unix runner), so stopping the host's group on exit leaves it
     // to deliver the marker late, as a pipe being drained would. The host aborts once the writer
-    // says it runs, and the writer writes once the host is gone: ordered, not timed.
+    // says it runs, and the writer writes once the host is gone. That order is fixed; what is
+    // timed is the supervisor's grace for a last write after the host exits (`STDERR_GRACE`,
+    // 500 ms), which the writer has to meet once it sees the host gone.
     let exe = std::env::current_exe().unwrap();
     let ready = std::env::temp_dir().canonicalize().unwrap().join(format!("script-host-late-marker-ready-{}", std::process::id()));
     drop(std::fs::remove_file(&ready));
@@ -553,6 +555,7 @@ fn the_host_starts_without_the_apps_environment_or_working_directory() {
     let seen = drive(&mut job, None, &[], |_, _| {});
     paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
     assert_eq!(seen.lines, ["clean"], "{:?}", seen.result);
+    assert_eq!(seen.result, Ok(()));
 }
 
 /// The app handles every output line, so it holds the total to the run's limit itself: a host

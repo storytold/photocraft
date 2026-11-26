@@ -53,10 +53,11 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
 }
 
 /// The arguments of one host call (`$.writeln`'s parts, a dialog's arguments) as text, each the
-/// way `String(value)` converts it, in the same order: `Symbol.toPrimitive`, then `toString`,
-/// then `valueOf`, each read once. Getters, proxy traps and conversion methods are script code,
-/// and their host calls are counted like any other. A failure in them is a catchable error at
-/// the call.
+/// way the abstract ToString converts it, in the same order: `Symbol.toPrimitive`, then
+/// `toString`, then `valueOf`, each read once. A Symbol is a `TypeError`: a script that wants one
+/// described calls `String()` on it itself. Getters, proxy traps and conversion methods are
+/// script code, and their host calls are counted like any other. A failure in them is a
+/// catchable error at the call.
 ///
 /// Where the conversion reaches the intrinsic `Array.prototype.toString` with the intrinsic
 /// `join`, the join is done here, with the engine's result but without its native recursion:
@@ -159,7 +160,7 @@ enum Converted {
 }
 
 impl Join {
-    /// Append `String(v)`.
+    /// Append ToString(`v`).
     fn value(&mut self, v: &JsValue, ctx: &mut Context) -> JsResult<()> {
         let Some(o) = v.as_object() else {
             let s = v.to_string(ctx)?;
@@ -169,6 +170,22 @@ impl Join {
         let exotic = o.get(JsSymbol::to_primitive(), ctx)?;
         if !exotic.is_null_or_undefined() {
             let f = exotic.as_callable().ok_or_else(|| JsError::from(JsNativeError::typ().with_message("Symbol.toPrimitive is not a function")))?;
+            // The intrinsic join as the method takes the hint as its separator, as the engine
+            // calls it; the intrinsic `toString` ignores it. Both are joined within bounds here.
+            if self.is_intrinsic(&f, ctx, |i| &i.array_join) {
+                let separator: Vec<u16> = js_string!("string").iter().collect();
+                return self.array_with(&o, &separator, ctx);
+            }
+            if self.is_intrinsic(&f, ctx, |i| &i.array_to_string) {
+                return match self.call(&o, &f, ctx)? {
+                    Converted::Appended => Ok(()),
+                    Converted::Value(r) if r.is_object() => Err(no_primitive()),
+                    Converted::Value(r) => {
+                        let s = r.to_string(ctx)?;
+                        self.push(&s)
+                    }
+                };
+            }
             let r = f.call(&o.clone().into(), &[js_string!("string").into()], ctx)?;
             if r.is_object() {
                 return Err(no_primitive());
@@ -190,6 +207,11 @@ impl Join {
             }
         }
         Err(no_primitive())
+    }
+
+    /// Whether `f` is the intrinsic `which` picks.
+    fn is_intrinsic(&self, f: &JsObject, ctx: &Context, which: impl Fn(&Intrinsics) -> &JsObject) -> bool {
+        ctx.realm().host_defined().get::<Intrinsics>().is_some_and(|i| JsObject::equals(f, which(i)))
     }
 
     /// Call a conversion method of `o`. The intrinsic `Array.prototype.toString` is run here:
@@ -223,6 +245,11 @@ impl Join {
 
     /// Append `Array.prototype.join.call(array)`: every element, `,` between them.
     fn array(&mut self, array: &JsObject, ctx: &mut Context) -> JsResult<()> {
+        self.array_with(array, &[u16::from(b',')], ctx)
+    }
+
+    /// [`Self::array`] with `separator` between the elements.
+    fn array_with(&mut self, array: &JsObject, separator: &[u16], ctx: &mut Context) -> JsResult<()> {
         if self.path.iter().any(|o| JsObject::equals(o, array)) {
             // A cycle: every engine joins an array already being joined as ''.
             return Ok(());
@@ -239,11 +266,11 @@ impl Join {
         for i in 0..len {
             if i > 0 {
                 // The separator counts too: past the limit, no further element is read.
-                if self.out.len() >= MAX_TEXT_UNITS {
+                if self.out.len().saturating_add(separator.len()) > MAX_TEXT_UNITS {
                     result = Err(too_long());
                     break;
                 }
-                self.out.push(u16::from(b','));
+                self.out.extend_from_slice(separator);
             }
             let element = match array.get(i, ctx) {
                 Ok(e) => e,
