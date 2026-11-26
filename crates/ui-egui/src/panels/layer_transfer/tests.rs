@@ -441,6 +441,133 @@ fn a_move_drag_between_floating_windows() {
 }
 
 #[test]
+fn a_move_drag_from_docked_to_floating_window() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+    let dest_id = h.state().session.documents()[1].doc.id;
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": dest_id.0})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+
+    // Position the floating window
+    let dest_rect = Rect::from_min_size(egui::pos2(600.0, 80.0), vec2(500.0, 400.0));
+    h.state_mut().ui.document_windows.floating[0].1 = dest_rect;
+    h.state_mut().ui.views[1].zoom = 2.0;
+    h.state_mut().ui.views[1].center = [35.0, 20.0];
+    h.state_mut().session.set_active(0);
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(4);
+
+    let before = source_square(&h, paint);
+    let host0 = CanvasHost::primary(h.state(), 0);
+    let view0 = ToolHost::shown_space(&h.ctx, host0.canvas_id()).unwrap().view;
+    let grab_doc = [9.0, 11.0];
+    let grab = to_screen(&view0, grab_doc[0], grab_doc[1]);
+
+    let host1 = CanvasHost::primary(h.state(), 1);
+    let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
+    let drop_doc = [25.0, 35.0];
+    let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
+
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer from move tool");
+    assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    let offset_x = (drop_doc[0] - grab_doc[0]).round() as i32;
+    let offset_y = (drop_doc[1] - grab_doc[1]).round() as i32;
+    let expected_bounds = before.translate(offset_x, offset_y);
+    let expected_rect =
+        Rect::from_min_max(egui::pos2(expected_bounds.x0 as f32, expected_bounds.y0 as f32), egui::pos2(expected_bounds.x1 as f32, expected_bounds.y1 as f32));
+    assert_eq!(copied, expected_rect, "copied layer bounds should match source bounds translated by drop-minus-grab offset");
+
+    assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
+    assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+}
+
+#[test]
+fn a_move_drag_from_docked_to_floating_viewport_transfers_layer() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+    let dest_id = h.state().session.documents()[1].doc.id;
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": dest_id.0})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+
+    let group_id = h.state().ui.document_windows.floating[0].0.id;
+    let dest_rect = Rect::from_min_size(egui::pos2(600.0, 80.0), vec2(500.0, 400.0));
+    h.state_mut().ui.document_windows.floating[0].1 = dest_rect;
+    h.state_mut().ui.views[1].zoom = 2.0;
+    h.state_mut().ui.views[1].center = [35.0, 20.0];
+    h.state_mut().session.set_active(0);
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(4);
+
+    let vp = egui::ViewportId::from_hash_of(("test-floating-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0))), ..Default::default() },
+    );
+    viewports
+        .insert(vp, egui::ViewportInfo { inner_rect: Some(dest_rect), outer_rect: Some(dest_rect), native_pixels_per_point: Some(1.0), ..Default::default() });
+
+    let before = source_square(&h, paint);
+    let host0 = CanvasHost::primary(h.state(), 0);
+    let view0 = ToolHost::shown_space(&h.ctx, host0.canvas_id()).unwrap().view;
+    let grab_doc = [9.0, 11.0];
+    let grab = to_screen(&view0, grab_doc[0], grab_doc[1]);
+
+    let host1 = CanvasHost::primary(h.state(), 1);
+    let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
+    let drop_doc = [25.0, 35.0];
+    let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
+
+    // Press and initiate drag in ROOT
+    h.event(egui::Event::PointerMoved(grab));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: grab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+
+    // Release occurs in the floating viewport `vp` (e.g. Linux multi-window), not ROOT
+    let drop_local = drop - dest_rect.min.to_vec2();
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+
+    let vp_input = egui::RawInput {
+        viewport_id: vp,
+        viewports: viewports.clone(),
+        events: vec![
+            egui::Event::PointerMoved(drop_local),
+            egui::Event::PointerButton { pos: drop_local, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ],
+        ..Default::default()
+    };
+    let _ = h.ctx.run_ui(vp_input, |_| {});
+
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+    h.run_steps(4);
+
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer from move tool via floating viewport");
+    assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    // Dest doc is 60×50, layer is 10×10. Target receives the layer centered (min=(25, 20), max=(35, 30)).
+    assert_eq!(copied, Rect::from_min_max(egui::pos2(25.0, 20.0), egui::pos2(35.0, 30.0)));
+
+    assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
+    assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
+    assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after transfer");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1);
+}
+
+#[test]
 fn drop_target_at_uses_maximized_bounds_for_maximized_floating_window() {
     let (mut h, _) = harness();
     let ctx = h.ctx.clone();

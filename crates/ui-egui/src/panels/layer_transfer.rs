@@ -115,13 +115,68 @@ fn move_drag(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[f64; 2]> {
     plain.then_some(d.start)
 }
 
+/// The latest pointer position (in root window coordinates), whether released this frame,
+/// and whether the primary button is held, checked across the root window and all floating
+/// document viewports.
+fn pointer_status(app: &PhotocraftApp, ctx: &egui::Context) -> (Option<egui::Pos2>, bool, bool) {
+    let host = WindowHost::of(ctx);
+    let main_facts = host.facts(egui::ViewportId::ROOT);
+
+    let (root_pos, root_released, root_down) =
+        ctx.input_for(egui::ViewportId::ROOT, |i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+
+    let mut pos = root_pos;
+    let mut released = root_released;
+    let mut down = root_down;
+    let mut release_vp = root_released.then_some(egui::ViewportId::ROOT);
+
+    for (group, _) in &app.ui.document_windows.floating {
+        if crate::canvas::document_windows::is_minimized(ctx, group.id) {
+            continue;
+        }
+        let key = egui::Id::unique(("floating document viewport", group.id));
+        let Some(vp) = ctx.data(|d| d.get_temp::<egui::ViewportId>(key)) else { continue };
+        let (vp_pos, vp_released, vp_down) = ctx.input_for(vp, |i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+        if vp_released {
+            released = true;
+            release_vp = Some(vp);
+        }
+        if vp_down {
+            down = true;
+        }
+        if let Some(p) = vp_pos
+            && let Some(facts) = host.facts(vp)
+        {
+            let desktop_p = p + facts.inner.min.to_vec2();
+            let root_p = main_facts.map_or(desktop_p, |main| desktop_p - main.inner.min.to_vec2());
+            if vp_released || (release_vp.is_none() && (vp_down || pos.is_none())) {
+                pos = Some(root_p);
+            }
+        }
+    }
+
+    if let Some(rel_vp) = release_vp {
+        if rel_vp == egui::ViewportId::ROOT {
+            pos = root_pos;
+        } else if let Some(facts) = host.facts(rel_vp)
+            && let Some(p) = ctx.input_for(rel_vp, |i| i.pointer.latest_pos())
+        {
+            let desktop_p = p + facts.inner.min.to_vec2();
+            let root_p = main_facts.map_or(desktop_p, |main| desktop_p - main.inner.min.to_vec2());
+            pos = Some(root_p);
+        }
+    }
+
+    (pos, released, down)
+}
+
 /// The pointer, while layers are dragged (or a Move drag could become a transfer): tabs only
 /// hit-test it then.
 pub fn pointer_if_armed(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui::Pos2> {
     if transfer(app, ctx).is_none() && move_drag(app, ctx).is_none() {
         return None;
     }
-    ctx.input(|i| i.pointer.latest_pos())
+    pointer_status(app, ctx).0
 }
 
 /// The pointer is over document tab `index` while layers are dragged: a Move drag becomes a
@@ -183,7 +238,8 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         app.session.set_active(index);
     }
     app.jobs.focus = None;
-    if ctx.input(|i| i.pointer.any_released()) {
+    let (_, released, _) = pointer_status(app, ctx);
+    if released {
         drop(app, ctx, index, DropTarget::Tab);
     }
 }
@@ -196,7 +252,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
 /// first pass), so a release drops once; the first pass also clears the Move-tool transfer.
 pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(t) = transfer(app, ctx) else { return };
-    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+    let (pos, released, down) = pointer_status(app, ctx);
     let target = pos.and_then(|p| target_at(app, p));
     if !released {
         if !down {
@@ -227,10 +283,11 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Do not consume a source drag merely because it passes over another tile. On release this
     // runs before canvas input, so a destination can take ownership without the source committing;
     // returning to the source still releases as the original move.
-    if !ctx.input(|i| i.pointer.any_released()) {
+    let (pos, released, _) = pointer_status(app, ctx);
+    if !released {
         return;
     }
-    let Some(pos) = pointer_if_armed(app, ctx) else { return };
+    let Some(pos) = (move_drag(app, ctx).is_some()).then_some(pos).flatten() else { return };
     let Some((dest, _)) = target_at(app, pos) else { return };
     if arm_move_transfer(app, ctx, dest) {
         if app.session.active_index() != Some(dest) {
