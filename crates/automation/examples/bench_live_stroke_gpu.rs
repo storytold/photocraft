@@ -13,7 +13,9 @@
 //! compares it with the committed document's GPU render. `--per-frame N` feeds N points per
 //! frame. `--settle` calls `LiveStroke::settle` between frames, 16 tiles at a time up to 64 tiles
 //! a frame, as the paint thread does while the UI renders: its time is `settle_ms`, outside the
-//! frame total, and the pen-up then has little left to composite.
+//! frame total but inside `stroke_incl_pen_up_ms`, and the pen-up then has little left to
+//! composite. The pen-up renders what the canvas redraws at release: the relayout damage, plus an
+//! overlay stroke's bounds.
 use photocraft_engine::Session;
 use photocraft_engine::brush_cmds::{LiveStroke, LiveStrokeExt};
 use photocraft_engine::paint::StrokePoint;
