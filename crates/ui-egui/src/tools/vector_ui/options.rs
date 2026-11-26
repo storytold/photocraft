@@ -265,9 +265,7 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             // measured).
             let text = if magnetic_on {
                 crate::i18n::fmt(
-                    tl!(
-                        "Click: begin the trace · Move: it fastens to the edge · {alt}-click: straight segment · Enter: finish · Double-click or click the start: close"
-                    ),
+                    tl!("Click: begin the trace · Move: fastens to the edge · {alt}-click: straight · Enter: end open · Double-click: close"),
                     &[("alt", &alt)],
                 )
             } else {
