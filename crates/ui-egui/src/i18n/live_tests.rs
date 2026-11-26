@@ -297,7 +297,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     });
 }
 
-/// The draft language previews inside the Preferences window only; Apply commits it.
+/// The draft language previews inside the Preferences window only; OK commits it.
 #[test]
 fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
     if !needs_catalogs() {
@@ -313,7 +313,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         let fr = lang("fr");
         assert!(text.iter().any(|text| text == tr(fr, "Appearance")), "the draft language must translate the visible window");
         assert!(text.iter().any(|text| text == tr(fr, "Cancel")), "the window buttons must preview the language too");
-        assert!(text.iter().any(|text| text == tr(fr, "Apply")), "Apply must use the draft language without committing it");
+        assert!(text.iter().any(|text| text == tr(fr, "OK")), "OK must use the draft language without committing it");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
         assert_eq!(h.state().session.prefs().interface.language, "auto");
         assert_eq!(current(), Lang::EN, "preview must not leak to the main window");

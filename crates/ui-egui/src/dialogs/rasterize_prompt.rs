@@ -105,15 +105,18 @@ pub fn needed(app: &PhotocraftApp) -> Option<(Kind, photocraft_doc::LayerId)> {
 
 /// A tool's pointer press: when it would paint a layer that must be rasterized first, open the
 /// prompt, or drop the press (the Remove tool on a type layer), and return true (the tool must not
-/// see the press).
+/// see the press). The Remove tool on a Smart Object layer is the one press that goes on without an
+/// answer: its fill lands on a new layer above the smart object, which keeps its content (#12555).
 pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: f32) -> bool {
     if !paints_pixels(app, tool) {
         return false;
     }
     let Some((kind, layer)) = needed(app) else { return false };
-    // The reference's Remove tool ignores a type layer: no prompt and no stroke (#12553).
-    if tool == Tool::Remove && kind == Kind::Type {
-        return true;
+    match (tool, kind) {
+        // The reference's Remove tool ignores a type layer: no prompt and no stroke (#12553).
+        (Tool::Remove, Kind::Type) => return true,
+        (Tool::Remove, Kind::SmartObject) => return false,
+        _ => {}
     }
     open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
     true
@@ -291,3 +294,7 @@ mod rasterize_prompt_history_name_tests;
 #[cfg(test)]
 #[path = "../tools/remove_type_layer_tests.rs"]
 mod remove_type_layer_tests;
+
+#[cfg(test)]
+#[path = "../tools/remove_smart_object_tests.rs"]
+mod remove_smart_object_tests;
