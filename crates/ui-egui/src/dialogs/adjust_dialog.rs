@@ -887,24 +887,21 @@ fn save_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, Str
 /// composite curve alone - the editor draws no channel curves for it - and is named `gray`. The
 /// preset's curves are checked against this, so a preset the dialog would quietly lose on the way to
 /// OK is refused instead.
-fn dialog_target(app: &PhotocraftApp, id: DialogId) -> Option<Map<String, Value>> {
+fn dialog_target(app: &PhotocraftApp, id: DialogId) -> Option<(&'static str, Option<&'static str>)> {
     let open = app.adjust_open.iter().find(|open| open.id == id)?;
     if gray_context(app, "curves", &open.target) {
-        return Some(Map::from_iter([("space".to_string(), json!("gray"))]));
+        return Some(("gray", None));
     }
     let space = match photocraft_engine::adjust_params::default_space(open.mode) {
         photocraft_doc::adjust::ToneSpace::Rgb => "rgb",
         photocraft_doc::adjust::ToneSpace::Cmyk => "cmyk",
         photocraft_doc::adjust::ToneSpace::Lab => "lab",
     };
-    let mut asked = Map::from_iter([("space".to_string(), json!(space))]);
     // A single colour component isolated in the Channels panel names one curve key. A colour *set*
     // lists its combined entry and each of its components, so it names no single channel and stays
     // checked by its colour mode, as it was.
-    if let Some(isolated) = open.target.channel.as_ref().filter(|isolated| isolated.components.is_none() && !isolated.key.is_empty()) {
-        asked.insert("channel".to_string(), json!(isolated.key));
-    }
-    Some(asked)
+    let channel = open.target.channel.as_ref().filter(|isolated| isolated.components.is_none() && !isolated.key.is_empty()).map(|isolated| isolated.key);
+    Some((space, channel))
 }
 
 /// The open dialog's parameters, only when `id` is still the Curves dialog that is open: the file
@@ -921,9 +918,10 @@ fn load_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, Str
         // after the dialog closed leaves no preset in the user's list.
         let held = open_curve_params(app, id).ok_or("the Curves dialog closed")?;
         let mut asked = crate::swatches_ui::source(&name, &bytes);
-        if let Some(target) = dialog_target(app, id) {
-            for (key, value) in target {
-                asked[key] = value;
+        if let Some((space, channel)) = dialog_target(app, id) {
+            asked["space"] = json!(space);
+            if let Some(channel) = channel {
+                asked["channel"] = json!(channel);
             }
         }
         let loaded = app.run("curves.presets.load", asked)?;
