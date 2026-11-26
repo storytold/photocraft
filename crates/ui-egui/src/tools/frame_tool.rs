@@ -819,7 +819,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     if app.ui.frame_tool.shape == "polygon" {
         let mut sides = Some(f64::from(app.ui.frame_tool.sides.clamp(3, 100)));
-        NumberField::new("Sides", Bind::bound(&mut sides)).range(3.0..=100.0).show(ui);
+        NumberField::new("#", Bind::bound(&mut sides)).range(3.0..=100.0).show(ui);
         if let Some(n) = sides {
             app.ui.frame_tool.sides = (n.round() as u32).clamp(3, 100);
         }
