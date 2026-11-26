@@ -40,7 +40,7 @@ impl Dictionary {
         if w.is_empty() || w.chars().any(|c| c.is_numeric()) || !w.chars().any(char::is_alphabetic) {
             return true;
         }
-        user.contains(&w.to_lowercase()) || craft::proof::is_correct_with(w, &OPTIONS)
+        user.contains(&w.to_lowercase()) || craft::proof::is_correct_in_with(w, craft::proof::ProofLang::En, &OPTIONS)
     }
 
     /// Up to `max` suggestions for a misspelled word, best first, with its possessive ending kept.
@@ -49,6 +49,10 @@ impl Dictionary {
         let normalized = normalize(word);
         let mut out: Vec<String> = Vec::new();
         for s in craft::proof::suggest(&w, max) {
+            // The input's ending is restored here; never on a candidate that already has one.
+            if !suffix.is_empty() && (s.ends_with("'s") || s.ends_with("'S")) {
+                continue;
+            }
             let s = format!("{s}{suffix}");
             if !out.contains(&s) && s != normalized {
                 out.push(s);
@@ -177,7 +181,8 @@ mod tests {
         for w in ["the", "The", "THE", "color", "colors", "running", "don't", "don’t", "Paris", "PARIS", "photographer's", "NASA"] {
             assert!(d.check(w, &none()), "{w}");
         }
-        for w in ["teh", "recieve", "paris", "Photograpy", "zxqv"] {
+        // American English: British-only spellings are flagged, as with the old en_US list.
+        for w in ["teh", "recieve", "paris", "Photograpy", "zxqv", "colour", "centre"] {
             assert!(!d.check(w, &none()), "{w}");
         }
         // Numbers and symbols are never flagged.
@@ -210,6 +215,7 @@ mod tests {
             assert!(d.suggest(word, 5).contains(&want.to_string()), "{word}: {:?}", d.suggest(word, 5));
         }
         assert!(d.suggest("wrold's", 0).is_empty());
+        assert!(!d.suggest("churchs's", 20).iter().any(|s| s.ends_with("'s's")), "{:?}", d.suggest("churchs's", 20));
         for apostrophe in ['\'', '\u{2019}', '\u{2018}', '\u{02BC}'] {
             let found = d.suggest(&format!("wrold{apostrophe}s"), 5);
             assert!(found.contains(&"world's".to_string()) && !found.iter().any(|s| s.ends_with("'s's")), "{found:?}");
