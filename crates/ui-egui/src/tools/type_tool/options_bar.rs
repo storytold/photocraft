@@ -26,7 +26,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     values::apply_bar_events(app, &out.edits);
     values::follow_family(app, std::mem::take(&mut out.preview_family), out.rested_family.as_deref());
     if let Some(request) = out.requests.take_color() {
-        values::pick_color(app, request.color.map(|c| [c.r, c.g, c.b]));
+        // A Type Mask edit paints a selection, not glyphs, so its well has no colour to change: the request asks for
+        // nothing (#12081). Whether a click on the placeholder should open a picker is one of the issue's unmeasured
+        // rows, asked there; nothing changing is what its acceptance asks for.
+        if colour_applies(app) {
+            values::pick_color(app, request.color.map(|c| [c.r, c.g, c.b]));
+        }
     }
     let ctx = ui.ctx().clone();
     for (pressed, command) in [(out.warp, "type.warpText"), (out.panels, "window.panel.character")] {
@@ -35,6 +40,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
+}
+
+/// Does a text colour apply to what the bar has in hand? A Type Mask session lays out a selection instead of glyphs,
+/// so while one is being edited the well has no colour to show and its click changes nothing (#12081). Every other
+/// case applies one: the bar idle with either mask tool, a Type tool edit, and a mask click that edits an existing
+/// text layer, which holds a plain text session with `mask` false (#12075).
+pub(crate) fn colour_applies(app: &PhotocraftApp) -> bool {
+    !app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask)
 }
 
 /// Character and paragraph style at the selection, caret, or first run of selected layers.
@@ -81,6 +94,10 @@ pub(super) fn kerning_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::K
         })
         .map(|r| (r.style.kerning, r.style.kern))
 }
+
+#[cfg(test)]
+#[path = "mask_color_swatch_tests.rs"]
+mod mask_color_swatch_tests;
 
 #[cfg(test)]
 #[path = "vertical_mask_align_buttons_tests.rs"]
