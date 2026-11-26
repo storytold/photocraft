@@ -1570,6 +1570,12 @@ fn install_package(built: &str, folder: &str, existed: bool) -> Result<()> {
     if !existed {
         return std::fs::rename(built, folder).map_err(fail);
     }
+    // Checked again right before it is moved aside: a file or a symbolic link that took the
+    // folder's place while the package was built is refused and left there, like one found at the
+    // start. (Something can still take its place between this check and the rename.)
+    if !check_package_folder("file.package", folder, true)? {
+        return std::fs::rename(built, folder).map_err(fail);
+    }
     let old = package_sibling(folder, "package-old")?;
     std::fs::rename(folder, &old).map_err(fail)?;
     if let Err(e) = std::fs::rename(built, folder) {
@@ -1632,6 +1638,23 @@ fn build_package(mut doc: Document, document: Option<&str>, name: &str, ext: &st
     // (layer, the link's old base name, the base name its copy got), for copies renamed by a clash.
     let mut renames: Vec<(photocraft_doc::LayerId, String, String)> = Vec::new();
     let mut missing = Vec::new();
+    // Packaged into the open package's own folder, a link already in its `Links` keeps its name:
+    // the open document's link then still finds the same file once the folder is replaced, and a
+    // different file with that name takes a numbered one instead. (lower-case name, file)
+    let links_path = std::path::Path::new(&links_dir);
+    let own: Vec<(String, std::path::PathBuf)> = doc
+        .walk()
+        .iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Smart(so) => match &so.source {
+                SmartSource::Linked { path } => crate::doc_path::resolve_in(path, document.map(std::path::Path::new)).ok(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter(|file| file.parent() == Some(links_path))
+        .filter_map(|file| Some((file.file_name()?.to_string_lossy().to_lowercase(), file)))
+        .collect();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
         let SmartSource::Linked { path } = &so.source else { continue };
@@ -1646,11 +1669,18 @@ fn build_package(mut doc: Document, document: Option<&str>, name: &str, ext: &st
         let target = match copied.iter().find(|(src, _)| src == path) {
             Some((_, t)) => t.clone(),
             None => {
+                // A path that is not followed is packaged as missing, like a file that is gone.
+                let Ok(file) = crate::doc_path::resolve_in(path, document.map(std::path::Path::new)) else {
+                    missing.push(path.clone());
+                    continue;
+                };
                 // A name no earlier copy has, ignoring case (macOS and Windows folders do): a
-                // renamed copy can't take the name of another link either.
+                // renamed copy can't take the name of another link either, nor the name a link
+                // already in the folder's `Links` keeps.
                 let base = file_name(path);
                 let taken = |n: &str| {
                     copied.iter().any(|(_, t)| file_name(t).to_lowercase() == n.to_lowercase())
+                        || own.iter().any(|(name, f)| *name == n.to_lowercase() && *f != file)
                         || std::path::Path::new(&join(&build_links, n)).exists()
                         || std::fs::read_dir(&build_links)
                             .ok()
@@ -1671,11 +1701,6 @@ fn build_package(mut doc: Document, document: Option<&str>, name: &str, ext: &st
                     n += 1;
                 }
                 let t = join(&links_dir, &fname);
-                // A path that is not followed is packaged as missing, like a file that is gone.
-                let Ok(file) = crate::doc_path::resolve_in(path, document.map(std::path::Path::new)) else {
-                    missing.push(path.clone());
-                    continue;
-                };
                 // Only a file PhotoCraft can place is copied; anything else is packaged as missing.
                 match read_file(&file.to_string_lossy()).ok().filter(|bytes| crate::file_cmds::import(&fname, bytes).is_ok()) {
                     Some(bytes) => {
@@ -1713,7 +1738,9 @@ fn build_package(mut doc: Document, document: Option<&str>, name: &str, ext: &st
         t.execute("layer.smartObjects.relinkToFile", json!({"layer": id.0, "path": built}))?;
     }
     let mut pdoc = (*t.active().ok_or(EngineError::NoDocument)?.doc).clone();
-    for (id, path) in &relinks {
+    // Only the native format keeps the links; PSD and PSB embed the files, which are read while
+    // the document is written, so there they stay at the copies that exist now.
+    for (id, path) in relinks.iter().filter(|_| ext == "pcraft") {
         if let Some(layer) = pdoc.layer_mut(*id)
             && let LayerContent::Smart(so) = &mut layer.content
         {

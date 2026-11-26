@@ -230,3 +230,130 @@ fn a_failed_replacement_keeps_the_old_package_and_leaves_nothing_behind() {
     assert!(r.is_err(), "{r:?}");
     assert_eq!(listing(&dest), before, "the old package is intact and nothing else is written");
 }
+
+/// A hash of the bytes of every file the open document links to, by its stored path.
+fn linked_bytes(s: &Session) -> Vec<(String, u64)> {
+    use std::hash::{Hash as _, Hasher as _};
+    let hash = |path: &str| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::fs::read(path).unwrap().hash(&mut h);
+        h.finish()
+    };
+    let mut v: Vec<(String, u64)> = s
+        .active()
+        .unwrap()
+        .doc
+        .walk()
+        .iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Smart(so) => match &so.source {
+                SmartSource::Linked { path } => Some((path.clone(), hash(path))),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn repackaging_an_opened_package_keeps_its_links_on_their_files_when_another_link_shares_a_name() {
+    // The reopened package links to `Links/link-red.png`; another link elsewhere has the same
+    // file name. Whichever is copied first, the open document's link must still find its own file
+    // in the replaced folder, not the other one.
+    let (dir, dest, mut s) = packaged_once("samename");
+    let folder = format!("{dest}/pkg-test");
+    let packaged = format!("{folder}/pkg-test.pcraft");
+    let bytes = std::fs::read(&packaged).unwrap();
+    crate::file_cmds::open_bytes_as(&mut s, "pkg-test.pcraft", &bytes, None, Some(packaged.clone())).unwrap();
+    let other = format!("{dir}/other");
+    std::fs::create_dir_all(&other).unwrap();
+    let green = format!("{other}/link-red.png");
+    let mut l = crate::session();
+    l.execute("file.new", json!({"width": 64, "height": 48, "background": "#00ff00"})).unwrap();
+    crate::file_cmds::save_doc(&l.active().unwrap().doc, &green, None).unwrap();
+    s.execute("file.placeLinked", json!({"path": green})).unwrap();
+    // The other link is walked before the package's own red one, so it would take the plain name.
+    let top = s
+        .active()
+        .unwrap()
+        .doc
+        .walk()
+        .iter()
+        .find_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(so) if so.source == SmartSource::Linked { path: green.clone() }).then_some(l.id))
+        .unwrap();
+    s.execute("layer.arrange.sendToBack", json!({"layer": top.0})).unwrap();
+    let walked: Vec<String> = s
+        .active()
+        .unwrap()
+        .doc
+        .walk()
+        .iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Smart(so) => match &so.source {
+                SmartSource::Linked { path } => Some(path.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(walked.first(), Some(&green), "{walked:?}");
+    let before = linked_bytes(&s);
+    assert_eq!(before.len(), 3, "{before:?}");
+    let r = s.execute("file.package", json!({"dir": dest, "overwrite": true})).unwrap();
+    assert_eq!(r["missing"], json!([]), "{r}");
+    assert_eq!(linked_bytes(&s), before, "every link of the open document still reads the same file: {r}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_that_takes_the_folders_place_before_installing_is_refused_and_kept() {
+    // The folder is checked before the package is built; a link put in its place after that
+    // check must not be moved aside and deleted when the new package is installed.
+    let dir = tmp("late-symlink");
+    let folder = format!("{dir}/pkg");
+    let built = format!("{dir}/.pkg.package-new");
+    let elsewhere = format!("{dir}/elsewhere");
+    std::fs::create_dir_all(&built).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(format!("{elsewhere}/precious.txt"), b"keep").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &folder).unwrap();
+    let err = install_package(&built, &folder, true).unwrap_err().to_string();
+    assert!(err.contains(&folder) && err.contains("symbolic link"), "{err}");
+    assert!(std::fs::symlink_metadata(&folder).unwrap().file_type().is_symlink(), "the link is kept");
+    assert_eq!(std::fs::read(format!("{elsewhere}/precious.txt")).unwrap(), b"keep");
+    assert!(std::path::Path::new(&built).is_dir(), "the new package is not installed");
+}
+
+#[test]
+fn a_file_that_takes_the_folders_place_before_installing_is_refused_and_kept() {
+    let dir = tmp("late-file");
+    let folder = format!("{dir}/pkg");
+    let built = format!("{dir}/.pkg.package-new");
+    std::fs::create_dir_all(&built).unwrap();
+    std::fs::write(&folder, b"not a folder").unwrap();
+    let err = install_package(&built, &folder, true).unwrap_err().to_string();
+    assert!(err.contains(&folder) && err.contains("a file"), "{err}");
+    assert_eq!(std::fs::read(&folder).unwrap(), b"not a folder");
+    assert_eq!(names(&dir), [".pkg.package-new/", "pkg"], "nothing moved aside or installed");
+}
+
+#[test]
+fn a_psd_package_embeds_the_link_copies() {
+    // PSD and PSB embed linked files, read while the package is written: the copies must be
+    // readable then, for a new folder and over an existing one.
+    let dir = tmp("psd");
+    let mut s = document(&dir);
+    let dest = format!("{dir}/dest");
+    for (format, overwrite) in [("psd", false), ("psd", true), ("psb", false)] {
+        let dest = format!("{dest}-{format}-{overwrite}");
+        if overwrite {
+            s.execute("file.package", json!({"dir": dest, "format": format})).unwrap();
+        }
+        let r = s.execute("file.package", json!({"dir": dest, "format": format, "overwrite": overwrite})).unwrap();
+        let warnings: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(warnings.iter().filter(|w| w.contains("was embedded")).count(), 2, "{format} overwrite {overwrite}: {warnings:?}");
+        assert!(!warnings.iter().any(|w| w.contains("can't be read") || w.contains("not opened")), "{format} overwrite {overwrite}: {warnings:?}");
+    }
+}
