@@ -69,7 +69,8 @@ pub(crate) fn clone_overlay_key(app: &mut PhotocraftApp, direction: Option<[f64;
     }
     let Some(now) = clone_offset_readout(app) else { return false };
     let offset = match direction {
-        Some([dx, dy]) => [now[0] - step(dx), now[1] - step(dy)],
+        // From the whole-pixel offset a stroke uses, so each press moves what it paints by exactly one pixel.
+        Some([dx, dy]) => [now[0].round() - step(dx), now[1].round() - step(dy)],
         None => [0.0, 0.0],
     };
     if offset == now {

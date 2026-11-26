@@ -1220,3 +1220,17 @@ fn the_whole_source_image_covers_the_source_document_where_it_clones_to() {
     let size = whole.size();
     assert!(size.width >= 1 && size.width <= 2048, "{size:?}");
 }
+
+/// Shown from a hover point between pixel centres, the whole source image still lands where a stroke there
+/// samples: a stroke moves pixels by the rounded offset, so the image moves by that too, not the fractional one.
+#[test]
+fn the_whole_source_image_lands_where_a_stroke_from_a_fractional_point_samples() {
+    let mut app = clone_overlay_app(10.0);
+    let at = [32.4, 31.6];
+    let map = crate::preset_panels::clone_mapping_at(&app, Some(at)).expect("a mapping");
+    let (ox, oy) = map.offset();
+    let whole = super::strokes::clone_source_whole(&mut app, at).expect("the whole source image");
+    let top_left = whole.corners[0];
+    // Source pixel (0, 0) shows over the destination pixel a stroke fills from it.
+    assert!((top_left[0] + f64::from(ox)).abs() < 1e-9 && (top_left[1] + f64::from(oy)).abs() < 1e-9, "offset ({ox}, {oy}), placed at {top_left:?}");
+}

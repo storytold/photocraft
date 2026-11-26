@@ -288,10 +288,16 @@ pub(crate) fn clone_source_whole(app: &mut PhotocraftApp, at: [f64; 2]) -> Optio
         return None;
     }
     let inv = [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det];
-    // The destination point a source point is cloned to: the mapping run backwards.
-    let place = |x: f64, y: f64| {
-        let (dx, dy) = (x - map.source.0, y - map.source.1);
-        [map.anchor.0 + inv[0] * dx + inv[1] * dy, map.anchor.1 + inv[2] * dx + inv[3] * dy]
+    // The destination point a source point is cloned to: the mapping run backwards. A plain move clones by whole
+    // pixels (the stroke rounds the offset), so the image moves by that same rounded offset, not the fractional one
+    // a hover point between pixel centres gives, which would show it up to half a pixel from where a stroke samples.
+    let whole_px = map.is_translation().then(|| map.offset());
+    let place = |x: f64, y: f64| match whole_px {
+        Some((ox, oy)) => [x - f64::from(ox), y - f64::from(oy)],
+        None => {
+            let (dx, dy) = (x - map.source.0, y - map.source.1);
+            [map.anchor.0 + inv[0] * dx + inv[1] * dy, map.anchor.1 + inv[2] * dx + inv[3] * dy]
+        }
     };
     let st = app.session.active()?;
     let source_revision =
