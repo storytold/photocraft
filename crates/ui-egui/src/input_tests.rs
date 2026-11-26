@@ -881,3 +881,41 @@ fn shift_alt_keys_line_up_the_source(focus_elsewhere: bool) {
     h.run_steps(2);
     assert_eq!(readout(&h), [0.0, 0.0], "⇧⌥Enter lines the source up; status: {}", h.state().ui.status);
 }
+
+/// The Timeline panel's Play button in the whole app: the playhead moves on as time passes.
+#[test]
+fn timeline_play_advances_the_playhead() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness();
+    h.state_mut().run("timeline.create", json!({"duration": 30, "fps": 30.0})).unwrap();
+    crate::panel_docking::show_panel(h.state_mut(), "timeline", Some(true)).unwrap();
+    h.run_steps(4);
+    let frame = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current;
+    let before = frame(&h);
+    h.get_by_label(craft::timeline::ui::TransportWords::default().play_stop.as_str()).click();
+    // Each pass is a quarter second of the harness's time; playback loops, so any frame other than the first counts.
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        h.step();
+        seen.push(frame(&h));
+    }
+    assert!(h.state().ui.timeline.playing(), "Play started playback");
+    assert!(seen.iter().any(|&f| f != before), "the playhead moved on from {before}: {seen:?}");
+}
+
+/// Page Down and Page Up step the timeline one frame on and back from the canvas, with no panel focused.
+#[test]
+fn page_down_and_page_up_step_the_timeline() {
+    let mut h = harness();
+    h.state_mut().run("timeline.create", json!({"duration": 30, "fps": 30.0})).unwrap();
+    h.run_steps(2);
+    let frame = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current;
+    let start = frame(&h);
+    h.key_press(Key::PageDown);
+    h.run_steps(2);
+    assert!(frame(&h) > start, "Page Down: the next frame ({start} → {})", frame(&h));
+    let on = frame(&h);
+    h.key_press(Key::PageUp);
+    h.run_steps(2);
+    assert!(frame(&h) < on, "Page Up: the previous frame ({on} → {})", frame(&h));
+}

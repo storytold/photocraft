@@ -54,6 +54,37 @@ pub(crate) fn stop(app: &mut PhotocraftApp) {
     app.ui.timeline.clock.halt(at);
 }
 
+/// Playback, once per frame from the app's logic: the playhead follows the clock, and the next frame is asked for at
+/// the next frame boundary. Not in the panel body, which replays while nothing it shows changes, so it would never
+/// run to move the playhead on.
+pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !app.ui.timeline.playing() {
+        return;
+    }
+    let now = ctx.input(|i| i.time);
+    let Some(tl) = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map(|t| (t.fps, t.duration, t.current)) else {
+        app.ui.timeline.clock.stop(now);
+        return;
+    };
+    let (fps, duration, current) = tl;
+    let rate = FrameRate::from_f64(f64::from(fps));
+    let clock = &mut app.ui.timeline.clock;
+    clock.set_loop(Some(TimeRange::new(Tick(0), rate.tick_of((duration as i64).max(1)))));
+    // Play starts prerolling; the frames are built when the playhead lands on them, so they count as ready and
+    // the clock runs at once (without this step it never leaves preroll and the playhead stays put).
+    let _ = clock.step(now, true);
+    let at = clock.position(now);
+    let frame = rate.frame_at(at);
+    request_repaint_after(ctx, rate.tick_of(frame + 1).saturating_sub(at).seconds());
+    if frame != current as i64
+        && let Err(e) = app.run("timeline.setFrame", json!({ "frame": frame.max(0) as u64 }))
+    {
+        app.ui.timeline.clock.stop(now);
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
 /// The transport row: Play/Pause, Stop, then the frame steps.
 fn buttons() -> [TransportButton; 4] {
     [TransportButton::PlayStop, TransportButton::custom("stop", IconId::new("square"), "Stop"), TransportButton::StepBack, TransportButton::StepForward]
@@ -88,23 +119,7 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rate = FrameRate::from_f64(f64::from(tl.fps));
     let duration = tl.duration as i64;
     let current = tl.current as i64;
-    let clock = &mut app.ui.timeline.clock;
-    clock.set_loop(Some(TimeRange::new(Tick(0), rate.tick_of(duration.max(1)))));
-
-    // Playback: the playhead follows the clock; the next pass is asked for at the next frame boundary.
-    let mut frame_from_clock = None;
-    if clock.is_playing() {
-        let at = clock.position(now);
-        let frame = rate.frame_at(at);
-        if frame != current {
-            frame_from_clock = Some(frame);
-        }
-        request_repaint_after(ui.ctx(), rate.tick_of(frame + 1).saturating_sub(at).seconds());
-    }
-    if let Some(frame) = frame_from_clock {
-        let _ = app.run("timeline.setFrame", json!({ "frame": frame as u64 }));
-    }
-    let current = frame_from_clock.unwrap_or(current);
+    app.ui.timeline.clock.set_loop(Some(TimeRange::new(Tick(0), rate.tick_of(duration.max(1)))));
 
     let playing = app.ui.timeline.playing();
     let mut stop = false;

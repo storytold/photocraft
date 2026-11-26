@@ -114,6 +114,8 @@ impl PhotocraftApp {
             // tick finds them taken.
             crate::shortcut_dispatch::record_view_commands(self);
             shortcuts::handle(self, ctx);
+            // Timeline playback moves the playhead on.
+            crate::panels::timeline_ui::tick(self, ctx);
         }
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();

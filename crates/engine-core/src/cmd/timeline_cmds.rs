@@ -145,6 +145,9 @@ macro_rules! spec {
     ($id:expr, $label:expr, $params:expr, $en:expr, $run:expr) => {
         CommandSpec { id: $id, label: $label, menu: &[], shortcut: None, params: $params, enabled: $en, journal: false, run: $run }
     };
+    ($id:expr, $label:expr, $key:expr, $params:expr, $en:expr, $run:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &[], shortcut: Some($key), params: $params, enabled: $en, journal: false, run: $run }
+    };
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -152,8 +155,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("timeline.create", "Create Video Timeline", r#"{duration?:30, fps?:30} → {timeline}"#, has_doc, |s, p| create(s, p)),
         spec!("timeline.delete", "Delete Timeline", "{} → {timeline:null}", has_timeline, |s, _| delete(s)),
         spec!("timeline.setFrame", "Go to Frame", r#"{frame} → {timeline}"#, has_timeline, |s, p| set_frame(s, p)),
-        spec!("timeline.nextFrame", "Next Frame", "{} → {timeline}", has_timeline, |s, _| step(s, 1)),
-        spec!("timeline.previousFrame", "Previous Frame", "{} → {timeline}", has_timeline, |s, _| step(s, -1)),
+        spec!("timeline.nextFrame", "Next Frame", "PageDown", "{} → {timeline}", has_timeline, |s, _| step(s, 1)),
+        spec!("timeline.previousFrame", "Previous Frame", "PageUp", "{} → {timeline}", has_timeline, |s, _| step(s, -1)),
         spec!("timeline.setProps", "Timeline Settings", r#"{fps?, duration?, workStart?, workEnd?} → {timeline}"#, has_timeline, |s, p| set_props(s, p)),
         spec!("timeline.info", "Timeline Info", "{} → {timeline}", has_doc, |s, _| info(s)),
     ]
