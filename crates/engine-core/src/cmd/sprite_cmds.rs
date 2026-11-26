@@ -68,7 +68,7 @@ fn mutate(s: &mut Session, label: &str, f: impl FnOnce(&mut Sprite) -> Result<()
         if let Some(t) = &mut doc.timeline {
             t.duration = sprite.frames.len();
             t.current = sprite.current;
-            t.work_end = t.work_end.min(t.duration).max(1);
+            t.clamp();
         }
         doc.restore_sprite_frame().map_err(EngineError::Other)?;
         Ok(())

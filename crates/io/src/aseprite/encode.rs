@@ -60,7 +60,9 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
         },
     )?;
     put(&mut bytes, 14, &u32::to_le_bytes(flags))?;
-    word(&mut bytes, 18, sprite.frames.first().map_or(100, |f| f.duration_ms))?;
+    // A zero-duration frame would otherwise read back with the legacy header speed.
+    let legacy_speed = if sprite.frames.iter().any(|frame| frame.duration_ms == 0) { 0 } else { sprite.frames.first().map_or(100, |f| f.duration_ms) };
+    word(&mut bytes, 18, legacy_speed)?;
     put(&mut bytes, 28, &[sprite.transparent_index])?;
     put(&mut bytes, 34, &sprite.pixel_aspect)?;
     for (i, n) in sprite.grid.iter().enumerate() {

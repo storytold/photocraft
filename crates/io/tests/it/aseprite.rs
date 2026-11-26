@@ -4,14 +4,85 @@ use photocraft_doc::LayerContent;
 
 const LAYERS: &[u8] = include_bytes!("../fixtures/aseprite/layers.aseprite");
 
+#[test]
+fn editable_export_refuses_native_artboards_and_web_slices() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Artboard, Document, Layer, Slice};
+    use photocraft_geom::{Rect, Size};
+
+    let mut doc = Document::new("Export", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Group", vec![Layer::raster("Paint", PixelFormat::RGBA8)]));
+    let export = |doc: &Document| photocraft_io::export(doc, "aseprite", &Default::default());
+    assert!(export(&doc).is_ok());
+
+    let rect = Rect::from_xywh(0, 0, 4, 4);
+    let mut artboards = doc.clone();
+    let LayerContent::Group(group) = &mut artboards.layers[0].content else { unreachable!() };
+    group.artboard = Some(Artboard::new(rect));
+    assert!(export(&artboards).err().unwrap().to_string().contains("artboards"));
+
+    doc.slices.list.push(Slice { id: 1, rect, name: "Link".into(), url: "https://example.com".into(), ..Default::default() });
+    assert!(export(&doc).err().unwrap().to_string().contains("web slices"));
+}
+
 /// Aseprite and Adobe Swatch Exchange share the short extension. Prefer the actual signature.
 #[test]
 fn aseprite_signature_routes_short_names_and_misleading_extensions() {
     for name in ["layers.aseprite", "layers.ase", "layers.pdf", "layers.png"] {
         assert!(photocraft_io::import(name, LAYERS).unwrap().document.sprite.is_some(), "{name}");
+        assert_eq!(photocraft_io::import_preflight(name, LAYERS), photocraft_io::ImportPreflight::Unbounded, "{name}");
     }
     let png = include_bytes!("../fixtures/aseprite/application-indexed.png");
     assert!(photocraft_io::import("oracle.aseprite", png).unwrap().document.sprite.is_none());
+}
+
+#[test]
+fn a_legacy_frame_uses_the_header_speed_when_its_own_duration_is_zero() {
+    let mut bytes = LAYERS.to_vec();
+    bytes[18..20].copy_from_slice(&125u16.to_le_bytes());
+    bytes[136..138].fill(0);
+    let doc = photocraft_io::import("legacy.ase", &bytes).unwrap().document;
+    let sprite = doc.sprite.as_ref().unwrap();
+    assert_eq!(sprite.frames[0].duration_ms, 125);
+    assert_eq!(sprite.frames[1].duration_ms, 83);
+}
+
+#[test]
+fn an_indexed_sprite_refuses_a_grayscale_display_cache() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use std::sync::Arc;
+
+    let bytes = include_bytes!("../fixtures/aseprite/application-indexed.aseprite");
+    let mut doc = photocraft_io::import("indexed.aseprite", bytes).unwrap().document;
+    let sprite = doc.sprite.as_mut().unwrap();
+    assert!(sprite.indexed && sprite.validate().is_ok());
+    let frame = sprite.frames.iter_mut().find(|frame| !frame.cels.is_empty()).unwrap();
+    let cel = Arc::make_mut(Arc::make_mut(frame).cels.values_mut().next().unwrap());
+    cel.pixels = cel.pixels.convert(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true));
+    assert!(sprite.validate().is_err());
+}
+
+#[test]
+fn group_opacity_is_valid_without_the_image_layer_opacity_flag() {
+    use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Document, Layer};
+    use photocraft_geom::Size;
+
+    let mut doc = Document::new("Export", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let mut paint = Layer::raster("Paint", PixelFormat::RGBA8);
+    paint.opacity = 0.25;
+    let mut group = Layer::group("Group", vec![paint]);
+    group.blend = BlendMode::Screen;
+    group.opacity = 0.5;
+    doc.layers.push(group);
+    let mut bytes = photocraft_io::export(&doc, "aseprite", &Default::default()).unwrap().bytes;
+    bytes[14] &= !1;
+    let reopened = photocraft_io::import("group.aseprite", &bytes).unwrap().document;
+    let group = &reopened.layers[0];
+    assert_eq!(group.blend, BlendMode::Screen);
+    assert!((group.opacity - 0.5).abs() <= 1.0 / 255.0, "{}", group.opacity);
+    let LayerContent::Group(contents) = &group.content else { unreachable!() };
+    assert_eq!(contents.children[0].opacity, 1.0);
 }
 
 /// Compare every imported/native/re-exported frame with original application-rendered PNG oracles.

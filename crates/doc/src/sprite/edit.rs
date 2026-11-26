@@ -281,7 +281,7 @@ impl Document {
                 if let Some(t) = &mut self.timeline {
                     t.current = index;
                     t.duration = sprite.frames.len();
-                    t.work_end = t.work_end.min(t.duration);
+                    t.clamp();
                 }
             })
         };

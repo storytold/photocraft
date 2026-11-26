@@ -307,7 +307,8 @@ impl PhotocraftApp {
         // A TIFF asks for TIFF Options (compression, pyramid, transparency, layers); the save
         // continues from the prompt, which records the step once answered.
         if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone(), false, "file.saveAs")?;
+            let copy = self.saves_copy(&path, None)?;
+            tiff_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         let tiff_layers = choices.tiff.and_then(|t| t.layers);
@@ -357,7 +358,8 @@ impl PhotocraftApp {
         }
         // A TIFF asks TIFF Options over its own file too, as Save As does.
         if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone(), false, "file.save")?;
+            let copy = self.saves_copy(&path, None)?;
+            tiff_options_ui::park(self, path.clone(), copy, "file.save")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         self.save_in_place(path, choices)
@@ -557,6 +559,9 @@ impl PhotocraftApp {
         // so the editable document isn't marked saved after losing them (#3806).
         let st = self.session.active().ok_or("no document")?;
         let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
+        if tiff(path) && st.doc.sprite.is_some() {
+            return Ok(true);
+        }
         let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || tiff(path);
         let lives_layered = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
         Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered)))

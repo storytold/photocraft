@@ -239,6 +239,19 @@ fn sprite_edits_and_frame_navigation_keep_cels_and_undo() {
     assert!(s.active().unwrap().doc.sprite.is_some());
 }
 
+#[test]
+fn deleting_the_last_frame_keeps_a_nonempty_timeline_work_area() {
+    let mut s = session();
+    s.execute("timeline.setProps", json!({"workStart": 1, "workEnd": 2})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    let timeline = s.active().unwrap().doc.timeline.as_ref().unwrap();
+    assert!(timeline.work_start < timeline.work_end && timeline.work_end <= timeline.duration);
+    s.execute("edit.undo", json!({})).unwrap();
+    let timeline = s.active().unwrap().doc.timeline.as_ref().unwrap();
+    assert_eq!((timeline.work_start, timeline.work_end), (1, 2));
+}
+
 /// Adversarial sprite parameters must return errors without altering document or undo state.
 #[test]
 fn malformed_sprite_commands_never_modify_the_document() {

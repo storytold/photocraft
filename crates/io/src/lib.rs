@@ -572,6 +572,9 @@ pub enum ImportPreflight {
 ///
 /// The order matches [`import_stages`]; keep the two in step.
 pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
+    if aseprite::is_aseprite(bytes) {
+        return ImportPreflight::Unbounded;
+    }
     match photocraft_formats::detect(name, bytes) {
         Some(photocraft_formats::Format::Psd) => ImportPreflight::Psd,
         Some(photocraft_formats::Format::Tiff) => ImportPreflight::Tiff,
@@ -587,6 +590,7 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
             | photocraft_formats::Format::Svgz
             | photocraft_formats::Format::Pdf,
         ) => ImportPreflight::Unbounded,
+        None if has_extension(name, "aseprite") => ImportPreflight::Unbounded,
         _ => ImportPreflight::Flat,
     }
 }

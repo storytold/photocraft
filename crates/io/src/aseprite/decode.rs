@@ -71,7 +71,8 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if flags & !7 != 0 {
         return Err(invalid("unsupported header flags"));
     }
-    r.take(10)?; // legacy speed/reserved
+    let legacy_speed = r.u16()?;
+    r.take(8)?; // reserved
     let transparent = r.u8()?;
     r.take(3)?;
     let colors = usize::from(r.u16()?);
@@ -113,7 +114,10 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
             return Err(invalid("invalid frame signature"));
         }
         let old_count = usize::from(r.u16()?);
-        d.frame.duration_ms = r.u16()?;
+        let duration = r.u16()?;
+        // The Aseprite file specification's Old Versions section uses the header speed when
+        // the frame does not specify a positive duration.
+        d.frame.duration_ms = if duration == 0 { legacy_speed } else { duration };
         r.take(2)?;
         let new_count = r.u32()? as usize;
         let chunks = if new_count == 0 { old_count } else { new_count };
@@ -272,7 +276,7 @@ impl Decoder<'_> {
         layer.locks.transparency = flags & 8 != 0;
         if kind != 1 || self.flags & 2 != 0 {
             layer.blend = blend_mode(blend)?;
-            if self.flags & 1 != 0 {
+            if kind == 1 || self.flags & 1 != 0 {
                 layer.opacity = f32::from(opacity) / 255.0
             }
         }

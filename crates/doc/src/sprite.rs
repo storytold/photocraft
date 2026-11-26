@@ -202,6 +202,7 @@ impl Sprite {
                 pixels::checked_rect(cel.rect, if self.indexed { 5 } else { cel.pixels.format().bytes_per_pixel() })?;
                 let fmt = cel.pixels.format();
                 if !matches!(fmt.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale)
+                    || self.indexed && fmt.mode != photocraft_color::ColorMode::Rgb
                     || fmt.sample != photocraft_color::SampleType::U8
                     || !fmt.alpha
                 {

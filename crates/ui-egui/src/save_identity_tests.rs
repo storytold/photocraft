@@ -37,6 +37,25 @@ fn identity(app: &PhotocraftApp) -> (String, Option<String>, u64, u64) {
 }
 
 #[test]
+fn layered_tiff_saves_a_copy_of_an_animated_sprite() {
+    for ask in [false, true] {
+        let mut app = app();
+        app.open_bytes("animation.aseprite", include_bytes!("../../io/tests/fixtures/aseprite/animation.aseprite")).unwrap();
+        app.run("sprite.duplicateFrame", json!({})).unwrap();
+        assert!(app.session.active().unwrap().is_dirty());
+        let original = identity(&app);
+        let ctx = app.ctx().clone();
+        let params = if ask { json!({"path": "preview.tiff"}) } else { json!({"path": "preview.tiff", "tiffLayers": true}) };
+        menus::invoke(&mut app, &ctx, "file.saveAs", params).unwrap();
+        if ask {
+            let dialog = app.framework.dialogs.stack().top().expect("TIFF Options is open");
+            crate::dialogs::testing::confirm(&mut app, dialog).unwrap();
+        }
+        assert_eq!(identity(&app), original);
+    }
+}
+
+#[test]
 fn save_settings_share_only_the_open_documents_native_cache() {
     let mut app = app();
     let first = app.save_settings().io_options().pcraft_cache.unwrap();

@@ -65,6 +65,9 @@ pub fn losses(doc: &Document) -> Vec<String> {
     if !doc.paths.is_empty() || !doc.notes.is_empty() {
         out.push("Aseprite cannot retain named paths or notes; save a .pcraft copy instead".into());
     }
+    if doc.has_artboards() || !doc.slices.is_empty() {
+        out.push("Aseprite cannot retain artboards or web slices; save a .pcraft copy instead".into());
+    }
     if !doc.metadata.text.is_empty() || doc.metadata.xmp.is_some() || doc.metadata.exif.is_some() {
         out.push("Aseprite cannot retain document text, XMP or EXIF metadata; save a .pcraft copy instead".into());
     }

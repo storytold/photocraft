@@ -26,7 +26,7 @@ pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("PhotoCraft", &["pcraft"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Amiga IFF", &["iff", "lbm", "ilbm"]),
-    ("Aseprite", &["aseprite"]),
+    ("Aseprite", &["aseprite", "ase"]),
     ("BMP", &["bmp", "dib"]),
     ("DDS", &["dds"]),
     ("DICOM", &["dcm", "dicom", "dc3"]),
