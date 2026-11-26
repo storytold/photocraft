@@ -1,12 +1,15 @@
 //! The Retouch options bar's healing family: Remove, Patch, Content-Aware Move, Spot Healing, Clone Stamp and
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
-use craft::behavior::Value;
-use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
-use craft::ui::display::Divider;
+use craft::behavior::{IconId, Value};
+use craft::ui::buttons::{IconButton, PopupMark};
+use craft::ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
+use craft::ui::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::display::{Divider, Text};
 use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
 use craft::ui::pickers::Select;
+use craft::ui::popover::Popover;
 use craft::ui::text::RangeAlert;
 use photocraft_engine::presets::PresetsExt;
 use serde_json::Value as Json;
@@ -82,7 +85,60 @@ pub(super) fn remove(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<Range
     check(ui, tl!("Sample all layers"), &mut o.sample_all.remove, true, Some(tl!("Sample content from all visible layers")));
     check(ui, tl!("Remove after each stroke"), &mut o.remove_after_each_stroke, true, Some(tl!("Remove area after a single stroke")));
     check(ui, tl!("Create new layer"), &mut o.remove_new_layer, composite, Some(tl!("Create new layer with results")));
-    None
+    Divider::vertical().show(ui);
+    overlay_gear(app, ui)
+}
+
+/// Whether the Remove tool's Overlay options popup is open, kept by the framework per viewer.
+#[derive(Clone, Copy, Default)]
+struct OverlayGearOpen(bool);
+
+/// The colour the Remove tool's overlay shows now and its Color Picker opens on: the person's choice,
+/// or the theme's own overlay colour while none is set (#12549).
+fn overlay_colour(app: &PhotocraftApp, ui: &egui::Ui) -> [f32; 3] {
+    app.ui.tool_options.remove_overlay_color.unwrap_or_else(|| {
+        let bad = craft::ui::runtime::env::Env::of(ui).tokens.tokens().color.status.bad.solid;
+        craft::theme::Srgba::from(bad).to_rgb_array()
+    })
+}
+
+/// The gear button of Remove's options bar and its "Overlay options" popup (#12549): a Color well that
+/// opens the Color Picker and an Opacity field with a slider arrow. Neither value is set until the
+/// person sets one, which keeps the overlay the tool draws today.
+fn overlay_gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<RangeAlert> {
+    Row::new()
+        .show(ui, |ui, cx| {
+            let open = &mut cx.memory.shown::<OverlayGearOpen>(cx.id).0;
+            let button = IconButton::new(IconId::new("settings"))
+                .label(tl!("Set additional options").to_string())
+                .tooltip(tl!("Set additional options"))
+                .popup(PopupKind::Dialog)
+                .popup_mark(PopupMark::Menu)
+                .expanded(*open)
+                .show(ui)
+                .response;
+            if clicked(&button) {
+                *open = !*open;
+            }
+            let mut alert = None;
+            Popover::new(tl!("Overlay options"), Bind::bound(open)).opened_by(&button).show(ui, |ui, _| {
+                // The framework names the popup with its label; the heading is what the person reads.
+                Text::new(tl!("Overlay options")).show(ui);
+                let rgb = overlay_colour(app, ui);
+                let well = Field::new(tl!("Color")).show(ui, |ui, _| Swatch::new(tl!("Color"), craft::theme::Srgba::from_rgb_array(rgb)).show(ui).clicked);
+                if well.inner == Some(true)
+                    && let Err(message) = crate::color_picker_ui::open_for_target(app, "removeOverlayColor", tl!("Color Picker"), rgb)
+                {
+                    crate::notices::error(app, message);
+                }
+                let held = &mut app.ui.tool_options.remove_overlay_opacity;
+                let out = number(tl!("Opacity"), held, 1.0..=100.0).whole().popup_slider().show(ui);
+                alert = out.out_of_range;
+            });
+            alert
+        })
+        .inner
+        .flatten()
 }
 
 /// Patch's options: the lasso's operation, then Normal (Source / Destination) or Content-Aware.

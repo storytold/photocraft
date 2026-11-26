@@ -10,6 +10,8 @@
 use craft::behavior::kurbo::{Point, Rect};
 use craft::ui::canvas_controls::brush::{CoverageMask, StrokeTrail, TrailTone};
 use craft::ui::contract::Show as _;
+use craft::ui::style::DataColor;
+use egui::Color32;
 use photocraft_paint::{BrushSettings, StrokePoint, StrokeRenderer};
 use serde_json::json;
 
@@ -25,6 +27,65 @@ pub struct Trail {
     dabs: Option<Dabs>,
     /// What the footprint shows as.
     tone: TrailTone,
+}
+
+/// What the Remove tool's "Overlay options" popup holds (#12549): the colour it picked, and the
+/// opacity its field shows. A fresh start holds the theme's colour and the share the tool's own trail
+/// tone paints, so the footprint is drawn exactly as it was before the popup existed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OverlayTint {
+    /// The footprint colour, channels 0..=1, as the Color Picker answered it; `None` shows the theme's.
+    color: Option<[f32; 3]>,
+    /// The footprint's opacity in percent, 1..=100.
+    opacity: f32,
+}
+
+impl Default for OverlayTint {
+    /// What a fresh start holds, straight from the tool options' own defaults.
+    fn default() -> Self {
+        let o = crate::state::ToolOptions::default();
+        Self { color: o.remove_overlay_color, opacity: o.remove_overlay_opacity }
+    }
+}
+
+impl OverlayTint {
+    /// The overlay tint `tool`'s tool options hold: the fresh one for every tool but the Remove tool,
+    /// whose overlay the popup colours (#12549).
+    pub(crate) fn of(app: &PhotocraftApp, tool: Tool) -> Self {
+        if tool != Tool::Remove {
+            return Self::default();
+        }
+        let o = &app.ui.tool_options;
+        Self { color: o.remove_overlay_color, opacity: o.remove_overlay_opacity }
+    }
+
+    /// Whether the tint leaves the trail's tone to paint the footprint: no colour, and the opacity the
+    /// tone already shows (#12549).
+    pub(crate) fn is_plain(&self) -> bool {
+        self.props() == (None, None)
+    }
+
+    /// The share of its colour a fully covered texel shows at `opacity` percent; over 100 % is no more
+    /// than the colour itself, under 0 % shows no footprint.
+    pub(crate) fn share(opacity: f32) -> f32 {
+        (opacity / 100.0).clamp(0.0, 1.0)
+    }
+
+    /// The trail props this tint stands for: the colour as the framework takes it, and the share of it.
+    /// An opacity that is still the tone's own needs no share prop, so an untouched overlay paints
+    /// through its tone exactly as before; `(None, None)` is that case (#12549).
+    pub(crate) fn props(&self) -> (Option<DataColor>, Option<f32>) {
+        let share = Self::share(self.opacity);
+        // Remove's own tone is the one whose share the tool options' default carries.
+        let same_as_tone = (share - TrailTone::Danger.share()).abs() < 1e-6;
+        (self.color.map(data_colour), (!same_as_tone).then_some(share))
+    }
+}
+
+/// The colour the person picked (channels 0..=1) as the trail's own colour.
+fn data_colour(rgb: [f32; 3]) -> DataColor {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    DataColor::new(Color32::from_rgb(byte(rgb[0]), byte(rgb[1]), byte(rgb[2])))
 }
 
 /// The brush stroke behind a [`Trail::feed_dabs`] trail.
@@ -136,9 +197,21 @@ impl Trail {
         self.dabs = Some(dabs);
     }
 
-    /// Shows the footprint as `tone` over the canvas.
-    fn show_as(&mut self, ui: &mut egui::Ui, rect: egui::Rect, label: &'static str, tone: TrailTone) {
-        StrokeTrail::new(label, &mut self.mask).tone(tone).show_at(ui, rect);
+    /// Shows the footprint as `tone` over the canvas. `tint` is what the Remove tool's Overlay options
+    /// popup holds: with either half set, it stands in for the tone's own colour or share (#12549).
+    fn show_as(&mut self, ui: &mut egui::Ui, rect: egui::Rect, label: &'static str, tone: TrailTone, tint: OverlayTint) {
+        let mut trail = StrokeTrail::new(label, &mut self.mask).tone(tone);
+        // An untouched overlay paints through its tone; the popup's pair stands in for it (#12549).
+        if !tint.is_plain() {
+            let (color, share) = tint.props();
+            if let Some(color) = color {
+                trail = trail.color(color);
+            }
+            if let Some(share) = share {
+                trail = trail.share(share);
+            }
+        }
+        trail.show_at(ui, rect);
     }
 }
 
@@ -176,16 +249,19 @@ pub(crate) fn feed(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) {
 }
 
 /// Shows the live stroke's trail and, while Remove strokes wait for Enter, their tint. A part
-/// with no trail does nothing.
+/// with no trail does nothing. The Remove tool shows the colour and opacity its Overlay options popup
+/// set (#12549); every other tool's trail paints its tone exactly as before.
 pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect) {
+    let live = OverlayTint::of(app, app.ui.tool);
+    let waiting = OverlayTint::of(app, Tool::Remove);
     if let Some(trail) = app.trail.as_mut() {
         let tone = trail.tone;
-        trail.show_as(ui, rect, tl!("Stroke footprint"), tone);
+        trail.show_as(ui, rect, tl!("Stroke footprint"), tone, live);
     }
     if app.remove_trail.is_some()
         && crate::retouch_ui::remove_pending_live(app)
         && let Some(trail) = app.remove_trail.as_mut()
     {
-        trail.show_as(ui, rect, tl!("Waiting removals"), TrailTone::Danger);
+        trail.show_as(ui, rect, tl!("Waiting removals"), TrailTone::Danger, waiting);
     }
 }
