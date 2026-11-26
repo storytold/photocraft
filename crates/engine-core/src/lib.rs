@@ -71,7 +71,7 @@ pub use photocraft_paint::BrushSettings;
 
 pub mod cmd;
 mod doc_state;
-mod error;
+pub mod error;
 mod install;
 pub mod registry;
 mod session;
@@ -81,7 +81,6 @@ pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
-pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
 pub use cmd::artboard_cmds;
 pub use cmd::atn_cmds;
@@ -91,7 +90,6 @@ pub use cmd::brush_preset_cmds;
 pub use cmd::channel_cmds;
 pub use cmd::color_cmds;
 pub use cmd::color_to_alpha_cmds;
-pub use cmd::comps_cmds;
 pub use cmd::contour_lib_cmds;
 pub use cmd::cutout_cmds;
 pub use cmd::distort_cmds;
@@ -117,22 +115,18 @@ pub use cmd::history_select_cmds;
 pub use cmd::history_source_cmds;
 pub use cmd::image_cmds;
 pub use cmd::layer_copy_cmds;
-pub use cmd::layer_css_cmds;
 pub use cmd::layer_label_cmds;
 pub use cmd::layer_list_cmds;
 pub use cmd::layer_mask_props_cmds;
 pub use cmd::layer_menu_cmds;
 pub use cmd::layer_multi_cmds;
 pub use cmd::layer_nav_cmds;
-pub use cmd::layer_xmp_cmds;
 pub use cmd::lens_cmds;
 pub use cmd::magnetic_cmds;
 pub use cmd::mask_view_cmds;
 pub use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
-pub use cmd::notes_cmds;
-pub use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
@@ -140,14 +134,12 @@ pub use cmd::photo_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
-pub use cmd::rasterize_style_cmds;
 pub use cmd::render_cmds;
 pub use cmd::sample_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
 pub use cmd::smart_cmds;
-pub use cmd::smart_svg_cmds;
 pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
 pub use cmd::style_asl_cmds;
@@ -155,14 +147,9 @@ pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
 pub use cmd::timeline_cmds;
 pub use cmd::transform_cmds;
-pub use cmd::trap_cmds;
-pub use cmd::type_area_cmds;
-pub use cmd::type_caret_cmds;
 pub use cmd::type_cmds;
 pub use cmd::type_extra_cmds;
-pub use cmd::type_mask_cmds;
 pub use cmd::type_spell_cmds;
-pub use cmd::type_styles_cmds;
 pub use cmd::variables_cmds;
 pub use cmd::vector_cmds;
 pub use cmd::video_cmds;
@@ -237,7 +224,7 @@ pub struct Session {
     /// Text layer changed by the last journal entry, for folding Type tool keystrokes.
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
-    coalesce_request: Option<String>,
+    pub coalesce_request: Option<String>,
     /// The outer action's original document/history states, independent of command transactions.
     action_history: Option<action_history::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.
@@ -252,7 +239,8 @@ pub struct Session {
     pub style_clipboard: craft_tracked::Tracked<Option<CopiedStyle>>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
-    pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
+    /// Complete stroke and the source layer's Align Edges setting.
+    pub path_stroke_clipboard: Option<(photocraft_doc::ShapeStroke, bool)>,
     /// Open Edit Contents documents and the smart objects they update.
     pub smart_links: Vec<state::SmartLink>,
     /// Type › Save Default Type Styles: character and paragraph style new type layers start from.

@@ -64,7 +64,7 @@ pub(crate) fn style_targets(s: &Session, p: &Value, fits: impl Fn(&Layer) -> boo
 }
 
 /// A key that makes the sub-commands of one command share a single history step.
-pub(crate) fn step_key(s: &Session, what: &str) -> String {
+pub fn step_key(s: &Session, what: &str) -> String {
     format!("{what}#{}", s.active().map_or(0, |d| d.revision))
 }
 
@@ -144,7 +144,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let width = stroke_width(p);
     let color = color_param("edit.stroke", p, "color", s.tools.foreground)?;
     // A colour picked as CMYK strokes a CMYK document with the picked inks (#4196).
-    let picked = s.tools.picked_cmyk([color[0], color[1], color[2]]);
+    let picked = if p.get("color").is_none_or(Value::is_null) { s.tools.picked_role_cmyk(0) } else { s.tools.matching_cmyk([color[0], color[1], color[2]]) };
     let mode = match p.get("mode") {
         None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
         Some(Value::String(m)) => crate::commands::parse_blend(m)
@@ -169,6 +169,9 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
+    if let Some(st) = s.active() {
+        crate::pixel_fill::check_mode_available("edit.stroke", &st.doc, mode)?;
+    }
     // Stroke keeps its layer behavior for channel views; an explicit mask edits that mask.
     let pixels = Value::Null;
     let target = if crate::commands::is_mask_target(p) { p } else { &pixels };
@@ -492,7 +495,8 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     // `select: false`: the targeted layer stays targeted, as when a Photoshop action's `set`
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
-    let id = s.edit("Layer From Background", |doc, active| {
+    // The reference names the state "Make Layer" however the command runs (#16760).
+    let id = s.edit("Make Layer", |doc, active| {
         let bg = doc.background().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         let (id, name) = (bg.id, lowest_free_layer_name(doc, bg.id));
         // The name is read before the layer is unlocked, from the other layers' names.
@@ -531,7 +535,7 @@ pub(crate) fn unlock_background(l: &mut Layer) {
 
 /// Before `id` gets a layer mask: the Background can't have one, so it becomes a normal layer
 /// first ("Layer 0"), as when adding a mask to it in Photoshop. Other layers are left alone.
-pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
     background_to_layer(doc, id);
 }
 
@@ -757,7 +761,7 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     s
 }
 
-pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
+pub fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
     let d = s.active()?;
     Some(match &d.doc.layer(id)?.content {
         LayerContent::Text(_) => "type",
@@ -780,7 +784,7 @@ fn has_rasterize_work(s: &Session, id: LayerId, only: Option<&str>) -> bool {
 /// Rasterize one layer; `only` restricts it to one kind. Without `only` (Rasterize › Layer / All
 /// Layers: "all vector data") a vector mask becomes a pixel mask too; layer effects stay live, as
 /// in Photoshop (Rasterize › Layer Style bakes them). Returns false when there was nothing to do.
-pub(crate) fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
+pub fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
     let vector_mask = has_vector_mask(s, id, only);
     let content = rasterize_content(s, id, only, key)?;
     if vector_mask {
@@ -1218,3 +1222,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "layer_from_background_history_tests.rs"]
+mod layer_from_background_history_tests;

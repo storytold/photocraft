@@ -1,11 +1,40 @@
 //! Filling and blending pixels into a surface: Edit › Fill's compositing, which Edit › Clear,
 //! Edit › Stroke, pastes into masks and channels, a floating selection and the painting tools share.
 
-use photocraft_color::BlendMode;
+use photocraft_color::{BlendMode, ColorMode, SampleType};
+use photocraft_doc::Document;
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 
 use crate::{EngineError, Result};
+
+/// The blend modes the reference application greys in its Fill, Stroke and Fade Mode lists for a document of `mode`
+/// at `depth` (#13806, #14647). Combinations it wasn't measured in (Grayscale 16/32, Lab 16, CMYK 16, Multichannel,
+/// Duotone…) grey none.
+pub fn greyed_modes(mode: ColorMode, depth: SampleType) -> &'static [BlendMode] {
+    use BlendMode::*;
+    match (mode, depth) {
+        (ColorMode::Grayscale, SampleType::U8) => &[DarkerColor, LighterColor, Hue, Saturation, Color, Luminosity],
+        (ColorMode::Lab, SampleType::U8) => &[Darken, ColorBurn, Lighten, ColorDodge, Difference, Exclusion, Subtract, Divide],
+        (ColorMode::Rgb, SampleType::F32) => {
+            &[ColorBurn, LinearBurn, Screen, ColorDodge, Overlay, SoftLight, HardLight, VividLight, LinearLight, PinLight, HardMix, Exclusion]
+        }
+        _ => &[],
+    }
+}
+
+/// An error for `cmd` when `blend` is one of [`greyed_modes`] for `doc`: the dialogs never offer it there.
+pub fn check_mode_available(cmd: &str, doc: &Document, blend: BlendMode) -> Result<()> {
+    if !greyed_modes(doc.mode, doc.depth).contains(&blend) {
+        return Ok(());
+    }
+    let model = match doc.mode {
+        ColorMode::Rgb => "RGB".to_string(),
+        ColorMode::Cmyk => "CMYK".to_string(),
+        other => format!("{other:?}"),
+    };
+    Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("{} is not available in {model} {}-bit documents", blend.label(), doc.depth.bits()) })
+}
 
 /// What a pixel of the filled area gets before blending.
 pub enum Source {
@@ -238,6 +267,30 @@ pub fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin:
             }
             for (c, v) in px.iter_mut().enumerate().take(n) {
                 *v = photocraft_color::read_sample(pb, fmt.sample, c);
+            }
+            // Normal CMYK fills blend the chosen separation directly. Converting
+            // through the display RGB would discard it at partial opacity/coverage.
+            if fmt.mode == photocraft_color::ColorMode::Cmyk
+                && mode == BlendMode::Normal
+                && let Source::Cmyk { cmyk, .. } = source
+            {
+                let alpha = if fmt.alpha { px[4] } else { 1.0 };
+                let out_alpha = k + alpha * (1.0 - k);
+                let weight = if keep_alpha || !fmt.alpha {
+                    k
+                } else if out_alpha > 0.0 {
+                    k / out_alpha
+                } else {
+                    0.0
+                };
+                for (channel, ink) in cmyk.iter().enumerate() {
+                    enc[channel] = px[channel] * (1.0 - weight) + ink * weight;
+                }
+                if fmt.alpha {
+                    enc[4] = if keep_alpha { alpha } else { out_alpha };
+                }
+                photocraft_raster::encode_pixel(fmt, &enc[..n.min(8)], pb);
+                continue;
             }
             let d = to_rgba(fmt, &px[..n.min(8)]);
             let mut c = source.at(x, y);

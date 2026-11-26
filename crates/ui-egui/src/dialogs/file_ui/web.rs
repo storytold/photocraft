@@ -7,8 +7,8 @@ use std::sync::Arc;
 use craft::behavior::PixelSize;
 use craft::ui::dialog::{DialogId, DialogResult, StackDialog};
 use craft::ui::patterns::form_dialogs::{
-    Animation, ColorTable, Dither, HostedSaveForWeb, Resample, SaveForWebOptions, SaveForWebResult, WantedVariant, WebFormat, WebMetadata, WebPreset, WebSlice,
-    WebSlices, WebVariant,
+    Animation, ColorTable, ColorTableEdit, Dither, HostedSaveForWeb, Resample, SaveForWebOptions, SaveForWebResult, TableMarks, WantedVariant, WebFormat,
+    WebMetadata, WebPreset, WebSlice, WebSlices, WebVariant,
 };
 use craft::ui::runtime::env::Label;
 use egui::load::SizedTexture;
@@ -59,13 +59,79 @@ fn hex(rgb: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
 
-fn parse_hex(text: &str) -> Option<[u8; 3]> {
+pub(super) fn parse_hex(text: &str) -> Option<[u8; 3]> {
     let digits = text.trim().strip_prefix('#').unwrap_or(text.trim());
     if digits.len() != 6 || !digits.is_ascii() {
         return None;
     }
     let channel = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok();
     Some([channel(0)?, channel(2)?, channel(4)?])
+}
+
+/// The colour table of the open Save for Web dialog: each shifted colour with the colour it becomes. The dialog names
+/// colours by value; the engine edits palette entries by index, so the shifts become `colorTableEdits` over the palette
+/// each encode indexes with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebTable {
+    /// The dialog the shifts belong to.
+    dialog: Option<DialogId>,
+    /// Each shifted colour and the colour it becomes, in the order they were shifted.
+    shifted: Vec<([u8; 3], [u8; 3])>,
+}
+
+impl WebTable {
+    /// Applies the edits of dialog `id`, each with the colours it applies to; a table of another dialog starts empty.
+    /// Returns whether the shifts changed. Lock, Make Transparent, Delete and Sort have no engine counterpart and
+    /// change nothing.
+    pub(super) fn apply(&mut self, id: DialogId, edits: impl IntoIterator<Item = (ColorTableEdit, Vec<[u8; 3]>)>) -> bool {
+        if self.dialog != Some(id) {
+            *self = WebTable { dialog: Some(id), shifted: Vec::new() };
+        }
+        let before = self.shifted.clone();
+        for (edit, colors) in edits {
+            match edit {
+                ColorTableEdit::Shift(to) => colors.iter().for_each(|from| self.shift(*from, to)),
+                ColorTableEdit::WebShift => colors.iter().for_each(|from| self.shift(*from, web_safe(*from))),
+                ColorTableEdit::Unshift => self.shifted.retain(|(from, _)| !colors.contains(from)),
+                ColorTableEdit::UnshiftAll | ColorTableEdit::Restore => self.shifted.clear(),
+                _ => {}
+            }
+        }
+        self.shifted != before
+    }
+
+    fn shift(&mut self, from: [u8; 3], to: [u8; 3]) {
+        self.shifted.retain(|(shifted, _)| *shifted != from);
+        if from != to {
+            self.shifted.push((from, to));
+        }
+    }
+
+    /// The marks the dialog's table shows.
+    fn marks(&self) -> TableMarks {
+        let mut marks = TableMarks::default();
+        marks.shifted = self.shifted.clone();
+        marks
+    }
+
+    /// The shifts of dialog `id`; none for another dialog.
+    pub(super) fn of(&self, id: DialogId) -> &[([u8; 3], [u8; 3])] {
+        if self.dialog == Some(id) { &self.shifted } else { &[] }
+    }
+}
+
+/// The nearest web-safe colour: each channel on the nearest multiple of 51.
+fn web_safe(rgb: [u8; 3]) -> [u8; 3] {
+    rgb.map(|v| ((f32::from(v) / 51.0).round() * 51.0) as u8)
+}
+
+/// The engine's `colorTableEdits` for `shifted` over `palette`: every entry holding a shifted colour, by index.
+pub(super) fn shift_edits(palette: &[[u8; 3]], shifted: &[([u8; 3], [u8; 3])]) -> serde_json::Map<String, Value> {
+    palette
+        .iter()
+        .enumerate()
+        .filter_map(|(at, color)| shifted.iter().find(|(from, _)| from == color).map(|(_, to)| (at.to_string(), json!(hex(*to)))))
+        .collect()
 }
 
 /// The dialog's options for engine parameters: remembered ones, a preset's, or the last export's. Keys the
@@ -116,9 +182,6 @@ pub(super) fn options_of(p: &Value) -> SaveForWebOptions {
     if let Some(v) = text("resample").and_then(|n| by_name(&RESAMPLES, n)) {
         o.resample = v;
     }
-    if let Some(edits) = p.get("colorTableEdits").and_then(Value::as_object) {
-        o.palette_edits = edits.iter().filter_map(|(k, v)| Some((k.parse().ok()?, parse_hex(v.as_str()?)?))).collect();
-    }
     o.slices = match text("slices") {
         Some("user") => WebSlices::User,
         Some("selected") => {
@@ -161,9 +224,6 @@ pub(super) fn params_of(o: &SaveForWebOptions, has_slices: bool) -> Value {
         }
         p["width"] = json!(size.width);
         p["height"] = json!(size.height);
-    }
-    if !o.palette_edits.is_empty() {
-        p["colorTableEdits"] = Value::Object(o.palette_edits.iter().map(|(i, c)| (i.to_string(), json!(hex(*c)))).collect());
     }
     if has_slices {
         p["html"] = json!(o.html);
@@ -264,7 +324,9 @@ pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
     if let Some(t) = doc.timeline.as_ref().filter(|t| t.duration >= 2) {
         dialog = dialog.animation(Animation::new(t.duration as u32, t.fps));
     }
-    Some(app.framework.dialogs.open(dialog))
+    let id = app.framework.dialogs.open(dialog);
+    app.ui.web_table = WebTable { dialog: Some(id), shifted: Vec::new() };
+    Some(id)
 }
 
 /// The notice under the preview captions when the document has more slices than are resolved (`overflow_warning`):
@@ -288,8 +350,8 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
 }
 
 /// The picture of one wanted pane: the options' encode of the document's `frame`, reduced to a proxy of at most
-/// 2048 px, with the size and palette the dialog shows.
-fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, frame: Option<usize>) -> WebVariant {
+/// 2048 px, with the size and palette the dialog shows and the table's `shifted` colours.
+fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, frame: Option<usize>, shifted: &[([u8; 3], [u8; 3])]) -> WebVariant {
     let (index, revision) = (wanted.index, wanted.request.revision);
     let fail = |message: String| WebVariant::failed(index, revision, message);
     let Some(st) = app.session.active() else { return fail("no document".into()) };
@@ -308,7 +370,7 @@ fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, fram
         let (w, h) = (proxy.size.width, proxy.size.height);
         Ok((photocraft_compose::flatten(&proxy).into_px(), w, h))
     };
-    let encoded = match web_preview::optimized(ctx, pane_key(doc.id.0, index), &signature, &p, source) {
+    let encoded = match web_preview::optimized(ctx, pane_key(doc.id.0, index), &signature, &p, shifted, source) {
         Ok(encoded) => encoded,
         Err(message) => return fail(message),
     };
@@ -352,8 +414,16 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(dialog) = app.framework.dialogs.get_mut::<HostedSaveForWeb>() else { return };
     let id = dialog.id();
+    let events = dialog.take_table_events();
+    if app.ui.web_table.apply(id, events.into_iter().map(|event| (event.edit, event.colors))) {
+        let marks = app.ui.web_table.marks();
+        if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
+            dialog.set_marks(marks);
+        }
+    }
+    let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) else { return };
     let wanted = dialog.wanted_variants();
-    let (color, path, frame) = (dialog.pick_color(), dialog.pick_path(), dialog.frame());
+    let (color, path, frame) = (dialog.take_color_request(), dialog.pick_path(), dialog.frame());
     let current = dialog.current().clone();
     if let Some(request) = color {
         crate::color_picker_ui::open_for_request(app, id, request);
@@ -361,7 +431,7 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
         && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id)
     {
-        dialog.answer_color(key, color);
+        dialog.answer_color(&key, color);
     }
     if let Some(request) = path {
         pick_save(app, id, request.key, &current);
@@ -370,7 +440,8 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2));
-    let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, w, animated.then_some(frame as usize))).collect();
+    let shifted = app.ui.web_table.of(id);
+    let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, w, animated.then_some(frame as usize), shifted)).collect();
     if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
         for variant in variants {
             dialog.set_variant(variant);
@@ -382,7 +453,8 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// opens, then the save picker answers the dialog's path request `key`.
 fn pick_save(app: &mut PhotocraftApp, id: DialogId, key: String, current: &SaveForWebOptions) {
     let slices = has_slices(app);
-    let checked = web_params(current, slices).and_then(|p| checked_params(app, &p));
+    let shifted = app.ui.web_table.of(id).to_vec();
+    let checked = web_params(current, slices).and_then(|p| checked_params(app, &p, &shifted));
     let refuse = |app: &mut PhotocraftApp, error: String| {
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
             dialog.cancel_requests();
@@ -410,12 +482,15 @@ fn pick_save(app: &mut PhotocraftApp, id: DialogId, key: String, current: &SaveF
 }
 
 /// OK: the export runs with the confirmed options and the picked path; the settings are remembered once it succeeded.
+/// Done writes nothing and remembers the settings.
 fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: SaveForWebResult) {
+    let shifted = std::mem::take(&mut app.ui.web_table).shifted;
+    let Some(picked) = result.path.as_deref() else { return result.remember(ctx) };
     let slices = has_slices(app);
     let outcome = web_params(&result.options, slices).and_then(|mut p| {
-        let path = result.path.to_string_lossy().into_owned();
+        let path = picked.to_string_lossy().into_owned();
         if slices {
-            p["dir"] = json!(result.path.parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty()).unwrap_or_else(|| ".".into()));
+            p["dir"] = json!(picked.parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty()).unwrap_or_else(|| ".".into()));
         } else {
             // The suggested name kept: only the folder, so a recorded action saves each document under its own
             // name, as in Photoshop (#5305). A document renamed since the picker opened no longer matches the
@@ -426,7 +501,7 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: SaveForWebResult
                 None => p["path"] = json!(path),
             }
         }
-        web_confirm(app, &p)
+        web_confirm(app, &p, &shifted)
     });
     match outcome {
         Ok(_) => result.remember(ctx),
@@ -449,10 +524,19 @@ fn authorize_web(app: &PhotocraftApp, p: &Value) -> Result<(), String> {
 }
 
 /// `p` with its generated palette, after the policy approved both the request and the palette-bearing parameters.
-fn checked_params(app: &PhotocraftApp, p: &Value) -> Result<Value, String> {
+/// The table's `shifted` colours become `colorTableEdits` over that palette.
+fn checked_params(app: &PhotocraftApp, p: &Value, shifted: &[([u8; 3], [u8; 3])]) -> Result<Value, String> {
     authorize_web(app, p)?;
     let mut prepared = p.clone();
     web_preview::prepare_table(app, &mut prepared)?;
+    let palette: Option<Vec<[u8; 3]>> =
+        prepared.get("colorTable").and_then(Value::as_array).map(|table| table.iter().filter_map(|c| c.as_str().and_then(parse_hex)).collect());
+    if let Some(palette) = palette.filter(|_| prepared.get("colorTableEdits").is_none()) {
+        let edits = shift_edits(&palette, shifted);
+        if !edits.is_empty() {
+            prepared["colorTableEdits"] = Value::Object(edits);
+        }
+    }
     if prepared != *p {
         authorize_web(app, &prepared)?;
     }
@@ -460,8 +544,8 @@ fn checked_params(app: &PhotocraftApp, p: &Value) -> Result<Value, String> {
 }
 
 /// Runs Save for Web with the final parameters `p`, which say where to write.
-pub(super) fn web_confirm(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
-    let p = checked_params(app, p)?;
+pub(super) fn web_confirm(app: &mut PhotocraftApp, p: &Value, shifted: &[([u8; 3], [u8; 3])]) -> Result<Value, String> {
+    let p = checked_params(app, p, shifted)?;
     save_for_web(app, p)
 }
 
@@ -503,4 +587,33 @@ pub(super) fn download_for_web(app: &mut PhotocraftApp, mut p: Value) -> Result<
     let write = app.services.write.as_mut().ok_or("no download service")?;
     web_cmds::save_for_web_with_writer(&mut app.session, &p, &mut |path, bytes| write(path, bytes).map_err(photocraft_engine::EngineError::Other))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    fn event(edit: ColorTableEdit, colors: &[[u8; 3]]) -> (ColorTableEdit, Vec<[u8; 3]>) {
+        (edit, colors.to_vec())
+    }
+
+    /// The table's shifts follow the dialog's edits, and an export edits every palette entry of a shifted colour.
+    #[test]
+    fn table_shifts_become_palette_edits() {
+        let id = egui::Id::unique("save-for-web");
+        let (red, blue, off) = ([255, 0, 0], [0, 0, 255], [10, 100, 160]);
+        let mut table = WebTable::default();
+        assert!(table.apply(id, vec![event(ColorTableEdit::Shift([0, 255, 0]), &[red]), event(ColorTableEdit::WebShift, &[off])]));
+        assert_eq!(table.of(id), &[(red, [0, 255, 0]), (off, [0, 102, 153])]);
+        assert!(!table.apply(id, vec![event(ColorTableEdit::Lock, &[blue])]), "Lock has no engine counterpart");
+        assert!(table.of(egui::Id::unique("another")).is_empty(), "shifts belong to their dialog");
+
+        let edits = shift_edits(&[red, blue, red], table.of(id));
+        assert_eq!(Value::Object(edits), json!({"0": "#00ff00", "2": "#00ff00"}));
+
+        assert!(table.apply(id, vec![event(ColorTableEdit::Unshift, &[red])]));
+        assert_eq!(table.of(id), &[(off, [0, 102, 153])]);
+        assert!(table.apply(id, vec![event(ColorTableEdit::Restore, &[])]));
+        assert!(table.of(id).is_empty());
+    }
 }

@@ -126,8 +126,9 @@ impl PhotocraftApp {
         self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
-        // The main window's file drops reach `open_dropped` through the document area's drop
-        // target, and the runtime repaints while files hover.
+        // The main window's file drops reach `open_dropped` through the tab strip's drop target, or
+        // the document area's window-wide one (`canvas::window_drop`), and the runtime repaints
+        // while files hover.
         crate::file_open::log_drag_over(ctx, ctx.input(|i| i.raw.hovered_files.len()));
         self.place_next_dropped(ctx);
         #[cfg(not(target_arch = "wasm32"))]
