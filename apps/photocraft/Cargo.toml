@@ -43,6 +43,8 @@ clap = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# JavaScript runs: the app drives a `photocraft-script-host` process per run.
+photocraft-script-js = { workspace = true }
 tempfile = "=3.27.0"
 craft-xml = { workspace = true }
 craft-update = { workspace = true }

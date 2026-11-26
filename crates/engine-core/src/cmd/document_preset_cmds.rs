@@ -91,6 +91,8 @@ pub(crate) fn validate_new_params(s: &Session, p: &Value) -> Result<()> {
             }
             "name" => (value.is_string(), "a string".into()),
             "artboard" => (value.is_boolean(), "true or false".into()),
+            // Every command takes a history step key (`Session::execute`).
+            "coalesce" => continue,
             "profile" => (value.as_str().is_some_and(|v| !v.is_empty()), "working, a built-in profile id or an .icc path".into()),
             _ => return Err(bad(cmd, format!("unknown parameter `{key}`"))),
         };
@@ -408,6 +410,14 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use crate::prefs::SavedPrefsExt;
+
+    #[test]
+    fn a_new_document_takes_a_history_step_key_like_every_command() {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 8, "height": 8, "coalesce": "script:1"})).unwrap();
+        assert_eq!(s.documents().len(), 1);
+        assert!(s.execute("file.new", json!({"width": 8, "height": 8, "colour": "red"})).is_err(), "other unknown keys are still refused");
+    }
 
     fn settings() -> Value {
         json!({"width":16,"height":24,"resolution":254.5,"mode":"lab","depth":16,

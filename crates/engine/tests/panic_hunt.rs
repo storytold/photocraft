@@ -74,6 +74,8 @@ fn no_command_panics_or_hangs_on_adversarial_params() {
         json!({"points": [[1e9, -1e9], [0.5, 0.5]], "subtractPoints": [[-1e9, 1e9], [2, 2]], "order": ["+", "-", "x", 5], "localized": true, "range": 0}),
         json!({"points": [[3, 3]], "subtractPoints": [[3]], "order": {}, "fuzziness": -1}),
         json!({"subtractPoints": "none", "order": ["-"], "labMinimum": [0, 0, 0], "labMaximum": [100, 0, 0]}),
+        // Offsets at the ends of the 32-bit range: a move there used to overflow in the bounds code.
+        json!({"dx": i32::MAX, "dy": i32::MIN}),
     ];
     let mut bad: Vec<String> = Vec::new();
     for spec in command_specs() {

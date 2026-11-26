@@ -56,6 +56,8 @@ mod monitor_profile;
 mod nightly_session;
 mod photoshop_settings;
 mod presentation;
+// JavaScript runs, each in its own script host process.
+mod scripts;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod print_portal;

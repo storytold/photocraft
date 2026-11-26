@@ -1675,6 +1675,10 @@ pub struct Preferences {
     pub recent_colors: Vec<String>,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: ScriptEvents,
+    /// What scripts keep between runs (`scripts.customOptions.*`). Read cut to the limits those
+    /// commands keep; [`Preferences::set`] refuses a value past them.
+    #[serde(deserialize_with = "crate::script_options_cmds::bounded")]
+    pub scripts: crate::script_options_cmds::ScriptPrefs,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
 }
@@ -1740,6 +1744,14 @@ impl Preferences {
         check_value(path, &value)?;
         let mut root = self.to_json();
         set_path(&mut root, path, value)?;
+        // Script options load cut to their limits; a set past them is refused instead.
+        if path == "scripts" || path.starts_with("scripts.") {
+            let scripts: crate::script_options_cmds::ScriptPrefs =
+                serde_json::from_value(root.get("scripts").cloned().unwrap_or_default()).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
+            if let Some(why) = scripts.custom_options.over_limits() {
+                return Err(format!("invalid value for `{path}`: {why}"));
+            }
+        }
         let mut next: Preferences = serde_json::from_value(root).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
         if let Some(theme) = legacy_theme {
             next.interface.set_legacy_theme(&theme)?;

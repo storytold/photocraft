@@ -50,6 +50,8 @@ cargo xtask stats                                          # tests and lines per
 cargo xtask parity                                         # Photoshop menu coverage -> docs/parity-checklist.md
 ```
 
+Scripts (File › Scripts) run in `photocraft-script-host`, a second binary of the app's package that the app looks for next to itself. `cargo build -p photocraft` builds both; `cargo run -p photocraft` builds only the app, so build the package once (with the same `--release` choice) before running scripts from a `cargo run` build. See [scripting.md](scripting.md).
+
 Image code is slow at `opt-level 0`, so the workspace profile builds dependencies at `opt-level 2`. Use `--release` for anything interactive. Test builds compile ui-egui itself at `opt-level 0` (`[profile.test.package.photocraft-ui-egui]` in `Cargo.toml`): it was one of the biggest test-build units, and its tests run no heavy pixel code of their own.
 
 The dev profile builds PhotoCraft's crates with `debug = "line-tables-only"` and dependencies with no debug info: panic backtraces keep file and line in PhotoCraft code, and test binaries link about twice as fast. To inspect local variables in a debugger, build with `CARGO_PROFILE_DEV_DEBUG=true`.

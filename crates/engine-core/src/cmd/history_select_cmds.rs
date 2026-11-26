@@ -23,11 +23,21 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let past = st.history.past_len();
     let last = past.saturating_add(st.history.redo_labels().count());
-    let v = match p.get("state") {
-        None | Some(Value::Null) => return Err(bad("missing `state` (the History entry to return to, 0 = oldest)")),
-        Some(_) => int(p, "state").ok_or_else(|| bad("`state` must be a number"))?,
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    let target = match (given("state"), given("stateId")) {
+        (Some(_), Some(_)) => return Err(bad("give `state` or `stateId`, not both")),
+        (None, None) => return Err(bad("missing `state` (the History entry to return to, 0 = oldest) or `stateId`")),
+        (Some(_), None) => {
+            let v = int(p, "state").ok_or_else(|| bad("`state` must be a number"))?;
+            usize::try_from(v).ok().filter(|i| *i <= last).ok_or_else(|| bad(format!("`state` = {v} is not a state (0..={last})")))?
+        }
+        // Found here, in the call that makes the jump: an edit between a caller's read of the
+        // rows and its request can't make it land on another state.
+        (None, Some(id)) => {
+            let id = id.as_u64().ok_or_else(|| bad("`stateId` must be a state id from document.inspect's historyIds"))?;
+            st.history.row_of(id).ok_or_else(|| EngineError::Other("the History state no longer exists".into()))?
+        }
     };
-    let target = usize::try_from(v).ok().filter(|i| *i <= last).ok_or_else(|| bad(format!("`state` = {v} is not a state (0..={last})")))?;
     // A background job is computing from the current state: it must not move under it.
     if s.active_job().is_some() {
         return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
@@ -95,9 +105,36 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Select History State",
         menu: &[],
         shortcut: None,
-        params: r##"{"state":index} (History entry as the panel lists them: 0 = oldest, then the current state, then the redo states) → {state,changed,current?}: returns the document to that state in one step; the states after it stay redoable"##,
+        params: r##"{"state":index? (History entry as the panel lists them: 0 = oldest, then the current state, then the redo states),"stateId":n? (instead of state: the state's id from document.inspect's historyIds; an error once an edit discarded it)} → {state,changed,current?}: returns the document to that state in one step; the states after it stay redoable"##,
         enabled: can_select,
         run: select_state,
         journal: true,
     }]
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    /// A state named by its id is the one the jump reaches, wherever its row is by then; one an
+    /// edit discarded is an error, not another state.
+    #[test]
+    fn a_state_is_selected_by_its_id() {
+        let mut s = crate::session();
+        s.execute("file.new", serde_json::json!({"width": 8, "height": 8})).unwrap();
+        for name in ["a", "b", "c"] {
+            s.execute("layer.new.layer", json!({ "name": name })).unwrap();
+        }
+        let ids: Vec<u64> = s.active().unwrap().history.row_ids().collect();
+        let second = ids[2];
+        let reached = s.execute("history.selectState", json!({ "stateId": second })).unwrap();
+        assert_eq!(reached["state"], 2);
+        assert_eq!(s.active().unwrap().history.row_ids().nth(2), Some(second));
+        // An edit now discards the states after the current one.
+        s.execute("layer.new.layer", json!({ "name": "d" })).unwrap();
+        let gone = ids[3];
+        assert!(s.execute("history.selectState", json!({ "stateId": gone })).unwrap_err().to_string().contains("no longer exists"));
+        assert!(s.execute("history.selectState", json!({ "stateId": second, "state": 0 })).is_err());
+        assert!(s.execute("history.selectState", json!({ "stateId": "x" })).is_err());
+    }
 }

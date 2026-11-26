@@ -482,7 +482,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 /// The flattened document, or an error when the canvas is over the compositor's render cap
 /// ([`photocraft_compose::MAX_RENDER_PIXELS`]; `flatten` returns an empty buffer then).
-fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer> {
+pub(crate) fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer> {
     let (w, h) = (doc.size.width, doc.size.height);
     let count = u64::from(w) * u64::from(h);
     let operation = if cmd == "image.trim" {
@@ -632,15 +632,8 @@ fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[
     let n = surf.channels();
     let a = n.saturating_sub(1);
     let pa = px.get(a).copied().unwrap_or(1.0);
-    // Without an alpha channel hidden pixels can't be told from empty ones: fill the strips.
-    let has_alpha = surf.format().alpha;
-    for strip in strips.into_iter().filter(|r| !r.is_empty()) {
-        if !has_alpha || !surf.has_tiles_in(strip) {
-            surf.fill_rect(strip, px);
-            continue;
-        }
-        // The Background's own pixels over `px` (source-over).
-        let mut d = surf.read_region(strip);
+    // The Background's own pixels over `px` (source-over).
+    let over = |d: &mut [f32]| {
         for p in d.chunks_exact_mut(n) {
             let ta = p.get(a).copied().unwrap_or(0.0);
             let oa = ta + pa * (1.0 - ta);
@@ -651,7 +644,46 @@ fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[
                 *alpha = oa;
             }
         }
-        surf.write_region(strip, &d);
+    };
+    // Without an alpha channel hidden pixels can't be told from empty ones: fill the strips.
+    let fmt = surf.format();
+    for strip in strips.into_iter().filter(|r| !r.is_empty()) {
+        if !fmt.alpha || !surf.has_tiles_in(strip) {
+            surf.fill_rect(strip, px);
+            continue;
+        }
+        // Tile by tile, only the tiles the Background holds there: the rest of the strip is
+        // empty, which over `px` is `px`. Neither the strip nor the box around those tiles is
+        // read whole (a 300000 px square is hundreds of gigabytes), and a tile many places share
+        // (a plain fill) is blended once and shared again.
+        let held: Vec<(photocraft_geom::TileCoord, std::sync::Arc<photocraft_raster::Tile>)> =
+            surf.tiles().filter(|(c, _)| !c.rect().intersect(&strip).is_empty()).map(|(c, t)| (*c, t.clone())).collect();
+        surf.fill_rect(strip, px);
+        let mut blended: std::collections::HashMap<*const photocraft_raster::Tile, std::sync::Arc<photocraft_raster::Tile>> = std::collections::HashMap::new();
+        for (c, tile) in held {
+            let whole = c.rect();
+            let part = whole.intersect(&strip);
+            if part == whole
+                && let Some(done) = blended.get(&std::sync::Arc::as_ptr(&tile))
+            {
+                surf.put_tiles([(c, done.clone())]);
+                continue;
+            }
+            let key = std::sync::Arc::as_ptr(&tile);
+            let mut one = Surface::new(fmt);
+            one.put_tiles([(c, tile)]);
+            let mut d = one.read_region(part);
+            over(&mut d);
+            if part == whole {
+                one.write_region(whole, &d);
+                if let Some((_, done)) = one.take_tiles(whole).into_iter().next() {
+                    blended.insert(key, done.clone());
+                    surf.put_tiles([(c, done)]);
+                }
+            } else {
+                surf.write_region(part, &d);
+            }
+        }
     }
 }
 
@@ -1254,7 +1286,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
-    Ok(json!({ "document": index, "name": name }))
+    let (id, serial) = s.documents().get(index).map(|d| (d.doc.id.0, d.serial)).unzip();
+    Ok(json!({ "document": index, "name": name, "id": id, "serial": serial }))
 }
 
 macro_rules! spec {

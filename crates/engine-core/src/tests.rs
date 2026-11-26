@@ -1572,3 +1572,172 @@ fn the_active_layer_marker_advances_for_a_new_document_and_not_for_a_same_layer_
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     assert!(s.active_layer_changes() > before, "a new active document advances the marker");
 }
+
+#[test]
+fn documents_are_inspected_and_activated_by_their_serial() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "One"})).unwrap();
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Two"})).unwrap();
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Three"})).unwrap();
+    let serial = |s: &mut Session, i: usize| s.execute("session.inspect", json!({})).unwrap()["documents"][i]["serial"].as_u64().unwrap();
+    let three = serial(&mut s, 2);
+    s.execute("file.close", json!({"save": "discard"})).unwrap();
+    // A closed document's serial is not given to the next one.
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Four"})).unwrap();
+    assert!(serial(&mut s, 2) > three);
+    s.execute("file.close", json!({"save": "discard"})).unwrap();
+    let one = serial(&mut s, 0);
+    let inspected = s.execute("document.inspect", json!({"serial": one})).unwrap();
+    assert_eq!((&inspected["name"], &inspected["serial"]), (&json!("One"), &json!(one)), "the answer names its document");
+    assert_eq!(inspected["id"], s.execute("session.inspect", json!({})).unwrap()["documents"][0]["id"]);
+    assert_eq!(s.active_index(), Some(1), "inspecting does not switch documents");
+    assert_eq!(s.execute("document.activate", json!({"serial": one})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.active_index(), Some(0));
+    for bad in [json!({"serial": 999}), json!({"serial": "1"}), json!({"serial": one, "document": 0})] {
+        assert!(s.execute("document.activate", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(s.execute("document.inspect", json!({"serial": 999})).is_err());
+    // An index and a serial naming different documents is refused, not settled by the serial.
+    assert!(s.execute("document.inspect", json!({"serial": one, "document": 1})).is_err());
+    assert_eq!(s.execute("document.inspect", json!({"serial": one, "document": null})).unwrap()["name"], "One");
+    // A serial follows its document when the tabs move, where an index would not.
+    assert_eq!(s.move_document(0, 1), Some(1));
+    assert_eq!(s.execute("document.activate", json!({"serial": one})).unwrap(), json!({"document": 1}));
+    assert_eq!(s.execute("document.inspect", json!({"serial": one})).unwrap()["name"], "One");
+}
+
+#[test]
+fn document_inspect_can_leave_out_the_history() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    let full = s.execute("document.inspect", json!({})).unwrap();
+    let lite = s.execute("document.inspect", json!({"history": false})).unwrap();
+    assert!(full.get("history").is_some() && lite.get("history").is_none());
+    assert_eq!(lite["name"], full["name"]);
+    assert!(s.execute("document.inspect", json!({"history": "no"})).is_err());
+    // Nor the layer tree, for a reader of the document's own values.
+    let own = s.execute("document.inspect", json!({"history": false, "layers": false})).unwrap();
+    assert!(full.get("layers").is_some() && lite.get("layers").is_some() && own.get("layers").is_none());
+    assert_eq!((&own["name"], &own["width"], &own["resolution"]), (&full["name"], &full["width"], &full["resolution"]));
+    assert!(s.execute("document.inspect", json!({"layers": 0})).is_err());
+}
+
+/// A layer the app named "Layer 3" takes its text's name when it becomes a text layer; one the
+/// user named "Layer 99" keeps that name, and a `name` given to `type.create` wins over both.
+#[test]
+fn type_create_in_place_keeps_a_users_name_that_reads_like_the_apps() {
+    let mut s = session_with_doc();
+    let new = |s: &mut Session| photocraft_doc::LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let name = |s: &Session, id: photocraft_doc::LayerId| s.active().unwrap().doc.layer(id).unwrap().name.clone();
+    let generated = new(&mut s);
+    assert!(name(&s, generated).starts_with("Layer "));
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": generated.0})).unwrap();
+    assert_eq!(name(&s, generated), "Caption");
+    let renamed = new(&mut s);
+    s.execute("layer.setProps", json!({"layer": renamed.0, "name": "Layer 99"})).unwrap();
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": renamed.0})).unwrap();
+    assert_eq!(name(&s, renamed), "Layer 99");
+    let given = new(&mut s);
+    s.execute("layer.setProps", json!({"layer": given.0, "name": "Layer 98"})).unwrap();
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": given.0, "name": "Title"})).unwrap();
+    assert_eq!(name(&s, given), "Title");
+}
+
+/// New Layer and New Group refuse a `group` that is no group before a floating selection drops,
+/// as they refuse bad params: the pixels stay floating and History gains no step.
+#[test]
+fn a_new_layer_into_a_layer_that_is_no_group_leaves_a_floating_selection_floating() {
+    for cmd in ["layer.new.layer", "layer.new.group"] {
+        let mut s = session_with_doc();
+        let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": s.active().unwrap().doc.layers[0].id.0})).unwrap();
+        let pixels = s.execute("layer.new.layer", json!({"name": "Pixels"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("select.float", json!({"dx": 8})).unwrap();
+        let original = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.entries();
+        assert!(s.execute(cmd, json!({"group": pixels})).is_err(), "{cmd}");
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: the selection still floats");
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &original), "{cmd}");
+        assert_eq!(s.active().unwrap().history.entries(), history, "{cmd}");
+        assert!(s.execute(cmd, json!({"group": 999_999})).is_err(), "{cmd}");
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: a missing group leaves it floating too");
+        // A real group with a position too is refused the same way.
+        assert!(s.execute(cmd, json!({"group": group, "position": "above"})).is_err(), "{cmd}");
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: group with position leaves it floating");
+    }
+}
+
+/// A name given to New Layer is the user's, as one given later is: the layer keeps it when it
+/// becomes text in place.
+#[test]
+fn type_create_in_place_keeps_a_name_given_to_new_layer() {
+    let mut s = session_with_doc();
+    let id = s.execute("layer.new.layer", json!({"name": "Layer 99"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": id})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().name, "Layer 99");
+}
+
+/// A pixel layer whose pixels come from an opaque default pixel, with no tiles stored, shows
+/// those pixels: it is not empty, so it does not become text in place.
+#[test]
+fn type_create_does_not_convert_a_layer_drawn_by_its_default_pixel() {
+    let mut s = session_with_doc();
+    let id = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("opaque default", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        let format = layer.surface().unwrap().format();
+        let red = photocraft_raster::from_rgba(&format, [1.0, 0.0, 0.0, 1.0]);
+        layer.content = photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::with_default(format, &red));
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": id.0})).is_err());
+    assert!(matches!(s.active().unwrap().doc.layer(id).unwrap().content, photocraft_doc::LayerContent::Raster(_)), "the pixels stay");
+}
+
+/// Merge Down reports the layer it merged into, so a caller need not read the active layer
+/// afterwards (which the user may have changed by then).
+#[test]
+fn merge_down_reports_the_merged_layer() {
+    let mut s = session_with_doc();
+    let lower = s.execute("layer.new.layer", json!({"name": "Lower"})).unwrap()["layer"].as_u64().unwrap();
+    let upper = s.execute("layer.new.layer", json!({"name": "Upper"})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(s.execute("layer.mergeDown", json!({"layer": upper})).unwrap(), json!({"layer": lower}));
+}
+
+/// `document.inspect` with the revision it last returned answers briefly while the document is
+/// unchanged, and in full once anything about it changed.
+#[test]
+fn inspect_answers_briefly_while_the_document_is_unchanged() {
+    let mut s = session_with_doc();
+    let full = s.execute("document.inspect", json!({})).unwrap();
+    let revision = full["stateRevision"].clone();
+    assert!(revision.is_object(), "{full}");
+    let again = s.execute("document.inspect", json!({"unlessRevision": revision})).unwrap();
+    assert_eq!(again["unchanged"], true);
+    assert!(again.get("layers").is_none(), "no layer tree while unchanged");
+    s.execute("layer.new.layer", json!({"name": "New"})).unwrap();
+    let after = s.execute("document.inspect", json!({"unlessRevision": revision})).unwrap();
+    assert!(after.get("unchanged").is_none() && after["layers"].is_array(), "{after}");
+    assert_ne!(after["stateRevision"], revision);
+}
+
+/// `document.inspect` with `layer` reports that layer, what it holds and its group, without the
+/// document's whole tree; a layer that is gone reads as null.
+#[test]
+fn inspect_reads_one_layer_without_the_tree() {
+    let mut s = session_with_doc();
+    let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    let inner = s.execute("layer.new.layer", json!({"name": "Inner", "group": group})).unwrap()["layer"].as_u64().unwrap();
+    let one = s.execute("document.inspect", json!({"layer": inner})).unwrap();
+    assert_eq!((&one["layer"]["name"], &one["parent"]), (&json!("Inner"), &json!(group)));
+    assert!(one.get("layers").is_none(), "no tree unless asked for");
+    let g = s.execute("document.inspect", json!({"layer": group})).unwrap();
+    assert_eq!(g["layer"]["children"][0]["id"], json!(inner), "a group comes with what it holds");
+    assert!(g["parent"].is_null(), "a top-level layer has no group");
+    s.execute("layer.delete", json!({"layer": inner})).unwrap();
+    let gone = s.execute("document.inspect", json!({"layer": inner})).unwrap();
+    assert!(gone["layer"].is_null() && gone["parent"].is_null(), "{gone}");
+    assert!(s.execute("document.inspect", json!({"layer": "Inner"})).is_err());
+}

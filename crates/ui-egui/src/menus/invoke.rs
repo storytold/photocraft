@@ -212,6 +212,10 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     {
         return Some(r);
     }
+    // File › Scripts › Browse…: its picker (a file it names runs through `app.run`).
+    if let Some(r) = crate::scripts::menu(app, id, params) {
+        return Some(r);
+    }
     // Save for Web, Print and the other File-menu dialogs added with slices.
     if let Some(r) = crate::file_ui::invoke(app, ctx, id, params) {
         return Some(r);

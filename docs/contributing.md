@@ -35,6 +35,7 @@
 | `docs/development.md` | Build, test, run, drive the app programmatically, debug tricks |
 | `docs/contributing.md` | Rules: clean-room, tests, layering, style, commits; the "add a command" checklist |
 | `docs/control-protocol.md` | JSON control channel: how agents drive and screenshot the running app |
+| `docs/scripting.md` | Scripts: how a run is isolated, its limits, and what is tested where |
 | `docs/ui-design.md` | Design tokens, themes, widgets, and how to match Photoshop's look |
 | `ROADMAP.md` | One-page summary: stage, the two parity numbers, every dimension, languages, what's next |
 | `docs/target-app-parity.md` | The authoritative parity assessment against Photoshop 2026: numbers, weights, evidence, hours |

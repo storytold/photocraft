@@ -8,7 +8,10 @@ use photocraft_raster::{Surface, to_rgba};
 /// Composite `layers` inside their visible composite bounds (effects included) and write the result directly into a
 /// tiled surface. Large merges used to hold both a full-canvas RGBA buffer and a second converted
 /// float buffer at once; banded rendering keeps only one compositor band plus the destination.
-pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+/// Refused when the composite would be past the budget for one new layer
+/// ([`crate::allocation::MAX_LAYER_BYTES`]), or its bands past the compositor's per-render
+/// limit: a composite that large can't be held, or would render as nothing.
+pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> crate::Result<Surface> {
     let canvas = solo.bounds();
     let area = solo
         .layers
@@ -22,15 +25,33 @@ pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, 
         .unwrap_or(Rect::EMPTY)
         .intersect(&canvas);
     if area.is_empty() {
-        return Surface::new(format);
+        return Ok(Surface::new(format));
     }
+    check_render_area(area, format)?;
     // Also keeps a plain CMYK stack in its ink values (#3778).
-    photocraft_compose::composite_to_surface(solo, area, format, background)
+    Ok(photocraft_compose::composite_to_surface(solo, area, format, background))
+}
+
+/// The refusal of a merge whose composite (`area` in `format`) would be past the budget for one
+/// new layer, or whose bands would be past the compositor's per-render
+/// limit: it renders in bands the area's full width, and such a band renders as nothing (only
+/// an area millions of pixels wide, layers far apart, comes near that).
+fn check_render_area(area: Rect, format: photocraft_color::PixelFormat) -> crate::Result<()> {
+    let rows = area.height().min(u32::try_from(photocraft_compose::band_rows_for(area.width(), 0)).unwrap_or(u32::MAX));
+    if u64::from(area.width()) * u64::from(rows) > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(crate::EngineError::Other(format!(
+            "Merging the layers would render a {} x {} px area in bands past the limit of {} pixels; the document was not changed",
+            area.width(),
+            area.height(),
+            photocraft_compose::MAX_RENDER_PIXELS
+        )));
+    }
+    crate::allocation::check_layer(area, format.bytes_per_pixel() as u64, "Merging the layers")
 }
 
 /// [`composite_layers`] without cropping to the canvas: pixels of the layers that lie outside it are kept
 /// (merging layers must not lose them, #5067).
-pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::PixelFormat) -> Surface {
+pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::PixelFormat) -> crate::Result<Surface> {
     let canvas = solo.bounds();
     // The canvas grown to every visible layer's content and effects, so no layer is clipped by `composite_bounds`.
     let reach = solo
@@ -53,9 +74,10 @@ pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::Pix
         .reduce(|a, b| a.union(&b))
         .unwrap_or(Rect::EMPTY);
     if area.is_empty() {
-        return Surface::new(format);
+        return Ok(Surface::new(format));
     }
-    photocraft_compose::composite_to_surface(solo, area, format, None)
+    check_render_area(area, format)?;
+    Ok(photocraft_compose::composite_to_surface(solo, area, format, None))
 }
 
 /// Most bytes of tiles an adjustment may materialize beyond the ones a surface stores: two distant
@@ -554,8 +576,9 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
     out
 }
 
-/// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
-pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
+/// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down), or the refusal of
+/// [`composite_layers`] for an area too large to render.
+pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> crate::Result<Layer> {
     let format = doc.pixel_format();
     let stack = vec![lower.clone(), upper.clone()];
     let mut tmp = Document::new("merge", doc.size, format.mode, format.sample);
@@ -563,7 +586,7 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     tmp.icc_profile = doc.icc_profile.clone();
     tmp.layers = stack.into();
     // A Background stays canvas-sized; any other layer keeps the pixels outside the canvas (#5067).
-    let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None) } else { composite_layers_uncropped(&tmp, format) };
+    let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None)? } else { composite_layers_uncropped(&tmp, format)? };
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));
     merged.id = lower.id;
     merged.blend = lower.blend;
@@ -576,5 +599,5 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     merged.clipped = lower.clipped && upper.clipped;
     merged.label = lower.label;
     merged.link_group = lower.link_group;
-    merged
+    Ok(merged)
 }
