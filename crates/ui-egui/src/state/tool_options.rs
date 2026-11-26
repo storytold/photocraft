@@ -16,6 +16,40 @@ pub enum ObjectFinderMode {
     Manual,
 }
 
+/// Warp › the guide-line gear: the three visibility rows (#12501). What Auto Show Guides does was not
+/// measured, so it draws the guides as the grid always did, which is also what Always does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarpGuideShow {
+    Auto,
+    /// The guides draw during a drag as well as at rest: the rule the grid has always painted.
+    #[default]
+    Always,
+    /// Never Show Guides: the thin lines inside the cells are left out; the patch boundaries stay.
+    Never,
+}
+
+/// Warp › the gear right of the style dropdown: the guide lines inside each grid cell (#12501). Every
+/// field left unset keeps what the grid paints on its own, so a fresh start looks as Warp always did.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WarpGuideOptions {
+    /// Color: the lines' colour, channels 0..=1, as the Color Picker answers it. `None` keeps the
+    /// theme's own overlay line colour.
+    pub color: Option<[f32; 3]>,
+    /// Opacity in percent, 0..=100: the share of the colour's alpha the lines show. 100 shows it whole.
+    pub opacity: f32,
+    /// Density: the thin lines inside each cell, each way, 1..=10. `None` keeps the grid's own rule.
+    pub density: Option<f32>,
+    /// Auto / Always / Never Show Guides.
+    pub show: WarpGuideShow,
+}
+
+impl Default for WarpGuideOptions {
+    fn default() -> Self {
+        WarpGuideOptions { color: None, opacity: 100.0, density: None, show: WarpGuideShow::Always }
+    }
+}
+
 /// Options-bar state for tools (Photoshop keeps these per tool).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -240,6 +274,10 @@ pub struct ToolOptions {
     /// picked (unset follows General's default), Legacy scaling, the W/H link and unit.
     #[serde(default)]
     pub transform: TransformSettings,
+    /// Warp (Free Transform's Warp phase) › the gear's guide-line options: the colour, opacity,
+    /// density and visibility of the thin lines inside each grid cell (#12501).
+    #[serde(default)]
+    pub warp_guides: WarpGuideOptions,
     /// The Crop tool: ratio, W x H x Resolution, Delete Cropped Pixels, Fill, the guide
     /// overlay and the shield (#1919, #2443, #3823).
     #[serde(default)]
@@ -542,6 +580,7 @@ impl Default for ToolOptions {
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
             transform: TransformSettings::default(),
+            warp_guides: WarpGuideOptions::default(),
             crop: CropSettings::default(),
             perspective_crop: CropSizeFields::default(),
             perspective_crop_grid: true,

@@ -658,6 +658,17 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     fit(&mut o.magic_eraser_opacity, 1.0, 100.0, d.magic_eraser_opacity);
     fit(&mut o.bg_tolerance, 0.0, 100.0, d.bg_tolerance);
     fit(&mut o.cr_tolerance, 0.0, 100.0, d.cr_tolerance);
+    // Warp's guide-line gear (#12501): the popup's fields allow 0-100 % and 1-10 lines, a colour with a
+    // channel outside 0..=1 (which one that is not a number also fails) is dropped so the theme's own
+    // line shows, and a density of its own goes back to the grid's own rule.
+    fit(&mut o.warp_guides.opacity, 0.0, 100.0, d.warp_guides.opacity);
+    o.warp_guides.density = match o.warp_guides.density {
+        Some(lines) if lines.is_finite() => Some(lines.clamp(1.0, 10.0)),
+        _ => d.warp_guides.density,
+    };
+    if o.warp_guides.color.is_some_and(|c| !c.iter().all(|channel| channel.is_finite() && (0.0..=1.0).contains(channel))) {
+        o.warp_guides.color = d.warp_guides.color;
+    }
     let (width_min, width_max) = MagneticSettings::WIDTH_RANGE;
     fit(&mut o.magnetic.width, width_min, width_max, d.magnetic.width);
     fit(&mut o.magnetic.contrast, 1.0, 100.0, d.magnetic.contrast);

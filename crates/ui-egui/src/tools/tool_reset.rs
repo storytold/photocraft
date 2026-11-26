@@ -205,7 +205,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             move_show_hover_bounds,
             move_expand_group_on_click,
             move_show_layers_hover_bounds,
-            transform
+            transform,
+            warp_guides
         ),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.

@@ -1,16 +1,25 @@
-use craft::behavior::{RulerUnits, Ticks};
+use craft::behavior::{IconId, RulerUnits, Ticks};
 use craft::draw::ui::transform::{BarSlot, TransformBar, TransformGroups, TransformRequest};
 use craft::imaging::ui::warp::{CylinderValues, WarpFieldValues, WarpFields, WarpFieldsEdit, WarpFieldsOutput, WarpGridChoice, WarpStyleEntry};
+use craft::theme::Srgba;
+use craft::ui::buttons::{IconButton, PopupMark};
 use craft::ui::canvas::RulerText;
-use craft::ui::contract::{Bind, Entry};
-use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::choice::{Radio, RadioGroup, Swatch};
+use craft::ui::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
+use craft::ui::popover::Popover;
+use craft::ui::runtime::env::{Env, Label, UnitKind};
+use craft::ui::text::RangeAlert;
 use photocraft_engine::prefs::Unit;
 
 use super::begin::{enter_warp, warps_type};
 use super::commit::{cancel, commit};
 use super::warp::{edit_session_warp, set_warp};
 use super::{BezierMesh, PhotocraftApp, Warp, WarpStyle, json};
-use crate::state::SessionWarp;
+use crate::option_cells::number;
+use crate::state::{SessionWarp, WarpGuideOptions, WarpGuideShow};
 
 /// Free Transform's options bar: the framework's [`TransformBar`] over the open session. The bar
 /// reports edits and the app applies them in the order they came; the persisted choices (unit,
@@ -34,6 +43,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut warp_out = WarpFieldsOutput::default();
     // Held outside the bar's block: the warp slot borrows them for as long as the bar lives.
     let warp = t.session.warp().map(|w| (warp_values(w), w.on_type));
+    // The guide-line options as a copy, with how many thin lines the grid draws on its own: the popup
+    // edits the copy while the bar holds the app, and the bar writes it back after its show (#12501).
+    let mut guides = app.ui.tool_options.warp_guides;
+    let own_guides = t.session.warp().map_or(0, |w| w.mesh.own_guide_count());
+    let mut ask_colour: Option<[f32; 3]> = None;
+    let mut guide_alert: Option<RangeAlert> = None;
     let out = {
         let mut bar =
             TransformBar::new(Label::from(tl!("Free Transform").to_string()), &t.session, Bind::bound(&mut settings)).units(x_text, y_text).size_units(&units);
@@ -55,12 +70,26 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     fields = fields.split(armed);
                 }
                 warp_out = fields.show(ui);
+                Divider::vertical().show(ui);
+                guide_gear(&mut guides, own_guides, &mut ask_colour, &mut guide_alert, ui);
             }));
         }
         bar.show(ui)
     };
     if settings != app.ui.tool_options.transform {
         app.ui.tool_options.transform = settings;
+    }
+    if guides != app.ui.tool_options.warp_guides {
+        app.ui.tool_options.warp_guides = guides;
+    }
+    // The Color well's picker, opened once the bar has let go of the app (#12501).
+    if let Some(rgb) = ask_colour
+        && let Err(message) = crate::color_picker_ui::open_for_target(app, "warpGuideColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb)
+    {
+        crate::notices::error(app, message);
+    }
+    if let Some(alert) = guide_alert.as_ref() {
+        crate::option_cells::range_alert(app, ui, alert);
     }
     let now = ui.input(|i| i.time);
     for edit in out.edits {
@@ -80,6 +109,78 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else if out.discard {
         cancel(app);
     }
+}
+
+/// Whether the Warp guide-line popup is open, kept by the framework per viewer (#12501).
+#[derive(Clone, Copy, Default)]
+struct GuideGearOpen(bool);
+
+/// The colour the warp guide lines show now, and the one the Color Picker opens on: the person's
+/// choice, or the theme's own overlay line while none is set (#12501).
+fn guide_colour(guides: &WarpGuideOptions, ui: &egui::Ui) -> [f32; 3] {
+    guides.color.unwrap_or_else(|| Srgba::from(Env::of(ui).tokens.tokens().color.overlay.line).to_rgb_array())
+}
+
+/// The gear right of the Warp style dropdown and its popup of guide-line options (#12501): Color, a
+/// well that opens the Color Picker; Opacity, the share of the line's alpha in percent; Density, the
+/// thin lines inside each cell; and the three Show Guides rows. It edits the `guides` copy the bar
+/// holds and hands back the colour the well was clicked on and any range alert, because the bar, not
+/// the slot, holds the app. `own` is how many lines the grid draws on its own, which the Density field
+/// shows until the person picks a number.
+fn guide_gear(guides: &mut WarpGuideOptions, own: usize, ask_colour: &mut Option<[f32; 3]>, alert: &mut Option<RangeAlert>, ui: &mut egui::Ui) {
+    let title = tl!("Set warp guide line display options").to_string();
+    Row::new().show(ui, |ui, cx| {
+        let open = &mut cx.memory.shown::<GuideGearOpen>(cx.id).0;
+        let button = IconButton::new(IconId::new("settings"))
+            .label(title.clone())
+            .tooltip(tl!("Set warp guide line display options"))
+            .popup(PopupKind::Dialog)
+            .popup_mark(PopupMark::Menu)
+            .expanded(*open)
+            .show(ui)
+            .response;
+        if clicked(&button) {
+            *open = !*open;
+        }
+        Popover::new(title.clone(), Bind::bound(open)).opened_by(&button).show(ui, |ui, _| {
+            Text::new(Label::from(tl!("Warp guide lines").to_string())).show(ui);
+            let rgb = guide_colour(guides, ui);
+            let well = Field::new(Label::from(tl!("Color").to_string()))
+                .show(ui, |ui, _| Swatch::new(Label::from(tl!("Color").to_string()), Srgba::from_rgb_array(rgb)).show(ui).clicked);
+            if well.inner == Some(true) {
+                *ask_colour = Some(rgb);
+            }
+            let opacity = number(Label::from(tl!("Opacity").to_string()), &mut guides.opacity, 0.0..=100.0).whole().popup_slider().show(ui);
+            *alert = alert.take().or(opacity.out_of_range);
+            // Density is an Option: the field shows the grid's own count until the person picks a
+            // number, and the framework writes a typed commit to the field's binding without naming
+            // it in the pass's events, so the copy of the binding tells the slot when to remember one.
+            let own_lines = own as f32;
+            let base = guides.density.unwrap_or(own_lines);
+            let mut density = base;
+            let lines = number(Label::from(tl!("Density").to_string()), &mut density, 1.0..=10.0).whole().popup_slider().show(ui);
+            if density != base {
+                guides.density = Some(density);
+            }
+            *alert = alert.take().or(lines.out_of_range);
+            let picked = RadioGroup::new(tl!("Show guides"), Bind::given(guides.show))
+                .show(ui, |ui, _| {
+                    for (show, name) in [
+                        (WarpGuideShow::Auto, tl!("Auto Show Guides")),
+                        (WarpGuideShow::Always, tl!("Always Show Guides")),
+                        (WarpGuideShow::Never, tl!("Never Show Guides")),
+                    ] {
+                        Radio::new(show).label(name.to_string()).show(ui);
+                    }
+                })
+                .output
+                .value()
+                .cloned();
+            if let Some(picked) = picked {
+                guides.show = picked;
+            }
+        });
+    });
 }
 
 /// A key of what the bar shows of the open session: the box, its skew, the phase, the interpolation, the reference
