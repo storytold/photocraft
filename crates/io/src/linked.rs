@@ -11,6 +11,20 @@
 
 use photocraft_doc::Metadata;
 
+/// A historical interpretation authorizes the exact encoded revision, never a pathname.
+pub const HISTORICAL_XCF_LINK_CHANGED: &str = "the linked historical XCF bytes changed; relink and choose their sample byte order";
+
+pub fn historical_xcf_digest(bytes: &[u8]) -> [u8; 32] {
+    *blake3::hash(bytes).as_bytes()
+}
+
+pub fn check_historical_xcf_digest(expected: Option<[u8; 32]>, bytes: &[u8]) -> Result<(), &'static str> {
+    if expected.is_some_and(|digest| digest != historical_xcf_digest(bytes)) {
+        return Err(HISTORICAL_XCF_LINK_CHANGED);
+    }
+    Ok(())
+}
+
 /// An embedded file found in a linked-layer block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkedFile {

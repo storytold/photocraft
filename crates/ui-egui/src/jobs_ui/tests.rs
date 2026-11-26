@@ -13,10 +13,12 @@ use craft::draw::ui::transform::TransformEdit;
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use photocraft_engine::jobs::{JobId, Started};
+use photocraft_engine::jobs::{JobId, JobOutcome, Started};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+
+mod pending_open_view;
 
 fn app_harness() -> Harness<'static, Box<PhotocraftApp>> {
     app_harness_with(crate::Services::default())
@@ -1208,4 +1210,377 @@ fn asynchronous_place_completion_displays_result_warnings() {
     // A frame placement bypasses transform startup but must still display its warnings.
     super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+}
+
+/// Both Open entry points own the opening card immediately, then focus the admitted
+/// document rather than the tab that was active while the worker was running.
+#[test]
+fn background_ordinary_and_smart_opens_reset_home_error_and_focus_their_result() {
+    for smart in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("focused.psd");
+        let bytes = psd_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+        let path = path.to_str().unwrap();
+        let mut session = photocraft_engine::Session::new();
+        session.color_mut().settings.ask_on_missing = false;
+        session.color_mut().settings.ask_on_mismatch = false;
+        session.execute("file.new", json!({"width": 2, "height": 1, "name": "Previous tab"})).unwrap();
+        let previous = session.active().unwrap().doc.id;
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.background_jobs = true;
+        app.ui.chrome.home = Some(0);
+        app.ui.status = "An earlier operation failed".into();
+        app.ui.status_error = true;
+        if smart {
+            super::start_open_as_smart_object(&mut app, path, None).unwrap();
+        } else {
+            app.open_path(path).unwrap();
+        }
+        assert_eq!(app.jobs.opens.len(), 1, "smart={smart}: tracked real worker");
+        let job = app.jobs.opens[0].job;
+        assert_eq!(app.jobs.focus, Some(job));
+        assert_eq!(app.ui.chrome.home, None);
+        assert!(!app.ui.status_error);
+        assert_eq!(app.ui.status, crate::i18n::fmt(tl!("Opening {name}…"), &[("name", "focused.psd")]));
+        assert_eq!(app.session.active().unwrap().doc.id, previous, "not installed before polling");
+        let started = Instant::now();
+        while !app.jobs.opens.is_empty() {
+            assert!(started.elapsed() < Duration::from_secs(30), "smart={smart}: worker timed out");
+            let ctx = app.ctx().clone();
+            crate::jobs_ui::tick(&mut app, &ctx);
+            std::thread::yield_now();
+        }
+        assert_eq!(app.session.documents().len(), 2);
+        let opened = app.session.active().unwrap();
+        assert_ne!(opened.doc.id, previous);
+        assert_eq!((opened.doc.size.width, opened.doc.size.height), (64, 48));
+        assert_eq!(opened.path.as_deref(), (!smart).then_some(path));
+        assert_eq!(app.jobs.focus, None);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+}
+
+/// Actual Place work is completed before its UI event, matching the engine's all-ready
+/// publication boundary. The fixture records which tab was focused before that poll.
+struct ReadyPlace {
+    app: Box<PhotocraftApp>,
+    target: Arc<photocraft_doc::Document>,
+    unrelated: Arc<photocraft_doc::Document>,
+    events: Vec<photocraft_engine::jobs::JobEvent>,
+    focused: photocraft_doc::DocId,
+}
+
+fn ready_place(different_tab: bool) -> ReadyPlace {
+    ready_place_with_services(different_tab, crate::Services::default())
+}
+
+fn ready_place_with_services(different_tab: bool, services: crate::Services) -> ReadyPlace {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":16,"height":16,"name":"Place target"})).unwrap();
+    let target = session.active().unwrap().doc.clone();
+    session.execute("file.new", json!({"width":16,"height":16,"name":"Unrelated tab"})).unwrap();
+    let unrelated = session.active().unwrap().doc.clone();
+    session.set_active(0);
+    let mut app = PhotocraftApp::new(session, services);
+    app.background_jobs = true;
+    app.sync_views();
+    let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#ff0011"/></svg>"##;
+    let result = app.place_bytes("placed.svg", bytes.to_vec(), None).unwrap();
+    assert!(super::track_place(&mut app, "placed.svg", &result));
+    if different_tab {
+        app.session.set_active(1);
+    }
+    let focused = app.session.active().unwrap().doc.id;
+    let job = app.jobs.place.as_ref().unwrap().job;
+    app.session.wait_job(job).unwrap();
+    let events = app.session.poll_jobs();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].id, job);
+    assert_eq!(app.session.active().unwrap().doc.id, focused, "Place's engine apply preserves the pre-poll focus");
+    ReadyPlace { app, target, unrelated, events, focused }
+}
+
+fn deferred_native_open(ready: &mut ReadyPlace, open_first: bool) -> photocraft_doc::DocId {
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+    let mut source = photocraft_engine::Session::new();
+    source.execute("file.new", json!({"width":8,"height":6})).unwrap();
+    source.execute("layer.new.layer", json!({"name":"Imported chosen"})).unwrap();
+    let chosen = source.active().unwrap().active_layer().unwrap();
+    source.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    source.execute("layer.new.layer", json!({"name":"Imported other"})).unwrap();
+    source.execute("channel.new", json!({})).unwrap();
+    let mut doc = (*source.active().unwrap().doc).clone();
+    doc.name = "Deferred native.xcf".into();
+    for name in ["Saved first", "Saved chosen"] {
+        doc.paths.push(photocraft_doc::vector::NamedPath { name: name.into(), ..Default::default() });
+    }
+    let view = NativeInitialView {
+        selected_layers: vec![chosen],
+        active_layer: Some(chosen),
+        target: NativeImportTarget::LayerMask,
+        show_layer_mask: true,
+        visible_alpha_channels: vec![0],
+        samplers: vec![[2., 3.]],
+        selected_path: Some(1),
+        selected_path_identity: Some(photocraft_io::initial_view::path_identity(&doc.paths[1])),
+    };
+    let (index, warning) = ready.app.session.admit_import_with_initial_view(doc, Some("/imports/deferred.xcf".into()), true, Some(view));
+    assert!(warning.is_none());
+    let id = ready.app.session.documents()[index].doc.id;
+    let job = JobId(10_000);
+    ready.app.jobs.opens.push(super::OpenTab { job, name: "Deferred native.xcf".into(), path: Some("/imports/deferred.xcf".into()), slot: None, order: None });
+    ready.events.push(photocraft_engine::jobs::JobEvent {
+        id: job,
+        command: super::OPEN_JOB.into(),
+        label: "Opening Deferred native.xcf".into(),
+        document: None,
+        outcome: JobOutcome::Done(json!({"document":index,"docId":id.0,"warnings":[]})),
+        error: None,
+    });
+    if open_first {
+        ready.events.reverse();
+    }
+    id
+}
+
+fn present_place_and_open(ready: &mut ReadyPlace) {
+    let ctx = ready.app.ctx().clone();
+    super::finish_ready_events(&mut ready.app, &ctx, std::mem::take(&mut ready.events), Some(ready.focused));
+}
+
+fn assert_deferred_native_view(app: &PhotocraftApp, id: photocraft_doc::DocId) {
+    use photocraft_engine::channel_cmds::ChannelTarget;
+    let state = app.session.active().unwrap();
+    assert_eq!(state.doc.id, id);
+    assert_eq!(state.doc.name, "Deferred native.xcf");
+    let chosen = state.doc.layers.iter().find(|layer| layer.name == "Imported chosen").unwrap().id;
+    assert_eq!(state.active_layer(), Some(chosen));
+    assert_eq!(state.selection(), &[chosen]);
+    assert_eq!(state.channel_view.target, ChannelTarget::LayerMask);
+    assert!(state.channel_view.layer_mask.is_some());
+    assert!(state.channel_view.alpha_shown(0));
+    assert_eq!(state.color_samplers, vec![[2., 3.]]);
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved chosen"));
+    assert!(state.initial_path_selection.is_none());
+    assert!(state.initial_path_identity.is_none());
+    assert_eq!(state.protected_import_source.as_deref(), Some("/imports/deferred.xcf"));
+    assert!(state.source_read_only && state.path.is_none() && !state.is_dirty());
+    assert_eq!(state.history.past_len(), 0);
+}
+
+#[test]
+fn same_poll_native_open_waits_for_place_transform_in_both_completion_orders() {
+    for open_first in [false, true] {
+        for commit in [false, true] {
+            let mut ready = ready_place(false);
+            let imported = deferred_native_open(&mut ready, open_first);
+            present_place_and_open(&mut ready);
+            assert_eq!(ready.app.session.active().unwrap().doc.id, ready.target.id);
+            assert_eq!(ready.app.held_opens.len(), 1);
+            assert!(ready.app.ui.transform.as_ref().is_some_and(|transform| transform.made == Some(crate::state::MadeLayer::Place)));
+            if commit {
+                crate::transform_tool::commit(&mut ready.app);
+            } else {
+                crate::transform_tool::cancel(&mut ready.app);
+            }
+            let started = Instant::now();
+            while ready.app.session.has_jobs() {
+                assert!(started.elapsed() < Duration::from_secs(30), "Place transform timed out");
+                let ctx = ready.app.ctx().clone();
+                super::tick(&mut ready.app, &ctx);
+                std::thread::yield_now();
+            }
+            let ctx = ready.app.ctx().clone();
+            crate::open_prompt::take(&mut ready.app, &ctx);
+            assert_deferred_native_view(&ready.app, imported);
+            assert!(ready.app.held_opens.is_empty());
+            let target = ready.app.session.documents().iter().find(|state| state.doc.id == ready.target.id).unwrap();
+            assert_eq!(target.doc.layers.len(), ready.target.layers.len() + usize::from(commit));
+            assert_eq!(target.history.past_len(), usize::from(commit));
+        }
+    }
+}
+
+#[test]
+fn same_poll_native_open_never_starts_place_transform_over_an_unrelated_tab() {
+    for open_first in [false, true] {
+        let mut ready = ready_place(true);
+        let imported = deferred_native_open(&mut ready, open_first);
+        present_place_and_open(&mut ready);
+        assert!(ready.app.ui.transform.is_none());
+        assert_deferred_native_view(&ready.app, imported);
+        let unrelated = &ready.unrelated;
+        let unchanged = ready.app.session.documents().iter().find(|state| state.doc.id == unrelated.id).unwrap();
+        assert!(Arc::ptr_eq(&unchanged.doc, unrelated));
+        assert_eq!(unchanged.history.past_len(), 0);
+        let target = ready.app.session.documents().iter().find(|state| state.doc.id == ready.target.id).unwrap();
+        assert_eq!(target.doc.layers.len(), ready.target.layers.len() + 1);
+    }
+}
+
+#[test]
+fn background_place_without_open_keeps_an_unrelated_tab_active() {
+    let mut ready = ready_place(true);
+    present_place_and_open(&mut ready);
+    assert_eq!(ready.app.session.active().unwrap().doc.id, ready.focused);
+    assert!(ready.app.ui.transform.is_none());
+    let unrelated = &ready.unrelated;
+    assert!(Arc::ptr_eq(&ready.app.session.active().unwrap().doc, unrelated));
+}
+
+type SmartPickerSources = [(std::path::PathBuf, Vec<u8>); 2];
+
+fn smart_picker_sources() -> (tempfile::TempDir, SmartPickerSources) {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = [("image2.png", "#ff0000"), ("image10.png", "#00ff00")].map(|(name, color)| {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":2,"height":1,"background":color})).unwrap();
+        let bytes = photocraft_io::export(&session.active().unwrap().doc, name, &Default::default()).unwrap().bytes;
+        let path = directory.path().join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        (path, bytes)
+    });
+    (directory, sources)
+}
+
+/// Install the scripted native picker in the host before any job or dialog starts.
+fn ready_smart_picker(different_tab: bool) -> (ReadyPlace, Arc<craft::host::ScriptedFiles>) {
+    let files = Arc::new(craft::host::ScriptedFiles::held());
+    // Framework captures the Files provider at construction; replacing only Services
+    // afterwards does not replace the host's picker or its answer queue.
+    let ready = ready_place_with_services(different_tab, crate::Services { files: Some(files.clone()), ..Default::default() });
+    (ready, files)
+}
+
+/// Drive the native File menu and Files service, rather than bypassing the picker with
+/// the starter. Its returned order is intentionally different from natural name order.
+fn pick_smart_opens(app: &mut PhotocraftApp, files: &craft::host::ScriptedFiles, paths: Vec<std::path::PathBuf>) -> Vec<JobId> {
+    app.session.color_mut().settings.ask_on_missing = false;
+    app.session.color_mut().settings.ask_on_mismatch = false;
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(app, &ctx, "file.openAsSmartObject", json!({})).unwrap();
+    assert_eq!(files.open(), 1);
+    assert_eq!(files.requests().last().unwrap().kind, craft::host::PickKind::OpenMany);
+    files.answer(craft::host::Picked::Paths(paths)).unwrap();
+    app.poll_file_dialog();
+    assert_eq!(files.open(), 0);
+    app.jobs.opens.iter().map(|open| open.job).collect()
+}
+
+fn assert_picked_smart_sources(app: &PhotocraftApp, sources: &SmartPickerSources) {
+    let opened: Vec<_> = app.session.documents().iter().skip(2).collect();
+    assert_eq!(opened.iter().map(|state| state.doc.name.as_str()).collect::<Vec<_>>(), ["image2-1", "image10-1"]);
+    for ((state, (path, bytes)), expected) in opened.iter().zip(sources).zip([[1., 0., 0., 1.], [0., 1., 0., 1.]]) {
+        assert_eq!(state.doc.size, photocraft_geom::Size::new(2, 1));
+        assert!(state.path.is_none() && !state.is_dirty(), "Smart Object Open is untitled");
+        assert_eq!(state.doc.layers.len(), 1);
+        let photocraft_doc::LayerContent::Smart(object) = &state.doc.layers[0].content else { panic!("embedded Smart Object") };
+        let photocraft_doc::SmartSource::Embedded { file_name, bytes: embedded } = &object.source else { panic!("embedded source") };
+        assert_eq!(file_name, path.file_name().unwrap().to_str().unwrap());
+        assert_eq!(embedded.as_slice(), bytes.as_slice());
+        assert_eq!(std::fs::read(path).unwrap(), *bytes);
+        let pixel = object.cache.as_ref().unwrap().pixel(0, 0);
+        for (actual, expected) in pixel.iter().copied().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{pixel:?}");
+        }
+        assert_eq!(state.history.entries(), ["Open As Smart Object"]);
+    }
+}
+
+fn complete_smart_picker_before_shell(ready: &mut ReadyPlace, files: &craft::host::ScriptedFiles, sources: &SmartPickerSources, open_first: bool) {
+    let jobs = pick_smart_opens(&mut ready.app, files, vec![sources[1].0.clone(), sources[0].0.clone()]);
+    assert_eq!(jobs.len(), 2);
+    assert_eq!(ready.app.jobs.opens.iter().map(|open| open.name.as_str()).collect::<Vec<_>>(), ["image2.png", "image10.png"]);
+    // Reverse actual Smart Object completion to prove tab order comes from the
+    // picker's captured OpenOrder rather than worker completion order.
+    for job in jobs.iter().rev() {
+        ready.app.session.wait_job(*job).unwrap();
+    }
+    ready.events.extend(ready.app.session.poll_jobs());
+    assert_eq!(ready.events.len(), 3);
+    if open_first {
+        ready.events.rotate_left(1);
+    }
+}
+
+#[test]
+fn native_smart_picker_completions_wait_for_place_and_keep_source_order_in_either_event_order() {
+    let (_directory, sources) = smart_picker_sources();
+    for open_first in [false, true] {
+        for commit in [false, true] {
+            let (mut ready, files) = ready_smart_picker(false);
+            complete_smart_picker_before_shell(&mut ready, &files, &sources, open_first);
+            present_place_and_open(&mut ready);
+            let ctx = ready.app.ctx().clone();
+            super::tick(&mut ready.app, &ctx);
+            assert!(ready.app.jobs.focus.is_none(), "ended Smart Open cards release focus");
+            assert_eq!(ready.app.session.active().unwrap().doc.id, ready.target.id);
+            assert_eq!(ready.app.held_opens.len(), 2);
+            assert!(ready.app.ui.transform.as_ref().is_some_and(|transform| transform.made == Some(crate::state::MadeLayer::Place)));
+            if commit {
+                crate::transform_tool::commit(&mut ready.app);
+            } else {
+                crate::transform_tool::cancel(&mut ready.app);
+            }
+            let started = Instant::now();
+            while ready.app.session.has_jobs() {
+                assert!(started.elapsed() < Duration::from_secs(30), "Place transform timed out");
+                let ctx = ready.app.ctx().clone();
+                super::tick(&mut ready.app, &ctx);
+                std::thread::yield_now();
+            }
+            let ctx = ready.app.ctx().clone();
+            crate::open_prompt::take(&mut ready.app, &ctx);
+            assert_picked_smart_sources(&ready.app, &sources);
+            assert!(ready.app.held_opens.is_empty());
+            assert!(ready.app.ui.recent_files.is_empty(), "Open as Smart Object does not bind the source as an opened file");
+            let target = ready.app.session.documents().iter().find(|state| state.doc.id == ready.target.id).unwrap();
+            assert_eq!(target.doc.layers.len(), ready.target.layers.len() + usize::from(commit));
+            let unrelated = ready.app.session.documents().iter().find(|state| state.doc.id == ready.unrelated.id).unwrap();
+            assert!(Arc::ptr_eq(&unrelated.doc, &ready.unrelated));
+        }
+    }
+}
+
+#[test]
+fn cancelling_a_native_picked_smart_open_preserves_place_focus_and_never_publishes_it() {
+    let (_directory, sources) = smart_picker_sources();
+    let (mut ready, files) = ready_smart_picker(false);
+    let jobs = pick_smart_opens(&mut ready.app, &files, vec![sources[0].0.clone()]);
+    assert_eq!(jobs.len(), 1);
+    assert!(super::cancel(&mut ready.app, jobs[0]));
+    ready.app.session.join_cancelled_jobs();
+    assert!(matches!(ready.app.session.wait_job(jobs[0]), Err(photocraft_engine::EngineError::Cancelled)));
+    ready.events.extend(ready.app.session.poll_jobs());
+    present_place_and_open(&mut ready);
+    let ctx = ready.app.ctx().clone();
+    super::tick(&mut ready.app, &ctx);
+    assert!(ready.app.jobs.focus.is_none());
+    assert_eq!(ready.app.session.documents().len(), 2);
+    assert_eq!(ready.app.session.active().unwrap().doc.id, ready.target.id);
+    assert!(ready.app.jobs.opens.is_empty() && ready.app.held_opens.is_empty());
+    assert!(ready.app.ui.transform.as_ref().is_some_and(|transform| transform.made == Some(crate::state::MadeLayer::Place)));
+    crate::transform_tool::cancel(&mut ready.app);
+    assert_eq!(ready.app.session.active().unwrap().doc.layers.len(), ready.target.layers.len());
+    assert_eq!(std::fs::read(&sources[0].0).unwrap(), sources[0].1);
+}
+
+#[test]
+fn native_smart_picker_completions_do_not_start_place_transform_over_an_unrelated_tab() {
+    let (_directory, sources) = smart_picker_sources();
+    for open_first in [false, true] {
+        let (mut ready, files) = ready_smart_picker(true);
+        complete_smart_picker_before_shell(&mut ready, &files, &sources, open_first);
+        present_place_and_open(&mut ready);
+        let ctx = ready.app.ctx().clone();
+        super::tick(&mut ready.app, &ctx);
+        assert!(ready.app.jobs.focus.is_none());
+        assert!(ready.app.ui.transform.is_none());
+        assert_picked_smart_sources(&ready.app, &sources);
+        let unrelated = ready.app.session.documents().iter().find(|state| state.doc.id == ready.unrelated.id).unwrap();
+        assert!(Arc::ptr_eq(&unrelated.doc, &ready.unrelated));
+        let target = ready.app.session.documents().iter().find(|state| state.doc.id == ready.target.id).unwrap();
+        assert_eq!(target.doc.layers.len(), ready.target.layers.len() + 1);
+    }
 }

@@ -13,10 +13,20 @@ use serde_json::{Value, json};
 use crate::workspace::{ExportSequence, authorize_engine_command, authorize_engine_step};
 use crate::{AuthorizedWorkspace, AutomationError, files};
 
+mod historical;
+
 fn untrusted(filesystem: Filesystem) -> Headless {
     let mut session = Session::new();
     session.authorize = Some(authorize_engine_step);
-    Headless { session, writers: HashMap::new(), filesystem, renderer: None, pending_diagnostics: Vec::new(), waited: HashMap::new() }
+    Headless {
+        session,
+        writers: HashMap::new(),
+        filesystem,
+        renderer: None,
+        pending_diagnostics: Vec::new(),
+        waited: HashMap::new(),
+        historical_opens: HashMap::new(),
+    }
 }
 
 enum Filesystem {
@@ -42,6 +52,8 @@ pub struct Headless {
     /// Incremental `.pcraft` writers per document id.
     writers: HashMap<u64, PcraftWriter>,
     filesystem: Filesystem,
+    /// Ownership/provenance only; encoded sources live in the engine's bounded holds.
+    historical_opens: HashMap<u64, historical::Owned>,
     /// Jobs a caller waits on ([`Headless::command_begin`]), with their outcome once they end.
     /// Kept here because `jobs.list` holds only the last few jobs that ended.
     waited: HashMap<JobId, Option<JobEvent>>,
@@ -87,6 +99,7 @@ impl Headless {
             session: Session::new(),
             writers: HashMap::new(),
             filesystem: Filesystem::TrustedLocal,
+            historical_opens: HashMap::new(),
             renderer: None,
             pending_diagnostics: Vec::new(),
             waited: HashMap::new(),
@@ -201,15 +214,23 @@ impl Headless {
     /// Open a file with custom import options and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
-        let (mut o, save_path) = match &self.filesystem {
+        let (o, save_path) = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
             Filesystem::TrustedLocal => (files::open_with_options(path, opts)?, Some(requested.to_string())),
             Filesystem::Workspace(workspace) => {
                 let (bytes, save_path) = workspace.read_with_save_path(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                (files::open_bytes_with_options(name, &bytes, opts)?, save_path)
+                // Rooted acquisition precedes authority. Native XCF stages use
+                // the same session gate as commands, while admission below keeps
+                // this host's existing profile, path and typed-error policies.
+                let opened = self.session.with_native_xcf_import_authority(|| files::open_bytes_with_options(name, &bytes, opts))?;
+                (opened, save_path)
             }
         };
+        self.admit_opened(requested, o, save_path)
+    }
+
+    fn admit_opened(&mut self, requested: &str, mut o: files::Opened, save_path: Option<String>) -> Result<Value, AutomationError> {
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
         file_cmds::raw_defaults(&self.session, &o.warnings, &mut o.document);
         let path = match file_cmds::template_name(&self.session, requested) {

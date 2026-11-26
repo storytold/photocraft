@@ -180,6 +180,7 @@ fn write_browser_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
 fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     match app.session.poll_link_scan() {
         Some(Ok(r)) => {
+            show_link_warnings(app, &r);
             if let Some(n) = r["updated"].as_array().map(Vec::len).filter(|n| *n > 0) {
                 app.ui.status = crate::i18n::trn(
                     crate::i18n::current(),
@@ -214,6 +215,11 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// timer (`app.autosave`) decides which documents are due and which recovery copies to discard;
 /// the write goes through `Services::autosave`.
 ///
+fn show_link_warnings(app: &mut PhotocraftApp, result: &serde_json::Value) {
+    let warnings: Vec<String> = result["warnings"].as_array().into_iter().flatten().filter_map(|warning| warning.as_str().map(str::to_owned)).collect();
+    crate::notices::io_warnings(app, tl!("Linked Smart Objects"), &warnings);
+}
+
 /// A saved or closed document needs no `Autosave::forget` here: the timer's next `due` finds it
 /// clean or gone and lists it in `discard` (craft-platform autosave/timer.rs:124-132).
 fn autosave(app: &mut PhotocraftApp, now: Instant) {
@@ -305,5 +311,20 @@ fn history_log(app: &mut PhotocraftApp) {
     }
     if !text.is_empty() {
         let _ = append(&hl.file_path, &text);
+    }
+}
+
+#[cfg(test)]
+mod link_warning_tests {
+    #[test]
+    fn a_link_scan_warning_is_visible_without_becoming_a_failed_open() {
+        let mut app = super::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let warning = "source.png: the linked source changed since its saved pixels were rendered";
+        super::show_link_warnings(&mut app, &serde_json::json!({"updated":[],"warnings":[warning]}));
+        assert!(app.ui.status.contains(warning));
+        assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+        let count = app.ui.notices.len();
+        super::show_link_warnings(&mut app, &serde_json::json!({"updated":[]}));
+        assert_eq!(app.ui.notices.len(), count);
     }
 }

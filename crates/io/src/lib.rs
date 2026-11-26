@@ -52,6 +52,7 @@ pub mod exr_parts;
 mod flat;
 pub mod gradient_bake;
 pub mod guides_map;
+pub mod initial_view;
 mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient, bake_smooth_opacity as bake_gradient_smooth_opacity};
 mod duotone_map;
@@ -59,6 +60,7 @@ mod kra;
 pub mod linked;
 pub mod memory;
 mod multichannel_map;
+pub mod native_xcf_tones;
 mod ora;
 mod palette_map;
 pub use ora::losses as ora_losses;
@@ -71,6 +73,7 @@ mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
+mod psd_appearance;
 pub mod psd_budget;
 mod psd_export;
 mod psd_gate;
@@ -82,6 +85,7 @@ pub mod renderer;
 pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
 pub mod slices_map;
 pub mod smart_map;
+mod smart_xcf_order;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;
@@ -102,6 +106,7 @@ pub use flat::{
     export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
     import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
 };
+pub use initial_view::{NativeImportTarget, NativeInitialView};
 pub use png_steps::PngImport;
 // Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
 #[doc(hidden)]
@@ -112,6 +117,9 @@ pub use psd_import::{psd_to_document, psd_to_document_with};
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// The caller requested an explicit choice for ambiguous historical XCF samples.
+    #[error("{0}")]
+    HistoricalXcfSampleOrderRequired(HistoricalXcfSampleOrderRequest),
     /// Paint.NET document decode failure.
     #[error("PDN: {0}")]
     Pdn(String),
@@ -124,6 +132,9 @@ pub enum IoError {
     /// A GIMP XCF file that could not be read.
     #[error("XCF: {0}")]
     Xcf(String),
+    /// A valid source tone stage needs permission the importing request denied.
+    #[error("the imported XCF tone command `{command}` is not authorized")]
+    NativeXcfToneDenied { command: String },
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -192,6 +203,8 @@ impl From<RenderError> for IoError {
 pub struct ImportResult {
     /// The imported document.
     pub document: Document,
+    /// Optional view hints for the first admission of the decoded document.
+    pub initial_view: Option<NativeInitialView>,
     /// Human-readable notes about anything approximated or dropped.
     pub warnings: Vec<String>,
     /// Save must not write back to an import-only source, such as Affinity or Paint.NET.
@@ -199,6 +212,9 @@ pub struct ImportResult {
     /// Only a stand-in picture of the file (an Affinity document whose native data couldn't be
     /// read): Open shows it with its warning; Place and other auxiliary imports refuse it.
     pub preview_only: bool,
+    /// Explicit order actually applied to ambiguous high-depth XCF samples. Other formats,
+    /// modern/byte-wide XCF and the compatible default leave this unset.
+    pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
 }
 
 /// Identity of the file behind an opened handle, read from that handle.
@@ -567,7 +583,10 @@ pub enum ImportPreflight {
 ///
 /// The order matches [`import_stages`]; keep the two in step.
 pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
-    match photocraft_formats::detect(name, bytes) {
+    if import_compression(bytes).is_some() {
+        return ImportPreflight::Unbounded;
+    }
+    match central_format(name, bytes) {
         Some(photocraft_formats::Format::Psd) => ImportPreflight::Psd,
         Some(photocraft_formats::Format::Tiff) => ImportPreflight::Tiff,
         Some(
@@ -614,6 +633,51 @@ pub fn import_with_svg_group_depth_and_interrupt(
     import_with_options_and_interrupt(name, bytes, &ImportOptions { max_group_depth, ..Default::default() }, ctl)
 }
 
+/// Source sample interpretation only; modern XCF and byte-wide samples ignore
+/// historical overrides. The default retains existing big-endian import behavior.
+pub use craft_xcf::samples::{HistoricalOrder as HistoricalXcfOrder, SampleOrder as HistoricalXcfSampleOrder};
+
+/// A retained-choice signal, emitted before drawable samples are decoded.
+/// The host owns holding/retrying the original source; this contains no path or capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoricalXcfSampleOrderRequest {
+    pub version: u32,
+    pub bits_per_sample: u32,
+}
+
+/// One opt-in verified path-read handoff, not a queue or filesystem capability.
+/// Hosts supply their remaining aggregate allowance and must reserve/count it
+/// across concurrent jobs before publishing a pending request. Capacity is
+/// charged, because truncating an encoded Vec does not release its allocation.
+#[cfg(any(unix, windows))]
+#[derive(Debug)]
+pub struct HistoricalXcfSourceCapture {
+    byte_limit: u64,
+    bytes: Option<std::sync::Arc<Vec<u8>>>,
+}
+
+#[cfg(any(unix, windows))]
+impl HistoricalXcfSourceCapture {
+    pub fn new(byte_limit: u64) -> Self {
+        Self { byte_limit, bytes: None }
+    }
+
+    /// Consume this handoff once; subsequent calls return None.
+    pub fn take(&mut self) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.bytes.take()
+    }
+}
+
+impl std::fmt::Display for HistoricalXcfSampleOrderRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Historical XCF version {} with {}-bit samples does not record sample byte order; choose little-endian or big-endian before importing",
+            self.version, self.bits_per_sample
+        )
+    }
+}
+
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {
@@ -621,6 +685,9 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// Preserve the compatible default, supply a source-specific explicit order,
+    /// or request a typed choice signal for ambiguous high-depth XCF4-11 samples.
+    pub historical_xcf_order: HistoricalXcfOrder,
     /// Keep a developed raw's sensor data for its open-time Camera Raw dialog
     /// ([`raw::take_kept_decode`]) instead of decoding the file again there.
     pub keep_raw: bool,
@@ -656,6 +723,7 @@ impl Default for ImportOptions {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
+            historical_xcf_order: HistoricalXcfOrder::Default,
             keep_raw: false,
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
@@ -700,7 +768,9 @@ pub fn import_for_open_with(name: &str, bytes: &[u8], opts: &ImportOptions, ctl:
     import_for_open_with_as(name, bytes, None, opts, ctl)
 }
 
-fn import_for_open_with_as(
+/// Cancellable Open with an explicit decoder; native hosts retain the damaged
+/// document signal as well as the caller's exact import options.
+pub fn import_for_open_with_as(
     name: &str,
     bytes: &[u8],
     as_ext: Option<&str>,
@@ -821,7 +891,7 @@ fn import_psd(
     *damaged = psd_damaged;
     document.name = name.to_string();
     text_import::prepare(&mut document, txt2.as_ref());
-    Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings, source_read_only: false, preview_only: false, historical_xcf_sample_order: None })
 }
 
 /// [`import_for_open_with`] for the file at `path`. A PSD/PSB is parsed from the open file
@@ -863,6 +933,59 @@ pub fn import_file_for_open_verified(
     ctl: &photocraft_raster::Interrupt,
     identity_out: &mut Option<FileIdentity>,
 ) -> Result<(ImportResult, bool), IoError> {
+    import_file_for_open_verified_inner(name, path, None, expected, opts, ctl, identity_out, None)
+}
+
+/// Opt-in continuation support for a historical XCF choice. On that typed refusal,
+/// retain the exact encoded allocation read from the identified handle, within
+/// the caller's remaining pending-source allowance. No path is reopened and no
+/// source is published on cancellation, identity change or another import error.
+/// Normal imports and the compatible direct-IO sample-order default are unchanged.
+#[cfg(any(unix, windows))]
+pub fn import_file_for_open_verified_with_historical_source(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    capture: &mut HistoricalXcfSourceCapture,
+) -> Result<(ImportResult, bool), IoError> {
+    capture.bytes = None;
+    import_file_for_open_verified_inner(name, path, None, expected, opts, ctl, identity_out, Some(capture))
+}
+
+/// Forced-decoder counterpart of [`import_file_for_open_verified_with_historical_source`].
+/// The same identified handle supplies the retained source; forced decoding never
+/// takes the unrelated streaming PSD/EXR fast paths.
+#[cfg(any(unix, windows))]
+#[allow(clippy::too_many_arguments)]
+pub fn import_file_for_open_verified_as_with_historical_source(
+    name: &str,
+    path: &std::path::Path,
+    as_ext: &str,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    capture: &mut HistoricalXcfSourceCapture,
+) -> Result<(ImportResult, bool), IoError> {
+    capture.bytes = None;
+    import_file_for_open_verified_inner(name, path, Some(as_ext), expected, opts, ctl, identity_out, Some(capture))
+}
+
+#[cfg(any(unix, windows))]
+#[allow(clippy::too_many_arguments)]
+fn import_file_for_open_verified_inner(
+    name: &str,
+    path: &std::path::Path,
+    as_ext: Option<&str>,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    capture: Option<&mut HistoricalXcfSourceCapture>,
+) -> Result<(ImportResult, bool), IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
@@ -879,7 +1002,9 @@ pub fn import_file_for_open_verified(
     // the identity from it after parsing, and never from a path that may point elsewhere now.
     let watch = source.file().try_clone().map_err(read_failed)?;
     let mut magic = [0u8; 4];
-    let psd = !has_extension(name, photocraft_format::EXTENSION) && craft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
+    let psd =
+        as_ext.is_none() && !has_extension(name, photocraft_format::EXTENSION) && craft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
+    let mut historical_source = None;
     let result = if psd {
         import_source_with_options(name, craft_psd::Source::new(source), ctl, opts)
     } else {
@@ -892,7 +1017,7 @@ pub fn import_file_for_open_verified(
         // layouts, and EXR headers the band decoder refuses, are read whole below.
         let mut streamed = None;
         let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
-        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
+        if as_ext.is_none() && photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
             let before = photocraft_raster::spill::read_error_generation();
             if let Some(mut result) = exr_native::import(&mut file, ctl)? {
                 // A rewrite in place while the blocks were read must not become the document.
@@ -911,18 +1036,37 @@ pub fn import_file_for_open_verified(
             Some(result) => Ok((result, false)),
             None => {
                 let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
-                import_for_open_with(name, &bytes, opts, ctl)
+                let result = import_for_open_with_as(name, &bytes, as_ext, opts, ctl);
+                if matches!(&result, Err(IoError::HistoricalXcfSampleOrderRequired(_)))
+                    && let Some(capture) = &capture
+                {
+                    let capacity = u64::try_from(bytes.capacity()).unwrap_or(u64::MAX);
+                    if capacity > capture.byte_limit {
+                        return Err(IoError::OutOfMemory(format!(
+                            "the retained historical XCF source needs {capacity} bytes, exceeding the remaining {}-byte source allowance",
+                            capture.byte_limit
+                        )));
+                    }
+                    historical_source = Some(std::sync::Arc::new(bytes));
+                }
+                result
             }
         }
     };
     // An approval pause must describe a file that still has the identity it was estimated with;
     // an approved resume must have decoded that file, not a rewrite that raced the decode.
-    if expected.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. })) {
+    if expected.is_some() || historical_source.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. })) {
         let after = FileIdentity::of_handle(&watch).map_err(read_failed)?;
         if after != identity {
             return Err(IoError::SourceChanged);
         }
+        if historical_source.is_some() {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+        }
         *identity_out = Some(after);
+    }
+    if let Some(capture) = capture {
+        capture.bytes = historical_source;
     }
     result
 }
@@ -975,7 +1119,7 @@ pub(crate) enum Route {
     Ora,
     Kra,
     Xcf,
-    GzippedXcf,
+    Compressed,
     Pdn,
     Raw,
     Svg,
@@ -985,16 +1129,72 @@ pub(crate) enum Route {
     Flat,
 }
 
+/// Supported compressed input envelopes; their signatures do not claim the inner format.
+pub use craft_xcf::transport::Wrapper as ImportCompression;
+
+/// Fixed-signature recognition without decompression, shared with the XCF reader.
+pub fn import_compression(bytes: &[u8]) -> Option<ImportCompression> {
+    ImportCompression::sniff(bytes)
+}
+
+/// A compressed stream gets a bounded format-specific probe, never the generic
+/// detector's full SVGZ inflate. Fallback uses only its filename hint.
+fn central_format(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
+    if import_compression(bytes).is_some() {
+        if is_xcf_input_name(name) {
+            return Some(photocraft_formats::Format::Xcf);
+        }
+        let (_, extension) = name.rsplit(['/', '\\']).next()?.rsplit_once('.')?;
+        return photocraft_formats::from_extension(extension);
+    }
+    photocraft_formats::detect(name, bytes)
+}
+
+/// The explicit short Affinity alias keeps precedence over unrelated SVG bytes.
+fn allow_compressed_svg(name: &str) -> bool {
+    !name.rsplit(['/', '\\']).next().and_then(|name| name.rsplit_once('.')).is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("af"))
+}
+
+/// XCF aliases include compound and compact compression suffixes.
+pub fn is_xcf_input_name(name: &str) -> bool {
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    const SUFFIXES: &[&str] = &[".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"];
+    SUFFIXES.iter().any(|suffix| name.get(name.len().saturating_sub(suffix.len())..).is_some_and(|tail| tail.eq_ignore_ascii_case(suffix)))
+}
+
+/// Recognize XCF for hosts that must preserve its complete import result while retaining
+/// their configured importer for other formats. Wrapped recognition reads only the shared
+/// fixed-default prefix; the subsequent import still checks the full source and trailer.
+/// Intentional XCF filenames keep malformed-input errors on the XCF admission path.
+pub fn is_xcf_input(name: &str, bytes: &[u8]) -> bool {
+    if is_xcf_input_name(name) || craft_xcf::is_xcf(bytes) {
+        return true;
+    }
+    matches!(
+        craft_xcf::transport::probe_prefix(bytes, ImportCompression::from_name(name), craft_xcf::transport::Limits::default(), &|| true,),
+        Ok(craft_xcf::transport::PrefixProbe::Xcf(_))
+    )
+}
+
 /// Which importer takes the file `name` holding `bytes`. The checks run in this order.
 pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
-    match photocraft_formats::detect(name, bytes) {
+    if craft_xcf::is_xcf(bytes) {
+        return Route::Xcf;
+    }
+    if import_compression(bytes).is_some() {
+        return Route::Compressed;
+    }
+    detected_route(name, bytes)
+}
+
+fn detected_route(name: &str, bytes: &[u8]) -> Route {
+    match central_format(name, bytes) {
         Some(photocraft_formats::Format::Pcraft) => Route::Pcraft,
         Some(photocraft_formats::Format::Psd) if is_psd(bytes) => Route::Psd,
         Some(photocraft_formats::Format::Psd) => Route::NamedPsd,
         Some(photocraft_formats::Format::Affinity) => Route::Affinity,
         Some(photocraft_formats::Format::Ora) => Route::Ora,
         Some(photocraft_formats::Format::Kra) => Route::Kra,
-        Some(photocraft_formats::Format::Xcf) if xcf::is_gzipped_xcf(name, bytes) => Route::GzippedXcf,
         Some(photocraft_formats::Format::Xcf) => Route::Xcf,
         Some(photocraft_formats::Format::Pdn) => Route::Pdn,
         Some(photocraft_formats::Format::Raw) => Route::Raw,
@@ -1015,10 +1215,8 @@ fn route_forced(ext: &str) -> Route {
         Route::Ora
     } else if kra::EXTENSIONS.contains(&ext.as_str()) {
         Route::Kra
-    } else if ext == "xcf" {
+    } else if matches!(ext.as_str(), "xcf" | "xcf.gz" | "xcfgz" | "xcf.bz2" | "xcfbz2" | "xcf.xz" | "xcfxz") {
         Route::Xcf
-    } else if matches!(ext.as_str(), "xcf.gz" | "xcfgz") {
-        Route::GzippedXcf
     } else if ext == "pdn" {
         Route::Pdn
     } else if ext == "raw" || raw::EXTENSIONS.contains(&ext.as_str()) {
@@ -1040,36 +1238,65 @@ fn import_stages(
     opts: &ImportOptions,
     damaged: &mut bool,
 ) -> Result<ImportResult, IoError> {
-    let selected = if let Some(ext) = as_ext {
+    let mut selected = if let Some(ext) = as_ext {
         let ext = ext.trim_start_matches('.').to_ascii_lowercase();
         if matches!(ext.as_str(), "pdf" | "ai") {
             return pdf_import::import(name, bytes, opts, ctl);
         }
         route_forced(&ext)
     } else {
-        // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
-        // before PDF).
-        if is_svg_input(name, bytes) {
-            return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
-        }
-        // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
-        // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
-        if photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Pdf) {
-            return pdf_import::import(name, bytes, opts, ctl);
-        }
         route(name, bytes)
     };
+    // Forced Open As never changes decoders after probing; explicitly selected
+    // XCF accepts every supported wrapper. Automatic XCF uses the same decoder
+    // from bounded recognition through full trailer validation.
+    let decoded = if selected == Route::Compressed || selected == Route::Xcf {
+        let allow_svg = as_ext.is_none() && allow_compressed_svg(name);
+        match xcf::transport::decode(name, bytes, ctl, as_ext.is_some(), allow_svg)? {
+            xcf::transport::Decoded::Xcf(bytes) => {
+                selected = Route::Xcf;
+                Some(bytes)
+            }
+            xcf::transport::Decoded::Svg => {
+                selected = Route::Svg;
+                None
+            }
+            xcf::transport::Decoded::Unrelated => {
+                selected = detected_route(name, bytes);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let bytes = decoded.as_deref().unwrap_or(bytes);
+    // Preserve SVG-over-misnamed-PDF precedence without a full generic detector
+    // inflate: compressed SVG has already been selected from bounded evidence.
+    if selected == Route::Svg {
+        return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+    }
+    if as_ext.is_none() && central_format(name, bytes) == Some(photocraft_formats::Format::Pdf) {
+        return pdf_import::import(name, bytes, opts, ctl);
+    }
+
     match selected {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
-            Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
+            Ok(ImportResult {
+                initial_view: None,
+                warnings: open_warnings(&document),
+                document,
+                source_read_only: false,
+                preview_only: false,
+                historical_xcf_sample_order: None,
+            })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
         Route::Affinity => affinity::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
-        Route::Xcf => xcf::import(name, bytes, ctl),
-        Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
+        Route::Xcf => xcf::import_with_samples(name, bytes, ctl, craft_xcf::samples::SampleOptions { historical_order: opts.historical_xcf_order }),
+        Route::Compressed => Err(IoError::Unsupported("unrecognized compressed image".into())),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => {
             if opts.keep_raw {
@@ -1080,6 +1307,53 @@ fn import_stages(
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
+    }
+}
+
+/// Decode Smart Object contents without silently accepting omitted SVG images.
+/// Unlike ordinary Open, these callers cannot present partial SVG contents as a warning.
+pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
+    match try_import_smart_object_svg(name, bytes, max_decoded_pixels)? {
+        Some(imported) => Ok(imported),
+        None => import(name, bytes),
+    }
+}
+
+/// Strictly decode recognized SVG/SVGZ contents, or return `None` without
+/// importing another format. Hosts with stronger generic-source admission can
+/// retain their existing fallback (preview-only rejection, typed budgets, etc.).
+pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
+    let named_svg = matches!(
+        name.rsplit(['/', '\\']).next().and_then(|base| base.rsplit_once('.')).and_then(|(_, ext)| photocraft_formats::from_extension(ext)),
+        Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz)
+    );
+    if craft_svg::sniff::is_svgz(bytes) {
+        use craft_xcf::transport::{Limits, PrefixProbe, Wrapper, probe_prefix};
+        // Only the explicit .af alias precedes SVGZ sniffing in the shared registry.
+        // Gzip-XCF has its own decode limit, including when the source was renamed.
+        if !allow_compressed_svg(name)
+            || Wrapper::from_name(name) == Some(Wrapper::Gzip)
+            || matches!(probe_prefix(bytes, None, Limits::default(), &|| true), Ok(PrefixProbe::Xcf(_)))
+        {
+            return Ok(None);
+        }
+        let decoded = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).and_then(|plain| {
+            let text = craft_svg::svgz::decode(&plain)?;
+            Ok(is_svg_input(name, text.as_bytes()).then_some(plain))
+        });
+        return match decoded {
+            // Preserve the encoding bytes for strict validation after bounded inflation.
+            Ok(Some(plain)) => svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some),
+            Err(error) if named_svg => Err(IoError::Svg(error.to_string())),
+            Ok(None) | Err(_) => Ok(None),
+        };
+    }
+    // A bzip2 or XZ signature gets the shared XCF probe before any SVG
+    // extension fallback. The generic registry does not recognize these wrappers.
+    if svg::is_svg(bytes) || (named_svg && import_compression(bytes).is_none() && is_svg_input(name, bytes)) {
+        svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some)
+    } else {
+        Ok(None)
     }
 }
 
@@ -1094,6 +1368,7 @@ fn extension(name_or_ext: &str) -> String {
     name_or_ext.rsplit(['.', '/', '\\']).next().unwrap_or(name_or_ext).to_ascii_lowercase()
 }
 
+#[cfg(any(unix, windows))]
 fn has_extension(name: &str, expected: &str) -> bool {
     name.rsplit(['/', '\\']).next().and_then(|name| name.rsplit_once('.')).is_some_and(|(base, ext)| !base.is_empty() && ext.eq_ignore_ascii_case(expected))
 }

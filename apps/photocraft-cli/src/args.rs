@@ -119,6 +119,9 @@ pub(crate) struct ConvertArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for unmarked high-depth XCF 4–11; never inferred
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     /// PDF import resolution in DPI (default 300)
     #[arg(long, value_name = "DPI", value_parser = pdf_dpi)]
     pub(crate) pdf_dpi: Option<f32>,
@@ -135,6 +138,15 @@ pub(crate) struct ConvertArgs {
     pub(crate) export: ExportArgs,
 }
 
+/// Accept only the historical flag's explicit spellings, never platform or sample guesses.
+fn historical_xcf_sample_order(value: &str) -> Result<photocraft_io::HistoricalXcfSampleOrder, ValueError> {
+    match value {
+        "little-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::LittleEndian),
+        "big-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::BigEndian),
+        _ => Err(ValueError::HistoricalXcfSampleOrder),
+    }
+}
+
 /// Print the document as JSON (size, mode, depth, layer tree)
 #[derive(Args)]
 pub(crate) struct InfoArgs {
@@ -145,6 +157,9 @@ pub(crate) struct InfoArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for unmarked high-depth XCF 4–11; never inferred
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
     #[arg(long)]
     pub(crate) detail: bool,
@@ -179,6 +194,9 @@ pub(crate) struct RunArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for unmarked high-depth XCF 4–11; requires FILE
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order, conflicts_with = "new")]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
@@ -239,6 +257,9 @@ pub(crate) struct BatchArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Sample byte order for historical XCF inputs and same-source Open As steps in this Batch
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
@@ -330,6 +351,8 @@ pub(crate) struct ServeArgs {
 /// Why a value was refused: clap prints it after the flag and its value (exit 2).
 #[derive(Debug, thiserror::Error)]
 enum ValueError {
+    #[error("expected little-endian or big-endian")]
+    HistoricalXcfSampleOrder,
     #[error("expected 24 or 32")]
     TgaBits,
     #[error("expected 8, 10, 12 or 16")]
@@ -617,6 +640,18 @@ fn check_server(sub: &mut clap::Command, m: &ArgMatches, has_transport: bool, tr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_xcf_order_accepts_only_explicit_spellings() {
+        use photocraft_io::HistoricalXcfSampleOrder::{BigEndian, LittleEndian};
+        assert_eq!(historical_xcf_sample_order("little-endian").unwrap(), LittleEndian);
+        assert_eq!(historical_xcf_sample_order("big-endian").unwrap(), BigEndian);
+        for value in ["native", "LE", "BE", "", " little-endian", "big-endian "] {
+            let error = historical_xcf_sample_order(value).unwrap_err();
+            assert!(matches!(error, ValueError::HistoricalXcfSampleOrder));
+            assert_eq!(error.to_string(), "expected little-endian or big-endian");
+        }
+    }
 
     /// `--pdf-dpi` only takes a positive finite number: a mistyped value is refused at parse time
     /// instead of silently becoming the importer's 300 DPI fallback.

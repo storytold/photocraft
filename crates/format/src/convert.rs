@@ -141,6 +141,8 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             color: t.color,
             transform: t.transform,
             cache: t.cache.as_ref().map(|s| surface_m(s, sink)),
+            cache_uses_raster_blending: t.cache_uses_raster_blending,
+            keep_layer_name: t.keep_layer_name,
             psd_raw: opt_blob(&t.psd_raw, sink),
             runs: t.runs.clone(),
             paragraphs: t.paragraphs.clone(),
@@ -152,6 +154,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         LayerContent::Shape(s) => ContentM::Shape {
             fill: s.fill.clone(),
             cache: s.cache.as_ref().map(|c| surface_m(c, sink)),
+            cache_preserves_appearance: s.cache_preserves_appearance,
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
@@ -180,6 +183,9 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
             },
+            historical_xcf_sample_order: s.historical_xcf_sample_order,
+            historical_xcf_link_digest: s.historical_xcf_link_digest,
+            linked_source_baseline: s.linked_source_baseline.clone(),
             vector_preview: s.vector_preview.as_ref().map(|preview| VectorPreviewM { source_hash: preview.source_hash, svg: sink.blob(&preview.svg) }),
             transform: s.transform,
             smart_filters: s.smart_filters.clone(),
@@ -496,44 +502,75 @@ impl Loader<'_> {
             }
             ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.clone()),
             ContentM::Fill { fill } => LayerContent::Fill(fill.clone()),
-            ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp } => {
-                LayerContent::Text(TextLayer {
-                    text: text.clone(),
-                    font_family: font_family.clone(),
-                    size_pt: *size_pt,
-                    color: *color,
-                    transform: *transform,
-                    cache: self.opt_surface(cache)?,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    runs: runs.clone(),
-                    paragraphs: paragraphs.clone(),
-                    shape: shape.clone(),
-                    orientation: *orientation,
-                    antialias: *antialias,
-                    warp: warp.clone(),
-                })
-            }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, live, arrow_live, triangle_live, density, feather } => {
-                LayerContent::Shape(ShapeLayer {
-                    path: path.clone(),
-                    fill: fill.clone(),
-                    stroke: stroke.clone(),
-                    use_aligned_rendering: *use_aligned_rendering,
-                    live: arrow_live
-                        .as_ref()
-                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
-                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
-                        .cloned()
-                        .or_else(|| live.clone()),
-                    cache: self.opt_surface(cache)?,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    density: *density,
-                    feather: *feather,
-                })
-            }
+            ContentM::Text {
+                text,
+                font_family,
+                size_pt,
+                color,
+                transform,
+                cache,
+                cache_uses_raster_blending,
+                keep_layer_name,
+                psd_raw,
+                runs,
+                paragraphs,
+                shape,
+                orientation,
+                antialias,
+                warp,
+            } => LayerContent::Text(TextLayer {
+                text: text.clone(),
+                font_family: font_family.clone(),
+                size_pt: *size_pt,
+                color: *color,
+                transform: *transform,
+                cache: self.opt_surface(cache)?,
+                cache_uses_raster_blending: *cache_uses_raster_blending,
+                keep_layer_name: *keep_layer_name,
+                psd_raw: self.opt_blob(psd_raw)?,
+                runs: runs.clone(),
+                paragraphs: paragraphs.clone(),
+                shape: shape.clone(),
+                orientation: *orientation,
+                antialias: *antialias,
+                warp: warp.clone(),
+            }),
+            ContentM::Shape {
+                fill,
+                cache,
+                cache_preserves_appearance,
+                psd_raw,
+                path,
+                stroke,
+                use_aligned_rendering,
+                live,
+                arrow_live,
+                triangle_live,
+                density,
+                feather,
+            } => LayerContent::Shape(ShapeLayer {
+                path: path.clone(),
+                fill: fill.clone(),
+                stroke: stroke.clone(),
+                use_aligned_rendering: *use_aligned_rendering,
+                live: arrow_live
+                    .as_ref()
+                    .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                    .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                    .cloned()
+                    .or_else(|| live.clone()),
+                cache: self.opt_surface(cache)?,
+                cache_preserves_appearance: *cache_preserves_appearance,
+                psd_raw: self.opt_blob(psd_raw)?,
+                density: *density,
+                feather: *feather,
+            }),
             ContentM::Smart {
                 contents_id,
                 source,
+                historical_xcf_sample_order,
+                historical_xcf_link_digest,
+                linked_source_baseline,
                 vector_preview,
                 transform,
                 smart_filters,
@@ -550,6 +587,14 @@ impl Loader<'_> {
                     SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
                     SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
                 },
+                // A legacy linked choice without an authenticated snapshot cannot be reused.
+                historical_xcf_sample_order: if matches!(source, SmartSourceM::Linked { .. }) && historical_xcf_link_digest.is_none() {
+                    None
+                } else {
+                    *historical_xcf_sample_order
+                },
+                historical_xcf_link_digest: *historical_xcf_link_digest,
+                linked_source_baseline: linked_source_baseline.clone(),
                 vector_preview: match vector_preview {
                     // A display-only preview must not prevent recovery of the native source
                     // and cached pixels if its optional blob is missing or damaged.

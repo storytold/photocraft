@@ -60,6 +60,27 @@ pub struct OpenParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// Explicit sample order for unmarked multibyte XCF 4-11: little-endian or big-endian.
+    /// Missing or null leaves the question unanswered; no host-native order is inferred.
+    #[serde(default)]
+    pub historical_xcf_sample_order: Option<String>,
+    /// Headless read-root workspaces only: retain the exact admitted bytes if a
+    /// historical order question is required. Default false keeps the typed error.
+    #[serde(default)]
+    pub hold_historical_xcf: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResolveHistoricalXcfOpenParams {
+    /// Request identity returned by this backend's opt-in doc_open.
+    pub id: u64,
+    /// Explicit interpretation, little-endian or big-endian, unless cancelling.
+    #[serde(default)]
+    pub historical_xcf_sample_order: Option<String>,
+    /// Release only this owned question without importing it.
+    #[serde(default)]
+    pub cancel: bool,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -373,7 +394,8 @@ pub struct MenuParams {
 #[serde(deny_unknown_fields)]
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, moveShowTransform (bool, the Move tool's
-    /// Show Transform Controls option), panels, dock, dockTabs, dockWidth, colorPanel
+    /// Show Transform Controls option), importReport (bool, open or close the read-only import conversion report),
+    /// panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
@@ -546,6 +568,7 @@ fn png_result(png: &[u8], note: String) -> CallToolResult {
 /// hard amounts, because no approval can raise that ceiling, and adds the free memory when
 /// measured memory set the limit.
 fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
+    crate::attach_historical_error_details(obj, err);
     let Some(obj) = obj.as_object_mut() else { return };
     match err {
         AutomationError::Import(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram })
@@ -811,18 +834,47 @@ impl PhotocraftMcp {
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        let mut params = json!({"path": p.path});
+        if p.approve_high_memory {
+            params["approveHighMemory"] = json!(true);
+        }
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        // Validate the same explicit controls before reading a scoped source or
+        // forwarding to a GUI host; the engine owns their interpretation.
+        let options = match files::import_options_from_params(&params) {
+            Ok(options) => options,
+            Err(error) => return to_result(Err(error)),
+        };
+        let hold = p.hold_historical_xcf;
+        if let Some(r) = self.headless_op(move |h| if hold { h.open_with_historical_hold(&path, &options) } else { h.open_with_options(&path, &options) }).await
+        {
             return to_result(r);
+        }
+        if hold {
+            return to_result(Err(AutomationError::BadRequest(
+                "historical source holds require a scoped headless backend; use the GUI's existing dialog controls in bridge mode".into(),
+            )));
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        let mut params = json!({"path": p.path});
-        if approve {
-            params["approveHighMemory"] = json!(true);
-        }
         to_result(b.call("app.open", params).await)
+    }
+
+    #[tool(
+        description = "Headless read-root workspaces: answer or cancel one historical XCF request returned by doc_open with hold_historical_xcf. Uses only the retained bytes and original import options; accepts no path or new approval. GUI bridge sessions use their existing dialog controls."
+    )]
+    async fn doc_resolve_historical_xcf_open(&self, Parameters(p): Parameters<ResolveHistoricalXcfOpenParams>) -> Result<CallToolResult, McpError> {
+        let mut params = json!({"id":p.id,"cancel":p.cancel});
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        match self.headless_op(move |headless| headless.resolve_historical_xcf_open(&params)).await {
+            Some(result) => to_result(result),
+            None => to_result(Err(AutomationError::BadRequest("historical source resolution requires its scoped headless backend".into()))),
+        }
     }
 
     #[tool(
@@ -1714,12 +1766,74 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(10), app).await.unwrap().unwrap();
     }
 
+    #[tokio::test]
+    async fn mcp_open_order_parameter_remains_explicit_and_strict() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let omitted: OpenParams = serde_json::from_value(json!({"path":"source.xcf"})).unwrap();
+        assert!(omitted.historical_xcf_sample_order.is_none());
+        assert!(serde_json::from_value::<OpenParams>(json!({"path":"source.xcf","historical_xcf_sample_order":1})).is_err());
+        assert!(crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":"native"})).is_err());
+
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = BridgeClient::new(listener.local_addr().unwrap().to_string(), TOKEN).unwrap().with_timeout(std::time::Duration::from_secs(5));
+        let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(bridge)));
+        let orders = [Some("little-endian"), Some("big-endian"), None];
+        let invalid =
+            mcp.doc_open(Parameters(serde_json::from_value(json!({"path":"source.xcf","historical_xcf_sample_order":"native"})).unwrap())).await.unwrap();
+        assert_eq!(invalid.is_error, Some(true));
+        let app = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (read, mut write) = socket.into_split();
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            assert!(fake_app_handshake(&mut lines, &mut write, TOKEN).await);
+            for order in orders {
+                let request: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                assert_eq!(request["method"], "app.open");
+                assert_eq!(request["params"]["path"], "source.xcf");
+                assert!(request["params"].get("approveHighMemory").is_none());
+                assert_eq!(request["params"].get("historicalXcfSampleOrder").map(|value| value.as_str().unwrap()), order);
+                let reply = json!({"id": request["id"], "ok": true, "result": {"opened": true}});
+                write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            }
+        });
+        for order in orders {
+            let mut arguments = json!({"path": "source.xcf"});
+            if let Some(order) = order {
+                arguments["historical_xcf_sample_order"] = json!(order);
+            }
+            let result = mcp.doc_open(Parameters(serde_json::from_value(arguments).unwrap())).await.unwrap();
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn headless_hold_controls_never_fall_through_to_a_gui_bridge() {
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = BridgeClient::new(listener.local_addr().unwrap().to_string(), TOKEN).unwrap().with_timeout(std::time::Duration::from_millis(100));
+        let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(bridge)));
+        let held = mcp.doc_open(Parameters(serde_json::from_value(json!({"path":"source.xcf","hold_historical_xcf":true})).unwrap())).await.unwrap();
+        assert_eq!(held.is_error, Some(true));
+        let answer = mcp.doc_resolve_historical_xcf_open(Parameters(serde_json::from_value(json!({"id":1,"cancel":true})).unwrap())).await.unwrap();
+        assert_eq!(answer.is_error, Some(true));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept()).await.is_err(),
+            "no remote acquisition or GUI-owned answer is attempted"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_doc_open_schema_and_structured_error() {
         let schema = &PhotocraftMcp::tool_router().map["doc_open"].attr.input_schema;
         assert_eq!(schema["properties"]["approve_high_memory"]["type"], "boolean");
         let omitted: OpenParams = serde_json::from_value(json!({"path": "file.psd"})).unwrap();
         assert!(!omitted.approve_high_memory);
+        assert!(omitted.historical_xcf_sample_order.is_none());
+        assert!(schema["properties"].get("historical_xcf_sample_order").is_some());
+        assert!(!omitted.hold_historical_xcf);
+        assert_eq!(schema["properties"]["hold_historical_xcf"]["type"], "boolean");
         let approved: OpenParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": true})).unwrap();
         assert!(approved.approve_high_memory);
         for invalid in [Value::Null, json!("true"), json!(1)] {

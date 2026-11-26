@@ -183,6 +183,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "statusError": app.ui.status_error,
         "notices": notices(app, ctx),
         "updatesOpen": app.ui.updates_open,
+        "importReport": app.ui.import_report.open,
         "updates": {
             "supported": cfg!(not(target_arch = "wasm32")),
             "currentVersion": photocraft_engine::build_info::VERSION,

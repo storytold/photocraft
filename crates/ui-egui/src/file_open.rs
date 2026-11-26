@@ -356,6 +356,10 @@ impl PhotocraftApp {
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // A template still loading opens as another Untitled, as it does once loaded.
             self.jobs.focus = Some(o.job);
+        } else if self.held_historical_opens.iter().any(|m| m.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
+            crate::open_prompt::advance(self);
+            self.ui.chrome.home = None;
+            return true;
         } else if self.held_memory_prompts.iter().any(|m| m.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // The file's high-memory prompt is already waiting: show it, don't queue a second
             // prompt and a second open for the same file. A template still opens again as
@@ -489,7 +493,7 @@ impl PhotocraftApp {
     /// answered). True when it took the slot.
     fn open_dropped_file(&mut self, f: &OsFile, name: &str, slot: Option<usize>) -> Result<bool, String> {
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
-        let held = self.held_opens.len() + self.held_memory_prompts.len();
+        let held = self.held_opens.len() + self.held_memory_prompts.len() + self.held_historical_opens.len();
         // The slot travels with the open through the inline document, a background tab and a
         // memory/profile prompt, so no separate move here can land on another document.
         if let Some(path) = f.path.as_deref().filter(|p| p.is_absolute()) {
@@ -502,7 +506,9 @@ impl PhotocraftApp {
         if slot.is_none() {
             return Ok(false);
         }
-        let took = self.jobs.opens.len() > opens || self.session.documents().len() > docs || self.held_opens.len() + self.held_memory_prompts.len() > held;
+        let took = self.jobs.opens.len() > opens
+            || self.session.documents().len() > docs
+            || self.held_opens.len() + self.held_memory_prompts.len() + self.held_historical_opens.len() > held;
         Ok(took)
     }
 

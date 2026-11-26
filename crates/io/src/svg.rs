@@ -452,18 +452,18 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
 
 fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>, max_image_pixels: u64) -> Result<Parsed, IoError> {
     let xml = inflate(bytes)?;
-    let depth = nesting_depth(&xml, MAX_XML_DEPTH)?;
+    let text = svg_xml_text(&xml, MAX_INFLATED_BYTES)?;
+    let depth = nesting_depth(text.as_bytes(), MAX_XML_DEPTH)?;
     if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
     // Convert the already-bounded-and-decoded text through checked XML, never from_data:
     // re-checks the gzip magic and would decompress a second time without our size limit if
     // the inflated content happened to start with a nested gzip stream.
-    let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
     let limits = tree_limits(MAX_XML_DEPTH, max_image_pixels);
     let image_resolver = craft_svg::tree::ValidatedImageResolver::new(limits);
     parse_at_depth(depth, || {
-        let (tree, fontless_text) = guarded_parse(|| parse_checked_svg(text, &image_resolver, fonts))??;
+        let (tree, fontless_text) = guarded_parse(|| parse_checked_svg(&text, &image_resolver, fonts))??;
         // Ordinary Open retains usable artwork and discloses optional omissions.
         // Strict stored previews enforce completeness in their separate path.
         Ok(Parsed { tree, fontless_text, image_usage: image_resolver.usage() })
@@ -536,15 +536,15 @@ fn parse_image_bounded_with(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, fonts
         return Err(overrun(IoError::Svg("embedded SVG source exceeds the 16 MiB byte limit".into())));
     }
     let xml = inflate_with_limit(bytes, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
-    let depth = nesting_depth(&xml, MAX_XML_DEPTH)?;
+    let text = svg_xml_text(&xml, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
+    let depth = nesting_depth(text.as_bytes(), MAX_XML_DEPTH)?;
     if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
     parse_at_depth(depth, || {
         let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
-        let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
         let (tree, fontless_text) =
-            guarded_parse(|| parse_checked_svg(text, &resolver, fonts)).inspect_err(|error| image_error(&budget, error.to_string()))??;
+            guarded_parse(|| parse_checked_svg(&text, &resolver, fonts)).inspect_err(|error| image_error(&budget, error.to_string()))??;
         let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
         counter.fontless_text |= fontless_text;
         let usage = counter.resolver.usage();
@@ -715,6 +715,35 @@ fn inflate_with_limit(bytes: &[u8], limit: u64) -> Result<std::borrow::Cow<'_, [
         craft_svg::svgz::Error::TooLarge(_) if bytes.starts_with(&[0x1f, 0x8b]) => IoError::Svg(format!("compressed SVG inflates past {limit} bytes")),
         error => IoError::Svg(error.to_string()),
     })
+}
+
+/// Decode the BOM-marked UTF-16 variants recognized by the format router.
+fn svg_xml_text(xml: &[u8], limit: u64) -> Result<std::borrow::Cow<'_, str>, IoError> {
+    use std::borrow::Cow;
+    let (bytes, little) = if let Some(bytes) = xml.strip_prefix(&[0xff, 0xfe]) {
+        (bytes, true)
+    } else if let Some(bytes) = xml.strip_prefix(&[0xfe, 0xff]) {
+        (bytes, false)
+    } else {
+        return std::str::from_utf8(xml).map(Cow::Borrowed).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()));
+    };
+    let invalid = || IoError::Svg("the SVG is not valid UTF-16".into());
+    let (units, tail) = bytes.as_chunks::<2>();
+    if !tail.is_empty() {
+        return Err(invalid());
+    }
+    let mut text = String::new();
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let words = units.iter().map(|&word| if little { u16::from_le_bytes(word) } else { u16::from_be_bytes(word) });
+    for character in char::decode_utf16(words) {
+        let character = character.map_err(|_| invalid())?;
+        if text.len().saturating_add(character.len_utf8()) > limit {
+            return Err(IoError::Svg(format!("decoded SVG text exceeds the {limit}-byte limit")));
+        }
+        text.try_reserve(character.len_utf8()).map_err(|_| IoError::Svg("not enough memory to decode SVG text".into()))?;
+        text.push(character);
+    }
+    Ok(Cow::Owned(text))
 }
 
 /// The deepest element nesting in `xml`, stopping as soon as it passes `limit` (the result is
@@ -1052,7 +1081,14 @@ fn import_parsed_with_limits(
     if doc.layers.is_empty() && !conv.noted.contains(&"raster-panic") {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult {
+        initial_view: None,
+        document: doc,
+        warnings: conv.warnings,
+        source_read_only: false,
+        preview_only: false,
+        historical_xcf_sample_order: None,
+    })
 }
 
 /// One count-only warning bounds disclosure independently of the number or length of data URLs.

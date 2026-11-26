@@ -322,3 +322,6 @@ fn unconfirmed_download_names_the_document_but_keeps_it_unsaved() {
     app.save_as(Some("download.psd".into())).unwrap();
     assert!(!app.has_unsaved_work());
 }
+
+#[path = "save_identity_tests/import_source.rs"]
+mod import_source;

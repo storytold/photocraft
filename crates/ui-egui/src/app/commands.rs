@@ -355,7 +355,7 @@ impl PhotocraftApp {
         // The Paths panel selection and canvas context menu belong to the active document.
         // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
         // without a newer revision is a reopened document, even with the same ID.
-        let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        let document = self.session.active().map(|st| (st.doc.id, st.open_generation(), st.revision, std::sync::Arc::downgrade(&st.doc)));
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
         // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
@@ -366,16 +366,27 @@ impl PhotocraftApp {
         {
             self.ui.tool_options.crop.fill = craft::draw::ui::crop::CropFill::Background;
         }
-        let same_document = match (&self.path_document, &document) {
-            (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
-            (None, None) => true,
-            _ => false,
+        let (same_tab, same_document) = match (&self.path_document, &document) {
+            (Some((old_id, old_open, old_revision, old_source)), Some((id, open, revision, source))) if old_id == id && old_open == open => {
+                (true, revision > old_revision || old_source.ptr_eq(source))
+            }
+            (None, None) => (true, true),
+            _ => (false, false),
         };
+        // Live edits and previews can replace the snapshot within the same tab.
+        if self.path_document.is_some() && !same_tab {
+            self.reset_mask_targets_for_document();
+        }
         if !same_document {
             self.ui.selected_path = None;
             self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
+        // A ready Open may still be requeued behind another prompt. Keep its
+        // exact index/identity for that handoff until the host finalizes the tab.
+        if self.jobs.opens.is_empty() && !crate::open_prompt::waiting(self) {
+            vector_ui::apply_imported_path_selection(self);
+        }
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
         type_transform::cancel_stale(self);

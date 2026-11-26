@@ -43,6 +43,9 @@ pub enum EngineError {
     /// The document is discarded and is not opened.
     #[error("“{name}” changed since it was checked; open it again to approve the new file")]
     SourceChanged { name: String },
+    /// A stored historical interpretation never applies to a different encoded linked revision.
+    #[error("{0}")]
+    HistoricalXcfLinkChanged(String),
     #[error("{0}")]
     Other(String),
     /// A batch or droplet stopped at its nesting or shared playback-step limit. A batch whose

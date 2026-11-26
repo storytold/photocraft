@@ -42,6 +42,7 @@ pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
+pub mod import_report;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
 pub mod levels_clipping;
@@ -239,11 +240,11 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationLocateFn, AutomationOpenPcraftFn, AutomationReadFn,
-    AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn,
-    CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
-    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox,
-    PrimaryDownFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn,
-    WriteFn,
+    AutomationServices, AutomationWriteFn, AutomationWriteLocationFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn,
+    ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave,
+    ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn,
+    PhotoshopShortcutsFn, PlaceInbox, PrimaryDownFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn,
+    TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
@@ -440,9 +441,8 @@ pub struct PhotocraftApp {
     pub(crate) drop_places: std::collections::VecDeque<(DocId, file_open::DropPlace)>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
-    /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
-    /// panel selection never carries over to a same-named path in another tab.
-    path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
+    /// Document id, open generation, edit revision, and snapshot from the last view sync.
+    path_document: Option<(DocId, u64, u64, std::sync::Weak<Document>)>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -690,6 +690,7 @@ pub struct PhotocraftApp {
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
     pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,
+    pub(crate) held_historical_opens: std::collections::VecDeque<dialogs::historical_open::Pending>,
     pub(crate) prompt_order: std::collections::VecDeque<open_prompt::PromptKind>,
     pub(crate) held_record_again: Option<actions::record_again::Held>,
     pub(crate) held_insert_menu: Option<actions::menu_item::Held>,

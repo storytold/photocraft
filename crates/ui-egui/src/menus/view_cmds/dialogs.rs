@@ -7,6 +7,7 @@ use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::sections::{DialogRole, FooterButton};
 
 #[path = "artboard_export_options.rs"]
 mod artboard_export_options;
@@ -14,6 +15,21 @@ pub(crate) use artboard_export_options::nest as nest_artboard_export_options;
 #[path = "artboard_name_options.rs"]
 mod artboard_name_options;
 pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
+
+fn replace_picked_contents(app: &mut PhotocraftApp, layer: photocraft_doc::LayerId, name: &str, bytes: Vec<u8>) -> Result<Value, String> {
+    let started = photocraft_engine::smart_cmds::start_replace_contents_bytes(&mut app.session, layer, name, bytes).map_err(|e| e.to_string())?;
+    let result = match started {
+        photocraft_engine::jobs::Started::Done(result) => result,
+        photocraft_engine::jobs::Started::Job(job) => {
+            app.jobs.last_started = Some(job);
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            json!({"job":job.0,"pending":true})
+        }
+    };
+    app.sync_views();
+    Ok(result)
+}
 
 // ---------- dialogs and pickers in front of engine commands ----------
 
@@ -58,6 +74,7 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
     let image_processor = id == image_processor_ui::COMMAND;
+    let report = id == "file.fileInfo" && crate::import_report::available(app);
     let calculations = id == crate::dialogs::calculations_ui::COMMAND;
     if image_processor {
         image_processor_ui::settings_opened(app.ctx());
@@ -67,12 +84,21 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
         let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
         if image_processor {
             image_processor_ui::settings_footer(dialog)
+        } else if report {
+            dialog.extra_buttons(vec![("importReport".to_owned(), FooterButton::new(tl!("Import Conversion Report").to_string(), DialogRole::Other))])
         } else if calculations {
             dialog.previews(true)
         } else {
             dialog
         }
     })
+}
+
+/// Open the read-only report from File Info without applying its editable metadata form.
+pub(crate) fn footer_action(app: &mut PhotocraftApp, _: &egui::Context, _: DialogId, action: &str) {
+    if action == "importReport" && crate::import_report::available(app) {
+        crate::import_report::open(app);
+    }
 }
 
 /// Brings a form's shell keys up to date with the values they follow, before each pass, OK and automation write (the
@@ -876,13 +902,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         }
         "layer.smartObjects.replaceContents" => {
             let st = app.session.active()?;
-            let (doc, layer) = (st.doc.id, st.active_layer?);
+            let (doc, generation, layer) = (st.doc.id, st.open_generation(), st.active_layer?);
             Some(app.pick_file_bytes(move |app, name, bytes| {
-                app.with_document(doc, |app| {
-                    let r = photocraft_engine::smart_cmds::replace_contents_bytes(&mut app.session, layer, &name, bytes).map_err(|e| e.to_string());
-                    app.sync_views();
-                    r
-                })
+                // Saved IDs can repeat after close/reopen. Check the opening,
+                // while still allowing edits to the same live document.
+                if !app.session.documents().iter().any(|state| state.doc.id == doc && state.open_generation() == generation) {
+                    return Err(tl!("the replacement document was closed").into());
+                }
+                app.with_document(doc, |app| replace_picked_contents(app, layer, &name, bytes))
             }))
         }
         "layer.smartObjects.exportContents" => Some(export_contents(app)),

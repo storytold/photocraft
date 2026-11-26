@@ -4,7 +4,7 @@ use photocraft_geom::TILE_SIZE;
 
 use super::{
     Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source, json, other,
+    base_name, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -32,7 +32,7 @@ pub fn source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<V
 }
 
 /// Memory-only resolution also covers Photoshop's embedded files addressed by a `Linked` UUID.
-fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
+pub(super) fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
     match src {
         SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes.clone())),
         SmartSource::Linked { path } => photocraft_io::linked::find_linked_file(meta, path).map(|f| (f.file_name, Arc::new(f.bytes))),
@@ -106,6 +106,16 @@ pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
 /// Keep automatic recognition and caller-supplied classifications separate. The filename
 /// also selects extension-sensitive importers. Neither decision may be bypassed by a hit.
 pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> CacheKey {
+    source_cache_key_with_order(file_name, bytes, fmt, svg, None)
+}
+
+pub(super) fn source_cache_key_with_order(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    svg: Option<bool>,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> CacheKey {
     let mut key = cache_key(bytes, fmt);
     let mut context = blake3::Hasher::new();
     context.update(b"source-decode-context-v1\0");
@@ -115,6 +125,11 @@ pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, 
         Some(true) => 2,
     }]);
     context.update(file_name.as_bytes());
+    context.update(&[match order {
+        None => 0,
+        Some(photocraft_doc::HistoricalXcfSampleOrder::BigEndian) => 1,
+        Some(photocraft_doc::HistoricalXcfSampleOrder::LittleEndian) => 2,
+    }]);
     key.2 = Some(*context.finalize().as_bytes());
     key
 }
@@ -301,6 +316,23 @@ fn convert_source(src: &Document, fmt: PixelFormat, raster: impl FnOnce(PixelFor
     Ok(if surface.format() == fmt { surface } else { surface.convert(fmt) })
 }
 
+/// Reuse a source admitted by the same engine IO boundary while preparing a source change.
+/// SVG retains its separate strict whole/layered renderer and is never primed by ordinary IO.
+pub(super) fn prime_imported_source(
+    name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    doc: &Document,
+) -> Result<()> {
+    if photocraft_io::is_svg_input(name, bytes) {
+        return Ok(());
+    }
+    let image = SourceImage { surface: Arc::new(flattened_source(doc, fmt)?), bounds: doc.bounds() };
+    cache_put(source_cache_key_with_order(name, bytes, fmt, Some(false), order), image);
+    Ok(())
+}
+
 /// An SVG source rendered at `scale` times its own size (cached per scale), so a vector smart
 /// object stays sharp however it is placed.
 pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<SourceImage> {
@@ -369,22 +401,39 @@ pub fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, None)
+    source_image_inner(file_name, bytes, fmt, None, None)
 }
 
+#[cfg(test)]
 pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, Some(svg))
+    source_image_inner(file_name, bytes, fmt, Some(svg), None)
 }
 
-fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> Result<SourceImage> {
-    let key = source_cache_key(file_name, bytes, fmt, svg);
+pub(super) fn source_image_classified_with_order(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    svg: bool,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, Some(svg), order)
+}
+
+fn source_image_inner(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    svg: Option<bool>,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<SourceImage> {
+    let key = source_cache_key_with_order(file_name, bytes, fmt, svg, order);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
     let doc = match svg {
-        Some(svg) => super::decode_source_classified(file_name, bytes, svg)?,
-        None => decode_source(file_name, bytes)?,
+        Some(svg) => super::decode_source_classified_with_order(file_name, bytes, svg, order)?,
+        None => super::decode_source_with_order(file_name, bytes, order)?,
     };
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());

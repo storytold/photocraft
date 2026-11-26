@@ -256,6 +256,7 @@ impl PhotocraftApp {
         // hosted dialog, then the other OS windows' contents.
         jobs_ui::dialog(self, ui);
         updates_ui::show(self, &ctx);
+        crate::import_report::show(self, &ctx);
         // The Keyboard Shortcuts dialog draws while its session is open.
         prefs_ui::show_shortcuts(self, ui);
         crate::dialogs::run(self, ui);

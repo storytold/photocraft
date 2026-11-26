@@ -7,7 +7,9 @@
 //! Methods (camelCase params):
 //! - `engine.execute {command, params?, wait?}` / `engine.commands {filter?}`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210)
-//! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
+//! - `session.list`, `doc.open {path, holdHistoricalXcf?}` (opt-in rooted retention),
+//!   `doc.resolveHistoricalXcfOpen {id, historicalXcfSampleOrder?, cancel?}` (owned held bytes only),
+//!   `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
 //!   `doc.replaceSmartObject {path, layer?, index?}` (#8061: the same scope for
@@ -46,6 +48,7 @@ pub const METHODS: &[&str] = &[
     "engine.commands",
     "session.list",
     "doc.open",
+    "doc.resolveHistoricalXcfOpen",
     "doc.place",
     "doc.replaceSmartObject",
     "doc.new",
@@ -64,6 +67,7 @@ pub const METHODS: &[&str] = &[
 /// Adds the structured memory fields (`required`, soft and hard limits and measured capacity)
 /// from a typed admission error to a JSON error object, so clients can offer approval.
 fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
+    crate::attach_historical_error_details(obj, err);
     match err {
         AutomationError::Import(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram })
         | AutomationError::Engine(photocraft_engine::EngineError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram, .. }) => {
@@ -141,13 +145,15 @@ impl Headless {
             "session.list" => Ok(self.session_list()),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
-                let approve = match p.get("approveHighMemory") {
+                let options = crate::files::import_options_from_params(&p)?;
+                let hold = match p.get("holdHistoricalXcf") {
                     None | Some(Value::Null) => false,
-                    Some(Value::Bool(b)) => *b,
-                    Some(_) => return Err(bad("`approveHighMemory` must be a boolean")),
+                    Some(Value::Bool(value)) => *value,
+                    _ => return Err(bad("holdHistoricalXcf must be a boolean")),
                 };
-                self.open_with_approval(&PathBuf::from(path), approve)
+                if hold { self.open_with_historical_hold(&PathBuf::from(path), &options) } else { self.open_with_options(&PathBuf::from(path), &options) }
             }
+            "doc.resolveHistoricalXcfOpen" => self.resolve_historical_xcf_open(&p),
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;
                 if p.get("approveHighMemory").is_some_and(|v| !v.is_boolean()) {

@@ -28,6 +28,13 @@ pub(crate) struct BatchOpen {
     pub read_only: bool,
 }
 
+pub(crate) struct BatchOpenSampleOrder {
+    pub path: std::path::PathBuf,
+    pub identity: photocraft_io::FileIdentity,
+    pub order: photocraft_io::HistoricalXcfSampleOrder,
+    pub depth: u8,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Clipboard (`edit_cmds`)
 
@@ -431,6 +438,21 @@ pub fn builtin() -> Vec<Pattern> {
 /// A file's size and modification time (nanoseconds since 1970).
 pub type Stamp = (u64, u128);
 
-/// Stamps of a document's linked files taken on a worker thread: (document id, [(stored path,
-/// the file it resolved to, layer ids, stamp)]).
-pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Option<std::path::PathBuf>, Vec<u64>, Option<Stamp>)>)>>>;
+/// Last stamp and the expected historical fingerprints covered by its comparison.
+#[derive(Clone)]
+pub struct LinkStamp {
+    pub(crate) file: Stamp,
+    pub(crate) checked_digests: Option<std::collections::BTreeSet<[u8; 32]>>,
+}
+
+/// A linked source observed at its resolved disk identity.
+pub struct LinkObservation {
+    pub(crate) path: String,
+    pub(crate) file: Option<std::path::PathBuf>,
+    pub(crate) layers: Vec<u64>,
+    pub(crate) stamp: Option<Stamp>,
+    pub(crate) first_digest: Option<[u8; 32]>,
+}
+
+/// The result of a worker's look at the active document's linked sources.
+pub type LinkScan = Arc<Mutex<Option<(u64, Vec<LinkObservation>)>>>;

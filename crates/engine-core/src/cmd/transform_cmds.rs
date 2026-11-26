@@ -407,7 +407,7 @@ fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelF
 /// [`check_budget`] for every warp [`transform_layer`] would make of `l` (for a group, of every
 /// layer inside it), so a transform that doesn't fit is refused before any layer is built and a
 /// group that partly fits isn't half-transformed.
-fn check_layer_budget(doc_sel: Option<&Surface>, l: &Layer, h: &Homography) -> Result<()> {
+fn check_layer_budget(doc_sel: Option<&Surface>, l: &Layer, h: &Homography, affine: Option<Affine>) -> Result<()> {
     if h.is_identity() {
         return Ok(());
     }
@@ -416,7 +416,15 @@ fn check_layer_budget(doc_sel: Option<&Surface>, l: &Layer, h: &Homography) -> R
     while let Some((l, sel)) = stack.pop() {
         match &l.content {
             LayerContent::Group(g) => stack.extend(g.children.iter().map(|c| (c, None))),
-            LayerContent::Text(_) | LayerContent::Shape(_) => {}
+            LayerContent::Text(text) => {
+                if is_whole_pixel_translation(affine)
+                    && text.cache_uses_raster_blending
+                    && let Some(cache) = &text.cache
+                {
+                    check_budget(cache.content_bounds(), h, "imported text", cache.format())?;
+                }
+            }
+            LayerContent::Shape(_) => {}
             LayerContent::Smart(sm) => {
                 if let Some(c) = &sm.cache {
                     check_budget(c.content_bounds(), h, "smart object", c.format())?;
@@ -468,7 +476,7 @@ fn transform_layer_with(
     interp: Interp,
     ctl: &Interrupt,
 ) -> Result<()> {
-    check_layer_budget(doc_sel, l, h)?;
+    check_layer_budget(doc_sel, l, h, affine)?;
     apply_transform(doc_sel, group, l, h, affine, interp, ctl)
 }
 
@@ -517,6 +525,16 @@ fn apply_transform(
             let Some(a) = affine else {
                 return Err(EngineError::Other("Distort and Perspective need rasterized type (Type › Rasterize Type Layer)".into()));
             };
+            if is_whole_pixel_translation(Some(a))
+                && t.cache_uses_raster_blending
+                && let Some(cache) = &mut t.cache
+            {
+                *cache = warp_surface_with(cache, cache.content_bounds(), h, Interp::Nearest, ctl)?.ok_or(EngineError::Cancelled)?;
+                // This cache-preserving path skips type refresh below. Move the
+                // retained PSD envelope too, preserving unknown text/style data;
+                // an unpatchable envelope must be regenerated on the next export.
+                t.psd_raw = t.psd_raw.as_ref().and_then(|raw| photocraft_text::psd::translate_tysh(raw, a.m[4], a.m[5])).map(std::sync::Arc::new);
+            }
             t.transform = a.mul(&t.transform);
         }
         LayerContent::Shape(sh) => match affine {
@@ -643,26 +661,38 @@ pub(crate) fn transform_by_map(doc: &mut Document, id: LayerId, h: &Homography, 
     let group = group_locks(doc, id);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     // Price the smart object caches before they are taken: the fallback warp below isn't budgeted.
-    check_layer_budget(None, l, h)?;
+    check_layer_budget(None, l, h, affine)?;
     let taken = crate::smart_cmds::take_caches(std::slice::from_mut(l));
     apply_transform(None, group, l, h, affine, interp, &Interrupt::NONE)?;
     let snapshot = doc.clone();
     if let Some(l) = doc.layer_mut(id) {
-        refresh_text(&snapshot, l);
+        refresh_transformed_content(&snapshot, l, affine);
     }
     crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
     Ok(())
 }
 
-pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) {
-    match &mut l.content {
-        LayerContent::Text(t) => crate::type_cmds::refresh(doc, t),
-        LayerContent::Shape(sh) => crate::vector_cmds::refresh_shape(doc, sh),
-        LayerContent::Smart(_) => {
-            // Unavailable sources keep the warped cache.
-            let _ = crate::smart_cmds::refresh_layer(doc, l);
+fn is_whole_pixel_translation(affine: Option<Affine>) -> bool {
+    affine.is_some_and(|transform| {
+        let [a, b, c, d, x, y] = transform.m;
+        [a, b, c, d] == [1.0, 0.0, 0.0, 1.0] && [x, y].iter().all(|value| value.is_finite() && value.fract() == 0.0)
+    })
+}
+
+pub(crate) fn refresh_text(doc: &Document, layer: &mut Layer) {
+    refresh_transformed_content(doc, layer, None);
+}
+
+pub(crate) fn refresh_transformed_content(doc: &Document, layer: &mut Layer, affine: Option<Affine>) {
+    match &mut layer.content {
+        LayerContent::Text(text) if !(is_whole_pixel_translation(affine) && text.cache_uses_raster_blending && text.cache.is_some()) => {
+            crate::type_cmds::refresh(doc, text)
         }
-        LayerContent::Group(g) => g.children.iter_mut().for_each(|c| refresh_text(doc, c)),
+        LayerContent::Shape(shape) => crate::vector_cmds::refresh_shape(doc, shape),
+        LayerContent::Smart(_) => {
+            let _ = crate::smart_cmds::refresh_layer(doc, layer);
+        }
+        LayerContent::Group(group) => group.children.iter_mut().for_each(|child| refresh_transformed_content(doc, child, affine)),
         _ => {}
     }
 }
@@ -1000,7 +1030,7 @@ fn transform_doc(
     // Every layer is priced before any is built, so one that doesn't fit leaves all as they were.
     for &id in ids {
         let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        check_layer_budget(layer_sel(l), l, h)?;
+        check_layer_budget(layer_sel(l), l, h, affine)?;
     }
     let mut taken = Vec::new();
     for &id in ids {
@@ -1019,7 +1049,7 @@ fn transform_doc(
         let snapshot = doc.clone();
         for &id in ids {
             if let Some(l) = doc.layer_mut(id) {
-                refresh_text(&snapshot, l);
+                refresh_transformed_content(&snapshot, l, affine);
             }
         }
         crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;

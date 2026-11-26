@@ -141,10 +141,10 @@ fn next_case(h: &mut Harness<'static, Box<PhotocraftApp>>, from: &Session, filte
     app.session.select_layer(st.active_layer.unwrap()).unwrap();
     app.session.active_mut().unwrap().channel_view = st.channel_view.clone();
     *app.session.actions_mut() = from.actions().clone();
+    app.sync_views();
     app.ui.mask_target = false;
     app.ui.vector_mask_target = false;
     app.ui.filter_mask_target = filter_mask;
-    app.sync_views();
     h.run_steps(3);
     show_left_of_dialog(h);
 }

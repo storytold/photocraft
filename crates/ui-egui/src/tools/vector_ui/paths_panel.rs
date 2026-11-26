@@ -10,6 +10,32 @@ use crate::theme::Tokens;
 // ---------------------------------------------------------------------------------------------
 // Paths panel
 
+/// Consume the saved import hint once, only after the host has finalized this
+/// tab. Name-based tool routing cannot safely address duplicate/reserved names.
+pub(crate) fn apply_imported_path_selection(app: &mut PhotocraftApp) {
+    // Ordinary view synchronization must not advance the tracked document revision.
+    let Some(index) = app.session.active().and_then(|st| st.initial_path_selection) else { return };
+    let Some(st) = app.session.active_mut() else { return };
+    st.initial_path_selection = None;
+    let identity = st.initial_path_identity.take();
+    let selected = st.doc.paths.get(index).filter(|path| {
+        identity.is_none_or(|identity| photocraft_io::initial_view::path_identity(path) == identity)
+            && !matches!(path.name.as_str(), "" | "work" | "layer")
+            && st.doc.paths.iter().filter(|other| other.name == path.name).take(2).count() == 1
+    });
+    if let Some(path) = selected {
+        app.ui.selected_path = Some(path.name.clone());
+    } else {
+        crate::notices::post(
+            app,
+            tl!("Import view"),
+            vec![tl!("The saved path selection could not be shown because the path changed or its name cannot be addressed unambiguously.").into()],
+            crate::notices::Tone::Neutral,
+            None,
+        );
+    }
+}
+
 /// What a Paths panel row is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathRow {
@@ -325,3 +351,6 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         apply(app, event);
     }
 }
+
+#[cfg(test)]
+mod imported_selection_tests;

@@ -1535,6 +1535,7 @@ async fn convention_tool_hints_match_what_each_tool_does() {
         ("jobs_list", READ),
         ("doc_new", ADDS),
         ("doc_open", ADDS),
+        ("doc_resolve_historical_xcf_open", EDITS),
         ("doc_place", ADDS),
         ("doc_export_layers", ADDS),
         ("doc_export_data_sets", ADDS),

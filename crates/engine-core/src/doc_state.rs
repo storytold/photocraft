@@ -10,8 +10,11 @@ pub struct DocState {
     /// Anchor of range selection (the last plainly or command-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
-    /// An Affinity document (or its preview) must not acquire the native source as its Save path.
+    pub(crate) open_generation: u64,
+    /// An import-only document must not acquire its source as its Save path.
     pub source_read_only: bool,
+    /// Runtime-only source writeback protection, not persisted document data or resource permission.
+    pub protected_import_source: Option<String>,
     /// Counts the edit steps: save state ([`Self::is_dirty`]) and damage measure from it. Views key on the `Tracked`
     /// revision the session holds the state in, which also moves with view state.
     pub revision: u64,
@@ -48,6 +51,10 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
+    /// A one-time imported path selection for a host to consume after validating its identity.
+    pub initial_path_selection: Option<usize>,
+    pub initial_path_identity: Option<[u8; 32]>,
+    pub(crate) import_initial_view_applied: bool,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened (unless History Options › Automatically Create First Snapshot is
     /// off). Kept for the session only, as in Photoshop: not history states,
@@ -135,7 +142,9 @@ impl DocState {
             history,
             layer_anchor: active_layer,
             path,
+            open_generation: 0,
             source_read_only: false,
+            protected_import_source: None,
             revision: 1,
             saved_revision: 1,
             view_revision: 0,
@@ -150,6 +159,9 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
+            initial_path_selection: None,
+            initial_path_identity: None,
+            import_initial_view_applied: false,
             snapshots: vec![first],
             snapshots_generation: next_snapshots_generation(),
             next_snapshot: 1,
@@ -159,6 +171,11 @@ impl DocState {
             pixel_revision: 0,
         }
     }
+    /// Identifies this opening even when a native file reuses its persisted document ID.
+    pub fn open_generation(&self) -> u64 {
+        self.open_generation
+    }
+
     /// The History panel snapshots, oldest first.
     pub fn snapshots(&self) -> &[history_cmds::Snapshot] {
         &self.snapshots

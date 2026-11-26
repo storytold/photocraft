@@ -99,17 +99,14 @@ impl PhotocraftApp {
             keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
             ..photocraft_engine::jobs::import_options(self.session.prefs())
         };
-        // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
-        // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
-        // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
-        // string. Every other format keeps the shell's import service. `detect` gets no name:
-        // given one it falls back to the extension, and a `.tif` name alone is no TIFF.
-        let typed_open = photocraft_io::is_psd(bytes) || photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff);
-        let (mut doc, warnings, damaged) = if typed_open {
-            // Read PSD damage as structured information in the same decode, not by
-            // retrying an error or matching the text of a compatibility warning. A TIFF never
-            // sets it: its layered import has no damaged-content confirmation.
-            let (r, damaged) = match photocraft_io::import_for_open(name, bytes, &opts) {
+        // Preserve the full typed result for XCF's one-time view/source policy, as well as
+        // PSD/TIFF's structured memory/damage decisions. XCF recognition uses only a bounded
+        // prefix; unrelated wrappers (including SVGZ) retain the configured import service.
+        let typed_open = photocraft_io::is_xcf_input(name, bytes)
+            || photocraft_io::is_psd(bytes)
+            || (photocraft_io::import_compression(bytes).is_none() && photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff));
+        let (mut doc, warnings, initial_view, source_read_only, damaged) = if typed_open {
+            let (imported, damaged) = match photocraft_io::import_for_open(name, bytes, &opts) {
                 Ok(result) => result,
                 Err(photocraft_io::IoError::PsdApprovalRequired { .. }) => {
                     jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
@@ -117,10 +114,10 @@ impl PhotocraftApp {
                 }
                 Err(error) => return Err(error.to_string()),
             };
-            (r.document, r.warnings, damaged)
+            (imported.document, imported.warnings, imported.initial_view, imported.source_read_only, damaged)
         } else {
             let (doc, warnings) = import(name, bytes, &opts)?;
-            (doc, warnings, false)
+            (doc, warnings, None, photocraft_io::affinity::is_affinity(bytes), false)
         };
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
@@ -136,7 +133,9 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
+                read_only: source_read_only,
+                initial_view,
+                protected_import_source: path.filter(|_| source_read_only).map(str::to_string),
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -162,13 +161,21 @@ impl PhotocraftApp {
 
     /// [`Self::open_automation_bytes`] with the caller's high-memory approval for the imported bytes.
     pub fn open_automation_bytes_with_approval(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+        let mut options = photocraft_engine::jobs::import_options(self.session.prefs());
+        options.psd_high_memory_approved = approved;
+        self.open_automation_bytes_with_options(name, bytes, &options)
+    }
+
+    /// Open already-authorized bytes with the caller's validated import policy.
+    /// Script events and profile-path policies stay disabled as on the approval-only path.
+    pub fn open_automation_bytes_with_options(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes, approved),
+            None => self.import_automation_document(name, bytes, options),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -178,17 +185,22 @@ impl PhotocraftApp {
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        opts.psd_high_memory_approved = approved;
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        // Like inline Open, XCF needs the complete typed result: tuple adapters
+        // cannot carry its source protection or the one-time saved editing view.
+        // Other formats keep the configured importer and its existing policy.
+        let (mut doc, mut warnings, initial_view, source_read_only) = if photocraft_io::is_xcf_input(name, bytes) {
+            let imported = photocraft_io::import_with_options(name, bytes, options).map_err(|error| error.to_string())?;
+            (imported.document, imported.warnings, imported.initial_view, imported.source_read_only)
+        } else {
+            let (doc, warnings) = import(name, bytes, options)?;
+            (doc, warnings, None, photocraft_io::affinity::is_affinity(bytes))
+        };
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        // The caller records the path it read from.
-        self.session.add_document(doc, None);
-        if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
-        }
+        // The authorized caller records the origin after successful admission.
+        let (_, view_warning) = self.session.admit_import_with_initial_view(doc, None, source_read_only, initial_view);
+        warnings.extend(view_warning);
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
         self.ui.status_error = false;
@@ -589,6 +601,7 @@ impl PhotocraftApp {
             return jobs_ui::start_save(self, path, settings.clone(), copy, save, false);
         }
         let st = self.session.active().ok_or("no document")?;
+        photocraft_engine::file_cmds::check_import_destination(st, &path).map_err(|error| error.to_string())?;
         ensure_memory_to_save(&st.doc, &path)?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
@@ -834,6 +847,7 @@ impl PhotocraftApp {
             };
         }
         let state = self.session.active().ok_or("no document")?;
+        self.check_automation_save_destination(state, &target)?;
         ensure_memory_to_save(&state.doc, &target)?;
         let (doc, revision) = (state.doc.id, state.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
@@ -842,6 +856,16 @@ impl PhotocraftApp {
         write(&target, &bytes)?;
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
+    }
+    /// Use the write workspace's identity before an automation save is admitted.
+    /// The original request path is still used by the capability-scoped writer.
+    pub(crate) fn check_automation_save_destination(&self, state: &photocraft_engine::DocState, target: &str) -> Result<(), String> {
+        let identity = match self.services.automation_write_location.as_ref() {
+            Some(locate) => locate(target)?,
+            None if state.protected_import_source.is_some() => return Err("automation save destination identity is not configured".into()),
+            None => return Ok(()),
+        };
+        photocraft_engine::file_cmds::check_import_destination(state, &identity).map_err(|error| error.to_string())
     }
 }
 
@@ -950,3 +974,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[cfg(test)]
+#[path = "inline_open_tests.rs"]
+mod inline_open_tests;

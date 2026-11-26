@@ -836,7 +836,7 @@ pub(super) fn snap_aliased_tip(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) 
     (f64::from(cx), f64::from(cy))
 }
 
-/// "mask" when the Layers panel targets (or the canvas shows) the active layer's mask, or the layer
+/// "mask" when the Layers panel targets (or an editing view shows) the active layer's mask, or the layer
 /// is an adjustment layer with one (it has no pixels: #4298), else "pixels".
 pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     use photocraft_engine::channel_cmds::ChannelTarget;
@@ -847,7 +847,7 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => return json!("quickMask"),
         ChannelTarget::LayerMask => return json!("mask"),
         ChannelTarget::Color(_) => {
-            if let Some(view) = photocraft_engine::mask_view_cmds::current(st) {
+            if let Some(view) = photocraft_engine::mask_view_cmds::editing(st) {
                 return json!(if view.filter { "filterMask" } else { "mask" });
             }
             // A colour set edits a raster layer's own pixels. The rows stay selected across layer
@@ -865,8 +865,9 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
         return json!("filterMask");
     }
     let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
-    // Viewing the mask (⌥-click its thumbnail, #196) paints the mask.
-    let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);
+    // A manual mask view paints its mask. An imported display-only view must
+    // retain the independently saved editing target.
+    let viewing = photocraft_engine::mask_view_cmds::editing(st).is_some_and(|v| !v.filter);
     let mask = app.ui.mask_target || viewing || crate::adjustment_layer_active(st);
     json!(if mask && has_mask { "mask" } else { "pixels" })
 }

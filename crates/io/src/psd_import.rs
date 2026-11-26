@@ -17,6 +17,7 @@ use photocraft_raster::Surface;
 use crate::adjust_map::{self, ADJUSTMENT_KEYS};
 use crate::blocks;
 use crate::pixels::{max_sample, sample_for_depth, try_interleave, zero_sample};
+use crate::psd_appearance::{self, Appearance};
 
 /// Resources that are mapped to document fields or regenerated on export.
 pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
@@ -77,6 +78,8 @@ pub(crate) struct Ctx<'a> {
     pub plld_sizes: std::collections::HashMap<String, Option<(f64, f64)>>,
     /// Shared vector previews are hashed/parsed once, under a per-file work budget.
     pub vector_previews: crate::vector_preview::ImportCache,
+    /// Hash each immutable embedded payload once even when many placed layers share its UUID.
+    pub historical_xcf_digests: std::collections::HashMap<String, Option<[u8; 32]>>,
     /// Cancellation and progress for background opens (checked per layer record).
     pub ctl: photocraft_raster::Interrupt<'a>,
     /// Layer records decoded so far, out of `total` (progress).
@@ -512,6 +515,7 @@ impl Ctx<'_> {
         // `SoLE` (a linked smart object) before `PlLd`: a `PlLd` alone is Photoshop CS2's record.
         let smart_key = [b"SoLd", b"SoLE", b"PlLd"].into_iter().find(|k| rec.block(k).is_some());
         let blocks = preserved_blocks(rec);
+        let saved_appearance = rec.blocks.iter().filter(|b| b.key == psd_appearance::PSD_KEY && !b.is_foreign_order()).find_map(|b| Appearance::parse(&b.data));
         // `psd_raw` shares the Arc of the matching `psd_blocks` entry.
         let principal = |k: &[u8; 4]| blocks.iter().find(|(bk, _)| bk == k).map(|(_, d)| d.clone());
         let mut fill_cache = None;
@@ -583,7 +587,12 @@ impl Ctx<'_> {
                 // rendered by text_import::prepare instead of retaining an empty cache.
                 let cache = self.record_surface(rec, &name);
                 let drawn = !cache.content_bounds().is_empty() || photocraft_text::psd::engine_text_is_blank(&block.data);
-                t.cache = drawn.then_some(cache);
+                t.cache_uses_raster_blending = saved_appearance == Some(Appearance::Text);
+                t.keep_layer_name = rec
+                    .blocks
+                    .iter()
+                    .any(|b| b.key == psd_appearance::FIXED_TEXT_NAME_KEY && !b.is_foreign_order() && b.data == psd_appearance::FIXED_TEXT_NAME_V1);
+                t.cache = (drawn || t.cache_uses_raster_blending).then_some(cache);
                 t.psd_raw = principal(b"TySh");
                 LayerContent::Text(t)
             } else {
@@ -592,7 +601,9 @@ impl Ctx<'_> {
             }
         } else if let Some(k) = smart_key {
             self.smart_content(rec, &name, k, &principal)
-        } else if let Some((f, soft)) = soft_shape_fill(rec, vector_key.is_some(), fill_key) {
+        } else if saved_appearance != Some(Appearance::Shape)
+            && let Some((f, soft)) = soft_shape_fill(rec, vector_key.is_some(), fill_key)
+        {
             // A pattern-filled shape is a pattern fill layer seen through its vector mask (soft
             // or not). Unless that mask is soft, the stored pixels stay its rendering (a soft
             // mask's pixels lack the fill beyond the path).
@@ -606,12 +617,15 @@ impl Ctx<'_> {
             let lookup = |k: &[u8; 4]| rec.block(k).map(|b| b.data.clone());
             crate::vector_map::shape_from_blocks(&mut sh, &lookup, self.file.header.width, self.file.header.height, self.dpi);
             (sh.density, sh.feather) = shape_mask_params(rec);
+            sh.cache_preserves_appearance = saved_appearance == Some(Appearance::Shape);
             // No stored pixels (32-bit documents, files saved without layer pixels): render the
             // shape from its path and fill, as Photoshop does when it opens the file. A soft
             // shape's stored pixels hold the shape alone, without the fill its density and feather
             // show beyond the path: render it too.
             let soft = sh.has_soft_mask() && sh.fill.is_some();
-            if self.fatal_error.is_none() && (soft || ((rec.rect.is_empty() || rec.rect.size().is_err()) && (!sh.path.subpaths.is_empty() || sh.path.inverted)))
+            if self.fatal_error.is_none()
+                && !sh.cache_preserves_appearance
+                && (soft || ((rec.rect.is_empty() || rec.rect.size().is_err()) && (!sh.path.subpaths.is_empty() || sh.path.inverted)))
             {
                 let canvas = Rect::new(0, 0, self.file.header.width as i32, self.file.header.height as i32);
                 sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, canvas));
@@ -717,9 +731,24 @@ impl Ctx<'_> {
                 crate::linked::embedded_payload_in_blocks(global.iter().map(|(_, key, data)| (key, data.as_slice())), &id).map(|(_, source)| source)
             })
         });
+        let historical = rec
+            .blocks
+            .iter()
+            .filter(|block| block.key == crate::smart_xcf_order::PSD_KEY && !block.is_foreign_order())
+            .find_map(|block| crate::smart_xcf_order::parse(&block.data))
+            .and_then(|order| {
+                let digest = self.historical_xcf_digests.entry(id.clone()).or_insert_with(|| {
+                    let blocks = self.global.iter().map(|(_, key, data)| (key, data.as_slice()));
+                    crate::linked::embedded_payload_in_blocks(blocks, &id).map(|(_, bytes)| *blake3::hash(bytes).as_bytes())
+                });
+                digest.map(|digest| (order, digest))
+            });
         let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
+            historical_xcf_sample_order: historical.map(|(order, _)| order),
+            historical_xcf_link_digest: historical.map(|(_, digest)| digest),
+            linked_source_baseline: None,
             vector_preview,
             transform,
             smart_filters: stack.filters,
@@ -878,10 +907,10 @@ pub(crate) fn group_depth(file: &PsdFile) -> usize {
 /// Most pixel bytes the smart-filter `FEid` sources may keep decoded across one import.
 const MAX_UNFILTERED_BYTES: u64 = 1 << 30;
 
-const LAYER_INFO_KEYS: [&[u8; 4]; 50] = [
+const LAYER_INFO_KEYS: [&[u8; 4]; 51] = [
     b"luni", b"lyid", b"lnsr", b"lsct", b"lsdk", b"lspf", b"lclr", b"iOpa", b"clbl", b"infx", b"knko", b"tsly", b"lmgm", b"vmgm", b"brst", b"shmd", b"fxrp",
     b"lfx2", b"lfxs", b"lmfx", b"lrFX", b"lyvr", b"sn2P", b"cust", b"CgEd", b"vmsk", b"vsms", b"vogk", b"vowv", b"vstk", b"vscg", b"artb", b"artd", b"abdd",
-    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd",
+    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd", b"pcXO",
 ];
 
 /// The key of an adjustment layer whose type no mapper knows (#6575), e.g. Photoshop 4's
@@ -903,7 +932,12 @@ fn unknown_adjustment_key(rec: &LayerRecord) -> Option<[u8; 4]> {
 }
 
 fn preserved_blocks(rec: &LayerRecord) -> Vec<([u8; 4], Arc<Vec<u8>>)> {
-    rec.blocks.iter().filter(|b| !REGENERATED.contains(&&b.key)).map(|b| (b.key, Arc::new(b.data.clone()))).collect()
+    rec.blocks
+        .iter()
+        .filter(|b| !REGENERATED.contains(&&b.key))
+        .filter(|b| b.is_foreign_order() || !psd_appearance::known_tag(&b.key, &b.data))
+        .map(|b| (b.key, Arc::new(b.data.clone())))
+        .collect()
 }
 
 fn be_to_ne_plane(plane: &[u8], s: SampleType, n: usize) -> craft_psd::Result<Vec<u8>> {
@@ -1342,6 +1376,7 @@ fn psd_to_document_global(
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
+        historical_xcf_digests: Default::default(),
         ctl: *ctl,
         done: 0,
         uniform: Default::default(),

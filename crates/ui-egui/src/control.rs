@@ -117,6 +117,8 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod xcf_open_tests;
 
 pub(super) const METHODS: &[&str] = &[
     "app.open",

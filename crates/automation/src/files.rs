@@ -9,6 +9,13 @@ use photocraft_io::{BandRenderer, ExportOptions};
 
 use crate::AutomationError;
 
+/// Resolve fresh-source open controls through the engine's strict policy before
+/// the host reads a capability or admits a document. Missing historical order
+/// remains unanswered; compatibility byte-level APIs keep their separate default.
+pub fn import_options_from_params(params: &serde_json::Value) -> Result<photocraft_io::ImportOptions, AutomationError> {
+    Ok(photocraft_engine::file_cmds::import_options_from_params(Default::default(), params, "doc.open")?)
+}
+
 /// Result of opening a file.
 pub struct Opened {
     pub document: Document,

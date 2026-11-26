@@ -70,6 +70,7 @@ pub mod history_options_cmds;
 pub mod history_select_cmds;
 pub mod history_source_cmds;
 pub mod image_cmds;
+pub mod import_report_cmds;
 pub mod layer_copy_cmds;
 #[cfg(test)]
 mod layer_duplicate_new_document_history_tests;

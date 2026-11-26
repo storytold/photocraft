@@ -66,6 +66,13 @@ pub(crate) struct Preparing {
     made: Option<MadeLayer>,
 }
 
+/// Place owns its document until the box is ready and then committed or cancelled.
+/// Ordinary transform preparation does not hold unrelated Open completions.
+pub(crate) fn placing(app: &PhotocraftApp) -> bool {
+    app.ui.transform.as_ref().is_some_and(|transform| transform.made == Some(MadeLayer::Place))
+        || app.transform_preparing.as_ref().is_some_and(|preparing| preparing.made == Some(MadeLayer::Place))
+}
+
 /// The canvas key of an open box's preview document (`display_doc`).
 pub(crate) fn preview_key(session: u64) -> u64 {
     (1 << 40) + session

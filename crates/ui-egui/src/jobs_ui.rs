@@ -268,6 +268,7 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
         }
         JobOutcome::Cancelled => {}
     }
+    crate::open_prompt::advance(app);
     app.place_next_dropped(ctx);
 }
 
@@ -284,7 +285,17 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
+    let started = if app.background_jobs && !cfg!(target_arch = "wasm32") {
+        let options = photocraft_io::ImportOptions {
+            keep_raw: app.session.prefs().raw_defaults.open_in_camera_raw,
+            ..photocraft_engine::jobs::import_options(app.session.prefs())
+        };
+        app.session.start_open_for_user_with_options(name, source, &options, true)
+    } else {
+        // Foreground/web policy remains outside this desktop background-Open prototype.
+        app.session.start_open_for_user_with_background(name, source, app.background_jobs)
+    };
+    match started.map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
@@ -296,7 +307,7 @@ pub fn start_open(
 }
 
 /// A file opening in the background gets its tab: focused, with the status line naming it.
-fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
+pub(crate) fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &tab.name)]);
     app.jobs.focus = Some(tab.job);
     app.jobs.opens.push(tab);
@@ -348,8 +359,13 @@ pub(crate) fn opened_in_order(jobs: &mut JobsUi, order: OpenOrder) {
 /// Every member of the set has been started: forget it unless some are still opening, waiting on
 /// their prompt (memory, profile or damage), or waiting for a prompt to clear.
 pub(crate) fn end_batch(app: &mut PhotocraftApp) {
-    let waiting: Vec<u64> =
-        app.held_memory_prompts.iter().filter_map(|m| m.order.map(|o| o.batch)).chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch))).collect();
+    let waiting: Vec<u64> = app
+        .held_memory_prompts
+        .iter()
+        .filter_map(|m| m.order.map(|o| o.batch))
+        .chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch)))
+        .chain(app.held_historical_opens.iter().filter_map(|h| h.order.map(|o| o.batch)))
+        .collect();
     let JobsUi { opens, batches, .. } = &mut app.jobs;
     batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id)) || waiting.contains(&b.id));
 }
@@ -392,6 +408,11 @@ pub fn start_save(
     automation: bool,
 ) -> Result<Option<(String, Vec<String>)>, String> {
     let st = app.session.active().ok_or("no document")?;
+    if automation {
+        app.check_automation_save_destination(st, &path)?;
+    } else {
+        photocraft_engine::file_cmds::check_import_destination(st, &path).map_err(|error| error.to_string())?;
+    }
     if let Some(j) = app.session.job_on(st.doc.id) {
         // The engine's wording for a command refused while a job runs.
         return Err(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", j.label));
@@ -489,9 +510,9 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    for e in app.session.poll_jobs() {
-        on_event(app, ctx, e);
-    }
+    let focused_before_poll = app.session.active().map(|state| state.doc.id);
+    let events = app.session.poll_jobs();
+    finish_ready_events(app, ctx, events, focused_before_poll);
     // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
     if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {
         app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
@@ -516,6 +537,31 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else {
             cancel(app, job.id);
         }
+    }
+}
+
+/// Apply shell results after the engine's poll has published all ready jobs. Place's
+/// event waits until completed Opens have entered the existing hold, in either order.
+fn finish_ready_events(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<JobEvent>, focused_before_poll: Option<DocId>) {
+    let mut place = None;
+    let mut admitted_open = false;
+    for event in events {
+        if app.jobs.place.as_ref().is_some_and(|job| job.job == event.id) {
+            place = Some(event);
+        } else {
+            admitted_open |= (event.command == OPEN_JOB || app.jobs.opens.iter().any(|tab| tab.job == event.id))
+                && matches!(&event.outcome, JobOutcome::Done(result) if result["docId"].is_u64());
+            on_event(app, ctx, event);
+        }
+    }
+    if let Some(event) = place {
+        if admitted_open
+            && app.jobs.place.as_ref().is_some_and(|place| Some(place.doc) == focused_before_poll)
+            && let Some(index) = app.session.documents().iter().position(|state| Some(state.doc.id) == focused_before_poll)
+        {
+            app.session.set_active(index);
+        }
+        on_event(app, ctx, event);
     }
 }
 
@@ -695,6 +741,12 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
 /// document, so an inline completion lands where a background tab would.
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+    if let Some(id) = v.get("heldHistoricalXcfOpen").and_then(Value::as_u64) {
+        return crate::dialogs::historical_open::arrive(
+            app,
+            crate::dialogs::historical_open::Pending { id, name: name.to_string(), path: path.map(str::to_string), slot, order },
+        );
+    }
     if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
         let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
         let available = v.get("availableRam").and_then(Value::as_u64);
@@ -716,9 +768,13 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
-        doc,
-        read_only,
+    let held = |imported: photocraft_engine::jobs::HeldImportedDocument, question, policy_applied| crate::open_prompt::Held {
+        doc: imported.document,
+        read_only: imported.source_read_only,
+        initial_view: imported.initial_view,
+        // Byte workers cannot return a filesystem origin. Preserve a shell path
+        // already captured for this Open, without granting it ordinary Save.
+        protected_import_source: imported.protected_import_source.or_else(|| path.filter(|_| imported.source_read_only).map(str::to_string)),
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -732,21 +788,43 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     };
     // Held back for the profile prompt (Ask When Opening).
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
-        let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        let imported = app.session.take_held_open_with_view(id).ok_or("the open job's document is gone")?;
+        crate::open_prompt::arrive(app, held(imported, v.get("color").filter(|q| !q.is_null()).cloned(), false));
         return Ok(());
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
     // handler may have moved or closed tabs, so the apply-time index is no longer authority.
     let document = v.get("docId").and_then(Value::as_u64).map(DocId).ok_or("the open job returned no document identity")?;
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the open job's document is missing")?;
+    if let Some(path) = path
+        && let Some(state) = app.session.document_mut(document)
+        && state.source_read_only
+        && state.protected_import_source.is_none()
+    {
+        // Bind the known shell origin to this validated identity before it can
+        // be closed/requeued; another tab's path is never a fallback authority.
+        state.protected_import_source = Some(path.to_string());
+    }
     // An earlier file is waiting on its prompt: this document waits after it, in order.
     if crate::open_prompt::waiting(app)
-        && let Some(st) = app.session.close(index)
+        && let Some(mut st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
+        let protected_import_source = st.protected_import_source.clone();
+        let initial_view = st.take_fresh_import_view();
+        // Closing the admitted result restored the prior document; keep its tool target
+        // authoritative while this import waits instead of leaving the import's mask active.
+        app.session.sync_tools_mask_target();
+        app.sync_views();
         let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        crate::open_prompt::arrive(
+            app,
+            held(
+                photocraft_engine::jobs::HeldImportedDocument { document: doc, source_read_only: read_only, initial_view, protected_import_source },
+                None,
+                true,
+            ),
+        );
         return Ok(());
     }
     if let Some(slot) = tab_slot(app, slot, order) {
@@ -772,6 +850,8 @@ pub(crate) fn after_open(
         app.opened_from(p);
     }
     app.sync_views();
+    // This tab has passed the requeue decision even if other Opens still run.
+    crate::vector_ui::apply_imported_path_selection(app);
     // Fonts the document's type uses that aren't installed join the import warnings (#4559).
     let warnings = crate::file_open::with_missing_fonts(app, warnings.to_vec());
     let warnings = warnings.as_slice();
