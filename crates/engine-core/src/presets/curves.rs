@@ -191,16 +191,16 @@ fn space_name(space: ToneSpace) -> &'static str {
     }
 }
 
-/// What a dialog can take from a preset: the channels of one colour mode, one channel of that mode
-/// (what a dialog the Channels panel has aimed at a single colour component edits, beside its
-/// composite curve), or the composite curve alone. A gray document - and a mask or saved channel,
-/// which holds gray levels - edits its tone in the composite curve only, so a preset with channel
-/// curves has no place there even when its channels are the ones the document's colour mode would
-/// have.
-#[derive(Clone, Copy, PartialEq)]
+/// What a dialog can take from a preset: the channels of one colour mode; the part of a mode a
+/// dialog aimed at the Channels panel's selection edits - those components, and the combined curve
+/// when its panel lists one (a colour set does, an isolated single component does not); or the
+/// composite curve alone. A gray document - and a mask or saved channel, which holds gray levels -
+/// edits its tone in the composite curve only, so a preset with channel curves has no place there
+/// even when its channels are the ones the document's colour mode would have.
+#[derive(Clone, PartialEq)]
 enum Applies {
     Space(ToneSpace),
-    Channel(ToneSpace, &'static str),
+    Parts(ToneSpace, Vec<&'static str>, bool),
     Composite,
 }
 
@@ -228,75 +228,107 @@ fn channel_owner(name: &str) -> Option<(ToneSpace, &'static str)> {
     None
 }
 
-/// A `space` parameter and the `channel` beside it: what the caller's dialog can edit. A channel
-/// knows the colour mode it belongs to, so a host that names only a channel is checked the same way;
-/// naming a mode beside it that disagrees, or a channel that is not one, is an error rather than a
-/// silent choice of which half to believe.
+/// The `channel` parameter as given: one name or a list of them.
+fn named_channels(cmd: &str, p: &Value) -> Result<Vec<String>> {
+    Ok(match p.get("channel") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::String(one)) => vec![one.trim().to_ascii_lowercase()],
+        Some(Value::Array(list)) => {
+            let mut names = Vec::new();
+            for entry in list {
+                match entry.as_str() {
+                    Some(one) => names.push(one.trim().to_ascii_lowercase()),
+                    None => return Err(bad(cmd, format!("`channel` must name channels, not {entry}"))),
+                }
+            }
+            names
+        }
+        Some(other) => return Err(bad(cmd, format!("`channel` must be a channel name or a list of them, not {other}"))),
+    })
+}
+
+/// A `space` parameter, the `channel` or channels beside it, and whether that panel also lists the
+/// combined curve: what the caller's dialog can edit. A channel knows the colour mode it belongs to,
+/// so a host that names only channels is checked the same way; naming a mode that disagrees, or
+/// channels of more than one mode, is an error rather than a silent choice of which half to believe.
 fn wanted_space(cmd: &str, p: &Value) -> Result<Option<Applies>> {
     let want = match p.get("space") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => Some(s.trim().to_ascii_lowercase()),
         Some(_) => return Err(bad(cmd, "`space` must be \"rgb\", \"cmyk\", \"lab\" or \"gray\"")),
     };
-    let named = match p.get("channel") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(c)) => Some(c.trim().to_ascii_lowercase()),
-        Some(_) => return Err(bad(cmd, "`channel` must name one channel, such as \"green\"")),
-    };
-    let Some(named) = named else {
+    let named = named_channels(cmd, p)?;
+    let Some(first) = named.first() else {
         return Ok(match want {
             None => None,
             Some(want) => Some(space_applies(cmd, &want)?),
         });
     };
-    let (owner, key) = channel_owner(&named).ok_or_else(|| bad(cmd, format!("`channel` must name a channel the Curves command knows, not \"{named}\"")))?;
+    let mut keys: Vec<&'static str> = Vec::new();
+    let Some((owner, key)) = channel_owner(first) else {
+        return Err(bad(cmd, format!("`channel` must name a channel the Curves command knows, not \"{first}\"")));
+    };
+    keys.push(key);
+    for name in named.iter().skip(1) {
+        let Some((space, key)) = channel_owner(name) else {
+            return Err(bad(cmd, format!("`channel` must name a channel the Curves command knows, not \"{name}\"")));
+        };
+        if space != owner {
+            return Err(bad(cmd, format!("`channel` names channels of {} and {}, which is more than one colour mode", space_name(owner), space_name(space))));
+        }
+        keys.push(key);
+    }
+    let combined = match p.get("combined") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(bad(cmd, "`combined` must be true or false")),
+    };
     if let Some(want) = &want
         && space_applies(cmd, want)? != Applies::Space(owner)
     {
-        return Err(bad(cmd, format!("`channel` \"{named}\" belongs to {}, not to \"{want}\"", space_name(owner))));
+        return Err(bad(cmd, format!("`channel` \"{first}\" belongs to {}, not to \"{want}\"", space_name(owner))));
     }
-    Ok(Some(Applies::Channel(owner, key)))
+    Ok(Some(Applies::Parts(owner, keys, combined)))
 }
 
 /// Why a preset whose curves the open dialog cannot show is refused instead of applied in pieces,
 /// naming what has no place. Reading a file into the user's list is one thing; writing curves into a
-/// dialog that will drop them on the way to OK is a silent half-apply. A dialog aimed at a single
-/// colour component holds that component's curve - its composite curve stays the straight line the
-/// neutral adjustment starts from, exactly as the hidden curves of a gray plane do (#5335).
+/// dialog that will drop them on the way to OK is a silent half-apply. A dialog aimed at part of its
+/// mode holds the curves its panel lists: the selected components, and the combined curve only where
+/// the panel lists one - a single isolated component lists none, so its composite stays the straight
+/// line the neutral adjustment starts from, as the hidden curves of a gray plane do (#5335).
 fn check_space(cmd: &str, curves: &Value, want: Applies) -> Result<()> {
-    let Some(found) = curves_space(curves) else {
-        return aimed_composite(cmd, curves, want);
-    };
-    if let Applies::Space(space) = want
-        && found == space
+    if let Applies::Parts(space, keys, combined) = &want {
+        let here = aimed_here(*space, keys, *combined);
+        let found = curves_space(curves);
+        let named: Vec<&'static str> = found.map(|of| moved_channels(of, curves)).unwrap_or_default().into_iter().filter(|key| !keys.contains(key)).collect();
+        if !named.is_empty() {
+            return Err(bad(cmd, format!("the preset curves {} for {} do not fit {here}", named.join(", "), space_name(found.unwrap_or(*space)))));
+        }
+        if !*combined && moves_composite(curves) {
+            return Err(bad(cmd, format!("the preset's composite curve does not fit {here}")));
+        }
+        return Ok(());
+    }
+    let Some(found) = curves_space(curves) else { return Ok(()) };
+    if let Applies::Space(space) = &want
+        && found == *space
     {
         return Ok(());
     }
-    let keys = |space: ToneSpace| adjust_params::channel_keys(space).join(", ");
-    let (only, here) = match want {
-        Applies::Space(space) => (None, format!("this {} dialog, which has {}", space_name(space), keys(space))),
-        Applies::Channel(space, key) => (Some(key), format!("this {} dialog aimed at {key}, which edits the {key} curve alone", space_name(space))),
-        Applies::Composite => (Some(""), "this gray dialog, which edits the composite curve only".to_string()),
+    let here = match &want {
+        Applies::Space(space) => format!("this {} dialog, which has {}", space_name(*space), adjust_params::channel_keys(*space).join(", ")),
+        _ => "this gray dialog, which edits the composite curve only".to_string(),
     };
-    let named: Vec<&'static str> = moved_channels(found, curves).into_iter().filter(|key| Some(*key) != only).collect();
-    if named.is_empty() {
-        return aimed_composite(cmd, curves, want);
-    }
+    let named = moved_channels(found, curves);
     Err(bad(cmd, format!("the preset curves {} for {} do not fit {here}", named.join(", "), space_name(found))))
 }
 
-/// A dialog aimed at one colour component lists that component and nothing else, so it holds no
-/// composite curve either: a preset that moves the composite is refused there, exactly as the hidden
-/// channel curves of a gray plane are kept neutral (#5335).
-fn aimed_composite(cmd: &str, curves: &Value, want: Applies) -> Result<()> {
-    let Applies::Channel(space, key) = want else { return Ok(()) };
-    if moves_composite(curves) {
-        return Err(bad(
-            cmd,
-            format!("the preset's composite curve does not fit this {} dialog aimed at {key}, which edits the {key} curve alone", space_name(space)),
-        ));
-    }
-    Ok(())
+/// How a dialog aimed at part of its colour mode is named in a refusal: the components its panel
+/// lists, and the combined curve when the panel lists one.
+fn aimed_here(space: ToneSpace, keys: &[&'static str], combined: bool) -> String {
+    let listed = if combined { format!("{} and its combined curve", keys.join(", ")) } else { keys.join(", ") };
+    format!("this {} dialog aimed at {listed}, which edits those curves alone", space_name(space))
 }
 
 /// The preset in `bytes`, or why the file is not one. A file naming no curve of its own comes back
@@ -502,7 +534,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Load Curve Preset…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".pcrv file"?,"data":base64 bytes?,"space":"rgb"|"cmyk"|"lab"|"gray"? (the colour mode the curves are applied in: a preset whose channels belong to another one is refused, naming them, and `gray` - a dialog that edits the composite curve only - refuses any channel curve),"channel":"red"|"green"|"blue"|"cyan"|"magenta"|"yellow"|"black"|"lightness"|"a"|"b"? (the one channel a dialog aimed at a single colour component edits: its panel lists that channel alone, so a preset moving any other channel or the composite curve is refused, naming what has no place)} → {name, curves (params for image.adjustments.curves), count, current} (Curves dialog › gear › Load Preset…)"##,
+            params: r##"{"path":".pcrv file"?,"data":base64 bytes?,"space":"rgb"|"cmyk"|"lab"|"gray"? (the colour mode the curves are applied in: a preset whose channels belong to another one is refused, naming them, and `gray` - a dialog that edits the composite curve only - refuses any channel curve),"channel":"red"|"green"|"blue"|"cyan"|"magenta"|"yellow"|"black"|"lightness"|"a"|"b"?, or a list of them (the components a dialog aimed at part of its colour mode lists; a name that is not a channel, channels of two modes together, or a mode beside them that disagrees is an error),"combined":bool (the panel also lists the set's combined entry, which is its composite curve; a single component lists none)} → {name, curves (params for image.adjustments.curves), count, current} (Curves dialog › gear › Load Preset…)"##,
             enabled: always,
             run: load,
             journal: true,

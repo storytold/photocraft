@@ -881,27 +881,40 @@ fn save_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, Str
 }
 
 /// What the open dialog edits of a curve, as `curves.presets.load` spells it: the colour mode, and
-/// the one channel when the Channels panel has aimed the dialog at a single colour component - that
-/// panel lists the component alone, so it holds no other channel and no composite curve of its own.
-/// A gray document, or a mask or saved channel holding its own gray levels, edits its tone in the
-/// composite curve alone - the editor draws no channel curves for it - and is named `gray`. The
+/// when the Channels panel has aimed the dialog at part of the image, the curves its channel list
+/// shows - the selected components, and their combined entry where the panel lists one (aimed at a
+/// single component it lists that component alone, so that dialog holds no composite curve of its
+/// own). A gray document, or a mask or saved channel holding its own gray levels, edits its tone in
+/// the composite curve alone - the editor draws no channel curves for it - and is named `gray`. The
 /// preset's curves are checked against this, so a preset the dialog would quietly lose on the way to
 /// OK is refused instead.
-fn dialog_target(app: &PhotocraftApp, id: DialogId) -> Option<(&'static str, Option<&'static str>)> {
+fn dialog_target(app: &PhotocraftApp, id: DialogId) -> Option<(&'static str, Option<Vec<&'static str>>, bool)> {
     let open = app.adjust_open.iter().find(|open| open.id == id)?;
     if gray_context(app, "curves", &open.target) {
-        return Some(("gray", None));
+        return Some(("gray", None, false));
     }
-    let space = match photocraft_engine::adjust_params::default_space(open.mode) {
+    let tone = photocraft_engine::adjust_params::default_space(open.mode);
+    let space = match tone {
         photocraft_doc::adjust::ToneSpace::Rgb => "rgb",
         photocraft_doc::adjust::ToneSpace::Cmyk => "cmyk",
         photocraft_doc::adjust::ToneSpace::Lab => "lab",
     };
-    // A single colour component isolated in the Channels panel names one curve key. A colour *set*
-    // lists its combined entry and each of its components, so it names no single channel and stays
-    // checked by its colour mode, as it was.
-    let channel = open.target.channel.as_ref().filter(|isolated| isolated.components.is_none() && !isolated.key.is_empty()).map(|isolated| isolated.key);
-    Some((space, channel))
+    let Some(isolated) = open.target.channel.as_ref() else {
+        return Some((space, None, false));
+    };
+    if let Some(colors) = isolated.components {
+        // A colour set: the panel lists the set's combined entry, which edits the composite curve,
+        // and each selected component. The components it left out have no place in this dialog.
+        let keys: Vec<&'static str> = colors.indices().filter_map(|at| photocraft_engine::adjust_params::channel_keys(tone).get(at).copied()).collect();
+        if keys.is_empty() {
+            return Some((space, None, false));
+        }
+        return Some((space, Some(keys), true));
+    }
+    if isolated.key.is_empty() {
+        return Some((space, None, false));
+    }
+    Some((space, Some(vec![isolated.key]), false))
 }
 
 /// The open dialog's parameters, only when `id` is still the Curves dialog that is open: the file
@@ -918,10 +931,11 @@ fn load_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, Str
         // after the dialog closed leaves no preset in the user's list.
         let held = open_curve_params(app, id).ok_or("the Curves dialog closed")?;
         let mut asked = crate::swatches_ui::source(&name, &bytes);
-        if let Some((space, channel)) = dialog_target(app, id) {
+        if let Some((space, channels, combined)) = dialog_target(app, id) {
             asked["space"] = json!(space);
-            if let Some(channel) = channel {
-                asked["channel"] = json!(channel);
+            if let Some(channels) = channels {
+                asked["channel"] = json!(channels);
+                asked["combined"] = json!(combined);
             }
         }
         let loaded = app.run("curves.presets.load", asked)?;

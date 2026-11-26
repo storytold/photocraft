@@ -505,6 +505,61 @@ fn a_curves_dialog_editing_only_green_refuses_a_preset_that_moves_red() {
 }
 
 #[test]
+fn a_green_plus_blue_target_refuses_a_preset_that_moves_red() {
+    let mut s = crate::session();
+    // A current preset is in place first, so the refusal is checked against the selection the load
+    // was about to change.
+    save(&mut s, &json!({"curves": one_curve(), "name": "Chosen"})).expect("a save works");
+    let before = list(&mut s);
+    // The Channels panel selecting Green and Blue: that dialog lists the set's combined entry and
+    // each of its two components, and nothing else.
+    let outside = json!({
+        "points": [[0.0, 0.0], [255.0, 255.0]],
+        "red": [[0.0, 20.0], [255.0, 235.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+        "blue": [[0.0, 0.0], [255.0, 200.0]],
+    });
+    let data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "All three".into(), curves: outside }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": data.clone(), "space": "rgb", "channel": ["green", "blue"], "combined": true})).unwrap_err().to_string();
+    assert!(err.contains("red"), "the refusal names the component this target left out: {err}");
+    assert!(err.contains("green") && err.contains("blue"), "and says which components it does edit: {err}");
+    assert_eq!(list(&mut s), before, "the refusal runs before the list and the current preset change");
+    // What that set can show - its two components and their combined entry - loads.
+    let inside = json!({
+        "points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+        "blue": [[0.0, 0.0], [255.0, 200.0]],
+    });
+    let inside_data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Green and blue".into(), curves: inside }).expect("a preset writes"));
+    assert!(
+        load(&mut s, &json!({"data": inside_data.clone(), "space": "rgb", "channel": ["green", "blue"], "combined": true})).is_ok(),
+        "the set's components and their combined curve load"
+    );
+    assert_eq!(list(&mut s)["count"], 2, "and that preset is recorded, as it should be");
+    // Without the combined entry the panel draws no line for that curve: the same preset is refused,
+    // as it is for a single isolated component.
+    assert!(
+        load(&mut s, &json!({"data": inside_data, "space": "rgb", "channel": ["green", "blue"]})).is_err(),
+        "a bent composite needs the combined entry listed"
+    );
+    // A set that spans two colour modes, a name that is not a channel, and a mode that disagrees with
+    // the set are errors rather than a silent choice of which half to believe.
+    assert!(load(&mut s, &json!({"data": data.clone(), "space": "rgb", "channel": ["green", "cyan"]})).is_err(), "a set spanning two colour modes is an error");
+    assert!(
+        load(&mut s, &json!({"data": data.clone(), "space": "cmyk", "channel": ["green", "blue"]})).is_err(),
+        "a mode that disagrees with the set is an error"
+    );
+    assert!(load(&mut s, &json!({"data": data, "space": "rgb", "channel": ["green", "chartreuse"]})).is_err(), "and so is a name that is not a channel");
+    // A dialog over the whole image is checked as it always was.
+    let all = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset {
+        name: "All channels".into(),
+        curves: json!({"points": [[0.0, 0.0], [255.0, 255.0]], "red": [[0.0, 20.0], [255.0, 235.0]], "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]], "blue": [[0.0, 0.0], [255.0, 200.0]]}),
+    })
+    .expect("a preset writes"));
+    assert!(load(&mut s, &json!({"data": all, "space": "rgb"})).is_ok(), "the whole-mode dialog takes every channel");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();

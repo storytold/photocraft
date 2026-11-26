@@ -304,6 +304,60 @@ fn a_gear_load_into_a_green_channel_dialog_refuses_a_preset_that_moves_red() {
 }
 
 #[test]
+fn a_gear_load_into_a_green_and_blue_target_refuses_a_preset_that_moves_red() {
+    let files = Arc::new(ScriptedFiles::held());
+    let mut application = app(files.clone());
+    application.run("channel.target", json!({"colors": [1, 2]})).expect("Green and Blue are the edit target");
+    let mut h = harness(application);
+    let id = adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the Curves dialog opens");
+    h.run_steps(4);
+    let before = params(&h, id);
+    // A preset of all three channels: the set lists Green and Blue and their combined entry, so the
+    // Red curve it also carries has no line to show it on.
+    let three = json!({
+        "points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]],
+        "red": [[0.0, 20.0], [255.0, 235.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+        "blue": [[0.0, 0.0], [255.0, 200.0]],
+    });
+    let stored_three = photocraft_engine::adjust_params::to_params(
+        &photocraft_engine::adjust_params::from_params("curves", &three, None, photocraft_doc::ColorMode::Rgb).expect("the parameters parse"),
+    );
+    let bytes = curves::to_bytes(&CurvePreset { name: "All three".into(), curves: stored_three.clone() }).expect("a preset writes");
+
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("All three.pcrv"), &bytes);
+
+    let state = h.state();
+    assert!(state.ui.status_error, "the set refuses a preset whose red curve it has no line for, instead of dropping it on the way to OK");
+    assert!(state.ui.status.contains("red"), "the message names the component this target left out: {}", state.ui.status);
+    assert_eq!(params(&h, id), before, "and the dialog keeps the curve it had");
+    assert!(state.session.presets().curves_presets.is_empty(), "nothing was added to the user's preset list");
+    assert!(state.session.presets().curves_preset.is_none(), "and nothing became current: the refusal runs before the selection changes");
+
+    // What the set does list - its two components and their combined entry - loads.
+    let inside = json!({
+        "points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+        "blue": [[0.0, 0.0], [255.0, 200.0]],
+    });
+    let stored = photocraft_engine::adjust_params::to_params(
+        &photocraft_engine::adjust_params::from_params("curves", &inside, None, photocraft_doc::ColorMode::Rgb).expect("the parameters parse"),
+    );
+    let bytes = curves::to_bytes(&CurvePreset { name: "Green and blue".into(), curves: stored.clone() }).expect("a preset writes");
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Green and blue.pcrv"), &bytes);
+    assert!(!h.state().ui.status_error, "the set's own curves load: {}", h.state().ui.status);
+    let after = params(&h, id);
+    assert_eq!(after["green"], stored["green"], "its green curve reaches the dialog");
+    assert_eq!(after["blue"], stored["blue"], "and so does its blue one");
+    assert_eq!(after["points"], stored["points"], "and so does the combined entry the panel lists");
+    assert_eq!(h.state().session.presets().curves_presets.len(), 1, "and that preset is in the user's list");
+}
+
+#[test]
 fn a_preset_of_the_same_colour_mode_loads_into_the_dialog() {
     // The dialog's own mode: the same curves that `stored_curves()` holds, named rgb.
     let files = Arc::new(ScriptedFiles::held());
