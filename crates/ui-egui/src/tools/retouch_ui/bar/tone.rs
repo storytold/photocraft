@@ -4,6 +4,7 @@ use craft::behavior::IconId;
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Segmented;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::dialog::{Alert, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog, dialog_id};
 use craft::ui::display::Divider;
 use craft::ui::primitives::IconSpec;
 use craft::ui::text::RangeAlert;
@@ -81,9 +82,17 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     // The cell writes only on a commit, so a shared fraction is not rounded (#12650).
     let strength = number(tl!("Strength"), &mut o.strength, 1.0..=100.0).whole().unit("%").show(ui).out_of_range;
-    // Sharpen's Angle follows Strength (#12946); the bar shows either field's range alert.
-    let angle = if tool == Tool::Sharpen { brush_angle(ui, app) } else { None };
-    let strength = strength.or(angle);
+    let alert = match tool {
+        Tool::Blur => {
+            let _ = app.framework.dialogs.take::<BlurAngleAlert>();
+            if brush_angle(ui, app).is_some() {
+                show_blur_angle_alert(app);
+            }
+            strength
+        }
+        Tool::Sharpen => strength.or(brush_angle(ui, app)),
+        _ => strength,
+    };
     let o = &mut app.ui.tool_options;
     if let Some(all) = o.sample_all.slot(tool) {
         check(ui, tl!("Sample All Layers"), all, true, None);
@@ -94,7 +103,7 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     if tool == Tool::Smudge {
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
     }
-    strength
+    alert
 }
 
 /// The brush Angle cell, as the Background Eraser's: whole degrees -180..180 over the tool's own
@@ -102,16 +111,39 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
 fn brush_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
-    let out = number(tl!("Angle"), &mut brush.angle, -180.0..=180.0)
-        .whole()
-        .unit("°")
-        .icon(IconSpec::svg(IconId::new("rotate_cw")))
-        .tooltip(tl!("Set the brush angle"))
-        .show(ui);
+    let out = crate::eraser_ui::brush_angle_field(&mut brush.angle).show(ui);
     // One scrub is one gesture, so one history step.
     let key = out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
     crate::brush_panel::commit_keyed(app, &before, &brush, key);
     out.out_of_range
+}
+
+fn show_blur_angle_alert(app: &mut PhotocraftApp) {
+    let message = tl!("Invalid numeric entry. An integer between -180 ° and 180 ° is required. Restored last valid value.");
+    app.framework.dialogs.open(BlurAngleAlert(HostedAlert::new(Alert::new(tl!("PhotoCraft"), message))));
+}
+
+/// The Blur angle alert can stay open when another field opens a standard range alert.
+struct BlurAngleAlert(HostedAlert);
+
+impl StackDialog for BlurAngleAlert {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id("blurAngleAlert")
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, stack: &DialogStack) -> Option<DialogResult<()>> {
+        self.0.show(ui, stack)
+    }
+
+    fn confirm(&mut self, ctx: &egui::Context) -> Option<()> {
+        self.0.confirm(ctx)
+    }
+
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        self.0.json_fields()
+    }
 }
 
 /// The options of Color Replacement.
@@ -144,3 +176,7 @@ pub(super) fn color_replacement(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> O
 #[cfg(test)]
 #[path = "../../../sharpen_bar_angle_tests.rs"]
 mod sharpen_bar_angle_tests;
+
+#[cfg(test)]
+#[path = "../../../blur_bar_angle_tests.rs"]
+mod blur_bar_angle_tests;

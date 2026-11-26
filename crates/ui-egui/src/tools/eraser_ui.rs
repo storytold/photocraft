@@ -178,6 +178,15 @@ fn magic_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let _ = option_cells::number(tl!("Opacity:"), &mut o.magic_eraser_opacity, 1.0..=100.0).unit("%").show(ui);
 }
 
+/// The brush tip's whole-degree angle control in a tool's options bar.
+pub(crate) fn brush_angle_field(angle: &mut f32) -> option_cells::NumberCell<'_> {
+    option_cells::number(tl!("Angle"), angle, -180.0..=180.0)
+        .whole()
+        .unit("°")
+        .icon(IconSpec::svg(IconId::new("rotate_cw")))
+        .tooltip(tl!("Set the brush angle"))
+}
+
 fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let mut alerts = Vec::new();
     {
@@ -232,16 +241,9 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per tool).
     let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
-    let mut angle = brush.angle;
-    let angle_out = option_cells::number(tl!("Angle"), &mut angle, -180.0..=180.0)
-        .whole()
-        .unit("°")
-        .icon(IconSpec::svg(IconId::new("rotate_cw")))
-        .tooltip(tl!("Set the brush angle"))
-        .show(ui);
+    let angle_out = brush_angle_field(&mut brush.angle).show(ui);
     // One scrub is one gesture, so one history step.
     let mut key = angle_out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
-    brush.angle = angle;
     alerts.extend(angle_out.out_of_range);
 
     check(ui, tl!("Protect Foreground Color"), &mut app.ui.tool_options.bg_protect_fg, Some(tl!("Do not erase the foreground swatch color")));
