@@ -1539,10 +1539,10 @@ fn print_one_copy(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- Package ----------
 
 /// An existing package folder (#14075): without `overwrite` an error naming it, before anything is
-/// written; with it the old folder is removed as a whole, so the new package does not merge into
-/// it. A file or a symbolic link in its place is refused, not removed.
-fn replace_package_folder(cmd: &str, folder: &str, overwrite: bool) -> Result<()> {
-    let Ok(meta) = std::fs::symlink_metadata(folder) else { return Ok(()) };
+/// written; with it `true`, and the new package later replaces it as a whole (it is not merged
+/// into it). A file or a symbolic link in its place is refused, not removed.
+fn check_package_folder(cmd: &str, folder: &str, overwrite: bool) -> Result<bool> {
+    let Ok(meta) = std::fs::symlink_metadata(folder) else { return Ok(false) };
     if !meta.is_dir() {
         let what = if meta.file_type().is_symlink() { "a symbolic link" } else { "a file" };
         return Err(other(format!("cannot package into {folder}: it is {what}, not a package folder")));
@@ -1550,7 +1550,35 @@ fn replace_package_folder(cmd: &str, folder: &str, overwrite: bool) -> Result<()
     if !overwrite {
         return Err(bad(cmd, format!("the package folder {folder} already exists: pass \"overwrite\": true to replace it")));
     }
-    std::fs::remove_dir_all(folder).map_err(|e| other(format!("cannot replace the package folder {folder}: {e}")))
+    Ok(true)
+}
+
+/// A sibling of `folder` that does not exist yet: `.<name>.<tag>`, numbered when taken.
+fn package_sibling(folder: &str, tag: &str) -> Result<String> {
+    let (parent, name) = folder.rsplit_once('/').ok_or_else(|| other(format!("cannot package into {folder}")))?;
+    (0..1000)
+        .map(|n| if n == 0 { format!("{parent}/.{name}.{tag}") } else { format!("{parent}/.{name}.{tag}-{n}") })
+        .find(|p| std::fs::symlink_metadata(p).is_err())
+        .ok_or_else(|| other(format!("cannot package into {folder}: no free name for a temporary folder next to it")))
+}
+
+/// Moves the finished package `built` to `folder`, replacing the old one (`existed`) only now, so
+/// a failure before this leaves it as it was. The old one is moved aside first and put back if
+/// the new one can't take its place.
+fn install_package(built: &str, folder: &str, existed: bool) -> Result<()> {
+    let fail = |e: std::io::Error| other(format!("cannot replace the package folder {folder}: {e}"));
+    if !existed {
+        return std::fs::rename(built, folder).map_err(fail);
+    }
+    let old = package_sibling(folder, "package-old")?;
+    std::fs::rename(folder, &old).map_err(fail)?;
+    if let Err(e) = std::fs::rename(built, folder) {
+        return Err(match std::fs::rename(&old, folder) {
+            Ok(()) => fail(e),
+            Err(back) => other(format!("cannot replace the package folder {folder}: {e}; the old package is in {old} ({back})")),
+        });
+    }
+    std::fs::remove_dir_all(&old).map_err(|e| other(format!("the package is in {folder}, but its old copy {old} could not be removed: {e}")))
 }
 
 fn package(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1563,7 +1591,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = std::path::absolute(dir).map_or_else(|_| dir.to_string(), |d| d.to_string_lossy().into_owned());
     let dir = crate::file_cmds::forward_slashes(dir);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let mut doc = (*d.doc).clone();
+    let doc = (*d.doc).clone();
     let document = d.path.clone();
     let name = stem(&d.path.clone().unwrap_or_else(|| doc.name.clone()));
     // The native format keeps external links; our PSD writer has no `lnkE` (external linked
@@ -1580,8 +1608,24 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     // `sanitize` gives one plain name (no separator, no `.` or `..`), so the package folder is
     // always a child of `dir`: replacing it never touches `dir` or anything else in it.
     let folder = join(&dir, &crate::file_cmds::sanitize(&name));
-    replace_package_folder(cmd, &folder, overwrite)?;
-    let links_dir = join(&folder, "Links");
+    let existed = check_package_folder(cmd, &folder, overwrite)?;
+    // The package is built next to `folder` and moved there when done: an earlier package in
+    // `folder` may be the document itself, its links still read from there.
+    let build = package_sibling(&folder, "package-new")?;
+    std::fs::create_dir_all(&dir).and_then(|()| std::fs::create_dir(&build)).map_err(|e| other(format!("cannot create {build}: {e}")))?;
+    let packaged = build_package(doc, document.as_deref(), &name, &ext, &folder, &build);
+    let result = packaged.and_then(|r| install_package(&build, &folder, existed).map(|()| r));
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&build);
+    }
+    result
+}
+
+/// Writes the package of `doc` into `build`, linked to the paths it will have once `build` is
+/// moved to `folder`.
+fn build_package(mut doc: Document, document: Option<&str>, name: &str, ext: &str, folder: &str, build: &str) -> Result<Value> {
+    let links_dir = join(folder, "Links");
+    let build_links = join(build, "Links");
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
@@ -1598,13 +1642,12 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
             Some((_, t)) => t.clone(),
             None => {
                 // A name no earlier copy has, ignoring case (macOS and Windows folders do): a
-                // renamed copy can't take the name of another link either. A file already in
-                // Links (an earlier package into the same folder) is never overwritten.
+                // renamed copy can't take the name of another link either.
                 let base = file_name(path);
                 let taken = |n: &str| {
                     copied.iter().any(|(_, t)| file_name(t).to_lowercase() == n.to_lowercase())
-                        || std::path::Path::new(&join(&links_dir, n)).exists()
-                        || std::fs::read_dir(&links_dir)
+                        || std::path::Path::new(&join(&build_links, n)).exists()
+                        || std::fs::read_dir(&build_links)
                             .ok()
                             .into_iter()
                             .flatten()
@@ -1624,14 +1667,14 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 let t = join(&links_dir, &fname);
                 // A path that is not followed is packaged as missing, like a file that is gone.
-                let Ok(file) = crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)) else {
+                let Ok(file) = crate::doc_path::resolve_in(path, document.map(std::path::Path::new)) else {
                     missing.push(path.clone());
                     continue;
                 };
                 // Only a file PhotoCraft can place is copied; anything else is packaged as missing.
                 match read_file(&file.to_string_lossy()).ok().filter(|bytes| crate::file_cmds::import(&fname, bytes).is_ok()) {
                     Some(bytes) => {
-                        write_file(&t, &bytes)?;
+                        write_file(&join(&build_links, &fname), &bytes)?;
                         copied.push((path.clone(), t.clone()));
                         t
                     }
@@ -1658,12 +1701,23 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut t = Session::new();
     t.add_document(doc, None);
+    // Relinked to the copies where they are now (relinking reads them), then pointed at where
+    // they will be: the same bytes.
     for (id, path) in &relinks {
-        t.execute("layer.smartObjects.relinkToFile", json!({"layer": id.0, "path": path}))?;
+        let built = join(&build_links, &file_name(path));
+        t.execute("layer.smartObjects.relinkToFile", json!({"layer": id.0, "path": built}))?;
     }
-    let out = join(&folder, &format!("{}.{ext}", crate::file_cmds::sanitize(&name)));
-    let pdoc = t.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let warnings = crate::file_cmds::save_doc(&pdoc, &out, None)?;
+    let mut pdoc = (*t.active().ok_or(EngineError::NoDocument)?.doc).clone();
+    for (id, path) in &relinks {
+        if let Some(layer) = pdoc.layer_mut(*id)
+            && let LayerContent::Smart(so) = &mut layer.content
+        {
+            so.source = SmartSource::Linked { path: path.clone() };
+        }
+    }
+    let file = format!("{}.{ext}", crate::file_cmds::sanitize(name));
+    let warnings = crate::file_cmds::save_doc(&pdoc, &join(build, &file), None)?;
+    let out = join(folder, &file);
     Ok(json!({"folder": folder, "document": out, "links": copied.iter().map(|(_, t)| t).collect::<Vec<_>>(), "missing": missing, "warnings": warnings}))
 }
 

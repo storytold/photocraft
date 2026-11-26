@@ -166,3 +166,67 @@ fn a_wrong_type_overwrite_is_an_error_and_writes_nothing() {
         assert_eq!(listing(&dest), before, "{v}");
     }
 }
+
+/// The linked paths of the document at `path`, sorted.
+fn linked_paths(path: &str) -> Vec<String> {
+    let doc = photocraft_format::load_path(std::path::Path::new(path)).unwrap();
+    let mut v: Vec<String> = doc
+        .walk()
+        .iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Smart(so) => match &so.source {
+                SmartSource::Linked { path } => Some(path.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn repackaging_an_opened_package_into_its_own_folder_copies_its_links() {
+    // The opened package's links live in the folder that `overwrite` replaces: they are read
+    // before the old folder goes, not reported missing.
+    let (_dir, dest, mut s) = packaged_once("reopen");
+    let folder = format!("{dest}/pkg-test");
+    let packaged = format!("{folder}/pkg-test.pcraft");
+    let bytes = std::fs::read(&packaged).unwrap();
+    crate::file_cmds::open_bytes_as(&mut s, "pkg-test.pcraft", &bytes, None, Some(packaged.clone())).unwrap();
+    let r = s.execute("file.package", json!({"dir": dest, "overwrite": true})).unwrap();
+    assert_eq!(r["missing"], json!([]), "{r}");
+    assert_eq!(r["links"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(
+        names(&dest),
+        ["pkg-test/", "pkg-test/Links/", "pkg-test/Links/link-blue.png", "pkg-test/Links/link-red.png", "pkg-test/pkg-test.pcraft", "sibling.txt"],
+        "the new package alone, no temporary folder left"
+    );
+    // The new package links to the installed copies, which are readable images.
+    let links = linked_paths(&packaged);
+    assert_eq!(links, [format!("{folder}/Links/link-blue.png"), format!("{folder}/Links/link-red.png")]);
+    for l in &links {
+        let bytes = std::fs::read(l).unwrap();
+        crate::file_cmds::import(l, &bytes).unwrap();
+    }
+    // The open document's links still resolve to those files.
+    s.execute("layer.smartObjects.updateAllModifiedContent", json!({})).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_replacement_keeps_the_old_package_and_leaves_nothing_behind() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, dest, mut s) = packaged_once("readonly");
+    let before = listing(&dest);
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(format!("{dest}/probe"), b"").is_ok() {
+        // Running as root: permissions don't stop the write, so there is no failure to test.
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let r = s.execute("file.package", json!({"dir": dest, "overwrite": true}));
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(listing(&dest), before, "the old package is intact and nothing else is written");
+}
