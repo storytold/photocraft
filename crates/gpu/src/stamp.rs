@@ -312,8 +312,8 @@ impl Compositor {
         let mut draws: Vec<(Cell, std::ops::Range<u64>, u32)> = Vec::new();
         for (n, (cell, list)) in by_cell.iter().enumerate() {
             let region = cell_rect(*cell, self.page).intersect(&ext.canvas);
-            if !self.residents.contains_key(&(layer, Role::Mask, *cell)) {
-                self.residents.insert((layer, Role::Mask, *cell), external_cell(device, &ext, region));
+            if let std::collections::hash_map::Entry::Vacant(slot) = self.residents.entry((layer, Role::Mask, *cell)) {
+                slot.insert(external_cell(device, &ext, region));
                 stats.cells_created += 1;
             }
             let start = instances.len() as u64 * 4;
