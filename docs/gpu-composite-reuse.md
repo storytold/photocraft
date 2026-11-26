@@ -25,12 +25,14 @@ clipping group's planning, and a deep knockout builds its target (a cleared slot
 Background composited onto it, even when occlusion left the Background out of the plan) fresh at
 each use, so only the root stack's accumulated backdrop is live between units. The other options
 still return `Unsupported` from the GPU planner and use the CPU path: Blend Interior Effects as
-Group with effects, Layer / Vector Mask Hides Effects, and Transparency Shapes Layer off on a
-layer clipped to a base when it has effects or a special-eight blend mode, and Hard Mix with
-Transparency Shapes Layer off in a 16/32-bit document. So does Blend Clipped Layers as Group off
-in a 32-bit float document when the base takes more than one pass (a group, or a pattern fill
-without cached pixels): its coverage would go through an accumulator slot, which may be half
-float. A later GPU implementation of any of them preserves the boundary invariant.
+Group with effects, Layer / Vector Mask Hides Effects, Transparency Shapes Layer off with
+effects or a special-eight blend mode on a layer drawn atop its clipping base (Blend Clipped
+Layers as Group on; individually blended clipped layers run on the GPU), and Hard Mix with
+Transparency Shapes Layer off in a 16/32-bit document, or without effects on an adapter with
+half-float accumulation. So does Blend Clipped Layers as Group off in a 32-bit float document when the base
+takes more than one pass (a group, or a pattern fill without cached pixels): its coverage would
+go through an accumulator slot, which may be half float. A later GPU implementation of any of
+them preserves the boundary invariant.
 
 ## Invalidation
 

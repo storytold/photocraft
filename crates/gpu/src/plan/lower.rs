@@ -35,8 +35,8 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
 /// Clipped Layers as Group off (`Planner::clipped_individually`) and Transparency Shapes Layer
 /// off, which the GPU runs itself: the special-eight blends take the content's own alpha as Fill
 /// (`F_SHAPELESS`) and the effects take the whole layer as their shape (`Planner::effects`). A
-/// layer clipped to a base is still refused for the last one (`clipped_on_cpu`), and Hard Mix with
-/// it off in a 16/32-bit document is refused too (`hard_mix_shapeless_on_cpu`).
+/// layer drawn atop its clipping base is still refused for the last one (`clipped_on_cpu`), and
+/// Hard Mix with it off in a 16/32-bit document is refused too (`hard_mix_shapeless_on_cpu`).
 pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'static str> {
     let a = &layer.advanced;
     if a.is_default() {
@@ -62,14 +62,16 @@ pub(super) fn shapeless_blend(layer: &Layer) -> bool {
 }
 
 /// Hard Mix with Transparency Shapes Layer off in a 16/32-bit document. The GPU holds such content
-/// as half floats, where a near-opaque alpha (0.9999, 65534/65535) rounds to 1.0, and Hard Mix's
-/// Fill formula divides by `1 - fill`, so it would take the binary branch the CPU doesn't.
+/// as half floats, which can't keep a near-opaque alpha (0.9999, 65534/65535), and Hard Mix's Fill
+/// formula divides by `1 - fill`, so the lost precision shows. Half-float accumulation refuses it
+/// at any depth (`Compositor::check_accumulation`).
 pub(super) fn hard_mix_shapeless_on_cpu(layer: &Layer, depth: SampleType) -> bool {
     depth != SampleType::U8 && layer.blend == BlendMode::HardMix && shapeless_blend(layer)
 }
 
-/// The Transparency Shapes Layer off case that keeps a layer clipped to a base on the CPU
-/// compositor (`composite_atop_any`, whose behaviour for it is changing separately), if any.
+/// The Transparency Shapes Layer off case that keeps a layer drawn atop its clipping base (Blend
+/// Clipped Layers as Group on) on the CPU compositor (`composite_atop_any`, whose behaviour for it
+/// is changing separately), if any. Clipped layers blended individually run on the GPU.
 pub(super) fn clipped_on_cpu(layer: &Layer) -> Option<&'static str> {
     if layer.advanced.transparency_shapes {
         None

@@ -133,6 +133,7 @@ impl Compositor {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
+        self.check_accumulation(&plan)?;
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;

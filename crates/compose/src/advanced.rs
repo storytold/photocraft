@@ -77,8 +77,11 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 /// composites. This is the full set the CPU path implements. The GPU compositor runs knockout,
 /// clipped layers blended individually and Transparency Shapes Layer off itself and sends the
 /// rest (Blend Interior Effects as Group with effects, and masks hiding effects) to the CPU path,
-/// as it does Transparency Shapes Layer off on a clipped layer with effects or a special-eight
-/// blend and Hard Mix with it off in a 16/32-bit document; its own gates are `plan::lower::advanced_on_cpu` and `plan::lower::clipped_on_cpu`.
+/// as it does Transparency Shapes Layer off with effects or a special-eight blend on a layer drawn
+/// atop its clipping base (Blend Clipped Layers as Group on), Hard Mix with it off in a 16/32-bit
+/// document (or, on a layer without effects, on half-float accumulation), and individually blended
+/// clipped layers on a 32-bit base that takes several passes; its own gates are `plan::lower::advanced_on_cpu`,
+/// `plan::lower::clipped_on_cpu` and the planner and compositor checks.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
     let a = &layer.advanced;
     if a.is_default() {

@@ -431,7 +431,7 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     assert!(p.passes.iter().all(|p| p.flags & F_SHAPELESS == 0));
     t.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
     assert!(plan(&t).is_ok(), "effects without Transparency Shapes Layer");
-    // Hard Mix takes the binary branch on a near-opaque alpha that 16/32-bit uploads round to 1.0:
+    // Hard Mix divides by 1 − Fill × alpha, which 16/32-bit half-float uploads can't hold near 1:
     // it stays on the CPU there, while 8 bits and the other special-eight modes plan.
     t.layers[1].effects.items.clear();
     t.layers[1].blend = BlendMode::HardMix;
