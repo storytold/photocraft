@@ -9,6 +9,7 @@
 //! application's pixel tables are not asserted and its default values are not copied.
 
 use craft::draw::ui::VectorMode;
+use craft::imaging::ui::select::MagneticSettings;
 use egui::Modifiers;
 use egui::accesskit::Role;
 use egui::vec2;
@@ -255,6 +256,58 @@ fn escape_cancels_a_magnetic_trace_with_no_path_and_no_history_step() {
     assert!(!app.canvas_tools.vector.freeform.draft.is_open(), "Escape drops the trace");
     assert!(st.doc.work_path.is_none(), "and leaves no path");
     assert_eq!(st.history.past_len(), n, "and makes no History step");
+}
+
+/// A right-click while a magnetic trace is in flight: no canvas menu over the trace, and the trace
+/// goes on to finish as it would have.
+#[test]
+fn a_right_click_during_a_magnetic_trace_opens_no_menu_and_the_trace_goes_on() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    let pts = [[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]];
+    let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) else { return };
+    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 200.0, y: 92.0, pressure: 1.0 }, Modifiers::NONE);
+    crate::canvas::testing::secondary_click(&mut app, [200.0, 92.0], Modifiers::NONE);
+    let opened = app.ui.canvas_tool_menu.as_ref().map(|m| m.tool);
+    assert!(opened.is_none(), "the right-click opens no menu over a trace in flight: {opened:?}");
+    assert!(app.canvas_tools.vector.freeform.draft.is_down(), "and the trace is still running");
+    tool_event(&mut app, ToolEvent::Up { x: last[0], y: last[1] }, Modifiers::NONE);
+    let points = anchors(&app);
+    assert!(edge_deviation(&points, TOP) < 2.0, "the finished path still rides the edge: {points:?}");
+}
+
+/// A hand-edited or damaged preferences file cannot start the tool with a value its own fields
+/// could never set: the remembered detection values land inside the bands the bar allows, as the
+/// Magnetic Lasso's do.
+#[test]
+fn remembered_detection_values_past_their_ranges_load_clamped_as_the_lasso_s_do() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.prefs.edit(|p| {
+        p.tool_options = json!({
+            "freeform_magnetic": {"width": 5000.0, "contrast": 0.0, "frequency": 99999.0},
+            "freeform_magnetic_on": true,
+            "magnetic": {"width": 5000.0, "contrast": 0.0, "frequency": 99999.0},
+        });
+    });
+    crate::tool_memory::restore(&mut app);
+    let o = &app.ui.tool_options;
+    let (width_min, width_max) = MagneticSettings::WIDTH_RANGE;
+    assert_eq!(o.magnetic.width, width_max, "the Lasso's Width is clamped");
+    assert_eq!(o.magnetic.contrast, 1.0, "its Contrast as well");
+    assert_eq!(o.magnetic.frequency, 100.0, "and its Frequency");
+    assert_eq!(o.freeform_magnetic.width, width_max, "the pen's Width lands in the same band: {:?}", o.freeform_magnetic);
+    assert_eq!(o.freeform_magnetic.contrast, 1.0, "its Contrast as well: {:?}", o.freeform_magnetic);
+    assert_eq!(o.freeform_magnetic.frequency, 100.0, "and its Frequency: {:?}", o.freeform_magnetic);
+    assert!(o.freeform_magnetic_on, "the checkbox comes back as it was left");
+    // The other end of each band clamps the same way.
+    let mut low = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    low.session.prefs.edit(|p| {
+        p.tool_options = json!({ "freeform_magnetic": {"width": 0.0, "contrast": -20.0, "frequency": -1.0} });
+    });
+    crate::tool_memory::restore(&mut low);
+    let low = low.ui.tool_options.freeform_magnetic;
+    assert_eq!((low.width, low.contrast, low.frequency), (width_min, 1.0, 0.0), "the low end clamps too: {low:?}");
 }
 
 #[test]

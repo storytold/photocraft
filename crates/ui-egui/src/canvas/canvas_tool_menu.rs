@@ -1052,9 +1052,12 @@ pub fn applies(tool: Tool) -> bool {
 
 /// A Magnetic Lasso border is being drawn on the document in front: a right-click opens no menu
 /// over it, and the border stays live, as in Photoshop (#11689). A border left on another
-/// document doesn't count, and neither does an ⌥-drag's freehand segment (not measured).
+/// document doesn't count, and neither does an ⌥-drag's freehand segment (not measured). The Freeform
+/// Pen's Magnetic trace follows the same rule while a press is in flight (#12693); the same tool
+/// with Magnetic off keeps opening the path menu of #12837.
 pub fn magnetic_drawing(app: &PhotocraftApp) -> bool {
     app.canvas_tools.selection.outline_open()
+        || (app.ui.tool == Tool::FreeformPen && app.ui.tool_options.freeform_magnetic_on && app.canvas_tools.vector.freeform.draft.is_down())
 }
 
 /// Tools whose canvas right-click opens the path menu ([`PEN_MENU`]): the Pen, and the Path

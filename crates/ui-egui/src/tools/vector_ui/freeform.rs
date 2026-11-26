@@ -344,6 +344,7 @@ impl CanvasTool for FreeformPenTool {
             cx.request_repaint();
         }
     }
+
     /// Escape during a drag, a lost pointer or `ToolHost::cancel` drops the trace without a path.
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
         self.draft.cancel();
