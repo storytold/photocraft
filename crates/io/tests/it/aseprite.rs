@@ -48,6 +48,32 @@ fn a_legacy_frame_uses_the_header_speed_when_its_own_duration_is_zero() {
 }
 
 #[test]
+fn editable_export_uses_known_indices_and_rejects_unrepresentable_alpha() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{ColorIndices, ColorTable, Document, Layer};
+    use photocraft_geom::{Rect, Size};
+
+    let mut doc = Document::new("Indexed export", Size::new(2, 1), ColorMode::Indexed, SampleType::U8);
+    doc.color_table = Some(ColorTable { colors: vec![[0; 3], [255, 0, 0], [255, 0, 0]], transparent: Some(0) });
+    let mut layer = Layer::raster("Red", PixelFormat::RGBA8);
+    let rect = Rect::from_xywh(0, 0, 2, 1);
+    layer.surface_mut().unwrap().fill_rect(rect, &[1.0, 0.0, 0.0, 1.0]);
+    doc.color_indices = ColorIndices::new(layer.id, layer.surface().unwrap(), rect, &[2, 1]);
+    doc.layers.push(layer);
+    let export = |doc: &Document| photocraft_io::export(doc, "aseprite", &Default::default());
+
+    let result = export(&doc).unwrap();
+    let reopened = photocraft_io::import("known-indices.aseprite", &result.bytes).unwrap().document;
+    let frame = &reopened.sprite.unwrap().frames[0];
+    let cel = frame.cels.values().next().unwrap();
+    assert_eq!(cel.indices.as_ref().unwrap().to_interleaved(rect), [2, 1]);
+
+    doc.layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.5]);
+    let error = export(&doc).err().unwrap().to_string();
+    assert!(error.contains("partial pixel alpha"), "{error}");
+}
+
+#[test]
 fn an_indexed_sprite_refuses_a_grayscale_display_cache() {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use std::sync::Arc;

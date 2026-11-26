@@ -180,10 +180,14 @@ fn from_document(doc: &Document) -> Result<Sprite> {
                         precise: None,
                     };
                     if indexed {
-                        if doc.color_table.as_ref().is_some_and(|t| t.transparent.is_none()) {
-                            require_opaque(pixels, rect)?;
+                        let transparent = doc.color_table.as_ref().and_then(|table| table.transparent);
+                        require_indexed_alpha(pixels, rect, transparent.is_some())?;
+                        if let Some(exact) = doc.color_indices.as_ref().filter(|exact| exact.holds(l.id, pixels)) {
+                            cel.pixels = sprite::pixels::render_indices(&exact.indices, rect, &palette, transparent).map_err(invalid)?;
+                            cel.indices = Some(exact.indices.clone());
+                        } else {
+                            sprite::pixels::capture_indices(&mut cel, pixels, &palette, transparent).map_err(invalid)?;
                         }
-                        sprite::pixels::capture_indices(&mut cel, pixels, &palette, doc.color_table.as_ref().and_then(|t| t.transparent)).map_err(invalid)?;
                     }
                     cels.insert(l.id, Arc::new(cel));
                 }
@@ -208,15 +212,22 @@ fn from_document(doc: &Document) -> Result<Sprite> {
 }
 
 /// Without a transparent entry, quantizing alpha would silently turn erased pixels opaque.
-fn require_opaque(pixels: &photocraft_raster::Surface, rect: Rect) -> Result<()> {
+fn require_indexed_alpha(pixels: &photocraft_raster::Surface, rect: Rect, has_transparent_entry: bool) -> Result<()> {
     sprite::pixels::checked_rect(rect, 5).map_err(invalid)?;
     if pixels.format().alpha {
         for y in rect.y0..rect.y1 {
             let row = pixels.to_interleaved(Rect::from_xywh(rect.x0, y, rect.width(), 1));
-            if row.chunks_exact(pixels.format().bytes_per_pixel()).any(|p| p.last().copied() != Some(255)) {
-                return Err(invalid(
-                    "indexed pixels have transparency but the color table has no transparent entry; add palette transparency before exporting",
-                ));
+            for alpha in row.chunks_exact(pixels.format().bytes_per_pixel()).filter_map(|pixel| pixel.last().copied()) {
+                match alpha {
+                    255 => {}
+                    0 if has_transparent_entry => {}
+                    0 => {
+                        return Err(invalid(
+                            "indexed pixels have transparency but the color table has no transparent entry; add palette transparency before exporting",
+                        ));
+                    }
+                    _ => return Err(invalid("the indexed color table cannot represent partial pixel alpha; export a converted RGB copy")),
+                }
             }
         }
     }
