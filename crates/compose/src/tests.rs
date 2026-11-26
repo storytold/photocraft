@@ -248,7 +248,7 @@ fn pixel_layer_rows_match_tile_copy() {
                     l.fill_opacity = fill;
                     let mut doc = doc_white(40, 30);
                     doc.layers.push(l.clone());
-                    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+                    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(&doc);
                     let cx = Ctx::for_doc(&doc, &patterns);
                     let layer = &doc.layers[1];
                     let backdrop = Buffer {

@@ -2924,7 +2924,7 @@ fn a_pattern_too_large_for_a_gpu_texture_falls_back_to_the_cpu() {
     let mut d = Document::new("big pattern", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
     // 100 MB as RGBA8, 400 MB as an RGBA32F texture.
     let surface = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
-    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, surface };
+    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, source_mode: None, surface };
     assert!(pat.is_paintable());
     d.layers.push(Layer::new(
         "pattern",

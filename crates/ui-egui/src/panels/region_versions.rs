@@ -65,17 +65,22 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 /// The version of the options bar: every tool option (`app.ui.tool_options`, all of which the bar shows; keys, the
 /// canvas menu, the canvas and its task bars, panels and presets write them without a command), the commit and cancel
 /// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
-/// Zoom tool's view, and an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
+/// Zoom tool's view, an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
 /// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
-/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets and
-/// the colours.
+/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets, the
+/// colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
+/// app hides (#12892), which a Pen drawing click by click changes with no History step (#12890). Which path is
+/// selected is already in [`version`]; the hidden path is held as its document's place, since its content can only
+/// change with the document's revision, which `version` holds too.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
     let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
-    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture))
+    let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
+    let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), hidden);
+    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, paths))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language

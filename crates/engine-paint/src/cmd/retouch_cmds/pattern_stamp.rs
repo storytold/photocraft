@@ -27,20 +27,27 @@ const STREAM_PHASE_Y: u64 = 102;
 /// The reference's alert for a Pattern Stamp stroke in an Indexed Color document (#12887).
 pub const INDEXED_REFUSAL: &str = "Could not fill because the pattern and image have different color modes.";
 
-/// The reference refuses every pattern in an Indexed Color document before painting: RGB,
-/// Grayscale, CMYK, Lab and Indexed ones from another image. It paints only a pattern with the
-/// document's own colour table, which PhotoCraft can't tell apart, so that one is refused too.
-/// Bitmap, Duotone and Multichannel documents weren't measured and paint as before.
-fn mode_refusal(s: &Session) -> Result<()> {
-    if s.active().is_some_and(|st| st.doc.mode == ColorMode::Indexed) { Err(EngineError::Other(INDEXED_REFUSAL.into())) } else { Ok(()) }
+/// The reference refuses a pattern whose source is not an Indexed image in an Indexed Color
+/// document (#12887): an RGB one, and Grayscale, CMYK and Lab ones. A pattern Edit › Define
+/// Pattern took from an Indexed document keeps painting there (#13071): the reference paints the
+/// one with the document's own colour table, and PhotoCraft records that mode on the pattern.
+/// A pattern whose source mode was never recorded (the library's built-ins, a `.pat` or PSD
+/// block) counts as not Indexed, so those keep being refused. Bitmap, Duotone and Multichannel
+/// documents weren't measured and paint as before.
+fn mode_refusal(s: &Session, pat: &Pattern) -> Result<()> {
+    let indexed = s.active().is_some_and(|st| st.doc.mode == ColorMode::Indexed);
+    if indexed && pat.source_mode != Some(ColorMode::Indexed) { Err(EngineError::Other(INDEXED_REFUSAL.into())) } else { Ok(()) }
 }
 
 /// [`mode_refusal`] for a press with the stroke's `p`, so the canvas can alert before the stroke
 /// starts: `None` when the pattern paints, or when `p` names no pattern (the stroke reports that).
 pub fn press_refusal(s: &Session, p: &Value) -> Option<String> {
-    mode_refusal(s).err()?;
-    crate::pattern_cmds::resolve_param(s, "paint.patternStamp", p).ok()?;
-    Some(INDEXED_REFUSAL.into())
+    // Outside Indexed Color nothing is refused, so the pattern is not resolved twice.
+    if s.active().is_none_or(|st| st.doc.mode != ColorMode::Indexed) {
+        return None;
+    }
+    let pat = crate::pattern_cmds::resolve_param(s, "paint.patternStamp", p).ok()?;
+    mode_refusal(s, &pat).err().map(|_| INDEXED_REFUSAL.into())
 }
 
 pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
@@ -77,7 +84,7 @@ impl Setup {
         let aligned = flag(p, "aligned", true);
         let impressionist = flag(p, "impressionist", false);
         let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
-        mode_refusal(s)?;
+        mode_refusal(s, &pat)?;
         if pat.is_empty() {
             return Err(bad(CMD, "the pattern is empty"));
         }

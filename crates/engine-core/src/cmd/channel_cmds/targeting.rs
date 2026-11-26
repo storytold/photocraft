@@ -140,6 +140,13 @@ fn edits_mask(id: &str) -> bool {
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
 /// layer needs a mask. None when another precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
+    // Brightness/Contrast refuses a hidden pixel layer, judged on the call's own params so that a
+    // channel target or a `"layer"` they name counts, not only the active layer (#14359).
+    if id == crate::adjust_cmds::BRIGHTNESS_CONTRAST_ID
+        && let Some(r) = crate::adjust_cmds::brightness_contrast_enabled_with(s, p)
+    {
+        return Some(r);
+    }
     match target_of(p) {
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).

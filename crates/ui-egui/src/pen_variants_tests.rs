@@ -180,8 +180,9 @@ fn new_pens_with_command_edit_paths_as_direct_selection() {
 }
 
 /// #6593: a Pen press on an endpoint of an open path carries on drawing it, as in Photoshop,
-/// from its last anchor or (reversed) its first; the commit extends that subpath in one step
-/// instead of adding a second one. Elsewhere the press starts a new subpath as before.
+/// from its last anchor or (reversed) its first; the carry-on extends that subpath in place instead
+/// of adding a second one. Elsewhere the press starts a new subpath as before. Each press of the
+/// carry-on is its own History step (#12890).
 #[test]
 fn the_pen_carries_on_an_open_path_from_either_end() {
     let mut app = app(Tool::Pen);
@@ -199,7 +200,7 @@ fn the_pen_carries_on_an_open_path_from_either_end() {
     click(&mut app, 80.0, 80.0);
     crate::vector_ui::pen_commit(&mut app, false);
     assert_eq!(anchors(&app), [vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0]]], "the same subpath, extended");
-    assert_eq!(steps(&app), before + 1, "one History step");
+    assert_eq!(steps(&app), before + 2, "the pick-up and the new anchor are one step each (#12890)");
     // From the first anchor: the subpath runs the other way and carries on past it.
     click(&mut app, 20.0, 20.0);
     click(&mut app, 20.0, 80.0);
