@@ -171,6 +171,17 @@ fn picker_events_run_their_command_and_the_current_shape_follows_or_clears() {
     assert!(app.ui.presets_ui.custom_shape.is_empty(), "the current shape clears on its own delete");
 }
 
+/// #13725 review: the gear menu's Rename/Delete enable for a built-in shape the same as a custom one, and disable
+/// when the name doesn't exist at all.
+#[test]
+fn shape_picker_rename_target_exists_covers_builtin_and_custom_shapes() {
+    let mut app = app();
+    assert!(shape_picker_rename_target_exists(&app.session, "Heart"), "a built-in shape enables Rename/Delete");
+    add_shape(&mut app, "A");
+    assert!(shape_picker_rename_target_exists(&app.session, "A"), "a custom shape enables Rename/Delete");
+    assert!(!shape_picker_rename_target_exists(&app.session, "Nope"), "a nonexistent shape disables them");
+}
+
 /// Runs one egui pass of `ctx` with `f`.
 fn pass(ctx: &egui::Context, f: impl FnMut(&mut egui::Ui)) {
     let mut out = ctx.run_ui(egui::RawInput::default(), f);

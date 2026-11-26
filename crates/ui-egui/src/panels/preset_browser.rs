@@ -784,13 +784,22 @@ enum ShapeGearAction {
     Export,
 }
 
+/// Whether the gear menu's Rename/Delete can act on `name`: any shape `all_groups` shows, a built-in included, not
+/// only a saved custom one. The engine's `shape.presets.edit` falls back to `edit_groups` for any name that is not a
+/// staged Define Custom Shape result, so a built-in shape's rename or delete succeeds the same as a custom one's
+/// (`renaming_or_deleting_a_builtin_shape_succeeds_like_any_library_preset` in the engine), matching the Shapes
+/// panel's own existing parity (#13725 review).
+fn shape_picker_rename_target_exists(session: &photocraft_engine::Session, name: &str) -> bool {
+    photocraft_engine::presets::shapes::all_groups(session).iter().any(|g| g.items.iter().any(|s| s.name == name))
+}
+
 /// The picker's gear button (top right of the popover) and its menu: Rename/Delete the current shape, the five view
 /// modes (a single choice), Append Default Shapes…, Import Shapes… and the still-unimplemented Export.
 fn shape_gear_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let label = tl!("Custom Shape Options").to_string();
     let button = IconButton::new(IconId::new("settings")).label(label.clone()).popup(PopupKind::Menu).show(ui);
     let cur = app.ui.presets_ui.shape().to_string();
-    let cur_exists = photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == cur));
+    let cur_exists = shape_picker_rename_target_exists(&app.session, &cur);
     let view = app.ui.presets_ui.shape_picker_view;
     let entries = [
         Entry::new(ShapeGearAction::Rename, tl!("Rename Shape…").to_string()).enabled(cur_exists),
