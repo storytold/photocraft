@@ -10,7 +10,7 @@ const POINTS: [(i32, i32); 4] = [(50, 50), (300, 50), (50, 200), (225, 150)];
 const GRAY: [u8; 4] = [129, 144, 129, 176];
 
 fn fixture() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": "target", "width": 400, "height": 300, "background": "white"})).unwrap();
     s.edit("fixture", |doc, active| {
         let format = doc.pixel_format();
@@ -142,7 +142,7 @@ fn individual_rgb_channels_keep_their_values() {
 #[test]
 fn grayscale_sources_keep_their_native_values_at_every_depth() {
     for depth in [8, 16, 32] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 400, "height": 300, "mode": "gray", "depth": depth, "background": "white"})).unwrap();
         s.edit("fixture", |doc, active| {
             doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 200, 300), &[0.0, 1.0]);
@@ -157,7 +157,7 @@ fn grayscale_sources_keep_their_native_values_at_every_depth() {
 #[test]
 fn unmeasured_rgb_depths_and_profiles_keep_legacy_gray_values() {
     for (depth, profile) in [(16, None), (32, None), (8, Some(Builtin::DisplayP3)), (8, Some(Builtin::AdobeRgbCompat))] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 2, "height": 1, "depth": depth, "background": "#ff0000"})).unwrap();
         if let Some(profile) = profile {
             s.edit("profile", |doc, _| {
