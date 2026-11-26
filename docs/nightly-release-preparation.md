@@ -33,7 +33,7 @@ schedule is approved.
 **Signer branch.** The signer runs on `refs/heads/nightly-signer`, not on the stable `release`
 branch, so nightly signer files never need a stable release sync. The policy's `release_branch`
 names it, the signer's guard requires it and the dispatcher targets it. The branch only
-fast-forwards to reviewed main commits, through `storytold/craft-common-actions scripts/nightly_signer_settings.py advance` (no queued signer
+fast-forwards to reviewed main commits, through `python3 scripts/nightly_signer_settings.py advance --repos photocraft --sha <main commit>`, run from a craft-common-actions checkout with PyYAML (see [`releasing.md`](releasing.md) for the exact steps; no queued signer
 run, a trust-closure scan, then the full diff of `.github/` and `packaging/`), and the existing
 `release` environment trusts it alongside `release`. Its trust closure is all of `.github/` and
 `packaging/`, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
