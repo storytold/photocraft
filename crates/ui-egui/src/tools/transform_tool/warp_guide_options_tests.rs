@@ -97,6 +97,16 @@ fn the_colour_dropdown_holds_the_measured_entries_in_measured_order_with_default
     for pair in tops.windows(2) {
         assert!(pair[0].0 < pair[1].0, "{} sits above {} in the dropdown", pair[0].1, pair[1].1);
     }
+    // The measured separator after Default: the framework's separator row carries no accessible node
+    // of its own (it is a drawn rule), so the popup tree pins it by the room it takes - the step from
+    // Default to Green is wider than any step between the twelve named rows below it.
+    let gaps: Vec<f32> = tops.windows(2).map(|pair| pair[1].0 - pair[0].0).collect();
+    let named = gaps[2..].iter().fold(0.0f32, |all, &gap| all.max(gap));
+    assert!(
+        gaps[1] >= named + 3.0,
+        "a separator row stands between Default and Green: the step there is {}, the widest step between named rows {named}",
+        gaps[1]
+    );
     h.get_by_label("Red").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.tool_options.warp_guides.color, WarpGuideColor::Red, "picking a row writes the option");
@@ -136,6 +146,13 @@ fn an_entry_past_the_whole_range_takes_the_closest_value_and_alerts_once() {
         assert_eq!(got, want, "{caption}: {typed}");
         assert_eq!(crate::dialogs::alerts::alerts(h.state()).len(), alerts, "{caption}: {typed} gives {alerts} alert(s)");
     }
+    // Density's typed decimals were not measured, so it keeps the rounding every other whole field
+    // does: 5<dec>6 goes to 6 in the machine's own decimal mark, and the unpromised field stays silent.
+    let dec = craft::i18n::Region::system().decimal.filter(|c| matches!(c, '.' | ',')).unwrap_or('.');
+    let mut h = guide_popup();
+    type_into(&mut h, "Density", &format!("5{dec}6"));
+    assert_eq!(h.state().ui.tool_options.warp_guides.density, 6.0, "5{dec}6 rounds to 6");
+    assert_eq!(crate::dialogs::alerts::alerts(h.state()).len(), 0, "and Density, unpromised, raises no alert");
 }
 
 #[test]
