@@ -14,7 +14,7 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -25,24 +25,24 @@ fn active_id(app: &PhotocraftApp) -> LayerId {
     app.session.active().unwrap().active_layer.unwrap()
 }
 
-fn harness(app: PhotocraftApp, id: LayerId) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>, id: LayerId) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h =
         Harness::builder().with_context(app.ctx().clone()).with_size(vec2(400.0, 900.0)).build_ui_state(move |ui, app| shape_properties(app, ui, id), app);
     h.run_steps(4);
     h
 }
 
-fn labels(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn labels(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).map(|l| l.to_string()).collect()
 }
 
-fn only_corner_radius(h: &Harness<'static, PhotocraftApp>) {
+fn only_corner_radius(h: &Harness<'static, Box<PhotocraftApp>>) {
     let l = labels(h);
     assert!(l.iter().any(|s| s == "Corner radius"), "{l:?}");
     assert!(!l.iter().any(|s| s == "Sides" || s == "Star ratio"), "{l:?}");
 }
 
-fn drag(tool: Tool, sides: u32) -> (PhotocraftApp, LayerId) {
+fn drag(tool: Tool, sides: u32) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = app();
     app.ui.tool = tool;
     app.ui.tool_options.polygon_sides = sides;
@@ -78,7 +78,7 @@ fn corner_radius(app: &PhotocraftApp, id: LayerId) -> f64 {
     }
 }
 
-fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+fn type_radius(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Corner radius")).expect("the Corner radius field").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);

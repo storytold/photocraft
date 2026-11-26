@@ -197,9 +197,20 @@ pub fn filter_stack(fx: &Descriptor) -> FilterStack {
 
 /// The filter mask stored in an `FEid` item, in document coordinates and white beyond its bounds
 /// (`filterMaskExtendWithWhite`), as a grayscale mask of `sample` depth. `Ok(None)` when the
-/// item has no mask or it is all white with default switches; `Err` when it can't be decoded.
+/// item has no mask or it is all white (no mask); `Err` when it can't be decoded.
 pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &FilterStack) -> Result<Option<LayerMask>, String> {
-    Ok(mask_surface_from_item(item, sample)?.and_then(|surface| mask_from_surface(surface, stack)))
+    let surface = mask_surface_from_item(item, sample)?.filter(|surface| surface.tile_count() != 0);
+    Ok(surface.and_then(|surface| mask_from_surface(Some(surface), sample, stack)))
+}
+
+/// Decode the mask as import retains it, including switches without an explicit pixel payload.
+pub(crate) fn mask_from_item_preserving_switches(
+    item: Option<&FilterEffectsItem>,
+    sample: SampleType,
+    stack: &FilterStack,
+) -> Result<Option<LayerMask>, String> {
+    let surface = item.map(|item| mask_surface_from_item(item, sample)).transpose()?.flatten();
+    Ok(mask_from_surface(surface, sample, stack))
 }
 
 /// Decode the shared pixel payload without discarding white coverage needed by other layers.
@@ -223,11 +234,13 @@ pub(crate) fn mask_surface_from_item(item: &FilterEffectsItem, sample: SampleTyp
 }
 
 /// Apply a layer's switches after cloning the cached surface, whose tile payloads stay shared.
-pub(crate) fn mask_from_surface(surface: Surface, stack: &FilterStack) -> Option<LayerMask> {
-    // Only default white masks are equivalent to None: None would lose disabled/linked state.
-    if surface.content_bounds().is_empty() && stack.mask_enabled && !stack.mask_linked {
+/// A supplied surface must already be pruned against white: zero tiles mean all-white coverage.
+/// An absent pixel payload is also white, but must not discard disabled or linked switches.
+pub(crate) fn mask_from_surface(surface: Option<Surface>, sample: SampleType, stack: &FilterStack) -> Option<LayerMask> {
+    if stack.mask_enabled && !stack.mask_linked && surface.as_ref().is_none_or(|surface| surface.tile_count() == 0) {
         return None;
     }
+    let surface = surface.unwrap_or_else(|| Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[1.0]));
     Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 })
 }
 

@@ -157,7 +157,10 @@ fn smart_filter_mask_switches_survive_white_and_nonwhite_psd_resaves() {
                         let placed = smart_map::parse_sold(&records[0].block(b"SoLd").unwrap().data).unwrap();
                         let stack = placed.stack.unwrap();
                         assert_eq!((stack.mask_enabled, stack.mask_linked), (enabled, linked), "{extension} {sample:?} save {save}");
-                        assert!(globals.iter().any(|block| &block.key == b"FEid"));
+                        let effects = globals.iter().find(|block| &block.key == b"FEid").unwrap();
+                        let effects = craft_psd::filter_effects::FilterEffects::parse(&effects.data).unwrap();
+                        let decoded = smart_map::mask_from_item(&effects.items[0], sample, &stack).unwrap();
+                        assert_eq!(decoded.is_some(), nonwhite, "the public decoder keeps all-white masks implicit");
                         doc = import(extension, &output.bytes).unwrap().document;
                         let got = smart(&doc).filter_mask.as_ref();
                         if !nonwhite && enabled && !linked {
@@ -168,7 +171,7 @@ fn smart_filter_mask_switches_survive_white_and_nonwhite_psd_resaves() {
                             assert_eq!(got.surface.sample_channel(2, 2, 0), if nonwhite { 0.0 } else { 1.0 });
                             assert_eq!(got.surface.sample_channel(0, 0, 0), 1.0);
                             if !nonwhite {
-                                assert!(got.surface.content_bounds().is_empty(), "white masks remain tile-sparse");
+                                assert_eq!(got.surface.tile_count(), 0, "white masks remain tile-sparse");
                             }
                         }
                     }

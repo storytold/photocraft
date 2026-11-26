@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 
 /// The app with a 200 × 100 document at 100 % and the Navigator shown, in 60 fps steps.
-fn whole_app(animated_zoom: bool) -> Harness<'static, PhotocraftApp> {
+fn whole_app(animated_zoom: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut session = photocraft_engine::Session::new();
@@ -35,7 +35,7 @@ fn whole_app(animated_zoom: bool) -> Harness<'static, PhotocraftApp> {
 /// The percentages the fields named Zoom show.
 // PLAN: assumes the Navigator's zoom field and the status bar's carry the accessible name "Zoom" and show the
 // percentage as their value (the framework's `NavigatorZoomRow` words are not in this tree).
-fn percents(h: &Harness<'static, PhotocraftApp>) -> Vec<f32> {
+fn percents(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<f32> {
     h.get_all_by_label("Zoom")
         .filter_map(|node| node.accesskit_node().value())
         .filter_map(|value| value.trim().trim_end_matches('%').trim().parse::<f32>().ok())

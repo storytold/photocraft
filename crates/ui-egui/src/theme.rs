@@ -961,7 +961,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// `medium` and `semibold` families, JetBrains Mono for numbers. The framework puts egui's default
 /// faces after them, for symbols Inter lacks, and orders the craft-fonts faces this build embeds
 /// (`cjk_fonts::craft_faces`) by `ui_language`. A web build's served faces and their fetcher come
-/// from `served_fonts::serve`.
+/// from `served_fonts::serve`; runtime-manifest deliveries use its owned fallback cache.
 fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     use craft::ui::fonts::{Emoji, Family, FontRef, I18nScripts, SEMIBOLD};
     let (proportional, monospace, medium, semibold) = (FontRef::proportional(), FontRef::monospace(), FontRef::named("medium"), FontRef::named(SEMIBOLD));
@@ -993,16 +993,18 @@ fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     if let Some(served) = crate::served_fonts::served(ctx) {
         fonts = fonts.served_faces(&served.faces).fetcher(served.fetcher);
     }
-    faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families))
+    let fonts = faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families));
+    crate::served_fonts::append_loaded(ctx, fonts, ui_language)
 }
 
-/// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]) and the root
+/// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]), the root
 /// window's `frame` decision (`None` where the platform has none, as on the web; the frame is part
-/// of this install, never set afterwards). It runs once, from `PhotocraftApp::setup_window` or
+/// of this install, never set afterwards) and the settings folder `settings` its windows' placement
+/// is saved in (`None`: not saved). It runs once, from `PhotocraftApp::setup_window` or
 /// `setup_context`, when the window or headless context is created.
-pub fn install_runtime(ctx: &egui::Context, frame: Option<craft::window::policy::Decision>) {
+pub fn install_runtime(ctx: &egui::Context, frame: Option<craft::window::policy::Decision>, settings: Option<&std::path::Path>) {
     let fonts = ui_fonts(ctx, crate::i18n::current().code());
-    crate::app::framework::install(ctx, &fonts, frame);
+    crate::app::framework::install(ctx, &fonts, frame, settings);
     install_font_stack(ctx, &fonts);
 }
 

@@ -9,11 +9,11 @@ use crate::canvas::{ToolEvent, testing, tool_event};
 use crate::canvas_tool_menu::GUIDE_CLEAR;
 use crate::state::Tool;
 
-type AppHarness = Harness<'static, PhotocraftApp>;
+type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 
 /// A 200 × 100 document with the Move tool, a vertical guide at 50 and a magenta horizontal one
 /// at 30.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.sync_views();
@@ -76,9 +76,9 @@ fn delete_removes_the_selected_guide_and_leaves_the_pixels() {
 }
 
 /// The canvas with its context menu and the hosted dialogs, as a frame runs them.
-fn harness(app: PhotocraftApp) -> AppHarness {
+fn harness(app: Box<PhotocraftApp>) -> AppHarness {
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
@@ -106,7 +106,7 @@ fn guide_on_screen(h: &AppHarness) -> Pos2 {
     testing::to_screen(h.state(), [100.0, 70.0])
 }
 
-fn centred_guide_app() -> PhotocraftApp {
+fn centred_guide_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("view.clearGuides", json!({})).unwrap();
     app.run("view.newGuide", json!({"orientation": "vertical", "position": 100})).unwrap();

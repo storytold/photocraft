@@ -30,7 +30,10 @@ use document::document_to_psd_sized;
 pub use document::{document_to_psd, document_to_psd_with};
 use document::{document_to_psd_nested, mask_parameters};
 pub(crate) use estimate::{fit_psd_size, psd_version, sign_global_blocks};
-pub(crate) use resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+pub(crate) use resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, embed_source_hash, masked, size_from_layer, smart_keys, upsert};
 
 /// Blocks that define a layer's content as something other than pixels: fill (`SoCo`, `GdFl`,
@@ -131,6 +134,9 @@ struct Ex<'c> {
     smart: SmartOut,
     /// The document's patterns, which Pattern Fill layers are rendered from.
     patterns: Vec<photocraft_doc::Pattern>,
+    /// How the stored pixels of a Pattern Fill layer take the pattern's colours: as the document
+    /// paints them (the grey profile's greys in a Grayscale document, #14975).
+    pattern_space: photocraft_compose::pattern::PatternSpace,
     /// The layer written as Photoshop's Background (see [`psd_background`]).
     background: Option<photocraft_doc::LayerId>,
     /// Where encoded channels go instead of memory ([`PsdExportOptions::stage_on_scratch_from`]).
@@ -417,6 +423,78 @@ impl Ex<'_> {
         }
     }
 
+    /// The adjustment part of [`Self::content_blocks`] for layer `l` holding `a`: keeps a preserved
+    /// block of `raw` that still decodes to `a` (or a Gradient Map retargeted in place, or the
+    /// verbatim block of an unknown type); otherwise drops the stale blocks from `raw` and pushes
+    /// the regenerated ones onto `regenerated`, warning about anything PSD cannot hold as it is.
+    fn adjustment_blocks(&mut self, l: &Layer, a: &photocraft_doc::Adjustment, raw: &mut Vec<([u8; 4], Vec<u8>)>, regenerated: &mut Vec<([u8; 4], Vec<u8>)>) {
+        let channels = match self.fmt.mode {
+            ColorMode::Rgb => adjust_map::Channels::Rgb,
+            ColorMode::Grayscale => adjust_map::Channels::Gray,
+            ColorMode::Cmyk => adjust_map::Channels::Cmyk,
+            ColorMode::Lab => adjust_map::Channels::Lab,
+            _ => adjust_map::Channels::Other,
+        };
+        let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
+        let keep = raw.iter().any(|(k, d)| {
+            // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
+            // It parses here, but Photoshop requires four-byte alignment, so repair
+            // that legacy record on re-save rather than preserving the broken bytes.
+            let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
+            // Older PhotoCraft builds wrote `grdm` 2 bytes short of four-byte alignment,
+            // which makes Photoshop refuse the file (#8070): regenerate it too.
+            let legacy_grdm = k == b"grdm" && adjust_map::is_unpadded_photocraft_gradient_map(d);
+            !legacy_phfl && !legacy_grdm && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
+        });
+        // A Gradient Map whose stops are unchanged keeps the file's own block (stops in
+        // the document's CMYK/Lab/Gray space, smoothness, method) with Reverse and Dither
+        // updated in place.
+        let keep = keep
+            || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
+                && raw
+                    .iter_mut()
+                    .any(|(k, d)| k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)));
+        // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
+        // never written a second time beside a stale copy.
+        let own = match a {
+            photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
+            _ => None,
+        };
+        let keep =
+            keep || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
+        if !keep {
+            raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
+            // A Channel Mixer whose outputs don't match the document's mode has no
+            // PSD encoding that reads back as it is: save its nearest equivalent.
+            let reshaped = adjust_map::mixer_for(a, channels);
+            let target = reshaped.as_ref().unwrap_or(a);
+            // No Photoshop sample shows a monochrome CMYK `mixr` yet (#8047), so its layout would
+            // be a guess: such a mixer is saved only as the imported block it came from (kept
+            // above), never regenerated, whether it was a CMYK mixer or an RGB one reshaped here.
+            let unconfirmed = matches!(target, photocraft_doc::Adjustment::ChannelMixer { cmyk: Some(_), monochrome: true, .. });
+            if unconfirmed {
+                self.warnings
+                    .push(format!("layer \"{}\": monochrome CMYK Channel Mixer is not written to PSD (its Photoshop layout is not confirmed yet)", l.name));
+                return;
+            }
+            if reshaped.is_some() {
+                let shape = if channels == adjust_map::Channels::Cmyk { "cyan, magenta, yellow and black" } else { "red, green and blue" };
+                self.warnings.push(format!("layer \"{}\": Channel Mixer saved with {shape} outputs, the document mode's own", l.name));
+            }
+            let w = adjust_map::write(target);
+            if w.is_empty() {
+                self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
+            }
+            // Photoshop's `clrL` descriptor has no interpolation setting, so the
+            // reopened layer renders trilinear.
+            if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
+                self.warnings
+                    .push(format!("layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)", l.name));
+            }
+            regenerated.extend(w);
+        }
+    }
+
     /// Content blocks for `l`: preserved raw blocks (with `psd_raw`
     /// overrides) plus regenerated adjustment/fill blocks. A preserved
     /// adjustment or fill block is reused verbatim while it still decodes to
@@ -493,58 +571,7 @@ impl Ex<'_> {
             }
         };
         match &l.content {
-            LayerContent::Adjustment(a) => {
-                let channels = match self.fmt.mode {
-                    ColorMode::Rgb => adjust_map::Channels::Rgb,
-                    ColorMode::Grayscale => adjust_map::Channels::Gray,
-                    ColorMode::Cmyk => adjust_map::Channels::Cmyk,
-                    ColorMode::Lab => adjust_map::Channels::Lab,
-                    _ => adjust_map::Channels::Other,
-                };
-                let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
-                let keep = raw.iter().any(|(k, d)| {
-                    // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
-                    // It parses here, but Photoshop requires four-byte alignment, so repair
-                    // that legacy record on re-save rather than preserving the broken bytes.
-                    let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
-                    // Older PhotoCraft builds wrote `grdm` 2 bytes short of four-byte alignment,
-                    // which makes Photoshop refuse the file (#8070): regenerate it too.
-                    let legacy_grdm = k == b"grdm" && adjust_map::is_unpadded_photocraft_gradient_map(d);
-                    !legacy_phfl && !legacy_grdm && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
-                });
-                // A Gradient Map whose stops are unchanged keeps the file's own block (stops in
-                // the document's CMYK/Lab/Gray space, smoothness, method) with Reverse and Dither
-                // updated in place.
-                let keep = keep
-                    || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
-                        && raw.iter_mut().any(|(k, d)| {
-                            k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)
-                        }));
-                // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
-                // never written a second time beside a stale copy.
-                let own = match a {
-                    photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
-                    _ => None,
-                };
-                let keep = keep
-                    || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
-                if !keep {
-                    raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
-                    let w = adjust_map::write(a);
-                    if w.is_empty() {
-                        self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
-                    }
-                    // Photoshop's `clrL` descriptor has no interpolation setting, so the
-                    // reopened layer renders trilinear.
-                    if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
-                        self.warnings.push(format!(
-                            "layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)",
-                            l.name
-                        ));
-                    }
-                    regenerated.extend(w);
-                }
-            }
+            LayerContent::Adjustment(a) => self.adjustment_blocks(l, a, &mut raw, &mut regenerated),
             LayerContent::Fill(f) => fill_rule(&mut raw, &mut regenerated, f),
             LayerContent::Shape(sh) => {
                 if let Some(f) = &sh.fill {
@@ -609,7 +636,7 @@ impl Ex<'_> {
             None => raw.retain(|(k, _)| k != b"fxrp"),
         }
         // Advanced Blending channel restrictions: written from the field (in place).
-        match crate::blocks::brst_data(l.excluded_channels) {
+        match craft_psd::tagged::channel_restrictions_data(l.excluded_channels) {
             Some(data) => match raw.iter_mut().find(|(k, _)| k == b"brst") {
                 Some(e) => e.1 = data,
                 None => raw.push((*b"brst", data)),
@@ -752,30 +779,43 @@ impl Ex<'_> {
         upsert(raw, &key, sold, None);
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
-            let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
-                (None, Some((img, img_bounds))) => {
-                    let unfiltered = match &sm.perspective {
-                        Some(p) => {
-                            photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
-                        }
-                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
-                    };
-                    match unfiltered {
-                        Ok(unfiltered) => {
-                            let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
-                            if item.is_some() && masked(sm) {
-                                let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
-                                self.smart.unfiltered.insert(l.id, u);
+            // Shared placements receive distinct IDs, but an unchanged cache needs no source
+            // pixels to be decoded or rendered again (the linked source may be missing).
+            let preserved = same_source.filter(|_| unchanged).and_then(|t| self.smart.old_fx.iter().find(|i| i.id == t.placed)).cloned();
+            let item = if let Some(mut item) = preserved {
+                item.id = placed.clone();
+                if masked(sm)
+                    && let Some(u) = crate::smart_map::unfiltered_from_item(&item, self.fmt)
+                {
+                    self.smart.unfiltered.insert(l.id, u);
+                }
+                Some(item)
+            } else {
+                match (sm.stack_mode, self.source_composite(&src.uuid)) {
+                    (None, Some((img, img_bounds))) => {
+                        let unfiltered = match &sm.perspective {
+                            Some(p) => {
+                                photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
                             }
-                            item
-                        }
-                        Err(e) => {
-                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
-                            None
+                            None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
+                        };
+                        match unfiltered {
+                            Ok(unfiltered) => {
+                                let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
+                                if item.is_some() && masked(sm) {
+                                    let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
+                                    self.smart.unfiltered.insert(l.id, u);
+                                }
+                                item
+                            }
+                            Err(e) => {
+                                warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                                None
+                            }
                         }
                     }
+                    _ => None,
                 }
-                _ => None,
             };
             match item {
                 Some(i) => self.smart.new_fx.push(i),
@@ -821,18 +861,20 @@ impl Ex<'_> {
     /// Whether an imported placed layer still says what the smart object is: transform, warp,
     /// filter stack and filter mask as stored.
     fn placed_unchanged(&self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> bool {
-        if t.transform != sm.transform || blocks::parse_placed_warp(b"SoLd", data) != sm.warp || t.stack.clone().unwrap_or_default() != *stack {
+        if t.transform != sm.transform
+            || blocks::parse_smart_perspective(b"SoLd", data) != sm.perspective
+            || blocks::parse_placed_warp(b"SoLd", data) != sm.warp
+            || t.stack.clone().unwrap_or_default() != *stack
+        {
             return false;
         }
         if stack.filters.is_empty() {
             return true;
         }
         let old = self.smart.old_fx.iter().find(|i| i.id == t.placed);
-        let mask = old.map(|i| crate::smart_map::mask_from_item(i, self.mask_fmt.sample, stack));
-        match mask {
-            Some(Ok(m)) => m == sm.filter_mask,
-            Some(Err(_)) => false,
-            None => sm.filter_mask.is_none(),
+        match crate::smart_map::mask_from_item_preserving_switches(old, self.mask_fmt.sample, stack) {
+            Ok(mask) => mask == sm.filter_mask,
+            Err(_) => false,
         }
     }
 
@@ -1024,7 +1066,7 @@ impl Ex<'_> {
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
         // fill must be rendered from the document's patterns, not left transparent (#1907).
-        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
+        let buf = photocraft_compose::render_fill_content_in(l, f, self.canvas, &self.patterns, self.pattern_space);
         let mut s = Surface::new(self.fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
         s.write_region(self.canvas, &vals);

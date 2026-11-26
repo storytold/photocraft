@@ -6,7 +6,7 @@ use photocraft_ui_egui::control::{ControlRequest, handle};
 use photocraft_ui_egui::{PhotocraftApp, Tool};
 use serde_json::{Value, json};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();

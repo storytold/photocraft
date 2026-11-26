@@ -3,7 +3,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use craft::behavior::CursorBadge;
 use craft::keymap::Mods;
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 1.0}})).unwrap();
@@ -759,7 +759,7 @@ fn subset_remove_uses_the_existing_layer_without_losing_the_saved_new_layer_opti
     assert_eq!(app.session.active().unwrap().doc.walk().len(), layers);
     assert!(app.ui.tool_options.remove_new_layer);
     app.run("channel.target", json!({"channel":"composite"})).unwrap();
-    assert_eq!(remove_params(&app.ui.tool_options, true)["newLayer"], json!(true));
+    assert_eq!(remove_params(&app.ui.tool_options, true, false)["newLayer"], json!(true));
 }
 
 #[test]

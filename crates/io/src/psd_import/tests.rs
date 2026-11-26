@@ -319,7 +319,7 @@ fn as_earlier_photocraft_resaved(doc: &Document, stale_ids: &[u32], kept: usize)
 fn a_spot_added_behind_a_kept_alpha_identifiers_resource_keeps_its_ink() {
     let transparent = |names: &[&str]| {
         let mut doc = channels_document(SampleType::U8);
-        doc.layers = vec![Layer::raster("Layer 1", doc.pixel_format())];
+        doc.layers = vec![Layer::raster("Layer 1", doc.pixel_format())].into();
         doc.channels.retain(|c| names.contains(&c.name.as_str()));
         doc
     };
@@ -350,7 +350,7 @@ fn a_spot_added_behind_a_kept_alpha_identifiers_resource_keeps_its_ink() {
 #[test]
 fn a_complete_alpha_identifiers_resource_keeps_photoshop_polarity() {
     let mut doc = channels_document(SampleType::U8);
-    doc.layers = vec![Layer::raster("Layer 1", doc.pixel_format())];
+    doc.layers = vec![Layer::raster("Layer 1", doc.pixel_format())].into();
     let bytes = as_earlier_photocraft_resaved(&doc, &[0, 3, 4, 5], 3);
     let file = PsdFile::from_bytes(&bytes).unwrap();
     assert!(file.merged_has_alpha());
@@ -669,5 +669,93 @@ fn oversized_tysh_fallback_remains_type_and_roundtrips_raw_block() {
             raw.push(0);
         }
         assert_eq!(block.data, raw);
+    }
+}
+
+/// An implicit white mask must leave the shared unfiltered budget available to a real mask.
+#[test]
+fn white_filter_mask_keeps_unfiltered_budget_for_the_next_placed_item() {
+    let file = testgen::small(Version::Psd, Compression::Raw);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let r = file.layers()[0].rect;
+    let bounds = Rect::new(r.left, r.top, r.right, r.bottom);
+    let cost = photocraft_raster::tile_storage_bytes(bounds, &fmt);
+    assert!(cost > 0 && cost < MAX_UNFILTERED_BYTES);
+    let mut source = Surface::new(fmt);
+    source.fill_rect(bounds, &[0.0, 1.0, 0.0, 1.0]);
+    let white = LayerMask::reveal_all();
+    let mut nonwhite = white.clone();
+    nonwhite.surface.fill_rect(Rect::from_xywh(bounds.x0, bounds.y0, 1, 1), &[0.0]);
+    let effects = [
+        crate::smart_map::feid_item("white", &source, Some(&white), bounds, fmt).unwrap(),
+        crate::smart_map::feid_item("nonwhite", &source, Some(&nonwhite), bounds, fmt).unwrap(),
+    ];
+    let mut cx = Ctx {
+        file: &file,
+        global: Vec::new(),
+        fmt,
+        mask_fmt: PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false),
+        cc: 3,
+        cmyk: false,
+        warnings: Vec::new(),
+        damaged: false,
+        fatal_error: None,
+        dpi: 72.0,
+        txt2: None,
+        filter_effects: effects.into(),
+        filter_masks: Default::default(),
+        unfiltered: Default::default(),
+        unfiltered_bytes: MAX_UNFILTERED_BYTES - cost,
+        smart_contents: Default::default(),
+        plld_sizes: Default::default(),
+        vector_previews: Default::default(),
+        ctl: photocraft_raster::Interrupt::NONE,
+        done: 0,
+        uniform: Default::default(),
+        total: 0,
+    };
+    let stored = cx.record_surface(&file.layers()[0], "stored").to_interleaved(bounds);
+    let stack = crate::smart_map::FilterStack {
+        filters: vec![photocraft_doc::SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: serde_json::json!({"radius": 1.0}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        }],
+        mask_linked: true,
+        ..Default::default()
+    };
+    for placed in ["white", "nonwhite"] {
+        let fx = crate::smart_map::filter_fx(&stack, "budget", &mut Vec::new());
+        let spec = crate::smart_map::PlacedSpec {
+            idnt: "fixture",
+            placed,
+            transform: photocraft_geom::Affine::IDENTITY,
+            perspective: None,
+            size: (f64::from(bounds.width()), f64::from(bounds.height())),
+            dpi: 72.0,
+            warp: None,
+            filter_fx: Some(fx),
+        };
+        let data = crate::smart_map::sold_bytes(None, &spec, &mut Vec::new());
+        let mut record = file.layers()[0].clone();
+        record.blocks.push(TaggedBlock::new(*b"SoLd", data.clone()));
+        let LayerContent::Smart(sm) = cx.smart_content(&record, placed, b"SoLd", &|_| Some(Arc::new(data.clone()))) else {
+            panic!("the placed layer became pixels");
+        };
+        let mask = sm.filter_mask.as_ref().unwrap();
+        assert!(mask.enabled && mask.linked);
+        if placed == "white" {
+            assert_eq!(mask.surface.tile_count(), 0);
+            assert_eq!(cx.unfiltered_bytes, MAX_UNFILTERED_BYTES - cost);
+            assert!(!cx.unfiltered.contains_key(placed));
+            assert_eq!(sm.cache.as_ref().unwrap().to_interleaved(bounds), stored, "keep the stored filtered pixels");
+        } else {
+            assert!(mask.surface.tile_count() > 0);
+            assert_eq!(cx.unfiltered_bytes, MAX_UNFILTERED_BYTES);
+            assert!(cx.unfiltered.get(placed).unwrap().is_some());
+            assert_eq!(sm.cache.as_ref().unwrap().sample_channel(bounds.x0, bounds.y0, 1), 1.0);
+        }
     }
 }

@@ -43,8 +43,13 @@ pub struct AutomationArgs {
 }
 
 fn root_path() -> impl TypedValueParser<Value = PathBuf> {
-    OsStringValueParser::new().try_map(|value: OsString| if value.is_empty() { Err("root needs a non-empty directory") } else { Ok(PathBuf::from(value)) })
+    OsStringValueParser::new().try_map(|value: OsString| if value.is_empty() { Err(EmptyRoot) } else { Ok(PathBuf::from(value)) })
 }
+
+/// An empty automation root cannot grant a directory capability.
+#[derive(Debug, thiserror::Error)]
+#[error("root needs a non-empty directory")]
+struct EmptyRoot;
 
 impl AutomationArgs {
     /// The roots, opened as capabilities.
@@ -153,6 +158,14 @@ mod tests {
         ] {
             assert!(RootCli::try_parse_from(args.clone()).is_err(), "accepted {args:?}");
         }
+    }
+
+    #[test]
+    fn empty_root_retains_its_usage_error_message() {
+        use clap::Parser;
+        let error = RootCli::try_parse_from(["test", "--automation-read-root="]).err().unwrap();
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("root needs a non-empty directory"));
     }
 
     #[cfg(unix)]

@@ -67,10 +67,8 @@ fn smart_session() -> (Session, u64, u64, u64) {
     (s, a, b, c)
 }
 
-/// Boxed: tests keep several apps alive, and each would otherwise take its full size on the test
-/// thread's stack.
 fn app_of(s: Session) -> Box<PhotocraftApp> {
-    let mut app = Box::new(PhotocraftApp::new(s, crate::Services::default()));
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
     app.background_jobs = false;
     // The app's first frame binds the Paths panel selection to the open document.
     app.sync_views();

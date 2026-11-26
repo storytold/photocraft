@@ -13,7 +13,7 @@ use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The border's corners: a plain click starts it, ⌥-clicks add the others.
 const CORNERS: [[f64; 2]; 3] = [[50.0, 50.0], [250.0, 50.0], [150.0, 200.0]];
