@@ -75,12 +75,16 @@ fn a_ctrl_click_on_a_groups_folder_icon_loads_no_selection() {
     ];
     for (name, mods) in combos {
         let mut h = harness(grouped(false));
-        let (before_active, before_steps) = (active(&h), steps(&h));
+        // A selection to keep: Alt subtracts from it and Shift+Alt intersects with it, which an empty one wouldn't show.
+        h.state_mut().run("select.rect", json!({"x": 20, "y": 30, "width": 40, "height": 50})).unwrap();
+        h.run_steps(2);
+        let before = (selection(&h), active(&h), steps(&h));
+        assert!(before.0.is_some());
         let at = thumb(&h, "Group", LayerPart::Pixels).center();
         click(&mut h, at, mods);
-        assert_eq!(selection(&h), None, "{name}: a group's folder icon loads no selection");
-        assert_eq!(active(&h), before_active, "{name}: the active layer stays");
-        assert_eq!(steps(&h), before_steps, "{name}: no history step");
+        assert_eq!(selection(&h), before.0, "{name}: a group's folder icon leaves the selection as it was");
+        assert_eq!(active(&h), before.1, "{name}: the active layer stays");
+        assert_eq!(steps(&h), before.2, "{name}: no history step");
     }
 }
 
