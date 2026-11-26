@@ -418,7 +418,8 @@ pub(crate) fn data_on_chain(obj: &JsObject, key: &PropertyKey) -> Lookup {
         }
         at = o.prototype();
     }
-    Lookup::Unknown
+    // The search is complete when the last prototype read ends the chain.
+    if at.is_none() { Lookup::Absent } else { Lookup::Unknown }
 }
 
 /// [`cut`], marked as cut also when `shortened` says text was left out before: one marker,

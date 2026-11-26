@@ -148,6 +148,7 @@ fn time_at_an_open_dialog_is_not_charged() {
             std::thread::sleep(Duration::from_millis(1500));
         }
     });
+    assert_eq!(seen.dialogs, [ModalKind::Alert], "the slow answer was given");
     assert_eq!(seen.result, Ok(()));
     assert_eq!(seen.lines, ["after"]);
 }

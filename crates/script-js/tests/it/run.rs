@@ -222,12 +222,14 @@ fn alert_of_a_document_shows_its_name() {
 #[test]
 fn time_at_a_dialog_does_not_count_against_the_limit() {
     let (clock, lines) = (Arc::new(ManualClock::default()), Log::default());
-    let host = SlowDialogs { clock: clock.clone(), wait: Duration::from_millis(400), lines: lines.clone() };
+    let host = SlowDialogs { clock: clock.clone(), wait: Duration::from_millis(400), lines: lines.clone(), shown: Rc::default() };
+    let shown = host.shown.clone();
     // The clock moves only at the dialog, so the run is charged nothing else: a charged dialog
     // wait alone would be past the limit.
     let budget = WallClock::with_clock(Duration::from_millis(200), clock);
     let r = Runner::new("alert('a'); $.writeln('after');", Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
     assert_eq!(r.run(), Ok(()));
+    assert_eq!(shown.get(), 1, "the slow dialog was shown");
     assert_eq!(*lines.borrow(), ["after"]);
 }
 
@@ -589,6 +591,8 @@ struct SlowDialogs {
     clock: Arc<ManualClock>,
     wait: Duration,
     lines: Log,
+    /// Dialogs shown.
+    shown: Rc<std::cell::Cell<usize>>,
 }
 
 impl Host for SlowDialogs {
@@ -601,6 +605,7 @@ impl Host for SlowDialogs {
     }
 
     fn modal(&mut self, _: ModalKind, _: &Value) -> Result<Value, HostError> {
+        self.shown.set(self.shown.get() + 1);
         self.clock.advance(self.wait);
         Ok(Value::Null)
     }
@@ -1027,4 +1032,17 @@ fn a_document_read_answered_for_another_document_is_refused() {
         let result = Runner::new(src, Box::new(Forged(answer.clone())), Box::new(Unlimited), RunOptions::default()).unwrap().run();
         assert_eq!(result, Err(json!(["the document is no longer open"]).to_string()), "{answer}");
     }
+}
+
+/// A search that read the whole chain is complete: an Error whose chain ends right at the bound
+/// keeps the engine's text, with its position; one longer than the bound gets the fixed text.
+#[test]
+fn an_error_whose_chain_ends_at_the_bound_keeps_its_position() {
+    let chain = |n: usize| {
+        format!(
+            "var e = new Error('x'); var p = Object.create(null); for (var i = 1; i < {n}; i++) {{ p = Object.create(p); }} Object.setPrototypeOf(e, p); throw e;"
+        )
+    };
+    assert!(failure_of(&chain(32)).contains("(script:1:9)"), "{}", failure_of(&chain(32)));
+    assert_eq!(failure_of(&chain(33)), "Error: x");
 }
