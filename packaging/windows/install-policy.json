@@ -15,6 +15,7 @@
   ],
   "payloads": [
     "photocraft-cli.exe",
+    "photocraft-script-host.exe",
     "photocraft.exe"
   ],
   "registry": [

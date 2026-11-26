@@ -329,6 +329,10 @@ fn command_of(app: &PhotocraftApp, id: DialogId, choice: &str) -> Option<(String
     if is_unsaved(app, id) {
         return if choice == "cancel" { None } else { crate::discard_ui::pending_command(app) };
     }
+    // Answering a script's dialog lets the script go on: it is judged as running one.
+    if crate::scripts::waits_at(app) == Some(id) {
+        return Some(("file.scripts.run".into(), json!({})));
+    }
     let key = key_of(app, id)?;
     let fields = fields_of(app, id);
     match key.as_str() {

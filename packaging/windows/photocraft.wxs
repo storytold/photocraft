@@ -135,6 +135,11 @@
       <Component Id="PhotocraftCli">
         <File Id="PhotocraftCliExe" Source="$(var.BinDir)\photocraft-cli.exe" KeyPath="yes" />
       </Component>
+
+      <!-- The script host the app starts for each script run, from next to its own executable. -->
+      <Component Id="PhotocraftScriptHost">
+        <File Id="PhotocraftScriptHostExe" Source="$(var.BinDir)\photocraft-script-host.exe" KeyPath="yes" />
+      </Component>
     </ComponentGroup>
   </Fragment>
 </Wix>

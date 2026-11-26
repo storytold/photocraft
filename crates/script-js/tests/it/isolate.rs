@@ -38,8 +38,8 @@ fn test_name(f: &str) -> String {
 /// folder the tests run in (the crate's folder, under Cargo).
 fn host_program() -> std::path::PathBuf {
     let program: std::path::PathBuf = std::env::var_os("PHOTOCRAFT_TEST_SCRIPT_HOST")
-        .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_photocraft_script_host"))
-        .unwrap_or_else(|| env!("CARGO_BIN_EXE_photocraft-script-host").into())
+        .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_script_js_test_host"))
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_script-js-test-host").into())
         .into();
     // Absolute: the host starts in another folder, where a relative path may not resolve.
     if program.is_relative() { std::env::current_dir().unwrap().join(program) } else { program }

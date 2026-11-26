@@ -2,6 +2,7 @@
 
 mod command_line_usage;
 mod control_exit_code;
+mod script_host;
 mod startup_without_display;
 
 /// Nextest archives relocate binaries; plain Cargo keeps the compile-time path valid.

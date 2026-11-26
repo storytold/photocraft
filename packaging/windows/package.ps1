@@ -5,8 +5,8 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     photocraft-<version>-windows-<arch>.msi            installer (WiX v5, per-user by default, per-machine optional)
-    photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + portable.txt
-    photocraft-<version>-windows-<arch>-symbols.zip    photocraft.pdb + photocraft_cli.pdb (optional, for profilers)
+    photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + photocraft-script-host.exe + portable.txt
+    photocraft-<version>-windows-<arch>-symbols.zip    photocraft.pdb + photocraft_cli.pdb + photocraft_script_host.pdb (optional, for profilers)
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -85,14 +85,15 @@ $Bin = Join-Path $TargetDir "$Target\release"
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
 # x64 build can never ship labelled arm64. Subsystem (optional header): 2 = Windows GUI, 3 = console.
 # The app must be GUI (no console window opens with it); the CLI must stay console so its output
-# reaches the terminal.
+# reaches the terminal. The script host, which the app starts for each script run and talks to
+# through its standard streams, is GUI too, so no console window flashes up with a run.
 function Get-PeHeader([string] $Path) {
   $bytes = [System.IO.File]::ReadAllBytes($Path)
   $pe = [BitConverter]::ToInt32($bytes, 0x3C)
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('photocraft.exe', 2), @('photocraft-cli.exe', 3))) {
+foreach ($check in @(@('photocraft.exe', 2), @('photocraft-cli.exe', 3), @('photocraft-script-host.exe', 2))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
@@ -104,9 +105,9 @@ if ((Get-Item -LiteralPath (Join-Path $Bin 'photocraft.exe')).VersionInfo.Produc
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe') $Stage
+Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe'), (Join-Path $Bin 'photocraft-script-host.exe') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe') (Join-Path $Stage 'photocraft-script-host.exe')
 
 # ---- font notices for the MSI ------------------------------------------------------------------
 # The portable ZIP already carries these notices; stage the complete files before MSI creation too.
@@ -212,21 +213,21 @@ Compress-Archive -Path (Join-Path $Portable '*') -DestinationPath $Zip
 $Check = Join-Path $TargetDir 'windows-package\portable-zip-check'
 Remove-Item -Recurse -Force $Check -ErrorAction SilentlyContinue
 Expand-Archive -Path $Zip -DestinationPath $Check -Force
-foreach ($f in 'photocraft.exe', 'photocraft-cli.exe', 'portable.txt') {
+foreach ($f in 'photocraft.exe', 'photocraft-cli.exe', 'photocraft-script-host.exe', 'portable.txt') {
   if (-not (Test-Path (Join-Path $Check $f))) { throw "the portable zip has no $f at its root: $Zip" }
 }
 Remove-Item -Recurse -Force $Check -ErrorAction SilentlyContinue
 
 # ---- debug symbols -----------------------------------------------------------------------------
 # The linker writes a PDB beside each exe, and the exe names it without a path (photocraft.pdb,
-# photocraft_cli.pdb). They ship as a separate, optional download so profilers (Windows Performance
+# photocraft_cli.pdb, photocraft_script_host.pdb). They ship as a separate, optional download so profilers (Windows Performance
 # Analyzer, Superluminal, Visual Studio) show PhotoCraft's function names for the released
 # binaries (#688). Signing doesn't change the PDB signature an exe records, so they match the
 # signed exes; a rebuild of the same commit writes a PDB that doesn't.
 $Symbols = Join-Path $TargetDir "windows-package\photocraft-$Version-windows-$Arch-symbols"
 Remove-Item -Recurse -Force $Symbols -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Symbols | Out-Null
-foreach ($pdb in 'photocraft.pdb', 'photocraft_cli.pdb') {
+foreach ($pdb in 'photocraft.pdb', 'photocraft_cli.pdb', 'photocraft_script_host.pdb') {
   $p = Join-Path $Bin $pdb
   if (-not (Test-Path $p)) { throw "$pdb is missing from $($Bin), where the release build writes it" }
   Copy-Item $p $Symbols

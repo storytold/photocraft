@@ -88,7 +88,7 @@ if [[ "$DRY_RUN" = 1 ]]; then
   BIN="$WORK/stub-bin"
   OUT_DIR="$WORK"
   mkdir -p "$BIN"
-  for b in photocraft photocraft-cli; do
+  for b in photocraft photocraft-cli photocraft-script-host; do
     printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$b" "$VERSION" >"$BIN/$b"
     chmod 755 "$BIN/$b"
   done
@@ -98,8 +98,10 @@ fi
 # FreeBSD's install(1) has no -D: create the directories first.
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" \
   "$STAGE/share/metainfo" "$STAGE/share/icons" "$STAGE/share/doc/photocraft"
-install -m 755 "$BIN/photocraft" "$BIN/photocraft-cli" "$STAGE/bin/"
-strip "$STAGE/bin/photocraft" "$STAGE/bin/photocraft-cli" 2>/dev/null || true
+# photocraft-script-host: the script host the app starts for each script run, from next to its
+# own executable.
+install -m 755 "$BIN/photocraft" "$BIN/photocraft-cli" "$BIN/photocraft-script-host" "$STAGE/bin/"
+strip "$STAGE/bin/photocraft" "$STAGE/bin/photocraft-cli" "$STAGE/bin/photocraft-script-host" 2>/dev/null || true
 # The desktop entry, MIME type, metainfo and icons are the freedesktop files Linux ships.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
@@ -128,7 +130,7 @@ elif [[ "$DRY_RUN" = 0 ]]; then
   install -m 644 "$WORK/cli-docs/photocraft-cli.fish" "$STAGE/share/fish/vendor_completions.d/photocraft-cli.fish"
 fi
 
-for f in bin/photocraft bin/photocraft-cli "share/applications/$APP_ID.desktop" \
+for f in bin/photocraft bin/photocraft-cli bin/photocraft-script-host "share/applications/$APP_ID.desktop" \
   "share/icons/hicolor/256x256/apps/$APP_ID.png" "share/icons/hicolor/scalable/apps/$APP_ID.svg" \
   share/doc/photocraft/LICENSE-MIT share/doc/photocraft/LICENSE-APACHE; do
   if [[ ! -e "$STAGE/$f" ]]; then echo "error: $f is missing from the package" >&2; exit 1; fi

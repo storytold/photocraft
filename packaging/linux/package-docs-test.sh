@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix="photocraft-package-docs-") as temporary
 
     binary = "#!/usr/bin/env bash\nprintf 'PhotoCraft packaging fixture\\n'\n"
     target = fixture / "target"
-    for name in ("photocraft", "photocraft-cli"):
+    for name in ("photocraft", "photocraft-cli", "photocraft-script-host"):
         path = target / "release" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(binary)
@@ -85,6 +85,7 @@ verify_appimagetool_override() { return 1; }
     bundle = next(unpacked.iterdir())
     assert_docs(bundle / "share/doc/photocraft")
     assert (bundle / "bin/photocraft-cli").read_text() == binary
+    assert (bundle / "bin/photocraft-script-host").read_text() == binary, "the tarball carries the script host"
     print("PASS: FHS stage, tarball and AppDir retain both protocol documents")
 
     # The source manifest must request both packages; a missing -p photocraft-cli leaves
@@ -99,10 +100,13 @@ import sys
 args = sys.argv[1:]
 for index, arg in enumerate(args[:-1]):
     if arg == "-p":
-        path = Path("target/release") / args[index + 1]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("#!/usr/bin/env bash\\nprintf 'PhotoCraft packaging fixture\\\\n'\\n")
-        path.chmod(0o755)
+        # The photocraft package builds the app and its script host.
+        names = [args[index + 1]] + (["photocraft-script-host"] if args[index + 1] == "photocraft" else [])
+        for name in names:
+            path = Path("target/release") / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("#!/usr/bin/env bash\\nprintf 'PhotoCraft packaging fixture\\\\n'\\n")
+            path.chmod(0o755)
 ''')
     cargo.chmod(0o755)
     env["PATH"] = str(tools) + os.pathsep + env["PATH"]
@@ -118,6 +122,8 @@ for index, arg in enumerate(args[:-1]):
         cli = app / "bin/photocraft-cli"
         assert cli.is_file() and os.access(cli, os.X_OK), f"missing executable CLI in {suffix}"
         assert cli.read_text() == binary, f"changed CLI bytes in {suffix}"
+        host = app / "bin/photocraft-script-host"
+        assert host.is_file() and os.access(host, os.X_OK), f"missing executable script host in {suffix}"
         assert_docs(app / "share/doc/photocraft")
         print(f"PASS: Flatpak {suffix} build commands install the CLI and both protocol documents")
 PY

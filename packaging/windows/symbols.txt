@@ -1,9 +1,9 @@
 PhotoCraft debug symbols
 
-photocraft.pdb and photocraft_cli.pdb are the debug symbols of photocraft.exe and
-photocraft-cli.exe from the release with the same version and architecture as this zip. They
-were written by the same build as those exes, so they match only them: a PDB from a local build
-of the same commit doesn't.
+photocraft.pdb, photocraft_cli.pdb and photocraft_script_host.pdb are the debug symbols of
+photocraft.exe, photocraft-cli.exe and photocraft-script-host.exe from the release with the same
+version and architecture as this zip. They were written by the same build as those exes, so they
+match only them: a PDB from a local build of the same commit doesn't.
 
 They hold PhotoCraft's function names (release builds carry no source line tables), which is
 what a profiler needs to show where the time goes. PhotoCraft doesn't need them to run.

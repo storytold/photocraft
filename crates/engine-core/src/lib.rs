@@ -136,6 +136,7 @@ pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
 pub use cmd::render_cmds;
 pub use cmd::sample_cmds;
+pub use cmd::script_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;

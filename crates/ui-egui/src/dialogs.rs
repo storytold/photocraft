@@ -113,6 +113,7 @@ pub(crate) mod params {
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
         crate::actions::dialogs::NEW_SET_FAMILY,
+        crate::scripts::PROMPT_FAMILY,
         crate::actions::dialogs::INSERT_STOP_FAMILY,
         crate::actions::playback::FAMILY,
         crate::actions::menu_item::FAMILY,
@@ -445,6 +446,7 @@ pub(crate) fn prompts_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The families that take their own results (one `take(app, ctx)` each), in order.
 pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     alerts::take,
+    crate::scripts::take,
     discard_ui::take,
     open_prompt::take,
     credits::take,

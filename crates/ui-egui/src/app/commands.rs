@@ -74,6 +74,10 @@ impl PhotocraftApp {
         {
             authorize(id, &params)?;
         }
+        // The engine alone can't run a script: however it is reached, the app runs it.
+        if let Some(result) = crate::scripts::intercept(self, id, &params) {
+            return result;
+        }
         // A new layer while Free Transform is open applies the transform first, as Photoshop does
         // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a
         // command that can run; a transform refused or still being applied keeps the box open and
@@ -87,7 +91,7 @@ impl PhotocraftApp {
                 // committing document, one at a time: a script, a control request or an action step
                 // needs its answer now, and a click in another tab wasn't meant for this one.
                 let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
-                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
+                let click = !self.automation_input && !self.programmatic_playback && self.session.authorize.is_none() && self.run_depth == 1;
                 if !click || !committing_here || self.after_transform_commit.is_some() {
                     return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
                 }

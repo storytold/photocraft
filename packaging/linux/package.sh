@@ -68,7 +68,9 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/photocraft" "$STAGE/usr/bin/photocraft"
 install -Dm755 "$BIN/photocraft-cli" "$STAGE/usr/bin/photocraft-cli"
-"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/photocraft" "$STAGE/usr/bin/photocraft-cli" 2>/dev/null || true
+# The script host the app starts for each script run, from next to its own executable.
+install -Dm755 "$BIN/photocraft-script-host" "$STAGE/usr/bin/photocraft-script-host"
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/photocraft" "$STAGE/usr/bin/photocraft-cli" "$STAGE/usr/bin/photocraft-script-host" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"

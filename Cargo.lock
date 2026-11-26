@@ -6776,6 +6776,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "photocraft-raster",
+ "photocraft-script-js",
  "photocraft-tablet",
  "photocraft-ui-egui",
  "plist",
