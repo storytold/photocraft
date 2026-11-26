@@ -6,10 +6,11 @@ use std::cell::RefCell;
 use craft::behavior::PointerButton;
 use craft::behavior::cursor::{Cursor, CursorIcon, PaintedCursor};
 use craft::behavior::geometry::SelectionOperation;
-use craft::behavior::kurbo::Point;
+use craft::behavior::geometry::{Constraint, MarqueeGesture, MarqueeRect, marquee_pixels, square_pixels};
+use craft::behavior::kurbo::{Point, Rect, Vec2};
 use craft::behavior::value::CancelReason;
 use craft::imaging::ui::select::{DragKind, LassoTool, PressRule, SelectEvent, SelectionProbe, SelectionShape, drag_kind};
-use craft::keymap::Mods;
+use craft::keymap::{Key, Mods};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 
@@ -35,6 +36,8 @@ pub(crate) struct RetouchTools {
     lasso: LassoTool,
     /// The outline drag of an Object Selection press inside the selection (see `RetouchTool::drags_outline`).
     drag: InsideSelectionDrag,
+    /// The Red Eye correction box being dragged (see `RedEyeBox`).
+    red_eye: Option<RedEyeBox>,
 }
 
 impl RetouchTools {
@@ -64,6 +67,38 @@ impl RetouchTools {
     pub(crate) fn drag_offset(&self) -> Option<(i32, i32)> {
         drag_delta(self.drag.phase())
     }
+
+    /// The pixel rectangle of the Red Eye box being dragged, `None` while there is no box or it has
+    /// no area. The marquee's own rounding, as `MarqueeTool::pixels`.
+    pub(crate) fn red_eye_box(&self) -> Option<Rect> {
+        self.red_eye.as_ref().and_then(red_eye_pixels)
+    }
+}
+
+/// The Red Eye box in progress (#12569): the marquee's drag rules, run by the retouch tool the way
+/// `selection.rs` runs them for the Marquees - `MarqueeGesture` for ⇧/⌥/Space, `marquee_pixels` and
+/// `square_pixels` for the rectangle - with the dotted outline painted and the release running
+/// `paint.redEye` over the box.
+#[derive(Clone, Copy, Debug)]
+struct RedEyeBox {
+    /// ⇧ squares and ⌥ centres the drag, Space moves it; the press mods choose neither.
+    gesture: MarqueeGesture,
+    /// The press point in document units: a drag too short to be a box is the tool's click here.
+    start: [f64; 2],
+    /// The corners the gesture has given, once the drag has begun.
+    corners: Option<MarqueeRect>,
+}
+
+/// The box's pixel rectangle: `marquee_pixels` of its corners, squared by ⇧ while held, as the
+/// marquee squares its own (`MarqueeTool::pixels`).
+fn red_eye_pixels(box_: &RedEyeBox) -> Option<Rect> {
+    let corners = box_.corners?;
+    let (a, b) = (corners.a, corners.b);
+    let mut rect = marquee_pixels(a, b);
+    if box_.gesture.square_and_centre().0 {
+        rect = square_pixels(rect, a, b);
+    }
+    (rect.width() > 0.0 && rect.height() > 0.0).then_some(rect)
 }
 
 /// The retouch tool for the selected tool (Patch, Content-Aware Move, Red Eye or Object Selection).
@@ -83,10 +118,9 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut RetouchTools, _h
 /// A Red Eye click. CMYK, Grayscale and Indexed Color documents get the reference's alert (#12575); the alert host
 /// shows one alert per message, so more clicks while it is open add nothing.
 fn red_eye_click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    use photocraft_engine::redeye_cmds::MODE_REFUSAL;
     let o = app.ui.tool_options.clone();
-    let result = app.run(
-        "paint.redEye",
+    run_red_eye(
+        app,
         serde_json::json!({
             "x": at[0].floor(),
             "y": at[1].floor(),
@@ -95,11 +129,54 @@ fn red_eye_click(app: &mut PhotocraftApp, at: [f64; 2]) {
             "target": crate::canvas::strokes::paint_target(app),
         }),
     );
+}
+
+/// A Red Eye box release (#12569): the correction inside the dragged rectangle, as one command and
+/// one History state. The rectangle is whole document pixels, as the marquee commits its own.
+fn red_eye_box(app: &mut PhotocraftApp, rect: Rect) {
+    let o = app.ui.tool_options.clone();
+    let (x0, y0) = (rect.x0.floor() as i64, rect.y0.floor() as i64);
+    let (w, h) = ((rect.x1 - rect.x0).floor() as i64, (rect.y1 - rect.y0).floor() as i64);
+    run_red_eye(
+        app,
+        serde_json::json!({
+            "rect": [x0, y0, w, h],
+            "pupilSize": o.red_eye_pupil_size.clamp(1.0, 100.0),
+            "darken": o.red_eye_darken.clamp(0.0, 100.0),
+            "target": crate::canvas::strokes::paint_target(app),
+        }),
+    );
+}
+
+/// Runs `paint.redEye`; a mode refusal takes the status line back and shows the alert (#12575).
+fn run_red_eye(app: &mut PhotocraftApp, params: serde_json::Value) {
+    use photocraft_engine::redeye_cmds::MODE_REFUSAL;
+    let result = app.run("paint.redEye", params);
     if result.is_err_and(|e| e == MODE_REFUSAL) {
         app.ui.status.clear();
         app.ui.status_error = false;
         let _ = crate::dialogs::alerts::alert(app, tl!(MODE_REFUSAL).to_string());
     }
+}
+
+/// Follows the pointer for the Red Eye box the way `MarqueeTool::follow` does: the gesture records
+/// ⇧ and ⌥, the box sizes to the snapped pointer, and with Space held the whole box moves by the
+/// pointer's step and then onto what the box snaps to.
+fn red_eye_follow(box_: &mut RedEyeBox, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+    box_.gesture.begin();
+    box_.gesture.follow(Some(pointer.pos), pointer.mods);
+    let raw = doc_point(pointer, cx);
+    let space = cx.held(Key::Space);
+    let at = if space { Point::new(raw[0], raw[1]) } else { cx.snap(Point::new(raw[0], raw[1])) };
+    let mut corners = box_.gesture.size_to(at, space, Constraint::Free);
+    if space {
+        let by = cx.snap_rect(corners.rect());
+        if by != Vec2::ZERO {
+            // A second Space step by the snap offset moves both corners, as the marquee's does.
+            corners = box_.gesture.size_to(at + by, true, Constraint::Free);
+        }
+    }
+    box_.corners = Some(corners);
 }
 
 /// The Alt-click source of Clone Stamp and Healing: the stand-in `tools::run` installs for `StandInKey::Alt`.
@@ -173,8 +250,11 @@ impl CanvasTool for RetouchTool<'_> {
         let (tool, mods) = (self.tool, pointer.mods);
         let mut state = self.state.borrow_mut();
         if tool == Tool::RedEye {
-            self.scope.with_app(|app| red_eye_click(app, at));
-            return ToolAction::Done;
+            // The box drag (#12569): the press is claimed and the release runs the tool. Like the
+            // marquee with nothing selected, ⇧ squares and ⌥ centres from the first move; the press
+            // mods pick nothing here.
+            state.red_eye = Some(RedEyeBox { gesture: MarqueeGesture::press(pointer.pos, Point::new(at[0], at[1]), Mods::NONE), start: at, corners: None });
+            return ToolAction::Claimed;
         }
         if self.drags_outline(at, mods) {
             return state.drag.press(&self.probe, pointer, cx);
@@ -205,7 +285,9 @@ impl CanvasTool for RetouchTool<'_> {
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let mut state = self.state.borrow_mut();
-        if state.drag.active() {
+        if let Some(box_) = state.red_eye.as_mut() {
+            red_eye_follow(box_, pointer, cx);
+        } else if state.drag.active() {
             state.drag.drag(&self.probe, pointer, cx);
         } else if state.press.is_some() {
             state.last = doc_point(pointer, cx);
@@ -217,6 +299,19 @@ impl CanvasTool for RetouchTool<'_> {
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let mut state = self.state.borrow_mut();
+        if let Some(mut box_) = state.red_eye.take() {
+            // The release follows the pointer once, as the marquee's does, then applies: under 3 px of
+            // travel it is the tool's one-click correction at the press point, over it the box (#12569).
+            red_eye_follow(&mut box_, pointer, cx);
+            let end = doc_point(pointer, cx);
+            let moved = (end[0] - box_.start[0]).hypot(end[1] - box_.start[1]);
+            let rect = red_eye_pixels(&box_).filter(|_| moved >= 3.0);
+            self.scope.with_app(|app| match rect {
+                Some(rect) => red_eye_box(app, rect),
+                None => red_eye_click(app, box_.start),
+            });
+            return;
+        }
         if state.drag.active() {
             state.drag.release(&self.probe, pointer, cx);
             return;
@@ -256,6 +351,7 @@ impl CanvasTool for RetouchTool<'_> {
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
         let mut state = self.state.borrow_mut();
         state.press = None;
+        state.red_eye = None;
         state.drag.cancel(&self.probe, reason, cx);
         if self.lassos() {
             state.lasso.pass(&self.probe).cancel(reason, cx);
@@ -263,6 +359,18 @@ impl CanvasTool for RetouchTool<'_> {
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        if let Some(rect) = self.state.borrow().red_eye_box() {
+            // The dotted box, drawn the marquee's way: built in document space and mapped point by
+            // point through the view, so a rotated view draws it where the release corrects.
+            if let Some(space) = cx.space() {
+                let points: Vec<_> = [(rect.x0, rect.y0), (rect.x1, rect.y0), (rect.x1, rect.y1), (rect.x0, rect.y1)]
+                    .map(|(x, y)| space.view.to_screen(Point::new(x, y)))
+                    .into_iter()
+                    .collect();
+                cx.marching_ants(&points, true);
+            }
+            return;
+        }
         if self.lassos() {
             self.state.borrow_mut().lasso.pass(&self.probe).paint(draw, cx);
         }
