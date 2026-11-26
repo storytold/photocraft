@@ -915,16 +915,24 @@ fn an_unanswered_command_or_dialog_ends_the_run() {
         opts.reply_limits = (Duration::from_millis(300), Duration::from_millis(300));
         let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
         let start = Instant::now();
+        let mut asked = 0;
         let result = loop {
             assert!(start.elapsed() < Duration::from_secs(30), "{src}: the run never ended");
             match job.poll(Duration::from_millis(20)) {
                 Some(Event::Finished(result)) => break result,
                 // Neither is ever answered.
-                Some(Event::Execute { .. }) => assert!(!dialog, "{src}"),
-                Some(Event::Dialog(_)) => assert!(dialog, "{src}"),
+                Some(Event::Execute { .. }) => {
+                    assert!(!dialog, "{src}");
+                    asked += 1;
+                }
+                Some(Event::Dialog(_)) => {
+                    assert!(dialog, "{src}");
+                    asked += 1;
+                }
                 _ => {}
             }
         };
+        assert_eq!(asked, 1, "{src}: the one unanswered request should reach the interface before the run ends");
         let f = result.expect_err(src);
         assert_eq!(f.kind, FailureKind::Timeout, "{src}: {f}");
         assert!(f.message.contains("got no answer"), "{src}: {f}");
