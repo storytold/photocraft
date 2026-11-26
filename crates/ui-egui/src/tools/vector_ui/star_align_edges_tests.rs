@@ -2,55 +2,45 @@
 //! shape tools. On (the default) a star's box snaps to whole pixels; off it keeps the drag's
 //! fractional coordinates. It is greyed in Path and Pixels mode, where the box still snaps.
 
+use craft::draw::geometry::ShapeGeometry;
 use craft::draw::ui::VectorMode;
 use craft::draw::ui::shape_drag::ShapeKind;
-use egui::Modifiers;
+use craft::keymap::Mods;
 use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use super::super::test_input::harness;
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
-const START: [f64; 2] = [10.3, 10.6];
-const END: [f64; 2] = [40.7, 30.2];
-/// The box `[x, y, w, h]` from `START` to `END` as dragged.
+/// The box `[x, y, w, h]` of the drag every test draws, from a fractional press to a fractional
+/// release, as dragged and snapped to whole pixels.
 const FRACTIONAL: [f64; 4] = [10.3, 10.6, 30.4, 19.6];
+const SNAPPED: [f64; 4] = [10.0, 11.0, 30.0, 20.0];
 
-/// The live star box a Star drag from `START` to `END` draws with the options `set` gives, `None`
-/// when it made no layer. The pixel-grid snap of vector tools is off, so only Align Edges rounds.
-fn star_box(set: impl FnOnce(&mut ToolOptions)) -> Option<[f64; 4]> {
+/// The live box of the star a Star drag over `FRACTIONAL` draws with the tool options `set` gives:
+/// the exact fractions go to `finish_drag` as the framework tool hands them over.
+fn star_box(set: impl FnOnce(&mut ToolOptions)) -> [f64; 4] {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
-    app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
-    app.sync_views();
-    app.ui.views[0].zoom = 16.0;
     app.ui.tool = Tool::Star;
     set(&mut app.ui.tool_options);
-    let before = app.session.active().unwrap().doc.layers.len();
-    let none = Modifiers::NONE;
-    tool_event(&mut app, ToolEvent::Down { x: START[0], y: START[1], pressure: 1.0 }, none);
-    tool_event(&mut app, ToolEvent::Move { x: (START[0] + END[0]) / 2.0, y: (START[1] + END[1]) / 2.0, pressure: 1.0 }, none);
-    tool_event(&mut app, ToolEvent::Move { x: END[0], y: END[1], pressure: 1.0 }, none);
-    tool_event(&mut app, ToolEvent::Up { x: END[0], y: END[1] }, none);
+    let [x, y, w, h] = FRACTIONAL;
+    let rect = craft::behavior::kurbo::Rect::new(x, y, x + w, y + h);
+    super::finish_drag(&mut app, ShapeKind::Star, &ShapeGeometry::Polygon { rect, sides: 5, star_ratio: 0.5 }, Mods::default());
     let st = app.session.active().unwrap();
-    if st.doc.layers.len() == before {
-        return None;
-    }
     let id = st.active_layer.unwrap().0;
     let info = app.session.execute("shape.info", json!({"layer": id})).unwrap();
-    assert_eq!(info["live"]["kind"].as_str(), Some("star"));
-    serde_json::from_value(info["live"]["rect"].clone()).ok()
+    assert_eq!(info["kind"].as_str(), Some("star"));
+    serde_json::from_value(info["live"]["rect"].clone()).unwrap()
 }
 
 #[test]
 fn on_by_default_a_star_snaps_and_off_it_keeps_the_drags_fractions() {
     assert!(ToolOptions::default().align_edges);
-    let on = star_box(|_| {}).unwrap();
-    assert!(on.iter().all(|v| v.fract() == 0.0), "on: {on:?}");
-    let off = star_box(|o| o.align_edges = false).unwrap();
+    assert_eq!(star_box(|_| {}), SNAPPED);
+    let off = star_box(|o| o.align_edges = false);
     assert!(off.iter().zip(FRACTIONAL).all(|(g, w)| (g - w).abs() < 1e-9), "off: {off:?}, want {FRACTIONAL:?}");
 }
 
