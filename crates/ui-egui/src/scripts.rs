@@ -12,6 +12,7 @@ use std::time::Duration;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, PromptChoice, StandardPrompt};
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::sections::{DialogRole, FooterButton};
 use egui::Id;
 use serde_json::{Value, json};
 
@@ -482,7 +483,32 @@ fn answer(app: &mut PhotocraftApp, id: DialogId, value: Value) {
 const PROMPT_KEY: &str = "script.prompt";
 
 /// The family of the prompt's parameter dialog: OK answers its text, Cancel `null`.
-pub(crate) const PROMPT_FAMILY: ParamFamily = ParamFamily { cancel: Some(prompt_cancelled), ..ParamFamily::new(owns_prompt, prompt_answered) };
+pub(crate) const PROMPT_FAMILY: ParamFamily =
+    ParamFamily { cancel: Some(prompt_cancelled), footer: Some(prompt_footer), ..ParamFamily::new(owns_prompt, prompt_answered) };
+
+/// Every script dialog's way to end the run: a script that asks again and again can't keep the
+/// app waiting at its dialogs, where the Stop window isn't shown.
+const STOP_SCRIPT: &str = "Stop Script";
+/// The prompt's footer action for [`STOP_SCRIPT`].
+const STOP_ACTION: &str = "stopScript";
+
+/// A prompt's Stop Script: the run ends, and its dialog closes without an answer.
+fn prompt_footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, action: &str) {
+    if action == STOP_ACTION {
+        stop_at(app, id);
+        app.framework.dialogs.cancel_by_id(ctx, id);
+    }
+}
+
+/// End the run waiting at dialog `id`, without answering it.
+fn stop_at(app: &mut PhotocraftApp, id: DialogId) {
+    if let Some(a) = app.scripts.run.as_mut()
+        && a.dialog.is_some_and(|open| open.id == id)
+    {
+        a.dialog = None;
+        a.run.cancel();
+    }
+}
 
 fn owns_prompt(key: &str) -> bool {
     key == PROMPT_KEY
@@ -518,12 +544,23 @@ fn open_dialog(app: &mut PhotocraftApp, kind: ScriptDialog, args: &Value) {
     let instance = ("script-dialog", app.scripts.dialogs);
     let id = match kind {
         ScriptDialog::Alert => {
-            let prompt = StandardPrompt::custom(arg(0)).title(title(&name, &arg(1))).button(PromptChoice::Proceed, tl!("OK"));
+            // Escape is OK, as before Stop Script was offered: stopping is asked for by name.
+            let prompt = StandardPrompt::custom(arg(0))
+                .title(title(&name, &arg(1)))
+                .button(PromptChoice::Proceed, tl!("OK"))
+                .button(PromptChoice::Alternate, tl!(STOP_SCRIPT))
+                .alternate_role(DialogRole::Other)
+                .escape(PromptChoice::Proceed);
             app.framework.dialogs.open(prompt.instance(instance))
         }
         ScriptDialog::Confirm => {
-            let prompt =
-                StandardPrompt::custom(arg(0)).title(title(&name, &arg(2))).button(PromptChoice::Proceed, tl!("Yes")).button(PromptChoice::Cancel, tl!("No"));
+            let prompt = StandardPrompt::custom(arg(0))
+                .title(title(&name, &arg(2)))
+                .button(PromptChoice::Proceed, tl!("Yes"))
+                .button(PromptChoice::Cancel, tl!("No"))
+                .button(PromptChoice::Alternate, tl!(STOP_SCRIPT))
+                // Apart from the answers, as on the prompt: it is no answer.
+                .alternate_role(DialogRole::Other);
             // `noAsDefault`: Enter answers No.
             let prompt = if arg(1) == "true" { prompt.default_choice(PromptChoice::Cancel) } else { prompt };
             app.framework.dialogs.open(prompt.instance(instance))
@@ -532,7 +569,9 @@ fn open_dialog(app: &mut PhotocraftApp, kind: ScriptDialog, args: &Value) {
             let (message, text, heading) = (arg(0), arg(1), title(&name, &arg(2)));
             params::open_param_unsaved(app, PROMPT_KEY, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
                 let rows = vec![Param::new("text", message.clone(), ParamKind::text(text.clone()))];
-                ParamDialog::new(PROMPT_KEY, heading.clone(), rows).values(Bind::bound(fields))
+                ParamDialog::new(PROMPT_KEY, heading.clone(), rows)
+                    .values(Bind::bound(fields))
+                    .extra_buttons(vec![(STOP_ACTION.to_owned(), FooterButton::new(tl!(STOP_SCRIPT).to_string(), DialogRole::Other))])
             })
         }
     };
@@ -554,6 +593,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
         return;
     }
     let yes = match app.framework.dialogs.take_by_id::<StandardPrompt>(open.id) {
+        Some(DialogResult::Ok(answer)) if answer.choice == PromptChoice::Alternate => return stop_at(app, open.id),
         Some(DialogResult::Ok(answer)) => answer.choice == PromptChoice::Proceed,
         Some(_) => false,
         None if app.framework.dialogs.stack().ids().any(|id| id == open.id) => return,

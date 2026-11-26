@@ -426,6 +426,38 @@ fn a_picked_jsxbin_is_refused_for_its_format_before_its_text_is_read() {
     assert!(h.state().ui.status.contains("compiled ExtendScript"), "{}", h.state().ui.status);
 }
 
+/// Every script dialog offers Stop Script: a script that asks again and again can still be
+/// stopped, though the Stop window isn't shown at a dialog. The run ends with no answer.
+#[test]
+fn stop_script_at_a_dialog_ends_the_run_without_answering() {
+    for asked in
+        [dialog(ScriptDialog::Alert, json!(["Again"])), dialog(ScriptDialog::Confirm, json!(["Again?"])), dialog(ScriptDialog::Prompt, json!(["Again?"]))]
+    {
+        let log = Log::default();
+        let mut h = harness(vec![vec![asked]], &log, vec![]);
+        start_named(h.state_mut(), "nag.jsx");
+        h.run_steps(4);
+        h.get_by_label("Stop Script").click();
+        h.run_steps(6);
+        assert_eq!(log.cancels.get(), 1, "the run was stopped");
+        assert!(log.answers.borrow().is_empty(), "{:?}", log.answers.borrow());
+        assert!(!h.state().scripts.running() && !h.state().dialog_open());
+    }
+}
+
+/// Escape on an alert is still OK, not Stop Script.
+#[test]
+fn escape_on_a_scripts_alert_answers_it() {
+    let log = Log::default();
+    let mut h = harness(vec![vec![dialog(ScriptDialog::Alert, json!(["Hi"]))]], &log, vec![]);
+    start_named(h.state_mut(), "hi.jsx");
+    h.run_steps(4);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert_eq!(*log.answers.borrow(), [Value::Null]);
+    assert_eq!(log.cancels.get(), 0);
+}
+
 /// `file.scripts.run` starts a run however it is reached: the menu, or `engine.execute`'s path
 /// through the app; so does `file.scripts.browse` of a `.jsx`, and one PhotoCraft can't run is
 /// refused with its reason. Without a script service it says no script can run.

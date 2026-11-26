@@ -17,11 +17,12 @@ platform gains a test run or a feature.
   `Document` has `name`, `resolution` and `saved`, and setting `app.activeDocument` switches to
   it.
 
-A busy run offers **Stop** after half a second. While a script's dialog is open, the app runs no
-other command, as under any of its own dialogs; the automation channel included. While the app is
-in another dialog (or another modal state, such as a pending crop), the script's next command
-waits, as a click would; the app notices a run that ended meanwhile (its host died) once it is
-out of that state.
+A busy run offers **Stop** after half a second, and each of a script's dialogs has **Stop
+Script**, so a script that keeps asking can still be ended. While a script's dialog is open, the
+app runs no other command, as under any of its own dialogs; the automation channel included.
+While the app is in another dialog (or another modal state, such as a pending crop), the script's
+next command waits, as a click would; the app notices a run that ended meanwhile (its host died)
+once it is out of that state.
 
 `file.scripts.run` (`{"path"}` or `{"name", "source"}`) starts a run from the menus, a key or
 the automation channel. An agent under a workspace policy can't start one yet: the policy refuses
