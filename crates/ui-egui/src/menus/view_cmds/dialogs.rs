@@ -7,6 +7,7 @@ use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::sections::{DialogRole, FooterButton};
 
 #[path = "artboard_export_options.rs"]
 mod artboard_export_options;
@@ -84,7 +85,7 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
         if image_processor {
             image_processor_ui::settings_footer(dialog)
         } else if report {
-            dialog.extra_buttons(vec![("importReport".to_owned(), Label::from(tl!("Import Conversion Report")))])
+            dialog.extra_buttons(vec![("importReport".to_owned(), FooterButton::new(tl!("Import Conversion Report").to_string(), DialogRole::Other))])
         } else if calculations {
             dialog.previews(true)
         } else {
