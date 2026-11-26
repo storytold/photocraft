@@ -1,10 +1,10 @@
 //! Render synthetic color-picker evidence without capturing the user's desktop.
 //! cargo run -p photocraft-ui-egui --example color_picker_demo -- /tmp/color-picker
-use craft::color_ui::ui::{CaptureSource, StillCapture};
+use craft::color_ui::ui::{CaptureSource, ScreenPickGesture, StillCapture};
 use craft::platform::screen::{Capture, ScreenImage};
 use craft::theme::Srgba;
 use egui_kittest::{Harness, kittest::Queryable};
-use photocraft_ui_egui::{PhotocraftApp, Services, color_picker_ui, screen_picker};
+use photocraft_ui_egui::{PhotocraftApp, Services, screen_picker};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -37,12 +37,9 @@ fn main() {
         app
     });
     text.run_steps(8);
-    text.get_by_label("Set the text color").click();
+    text.get_all_by_role_and_label(egui::accesskit::Role::ColorWell, "Text color").next().expect("the text swatch").click();
     text.run_steps(6);
     text.render().unwrap().save(format!("{output}/text-color-picker.png")).unwrap();
-    text.get_by_label("Sample color from the screen").click();
-    text.run_steps(6);
-    text.render().unwrap().save(format!("{output}/text-color-picked.png")).unwrap();
 
     // PLAN: the loupe renders through the app's own frame, which calls `screen_picker::tick` and
     // `show` once per pass (frame.rs, hub-w1); calling them again here would run the pick twice a pass.
@@ -57,9 +54,9 @@ fn main() {
         PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services)
     });
     loupe.run_steps(8);
-    color_picker_ui::open(loupe.state_mut(), "foreground");
-    loupe.run_steps(6);
-    loupe.get_by_label("Sample color from the screen").click();
+    // The Color Picker dialog has no screen button (#17017); the compact popovers start the same pick.
+    let ctx = loupe.ctx.clone();
+    screen_picker::hold(loupe.state_mut(), &ctx, "color-picker-demo", ScreenPickGesture::Clicked);
     loupe.run_steps(3);
     loupe.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(360.0, 220.0)));
     loupe.run_steps(2);
