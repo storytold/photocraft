@@ -87,6 +87,11 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
 /// The Freeform history override applies to document paths and new shape layers only.
 fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, freeform: bool) -> bool {
     let shape_mode = app.ui.tool_options.vector_mode == VectorMode::Shape;
+    // The Freeform Pen records itself under the Magnetic Pen's name when the trace was drawn with the
+    // Magnetic checkbox on (#12693, as the reference names the step); the options here are the ones the
+    // trace's owner captured when it began, so the label follows the mode the trace ran in.
+    let tool_label = if app.ui.tool_options.freeform_magnetic_on { "Magnetic Pen" } else { "Freeform Pen" };
+    let freeform_label = freeform.then_some(tool_label);
     // One anchor is no path, in either mode.
     if pen.draft.knots.len() < 2 {
         return true;
@@ -103,7 +108,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         // An open path is filled to its chord and stays open, as in Photoshop (#12839).
         let fill = fill_param(app);
         let stroke = if closed { stroke_param(app) } else { super::shapes::open_pen_stroke_param(app) };
-        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges, "historyName": freeform.then_some("Freeform Pen")}))
+        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges, "historyName": freeform_label}))
     } else if let Some((name, p)) =
         pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
     {
@@ -117,7 +122,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
             }
             Some(LiveFinish::Close) => Some("Close Path"),
             Some(LiveFinish::Rest) => None,
-            None => freeform.then_some("Freeform Pen"),
+            None => freeform_label,
         };
         app.run("path.set", json!({"name": name, "path": p, "historyName": label})).inspect(|_| app.ui.selected_path = Some(name))
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
@@ -138,7 +143,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         // subpath, even with nothing selected in the Paths panel.
         let target = draft_target(app, pen);
         let name = target.clone().unwrap_or_else(|| "work".into());
-        let mut params = json!({"name": name, "path": path, "historyName": freeform.then_some("Freeform Pen")});
+        let mut params = json!({"name": name, "path": path, "historyName": freeform_label});
         if target.is_some() {
             params["op"] = json!(op.unwrap_or("combine"));
         }
