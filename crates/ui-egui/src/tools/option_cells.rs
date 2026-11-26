@@ -22,6 +22,9 @@ pub(crate) struct NumberCell<'a> {
     range: RangeInclusive<f64>,
     unit: Option<Label>,
     whole: bool,
+    /// A whole cell that keeps its previous value and answers the range alert when a typed number would have to
+    /// be rounded (#12501's Opacity, as the maintainers measured it); `whole` implies rounding instead.
+    keeps_whole: bool,
     popup_slider: bool,
     tooltip: Option<Label>,
     enabled: bool,
@@ -30,7 +33,18 @@ pub(crate) struct NumberCell<'a> {
 
 /// A number cell named `caption` over `value`, held to `range`.
 pub(crate) fn number<'a>(caption: impl Into<Label>, value: &'a mut f32, range: RangeInclusive<f64>) -> NumberCell<'a> {
-    NumberCell { caption: caption.into(), value, range, unit: None, whole: false, popup_slider: false, tooltip: None, enabled: true, icon: None }
+    NumberCell {
+        caption: caption.into(),
+        value,
+        range,
+        unit: None,
+        whole: false,
+        keeps_whole: false,
+        popup_slider: false,
+        tooltip: None,
+        enabled: true,
+        icon: None,
+    }
 }
 
 impl<'a> NumberCell<'a> {
@@ -45,6 +59,15 @@ impl<'a> NumberCell<'a> {
     #[must_use]
     pub(crate) fn whole(mut self) -> Self {
         self.whole = true;
+        self
+    }
+
+    /// The cell holds whole numbers and keeps its previous value, alerting, when a typed number is a fraction;
+    /// out-of-range numbers still go to the closest end (#12501's Opacity field).
+    #[must_use]
+    pub(crate) fn whole_keeps(mut self) -> Self {
+        self.whole = true;
+        self.keeps_whole = true;
         self
     }
 
@@ -79,7 +102,7 @@ impl<'a> NumberCell<'a> {
     /// Shows the cell. Returns the pass's edit events, which a caller keys its history step by
     /// (`history_keys::coalesce`), and the alert of a typed value that was clamped to the range.
     pub(crate) fn show(self, ui: &mut egui::Ui) -> NumberCellOutput {
-        let Self { caption, value, range, unit, whole, popup_slider, tooltip, enabled, icon } = self;
+        let Self { caption, value, range, unit, whole, keeps_whole, popup_slider, tooltip, enabled, icon } = self;
         let mut side = SideLabel::new().scrub(true);
         if let Some(icon) = icon {
             side = side.icon(icon).layout(FieldLayout::Inside);
@@ -90,6 +113,9 @@ impl<'a> NumberCell<'a> {
             if whole {
                 let codec = NumberCodec::new(Env::of(ui).units().reader(None), 0);
                 field = field.step(1.0).commit_decimals(0).codec(codec);
+                if keeps_whole {
+                    field = field.keeps_on_rounding(true);
+                }
             }
             if let Some(unit) = unit.clone() {
                 field = field.unit(unit);

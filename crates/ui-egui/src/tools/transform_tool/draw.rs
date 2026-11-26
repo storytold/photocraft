@@ -9,7 +9,7 @@ use craft::draw::ui::pen::{AnchorsShown, BezierOverlay, BezierTool, EditPath, Ed
 use craft::draw::ui::transform::{ApplyBy, Interpolation, TransformEdit, TransformOverlay, TransformPhase, TransformRequest};
 use craft::imaging::ui::selection::PointMap;
 use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, TransformPreview};
-use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpGuides, WarpMesh};
+use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpGuides, WarpGuidesShow, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::primitives::PaintSlot;
@@ -218,18 +218,22 @@ pub(crate) fn styled_composite(app: &PhotocraftApp, zoom: f32) -> Option<(egui::
     Some((source.compose(&plan, &content)?, plan))
 }
 
-/// The grid's guide lines as the framework takes them, from the remembered options (#12501): no
-/// colour picked leaves the theme's own overlay line, Opacity scales the line's alpha, no density
-/// picked keeps the grid's own rule, and Never Show Guides leaves only the patch boundaries.
+/// The grid's guide lines as the framework takes them, from the remembered options (#12501, values
+/// as measured by the maintainers on 2026-11-26): the picked colour entry - Classic keeps the theme's
+/// own overlay line - Opacity scales the line's alpha, Density is the number of thin lines inside
+/// every cell each way on every patch, and the Show Guides row says when they draw: Auto only while a
+/// drag of the grid runs, Never not at all, leaving the patch boundaries.
 pub(super) fn guide_look(options: &WarpGuideOptions) -> WarpGuides {
     let mut guides = WarpGuides::default();
-    guides.line = options.color.map(|[r, g, b]| {
-        let byte = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-        DataColor::new(egui::Color32::from_rgb(byte(r), byte(g), byte(b)))
-    });
+    guides.line = options.color.rgb().map(|[r, g, b]| DataColor::new(egui::Color32::from_rgb(r, g, b)));
     guides.share = if options.opacity.is_finite() { (options.opacity / 100.0).clamp(0.0, 1.0) } else { 1.0 };
-    guides.density = options.density.filter(|lines| lines.is_finite()).map(|lines| lines.round().clamp(1.0, 10.0) as usize);
-    guides.visible = options.show != WarpGuideShow::Never;
+    let lines = if options.density.is_finite() { options.density.round() } else { WarpGuideOptions::default().density };
+    guides.density = Some(lines.clamp(1.0, 10.0) as usize);
+    guides.show = match options.show {
+        WarpGuideShow::Auto => WarpGuidesShow::WhileDragging,
+        WarpGuideShow::Always => WarpGuidesShow::Always,
+        WarpGuideShow::Never => WarpGuidesShow::Never,
+    };
     guides
 }
 

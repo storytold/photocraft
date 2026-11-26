@@ -47,8 +47,6 @@ pub(crate) enum PickTarget {
     NoteColor,
     /// The pasteboard's custom colour.
     Pasteboard,
-    /// The colour of Warp's guide lines (#12501).
-    WarpGuideColor,
     /// A colour row `key` of `window`, which the app holds itself; the answer waits in [`answer_for_window`].
     Window { window: PickWindow, key: String },
 }
@@ -85,7 +83,6 @@ impl PickTarget {
             PickTarget::ArtboardBackground => "artboardBackground".into(),
             PickTarget::NoteColor => "noteColor".into(),
             PickTarget::Pasteboard => "pasteboard".into(),
-            PickTarget::WarpGuideColor => "warpGuideColor".into(),
         }
     }
 }
@@ -112,7 +109,6 @@ impl PickTarget {
             PickTarget::ArtboardBackground => Identity::Plain("artboardBackground"),
             PickTarget::NoteColor => Identity::Plain("noteColor"),
             PickTarget::Pasteboard => Identity::Plain("pasteboard"),
-            PickTarget::WarpGuideColor => Identity::Plain("warpGuideColor"),
             PickTarget::Request { parent, key } => Identity::Request(*parent, key),
             PickTarget::Window { window, key } => Identity::Window(*window, key),
             PickTarget::Command { command, document, .. } => Identity::Command(command, document.map(|d| d.0)),
@@ -222,7 +218,7 @@ pub(crate) fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 
 }
 
 /// Opens the picker on `rgb` for a colour the shell keeps itself: `cropShield`, `artboardBackground`,
-/// `noteColor`, `pasteboard` or `warpGuideColor` (or `foreground`/`background`). Any other name is refused.
+/// `noteColor` or `pasteboard` (or `foreground`/`background`). Any other name is refused.
 pub(crate) fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> Result<DialogId, String> {
     let which = match target {
         "foreground" | "background" => return Ok(open(app, target)),
@@ -230,7 +226,6 @@ pub(crate) fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str
         "artboardBackground" => PickTarget::ArtboardBackground,
         "noteColor" => PickTarget::NoteColor,
         "pasteboard" => PickTarget::Pasteboard,
-        "warpGuideColor" => PickTarget::WarpGuideColor,
         other => return Err(format!("unknown colour target: {other}")),
     };
     Ok(open_for(app, label, Srgba::from_rgb_array(rgb), None, which))
@@ -453,11 +448,6 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         }
         // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
         PickTarget::Pasteboard => app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}})),
-        // Warp › the guide-line gear: the colour of the thin lines inside each grid cell (#12501).
-        PickTarget::WarpGuideColor => {
-            app.ui.tool_options.warp_guides.color = Some(picked.color.to_rgb_array());
-            Ok(json!({ "color": color }))
-        }
     }
 }
 
