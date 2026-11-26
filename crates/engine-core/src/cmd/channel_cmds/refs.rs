@@ -130,7 +130,7 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
 /// Photoshop action refers to it), `{"name":"merged"}` for a literal name, `{"background":true}`,
 /// or `"merged"` (default).
 /// An unknown name or a missing requested Background is an error.
-fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
+pub(super) fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
     let name = match p.get("layer") {
         Some(Value::Number(n)) => return Ok(n.as_u64().map(LayerId)),
         Some(v) if *v == serde_json::json!({"background": true}) => {

@@ -1,5 +1,5 @@
 use super::planes::{channel_format, next_alpha_name, plane_surface, read_plane};
-use super::refs::{ChanRef, bad, doc_index, parse_ref, source};
+use super::refs::{ChanRef, bad, doc_index, parse_ref, source, source_layer};
 use super::view::{ChannelTarget, QuickMaskOptions};
 use super::{AlphaChannel, ColorIndicates, Document, EngineError, PixelFormat, Rect, Result, SelectionMode, Session, Surface, Value, json, operation, sel};
 
@@ -86,6 +86,7 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     let p = &targeted;
+    refuse_group_transparency(s, p, cmd)?;
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
     let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -99,6 +100,26 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected }))
+}
+
+/// A group has no pixels of its own (#17050), so its transparency loads no selection, as Ctrl+click on its folder icon
+/// in the Layers panel loads none (#16785). The source layer is resolved as [`source`] resolves it: `layer` by id, name
+/// or `{"background": true}`, else the active layer; the merged transparency (`"layer": "merged"`) isn't a group's.
+/// Artboards, which weren't measured, and Apply Image and Calculations, which read the same transparency, are
+/// unchanged.
+fn refuse_group_transparency(s: &Session, p: &Value, cmd: &str) -> Result<()> {
+    let st = &s.documents()[doc_index(s, p, "document")?];
+    let transparency = matches!(p.get("channel").and_then(|v| parse_ref(v, &st.doc)), Some(ChanRef::Transparency));
+    if !transparency || p.get("layer").is_some_and(|v| v == "merged") {
+        return Ok(());
+    }
+    let layer = source_layer(&st.doc, p, cmd)?.or(st.active_layer).and_then(|id| st.doc.layer(id));
+    match layer {
+        Some(l) if l.is_group() && l.artboard().is_none() => {
+            Err(bad(cmd, format!("\"{}\" is a group: it has no pixels of its own to load as a selection", l.name)))
+        }
+        _ => Ok(()),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
