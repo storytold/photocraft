@@ -889,11 +889,14 @@ fn time_the_app_takes_to_answer_does_not_count_against_the_limit() {
     let mut opts = options("slow-app");
     opts.time_limit = Duration::from_millis(800);
     let mut job = IsolatedJob::spawn("for (var i = 0; i < 6; i++) { app.documents.length; } $.writeln('done');".into(), opts).unwrap();
+    let mut delayed = 0;
     let seen = drive(&mut job, None, &[], |_, e| {
         if matches!(e, Event::Execute { .. }) {
+            delayed += 1;
             std::thread::sleep(Duration::from_millis(300));
         }
     });
+    assert_eq!(delayed, 6, "every command was answered slowly");
     assert_eq!(seen.result, Ok(()), "1.8 s of answering, 0.8 s limit: {:?}", seen.lines);
     assert_eq!(seen.lines, ["done"]);
 }

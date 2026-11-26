@@ -288,11 +288,11 @@ pub fn error_text(e: &JsError) -> String {
     let Some(v) = e.as_opaque() else { return cut(&e.to_string(), MAX_ERROR_CHARS) };
     if let Some(s) = v.as_string() {
         if s.len() > MAX_ERROR_CHARS {
-            return cut_shortened(&format!("\"{}", s.slice(0, MAX_ERROR_CHARS).to_std_string_escaped()), MAX_ERROR_CHARS);
+            return cut_shortened(&format!("\"{}", s.slice(0, whole(&s, MAX_ERROR_CHARS)).to_std_string_escaped()), MAX_ERROR_CHARS);
         }
     } else if let Some(sym) = v.as_symbol() {
         if let Some(d) = sym.description().filter(|d| d.len() > MAX_ERROR_CHARS) {
-            return cut_shortened(&format!("Symbol({}", d.slice(0, MAX_ERROR_CHARS).to_std_string_escaped()), MAX_ERROR_CHARS);
+            return cut_shortened(&format!("Symbol({}", d.slice(0, whole(&d, MAX_ERROR_CHARS)).to_std_string_escaped()), MAX_ERROR_CHARS);
         }
     } else if let Some(obj) = v.as_object() {
         let name = data_on_chain(&obj, &js_string!("name").into());
@@ -335,7 +335,14 @@ pub fn error_text(e: &JsError) -> String {
 /// characters outside the BMP can lose units yet hold fewer characters than [`cut`] counts.
 fn short(s: &JsString) -> (String, bool) {
     let shortened = s.len() > MAX_ERROR_CHARS;
-    (s.slice(0, s.len().min(MAX_ERROR_CHARS)).to_std_string_escaped(), shortened)
+    (s.slice(0, whole(s, s.len().min(MAX_ERROR_CHARS))).to_std_string_escaped(), shortened)
+}
+
+/// `n`, or one less when the first `n` units of `s` would end inside a surrogate pair: a cut
+/// keeps whole characters.
+fn whole(s: &JsString, n: usize) -> usize {
+    let splits = n > 0 && n < s.len() && matches!(s.code_point_at(n - 1), boa_engine::string::CodePoint::Unicode(c) if c.len_utf16() == 2);
+    if splits { n - 1 } else { n }
 }
 
 /// Prototype hops when reading Error data; enough for a subclass, short of a cycle.

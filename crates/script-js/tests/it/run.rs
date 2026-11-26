@@ -624,6 +624,8 @@ fn a_long_thrown_text_is_marked_as_cut() {
         "throw '\u{1F600}'.repeat(2001)",
         "throw new Error('\u{1F600}'.repeat(3000))",
         "throw { message: '\u{1F600}'.repeat(3000) }",
+        // A pair the cut would split is left out whole.
+        "throw 'x' + '\u{1F600}'.repeat(1001)",
         // Cut again with its prefix: still one marker, whole, at the end.
         "throw new Error('\u{1F600}'.repeat(10) + 'x'.repeat(5000))",
         "throw { message: '\u{1F600}'.repeat(25) + 'x'.repeat(5000) }",
@@ -633,6 +635,7 @@ fn a_long_thrown_text_is_marked_as_cut() {
         let tail: String = message.chars().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
         assert_eq!(message.matches("(cut)").count(), 1, "{src}: …{tail}");
         assert_eq!(message.matches('…').count(), 1, "{src}: …{tail}");
+        assert!(!message.contains("\\u"), "no half of a pair is shown: {src}: …{tail}");
     }
 }
 
