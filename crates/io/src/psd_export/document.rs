@@ -1,7 +1,10 @@
 use super::PSD_MAX_FILE_SIZE;
 use super::estimate::{MERGED_RENDERED, MERGED_WEIGHT, fit_psd_size, psd_version, sign_global_blocks};
 use super::merged::{cmyk_of, merged_planes, placeholder_planes};
-use super::resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+use super::resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use super::smart::{SmartOut, link_group_resource};
 use super::{
     ColorMode, Compression, Document, Ex, GlobalLayerMask, Header, ImageData, ImageResource, Interrupt, LayerContent, LayerInfo, LayerInfoPlacement,
@@ -113,6 +116,7 @@ fn export_supported_document(
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),
+        pattern_space: photocraft_compose::pattern::PatternSpace::of_pixels(doc),
         background: psd_background(doc),
         stage: {
             let raw = doc.size.area().saturating_mul(fmt.bytes_per_pixel() as u64).saturating_mul(doc.walk().len() as u64 + 1);
@@ -204,8 +208,14 @@ fn export_supported_document(
     // as Photopea reject it (#3514). Keep the block when the file had one (round-trip its pen
     // positions/extras), a layer is Optical (#1348), or a layer carries stylistic sets / other
     // Txt2-only features (#10308).
-    let txt2 = (previous.is_some() || photocraft_text::psd::needs_txt2(&text_layers))
-        .then(|| photocraft_text::psd::build_txt2_at(&text_layers, previous.as_deref(), ex.dpi));
+    // A restyle that would lose a style's fill colour is refused: the file's own block stays as it
+    // was, and the export says so.
+    let txt2 = (previous.is_some() || photocraft_text::psd::needs_txt2(&text_layers)).then(|| {
+        photocraft_text::psd::build_txt2_at(&text_layers, previous.as_deref(), ex.dpi).unwrap_or_else(|e| {
+            ex.warnings.push(format!("type styles were not updated in the file's text block: {e}"));
+            previous.clone().unwrap_or_default()
+        })
+    });
     for (sig, key, data) in preserved {
         // With no type layers left the opened file's `Txt2` describes text that is gone (fonts and
         // layout caches, often most of the file): Photoshop drops it, and so does the save (#9563).
@@ -237,6 +247,7 @@ fn export_supported_document(
     if let Some(warning) = slices_warning {
         ex.warnings.push(warning);
     }
+    let clipping_flatness = imported_clipping_flatness_edit(doc);
     for (id, name, data) in &doc.metadata.psd_resources {
         // Layer comps: the preserved list while unchanged, else regenerated (or dropped) below.
         if *id == crate::comps_map::LAYER_COMPS && comps_resource.is_some() {
@@ -255,7 +266,7 @@ fn export_supported_document(
         if *id == crate::channel_map::ALPHA_IDENTIFIERS {
             continue;
         }
-        let mut r = ImageResource::new(*id, data.to_vec());
+        let mut r = ImageResource::new(*id, imported_resource_data(*id, data, clipping_flatness));
         r.name = legacy_name(name);
         resources.push(r);
     }
@@ -517,7 +528,7 @@ mod pattern_failure_tests {
             for name in ["Retained first", "Refused second"] {
                 let mut surface = Surface::new(PixelFormat::RGBA8);
                 surface.fill_rect(photocraft_geom::Rect::new(0, 0, 2, 2), &[0.25, 0.5, 0.75, 1.]);
-                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, surface });
+                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, source_mode: None, surface });
             }
             let before = doc.clone();
             let error = document_to_psd_with_pattern_limit(&doc, 16).unwrap_err();

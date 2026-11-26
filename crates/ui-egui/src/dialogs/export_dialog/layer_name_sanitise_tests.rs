@@ -5,13 +5,13 @@
 //! export's `export_name`.
 
 use super::*;
-use crate::file_dialog::FileDialogRequest;
+use craft::host::ScriptedFiles;
 
 /// The file name Layer › Quick Export as PNG suggests for a layer named `name` (the Save dialog
-/// is cancelled), and the whole suggested path.
+/// stays open), and the whole save request as text.
 fn suggested_for(name: &str) -> (String, String) {
-    let (show, asked) = crate::file_dialog::fake(vec![None]);
-    let services = crate::Services { file_dialog: Some(show), ..Default::default() };
+    let files = Arc::new(ScriptedFiles::held());
+    let services = crate::Services { files: Some(files.clone()), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
     app.run("layer.new.layer", json!({"name": name})).unwrap();
@@ -19,11 +19,9 @@ fn suggested_for(name: &str) -> (String, String) {
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
     quick_export_layer_png(&mut app, layer).unwrap();
-    app.poll_file_dialog(&egui::Context::default(), None);
-    let asked = asked.borrow();
-    let [FileDialogRequest::Save { suggested }] = asked.as_slice() else { panic!("one Save dialog: {asked:?}") };
-    let file = std::path::Path::new(suggested).file_name().and_then(|f| f.to_str()).unwrap_or_default().to_string();
-    (file, suggested.clone())
+    let asked = files.requests();
+    let [request] = asked.as_slice() else { panic!("one Save dialog: {asked:?}") };
+    (request.file_name.clone().unwrap_or_default(), format!("{request:?}"))
 }
 
 #[test]

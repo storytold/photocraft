@@ -360,3 +360,6 @@ sync_github_name = true
 real_name = "Stefan Sels"
 display_name = "tronicum"
 sync_github_name = false
+
+[people.MMexicann]
+display_name = "mexicann"
