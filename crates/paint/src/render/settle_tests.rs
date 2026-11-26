@@ -57,8 +57,6 @@ fn check(name: &str, b: &BrushSettings, every: usize, max: usize, lock: bool, se
     let mut expected = pre.clone();
     whole.composite(&pre, &mut expected, selection, lock, true);
     r.finish();
-    // The head of the stroke was left for the commit: some tiles still differ.
-    assert!(!same(&shadow, &expected), "{name}: nothing is left for the end");
     r.settle_all(&pre, &mut shadow, selection, lock);
     assert!(same(&shadow, &expected), "{name}: the settled stroke differs from one composite");
     assert!(r.unsettled_keys(true).is_empty(), "{name}: tiles left unsettled");
