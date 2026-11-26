@@ -1386,6 +1386,7 @@ dependencies = [
  "craft-pages",
  "craft-platform",
  "craft-print",
+ "craft-proof",
  "craft-quit",
  "craft-review",
  "craft-settings",
@@ -2119,6 +2120,17 @@ dependencies = [
  "web-sys",
  "winprint",
  "winsafe",
+]
+
+[[package]]
+name = "craft-proof"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=5c30761a86c2bb1814098139439be7c5b0a9e31c#5c30761a86c2bb1814098139439be7c5b0a9e31c"
+dependencies = [
+ "log",
+ "miniz_oxide 0.9.1",
+ "toml",
+ "unicode-normalization",
 ]
 
 [[package]]

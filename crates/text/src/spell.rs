@@ -1,29 +1,21 @@
 //! Spelling checker for Edit › Check Spelling.
 //!
-//! The dictionary is SCOWL size 50 (American English, ~72k words; see
-//! `assets/dict/LICENSE-SCOWL.txt`), gzip-compressed into the binary and decoded on first use.
-//! Words are grouped by SCOWL level (10 = most common … 50), which ranks suggestions.
+//! Words are checked and suggested by craft-proof against SCOWL's American English dictionary,
+//! which craft-proof embeds from craft-i18n's Language data at build time (`CRAFT_I18N_DIR`, the
+//! commit in `craft-i18n.rev`; RFC-0011). Without that checkout craft-proof falls back to an
+//! installed Hunspell dictionary or its own English word list.
 //!
-//! Case rules follow common spell checkers: a lowercase dictionary word may be written
-//! capitalised or in all caps; a capitalised entry (proper noun) must keep its capital. Trailing
-//! possessive `'s` is ignored, typographic apostrophes count as `'`, and tokens containing digits
-//! are skipped.
+//! Words in capitals are checked too (`TEH` is flagged). A trailing possessive `'s` is checked and
+//! suggested on its stem, typographic apostrophes count as `'`, and tokens containing digits are
+//! skipped.
 
-use std::collections::{HashMap, HashSet};
-use std::io::Read;
-use std::sync::OnceLock;
+use std::collections::HashSet;
 
-static WORDS_GZ: &[u8] = include_bytes!("../../../assets/dict/en_US-scowl-50.txt.gz");
+/// craft-proof's English spelling, with what PhotoCraft skips.
+pub struct Dictionary(());
 
-/// A word list with frequency levels.
-pub struct Dictionary {
-    /// Word (as listed) → SCOWL level.
-    words: HashMap<String, u8>,
-    /// Lowercase form → listed forms (for case-insensitive lookups and suggestions).
-    by_lower: HashMap<String, Vec<String>>,
-    /// Lowercase words grouped by char length, for suggestions.
-    by_len: Vec<Vec<(String, Vec<char>, u8)>>,
-}
+/// Words in capitals are checked; words with digits and web addresses are not.
+const OPTIONS: craft::proof::Options = craft::proof::Options { ignore_uppercase: false, ignore_numbers: true, ignore_internet: true };
 
 /// A misspelled word in a string.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,141 +27,31 @@ pub struct Misspelling {
 }
 
 impl Dictionary {
-    /// The bundled English dictionary (decoded once).
+    /// The English dictionary.
     pub fn english() -> &'static Dictionary {
-        static D: OnceLock<Dictionary> = OnceLock::new();
-        D.get_or_init(|| {
-            let mut s = String::new();
-            let _ = flate2::read::GzDecoder::new(WORDS_GZ).read_to_string(&mut s);
-            Dictionary::from_list(&s)
-        })
-    }
-
-    /// Builds a dictionary from one word per line; `#NN` lines set the level of the words after.
-    pub fn from_list(list: &str) -> Dictionary {
-        let mut words = HashMap::new();
-        let mut by_lower: HashMap<String, Vec<String>> = HashMap::new();
-        let mut level = 50u8;
-        for line in list.lines() {
-            let w = line.trim();
-            if let Some(l) = w.strip_prefix('#') {
-                level = l.parse().unwrap_or(level);
-                continue;
-            }
-            if w.is_empty() || words.contains_key(w) {
-                continue;
-            }
-            words.insert(w.to_string(), level);
-            by_lower.entry(w.to_lowercase()).or_default().push(w.to_string());
-        }
-        let mut by_len: Vec<Vec<(String, Vec<char>, u8)>> = Vec::new();
-        for (lw, forms) in &by_lower {
-            let n = lw.chars().count();
-            if by_len.len() <= n {
-                by_len.resize(n + 1, Vec::new());
-            }
-            let lvl = forms.iter().filter_map(|f| words.get(f)).min().copied().unwrap_or(50);
-            by_len[n].push((lw.clone(), lw.chars().collect(), lvl));
-        }
-        for v in &mut by_len {
-            v.sort();
-        }
-        Dictionary { words, by_lower, by_len }
-    }
-
-    pub fn len(&self) -> usize {
-        self.words.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.words.is_empty()
+        static D: Dictionary = Dictionary(());
+        &D
     }
 
     /// Whether `word` is spelled correctly (also accepting `user` words, compared without case).
     pub fn check(&self, word: &str, user: &HashSet<String>) -> bool {
-        let w = normalize(word);
-        let w = w.strip_suffix("'s").or_else(|| w.strip_suffix("'S")).filter(|b| !b.is_empty()).unwrap_or(&w);
+        let (w, _) = stem(word);
         let w = w.trim_matches('\'');
         if w.is_empty() || w.chars().any(|c| c.is_numeric()) || !w.chars().any(char::is_alphabetic) {
             return true;
         }
-        let lower = w.to_lowercase();
-        if user.contains(&lower) || self.words.contains_key(w) {
-            return true;
-        }
-        let Some(forms) = self.by_lower.get(&lower) else {
-            return false;
-        };
-        let all_caps = w.chars().filter(|c| c.is_alphabetic()).all(char::is_uppercase);
-        let first_cap = w.chars().next().is_some_and(char::is_uppercase) && w.chars().skip(1).all(|c| !c.is_uppercase());
-        forms.iter().any(|f| {
-            let f_lower = f.chars().all(|c| !c.is_uppercase());
-            // "the" → "The"/"THE"; "Paris" → "PARIS"; "NASA" stays as listed (exact match above).
-            all_caps || (f_lower && first_cap) || (first_cap && capitalize(f) == w)
-        })
+        user.contains(&w.to_lowercase()) || craft::proof::is_correct_with(w, &OPTIONS)
     }
 
-    /// Up to `max` suggestions for a misspelled word, nearest first (then most common), with the
-    /// word's case pattern and possessive ending applied.
+    /// Up to `max` suggestions for a misspelled word, best first, with its possessive ending kept.
     pub fn suggest(&self, word: &str, max: usize) -> Vec<String> {
+        let (w, suffix) = stem(word);
         let normalized = normalize(word);
-        let (w, suffix) = normalized
-            .strip_suffix("'s")
-            .filter(|w| !w.is_empty())
-            .map(|w| (w, "'s"))
-            .or_else(|| normalized.strip_suffix("'S").filter(|w| !w.is_empty()).map(|w| (w, "'S")))
-            .unwrap_or((&normalized, ""));
-        let lower = w.to_lowercase();
-        let lc: Vec<char> = lower.chars().collect();
-        let n = lc.len();
-        let max_d = if n <= 4 { 1 } else { 2 };
-        // Same letters in another order (transposed typing) ranks first among equal distances.
-        let mut sorted = lc.clone();
-        sorted.sort_unstable();
-        let anagram = |c: &str| {
-            let mut v: Vec<char> = c.chars().collect();
-            v.sort_unstable();
-            v == sorted
-        };
-        let mut found: Vec<(usize, bool, u8, &str)> = Vec::new();
-        let mut rows = Rows::default();
-        for len in n.saturating_sub(max_d)..=(n + max_d) {
-            let Some(bucket) = self.by_len.get(len) else {
-                continue;
-            };
-            for (cand, cc, lvl) in bucket {
-                // The input's ending is restored below; do not append it to another possessive.
-                if !suffix.is_empty() && cand.ends_with("'s") {
-                    continue;
-                }
-                if let Some(d) = distance(&lc, cc, max_d, &mut rows) {
-                    found.push((d, !anagram(cand), *lvl, cand));
-                }
-            }
-        }
-        found.sort();
-        let all_caps = w.chars().filter(|c| c.is_alphabetic()).all(char::is_uppercase) && w.chars().filter(|c| c.is_alphabetic()).count() > 1;
-        let first_cap = w.chars().next().is_some_and(char::is_uppercase);
         let mut out: Vec<String> = Vec::new();
-        for (_, _, _, cand) in found {
-            // Common (lowercase) forms before proper nouns: "brwon" → "brown", then "Brown".
-            let mut forms: Vec<&String> = self.by_lower.get(cand).into_iter().flatten().collect();
-            forms.sort_by_key(|f| f.chars().any(char::is_uppercase));
-            for form in forms {
-                let mut s = if all_caps {
-                    form.to_uppercase()
-                } else if first_cap {
-                    capitalize(form)
-                } else {
-                    form.clone()
-                };
-                s.push_str(suffix);
-                if !out.contains(&s) && s != normalized {
-                    out.push(s);
-                }
-            }
-            if out.len() >= max {
-                break;
+        for s in craft::proof::suggest(&w, max) {
+            let s = format!("{s}{suffix}");
+            if !out.contains(&s) && s != normalized {
+                out.push(s);
             }
         }
         out.truncate(max);
@@ -186,17 +68,21 @@ impl Dictionary {
     }
 }
 
+/// `word` with typographic apostrophes as `'` and without a trailing possessive (`'s`/`'S`), and
+/// that ending.
+fn stem(word: &str) -> (String, &'static str) {
+    let w = normalize(word);
+    for suffix in ["'s", "'S"] {
+        if let Some(b) = w.strip_suffix(suffix).filter(|b| !b.is_empty()) {
+            return (b.to_string(), suffix);
+        }
+    }
+    (w, "")
+}
+
 /// Typographic apostrophes → `'`.
 fn normalize(w: &str) -> String {
     w.replace(['\u{2019}', '\u{2018}', '\u{02BC}'], "'")
-}
-
-fn capitalize(w: &str) -> String {
-    let mut c = w.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().chain(c).collect(),
-        None => String::new(),
-    }
 }
 
 /// Byte ranges of the words in `text`: letters/digits with inner apostrophes (hyphens split).
@@ -286,9 +172,8 @@ mod tests {
     }
 
     #[test]
-    fn bundled_dictionary_loads() {
+    fn english_dictionary_checks_words() {
         let d = Dictionary::english();
-        assert!(d.len() > 70_000, "{}", d.len());
         for w in ["the", "The", "THE", "color", "colors", "running", "don't", "don’t", "Paris", "PARIS", "photographer's", "NASA"] {
             assert!(d.check(w, &none()), "{w}");
         }
@@ -299,33 +184,36 @@ mod tests {
         assert!(d.check("2026", &none()) && d.check("B2B", &none()));
     }
 
+    /// The dictionary is craft-i18n's SCOWL (rel-2026.02.25), not the old in-tree SCOWL 50 list,
+    /// which had neither word.
     #[test]
-    fn suggestions_rank_by_distance_then_frequency() {
+    fn english_dictionary_is_craft_i18ns() {
         let d = Dictionary::english();
-        assert_eq!(d.suggest("teh", 3)[0], "the");
-        assert!(d.suggest("recieve", 5).contains(&"receive".to_string()));
-        assert_eq!(d.suggest("Wrold", 1), vec!["World".to_string()]);
-        assert_eq!(d.suggest("brwon", 1), vec!["brown".to_string()]);
+        for w in ["livestream", "vlog"] {
+            assert!(d.check(w, &none()), "{w}");
+        }
+    }
+
+    #[test]
+    fn suggestions_offer_the_correction() {
+        let d = Dictionary::english();
+        let has = |word: &str, want: &str| d.suggest(word, 5).contains(&want.to_string());
+        assert!(has("teh", "the") && has("recieve", "receive") && has("brwon", "brown"));
+        assert!(has("Wrold", "World"), "{:?}", d.suggest("Wrold", 5));
         assert_eq!(d.suggest("HELO", 5).first().map(|s| s.chars().all(|c| c.is_uppercase())), Some(true));
     }
 
     #[test]
-    fn possessive_suggestions_keep_the_ending_and_case() {
-        let d = Dictionary::from_list("#10\nworld\nworlds\nMonday\n");
-        for (word, want) in [("wrold's", "world's"), ("Wrold's", "World's"), ("WROLD'S", "WORLD'S"), ("WROLD's", "WORLD's"), ("Mnday's", "Monday's")] {
-            assert_eq!(d.suggest(word, 1), vec![want.to_string()], "{word}");
+    fn possessive_suggestions_keep_the_ending() {
+        let d = Dictionary::english();
+        for (word, want) in [("wrold's", "world's"), ("Wrold's", "World's"), ("Mnday's", "Monday's")] {
+            assert!(d.suggest(word, 5).contains(&want.to_string()), "{word}: {:?}", d.suggest(word, 5));
         }
         assert!(d.suggest("wrold's", 0).is_empty());
-        assert_eq!(d.suggest("wrold", 1), vec!["world".to_string()]);
-    }
-
-    #[test]
-    fn possessive_suggestions_normalize_apostrophes_without_doubling_the_ending() {
-        let d = Dictionary::from_list("world\nworld's\n");
         for apostrophe in ['\'', '\u{2019}', '\u{2018}', '\u{02BC}'] {
-            assert_eq!(d.suggest(&format!("wrold{apostrophe}s"), 1), vec!["world's".to_string()]);
+            let found = d.suggest(&format!("wrold{apostrophe}s"), 5);
+            assert!(found.contains(&"world's".to_string()) && !found.iter().any(|s| s.ends_with("'s's")), "{found:?}");
         }
-        assert!(d.suggest("world's", 8).is_empty(), "a listed possessive must not gain a second ending");
     }
 
     #[test]
@@ -340,7 +228,7 @@ mod tests {
 
     #[test]
     fn misspellings_and_user_words() {
-        let d = Dictionary::from_list("#10\nhello\nworld\nParis\n");
+        let d = Dictionary::english();
         let text = "Hello wrld, Paris paris photocraft 42x";
         let m: Vec<String> = d.misspellings(text, &none()).into_iter().map(|m| m.word).collect();
         assert_eq!(m, vec!["wrld", "paris", "photocraft"]);
