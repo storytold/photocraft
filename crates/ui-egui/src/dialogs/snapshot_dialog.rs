@@ -95,7 +95,7 @@ mod tests {
             let id = super::open(&mut app).unwrap();
             set(&mut app, id, "name", json!(typed)).unwrap();
             crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
-            assert_eq!(app.session.active().unwrap().snapshots.last().unwrap().name, want);
+            assert_eq!(app.session.active().unwrap().snapshots().last().unwrap().name, want);
         }
         assert!(app.run(super::COMMAND, json!({"name": ""})).is_err(), "agents still get the error");
     }

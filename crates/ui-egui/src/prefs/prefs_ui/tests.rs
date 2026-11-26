@@ -9,7 +9,9 @@ use craft::settings::{Location, OpenOptions, Settings, SettingsFiles, SettingsSt
 use craft::theme::ThemeId;
 use craft::ui::patterns::preferences::{PrefValue, SettingsDraft};
 use egui::{Color32, vec2};
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::prefs::{self, AppearanceMode};
+use photocraft_engine::preset_store::PresetStoreExt;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,6 +23,36 @@ const DIR: &str = "/memory/photocraft";
 
 /// The title of the notice a failed preferences save posts.
 const SAVE_NOTICE: &str = "Preferences can't be saved";
+
+#[test]
+fn settings_store_restores_distinct_same_rgb_role_inks() {
+    let (mut app, files) = app_with_store();
+    let fg = [0., 0., 0., 1.];
+    let bg = [0.5, 0.5, 0.5, 1.];
+    app.run("tools.setColors", json!({"foreground":[0.,0.,0.],"background":[0.,0.,0.],"foregroundCmyk":fg,"backgroundCmyk":bg})).unwrap();
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let mut restored = app_on(&files);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(fg));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg));
+    for (role, inks) in [("foreground", fg), ("background", bg)] {
+        let id = crate::color_picker_ui::open(&mut restored, role);
+        let picked = crate::color_picker_ui::testing::current(&restored, id).unwrap();
+        assert!(crate::color_picker_ui::same_inks(crate::color_picker_ui::inks_of(&picked).unwrap(), inks));
+    }
+    restored.run("file.new", json!({"width":4,"height":4,"mode":"cmyk"})).unwrap();
+    let fill = crate::solid_fill_ui::open_new(&mut restored).unwrap();
+    let picked = crate::color_picker_ui::testing::current(&restored, fill).unwrap();
+    assert!(
+        crate::color_picker_ui::same_inks(crate::color_picker_ui::inks_of(&picked).unwrap(), fg),
+        "new fill uses foreground's separation, not background's identical RGB"
+    );
+    crate::dialogs::testing::confirm(&mut restored, fill).unwrap();
+    let st = restored.session.active().unwrap();
+    let photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Solid(color)) = st.doc.layer(st.active_layer.unwrap()).unwrap().content else {
+        panic!("solid fill")
+    };
+    assert_eq!(color.c, fg);
+}
 
 fn config_path() -> std::path::PathBuf {
     std::path::Path::new(DIR).join("config.toml")
@@ -246,7 +278,7 @@ fn auto_uses_native_system_theme_when_egui_does_not_report_one() {
 }
 
 #[test]
-fn appearance_button_cycles_modes_without_losing_theme_choices() {
+fn next_appearance_mode_cycles_modes_without_losing_theme_choices() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
@@ -723,8 +755,34 @@ fn run_cases(cases: Vec<Case>) {
 }
 
 /// A case that only seeds a file and checks what the app loads from it.
-fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Case {
-    Case { name, seed: Some(seed), set: Box::new(|_, _| {}), check: Box::new(move |app, _, _| check(app)) }
+struct Loaded {
+    name: &'static str,
+    seed: Value,
+    check: Box<dyn Fn(&PhotocraftApp)>,
+}
+
+fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Loaded {
+    Loaded { name, seed, check: Box::new(check) }
+}
+
+/// One app per case: what it loads, then what its first tick leaves in the file. A load that reset values writes the
+/// repaired preferences on that tick, so the file must read back cleanly as what the app holds; a repair that drops
+/// other keys fails here without a restarted app.
+fn run_loaded(cases: Vec<Loaded>) {
+    for case in cases {
+        eprintln!("case: {}", case.name);
+        let files = Arc::new(MemoryFiles::new());
+        seed(&files, &case.seed, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION));
+        let mut app = app_on(&files);
+        (case.check)(&app);
+        let ctx = app.ctx().clone();
+        tick(&mut app, &ctx);
+        let (reread, report) = services_on(&files).settings.unwrap();
+        assert!(report.section_errors.is_empty(), "{}: {:?}", case.name, report.section_errors);
+        // Compared as written: the file has no nulls, while the preset libraries hold some in memory.
+        let written = |p: &prefs::SavedPrefs| serde_json::to_value(p).unwrap();
+        assert_eq!(written(reread.get()), written(&app.session.saved_prefs()), "{}", case.name);
+    }
 }
 
 fn restart_cases() -> Vec<Case> {
@@ -741,11 +799,11 @@ fn restart_cases() -> Vec<Case> {
             }),
             check: Box::new(|app, ctx, _| {
                 // The list comes back, newest first.
-                assert_eq!(app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
                 // Lowering "Recent File List Contains" shortens the menu at once; 0 turns it off.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 1}})).unwrap();
                 tick(app, ctx);
-                assert_eq!(app.ui.recent_files, vec!["/work/b.png".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string()]);
                 app.push_recent("/work/c.tif");
                 assert_eq!(app.session.prefs().file_handling.recent_files, vec!["/work/c.tif".to_string()]);
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
@@ -755,7 +813,7 @@ fn restart_cases() -> Vec<Case> {
                 // Clearing the list in Preferences (or by an agent) reaches the menu.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": ["/x.psd"]}})).unwrap();
                 tick(app, ctx);
-                assert_eq!(app.ui.recent_files, vec!["/x.psd".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/x.psd".to_string()]);
                 // A hostile count from a hand-edited preferences file is capped, not trusted.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
                 app.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);
@@ -948,7 +1006,7 @@ fn restart_cases() -> Vec<Case> {
                 assert!(early.files.lock().unwrap().is_empty());
                 tx.send(photocraft_engine::preset_store::open(Box::new(early.clone()))).unwrap();
                 tick(app, ctx);
-                assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
+                assert!(app.services.preset_store.is_none() && app.session.preset_store().is_some());
                 app.run("brush.presets.save", json!({"name": "Late"})).unwrap();
             }),
             check: Box::new(move |_, _, _| {
@@ -982,7 +1040,8 @@ fn remembered_state_survives_a_restart() {
     run_cases(restart_cases());
 }
 
-fn damaged_cases() -> Vec<Case> {
+/// The load-only cases, and the cases that set state in a first app and restart.
+fn damaged_cases() -> (Vec<Loaded>, Vec<Case>) {
     use crate::state::Tool;
     let d = crate::state::ToolOptions::default;
     let mut cases = Vec::new();
@@ -1080,8 +1139,9 @@ fn damaged_cases() -> Vec<Case> {
         assert_eq!(app.session.tools.background, [1.0; 4]);
     }));
     // A tool-colour preset with an invalid channel is refused and leaves the remembered colours alone.
+    let mut restarts = Vec::new();
     for bad_channel in [json!(1e100), json!("red"), json!(true), json!({}), json!([])] {
-        cases.push(Case {
+        restarts.push(Case {
             name: "tool colours after an invalid preset",
             seed: None,
             set: Box::new(move |app, _| {
@@ -1094,17 +1154,19 @@ fn damaged_cases() -> Vec<Case> {
             }),
             check: Box::new(|app, _, stored| {
                 // The file holds the f32 colour widened to f64.
-                assert_eq!(stored["toolColors"]["foreground"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
+                assert_eq!(stored["toolColors"]["selections"]["foreground"]["color"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
                 assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 0.8]);
             }),
         });
     }
-    cases
+    (cases, restarts)
 }
 
 #[test]
 fn a_damaged_remembered_value_resets_only_itself() {
-    run_cases(damaged_cases());
+    let (loaded, restarts) = damaged_cases();
+    run_loaded(loaded);
+    run_cases(restarts);
 }
 
 #[test]
@@ -1276,7 +1338,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     crate::tool_memory::persist(&mut app, &ctx);
     // The Brush's tip becomes a big sampled one, then the Blur tool takes over that brush (the Eraser has its own
     // starting tip since #11936).
-    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
+    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0)).into();
     app.session.tools.brush_changed();
     app.ui.tool = Tool::Blur;
     crate::paint_mouse::sync_tool_brush(&mut app);
@@ -1292,7 +1354,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     assert_eq!(app2.session.tools.brush.size, 77.0);
 
     // Once the Blur tool's brush is saved, the Blur tool owns it in the preferences too.
-    app.session.tools.brush.tip = TipShape::Round;
+    app.session.tools.brush.tip = TipShape::Round.into();
     app.session.tools.brush.size = 33.0;
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);
@@ -1705,4 +1767,57 @@ fn integrations_apply_without_a_restart() {
     for key in ["allowAgentControl", "connectAgents", "controlPort", "readRoot", "writeRoot", "whenAppClosed"] {
         assert!(!super::fields::read_at_launch(&format!("integrations.{key}")), "{key}");
     }
+}
+
+/// The texts the last frame painted, without a trailing colon, with each one's laid-out rect.
+fn painted_texts(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> Vec<(String, egui::Rect)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.galley.text().trim_end_matches(':').to_owned(), text.galley.rect.translate(text.pos.to_vec2()))),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|clipped| collect(&clipped.shape, &mut out));
+    out
+}
+
+/// #15553: Preferences › Interface labels Appearance Mode once: the Appearance page draws the row with its own label,
+/// and the window adds none.
+#[test]
+fn the_appearance_mode_row_shows_its_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let shown = painted_texts(&h).into_iter().filter(|(text, _)| text == "Appearance Mode").count();
+    assert_eq!(shown, 1, "\"Appearance Mode\" is painted once");
+}
+
+/// #15554: Preferences › Interface shows Appearance (the mode and the canvas), then Presentation (language, font size,
+/// scale), then Options, and the rows of all three share one label column.
+#[test]
+fn the_interface_page_lists_appearance_presentation_then_options_on_one_label_column() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let texts = painted_texts(&h);
+    let at = |name: &str| texts.iter().find(|(text, _)| text == name).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("{name:?} is painted"));
+    let order = ["Appearance", "Appearance Mode", "Canvas color", "Presentation", "Language", "UI font size", "UI scale", "Options", "Show tooltips"];
+    let tops: Vec<f32> = order.iter().map(|name| at(name).top()).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "top to bottom {order:?}: {tops:?}");
+    let ends: Vec<f32> = ["Appearance Mode", "Language", "Notification Duration (seconds)"].iter().map(|name| at(name).right()).collect();
+    assert!(ends.iter().all(|end| (end - ends[0]).abs() < 0.5), "one right-aligned label column: {ends:?}");
+}
+
+/// The rows of Preferences › Performance that draw their own label or heading show it once: the window adds no second
+/// "Rendering mode" beside the select's own, and no "Memory usage (MB)" beside the Memory Usage heading. Memory Usage
+/// Percent's check box shows no text, so the window's label is its only one.
+#[test]
+fn self_labelled_performance_rows_show_their_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "performance", vec2(1280.0, 800.0), |_| {});
+    let texts: Vec<String> = painted_texts(&h).into_iter().map(|(text, _)| text.to_lowercase()).collect();
+    let count = |wanted: &dyn Fn(&str) -> bool| texts.iter().filter(|text| wanted(text)).count();
+    assert_eq!(count(&|t| t == "rendering mode"), 1, "Rendering Mode is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t.starts_with("memory usage") && t != "memory usage percent"), 1, "Memory Usage is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t == "memory usage percent"), 1, "Memory Usage Percent is labelled once: {texts:?}");
 }
