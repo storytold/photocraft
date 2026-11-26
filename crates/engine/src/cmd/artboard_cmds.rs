@@ -431,21 +431,19 @@ pub(crate) fn from_group_does_nothing(s: &Session, p: &Value) -> bool {
 }
 
 /// The selected layers Artboard from Group takes in with the group `id` (#14560), bottom to top:
-/// the other top-level selections when `id` is selected, leaving out the Background and
-/// artboards. With another group selected (not measured in the reference) it takes none in, as
-/// before.
+/// the other selections at the document root when `id` is selected, leaving out the Background.
+/// A selected layer inside an unselected group stays in it. With another group selected, an
+/// artboard included (not measured in the reference), it takes none in, as before.
 fn selected_with_group(s: &Session, doc: &Document, id: LayerId) -> Vec<LayerId> {
     let sel = crate::layer_multi_cmds::selected(s);
     if !sel.contains(&id) {
         return Vec::new();
     }
-    let others: Vec<LayerId> = crate::layer_multi_cmds::top_level(doc, &sel)
-        .into_iter()
-        .filter(|o| *o != id && !doc.is_background(*o) && doc.layer(*o).is_some_and(|l| l.artboard().is_none()))
-        .collect();
+    let others: Vec<LayerId> = crate::layer_multi_cmds::top_level(doc, &sel).into_iter().filter(|o| *o != id).collect();
     if others.iter().any(|o| doc.layer(*o).is_some_and(Layer::is_group)) {
         return Vec::new();
     }
+    let others: Vec<LayerId> = others.into_iter().filter(|o| doc.layers.iter().any(|t| t.id == *o) && !doc.is_background(*o)).collect();
     let mut ordered: Vec<(Vec<usize>, LayerId)> = others.into_iter().filter_map(|o| Some((doc.path_of(o)?, o))).collect();
     ordered.sort();
     ordered.into_iter().map(|(_, o)| o).collect()

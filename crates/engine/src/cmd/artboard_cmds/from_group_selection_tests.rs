@@ -209,3 +209,35 @@ fn an_unknown_layer_is_an_error_that_leaves_a_floating_selection_floating() {
         assert_eq!(steps(&d.s), before, "{layer}: no history step");
     }
 }
+
+#[test]
+fn a_selected_layer_inside_another_group_stays_in_that_group() {
+    for depth in [8, 16, 32] {
+        let mut d = document(depth);
+        // Root, bottom to top: Background, Group 1 (Red, Blue), Green, G2 (Inner).
+        let (g2, inner) =
+            d.s.edit("G2", |doc, _| {
+                let inner = square(doc, "Inner", GREEN, [1.0, 0.0, 1.0, 1.0]);
+                let inner_id = inner.id;
+                Ok((doc.insert_above(None, Layer::group("G2", vec![inner])), inner_id))
+            })
+            .unwrap();
+        select(&mut d.s, &[d.group, d.green, inner], d.group);
+        d.s.execute(CMD, json!({"layer": d.group.0})).unwrap();
+        assert_eq!(children(&d.s, d.group), ["Red", "Blue", "Green"], "{depth} bit: only the top-level layer moves in");
+        assert_eq!(children(&d.s, g2), ["Inner"], "{depth} bit: the unselected group keeps its child");
+    }
+}
+
+#[test]
+fn an_artboard_in_the_selection_counts_as_another_group() {
+    for depth in [8, 16, 32] {
+        let mut d = document(depth);
+        let board_id = LayerId(d.s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50]})).unwrap()["layer"].as_u64().unwrap());
+        assert!(d.s.active().unwrap().doc.layer(board_id).and_then(Layer::artboard).is_some(), "{depth} bit: an artboard");
+        select(&mut d.s, &[d.group, board_id, d.green], d.group);
+        d.s.execute(CMD, json!({"layer": d.group.0})).unwrap();
+        assert_eq!(children(&d.s, d.group), ["Red", "Blue"], "{depth} bit: with another group selected none move in");
+        assert_eq!(board(&d.s, d.group), Some([100, 100, 500, 350]), "{depth} bit: the group's own bounds");
+    }
+}
