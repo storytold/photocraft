@@ -149,7 +149,11 @@ async fn a_waited_command_reports_progress_serves_other_calls_and_cancels_cleanl
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelling_a_batch_cancels_its_waited_step_and_runs_no_later_step() {
-    let mut wire = Wire::start(PhotocraftMcp::headless()).await;
+    let session = Arc::new(Mutex::new(photocraft_automation::headless::Headless::new()));
+    let mut wire = Wire::start(PhotocraftMcp::with_backend(Backend::Headless(session.clone()))).await;
+    // Every call holds a clone of the session until it returns, and a batch holds one for its
+    // whole run (the target it pinned), so the count is back here once no call is running.
+    let idle = Arc::strong_count(&session);
     wire.big_document().await;
     let before = wire.history(4).await;
 
@@ -158,8 +162,13 @@ async fn cancelling_a_batch_cancels_its_waited_step_and_runs_no_later_step() {
     assert!(wire.first_progress(5, "batch", 2.0).await < 1.0, "still in the first step");
     wire.cancel(5).await;
     wire.settle(6, 5).await;
-    // Give a (wrongly) continuing batch time to start its next step.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The cancelled batch never answers, so its end is not visible on the wire: wait until it
+    // has returned, after which a (wrongly) continuing batch has run its next step.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Arc::strong_count(&session) != idle {
+        assert!(Instant::now() < deadline, "the cancelled batch never returned");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     assert_eq!(wire.history(1000).await, before, "neither the blur nor the later step ran");
     wire.finish().await;
 }

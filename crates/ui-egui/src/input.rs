@@ -12,4 +12,7 @@ pub mod touch_twins;
 pub mod window_keys;
 
 #[cfg(test)]
+mod magic_eraser_digit_keys_tests;
+
+#[cfg(test)]
 mod mixer_digit_keys_tests;

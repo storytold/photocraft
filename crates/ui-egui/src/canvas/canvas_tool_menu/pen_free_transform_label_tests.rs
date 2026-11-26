@@ -14,7 +14,7 @@ const LABELS: [&str; 3] = ["Free Transform", "Free Transform Points", "Free Tran
 
 /// Right-click the middle of the canvas with `tool`: the one transform row label the path menu
 /// shows, and whether that row is enabled. `ui.inspect` lists the row the same way.
-fn transform_row(mut app: Box<PhotocraftApp>, tool: Tool) -> (&'static str, bool) {
+pub(super) fn transform_row(mut app: Box<PhotocraftApp>, tool: Tool) -> (&'static str, bool) {
     app.ui.tool = tool;
     let mut h = harness(app);
     let center = h.state().last_canvas_rect.center();

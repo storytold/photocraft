@@ -64,7 +64,8 @@ fn baked_overlay_is_unchanged_until_method_selection_then_edits_the_whole_curve(
     app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
     // PSD import and older method commands leave a baked curve without a source record.
     let state = app.session.active_mut().unwrap();
-    let fx = &mut std::sync::Arc::make_mut(&mut state.doc).layer_mut(state.active_layer.unwrap()).unwrap().effects.items[0];
+    let active_layer = state.active_layer.unwrap();
+    let fx = &mut std::sync::Arc::make_mut(state.doc_mut()).layer_mut(active_layer).unwrap().effects.items[0];
     let Effect::GradientOverlay { gradient, interpolation, .. } = fx else { panic!("expected overlay") };
     gradient.stops = bake_gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], &[0.5], 1.0, GradientMethod::Smooth);
     *interpolation = None;

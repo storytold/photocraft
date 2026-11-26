@@ -158,7 +158,7 @@ fn real_app_keys_set_only_mixer_wet_flow_and_smoothing_with_either_airbrush_mode
         h.state_mut().session.tools.brush.build_up = build_up;
         let options = h.state().ui.tool_options.clone();
         let before_layer = layer(h.state());
-        let mut expected = h.state().session.tools.brush.clone();
+        let mut expected = (*h.state().session.tools.brush).clone();
         for (key, modifiers, wet, flow, smoothing) in [
             (Key::Num4, Modifiers::NONE, Some(0.4), None, None),
             (Key::Num6, Modifiers::SHIFT, None, Some(0.6), None),
@@ -178,14 +178,14 @@ fn real_app_keys_set_only_mixer_wet_flow_and_smoothing_with_either_airbrush_mode
                 expected.smoothing.enabled = true;
                 expected.smoothing.amount = smoothing;
             }
-            assert_eq!(h.state().session.tools.brush, expected);
+            assert_eq!(*h.state().session.tools.brush, expected);
             assert_eq!(h.state().ui.tool_options, options);
             assert_eq!(layer(h.state()), before_layer);
         }
     }
 }
 
-/// Preserve all isolation checks, including Color Replacement Tolerance now on main.
+/// Preserve all isolation checks, including the Color Replacement and Magic Eraser targets now on main.
 #[test]
 fn other_tools_keep_their_current_digit_targets() {
     for tool in [Tool::ColorReplacement, Tool::MagicEraser, Tool::Dodge, Tool::Smudge] {
@@ -194,6 +194,8 @@ fn other_tools_keep_their_current_digit_targets() {
         let mut expected = before.clone();
         if tool == Tool::ColorReplacement {
             expected.2.cr_tolerance = 30.0;
+        } else if tool == Tool::MagicEraser {
+            expected.2.magic_eraser_opacity = 30.0;
         }
         press(&mut a, 3, false, 0.0);
         assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), expected);
