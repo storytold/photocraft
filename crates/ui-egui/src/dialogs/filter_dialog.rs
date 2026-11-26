@@ -639,15 +639,46 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
 /// parameters (a key the filter never recorded keeps its default), with the smart-filter `target`
 /// `{layer, index, guard}` as the dialog's captured value. It remembers nothing.
 pub fn open_smart_edit(app: &mut PhotocraftApp, command: &str, recorded: &Map<String, Value>, target: Value) -> Result<DialogId, String> {
+    open_recorded(app, command, recorded, target)
+}
+
+/// Whether `values` give Relight a light list, which replaces the single-lamp settings. The engine
+/// switches on the key's presence, so this does too.
+fn has_light_list(command: &str, values: &Map<String, Value>) -> bool {
+    command == "filter.render.relight" && values.contains_key("lights")
+}
+
+/// The editor of a recorded Action step that holds a Relight light list; `None` for every other
+/// step. The dialog has no row for the lights, so it carries them as recorded, and it remembers
+/// nothing: a later Filter › Relight must not open with them.
+pub(crate) fn open_light_list_step(app: &mut PhotocraftApp, command: &str, values: &Value) -> Option<Result<DialogId, String>> {
+    let values = values.as_object().filter(|values| has_light_list(command, values))?;
+    let lights = values.iter().filter(|(key, _)| *key == "lights").map(|(key, value)| (key.clone(), value.clone())).collect();
+    Some(open_recorded(app, command, &lights, Value::Null))
+}
+
+/// The dialog over `recorded` parameters, with `captured` as its captured value. A Relight light
+/// list hides the single-lamp rows it replaces and says why.
+fn open_recorded(app: &mut PhotocraftApp, command: &str, recorded: &Map<String, Value>, captured: Value) -> Result<DialogId, String> {
     let spec = photocraft_engine::commands::find(command).ok_or_else(|| format!("{command} has no dialog"))?;
-    let params = params(app, command, spec.params);
+    let mut params = params(app, command, spec.params);
+    let rig = has_light_list(command, recorded);
+    if rig {
+        params.retain(|p| !matches!(p.key.as_str(), "angle" | "elevation" | "intensity" | "warmth"));
+        let note = tl!("This filter uses its own list of lights, so Angle, Elevation, Intensity and Warmth don't apply. The lights stay as they are.");
+        params.push(Param::read_only_text("lightsNote", Label::Empty, Label::from(note)).full_width());
+    }
     let base = fields(app, command, &params);
-    let reset = reset_values(&params, &base);
+    let mut reset = reset_values(&params, &base);
     let mut opening = base;
     overlay(&params, recorded, &mut opening);
+    // The reset keeps the light list: without it, a step would fall back to a single lamp.
+    if rig && let Some(lights) = opening.get("lights") {
+        reset.set("lights", lights.clone());
+    }
     let build = builder(app, command, dialog_title(command, spec.label), params, reset, previews(command));
     // PLAN: assumed `open_param_unsaved`, as in `open_with_spec`.
-    Ok(crate::dialogs::params::open_param_unsaved(app, command, opening, target, build))
+    Ok(crate::dialogs::params::open_param_unsaved(app, command, opening, captured, build))
 }
 
 /// The command parameters of the dialog values `fields`: the plain map, colours as `#rrggbb`,

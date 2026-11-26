@@ -1919,3 +1919,76 @@ fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
     assert_eq!(app.session.documents()[0].history.past_len(), steps[0] + 1, "Lens Blur ran on the first document");
     assert_eq!(app.session.documents()[1].history.past_len(), steps[1], "the second document is untouched");
 }
+
+const RELIGHT: &str = "filter.render.relight";
+const LAMP_ROWS: [&str; 4] = ["angle", "elevation", "intensity", "warmth"];
+
+/// A Smart Object filtered by Relight with `params`, and the dialog that edits that filter.
+fn edit_smart_relight(params: Value) -> (Box<PhotocraftApp>, DialogId) {
+    let mut app = new_app();
+    app.background_jobs = false;
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run(RELIGHT, params.clone()).unwrap();
+    app.sync_views();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let target = crate::smart_filter_dialog::target(&app, layer, 0).unwrap();
+    let id = open_smart_edit(&mut app, RELIGHT, params.as_object().unwrap(), target).unwrap();
+    (app, id)
+}
+
+fn smart_filter_params(app: &PhotocraftApp) -> Value {
+    let state = app.session.active().unwrap();
+    let layer = state.doc.layer(state.active_layer.unwrap()).unwrap();
+    let photocraft_doc::LayerContent::Smart(smart) = &layer.content else { panic!("not a Smart Object") };
+    smart.smart_filters[0].params.clone()
+}
+
+/// The engine ignores the single-lamp settings beside a light list, so the editor does not offer them.
+#[test]
+fn a_relight_light_list_hides_the_single_lamp_rows_and_keeps_the_lights() {
+    let lights = json!([{"x": 0.25, "y": 0.5, "intensity": 60}, {"kind": "directional", "intensity": 20}]);
+    let (mut app, id) = edit_smart_relight(json!({"lights": lights}));
+    for key in LAMP_ROWS {
+        assert!(try_set(&mut app, id, key, json!(10)).is_err(), "{key} has no effect, so it is not offered");
+    }
+    set(&mut app, id, "ambient", json!(70));
+    set(&mut app, id, "softness", json!(40));
+    assert!(ok(&mut app, id));
+    let stored = smart_filter_params(&app);
+    assert_eq!(stored["lights"], lights);
+    assert_eq!(stored["ambient"].as_f64(), Some(70.0), "{stored}");
+
+    let (mut app, id) = edit_smart_relight(json!({"angle": 20}));
+    for key in LAMP_ROWS {
+        set(&mut app, id, key, json!(10));
+    }
+}
+
+/// A recorded step's light list reaches the command from its editor, through Alt+Cancel too, and is
+/// not remembered for the next plain Relight.
+#[test]
+fn a_recorded_relight_step_keeps_its_light_list() {
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let mut h = harness(app, egui::vec2(900.0, 800.0));
+    let lights = json!([{"x": 0.25, "y": 0.5, "intensity": 60}]);
+    let recorded = json!({"lights": lights, "ambient": 30, "angle": 10});
+    let id = crate::panels::actions::open_recorded_editor(h.state_mut(), RELIGHT, &recorded).unwrap();
+    h.run_steps(3);
+    assert_eq!(fields_of(h.state(), id).number("ambient"), Some(30.0));
+    assert!(try_set(h.state_mut(), id, "angle", json!(10)).is_err());
+    h.get_by_label("Cancel").click_modifiers(egui::Modifiers::ALT);
+    h.run_steps(3);
+    assert!(is_open(h.state(), id), "Alt+Cancel resets and keeps the dialog open");
+    let params = command_params(RELIGHT, &fields_of(h.state(), id));
+    assert_eq!(params["lights"], lights, "{params}");
+    assert!(LAMP_ROWS.iter().all(|key| params.get(key).is_none()), "{params}");
+    assert!(ok(h.state_mut(), id));
+
+    let plain = open(h.state_mut(), RELIGHT).unwrap();
+    assert!(field_json(h.state(), plain, "lights").is_null());
+    set(h.state_mut(), plain, "angle", json!(10));
+}
