@@ -347,6 +347,9 @@ pub struct ShapeLayer {
     /// `None` = no fill (Photoshop's fill "none").
     pub fill: Option<Fill>,
     pub stroke: Option<ShapeStroke>,
+    /// Align Edges (PSD `sn2P`, scripting `useAlignedRendering`): at render time the whole shape
+    /// is fitted to whole document pixels (`photocraft_vector::align_edges`); `path` is unchanged.
+    pub use_aligned_rendering: bool,
     pub live: Option<LiveShape>,
     /// Rasterized appearance (from PSD or `photocraft-vector`).
     pub cache: Option<Surface>,
@@ -362,7 +365,17 @@ pub struct ShapeLayer {
 
 impl Default for ShapeLayer {
     fn default() -> Self {
-        ShapeLayer { path: Path::default(), fill: None, stroke: None, live: None, cache: None, psd_raw: None, density: 1.0, feather: 0.0 }
+        ShapeLayer {
+            path: Path::default(),
+            fill: None,
+            stroke: None,
+            use_aligned_rendering: false,
+            live: None,
+            cache: None,
+            psd_raw: None,
+            density: 1.0,
+            feather: 0.0,
+        }
     }
 }
 

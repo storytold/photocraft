@@ -8,7 +8,7 @@ use craft::behavior::{ColumnWidth, EditEvent, EditEvents, Mixed, RulerUnits, Tic
 use craft::draw::ui::{SizeUnit, TransformFields, TransformGroups, TransformRow};
 use craft::ui::bars::AlignBar;
 use craft::ui::buttons::Button;
-use craft::ui::canvas::RulerText;
+use craft::ui::canvas::{CanvasRulers, RulerText};
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft::ui::layout_components::Grid;
 use craft::ui::runtime::commands::CommandRef;
@@ -169,7 +169,7 @@ fn transform_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, 
         TransformFields::new(tl!("Transform"), Bind::given(row), rect, Bind::bound(&mut app.ui.properties_linked))
             .groups(groups)
             .document(Size::new(dw, dh))
-            .units(x_text, y_text)
+            .rulers(CanvasRulers::new(x_text, y_text, Point::ZERO))
             .size_unit(SizeUnit::length(x_text, y_text))
             .show(ui)
     });

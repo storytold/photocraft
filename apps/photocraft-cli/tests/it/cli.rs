@@ -1427,6 +1427,7 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
 #[test]
 fn batch_plays_a_photoshop_actions_file() {
     use photocraft_engine::actions_cmds::{Action, ActionStep};
+    photocraft_engine::install().unwrap();
     let d = tmp("atn");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();

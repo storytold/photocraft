@@ -2,14 +2,14 @@
 //! (craft-libs docs/craft-framework.md 2.2, "Host the runtime from your own eframe `App`"):
 //! installed once with PhotoCraft's fonts, then given PhotoCraft's preferences before each frame.
 //!
-//! eframe's `ui` would also call `embed::before_ui`, which needs craft-ui-shell's `app` feature;
-//! that feature turns on egui's `default_fonts`, which PhotoCraft leaves out (it ships them
-//! deflated). Its two jobs are PhotoCraft's own here: `work_area::fit_window` fits the window to
-//! its monitor, and the Windows window comes from PhotoCraft's title bar code.
+//! eframe's `ui` calls `embed::before_ui` first, which hands the runtime the native window (on
+//! Windows the runtime answers its hit test: resize edges, the title bar's move area, snap
+//! layouts) and fits the window to its monitor once.
 //!
 //! The `craft` facade features PhotoCraft enables for this: `text`, `text-font-picker`,
 //! `font-manager`, `menu`, `timeline` and `print`, plus `dialogs` on native targets.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -30,7 +30,12 @@ use craft::ui::runtime::install::WheelModifiers;
 use craft::ui::runtime::{InstallError, InstallSpec};
 use craft::ui::shell::embed;
 use craft::window::policy::Decision;
-use craft::window::system::SystemWindows;
+// Tests run headless: the desktop pointer Windows tells is the mouse of the machine running them, not the test's
+// pointer, so tests see no desktop services on any platform, as on Linux.
+#[cfg(test)]
+use craft::window::system::NoWindows as Desktop;
+#[cfg(not(test))]
+use craft::window::system::SystemWindows as Desktop;
 use photocraft_engine::Session;
 use photocraft_engine::prefs::{AppearanceMode, Preferences};
 use serde_json::Value;
@@ -40,20 +45,40 @@ use crate::i18n;
 use crate::state::Tool;
 use crate::theme::AppTheme;
 
-/// Installs the runtime on `ctx` with `fonts` and the root window's decided `frame` (`None` where
-/// the platform decides none), unless it is there already (`setup_window` again for the same
-/// context). Only `theme::install_runtime` calls it.
-pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>) {
+/// The store the dialogs that open their own window (RAW Develop, Vanishing Point) keep their size and place in:
+/// `window.json` in the settings folder `settings`. Without a settings folder (tests, the web) there is none, and those
+/// windows open at their default size each time.
+pub(crate) fn placement_store(settings: Option<&std::path::Path>) -> Option<Arc<Mutex<craft::window::restore::Store>>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        settings.map(|dir| Arc::new(Mutex::new(craft::window::restore::Store::at(&dir.join(craft::window::restore::FILE_NAME)))))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = settings;
+        None
+    }
+}
+
+/// Installs the runtime on `ctx` with `fonts`, the root window's decided `frame` (`None` where
+/// the platform decides none) and the window placement store of the settings folder `settings`
+/// ([`placement_store`]), unless it is there already (`setup_window` again for the same context).
+/// Only `theme::install_runtime` calls it.
+pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>, settings: Option<&std::path::Path>) {
     // The wheel zooms with the canvas's own keys and scrolls sideways with Shift or Command, as
     // PhotoCraft's input always has.
     let wheel = WheelModifiers::new(egui::Modifiers::NONE, egui::Modifiers::SHIFT | egui::Modifiers::COMMAND);
     let wake = ctx.clone();
-    let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(SystemWindows))
+    let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(Desktop))
         .wheel(wheel)
-        .app_id(crate::os_window::APP_ID)
+        .app_id(crate::os_window::app_id())
         .system(SystemReader::start(move || wake.request_repaint()));
     if let Some(decision) = frame {
         spec = spec.frame(decision);
+    }
+    // Without it a dialog's own window saves its size and place nowhere and opens at its default each time (#17012).
+    if let Some(store) = placement_store(settings) {
+        spec = spec.placement(store);
     }
     // The platform's pen readings: the app writes them into this feed, the runtime pairs them with the pointer moves.
     let pen = crate::stylus::StylusFeed::default();
@@ -243,6 +268,9 @@ fn base_root() -> RootEnv {
     root.tab_toggles_chrome = true;
     // Tab in a dialog moves between its fields, as in Photoshop.
     root.dialog_tab = TabReach::Fields;
+    // The title bar keeps the arrow, also over the menu titles on it, as an OS title bar does: the default open hand
+    // shows as Windows' four-way Move cursor (#16993).
+    root.values.set(craft::ui::contract::MoveBandCursor::Arrow);
     root
 }
 
@@ -372,6 +400,10 @@ impl Framework {
     /// in-memory suite the app starts with.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_suite(&mut self, ctx: &egui::Context) {
+        // A nightly keeps its in-memory suite; never open the stable shared theme store.
+        if !crate::os_window::stable_services_allowed() {
+            return;
+        }
         use craft::theme_store::{StoreOptions, SuiteDir, SuiteWatch};
         let ctx = ctx.clone();
         let options = StoreOptions::new(concat!("photocraft ", env!("CARGO_PKG_VERSION")));
@@ -677,7 +709,7 @@ impl PhotocraftApp {
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
         // The catalog's rows change only with the action names; the bindings with the rows and the
         // shortcut preferences.
-        let list = &self.session.actions.list;
+        let list = &self.session.actions().list;
         let actions_rev = list.revision();
         if self.framework.catalog_rows_rev != Some(actions_rev) {
             let same = self.framework.catalog_rows_rev.is_some()
@@ -806,7 +838,7 @@ impl SectionStore for PrefSections {
 #[cfg(test)]
 pub(crate) fn close_path_frame(app: &mut PhotocraftApp, input: egui::RawInput) -> egui::FullOutput {
     let ctx = app.ctx().clone();
-    install(&ctx, &UiFonts::new(&craft::ui::fonts::I18nScripts), None);
+    install(&ctx, &UiFonts::new(&craft::ui::fonts::I18nScripts), None, None);
     ctx.run_ui(input, |ui| embed::logic(ui.ctx(), || crate::discard_ui::close_decision(app)))
 }
 
@@ -851,6 +883,26 @@ pub(crate) fn keys_pass(app: &mut PhotocraftApp, ctx: &egui::Context, input: egu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dialogs' own windows keep their place in the settings folder's `window.json` and find it there on the next
+    /// launch; without a settings folder nothing is kept (#17012).
+    #[test]
+    fn dialog_windows_keep_their_placement_in_the_settings_folder() {
+        use craft::window::restore::FILE_NAME;
+        let dir = tempfile::tempdir().unwrap();
+        let key = "craft_imaging.raw_develop.window";
+        let placement = craft::behavior::placement::Placement::new([1400.0, 900.0], 1.25);
+        let store = placement_store(Some(dir.path())).expect("a settings folder has a placement store");
+        {
+            let mut store = store.lock().unwrap();
+            store.set(key, &placement);
+            store.save().unwrap();
+        }
+        assert!(dir.path().join(FILE_NAME).is_file());
+        let reopened = placement_store(Some(dir.path())).unwrap();
+        assert_eq!(reopened.lock().unwrap().get(key).map(|p| p.normal.size), Some([1400.0, 900.0]), "the next launch reads it");
+        assert!(placement_store(None).is_none());
+    }
 
     fn table(n: i64) -> toml::Table {
         let mut t = toml::Table::new();
