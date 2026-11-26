@@ -9,6 +9,9 @@ use craft::host::PickRequest;
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 /// The named Open filters cover this list. All Formats itself is [`ALL_FORMATS`], not this list (#5126).
+/// Compiled for the open-filter coverage tests only: the native picker uses `*`, so a non-test build
+/// would otherwise warn that this list is unused.
+#[cfg(test)]
 pub(super) const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
@@ -20,7 +23,7 @@ const SVG_EXTS: &[&str] = &["svg", "svgz"];
 /// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
 /// of mixed files can be narrowed to one kind (#6337). The document formats, the rest by name as in
 /// [`SAVE_FILTERS`], then the app's own resources. Together they cover every extension of
-/// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
+/// the open-extension list. An explicit SVG filter also keeps vector artwork discoverable when a native
 /// picker defaults to another filter.
 pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Photoshop", &["psd", "psb", "psdt"]),
