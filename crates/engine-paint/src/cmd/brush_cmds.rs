@@ -643,6 +643,21 @@ struct Overlay {
     mask_layer: Vec<usize>,
     /// The mask holds what stays (1 minus the stroke), as the eraser's does.
     invert: bool,
+    /// The colour layer sits in a group that replaces the target (see `enter_overlay`).
+    grouped: bool,
+}
+
+/// A live stroke's document for a GPU that stamps the dabs itself (see
+/// [`LiveStroke::gpu_preview`]).
+pub struct GpuPreview {
+    /// The document as it was when taken: the colour layer's mask is untouched (it reads 0
+    /// everywhere) and the layer's opacity is the brush's, because the GPU's mask holds the raw
+    /// coverage the stroke accumulates.
+    pub doc: std::sync::Arc<photocraft_doc::Document>,
+    /// The colour layer whose mask the GPU owns.
+    pub layer: photocraft_doc::LayerId,
+    /// The brush the stroke's dabs are generated with.
+    pub brush: BrushSettings,
 }
 
 pub use photocraft_engine_core::LiveCommit;
@@ -916,14 +931,14 @@ impl LiveStroke {
         if plain {
             if erase {
                 target.mask = Some(mask(1.0));
-                self.overlay = Some(Overlay { mask_layer: path.to_vec(), invert: true });
+                self.overlay = Some(Overlay { mask_layer: path.to_vec(), invert: true, grouped: false });
             } else {
                 let (id, visible) = (target.id, target.visible);
                 let Some((&at, parent)) = path.split_last() else { return };
                 let mut mask_layer = parent.to_vec();
                 mask_layer.push(at + 1);
                 doc.insert_above(Some(id), stroke_layer(visible, self.lock));
-                self.overlay = Some(Overlay { mask_layer, invert: false });
+                self.overlay = Some(Overlay { mask_layer, invert: false, grouped: false });
             }
             return;
         }
@@ -949,7 +964,42 @@ impl LiveStroke {
         group.label = original.label;
         group.mask = original.mask;
         *target = group;
-        self.overlay = Some(Overlay { mask_layer, invert: erase });
+        self.overlay = Some(Overlay { mask_layer, invert: erase, grouped: true });
+    }
+
+    /// The stroke's document for a GPU that stamps the dabs into the colour layer's mask itself
+    /// (the prototype of #17133), or why it cannot: the stroke must be an overlay without a group
+    /// (a plain Normal, fully opaque target without a mask), painting (not erasing) on an 8-bit
+    /// RGB document with no selection or transparency lock, with a brush
+    /// [`photocraft_paint::BrushContext::gpu_stampable`] accepts. The CPU still builds the coverage for the commit
+    /// ([`push`](Self::push), [`into_commit`](Self::into_commit)); this document is a snapshot
+    /// that does not change with it.
+    pub fn gpu_preview(&self) -> std::result::Result<GpuPreview, String> {
+        let Some(overlay) = &self.overlay else { return Err("the stroke is not an overlay".into()) };
+        if overlay.grouped {
+            return Err("the target is not a plain layer (the overlay needs a group)".into());
+        }
+        if overlay.invert {
+            return Err("the eraser".into());
+        }
+        if self.sel.is_some() {
+            return Err("a selection".into());
+        }
+        if self.lock {
+            return Err("locked transparency".into());
+        }
+        if self.pre.format().sample != photocraft_color::SampleType::U8 {
+            return Err("a document deeper than 8 bits".into());
+        }
+        let brush = self.renderer.ctx.brush.clone();
+        photocraft_paint::BrushContext::gpu_stampable(&brush).map_err(|why| format!("the brush has {why}"))?;
+        let mut doc = (*self.doc).clone();
+        let layer = doc.layer_at_mut(&overlay.mask_layer).ok_or("the colour layer is gone")?;
+        let id = layer.id;
+        layer.opacity = brush.opacity.clamp(0.0, 1.0);
+        let mask = layer.mask.as_mut().ok_or("the colour layer has no mask")?;
+        mask.surface = Surface::with_default(mask.surface.format(), &[0.0]);
+        Ok(GpuPreview { doc: std::sync::Arc::new(doc), layer: id, brush })
     }
 
     /// What an overlay stroke has touched, for a canvas that must redraw it from the committed
