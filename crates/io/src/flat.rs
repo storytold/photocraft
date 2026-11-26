@@ -123,12 +123,9 @@ fn import_flat_impl_with_options(
             let mut img =
                 codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            if format == Some(Format::OpenExr)
-                && img.layout().has_alpha()
-                && img.sample_type() == CSample::F32
-                && crate::exr_alpha::ordinary_import(&crate::exr_alpha::parts(bytes))
-            {
-                crate::exr_alpha::unpremultiply_image(&mut img);
+            if format == Some(Format::OpenExr) && img.layout().has_alpha() {
+                let associated = img.sample_type() == CSample::F32 && crate::exr_alpha::ordinary_import(&crate::exr_alpha::parts(bytes));
+                crate::exr_alpha::prepare_import(&mut img, associated);
             }
             ctl.progress(0.6);
             (image_to_document_with(name, &img, ctl)?, Some(img))

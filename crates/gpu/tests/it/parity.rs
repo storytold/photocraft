@@ -194,6 +194,57 @@ fn hdr_emission_survives_group_opacity_masks_and_clipping() {
 }
 
 #[test]
+fn hdr_pass_through_groups_preserve_light_when_clipping_changes_nothing() {
+    let Some(mut g) = gpu() else { return };
+    for red in [2.0, f32::MAX / 2.0 + f32::MAX / 4.0] {
+        for covered in [false, true] {
+            let mut doc = Document::new("HDR clipping", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+            let bounds = doc.bounds();
+            let mut emitter = Layer::raster("Light", PixelFormat::RGBA32F);
+            emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
+            let mut group = Layer::group("Group", vec![emitter]);
+            group.blend = BlendMode::PassThrough;
+            if covered {
+                let mut backdrop = Layer::raster("Black", PixelFormat::RGBA32F);
+                backdrop.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, 1.0]);
+                doc.layers.push(backdrop);
+            }
+            doc.layers.push(group);
+            let mut clip = Layer::raster("Empty clip", PixelFormat::RGBA32F);
+            clip.clipped = true;
+            doc.layers.push(clip);
+            let cpu = photocraft_compose::flatten(&doc).get(0, 0);
+            assert_eq!(cpu, [red, 0.0, 0.0, if covered { 1.0 } else { photocraft_color::EMISSIVE_ALPHA }]);
+            for comp in [&mut g.comp, &mut g.paged] {
+                assert_eq!(render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap()[0], cpu);
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_dissolve_keeps_binary_coverage_over_zero_coverage_light() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("HDR dissolve", Size::new(64, 1), ColorMode::Rgb, SampleType::F32);
+    let bounds = doc.bounds();
+    let red = [2.0, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let mut emitter = Layer::raster("Light", PixelFormat::RGBA32F);
+    emitter.surface_mut().unwrap().fill_rect(bounds, &red);
+    let mut dissolve = Layer::raster("Dissolve", PixelFormat::RGBA32F);
+    dissolve.surface_mut().unwrap().fill_rect(bounds, &blue);
+    dissolve.blend = BlendMode::Dissolve;
+    dissolve.opacity = 0.5;
+    doc.layers = vec![emitter, dissolve].into();
+    let cpu = photocraft_compose::flatten(&doc);
+    assert!(cpu.px.contains(&red) && cpu.px.contains(&blue));
+    assert!(cpu.px.iter().all(|pixel| *pixel == red || *pixel == blue));
+    for comp in [&mut g.comp, &mut g.paged] {
+        assert_eq!(render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap(), cpu.px);
+    }
+}
+
+#[test]
 fn hdr_emission_overflow_retains_associated_light() {
     let Some(mut g) = gpu() else { return };
     for (alpha, red) in [(1e-10, f32::MAX / 2.0), (0.25, f32::MAX / 2.0), (f32::MIN_POSITIVE, 8.0)] {

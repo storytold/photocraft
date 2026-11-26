@@ -473,9 +473,9 @@ fn composite_layer_plain_with<A: BufferAlloc>(
             let mut with = before;
             blend_into(&mut with, &clipped_iso, BlendMode::Normal, opacity);
             for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
-                if [p[3], w[3], wo[3]].into_iter().any(photocraft_color::is_emissive_alpha) {
+                if cx.depth == photocraft_color::SampleType::F32 {
                     let (a, b, c) = (psblend::associated(*p), psblend::associated(*w), psblend::associated(*wo));
-                    *p = psblend::from_associated(std::array::from_fn(|i| a[i] + b[i] - c[i]));
+                    *p = psblend::from_associated(std::array::from_fn(|i| a[i] + (b[i] - c[i])));
                     continue;
                 }
                 // Work premultiplied so transparent areas stay consistent.
@@ -838,16 +838,18 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
     }
     for (x, (b, s)) in (x0..).zip(dst.iter_mut().zip(src)) {
         let mut s = *s;
+        if mode == BlendMode::Dissolve && !photocraft_color::is_emissive_alpha(s[3]) {
+            if s[3] > 0.0 && dissolve_noise(x, y) < s[3] * opacity {
+                s[3] = 1.0;
+                *b = psblend::composite_emission(*b, s, 1.0).unwrap_or_else(|| blend::composite(BlendMode::Normal, *b, s, 1.0));
+            }
+            continue;
+        }
         if let Some(pixel) = psblend::composite_emission(*b, s, opacity) {
             *b = pixel;
             continue;
         }
         if s[3] <= 0.0 {
-            continue;
-        }
-        if mode == BlendMode::Dissolve {
-            s[3] = if dissolve_noise(x, y) < s[3] * opacity { 1.0 } else { 0.0 };
-            *b = blend::composite(BlendMode::Normal, *b, s, 1.0);
             continue;
         }
         *b = blend::composite_gamma(mode, *b, s, opacity, gamma);

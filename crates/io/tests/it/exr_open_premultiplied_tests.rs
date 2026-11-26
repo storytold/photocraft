@@ -21,6 +21,24 @@ fn assert_composite(doc: &Document, x: i32, black: [f32; 3], white: [f32; 3]) {
 }
 
 #[test]
+fn exr_negative_alpha_cannot_create_an_internal_emitter() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("negative.exr");
+    let raw_f16: Vec<u8> = [0x3800u16, 0x0000, 0x0000, 0xbc00].into_iter().flat_map(u16::to_ne_bytes).cycle().take(32 * 16 * 8).collect();
+    let half = Image::from_raw(32, 16, ChannelLayout::Rgba, codecs::SampleType::F16, raw_f16).unwrap();
+    let options = EncodeOptions { exr_compression: ExrCompression::Zip16, ..Default::default() };
+    let full = fixture(ChannelLayout::Rgba, &[0.5, 0.0, 0.0, -1.0], &[0.5, 0.0, 0.0, -1.0]);
+    for bytes in [codecs::encode(&half, Format::OpenExr, &options).unwrap(), full] {
+        std::fs::write(&path, &bytes).unwrap();
+        let file = import_file("negative.exr", &path, &ImportOptions::default(), &Interrupt::NONE).unwrap();
+        let memory = import("negative.exr", &bytes).unwrap();
+        for doc in [&file.document, &memory.document] {
+            assert_composite(doc, 4, [0.0; 3], [1.0; 3]);
+        }
+    }
+}
+
+#[test]
 fn exr_scanline_alpha_opens_and_round_trips() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("alpha.exr");

@@ -91,8 +91,8 @@ pub(crate) fn import<R: Read + Seek>(mut source: R, ctl: &Interrupt<'_>) -> Resu
                 missing.saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(fmt.bytes_per_pixel() as u64),
             )?;
         }
-        if premultiplied && info.has_alpha {
-            crate::exr_alpha::unpremultiply(&mut band.data, if info.gray { 2 } else { 4 });
+        if info.has_alpha {
+            crate::exr_alpha::prepare_import_f32(&mut band.data, if info.gray { 2 } else { 4 }, premultiplied);
         }
         if info.gray {
             surface.write_interleaved(rect, &gray_alpha_to_rgba(&band.data));

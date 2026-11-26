@@ -27,18 +27,37 @@ pub(crate) fn selected_part(part: &PartInfo, names: Option<&[&str]>) -> bool {
     channels.iter().all(|&index| part.channels.get(index).is_some_and(|channel| channel.sample == SampleType::F32))
 }
 
-pub(crate) fn unpremultiply_image(image: &mut Image) {
+pub(crate) fn prepare_import(image: &mut Image, associated: bool) {
     let layout = image.layout();
-    if image.sample_type() == CodecSample::F32 && layout.has_alpha() {
-        unpremultiply(image.data_mut(), layout.channels());
+    if !layout.has_alpha() {
+        return;
+    }
+    match image.sample_type() {
+        CodecSample::F32 => prepare_import_f32(image.data_mut(), layout.channels(), associated),
+        CodecSample::F16 => {
+            for pixel in image.data_mut().chunks_exact_mut(layout.channels() * 2) {
+                let Some(alpha) = pixel.as_chunks_mut::<2>().0.last_mut() else { continue };
+                if u16::from_ne_bytes(*alpha) == 0xbc00 {
+                    // HALF -1.0 would become the internal emission marker after expansion.
+                    *alpha = 0x8000u16.to_ne_bytes();
+                }
+            }
+        }
+        _ => {}
     }
 }
 
-pub(crate) fn unpremultiply(data: &mut [u8], channels: usize) {
+pub(crate) fn prepare_import_f32(data: &mut [u8], channels: usize, associated: bool) {
     for pixel in data.chunks_exact_mut(channels * 4) {
         let Some((alpha, colours)) = pixel.as_chunks_mut::<4>().0.split_last_mut() else { continue };
         let a = f32::from_ne_bytes(*alpha);
-        if !(0.0..1.0).contains(&a) {
+        if is_emissive_alpha(a) {
+            // A negative alpha in the file denotes no coverage. Only our conversion of an
+            // associated zero-coverage pixel may create an emitter.
+            *alpha = (-0.0f32).to_ne_bytes();
+            continue;
+        }
+        if !associated || !(0.0..1.0).contains(&a) {
             continue;
         }
         let peak = colours.iter().map(|colour| f32::from_ne_bytes(*colour).abs()).filter(|value| value.is_finite()).fold(0.0, f32::max);

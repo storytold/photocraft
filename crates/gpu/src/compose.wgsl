@@ -923,12 +923,13 @@ fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
 // blend_into(backdrop = b, src = s, mode, opacity) at chunk pixel p, including Dissolve.
 fn blend_px(p: vec2<i32>, b: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     var s = src;
-    if (emits(b.a) || emits(s.a)) { return composite_emission(b, s, op.opacity * clamp(op.fill, 0.0, 1.0)); }
-    if (s.a <= 0.0) { return b; }
-    if (op.mode == M_DISSOLVE) {
+    if (op.mode == M_DISSOLVE && !emits(s.a)) {
+        if (s.a <= 0.0) { return b; }
         s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
+    if (emits(b.a) || emits(s.a)) { return composite_emission(b, s, op.opacity * clamp(op.fill, 0.0, 1.0)); }
+    if (s.a <= 0.0) { return b; }
     return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
 }
 
@@ -1077,8 +1078,8 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
     if ((op.flags & F_ADD_DIFF) != 0u) {
         // compose: pass-through group + (with clipped − without), premultiplied.
         let c = textureLoad(tex_c, p, 0);
-        if (emits(a.a) || emits(b.a) || emits(c.a)) {
-            return from_associated(associated(a) + associated(b) - associated(c));
+        if ((op.flags & F_HDR) != 0u) {
+            return from_associated(associated(a) + (associated(b) - associated(c)));
         }
         var pm = vec4(a.rgb * a.a, a.a) + vec4(b.rgb * b.a, b.a) - vec4(c.rgb * c.a, c.a);
         let al = clamp(pm.a, 0.0, 1.0);
