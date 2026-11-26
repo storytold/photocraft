@@ -280,7 +280,7 @@ fn name_char(c: char) -> bool {
 }
 
 /// White space as script reads it: what `char::is_whitespace` accepts, and U+FEFF.
-fn space(c: char) -> bool {
+pub(crate) fn space(c: char) -> bool {
     c.is_whitespace() || c == '\u{feff}'
 }
 

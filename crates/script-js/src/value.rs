@@ -288,18 +288,21 @@ pub fn error_text(e: &JsError) -> String {
     let Some(v) = e.as_opaque() else { return cut(&e.to_string(), MAX_ERROR_CHARS) };
     if let Some(s) = v.as_string() {
         if s.len() > MAX_ERROR_CHARS {
-            return cut(&format!("\"{}", s.slice(0, MAX_ERROR_CHARS).to_std_string_escaped()), MAX_ERROR_CHARS);
+            return cut_shortened(&format!("\"{}", s.slice(0, MAX_ERROR_CHARS).to_std_string_escaped()), MAX_ERROR_CHARS);
         }
     } else if let Some(sym) = v.as_symbol() {
         if let Some(d) = sym.description().filter(|d| d.len() > MAX_ERROR_CHARS) {
-            return cut(&format!("Symbol({}", d.slice(0, MAX_ERROR_CHARS).to_std_string_escaped()), MAX_ERROR_CHARS);
+            return cut_shortened(&format!("Symbol({}", d.slice(0, MAX_ERROR_CHARS).to_std_string_escaped()), MAX_ERROR_CHARS);
         }
     } else if let Some(obj) = v.as_object() {
         let name = data_on_chain(&obj, &js_string!("name").into());
         let message = data_on_chain(&obj, &js_string!("message").into());
         if !obj.is::<ErrorData>() {
             return match message.string() {
-                Some(m) => cut(&format!("Uncaught exception: {}", short(&m)), MAX_ERROR_CHARS),
+                Some(m) => {
+                    let (m, shortened) = short(&m);
+                    marked(&format!("Uncaught exception: {m}"), MAX_ERROR_CHARS, shortened)
+                }
                 None => NOT_AN_ERROR.to_owned(),
             };
         }
@@ -312,9 +315,15 @@ pub fn error_text(e: &JsError) -> String {
             Lookup::Unknown => false,
         };
         if !small(&name) || !small(&message) {
-            let name = name.string().map_or_else(|| "Error".to_owned(), |n| cut(&short(&n), 100));
+            let name = name.string().map_or_else(
+                || "Error".to_owned(),
+                |n| {
+                    let (n, shortened) = short(&n);
+                    marked(&n, 100, shortened)
+                },
+            );
             return match message.string().map(|m| short(&m)) {
-                Some(m) if !m.is_empty() => cut(&format!("{name}: {m}"), MAX_ERROR_CHARS),
+                Some((m, shortened)) if !m.is_empty() => marked(&format!("{name}: {m}"), MAX_ERROR_CHARS, shortened),
                 _ => name,
             };
         }
@@ -322,9 +331,11 @@ pub fn error_text(e: &JsError) -> String {
     cut(&e.to_string(), MAX_ERROR_CHARS)
 }
 
-/// At most one more than [`MAX_ERROR_CHARS`] units of `s`, enough for [`cut`] to mark it.
-fn short(s: &JsString) -> String {
-    s.slice(0, s.len().min(MAX_ERROR_CHARS + 1)).to_std_string_escaped()
+/// At most [`MAX_ERROR_CHARS`] UTF-16 units of `s`, and whether some were left out: a text of
+/// characters outside the BMP can lose units yet hold fewer characters than [`cut`] counts.
+fn short(s: &JsString) -> (String, bool) {
+    let shortened = s.len() > MAX_ERROR_CHARS;
+    (s.slice(0, s.len().min(MAX_ERROR_CHARS)).to_std_string_escaped(), shortened)
 }
 
 /// Prototype hops when reading Error data; enough for a subclass, short of a cycle.
@@ -366,6 +377,21 @@ pub(crate) fn data_on_chain(obj: &JsObject, key: &PropertyKey) -> Lookup {
         at = o.prototype();
     }
     Lookup::Unknown
+}
+
+/// [`cut`], marked as cut also when `shortened` says text was left out before: one marker,
+/// always at the end.
+fn marked(s: &str, max: usize, shortened: bool) -> String {
+    match s.char_indices().nth(max) {
+        Some((at, _)) => format!("{}… (cut)", &s[..at]),
+        None if shortened => format!("{s}… (cut)"),
+        None => s.to_owned(),
+    }
+}
+
+/// [`marked`] for a text already shortened.
+fn cut_shortened(s: &str, max: usize) -> String {
+    marked(s, max, true)
 }
 
 /// The first `max` characters of `s`, with a marker when it was longer.

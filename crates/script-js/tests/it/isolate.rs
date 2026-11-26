@@ -356,13 +356,22 @@ enum Settle {
     Done,
 }
 
+/// Write a fixture file the test made the name of: a new file, never through what was already
+/// at the path (a link from an earlier run is removed, not followed).
+#[cfg(unix)]
+fn fixture(path: &std::path::Path, bytes: &[u8]) {
+    use std::io::Write as _;
+    drop(std::fs::remove_file(path));
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path).unwrap().write_all(bytes).unwrap();
+}
+
 /// A stand-in host that writes `frames`, then runs the shell commands `then` (which see `more`
 /// as `"$2"`, `"$3"`, …); the interface starts polling as `settle` says. Only the run's end may
 /// reach the interface.
 #[cfg(unix)]
 fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], settle: Settle) -> Seen {
     let dir = std::env::temp_dir().join(format!("script-host-{name}-{}-{}", std::process::id(), frames.len()));
-    std::fs::write(&dir, frames).unwrap();
+    fixture(&dir, frames);
     let mut opts = options(name);
     let mut paths = vec![dir.as_path()];
     paths.extend_from_slice(more);
@@ -515,7 +524,7 @@ fn shell_host_within(name: &str, files: &[(&str, Vec<u8>)], script: &str, limit:
     let mut paths = Vec::new();
     for (i, (key, bytes)) in files.iter().enumerate() {
         let path = std::env::temp_dir().join(format!("script-host-{name}-{key}-{}", std::process::id()));
-        std::fs::write(&path, bytes).unwrap();
+        fixture(&path, bytes);
         script = script.replace(&format!("{{{key}}}"), &format!("\"${}\"", i + 1));
         paths.push(path);
     }

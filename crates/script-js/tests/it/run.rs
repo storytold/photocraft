@@ -374,6 +374,7 @@ impl Budget for Countdown {
 fn first_dialog_text(src: &str) -> String {
     let seen = answering(src, &[]);
     let Some(m) = seen.dialogs.first() else { panic!("no dialog: {src} {:?}", seen.result) };
+    assert_eq!(seen.result, Ok(()), "{src}");
     m.args[0].as_str().unwrap().to_owned()
 }
 
@@ -613,6 +614,26 @@ fn a_slow_last_output_line_is_charged() {
     let r = Runner::new("$.writeln('x');", Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
     assert_eq!(r.run(), Err("The script was stopped: it ran longer than its time limit.".into()));
     assert_eq!(*lines.borrow(), ["x"], "the line was written once");
+}
+
+/// A long thrown text is marked as cut even when it is cut by its UTF-16 length, as text of
+/// characters outside the BMP is.
+#[test]
+fn a_long_thrown_text_is_marked_as_cut() {
+    for src in [
+        "throw '\u{1F600}'.repeat(2001)",
+        "throw new Error('\u{1F600}'.repeat(3000))",
+        "throw { message: '\u{1F600}'.repeat(3000) }",
+        // Cut again with its prefix: still one marker, whole, at the end.
+        "throw new Error('\u{1F600}'.repeat(10) + 'x'.repeat(5000))",
+        "throw { message: '\u{1F600}'.repeat(25) + 'x'.repeat(5000) }",
+    ] {
+        let seen = run_probe(src, Probe::default(), Box::new(Unlimited), RunOptions::default());
+        let message = seen.result.unwrap_err();
+        let tail: String = message.chars().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
+        assert_eq!(message.matches("(cut)").count(), 1, "{src}: …{tail}");
+        assert_eq!(message.matches('…').count(), 1, "{src}: …{tail}");
+    }
 }
 
 #[test]

@@ -79,19 +79,20 @@ fn is_utf16(source: &str) -> bool {
 
 /// The name of a `//@include` or `//@includepath` line.
 fn comment_include(line: &str) -> Option<&'static str> {
-    let rest = line.trim_start().strip_prefix("//@")?;
+    let rest = line.trim_start_matches(scan::space).strip_prefix("//@")?;
     let name = ["includepath", "include"].into_iter().find(|d| rest.starts_with(d))?;
     let after = &rest[name.len()..];
-    (after.is_empty() || after.starts_with(char::is_whitespace)).then_some(name)
+    (after.is_empty() || after.starts_with(scan::space)).then_some(name)
 }
 
 /// The directive name when `line` is one.
 fn directive(line: &str) -> Option<&'static str> {
-    let rest = line.trim_start().strip_prefix('#')?;
+    // White space as script reads it, U+FEFF included.
+    let rest = line.trim_start_matches(scan::space).strip_prefix('#')?;
     let name = DIRECTIVES.into_iter().filter(|d| rest.starts_with(d)).max_by_key(|d| d.len())?;
     let after = &rest[name.len()..];
-    let separated = after.is_empty() || after.starts_with(char::is_whitespace);
-    let assigns_or_calls = after.trim_start().starts_with(['=', '(']);
+    let separated = after.is_empty() || after.starts_with(scan::space);
+    let assigns_or_calls = after.trim_start_matches(scan::space).starts_with(['=', '(']);
     (separated && !assigns_or_calls).then_some(name)
 }
 
@@ -140,6 +141,9 @@ mod tests {
         assert_eq!(preprocess("#target x\r$.writeln('ran');\r").unwrap(), "\r$.writeln('ran');\r");
         assert_eq!(preprocess("#target x\r\n#strict on\rvar a;\n#include y").unwrap_err(), "line 4: #include is not supported yet");
         assert_eq!(preprocess("#strict\n#target").unwrap(), "\n");
+        // U+FEFF is white space to script, before a directive's value as anywhere.
+        assert_eq!(preprocess("var a;\n#target\u{feff}photocraft\n").unwrap(), "var a;\n\n");
+        assert!(preprocess("var a;\n//@include\u{feff}x.jsx\n").unwrap_err().contains("include"));
     }
 
     #[test]
