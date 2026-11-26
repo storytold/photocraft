@@ -30,6 +30,8 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
         h.finish()
     }
     layer.id.0.hash(h);
+    // The same display surface can blend differently before and after rasterizing a text child.
+    std::mem::discriminant(&layer.content).hash(h);
     // What the maps depend on: `fill_opacity` shades them; layer `opacity` is applied when the
     // maps are composited and `visible` only skips the lookup entirely, so neither belongs in
     // the key (an opacity drag must not rebuild shadows over the whole layer; the GPU's
