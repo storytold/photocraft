@@ -60,6 +60,9 @@ pub struct DocM {
     /// Indexed Color palette.
     #[serde(default)]
     pub color_table: Option<photocraft_doc::ColorTable>,
+    /// Indexed Color pixel indices, where known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_indices: Option<ColorIndicesM>,
     /// Duotone inks.
     #[serde(default)]
     pub duotone: Option<photocraft_doc::Duotone>,
@@ -132,6 +135,10 @@ pub struct PatternM {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    /// The colour mode Edit › Define Pattern took this pattern from
+    /// (`photocraft_doc::Pattern::source_mode`); absent in older files, which recorded no source.
+    #[serde(default)]
+    pub source_mode: Option<ColorMode>,
     pub surface: SurfaceM,
 }
 
@@ -141,6 +148,14 @@ pub struct NamedPathM {
     pub path: Path,
     #[serde(default)]
     pub psd_raw: Option<Hash>,
+}
+
+/// [`photocraft_doc::ColorIndices`]: the layer (by id) and its pixels' indices. Saved only while
+/// they hold for the layer as saved, so the layer's own pixels are the recorded ones on open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColorIndicesM {
+    pub layer: u64,
+    pub indices: SurfaceM,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -282,6 +297,10 @@ pub enum ContentM {
         path: Path,
         #[serde(default)]
         stroke: Option<ShapeStroke>,
+        /// Align Edges. Absent in files from before it existed, which keep rendering as they did
+        /// (off); written only when on, so files without it stay readable by older versions.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        use_aligned_rendering: bool,
         #[serde(default)]
         live: Option<LiveShape>,
         /// Arrow parameters stored separately for backward compatibility.

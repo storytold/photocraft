@@ -7,6 +7,7 @@
 //! draft as `StyleValue::Other` so everything the dialog doesn't model (gradient strokes, imported
 //! contours, PSD data) survives an apply.
 
+use photocraft_engine::presets::PresetsExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -19,10 +20,12 @@ use craft::imaging::layer_style::{
 use craft::imaging::ui::layer_style::{ContourEditorDialog, HostedLayerStyle, LayerStyleAsk};
 use craft::theme::Srgba;
 use craft::ui::contract::Entry;
+use craft::ui::contract::Tracked;
 use craft::ui::dialog::{DialogId, DialogResult};
-use craft::ui::patterns::presets::{PresetRow, ThumbInfo};
+use craft::ui::patterns::presets::{PresetFns, PresetRow, PresetSource, ThumbInfo};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
+use craft::ui::runtime::env::Env;
 use egui::{ColorImage, Pos2, Rect, pos2};
 use photocraft_doc::effects::{FxPaint, GlowSource, GlowTechnique, StrokePosition};
 use photocraft_doc::{Document, Effect, Layer, LayerId};
@@ -31,10 +34,15 @@ use photocraft_engine::pattern_cmds::PatternLibrary;
 use photocraft_engine::presets::styles::StylePreset;
 use serde_json::{Map, Value, json};
 
+use crate::panels::preset_browser::StyleLibrary;
 use crate::{PhotocraftApp, color_picker_ui};
 
+#[cfg(test)]
+mod bevel_reset_angle_tests;
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod drop_shadow_last_values_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
@@ -477,9 +485,10 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let keys = blend_keys();
-    let specs = specs(&keys, &user, light);
+    let mut specs = specs(&keys, &user, light);
+    start_from_last_committed(app, &mut specs, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
     match select {
         None => {
@@ -505,10 +514,10 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
         .specs(specs)
         .blend_keys(keys)
         .blend_modes(blend_modes(&layer))
-        .patterns(pattern_list(app))
+        .patterns(PresetSource::new(pattern_list(app), PresetFns::new(|patterns, env| pattern_rows(patterns, env))))
         .user_contours(contour::user_contours(app))
-        .sampler(contour::sampler())
-        .style_presets(style_rows(app), style_thumb(app))
+        .sampler(contour::sampler)
+        .style_presets(style_presets(app))
         .gradient_presets(gradient_presets(app))
         .preview_thumb(preview_thumb(app))
         .canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
@@ -534,6 +543,41 @@ pub(crate) fn open_layer(app: &PhotocraftApp) -> Option<LayerId> {
     (app.session.active()?.doc.id == doc).then_some(layer)
 }
 
+/// The effects whose new instance starts with the values of the last one committed with OK, also after a restart, as
+/// the reference's do (#14877, Drop Shadow).
+const STARTS_FROM_LAST: &[EffectKind] = &[EffectKind::DropShadow];
+
+/// Where the last committed values of `kind` are kept (the framework's saved memory, so they survive a restart).
+fn last_committed_key(kind: EffectKind) -> craft::ui::runtime::memory::SaveKey {
+    craft::ui::runtime::memory::SaveKey::named(format!("photocraft.layerStyle.lastCommitted.{}", kind.key()))
+}
+
+/// A new instance of the [`STARTS_FROM_LAST`] kinds starts from the last committed values over the usual defaults; an
+/// effect lit by the shared light keeps the document's light angle. Reset to Default still writes the Make Default (or
+/// factory) values, which it reads from the engine.
+fn start_from_last_committed(app: &PhotocraftApp, specs: &mut [EffectSpec], light: f32) {
+    for spec in specs.iter_mut().filter(|s| STARTS_FROM_LAST.contains(&s.kind)) {
+        let Some(last) = craft::ui::runtime::memory::saved_value::<Option<Value>>(app.ctx(), &last_committed_key(spec.kind)) else { continue };
+        let mut values = style_params_json(&spec.defaults);
+        if let (Some(o), Some(l)) = (values.as_object_mut(), last.as_object()) {
+            o.extend(l.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true) {
+            values["angle"] = json!(light);
+        }
+        spec.defaults = style_params(spec.kind, &values, None).over(&spec.defaults);
+    }
+}
+
+/// After an OK: keeps the values of the committed style's last instance of each [`STARTS_FROM_LAST`] kind.
+fn keep_last_committed(app: &PhotocraftApp, style: &LayerStyle) {
+    for kind in STARTS_FROM_LAST {
+        if let Some(e) = style.effects.iter().rev().find(|e| e.kind == *kind) {
+            craft::ui::runtime::memory::set_saved_value::<Option<Value>>(app.ctx(), &last_committed_key(*kind), Some(style_params_json(&e.params)));
+        }
+    }
+}
+
 /// The effect pages with the user's defaults (Make Default) over the factory ones.
 fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) -> Vec<EffectSpec> {
     KINDS
@@ -541,6 +585,16 @@ fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) 
         .filter_map(|(key, _)| {
             let kind = EffectKind::from_key(key)?;
             let mut spec = EffectSpec::photoshop(kind).with_blend_keys(keys);
+            if kind == EffectKind::OuterGlow {
+                // #14944: Photoshop groups the Outer Glow rows Structure / Elements / Quality and
+                // puts Noise right under Opacity. The hosted page draws the spec's rows in order,
+                // so the host moves the row; the group titles belong to the framework's page.
+                if let Some(noise) = spec.fields.iter().position(|f| f.key == "noise") {
+                    let field = spec.fields.remove(noise);
+                    let after = spec.fields.iter().position(|f| f.key == "opacity").unwrap_or(0);
+                    spec.fields.insert(after + 1, field);
+                }
+            }
             spec.defaults = style_params(kind, &fresh_params(key, light, user.get(*key)), None).over(&spec.defaults);
             Some(spec)
         })
@@ -559,23 +613,28 @@ fn blend_keys() -> HashMap<String, String> {
     photocraft_color::BlendMode::LAYER_MODES.into_iter().map(|m| (m.label().to_string(), m.label().to_string())).collect()
 }
 
-/// The patterns a style can use (document's, then the library's).
-pub fn pattern_list(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
+/// The patterns a style can use (document's, then the library's), as (id, name).
+pub fn pattern_list(app: &PhotocraftApp) -> Vec<(String, String)> {
     let mut seen = HashSet::new();
-    let doc_pats = app.session.active().map(|d| d.doc.patterns.clone()).unwrap_or_default();
+    let doc_pats = app.session.active().map(|d| d.doc.patterns.as_slice()).unwrap_or_default();
     doc_pats
         .iter()
         .chain(app.session.patterns.items.iter())
         .filter(|p| seen.insert(p.id.clone()))
-        .map(|p| PresetRow::item(p.id.clone(), p.display_name(), 0))
+        .map(|p| (p.id.clone(), p.display_name().to_string()))
         .collect()
+}
+
+/// One row per pattern of [`pattern_list`], keyed by its id.
+fn pattern_rows(patterns: &[(String, String)], _: &Env) -> Vec<PresetRow<String>> {
+    patterns.iter().map(|(id, name)| PresetRow::item(id.clone(), name.clone(), 0)).collect()
 }
 
 /// The Gradients panel's presets resolved with the tool colours, for the Gradient field's select.
 fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     app.session
-        .presets
+        .presets()
         .gradients
         .iter()
         .flat_map(|g| g.items.iter())
@@ -586,14 +645,34 @@ fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
         .collect()
 }
 
+/// What the Styles page's presets are built from: each style group's name and its styles' names, and the library the
+/// thumbnails draw from, as the app held them when the dialog opened.
+#[derive(craft::ui::contract::MemoProps)]
+struct StylePresets {
+    groups: Vec<(String, Vec<String>)>,
+    library: std::sync::Arc<Tracked<StyleLibrary>>,
+}
+
+/// The Styles page's presets.
+fn style_presets(app: &mut PhotocraftApp) -> PresetSource<'static, String> {
+    let groups = app.session.presets().styles.iter().map(|group| (group.name.clone(), group.items.iter().map(|st| st.name.clone()).collect())).collect();
+    let inputs = StylePresets { groups, library: StyleLibrary::held(app) };
+    PresetSource::new(inputs, PresetFns::new(style_rows).thumb(style_thumb))
+}
+
 /// The Styles page's rows: each group with its presets, presets keyed by name and groups by `group/<name>`.
-fn style_rows(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
+fn style_rows(inputs: &StylePresets, _: &Env) -> Vec<PresetRow<String>> {
     let mut rows = Vec::new();
-    for group in &app.session.presets.styles {
-        rows.push(PresetRow::group(format!("group/{}", group.name), group.name.clone(), 0).count(group.items.len()));
-        rows.extend(group.items.iter().map(|st| PresetRow::item(st.name.clone(), st.name.clone(), 1)));
+    for (group, styles) in &inputs.groups {
+        rows.push(PresetRow::group(format!("group/{group}"), group.clone(), 0).count(styles.len()));
+        rows.extend(styles.iter().map(|name| PresetRow::item(name.clone(), name.clone(), 1)));
     }
     rows
+}
+
+/// Paints a style preset's thumbnail; the Styles panel shares the textures.
+fn style_thumb(inputs: &StylePresets, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, String>) {
+    inputs.library.paint(cx, rect, info.key);
 }
 
 fn paint_picture(cx: &ContentPainterCx, rect: Rect, key: impl std::hash::Hash + 'static, image: impl FnOnce() -> ColorImage) {
@@ -601,28 +680,18 @@ fn paint_picture(cx: &ContentPainterCx, rect: Rect, key: impl std::hash::Hash + 
     cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
 }
 
-/// Paints a style preset's thumbnail. The dialog's painter cannot read the app, so it owns the
-/// presets and patterns; a picture is rendered on a texture miss only, under the key the Styles
-/// panel uses, so both share the textures.
-fn style_thumb(app: &PhotocraftApp) -> impl Fn(&ContentPainterCx, Rect, ThumbInfo<'_, String>) + Send + 'static {
-    let presets: Vec<StylePreset> = app.session.presets.styles.iter().flat_map(|g| g.items.iter().cloned()).collect();
-    let patterns = app.session.patterns.clone();
-    move |cx, rect, info| {
-        let Some(style) = presets.iter().find(|s| &s.name == info.key) else { return };
-        let key = ("style", style.name.clone(), style.effects.len(), format!("{:?}{:?}", style.blend, style.fill_opacity));
-        paint_picture(cx, rect, key, || {
-            let mut scratch = Session::new();
-            scratch.patterns = patterns.clone();
-            crate::panels::preset_browser::style_image(&scratch, style)
-        });
-    }
+/// The texture store key of the preview swatch: the draft's render hash and the scratch read-error generation, as the
+/// swatch draws over the patterns' pixels, which a tile that fails to read shows as zeros until it reads again
+/// (`crate::scratch_reads`).
+fn swatch_key(draft: &LayerStyleDraft) -> (&'static str, u64, u64) {
+    ("layer-style-swatch", draft.render_hash(), crate::scratch_reads::generation())
 }
 
 /// Paints the preview swatch: the draft's style on a sample square, rebuilt when its render hash changes.
 fn preview_thumb(app: &PhotocraftApp) -> impl Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync + 'static {
     let patterns = app.session.patterns.clone();
     move |cx, rect, draft| {
-        paint_picture(cx, rect, ("layer-style-swatch", draft.render_hash()), || {
+        paint_picture(cx, rect, swatch_key(draft), || {
             let mut scratch = Session::new();
             scratch.patterns = patterns.clone();
             match pending_style(&patterns, &draft.style) {
@@ -648,6 +717,25 @@ fn effect_entry(fx: Option<&Value>, kind: &str, mut params: Value, initial_light
                     if edits.get(key) == shown.get(key) {
                         edits.remove(key);
                     }
+                }
+            }
+            if kind == "innerShadow"
+                && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
+                && let Some(edits) = params.as_object_mut()
+            {
+                let shown = values_of(&original, initial_light_angle.unwrap_or(120.0) as f32);
+                // A file can carry a Distance or Size outside the page's typed ranges (#14940) that
+                // the command clamps. An untouched field must not send it back through the clamp.
+                for key in ["distance", "size"] {
+                    if edits.get(key) == shown.get(key) {
+                        edits.remove(key);
+                    }
+                }
+                // The Angle field shows the shared light while the effect is lit by it, so the
+                // effect's own angle is only what the field showed when the check is off; with it on,
+                // the light angle is written as before.
+                if shown.get("useGlobalLight") == Some(&Value::Bool(false)) && edits.get("angle") == shown.get("angle") {
+                    edits.remove("angle");
                 }
             }
             if kind == "gradientOverlay"
@@ -692,17 +780,8 @@ fn light_to_apply(style: &LayerStyle, initial: Option<f64>) -> Option<f64> {
     light_angle
 }
 
-/// Runs the style's commands through `run`: blending options, then the whole effect list in one
-/// `layer.layerStyle.replace` (instances keep their order; their snapshots carry what the dialog
-/// doesn't model). `light` is the document's global light angle when the dialog opened.
-// The typed draft cannot hold a malformed parameter group, so there is nothing to validate.
-pub(crate) fn apply(
-    style: &LayerStyle,
-    layer: LayerId,
-    light: Option<f64>,
-    mut run: impl FnMut(&str, Value) -> Result<Value, String>,
-) -> Result<Value, String> {
-    run("layer.layerStyle.blendingOptions", blending_json(&style.blending, layer))?;
+/// Applies blending, the ordered effect snapshots, and any shared light change in one edit.
+pub(crate) fn apply(style: &LayerStyle, layer: LayerId, light: Option<f64>, run: impl FnOnce(&str, Value) -> Result<Value, String>) -> Result<Value, String> {
     let entries: Vec<Value> = style
         .effects
         .iter()
@@ -712,12 +791,11 @@ pub(crate) fn apply(
             effect_entry(fx_of(&e.params).as_ref(), e.kind.key(), params, light)
         })
         .collect();
-    run("layer.layerStyle.replace", json!({"layer": layer.0, "effects": entries}))?;
-    // An effect lit by the global light follows the document's light angle, so the Angle slider
-    // drives that shared angle rather than the per-effect angle the compositor ignores.
+    let mut params = json!({"layer": layer.0, "blendingOptions": blending_json(&style.blending, layer), "effects": entries});
     if let Some(angle) = light_to_apply(style, light) {
-        run("layer.layerStyle.globalLight", json!({"angle": angle}))?;
+        params["globalLight"] = json!({"angle": angle});
     }
+    run("layer.layerStyle.replace", params)?;
     Ok(Value::Null)
 }
 
@@ -828,8 +906,9 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
         return fail(app, "Layer Style target document changed".into());
     };
     if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
-        fail(app, error);
+        return fail(app, error);
     }
+    keep_last_committed(app, style);
 }
 
 /// Applies a style preset to the draft without touching the document: Cancel leaves the document
@@ -866,13 +945,26 @@ fn save_new_style(app: &mut PhotocraftApp, dialog: DialogId, layer: LayerId) {
 }
 
 /// Writes the user's default (or the factory defaults before the first Make Default) into the instance.
+/// An effect lit by the shared light takes the dialog's light angle, not the default's own `angle`
+/// (120 for the factory): the same seeding [`fresh_params`] and the draft's `add_instance` apply to a
+/// new instance, so Reset to Default leaves a globally lit effect at the shared angle (#14843).
 fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectId) {
-    let Some(kind) = app.framework.dialogs.get_by_id::<HostedLayerStyle>(dialog).and_then(|d| d.draft().style.effect(instance)).map(|e| e.kind) else {
+    let Some((kind, light)) = app
+        .framework
+        .dialogs
+        .get_by_id::<HostedLayerStyle>(dialog)
+        .and_then(|d| d.draft().style.effect(instance).map(|e| (e.kind, f64::from(d.draft().style.global_light))))
+    else {
         return;
     };
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
     let mut values = v["params"].clone();
     drop_from_to(&mut values);
+    if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
+        && let Some(o) = values.as_object_mut()
+    {
+        o.insert("angle".into(), json!(light));
+    }
     let params = style_params(kind, &values, None);
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
         for (key, value) in params.0 {
@@ -968,5 +1060,7 @@ pub(crate) fn gradient_layer_bounds(session: &Session, layer: LayerId) -> Option
     (w > 0.0 && h > 0.0).then_some([w, h])
 }
 
+#[cfg(test)]
+mod ok_history_tests;
 #[cfg(test)]
 mod tests;

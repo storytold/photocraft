@@ -1,7 +1,7 @@
-use super::{PhotocraftApp, Tool, json, vec2};
+use super::{PhotocraftApp, Tool, json};
 use craft::behavior::overlay::Side;
 use craft::color_ui::ui::{PairWell, SwatchPair, Well};
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::rails::{
@@ -14,6 +14,9 @@ use photocraft_engine::prefs::ToolbarCustomization;
 
 use super::tool_commands;
 
+#[cfg(test)]
+#[path = "toolbar_docking_tests.rs"]
+mod toolbar_docking_tests;
 #[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
@@ -45,6 +48,7 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
         &[Tool::Gradient, Tool::PaintBucket],
         &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
+        &[Tool::AdjustmentBrush],
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
     &[
@@ -158,8 +162,20 @@ fn quick_mask_button(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let _ = FlyoutButton::new(&tools, &0).id_salt("quick-mask").selected(on).show(ui);
 }
 
-/// The rail over `slots`, its flyouts and drawer opening on `opens`, the side of the canvas.
-fn rail<'a>(slots: &'a [ToolSlot<Tool>], current: &'a Tool, remembered: &'a LastUsed<Tool>, opens: Side, editing: bool) -> ToolRail<'a, Tool> {
+/// The side of the toolbar its tool flyouts, "…" flyout and Edit Toolbar drawer open on: the end (the right in a
+/// left-to-right layout) wherever the toolbar is docked or floats, as in the reference application, which opens them
+/// to the right even when the toolbar sits on the right between the dock's columns. The overlay flips them to the
+/// other side only when they would leave the window.
+const FLYOUTS_OPEN: Side = Side::End;
+
+/// The rail over `slots`, its flyouts and drawer opening on `opens`.
+fn rail<'a>(
+    slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
+    current: &'a Tool,
+    remembered: &'a Tracked<LastUsed<Tool>>,
+    opens: Side,
+    editing: bool,
+) -> ToolRail<'a, Tool> {
     let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens).edit_toolbar(tl!("Edit Toolbar…").to_string());
     // The drawer's open flag is the one source of "editing".
     if editing { rail.editing() } else { rail }
@@ -167,8 +183,7 @@ fn rail<'a>(slots: &'a [ToolSlot<Tool>], current: &'a Tool, remembered: &'a Last
 
 /// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons.
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
-    let column = ui.available_width();
-    color_chips(app, ui, column);
+    color_chips(app, ui);
     let modes = |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
         quick_mask_button(app, ui);
         ScreenModeButton::new(app.ui.view.screen_mode).show(ui);
@@ -191,7 +206,7 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
 struct MeasureKey {
     width: u32,
     room: [u32; 2],
-    slots: std::sync::Arc<[ToolSlot<Tool>]>,
+    slots: super::tool_commands::RailSlots,
     opens: Side,
     editing: bool,
     pixels_per_point: u32,
@@ -218,7 +233,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
         static LAST: std::cell::RefCell<Option<(MeasureKey, f32)>> = const { std::cell::RefCell::new(None) };
     }
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let env = craft::ui::runtime::env::Env::of(ui);
     let room = ui.available_size();
     let key = MeasureKey {
@@ -242,9 +257,9 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
 /// [`measure`] without the kept height: a measuring run of the rail.
 fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let remembered = last_used(&slots, &app.ui.group_tools);
+    let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
 }
 
@@ -257,9 +272,9 @@ fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let remembered = last_used(&slots, &app.ui.group_tools);
+    let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
 
     if let Some(tool) = out.select {
@@ -353,10 +368,9 @@ fn chip_pair<'a>(app: &PhotocraftApp, active: &'a mut Well) -> SwatchPair<'a> {
 }
 
 /// The colour chips: a click on a chip opens the Color Picker for that colour (Photoshop).
-pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, column: f32) {
+pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut active = Well::Primary;
-    let layout = egui::Layout::top_down(egui::Align::Center);
-    let out = ui.allocate_ui_with_layout(vec2(column, 0.0), layout, |ui| chip_pair(app, &mut active).show(ui)).inner;
+    let Some(out) = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| chip_pair(app, &mut active).show(ui)).inner else { return };
     match out.clicked {
         Some(Well::Secondary) => {
             crate::color_picker_ui::open(app, "background");

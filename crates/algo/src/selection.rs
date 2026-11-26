@@ -309,7 +309,8 @@ pub(crate) fn tolerance_steps(tolerance: f32) -> i32 {
 /// the Magic Wand's rule: the colour is within `tol` by `distance` and alpha is that close. Copying
 /// a selection can leave RGB under zero alpha, and those invisible colours must not split a
 /// transparent region into pieces, so two fully transparent pixels always match when the seed is
-/// transparent.
+/// transparent. Only the tests call it; the code goes through [`similar_by_rule`].
+#[cfg(test)]
 pub(crate) fn similar_to_seed(target: [u8; 4], tol: i32, p: [u8; 4], distance: ColorDistance) -> bool {
     similar_by_rule(MatchRule::Wand, target, tol, p, distance)
 }

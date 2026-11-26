@@ -654,7 +654,7 @@ pub fn render_display(doc: &Document, rect: Rect) -> Option<super::Buffer> {
 /// [`render_cmyk`] with an explicit tile size (tests check tile independence).
 pub fn render_cmyk_tiled(doc: &Document, rect: Rect, tile: i32) -> Option<CmykBuffer> {
     if supports(doc) {
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
         let cx = Ctx::for_doc(doc, &patterns);
         let space = super::cmyk_space(doc);
         return Some(render_with(rect, tile, |t| render_tile(doc, t, &cx, space.as_ref())));
@@ -721,7 +721,7 @@ pub fn render_cmyk_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink
     if !supports(doc) {
         return split::supports(doc).then(|| split::render_bands(doc, rect, band_rows, RENDER_TILE, sink));
     }
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     let cx = Ctx::for_doc(doc, &patterns);
     let space = super::cmyk_space(doc);
     let rows = super::band_rows_for(rect.width(), band_rows);
