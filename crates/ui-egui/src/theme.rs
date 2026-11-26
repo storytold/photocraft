@@ -997,13 +997,14 @@ fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     crate::served_fonts::append_loaded(ctx, fonts, ui_language)
 }
 
-/// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]) and the root
+/// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]), the root
 /// window's `frame` decision (`None` where the platform has none, as on the web; the frame is part
-/// of this install, never set afterwards). It runs once, from `PhotocraftApp::setup_window` or
+/// of this install, never set afterwards) and the settings folder `settings` its windows' placement
+/// is saved in (`None`: not saved). It runs once, from `PhotocraftApp::setup_window` or
 /// `setup_context`, when the window or headless context is created.
-pub fn install_runtime(ctx: &egui::Context, frame: Option<craft::window::policy::Decision>) {
+pub fn install_runtime(ctx: &egui::Context, frame: Option<craft::window::policy::Decision>, settings: Option<&std::path::Path>) {
     let fonts = ui_fonts(ctx, crate::i18n::current().code());
-    crate::app::framework::install(ctx, &fonts, frame);
+    crate::app::framework::install(ctx, &fonts, frame, settings);
     install_font_stack(ctx, &fonts);
 }
 

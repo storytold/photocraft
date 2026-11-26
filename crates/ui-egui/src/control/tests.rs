@@ -3,6 +3,7 @@ use crate::canvas_tool_menu::MenuKind;
 use craft::automation::actions::{Action, ActionList, ActionStep};
 use craft::color_ui::ui::{SampleSize, SampleSource};
 use craft::keymap::CommandRef;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 /// An action named `name` whose steps run the given commands.
 // PLAN: assumed `app.session.actions.list` is craft-automation's `ActionList`
@@ -113,7 +114,7 @@ fn perf_output_includes_slow_frames() {
     }
     // A nested run (`actions.play` → its view steps through `App::run`) is inside the outer
     // call's time: the frame counts the outer command once, not the steps again.
-    app.session.actions.list.push(action("Zoom", vec![("view.zoomIn", json!({})), ("view.zoomOut", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Zoom", vec![("view.zoomIn", json!({})), ("view.zoomOut", json!({}))])).unwrap();
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
@@ -551,7 +552,13 @@ fn agent_can_inspect_and_choose_pen_make_selection_from_full_context_menu() {
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     assert_eq!(app.ui.canvas_tool_menu.as_ref().unwrap().pos, screen_point(&app, 8.0, 8.0));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
-    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 9);
+    // #12915: (8,8) lies on the closed work path's diagonal, so the menu now leads with the
+    // segment's Add Anchor Point entry above one more separator.
+    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 10);
+    assert!(
+        entries.iter().any(|row| row.get("id") == Some(&json!("path.addAnchor")) && row.get("enabled") == Some(&json!(true))),
+        "the segment entry heads the menu"
+    );
     assert!(entries.iter().any(|row| row.get("id") == Some(&json!("path.toSelection")) && row.get("enabled") == Some(&json!(true))));
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"file.new"}))["ok"], false);
     let chosen = call(&mut app, &ctx, "ui.context.choose", json!({"id":"path.toSelection"}));
@@ -952,6 +959,21 @@ fn ui_set_theme_picks_a_library_theme_the_suite_has_not_loaded() {
     assert!(app.ui.theme.is_dark());
 }
 
+/// #17096: a size another Craft app writes to the suite becomes PhotoCraft's density preference, which the root reads.
+#[test]
+fn a_size_another_app_picks_becomes_the_density_preference() {
+    use craft::theme_store::{Op, SelectionChange};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.framework.sync_theme(&mut app.session);
+    assert_eq!(app.session.prefs().interface.density, photocraft_engine::prefs::UiDensity::Compact);
+    let base = app.framework.suite().accepted().clone();
+    app.framework.suite().watch().request(Op::Update { base, change: SelectionChange::size(craft::theme::Size::Comfortable) });
+    for _ in 0..4 {
+        app.framework.sync_theme(&mut app.session);
+    }
+    assert_eq!(app.session.prefs().interface.density, photocraft_engine::prefs::UiDensity::Comfortable);
+}
+
 /// A slot naming a theme the suite doesn't know (a deleted library theme) shows the mode's
 /// default, and once settled a frame resolves nothing.
 #[test]
@@ -1199,6 +1221,34 @@ fn automation_save_passes_dds_options_without_asking() {
 }
 
 #[test]
+fn an_automation_open_without_a_location_is_not_listed_in_open_recent() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+
+    let services = crate::Services {
+        import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
+            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+        })),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                bytes: b"x".to_vec(),
+                save_path: Some(path.to_string()),
+            })
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = app.ctx().clone();
+    let r = call(&mut app, &ctx, "app.open", json!({"path": "shots/gk_25.png"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shots/gk_25.png"), "the save-back target stays the root-relative path");
+    // A root-relative path names no file for Open Recent or Home, so nothing is listed.
+    assert!(app.ui.recent_files.is_empty(), "{:?}", app.ui.recent_files);
+}
+
+#[test]
 fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::Document;
@@ -1234,6 +1284,7 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
                 save_path: Some(path.to_string()),
             })
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/work/{path}")))),
         automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
             w.borrow_mut().push(path.to_string());
             Ok(())
@@ -1245,7 +1296,8 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
     assert_eq!(r["result"]["name"], "warn.psd");
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("in/warn.psd"));
-    assert_eq!(app.ui.recent_files, vec!["in/warn.psd".to_string()]);
+    // Open Recent lists where the file is, not the root-relative request path, which names nothing outside automation.
+    assert_eq!(*app.ui.recent_files, vec!["/work/in/warn.psd".to_string()]);
     let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
     assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
     assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
@@ -1457,6 +1509,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
                 Err(format!("no such path: {path}"))
             }
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/work/{path}")))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -1465,7 +1518,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     let r = call(&mut app, &ctx, "app.open", json!({"path": "native.pcraft"}));
     assert_eq!(r["result"], json!({"path": "native.pcraft", "name": "native.pcraft", "warnings": []}), "{r}");
     assert_eq!(app.session.active().unwrap().doc.name, "Native");
-    assert_eq!(app.ui.recent_files, vec!["native.pcraft".to_string()], "the open is recorded in recent files");
+    assert_eq!(*app.ui.recent_files, vec!["/work/native.pcraft".to_string()], "the open is recorded in recent files, where it is on disk");
     assert_eq!(app.session.active().unwrap().path, None, "no save-back target: the automation writer replaces files, never directories");
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "an in-place save is refused up front: {r}");
@@ -1716,8 +1769,8 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": command, "params": {"layer": smart.0}}));
         assert_eq!(r["ok"], false, "{r}");
         assert!(r["error"].as_str().unwrap().contains("ambient smart-object path denied"), "{r}");
-        app.session.actions.list = ActionList::new();
-        app.session.actions.list.push(action("Linked contents", vec![(command, json!({"layer": smart.0}))])).unwrap();
+        app.session.actions_mut().list = ActionList::new();
+        app.session.actions_mut().list.push(action("Linked contents", vec![(command, json!({"layer": smart.0}))])).unwrap();
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Linked contents"}}));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(r["result"]["ran"], 0, "{r}");
@@ -1743,7 +1796,7 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
 fn actions_play_checks_each_step_over_control() {
     let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.actions.list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
     let ctx = app.ctx().clone();
     let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Open"}}));
     assert_eq!(r["ok"], true, "{r}");
@@ -1758,7 +1811,7 @@ fn actions_play_checks_each_step_over_control() {
 fn actions_play_checks_each_step_for_synthetic_input() {
     let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.actions.list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
     app.automation_input = true;
     let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
     assert_eq!(r["ran"], 0, "{r}");
@@ -1767,7 +1820,7 @@ fn actions_play_checks_each_step_for_synthetic_input() {
 
     // A local play (no automation input) still runs recorded steps.
     app.automation_input = false;
-    app.session.actions.list.delete_step(0, 0).unwrap();
+    app.session.actions_mut().list.delete_step(0, 0).unwrap();
     app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
     let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
     assert_eq!(r["ran"], 1, "{r}");
@@ -2120,6 +2173,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
                 save_path: path.starts_with("work/").then(|| path.to_owned()),
             })
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/roots/{path}")))),
         automation_write: Some(Box::new(move |path: &str, _: &[u8]| {
             if path == "failed.psd" {
                 return Err("test write failure".into());
@@ -2135,7 +2189,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let opened = call(&mut app, &ctx, "app.open", json!({"path": "library/same.psd"}));
     assert_eq!(opened["ok"], true, "{opened}");
     assert_eq!(app.session.active().unwrap().path, None);
-    assert_eq!(app.ui.recent_files, vec!["library/same.psd"]);
+    assert_eq!(*app.ui.recent_files, vec!["/roots/library/same.psd"]);
     app.run("layer.new.layer", json!({"name": "edit"})).unwrap();
     assert!(app.session.active().unwrap().is_dirty());
     let refused = call(&mut app, &ctx, "app.save", json!({}));
@@ -2223,6 +2277,17 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     // Magic Eraser has no menu.
     shift_right(&mut app, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
+}
+
+#[test]
+fn ui_set_align_edges_uses_scripted_tool_option_name() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": true}))["ok"], true);
+    assert!(app.ui.tool_options.align_edges);
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["useAlignedRendering"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": "true"}))["ok"], false);
+    assert!(app.ui.tool_options.align_edges);
 }
 
 /// A fresh app with a document, as a control client finds it, and the context the control channel runs on.

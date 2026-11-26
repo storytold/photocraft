@@ -38,6 +38,12 @@ pub fn tone_luts(adj: &Adjustment) -> [Vec<f32>; 4] {
 /// [`tone_luts`] for samples with `quantum` steps per unit (Levels works on whole levels; see
 /// [`levels_q`]).
 pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
+    tone_luts_qc(adj, quantum, true)
+}
+
+/// [`tone_luts_q`]; `curve_levels` false leaves an 8-bit RGB Curves channel's output where the
+/// spline put it instead of on a whole level (see [`tone_luts_depth_in`]).
+fn tone_luts_qc(adj: &Adjustment, quantum: Option<f32>, curve_levels: bool) -> [Vec<f32>; 4] {
     let x = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
     match adj {
         Adjustment::Levels { master, per_channel, space, black } => {
@@ -48,8 +54,37 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
         }
         Adjustment::Curves { master, per_channel, space, black, pencil } => {
             let m = if *space == ToneSpace::Lab { curve_lut(&[]) } else { curve_lut_mode(master, *pencil) };
-            let row = |c: &[CurvePoint]| curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect();
-            [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), row(if *space == ToneSpace::Cmyk { black } else { &[] })]
+            // In an 8-bit document the channel curve's output sits on a whole level before the
+            // composite curve is applied to it, as every Levels step is above (#14446, measured:
+            // Red 0,0 128,64 255,255 with composite 0,0 128,200 255,255 gives gray 192 as 217,
+            // 128 as 114 and 64 as 37). The channel's input is snapped to its level as well, so
+            // the row is flat across a level and the table cannot blend two levels' results at a
+            // document sample - the way [`levels_q`] is exact at every level. 16-bit and float
+            // documents were not measured, nor CMYK and Lab curves, so only the 8-bit quantum.
+            let level = (curve_levels && *space == ToneSpace::Rgb && quantum == Some(EIGHT_BIT_LEVELS)).then_some(EIGHT_BIT_LEVELS);
+            // Both curves are evaluated at the 256 exact levels, not read between two entries of
+            // the 4096-entry table: a pencil step between levels 128 and 129 would otherwise give
+            // level 128 a small fraction that rounds up to level 4 and wakes a composite step there.
+            let master_levels = if *space == ToneSpace::Lab { curve_samples::<LEVELS>(&[]) } else { curve_samples_mode::<LEVELS>(master, *pencil) };
+            let row = |c: &[CurvePoint], level: Option<f32>| match level {
+                Some(q) => {
+                    let channel = curve_samples_mode::<LEVELS>(c, *pencil);
+                    let index = |v: f32| (whole_levels(v, Some(q)) * q).round().clamp(0.0, q) as usize;
+                    (0..LUT_SIZE)
+                        .map(|k| {
+                            let ch = channel.get(index(x(k))).copied().unwrap_or(0.0);
+                            master_levels.get(index(ch)).copied().unwrap_or(0.0)
+                        })
+                        .collect()
+                }
+                None => curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect(),
+            };
+            [
+                row(&per_channel[0], level),
+                row(&per_channel[1], level),
+                row(&per_channel[2], level),
+                row(if *space == ToneSpace::Cmyk { black } else { &[] }, None),
+            ]
         }
         _ => std::array::from_fn(|_| (0..LUT_SIZE).map(x).collect()),
     }
@@ -59,13 +94,34 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
 /// [`levels_float`], sampled on 0..1 and kept in 0..1 for LUT consumers. Float RGB rendering
 /// evaluates the formula directly instead, so samples and results outside that domain survive.
 pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>; 4] {
+    tone_luts_depth_in(adj, depth, true)
+}
+
+/// [`tone_luts_depth`]; `curve_levels` false for the RGB Curves that stand in for a CMYK
+/// document's ink curves on the split route (`cmyk_split`): the exact ink path doesn't put CMYK
+/// curves on whole levels, so neither may their stand-ins, or the two routes part by a level.
+pub fn tone_luts_depth_in(adj: &Adjustment, depth: Option<SampleType>, curve_levels: bool) -> [Vec<f32>; 4] {
     match (adj, depth) {
         (Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. }, Some(SampleType::F32)) => {
             let x = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
             let row = |c: &LevelsChannel| (0..LUT_SIZE).map(|k| levels_float(master, levels_float(c, x(k))).clamp(0.0, 1.0)).collect();
             [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), (0..LUT_SIZE).map(x).collect()]
         }
-        _ => tone_luts_q(adj, depth.and_then(crate::adjustment_quantum)),
+        _ => tone_luts_qc(adj, depth.and_then(crate::adjustment_quantum), curve_levels),
+    }
+}
+
+/// A document's quantum in whole 8-bit levels: [`crate::adjustment_quantum`]'s 8-bit step (see
+/// [`levels_q`], which rounds each of its three steps to these).
+const EIGHT_BIT_LEVELS: f32 = 255.0;
+
+/// [`levels_q`]'s round-half-up to a whole level, for a Curves channel's output; `None` (any other
+/// depth) leaves the sample where the spline put it.
+#[inline]
+fn whole_levels(v: f32, quantum: Option<f32>) -> f32 {
+    match quantum {
+        Some(q) => (v * q + 0.5).floor() / q,
+        None => v,
     }
 }
 
@@ -145,13 +201,15 @@ fn lut_extended(table: &[f32], v: f32) -> f32 {
 /// and `b = 0` is the identity. Raised, it is a line of slope `s = 1.375^(b/50)` from the origin
 /// up to a knee at output 126/255, then a cubic Hermite to (1, 1) whose end slope is
 /// `1 / (1 + 0.084 b)`; past about +110, where no such cubic stays below white, the roll-off is
-/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). Lowered, it
-/// is the inverse of the curve raised by as much.
+/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). From +109.5
+/// to +150 that curve eases into [`brightness_150`]. Lowered, it is the inverse of the curve
+/// raised by as much.
 ///
 /// Fit to every Photoshop measurement we have, all within about a level and a half: its ±50
 /// samples (`modern_brightness_matches_photoshop`), the photoshop corpus's brightness-contrast.psd
-/// (+25 with contrast +30) and psd-tools' brightnesscontrast_rgb.psd, whose masked layers give
-/// +23, -31 and -95 (+150 within 6 levels there, where every curve family tried bottoms out).
+/// (+25 with contrast +30), psd-tools' brightnesscontrast_rgb.psd, whose masked layers give
+/// +23, -31 and -95 (and +150, within 2 levels), and full 8-bit ramps at +150 and -150 (within a
+/// level once rounded).
 pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
     if brightness == 0.0 || !brightness.is_finite() {
         return v;
@@ -162,6 +220,14 @@ pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
 /// [`modern_brightness`] for one slider value, its curve's constants worked out once.
 struct Brightness {
     raise: bool,
+    roll: Roll,
+    /// How far the curve has eased into [`brightness_150`]: 0 up to ±109.5, 1 at ±150.
+    toward_150: f32,
+}
+
+/// The raised curve's line and roll-off for one slider value.
+#[derive(Clone, Copy)]
+struct Roll {
     s: f32,
     e: f32,
     x0: f32,
@@ -174,15 +240,16 @@ struct Brightness {
 /// Output level of the Brightness curve's knee.
 const BRIGHTNESS_KNEE: f32 = 126.0 / 255.0;
 
+/// The slider value where the curve starts to ease into [`brightness_150`]: the last Hermite
+/// roll-off before the power roll-off takes over (about 109.7). Every curve up to here stays at
+/// or below [`brightness_150`]; the power roll-offs come closer to white past input 220.
+const BRIGHTNESS_EASE_FROM: f32 = 109.5;
+
 impl Brightness {
     fn new(brightness: f32) -> Self {
         let b = brightness.abs();
-        let s = 1.375f32.powf(b / 50.0);
-        let e = 1.0 / (1.0 + 0.084 * b);
-        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
-        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
-        let (alpha, beta) = (s / secant, e / secant);
-        Brightness { raise: brightness > 0.0, s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0 }
+        let toward_150 = ((b - BRIGHTNESS_EASE_FROM) / (150.0 - BRIGHTNESS_EASE_FROM)).clamp(0.0, 1.0);
+        Brightness { raise: brightness > 0.0, roll: Roll::new(b), toward_150 }
     }
 
     fn eval(&self, v: f32) -> f32 {
@@ -206,9 +273,40 @@ impl Brightness {
         0.5 * (lo + hi)
     }
 
-    /// The curve raised: the line, then a monotone roll-off to (1, 1).
+    /// The curve raised: the line and its roll-off, eased into [`brightness_150`] past +109.5.
+    ///
+    /// Each input must rise with the slider, not only the output with the input. The roll-off
+    /// alone rises with the slider, but past about input 220 the power roll-offs come closer to
+    /// white than [`brightness_150`], so a plain mix of the two fell there as the slider neared
+    /// +150 (input 200 gave 253.55 at +134 and 253.32 at +150). So the ease starts from the
+    /// roll-off held at or below [`brightness_150`]: in `held + t (target - held)` both `held`
+    /// and `t` rise with the slider, and `target - held` is never negative. It is a mix of two
+    /// monotone curves that pin black and white, so it stays monotone and pinned, and reaches
+    /// [`brightness_150`] itself at +150.
     fn raised(&self, x: f32) -> f32 {
-        let Brightness { s, e, x0, alpha, hermite, .. } = *self;
+        let y = self.roll.eval(x);
+        if self.toward_150 <= 0.0 {
+            return y;
+        }
+        let target = brightness_150(x);
+        let held = y.min(target);
+        (held + self.toward_150 * (target - held)).clamp(0.0, 1.0)
+    }
+}
+
+impl Roll {
+    fn new(b: f32) -> Self {
+        let s = 1.375f32.powf(b / 50.0);
+        let e = 1.0 / (1.0 + 0.084 * b);
+        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
+        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
+        let (alpha, beta) = (s / secant, e / secant);
+        Roll { s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0 }
+    }
+
+    /// The line, then a monotone roll-off to (1, 1).
+    fn eval(&self, x: f32) -> f32 {
+        let Roll { s, e, x0, alpha, hermite } = *self;
         let y0 = BRIGHTNESS_KNEE;
         if x <= x0 {
             return y0.min(s * x);
@@ -223,6 +321,33 @@ impl Brightness {
         };
         y.clamp(0.0, 1.0)
     }
+}
+
+/// The modern Brightness curve at +150, fit to the reference application's 8-bit ramp (and,
+/// inverted, to its -150 ramp; both within a level and a quarter before rounding). A line of
+/// slope 2.585 up to input 52/255, then a cubic Hermite to input 168/255, then an exponential
+/// approach to white, `1 - d(e^((1 - x)/c) - 1)`, that is still rising there (slope `d/c`, about
+/// 0.012). The power roll-off, flat at white, comes too close to white past input 200 (254.5
+/// where the reference has 253), so lowered it gave 254 -> 191 instead of 214.
+fn brightness_150(x: f32) -> f32 {
+    const S: f32 = 2.585;
+    const C: f32 = 0.131;
+    const D: f32 = 0.4 / 255.0;
+    const X1: f32 = 52.0 / 255.0;
+    const X2: f32 = 168.0 / 255.0;
+    let tail = |x: f32| 1.0 - D * (((1.0 - x) / C).exp() - 1.0);
+    let x = x.clamp(0.0, 1.0);
+    if x <= X1 {
+        return S * x;
+    }
+    if x >= X2 {
+        return tail(x).min(1.0);
+    }
+    let (y1, y2, m2) = (S * X1, tail(X2), D / C * ((1.0 - X2) / C).exp());
+    let h = X2 - X1;
+    let t = (x - X1) / h;
+    let (t2, t3) = (t * t, t * t * t);
+    (2.0 * t3 - 3.0 * t2 + 1.0) * y1 + (t3 - 2.0 * t2 + t) * h * S + (-2.0 * t3 + 3.0 * t2) * y2 + (t3 - t2) * h * m2
 }
 
 /// Modern Brightness/Contrast as one channel's lookup table (4096 samples over 0..1):
@@ -373,13 +498,26 @@ pub fn curve_lut_mode(points: &[CurvePoint], pencil: bool) -> Vec<f32> {
 /// A pencil-drawn Curves map (see [`photocraft_doc::adjust::curve_map`]): straight segments
 /// between its entries, constant outside the first/last, clamped to 0..=1, sampled into a LUT.
 pub fn curve_map_lut(points: &[CurvePoint]) -> Vec<f32> {
+    curve_map_samples::<LUT_SIZE>(points)
+}
+
+/// Whole 8-bit levels: the sample count [`tone_luts_qc`] evaluates an 8-bit RGB Curves at.
+const LEVELS: usize = 256;
+
+/// [`curve_lut_mode`] sampled at `N` evenly spaced inputs including both end points.
+fn curve_samples_mode<const N: usize>(points: &[CurvePoint], pencil: bool) -> Vec<f32> {
+    if pencil { curve_map_samples::<N>(points) } else { curve_samples::<N>(points) }
+}
+
+/// [`curve_map_lut`] sampled at `N` evenly spaced inputs including both end points.
+fn curve_map_samples<const N: usize>(points: &[CurvePoint]) -> Vec<f32> {
     let mut pts: Vec<(f32, f32)> = points.iter().filter(|p| p.input.is_finite() && p.output.is_finite()).map(|p| (p.input, p.output)).collect();
     pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
-    let ident = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
-    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return (0..LUT_SIZE).map(ident).collect() };
+    let ident = |k: usize| k as f32 / N.saturating_sub(1).max(1) as f32;
+    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return (0..N).map(ident).collect() };
     let mut seg = 0;
-    (0..LUT_SIZE)
+    (0..N)
         .map(|k| {
             let xv = ident(k);
             if xv <= first.0 {

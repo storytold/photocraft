@@ -19,6 +19,7 @@ use craft::imaging::ui::scopes::ScopePanelState;
 use craft::layers::ui::filter::LayerFilter;
 use craft::layers::ui::options::LayersSettings;
 use craft::ui::canvas::{SplitAt, ViewCommands, ViewRequest};
+use craft::ui::contract::Tracked;
 use craft::ui::patterns::presets::{PresetState, PresetView};
 use photocraft_doc::DocId;
 
@@ -175,7 +176,7 @@ pub struct UiState {
     pub spring: Option<crate::spring_tools::Spring>,
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
-    pub recent_files: Vec<String>,
+    pub recent_files: craft::ui::contract::Tracked<Vec<String>>,
     /// Recently picked type families, most-recent first (the font menu's Recent group). Capped by
     /// Preferences ▸ Type ▸ Recent Fonts; de-duplicated.
     #[serde(default)]
@@ -245,7 +246,7 @@ pub struct UiState {
     pub brush_picker: Option<[f32; 2]>,
     /// The Brush Preset picker's list: search, collapsed groups, view, size and the parts shown.
     #[serde(skip)]
-    pub(crate) brush_picker_state: BrushPickerState<BrushKey>,
+    pub(crate) brush_picker_state: Tracked<BrushPickerState<BrushKey>>,
     /// Photoshop's HUD Color Picker (#6098), open while Shift+Alt+right-click is held on the
     /// canvas with a painting tool (`crate::color_hud`).
     #[serde(default)]
@@ -330,6 +331,9 @@ pub struct UiState {
     /// Slice and Slice Select tools (see `slice_ui`).
     #[serde(default)]
     pub slices: crate::slice_ui::SliceUi,
+    /// The open Save for Web dialog's colour table shifts (see `file_ui::web`).
+    #[serde(skip)]
+    pub web_table: crate::dialogs::file_ui::WebTable,
     /// Frame tool (see `frame_tool`).
     #[serde(default)]
     pub frame_tool: crate::frame_tool::FrameToolUi,
@@ -370,8 +374,9 @@ pub struct UiState {
     pub palette: crate::palette::PaletteState,
     /// The panel layout: every panel's place, the docks, the floating panels and where each one
     /// docks back to.
-    #[serde(default = "crate::panels::registry::default_workspace")]
-    pub docking: craft::behavior::dock::Workspace<String>,
+    /// One `Arc` across frames: the dock keys what it derives on the workspace's revision.
+    #[serde(default = "default_docking")]
+    pub docking: std::sync::Arc<craft::behavior::dock::Workspace<String>>,
     /// The panel open in the flyout of a column collapsed to icons (`Layout::opens_in_flyout`); the dock area shows it.
     /// Not saved: a flyout is closed at launch.
     #[serde(skip)]
@@ -412,7 +417,7 @@ pub struct UiState {
     pub brush_curves_open: BTreeSet<&'static str>,
     /// Brushes panel: list or grid, zoom, collapsed groups and the search filter. Starts as a list.
     #[serde(default = "brushes_list")]
-    pub(crate) brushes_panel: PresetState<BrushKey>,
+    pub(crate) brushes_panel: Tracked<PresetState<BrushKey>>,
     /// Marquee options-bar mode: 0 new, 1 add, 2 subtract, 3 intersect (modifier keys override).
     #[serde(default)]
     pub selection_mode: u8,
@@ -446,11 +451,16 @@ pub struct UiState {
     pub chrome: crate::chrome_ui::ChromeState,
 }
 
+/// The panel layout at start and for a saved state without one.
+fn default_docking() -> std::sync::Arc<craft::behavior::dock::Workspace<String>> {
+    std::sync::Arc::new(crate::panels::registry::default_workspace())
+}
+
 /// The Brushes panel's state at start and for a saved state without one: the list view.
-fn brushes_list() -> PresetState<BrushKey> {
+fn brushes_list() -> Tracked<PresetState<BrushKey>> {
     let mut state = PresetState::new();
     state.view = PresetView::List;
-    state
+    Tracked::new(state)
 }
 
 impl Default for UiState {
@@ -460,7 +470,7 @@ impl Default for UiState {
             tool: Tool::Move,
             group_tools: Vec::new(),
             spring: None,
-            recent_files: Vec::new(),
+            recent_files: Default::default(),
             recent_fonts: Vec::new(),
             text_edit: None,
             type_box_overflow: false,
@@ -477,7 +487,7 @@ impl Default for UiState {
             filter_mask_target: None,
             properties_layer: None,
             brush_picker: None,
-            brush_picker_state: BrushPickerState::default(),
+            brush_picker_state: Tracked::default(),
             color_hud: None,
             canvas_tool_menu: None,
             selected_guide: None,
@@ -496,6 +506,7 @@ impl Default for UiState {
             analysis: Default::default(),
             timeline: Default::default(),
             slices: Default::default(),
+            web_table: Default::default(),
             frame_tool: Default::default(),
             task_bar_shown: None,
             artboard_tool: Default::default(),
@@ -521,7 +532,7 @@ impl Default for UiState {
             window_views: HashMap::new(),
             theme: crate::theme::AppTheme::default(),
             palette: Default::default(),
-            docking: crate::panels::registry::default_workspace(),
+            docking: default_docking(),
             flyout: None,
             color_panel: Default::default(),
             color_panel_synced: None,
@@ -618,7 +629,7 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 69);
+        assert_eq!(Tool::ALL.len(), 70);
     }
 
     fn vector_tool_names_parse() {

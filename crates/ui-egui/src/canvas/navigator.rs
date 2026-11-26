@@ -64,7 +64,7 @@ pub fn navigator_waits_for_gpu(app: &PhotocraftApp, idx: usize, ctx: &egui::Cont
         return false;
     }
     ctx.data_mut(|d| d.insert_temp(key, waited + 1));
-    craft::ui::runtime::frame::request_own_repaint(ctx);
+    craft::ui::runtime::frame::request_repaint(ctx);
     true
 }
 
@@ -74,7 +74,9 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.damage_from(), st.last_damage))?;
     let (doc, preview_key) = display_doc(app, idx);
     let (display, display_key) = canvas_display(app, &doc, None);
-    let preview_key = preview_key ^ display_key;
+    // A tile that fails to read and recovers keeps the snapshot and its revision: the picture and its partial updates
+    // follow the scratch read-error generation too (`crate::scratch_reads`).
+    let preview_key = crate::scratch_reads::with(preview_key ^ display_key);
     let cached = app.navigator_textures.get(&id).cloned();
     if let Some((r, p, _, t)) = &cached
         && r.ptr_eq(&snapshot)
