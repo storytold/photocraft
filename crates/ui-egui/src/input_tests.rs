@@ -906,9 +906,26 @@ fn timeline_play_advances_the_playhead() {
 /// Page Down and Page Up step the timeline one frame on and back from the canvas, with no panel focused.
 #[test]
 fn page_down_and_page_up_step_the_timeline() {
+    page_keys_step_the_timeline(false);
+}
+
+/// The same with a Timeline control focused, as after a click on the timeline: the keys still step the frame.
+#[test]
+fn page_down_and_page_up_step_the_timeline_with_a_timeline_control_focused() {
+    page_keys_step_the_timeline(true);
+}
+
+fn page_keys_step_the_timeline(focus_timeline: bool) {
+    use egui_kittest::kittest::Queryable as _;
     let mut h = harness();
     h.state_mut().run("timeline.create", json!({"duration": 30, "fps": 30.0})).unwrap();
-    h.run_steps(2);
+    crate::panel_docking::show_panel(h.state_mut(), "timeline", Some(true)).unwrap();
+    h.run_steps(4);
+    if focus_timeline {
+        h.get_by_label(craft::timeline::ui::TransportWords::default().play_stop.as_str()).focus();
+        h.run_steps(2);
+        assert!(h.ctx.memory(|m| m.focused()).is_some(), "a Timeline control has focus");
+    }
     let frame = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current;
     let start = frame(&h);
     h.key_press(Key::PageDown);
@@ -918,6 +935,7 @@ fn page_down_and_page_up_step_the_timeline() {
     h.key_press(Key::PageUp);
     h.run_steps(2);
     assert!(frame(&h) < on, "Page Up: the previous frame ({on} → {})", frame(&h));
+    assert!(!h.state().ui.timeline.playing(), "the focused Play button was not pressed");
 }
 
 /// ⇧⌥ < / > turn the clone source and ⇧⌥ [ / ] scale it; with Ctrl held each step is finer.
@@ -956,3 +974,4 @@ fn shift_alt_angle_brackets_turn_and_brackets_scale_the_clone_source_with_a_fine
     press(&mut h, coarse, Key::OpenBracket);
     assert!(slot(&h).scale[0] < finer[0], "[ makes it smaller");
 }
+

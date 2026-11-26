@@ -297,6 +297,8 @@ impl eframe::App for PhotocraftApp {
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         // ⇧⌥-arrows and ⇧⌥-Enter move and line up the clone source whichever panel has focus.
         crate::preset_panels::clone_overlay_raw_keys(self, ctx, raw_input);
+        // Page Down / Page Up step the timeline whichever control has focus.
+        crate::panels::timeline_ui::frame_step_raw_keys(self, ctx, raw_input);
         #[cfg(not(target_arch = "wasm32"))]
         self.withdraw_stale_input(ctx);
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).

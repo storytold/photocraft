@@ -54,6 +54,42 @@ pub(crate) fn stop(app: &mut PhotocraftApp) {
     app.ui.timeline.clock.halt(at);
 }
 
+/// Next Frame and Previous Frame by their keys wherever keyboard focus is: the runtime leaves Page Up and Page Down to
+/// a focused control, so after a click on the timeline (or any other control) the frame keys did nothing. Runs from
+/// `raw_input_hook`, before any widget sees the keys; a key is taken only while it is the command's effective shortcut
+/// (a user's rebinding is kept), a timeline exists, and no text is being typed and no dialog or popup is open.
+pub(crate) fn frame_step_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if app.session.active().is_none_or(|st| st.doc.timeline.is_none())
+        || ctx.text_edit_focused()
+        || app.ui.text_edit.is_some()
+        || app.dialog_open()
+        || ctx.any_popup_open()
+    {
+        return;
+    }
+    let bound = |app: &PhotocraftApp, id: &str, key: &str| {
+        crate::shortcuts::effective_shortcut(app, id, crate::shortcuts::default_shortcut(id).as_deref()).as_deref() == Some(key)
+    };
+    let next = bound(app, "timeline.nextFrame", "PageDown");
+    let previous = bound(app, "timeline.previousFrame", "PageUp");
+    raw.events.retain(|event| {
+        let egui::Event::Key { key, pressed, modifiers, .. } = event else { return true };
+        if !modifiers.is_none() {
+            return true;
+        }
+        let id = match key {
+            egui::Key::PageDown if next => "timeline.nextFrame",
+            egui::Key::PageUp if previous => "timeline.previousFrame",
+            _ => return true,
+        };
+        if *pressed && let Err(e) = app.run(id, serde_json::json!({})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        false
+    });
+}
+
 /// Playback, once per frame from the app's logic: the playhead follows the clock, and the next frame is asked for at
 /// the next frame boundary. Not in the panel body, which replays while nothing it shows changes, so it would never
 /// run to move the playhead on.
