@@ -1,19 +1,32 @@
 //! GIMP XCF import. `craft-xcf` owns XCF parsing, decompression and pixel decoding; this module
 //! maps its neutral document representation into PhotoCraft's model.
 
+mod color;
+mod historical;
+mod metadata;
+mod metadata_packets;
+mod paths;
+mod raster;
+mod report;
+mod saved_view;
 #[cfg(test)]
 mod tests;
+mod text_source;
+pub(crate) mod transport;
 
-use std::sync::Arc;
+#[cfg(test)]
+use craft_xcf::{gunzip, is_gzipped_xcf};
 
-use craft_xcf::{BaseType, Orientation, Pixels, TreeNode};
+use craft_xcf::{BaseType, TreeNode};
+use craft_xcf::{records, samples::SampleOptions};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, LabelColor, Layer, LayerContent, LayerMask};
-use photocraft_geom::{Rect, Size};
-use photocraft_raster::{Interrupt, Surface};
+use photocraft_geom::Size;
+use photocraft_raster::Interrupt;
 
 use crate::ora::Warnings;
 use crate::{ImportResult, IoError};
+use raster::TileWriter;
 
 type Result<T> = std::result::Result<T, IoError>;
 
@@ -30,16 +43,6 @@ fn map_error(error: craft_xcf::Error) -> IoError {
         craft_xcf::Error::Invalid(message) => invalid(message),
         craft_xcf::Error::Cancelled => IoError::Cancelled,
     }
-}
-
-/// `true` for a gzip stream named `.xcf.gz` / `.xcfgz`.
-pub(crate) fn is_gzipped_xcf(name: &str, bytes: &[u8]) -> bool {
-    craft_xcf::is_gzipped_xcf(name, bytes)
-}
-
-/// Inflates a gzipped XCF with craft-xcf's size bound.
-pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>> {
-    craft_xcf::gunzip(bytes).map_err(map_error)
 }
 
 fn blend_mode(mode: u32) -> (BlendMode, Option<&'static str>) {
@@ -103,43 +106,26 @@ fn label(tag: u32) -> LabelColor {
     }
 }
 
-fn write_pixels(surface: &mut Surface, pixels: &Pixels, x: i32, y: i32, budget: &mut usize) -> Result<()> {
-    let (w, h) = (
-        i32::try_from(pixels.width).map_err(|_| invalid("drawable width is out of range"))?,
-        i32::try_from(pixels.height).map_err(|_| invalid("drawable height is out of range"))?,
-    );
-    let rect = Rect::new(x, y, x.checked_add(w).ok_or_else(|| invalid("offset overflow"))?, y.checked_add(h).ok_or_else(|| invalid("offset overflow"))?);
-    if surface.channels() != pixels.channels || pixels.data.len() != pixels.width as usize * pixels.height as usize * pixels.channels {
-        return Err(invalid("pixel data does not match the drawable"));
-    }
-    let bytes = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &surface.format())).unwrap_or(usize::MAX);
-    if bytes > *budget {
-        return Err(invalid("the layers exceed the 1 GiB pixel limit"));
-    }
-    let before = surface.tile_count();
-    surface.write_region(rect, &pixels.data);
-    surface.prune();
-    let added = surface.tile_count().saturating_sub(before) as u64;
-    *budget = budget.saturating_sub(usize::try_from(photocraft_raster::stored_tiles_bytes(added, &surface.format())).unwrap_or(usize::MAX));
-    Ok(())
-}
-
 struct Mapper<'a, 'c> {
     xcf: &'a craft_xcf::Xcf<'a>,
     ctl: &'c Interrupt<'c>,
     fmt: PixelFormat,
     mask_fmt: PixelFormat,
     budget: usize,
+    source_budget: usize,
+    record_budget: records::Budget,
+    options: SampleOptions,
+    report: report::Report<'a>,
+    view: saved_view::SavedView,
+    resolution: (f32, f32),
+    text_budget: text_source::NativeBudget,
+    text_colors: Option<text_source::NativeColors>,
     clipped_to_backdrop: usize,
     linear_compositing: bool,
     warnings: Warnings,
 }
 
 impl Mapper<'_, '_> {
-    fn pixels(&mut self, index: usize) -> Result<Option<Pixels>> {
-        self.xcf.layer_pixels(index, &mut self.budget, &|| !self.ctl.cancelled()).map_err(map_error)
-    }
-
     fn layer(&mut self, index: usize) -> Result<(Layer, bool)> {
         self.ctl.check().map_err(|_| IoError::Cancelled)?;
         let image = self.xcf.image();
@@ -165,17 +151,11 @@ impl Mapper<'_, '_> {
             4 => self.warnings.layer(name, "composites with Intersection, which is not reproduced"),
             _ => {}
         }
-        if source.text {
-            self.warnings.layer(name, "is a text layer and opens as pixels");
-        }
         if source.vector {
             self.warnings.layer(name, "is a vector layer and opens as pixels");
         }
         if source.link {
             self.warnings.layer(name, "is a link layer and opens as pixels");
-        }
-        if source.effects > 0 {
-            self.warnings.layer(name, &format!("has {} layer effect(s) (non-destructive filters) that are not applied", source.effects));
         }
 
         let mut layer = if source.group {
@@ -199,29 +179,69 @@ impl Mapper<'_, '_> {
         layer.clipped = source.clipped;
 
         if !source.group && source.has_pixels() {
-            let mut pixels = self.pixels(index)?.ok_or_else(|| invalid("layer pixels are missing"))?;
-            if !source.has_alpha() {
-                let n = pixels.channels;
-                let mut data = Vec::with_capacity(pixels.data.len() / n * (n + 1));
-                for p in pixels.data.chunks_exact(n) {
-                    data.extend_from_slice(p);
-                    data.push(1.0);
-                }
-                pixels = Pixels { width: pixels.width, height: pixels.height, channels: n + 1, data };
-                layer.locks.transparency = true;
+            let opaque = !source.has_alpha();
+            let mut writer = TileWriter::new(self.fmt, (source.x, source.y), &image.colormap, opaque, false, self.budget);
+            self.xcf
+                .visit_layer_tiles(index, self.options, &mut self.source_budget, &|| !self.ctl.cancelled(), |tile| writer.write(tile))
+                .map_err(map_error)?
+                .ok_or_else(|| invalid("layer pixels are missing"))?;
+            let (surface, clamped) = writer.finish(&mut self.budget);
+            layer.locks.transparency |= opaque;
+            if clamped {
+                self.warnings.layer(name, "has alpha samples outside the supported range");
             }
-            let mut surface = Surface::new(self.fmt);
-            write_pixels(&mut surface, &pixels, source.x, source.y, &mut self.budget)?;
             layer.content = LayerContent::Raster(surface);
         }
-        if let Some((_, pixels)) = self.xcf.layer_mask(index, &mut self.budget, &|| !self.ctl.cancelled()).map_err(map_error)? {
-            let mut surface = Surface::new(self.mask_fmt);
-            write_pixels(&mut surface, &pixels, source.x, source.y, &mut self.budget)?;
+        let mut writer = TileWriter::new(self.mask_fmt, (source.x, source.y), &[], false, true, self.budget);
+        if self
+            .xcf
+            .visit_layer_mask_tiles(index, self.options, &mut self.source_budget, &|| !self.ctl.cancelled(), |tile| writer.write(tile))
+            .map_err(map_error)?
+            .is_some()
+        {
+            let (surface, clamped) = writer.finish(&mut self.budget);
+            if clamped {
+                self.warnings.layer(name, "has mask samples outside the supported range");
+            }
             layer.mask = Some(LayerMask { surface, enabled: source.apply_mask, linked: true, density: 1.0, feather: 0.0 });
         }
         let linear = source.composite_space.unsigned_abs() == 1 || source.blend_space.unsigned_abs() == 1;
         self.linear_compositing |= linear;
+        let properties = self.xcf.layer_properties(index, records::Limits::default(), &mut self.record_budget, &|| !self.ctl.cancelled()).map_err(map_error)?;
+        self.view.layer(&properties, index, &layer, &mut self.record_budget, self.ctl)?;
+        if !source.group && !source.floating_selection {
+            self.map_text(&properties, index, source, &mut layer)?;
+        }
+        self.report.layer_effects(self.xcf, index, &layer, &mut self.warnings, self.ctl)?;
         Ok((layer, linear))
+    }
+
+    fn map_text(&mut self, properties: &records::Scan<records::Property<'_>>, index: usize, source: &craft_xcf::Layer, layer: &mut Layer) -> Result<()> {
+        use text_source::{Mapping, NativeOptions, TextSource};
+
+        if !source.text && !properties.records.iter().any(|property| property.kind == 21) {
+            return Ok(());
+        }
+        let text = text_source::read_layer(properties, &mut self.record_budget, self.ctl)?;
+        if !source.text && matches!(text, TextSource::Missing) {
+            return Ok(());
+        }
+        let options = NativeOptions { resolution: self.resolution, offset: (source.x, source.y), colors: self.text_colors.as_ref() };
+        let mapping = if source.link {
+            Mapping::Preserved { reason: "the link record takes precedence over its text configuration".into(), source_reason: None }
+        } else {
+            text_source::map_layer(layer, &text, options, &mut self.text_budget, &mut self.record_budget, self.ctl)?
+        };
+        match &mapping {
+            Mapping::Missing => self.warnings.layer(&layer.name, "is a text layer and opens as pixels"),
+            Mapping::Converted { notes } => {
+                for note in notes {
+                    self.warnings.layer(&layer.name, note);
+                }
+            }
+            Mapping::Preserved { reason, .. } => self.warnings.layer(&layer.name, &format!("is a text layer and opens as pixels ({reason})")),
+        }
+        self.report.text(index, layer, &text, &mapping)
     }
 
     fn build(&mut self, tree: &[TreeNode]) -> Result<Vec<Layer>> {
@@ -240,14 +260,28 @@ impl Mapper<'_, '_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
+    import_with_samples(name, bytes, ctl, SampleOptions::default())
+}
+
+pub(crate) fn import_with_samples(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, options: SampleOptions) -> Result<ImportResult> {
     let xcf = craft_xcf::Xcf::parse_with(bytes, &|| !ctl.cancelled()).map_err(map_error)?;
     let image = xcf.image();
+    let request = xcf.historical_sample_order_request();
+    if options.historical_order == crate::HistoricalXcfOrder::RequireExplicit
+        && let Some(request) = request
+    {
+        return Err(IoError::HistoricalXcfSampleOrderRequired(crate::HistoricalXcfSampleOrderRequest {
+            version: request.version,
+            bits_per_sample: request.precision.storage.bytes as u32 * 8,
+        }));
+    }
     let mode = if image.base_type == BaseType::Gray { ColorMode::Grayscale } else { ColorMode::Rgb };
     let mode = if image.base_type == BaseType::Indexed { ColorMode::Rgb } else { mode };
     let depth = match (image.precision.float, image.precision.bytes) {
         (false, 1) => SampleType::U8,
-        (false, 4) => SampleType::U16,
+        (false, 4) => SampleType::F32,
         (false, _) => SampleType::U16,
         (true, _) => SampleType::F32,
     };
@@ -259,8 +293,18 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         warnings.note("the indexed image opens as RGB");
     }
     if !image.precision.float && image.precision.bytes == 4 {
-        warnings.note("32-bit integer samples open as 16-bit");
+        warnings.note("32-bit integer samples open as native F32 with reduced integer precision");
     }
+    let mut document = Document::new(name, Size::new(image.width, image.height), mode, depth);
+    let mut record_budget = records::Budget::default();
+    let image_metadata = metadata::read(&xcf, &mut record_budget, &mut warnings, ctl)?;
+    let source_axes = metadata::resolution(&image_metadata, document.resolution_dpi);
+    let color = color::select_profile(mode, xcf.source_precision(), metadata::assigned_profile(&image_metadata, &mut warnings))?;
+    if let Some(reason) = &color.fallback_reason {
+        warnings.note(&format!("the assigned XCF profile could not be used ({reason}); an implicit profile interprets the saved samples"));
+    }
+    document.icc_profile = color.tag_document.then(|| color.bytes.clone());
+    metadata::apply(&mut document, &image_metadata, source_axes, image.version, &mut warnings, ctl)?;
     for source in &image.layers {
         if source.floating_selection {
             warnings.layer(&source.name, "is a floating selection and was not imported (anchor it in GIMP first)");
@@ -268,7 +312,24 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let fmt = PixelFormat::new(mode, depth, true);
     let mask_fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
-    let mut mapper = Mapper { xcf: &xcf, ctl, fmt, mask_fmt, budget: MAX_PIXEL_BYTES, clipped_to_backdrop: 0, linear_compositing: false, warnings };
+    let mut mapper = Mapper {
+        xcf: &xcf,
+        ctl,
+        fmt,
+        mask_fmt,
+        budget: MAX_PIXEL_BYTES,
+        source_budget: MAX_PIXEL_BYTES,
+        record_budget,
+        options,
+        report: report::Report::new(bytes, image.version),
+        view: saved_view::SavedView::default(),
+        resolution: source_axes,
+        text_budget: text_source::NativeBudget::default(),
+        text_colors: text_source::NativeColors::new(&color.bytes, mode).ok(),
+        clipped_to_backdrop: 0,
+        linear_compositing: false,
+        warnings,
+    };
     let tree = image.tree();
     for &index in &tree.too_deep {
         if let Some(layer) = image.layers.get(index) {
@@ -286,57 +347,29 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     let mut selection = None;
     for index in 0..image.channel_count {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let (channel, pixels) = xcf.channel(index, &mut mapper.budget, &|| !ctl.cancelled()).map_err(map_error)?;
-        let mut surface = Surface::new(mask_fmt);
-        write_pixels(&mut surface, &pixels, 0, 0, &mut mapper.budget)?;
-        if channel.selection {
+        let mut writer = TileWriter::new(mask_fmt, (0, 0), &[], false, true, mapper.budget);
+        let (channel, _) =
+            xcf.visit_channel_tiles(index, options, &mut mapper.source_budget, &|| !ctl.cancelled(), |tile| writer.write(tile)).map_err(map_error)?;
+        let (surface, clamped) = writer.finish(&mut mapper.budget);
+        if clamped {
+            mapper.warnings.note(&format!("XCF channel '{}' has samples outside the supported range", channel.name));
+        }
+        if channel.selection && selection.is_none() {
             selection = Some(surface);
         } else {
-            channels.push(AlphaChannel::new(channel.name, surface));
+            if channel.selection {
+                mapper.warnings.note("additional XCF selection channels were imported as saved alpha channels");
+            }
+            let mut alpha = AlphaChannel::new(channel.name, surface);
+            mapper.view.channel(&xcf, index, channels.len(), &mut alpha, &mut mapper.record_budget, ctl)?;
+            channels.push(alpha);
         }
     }
 
-    let mut document = Document::new(name, Size::new(image.width, image.height), mode, depth);
     document.layers = layers.into();
     document.channels = channels;
     document.selection = selection;
-    if let Some((x, y)) = image.resolution.filter(|(x, _)| *x > 0.0 && *x < 1.0e6) {
-        document.resolution_dpi = x;
-        if let Some(warning) = crate::unequal_resolution_warning(f64::from(x), f64::from(y)) {
-            mapper.warnings.note(&warning);
-        }
-    }
-    for guide in &image.guides {
-        if guide.position < 0 && image.version < 15 {
-            continue;
-        }
-        match guide.orientation {
-            Orientation::Horizontal => document.guides.horizontal.push(f64::from(guide.position)),
-            Orientation::Vertical => document.guides.vertical.push(f64::from(guide.position)),
-        }
-    }
-    document.icc_profile = match (image.precision.linear, image.icc_profile.clone(), mode) {
-        (true, icc, ColorMode::Grayscale) => {
-            if icc.is_some() {
-                mapper.warnings.note("the linear-light image's own profile was replaced by linear gray");
-            }
-            Some(craft_cms::builtin::linear_gray().to_bytes())
-        }
-        (true, icc, _) => {
-            if icc.is_some() {
-                mapper.warnings.note("the linear-light image's own profile was replaced by linear sRGB");
-            }
-            Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes())
-        }
-        (false, Some(icc), _) => Some(Arc::new(icc)),
-        (false, None, _) => None,
-    };
-    if let Some(comment) = image.comment.as_deref().filter(|c| !c.is_empty()) {
-        document.metadata.text.push(("Comment".into(), comment.to_string()));
-    }
-    if image.path_count > 0 {
-        mapper.warnings.note(&format!("{} path(s) were not imported", image.path_count));
-    }
+    let selected_path = paths::import_saved_paths(&xcf, &mut mapper.record_budget, &mut document, &mut mapper.warnings, ctl)?;
     if mapper.clipped_to_backdrop > 0 && document.layers.first().is_some_and(|l| !l.locks.transparency || l.is_group()) {
         mapper.warnings.note(&format!(
             "{} layer(s) use a mode GIMP clips to the layers beneath; where those are transparent GIMP shows nothing and PhotoCraft shows the layer",
@@ -351,6 +384,11 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if document.layers.is_empty() {
         mapper.warnings.note("the XCF file has no layers");
     }
+    if let Some(entry) = historical::evidence(request, options.historical_order) {
+        mapper.report.append(entry)?;
+    }
+    mapper.report.attach(&mut document, &mut mapper.warnings);
+    let initial_view = mapper.view.finish(&document, &image_metadata, selected_path, &mut mapper.warnings);
     ctl.progress(1.0);
-    Ok(ImportResult { document, warnings: mapper.warnings.finish(), source_read_only: true, preview_only: false })
+    Ok(ImportResult { initial_view, document, warnings: mapper.warnings.finish(), source_read_only: true, preview_only: false })
 }

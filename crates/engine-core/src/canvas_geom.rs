@@ -329,8 +329,10 @@ pub(crate) fn transform_geometry(doc: &mut Document, a: &Affine) {
 /// What to re-render after the geometry moved.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refresh {
-    /// Shapes only (their pixels are clipped to the canvas, which may have grown).
+    /// Redraw editable shape caches for new canvas bounds. Saved pixels have already moved.
     Shapes,
+    /// Image Size already resampled authoritative shape pixels with the chosen filter.
+    Resampled,
     /// Type, shapes and smart objects (after a resampling map: Image Size, Image Rotation ›
     /// Arbitrary). Smart objects whose source is unavailable keep their (already mapped) cache;
     /// so does type set in a font that isn't installed ([`keeps_own_pixels`]), which the caller
@@ -366,9 +368,11 @@ pub(crate) fn refresh(doc: &mut Document, what: Refresh) {
         for l in layers {
             match &mut l.content {
                 LayerContent::Group(g) => rec(snapshot, &mut g.children, what),
-                LayerContent::Shape(sh) => crate::vector_cmds::refresh_shape(snapshot, sh),
-                LayerContent::Text(t) if what == Refresh::All && !keeps_own_pixels(t) => crate::type_cmds::refresh(snapshot, t),
-                LayerContent::Smart(_) if what == Refresh::All => {
+                LayerContent::Shape(sh) if what == Refresh::All || !sh.cache_preserves_appearance || sh.cache.is_none() => {
+                    crate::vector_cmds::refresh_shape(snapshot, sh)
+                }
+                LayerContent::Text(t) if matches!(what, Refresh::All | Refresh::Resampled) && !keeps_own_pixels(t) => crate::type_cmds::refresh(snapshot, t),
+                LayerContent::Smart(_) if matches!(what, Refresh::All | Refresh::Resampled) => {
                     let _ = crate::smart_cmds::refresh_layer(snapshot, l);
                 }
                 _ => {}

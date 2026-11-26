@@ -105,6 +105,7 @@ pub fn aligned_shape(shape: &ShapeLayer, tol: f64) -> Option<ShapeLayer> {
         use_aligned_rendering: false,
         live: None,
         cache: None,
+        cache_preserves_appearance: false,
         psd_raw: None,
         density: shape.density,
         feather: shape.feather,

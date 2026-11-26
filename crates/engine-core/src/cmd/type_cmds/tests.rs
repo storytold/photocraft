@@ -1,5 +1,61 @@
 use super::*;
 
+#[test]
+fn native_reopened_text_keeps_its_explicit_name_when_edited() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width":32,"height":32})).unwrap();
+    s.execute("type.create", json!({"x":2,"y":20,"text":"Title","name":"Title"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("Set imported text policy", |doc, _| {
+        let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("type layer") };
+        text.keep_layer_name = true;
+        text.cache_uses_raster_blending = true;
+        Ok(())
+    })
+    .unwrap();
+    let saved = photocraft_format::save_to_bytes(s.active().unwrap().doc(), &Default::default()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&saved).unwrap();
+    let mut reopened = crate::session();
+    reopened.add_document(doc, None);
+    reopened.execute("type.edit", json!({"layer":id.0,"text":"New title"})).unwrap();
+    let layer = reopened.active().unwrap().doc.layer(id).unwrap();
+    assert_eq!(layer.name, "Title");
+    assert!(matches!(&layer.content, LayerContent::Text(text) if text.text == "New title" && !text.cache_uses_raster_blending));
+}
+
+#[test]
+fn psd_preserves_fixed_text_names_before_and_after_the_saved_pixels_are_refreshed() {
+    let mut s = session();
+    s.execute("type.create", json!({"x":2,"y":20,"text":"Title","name":"Title"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("Set imported text policy", |doc, _| {
+        let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("type layer") };
+        text.keep_layer_name = true;
+        text.cache_uses_raster_blending = true;
+        Ok(())
+    })
+    .unwrap();
+
+    for authoritative in [true, false] {
+        let saved = photocraft_io::export(s.active().unwrap().doc(), "fixed-name.psd", &Default::default()).unwrap();
+        let doc = photocraft_io::import("fixed-name.psd", &saved.bytes).unwrap().document;
+        let layer = doc.layers.iter().find(|layer| layer.name == "Title").expect("saved layer name");
+        let LayerContent::Text(text) = &layer.content else { panic!("saved layer reopened as {}", layer.content.kind_name()) };
+        assert!(text.keep_layer_name);
+        assert_eq!(text.cache_uses_raster_blending, authoritative);
+        let id = layer.id;
+        let mut reopened = crate::session();
+        reopened.add_document(doc, None);
+        reopened.execute("type.edit", json!({"layer":id.0,"text":"New title"})).unwrap();
+        assert_eq!(reopened.active().unwrap().doc.layer(id).unwrap().name, "Title");
+        assert!(!text_layer(&reopened, id.0).cache_uses_raster_blending);
+
+        // Leave text and name equal again, with the cache now rendered by PhotoCraft.
+        reopened.execute("type.edit", json!({"layer":id.0,"text":"Title"})).unwrap();
+        s = reopened;
+    }
+}
+
 fn session() -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();

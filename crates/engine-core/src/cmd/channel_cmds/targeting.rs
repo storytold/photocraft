@@ -275,26 +275,26 @@ pub fn inject_target(s: &Session, id: &str, params: Value) -> Value {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
-        ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => {
+        ChannelTarget::Color(_) if crate::mask_view_cmds::editing(st).is_some_and(|v| v.filter) => {
             if !follows_filter_mask(id) {
                 return params;
             }
             json!("filterMask")
         }
-        ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        ChannelTarget::Color(_) if crate::mask_view_cmds::editing(st).is_some() => json!("mask"),
         ChannelTarget::Color(_) => match crate::color_channels::selected(s).filter(|c| c.len() > 1) {
             Some(c) => c.params(),
             None => return params,
         },
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
         // A shown filter mask takes only the commands that edit it; the rest act on the smart object.
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => {
+        ChannelTarget::Composite if crate::mask_view_cmds::editing(st).is_some_and(|v| v.filter) => {
             if !follows_filter_mask(id) {
                 return params;
             }
             json!("filterMask")
         }
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        ChannelTarget::Composite if crate::mask_view_cmds::editing(st).is_some() => json!("mask"),
         // Edit › Transform's Rotate/Flip presets turn the targeted vector mask's path (#12283).
         ChannelTarget::VectorMask if follows_vector_mask_target(id) => json!("vectorMask"),
         _ => return params,

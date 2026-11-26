@@ -42,6 +42,7 @@ pub(crate) use path_ops::{
     active_shape_path, active_type_path, delete_key_edits_path, deselect_loaded_path, edit_path, free_transform_path, saved_path_components_selected,
     targeted_vector_mask, work_path_shown,
 };
+pub(crate) use paths_panel::apply_imported_path_selection;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_panel};
 #[cfg(test)]
 use pen::pen_path_op;
@@ -425,7 +426,7 @@ pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
             // The temporary source commit ran sync_views on that document. Rebind its runtime
             // tracker before restoring the destination UI, so the next frame cannot clear
             // an unrelated saved-path selection in the destination tab.
-            app.path_document = app.session.active().map(|st| (st.doc.id, st.revision, Arc::downgrade(&st.doc)));
+            app.path_document = app.session.active().map(|st| (st.doc.id, st.open_generation(), st.revision, Arc::downgrade(&st.doc)));
             app.ui = saved_ui;
             app.ui.pen = if result.is_ok() { None } else { failed };
             if result.is_ok() && app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {

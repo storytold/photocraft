@@ -127,6 +127,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             color: Color::rgb(0.2, 0.4, 0.6),
             transform: Affine::translate(10.5, 20.25),
             cache: Some(cache.clone()),
+            cache_uses_raster_blending: false,
+            keep_layer_name: false,
             psd_raw: Some(blob(9, 100)),
             runs: vec![
                 TextRun { len: 1, style: CharStyle { kerning: text::Kerning::Off, kern: 120.0, ..CharStyle::default() } },
@@ -159,6 +161,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             use_aligned_rendering: false,
             live: Some(LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [4.0, 0.0, 4.0, 0.0] }),
             cache: Some(cache.clone()),
+            cache_preserves_appearance: false,
             psd_raw: Some(blob(10, 30)),
             density: 0.6,
             feather: 3.5,

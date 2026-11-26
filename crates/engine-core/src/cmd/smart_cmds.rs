@@ -68,14 +68,18 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
 
 /// Reuse the central format decision made by this render operation.
 fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
+    decode_source_import(file_name, bytes, svg).map(|imported| imported.document)
+}
+
+fn decode_source_import(file_name: &str, bytes: &[u8], svg: bool) -> Result<photocraft_io::ImportResult> {
     if svg {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
         return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
-            .map(|imported| imported.document)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
-    crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    crate::file_cmds::import_result_with(file_name, bytes, &photocraft_io::ImportOptions::default())
+        .map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
 fn base_name(path: &str) -> String {

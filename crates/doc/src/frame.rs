@@ -56,6 +56,7 @@ impl Frame {
             stroke: Some(stroke),
             use_aligned_rendering: false,
             cache: None,
+            cache_preserves_appearance: false,
             psd_raw: None,
             live: None,
             density: 1.0,

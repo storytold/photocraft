@@ -201,13 +201,13 @@ impl Headless {
     /// Open a file with custom import options and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
-        let (mut o, save_path) = match &self.filesystem {
+        let (mut o, save_path, origin) = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => (files::open_with_options(path, opts)?, Some(requested.to_string())),
+            Filesystem::TrustedLocal => (files::open_with_options(path, opts)?, Some(requested.to_string()), path.to_path_buf()),
             Filesystem::Workspace(workspace) => {
-                let (bytes, save_path) = workspace.read_with_save_path(requested)?;
+                let (bytes, save_path, origin) = workspace.read_document(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                (files::open_bytes_with_options(name, &bytes, opts)?, save_path)
+                (files::open_bytes_with_options(name, &bytes, opts)?, save_path, origin)
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
@@ -219,10 +219,14 @@ impl Headless {
             }
             None => save_path,
         };
-        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
-        if let Some(st) = self.session.active_mut() {
-            st.source_read_only = o.source_read_only;
-        }
+        let path = if o.source_read_only {
+            let origin = origin.to_str().ok_or_else(|| AutomationError::BadRequest("automation source paths must be valid UTF-8".into()))?;
+            Some(origin.to_owned())
+        } else {
+            path
+        };
+        let (index, view_warning) = self.session.admit_import_with_initial_view(o.document, path, o.source_read_only, o.initial_view);
+        o.warnings.extend(view_warning);
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;
         warnings.extend(photocraft_engine::type_extra_cmds::missing_font_warnings(&d.doc));
@@ -393,9 +397,11 @@ impl Headless {
             }
         };
         let target_text = target.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
+        let state = &self.session.documents()[i];
         let mut warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
+                file_cmds::check_import_destination(state, target_text)?;
                 let writer = self.writers.entry(doc.id.0).or_default();
                 // Export warnings of a failed write stay in `pending_diagnostics`, whatever the
                 // renderer does with `push_diagnostic`.
@@ -410,6 +416,12 @@ impl Headless {
                 )?
             }
             Filesystem::Workspace(workspace) => {
+                if state.protected_import_source.is_some() {
+                    let destination = workspace.write_location(target_text)?;
+                    let destination =
+                        destination.to_str().ok_or_else(|| AutomationError::BadRequest("automation destination paths must be valid UTF-8".into()))?;
+                    file_cmds::check_import_destination(state, destination)?;
+                }
                 // Only the target is granted: a linked smart object's stored path is document
                 // data, so PSD export writes that layer as pixels instead of embedding the file.
                 let opts = ExportOptions { read_linked_files: false, ..opts.clone() };

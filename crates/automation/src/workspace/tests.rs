@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn save_identity_uses_only_the_authorized_write_root() {
+    let (read, write, _) = roots("save-identity");
+    let workspace = AuthorizedWorkspace::new(Some(&read), Some(&write)).unwrap();
+    let expected = std::fs::canonicalize(&write).unwrap().join("source.psd");
+    assert_eq!(workspace.write_location("source.psd").unwrap(), expected);
+    assert_ne!(workspace.write_location("source.psd").unwrap(), read.join("source.psd"));
+    assert_eq!(workspace.write_location(expected.to_str().unwrap()).unwrap(), expected);
+    assert!(workspace.write_location(read.join("source.psd").to_str().unwrap()).is_err());
+    assert!(workspace.write_location("../source.psd").is_err());
+    assert!(workspace.write_location("missing/copy.pcraft").is_err());
+    assert!(AuthorizedWorkspace::new(Some(&read), None).unwrap().write_location("source.psd").is_err());
+    assert!(std::fs::read_dir(&write).unwrap().next().is_none(), "identity resolution never writes a destination");
+}
+
 fn roots(name: &str) -> (PathBuf, PathBuf, AuthorizedWorkspace) {
     let base = std::env::temp_dir().join(format!("photocraft-workspace-{}-{name}", std::process::id()));
     let inside = base.join("inside");

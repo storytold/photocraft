@@ -88,12 +88,12 @@ pub(crate) fn openable_name(_path: &str) -> bool {
 }
 
 /// Whether a folder entry is one the batch commands open: an `OPENABLE` extension, an extension
-/// of a format `photocraft-codecs` reads in this build, or GIMP's gzipped `.xcf.gz`, whose last
-/// extension alone says nothing.
+/// of a format `photocraft-codecs` reads in this build, or an XCF transport suffix, whose last
+/// extension alone does not identify the drawing.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
-    lower.ends_with(".xcf.gz")
+    photocraft_io::is_xcf_input_name(&lower)
         || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read))
 }
 
@@ -300,6 +300,15 @@ pub fn same_destination(a: impl AsRef<std::path::Path>, b: impl AsRef<std::path:
     }
     #[cfg(target_arch = "wasm32")]
     false
+}
+
+/// Refuse overwriting a known import-only source, including aliases with a writable suffix.
+/// Hosts must check this before starting a save; it grants no file or resource access.
+pub fn check_import_destination(state: &crate::DocState, destination: &str) -> Result<()> {
+    if state.protected_import_source.as_deref().is_some_and(|source| same_file(source, destination)) {
+        return Err(EngineError::Other("the destination is the import-only source; choose a different native or export path".into()));
+    }
+    Ok(())
 }
 
 /// A path as command results report it: `/` between components, whatever the platform.

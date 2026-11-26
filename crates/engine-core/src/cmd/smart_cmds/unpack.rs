@@ -98,7 +98,7 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
     }
     for l in layers {
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
-        crate::transform_cmds::refresh_text(doc, l);
+        crate::transform_cmds::refresh_transformed_content(doc, l, affine);
     }
     Ok(())
 }
