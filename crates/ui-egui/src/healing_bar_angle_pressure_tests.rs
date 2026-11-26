@@ -78,12 +78,9 @@ fn healing_bar_orders_source_angle_and_pressure_without_extra_brush_controls() {
     assert!(!h.state().session.tools.brush.pressure_size);
     assert_eq!(pressure.accesskit_node().description().as_deref(), Some(PRESSURE_TIP));
     assert!(!has_control(&h, Role::Button, SETTINGS));
-    for (role, label) in [
-        (Role::SpinButton, "Opacity"),
-        (Role::SpinButton, "Flow"),
-        (Role::SpinButton, "Smoothing"),
-        (Role::Button, "Always use pressure for opacity"),
-    ] {
+    for (role, label) in
+        [(Role::SpinButton, "Opacity"), (Role::SpinButton, "Flow"), (Role::SpinButton, "Smoothing"), (Role::Button, "Always use pressure for opacity")]
+    {
         assert!(!has_control(&h, role, label), "Healing has no {label}");
     }
 }
