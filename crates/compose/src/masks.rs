@@ -201,7 +201,15 @@ pub fn combined_mask(layer: &Layer, canvas: Rect) -> Option<Surface> {
     Some(cached_mask(cache(), key(layer, canvas), || (build_mask(layer, canvas), layer.mask.as_ref().map(|m| m.surface.clone()))))
 }
 
+/// The dense working set a mask build may allocate: coverage, pixel-mask values and blur scratch,
+/// one `f32` plane each over the block being built.
+const MAX_MASK_WORKING_BYTES: u64 = 512 << 20;
+
 fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
+    build_mask_within(layer, canvas, MAX_MASK_WORKING_BYTES)
+}
+
+fn build_mask_within(layer: &Layer, canvas: Rect, budget: u64) -> Surface {
     let vm = layer.vector_mask.as_ref().filter(|v| v.enabled);
     let pixel = layer.mask.as_ref().filter(|m| m.enabled);
     let (sv, sp) = (vm.map_or(0.0, |v| feather_sigma(v.feather)), pixel.map_or(0.0, |m| feather_sigma(m.feather)));
@@ -231,33 +239,72 @@ fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
     }
     let area = area.intersect(&canvas);
     let mut s = Surface::with_default(FORMAT, &[p_def * v_out]);
-    // Bound the transient dense working set: `area` is derived from sparse mask geometry grown
-    // by feather, so two distant changed pixels could span a canvas-sized rectangle. Building
-    // f32 planes over it (coverage, pixel-mask values, blur scratch) could be gigabytes during
-    // a one-pixel render. Above the budget, fall back to the constant default mask rather than
-    // allocating; feather detail is lost only for pathological geometry.
-    const MAX_MASK_WORKING_BYTES: u64 = 512 << 20;
-    let working = (area.width() as u64).saturating_mul(area.height() as u64).saturating_mul(std::mem::size_of::<f32>() as u64).saturating_mul(3);
-    if !area.is_empty() && working <= MAX_MASK_WORKING_BYTES {
-        let (w, h) = (area.width() as usize, area.height() as usize);
-        // A slot initializer must not enter Rayon: another tile requesting the
-        // same mask could be stolen onto its stack and wait for its own build.
-        let mut v = match &compiled {
-            Some(vm) => vm.render_sequential(area),
-            None => vec![1.0; w * h],
-        };
-        gaussian(&mut v, w, h, sv);
-        if let Some(m) = pixel {
-            let mut pm = Vec::new();
-            m.values_into(area, &mut pm);
-            gaussian(&mut pm, w, h, sp);
-            for (a, b) in v.iter_mut().zip(pm) {
-                *a *= b;
+    if area.is_empty() {
+        return s;
+    }
+    // Bound the transient dense working set: building f32 planes over a whole 50 MP mask would
+    // take gigabytes. Over the budget, build square blocks, each blurred with the feather's
+    // reach of mask around it, so every block gets the values one dense build would (#17060).
+    let samples = budget / (std::mem::size_of::<f32>() as u64 * 3);
+    let (w, h) = (u64::from(area.width()), u64::from(area.height()));
+    let (step, reach) = if w.saturating_mul(h) <= samples {
+        (w.max(h), 0)
+    } else {
+        let reach = photocraft_vector::feather::reach(sv).max(photocraft_vector::feather::reach(sp)) as u64;
+        // Never below 64 px, so a tiny budget still makes progress; the real budget leaves
+        // blocks of about 690 px even at the 1000 px feather limit.
+        (samples.isqrt().saturating_sub(reach.saturating_mul(2)).max(64), reach)
+    };
+    let (step, reach) = (i32::try_from(step).unwrap_or(i32::MAX), i32::try_from(reach).unwrap_or(i32::MAX));
+    let mut y0 = area.y0;
+    while y0 < area.y1 {
+        let y1 = y0.saturating_add(step).min(area.y1);
+        let mut x0 = area.x0;
+        while x0 < area.x1 {
+            let x1 = x0.saturating_add(step).min(area.x1);
+            let block = Rect::new(x0, y0, x1, y1);
+            let context = Rect::new(x0.saturating_sub(reach), y0.saturating_sub(reach), x1.saturating_add(reach), y1.saturating_add(reach)).intersect(&area);
+            let v = mask_values(compiled.as_ref(), pixel, context, sv, sp);
+            if context == block {
+                s.write_region(block, &v);
+            } else {
+                let (cw, bw) = (context.width() as usize, block.width() as usize);
+                let left = (block.x0 - context.x0) as usize;
+                let inner: Vec<f32> = (block.y0..block.y1)
+                    .flat_map(|y| {
+                        let start = (y - context.y0) as usize * cw + left;
+                        v.get(start..start + bw).unwrap_or_default().iter().copied()
+                    })
+                    .collect();
+                s.write_region(block, &inner);
             }
+            x0 = x1;
         }
-        s.write_region(area, &v);
+        y0 = y1;
     }
     s
+}
+
+/// The combined mask values over `r`: vector-mask coverage and pixel-mask values, each blurred by
+/// its feather (continued past `r`'s edges with its edge values), multiplied.
+fn mask_values(compiled: Option<&photocraft_vector::CompiledVectorMask>, pixel: Option<&photocraft_doc::LayerMask>, r: Rect, sv: f32, sp: f32) -> Vec<f32> {
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    // A slot initializer must not enter Rayon: another tile requesting the
+    // same mask could be stolen onto its stack and wait for its own build.
+    let mut v = match compiled {
+        Some(vm) => vm.render_sequential(r),
+        None => vec![1.0; w * h],
+    };
+    gaussian(&mut v, w, h, sv);
+    if let Some(m) = pixel {
+        let mut pm = Vec::new();
+        m.values_into(r, &mut pm);
+        gaussian(&mut pm, w, h, sp);
+        for (a, b) in v.iter_mut().zip(pm) {
+            *a *= b;
+        }
+    }
+    v
 }
 
 #[cfg(test)]
