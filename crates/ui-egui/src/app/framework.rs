@@ -248,6 +248,9 @@ fn base_root() -> RootEnv {
     root.tab_toggles_chrome = true;
     // Tab in a dialog moves between its fields, as in Photoshop.
     root.dialog_tab = TabReach::Fields;
+    // The title bar keeps the arrow, also over the menu titles on it, as an OS title bar does: the default open hand
+    // shows as Windows' four-way Move cursor (#16993).
+    root.values.set(craft::ui::contract::MoveBandCursor::Arrow);
     root
 }
 
