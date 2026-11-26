@@ -705,8 +705,10 @@ fn tall_selected_session() -> Session {
 
 #[test]
 fn liquify_cancelled_mid_blend_leaves_the_document_and_history() {
-    // A brush wider than the canvas: the warp touches all four of its 64×256 tiles.
-    let stroke = |pressure: u32| json!({"strokes": [{"tool": "forwardWarp", "size": 3000, "pressure": pressure, "points": [[32, 500], [32, 520]]}]});
+    // A brush taller than the canvas, dragged 200 px: the warp touches all four of its 64×256
+    // tiles. (Dabs fall a twentieth of the radius apart, so the drag must be longer than that or
+    // the stroke lays no dab and warps nothing.)
+    let stroke = |pressure: u32| json!({"strokes": [{"tool": "forwardWarp", "size": 2400, "pressure": pressure, "points": [[32, 400], [32, 600]]}]});
     let (tiles, bands) = (4, 1024 / MIX_BAND_ROWS as usize);
     let checks = |selected: bool, p: Value| {
         let mut s = tall_selected_session();
@@ -726,6 +728,7 @@ fn liquify_cancelled_mid_blend_leaves_the_document_and_history() {
     // Without a selection: those, the warp's (one per tile and one per batch of tiles) and the
     // ones after the warp, which also follow the blend.
     let unblended = checks(false, stroke(100));
+    assert!(unblended > before + tiles, "unblended {unblended} <= before {before} + tiles {tiles}: the stroke warps nothing");
     let after = unblended.saturating_sub(before + tiles + 1);
     assert!(after < bands / 2, "after {after} >= bands {bands} / 2 (before {before}, unblended {unblended})");
     // With it, the selection path's own checks: the blend's (one before its first band, one per
