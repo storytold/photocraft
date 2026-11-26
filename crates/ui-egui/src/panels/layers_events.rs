@@ -140,7 +140,8 @@ fn thumb_click_actions(doc: &photocraft_doc::Document, id: LayerId, part: LayerP
         let params = match part {
             LayerPart::LayerMask | LayerPart::VectorMask => mask_kind(part).map(|k| crate::mask_thumbs_ui::load_params(l, k, mods)),
             LayerPart::FrameShape if l.frame.is_some() => Some(crate::mask_thumbs_ui::load_params(l, MaskKind::Vector, mods)),
-            LayerPart::Pixels | LayerPart::FrameShape if !doc.is_background(id) => {
+            // A group's folder icon has no pixels of its own to load (#16785); its masks load above.
+            LayerPart::Pixels | LayerPart::FrameShape if !doc.is_background(id) && !l.is_group() => {
                 Some(json!({"channel": "transparency", "layer": id.0, "operation": craft::behavior::geometry::SelectionOperation::from_mods(mods).name()}))
             }
             _ => None,
