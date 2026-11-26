@@ -844,6 +844,8 @@ mod cursor_tests;
 #[cfg(test)]
 mod escape_commit_tests;
 #[cfg(test)]
+mod labels_tests;
+#[cfg(test)]
 mod move_history_tests;
 #[cfg(test)]
 mod shift_square_tests;
@@ -851,8 +853,6 @@ mod shift_square_tests;
 mod size_hud_tests;
 #[cfg(test)]
 mod space_move_tests;
-#[cfg(test)]
-mod labels_tests;
 #[cfg(test)]
 mod tests;
 
