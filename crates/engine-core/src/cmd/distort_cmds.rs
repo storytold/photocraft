@@ -187,8 +187,8 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface, ctl: &Interrupt
     }
     let fmt = old.format();
     let n = fmt.channels();
-    // The same refusal as when the whole area was read at once: the blended area still becomes
-    // dense tiles of the result.
+    // Refuses what it refused before banding, so the refusal doesn't change; the bands no longer
+    // hold the three full-area f32 buffers this budget was sized for.
     crate::allocation::check_dense(area, (n as u64).saturating_mul(12), "blending Liquify through the selection")?;
     // Shares `old`'s tiles until a band writes to them.
     let mut out = old.clone();

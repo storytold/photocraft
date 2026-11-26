@@ -149,7 +149,9 @@ const COMMITTED: u8 = 4;
 
 impl std::fmt::Debug for JobCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JobCtx").field("progress", &self.fraction()).field("cancelled", &self.cancelled()).finish()
+        // The state itself, not `cancelled()`: printing a context is not a cancel check.
+        let cancelled = self.shared.state.load(Ordering::Acquire) & CANCEL_REQUESTED != 0;
+        f.debug_struct("JobCtx").field("progress", &self.fraction()).field("cancelled", &cancelled).finish()
     }
 }
 
