@@ -154,7 +154,7 @@ fn moving_box(app: &PhotocraftApp, pixels: bool) -> Option<[f64; 4]> {
         };
         return (!b.is_empty()).then(|| rect4(b));
     }
-    photocraft_engine::layer_multi_cmds::move_targets(&st.doc, &st.selected_layers())
+    photocraft_engine::layer_multi_cmds::move_targets(&st.doc, st.selected_layers())
         .into_iter()
         .filter_map(|id| crate::snap_ui::tree_rect(&st.doc, id))
         .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
@@ -288,7 +288,9 @@ fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mu
     run.delta = [f64::from(dx), f64::from(dy)];
     run.moved = true;
     if readout {
-        cx.readout(vec![(Label::from("ΔX"), format!("{dx} px")), (Label::from("ΔY"), format!("{dy} px"))]);
+        let x_arrow = if dx < 0 { "←" } else { "→" };
+        let y_arrow = if dy < 0 { "↑" } else { "↓" };
+        cx.readout(vec![(Label::from(x_arrow), format!("{} px", dx.unsigned_abs())), (Label::from(y_arrow), format!("{} px", dy.unsigned_abs()))]);
     }
 }
 

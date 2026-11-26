@@ -76,6 +76,28 @@ fn box_shows(app: &PhotocraftApp) -> bool {
         && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line)
 }
 
+/// The shape layers the box or a corner widget is editing: the selected shape layers while one of them holds a press.
+/// They are not snap targets, so a handle does not snap to the starting edges and centres of the shapes it scales.
+pub(crate) fn pressed_layers(app: &PhotocraftApp) -> Vec<LayerId> {
+    if !editing(app) {
+        return Vec::new();
+    }
+    let mut layers: Vec<LayerId> = if box_shows(app) {
+        selection(app, live_line(app).is_some()).map(|(layers, _)| layers.into_iter().map(LayerId).collect()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // The corner widgets show without the box (Target Path hidden, the Move tool) and beside other layers in a mixed
+    // selection: the shapes they round are not targets either.
+    for target in corner_targets(app) {
+        let id = LayerId(target.key);
+        if !layers.contains(&id) {
+            layers.push(id);
+        }
+    }
+    layers
+}
+
 /// The selected shape layers and the box round their paths `[x0, y0, x1, y1]`. `None` unless at least
 /// one layer is selected and all are shape layers. A box with no extent along one axis counts only
 /// when `flat_ok` (a level or upright live line).
@@ -87,7 +109,7 @@ fn selection(app: &PhotocraftApp, flat_ok: bool) -> Option<(Vec<u64>, [f64; 4])>
     }
     let mut layers = Vec::with_capacity(ids.len());
     let mut rect: Option<[f64; 4]> = None;
-    for id in ids {
+    for &id in ids {
         let l = st.doc.layer(id)?;
         let LayerContent::Shape(sh) = &l.content else { return None };
         let (x0, y0, x1, y1) = sh.path.control_bounds()?;
@@ -335,7 +357,8 @@ pub(crate) fn corner_targets(app: &PhotocraftApp) -> Vec<CornerTarget> {
     let Some(st) = app.session.active() else { return Vec::new() };
     let mut out: Vec<CornerTarget> = st
         .selected_layers()
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(|id| {
             let l = st.doc.layer(id)?;
             let LayerContent::Shape(sh) = &l.content else { return None };
