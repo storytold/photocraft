@@ -6,6 +6,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::app::framework::BuildApp;
 use crate::state::Tool;
 
 const ANGLE_RANGE_MESSAGE: &str = "An integer between -180 ° and 180 ° is required. Closest value inserted.";
@@ -14,7 +15,7 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
-    let mut h = Harness::builder().with_size(vec2(1600.0, 400.0)).with_context(app.ctx().clone()).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(1600.0, 400.0)).build_app(
         |ui, app| {
             crate::panels::options_bar(app, ui);
             crate::dialogs::run(app, ui);
@@ -26,7 +27,11 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
 }
 
 fn field<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> Option<egui_kittest::Node<'a>> {
-    h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().label().as_deref() == Some("Angle"))
+    number_field(h, "Angle")
+}
+
+fn number_field<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>, label: &str) -> Option<egui_kittest::Node<'a>> {
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().label().is_some_and(|name| name.trim_end_matches(':') == label))
 }
 
 fn type_angle(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
@@ -50,7 +55,7 @@ fn angle_starts_at_zero_between_strength_and_sample_all_layers_with_its_tooltip(
     assert_eq!(h.state().session.tools.brush.angle, 0.0);
     assert!(angle.accesskit_node().value().unwrap().starts_with('0'));
     assert_eq!(angle.accesskit_node().description().as_deref(), Some("Set the brush angle"));
-    assert!(h.get_by_label("Strength").rect().right() <= angle.rect().left());
+    assert!(number_field(&h, "Strength").expect("Strength").rect().right() <= angle.rect().left());
     assert!(angle.rect().right() <= h.get_by_label("Sample All Layers").rect().left());
 }
 
@@ -89,7 +94,9 @@ fn in_range_edits_are_whole_degrees_and_share_the_brush_settings_value() {
 
 #[test]
 fn smudge_keeps_its_own_angle_across_tool_switches_and_reset_tool_restores_zero() {
-    let mut h = bar(Tool::Brush);
+    let mut h = bar(Tool::Smudge);
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(3);
     h.state_mut().run("tools.setBrush", json!({"brush": {"angle": -20.0}})).unwrap();
     h.run_steps(2);
     h.state_mut().ui.tool = Tool::Smudge;
@@ -109,11 +116,17 @@ fn smudge_keeps_its_own_angle_across_tool_switches_and_reset_tool_restores_zero(
 }
 
 #[test]
-fn the_smudge_change_does_not_add_an_angle_field_to_blur_or_sharpen() {
-    for tool in [Tool::Blur, Tool::Sharpen] {
-        let h = bar(tool);
-        assert!(field(&h).is_none(), "{tool:?}");
-        assert!(h.query_by_label("Strength").is_some());
-        assert!(h.query_by_label("Sample All Layers").is_some());
-    }
+fn blur_still_has_no_angle_and_sharpen_keeps_its_existing_angle() {
+    let blur = bar(Tool::Blur);
+    assert!(field(&blur).is_none());
+    assert!(number_field(&blur, "Strength").is_some());
+    assert!(blur.query_by_label("Sample All Layers").is_some());
+
+    let mut sharpen = bar(Tool::Sharpen);
+    assert!(field(&sharpen).is_some());
+    assert!(number_field(&sharpen, "Strength").is_some());
+    assert!(sharpen.query_by_label("Sample All Layers").is_some());
+    type_angle(&mut sharpen, "35");
+    assert_eq!(sharpen.state().session.tools.brush.angle, 35.0);
+    assert!(alerts(&sharpen).is_empty());
 }

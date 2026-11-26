@@ -123,11 +123,15 @@ fn existing_document_profile_preset_and_recorded_export_keep_source_colors() {
     verify_png(&writes.borrow()[0], [30, 30, 200], 0, true);
 }
 
-#[test]
-fn export_as_color_space_gpu_snapshots() {
-    let Some(dir) = std::env::var_os("PHOTOCRAFT_SRGB_SNAPSHOTS") else { return };
-    let dir = std::path::PathBuf::from(dir);
-    let _gpu = photocraft_testkit::gpu_lock();
-    std::fs::create_dir_all(&dir).unwrap();
-    export_both_ways(Some(&dir));
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn export_as_color_space_gpu_snapshots() {
+        let Some(dir) = std::env::var_os("PHOTOCRAFT_SRGB_SNAPSHOTS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let _gpu = photocraft_testkit::gpu_lock();
+        std::fs::create_dir_all(&dir).unwrap();
+        export_both_ways(Some(&dir));
+    }
 }
