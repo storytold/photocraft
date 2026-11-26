@@ -162,6 +162,7 @@ fn the_overlay_shows_what_the_commit_writes() {
     for (name, depth, setup, p) in cases {
         let (live, committed, d) = run(&|| scene(depth, &*setup), p);
         assert!(live.is_overlay(), "{name}: shown as an overlay");
+        eprintln!("overlay preview vs commit, {name}: worst difference {:.2}/255", d * 255.0);
         assert!(d <= TOLERANCE, "{name}: the preview and the commit differ by {d}");
         // Something was drawn, so the comparison is not of two untouched documents.
         let untouched = scene(depth, &*setup);
