@@ -633,6 +633,24 @@ fn a_detection_value_past_its_range_takes_the_closest_one_with_the_range_alert()
     }
 }
 
+/// The bar's hint words the gesture the tool is in: today's freehand drag with Magnetic off, the
+/// click-and-move trace with it on.
+#[test]
+fn the_bar_hint_follows_the_mode() {
+    let mut h = bar();
+    assert!(hint_of(&h).contains("draw freehand"), "with Magnetic off the hint is the freehand one: {:?}", hint_of(&h));
+    h.get_by_label("Magnetic").click();
+    h.run_steps(2);
+    let hint = hint_of(&h);
+    assert!(hint.contains("fastens to the edge") && hint.contains("Enter"), "with Magnetic on it words the click-and-move gesture: {hint:?}");
+    assert!(!hint.contains("Release on the start point"), "and not the release that ends a held drag: {hint:?}");
+}
+
+/// The bar's hint line, picked out by the separators its clauses are joined with.
+fn hint_of(h: &Harness<'static, Box<PhotocraftApp>>) -> String {
+    h.query_all_by_role(Role::Label).filter_map(|n| n.accesskit_node().label()).find(|l| l.contains('·')).unwrap_or_default()
+}
+
 #[test]
 fn the_magnetic_cells_are_the_freeform_pen_s_own_and_leave_the_lasso_alone() {
     let mut h = bar();
@@ -641,4 +659,144 @@ fn the_magnetic_cells_are_the_freeform_pen_s_own_and_leave_the_lasso_alone() {
     type_into(&mut h, "Width", "30");
     let o = &h.state().ui.tool_options;
     assert_eq!((f64::from(o.freeform_magnetic.width), f64::from(o.magnetic.width)), (30.0, 10.0), "the pen's Width is not the lasso's");
+}
+
+/// The gate as the right-click actually arrives over a trace: the primary button held, one fastening
+/// already laid by itself, and the right button pressed over the canvas. A fastening leaves the draft
+/// between its clicks, so a gate on the held press is off by then and the Pen's path menu opens over
+/// the trace.
+#[test]
+fn a_right_click_in_a_held_magnetic_drag_opens_no_menu_once_a_point_has_fastened() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    let first = [140.0, 92.0];
+    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
+    drag(&mut app, &[[170.0, 92.0], [200.0, 92.0], [230.0, 92.0]], 1.0, Modifiers::NONE);
+    let laid = app.canvas_tools.vector.freeform.draft.points().len();
+    assert!(laid > 1, "the held drag lays fastening points of its own: {laid}");
+    crate::canvas::testing::secondary_click(&mut app, [230.0, 92.0], Modifiers::NONE);
+    let opened = app.ui.canvas_tool_menu.as_ref().map(|m| m.tool);
+    assert!(opened.is_none(), "the right-click opens no menu over a trace that has fastened: {opened:?}");
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "and the trace goes on");
+    tool_event(&mut app, ToolEvent::Up { x: 230.0, y: 92.0 }, Modifiers::NONE);
+    finish(&mut app);
+    let points = anchors(&app);
+    assert!(edge_deviation(&points, TOP) < 2.0, "and it ends as a trace along the edge: {points:?}");
+}
+
+/// Turning the checkbox on under a trace that began freehand must not start the edge walk inside it.
+/// The draft follows the rules it began with, and a fastening put into a draft that does not take one
+/// closes the outline there and then, which commits a Work Path in the middle of a held gesture.
+#[test]
+fn turning_magnetic_on_under_an_open_freehand_trace_lays_no_fastening_and_commits_nothing() {
+    let mut app = app();
+    let first = [140.0, 92.0];
+    tool_event(&mut app, ToolEvent::Down { x: first[0], y: first[1], pressure: 1.0 }, Modifiers::NONE);
+    drag(&mut app, &[[170.0, 92.0], [200.0, 92.0]], 1.0, Modifiers::NONE);
+    crate::canvas::testing::control(&mut app, "ui.set", json!({"freeformMagnetic": true}));
+    assert!(app.ui.tool_options.freeform_magnetic_on, "the checkbox is on from here on");
+    let before = app.canvas_tools.vector.freeform.draft.points().len();
+    drag(&mut app, &[[230.0, 92.0], [260.0, 92.0]], 1.0, Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.work_path.is_none(), "the toggle mid-gesture commits no path");
+    let after = app.canvas_tools.vector.freeform.draft.points().len();
+    assert!(after > before, "the freehand trace goes on taking the pointer's own points: {before} → {after}");
+    let Some(last) = app.canvas_tools.vector.freeform.draft.points().last().copied() else { panic!("the trace has points") };
+    assert!((last.y - 92.0).abs() < 2.0, "and its last point is the pointer's, not the edge's: {last:?}");
+    tool_event(&mut app, ToolEvent::Up { x: 260.0, y: 92.0 }, Modifiers::NONE);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Freeform Pen"), "the step is named for the mode the trace began in");
+}
+
+/// Inside a running trace a plain click fastens to the edge near the pointer rather than to where the
+/// pointer clicked — the point the branch in `press` exists for.
+#[test]
+fn a_plain_click_in_a_magnetic_trace_fastens_to_the_edge_instead_of_the_pointer() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0]], 1.0);
+    let before = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    crate::canvas::testing::press(&mut app, [260.0, 92.0], Modifiers::NONE);
+    crate::canvas::testing::release(&mut app, [260.0, 92.0], Modifiers::NONE);
+    let after = app.canvas_tools.vector.freeform.draft.points().to_vec();
+    assert_eq!(after.len(), before.len() + 1, "the click adds one point: {before:?} → {after:?}");
+    let Some(last) = after.last().copied() else { panic!("the trace has a last point") };
+    assert!((last.y - TOP).abs() < 2.0, "and it lies on the edge, not under the pointer: {last:?}");
+}
+
+/// The guard a retracted fastening needs, pinned: a pointer that stands still lays nothing back.
+#[test]
+fn a_standing_still_pointer_lays_nothing_back_over_a_retracted_fastening() {
+    let mut app = app();
+    let o = &mut app.ui.tool_options;
+    o.freeform_magnetic_on = true;
+    o.freeform_magnetic.frequency = 100.0;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    let laid = app.canvas_tools.vector.freeform.draft.points().len();
+    assert!(laid >= 8, "a dense trace fastens often: {laid} points");
+    crate::canvas::testing::key(&mut app, egui::Key::Backspace, Modifiers::NONE);
+    let taken = app.canvas_tools.vector.freeform.draft.points().len();
+    assert_eq!(taken, laid - 1, "Backspace takes the last fastening back");
+    for _ in 0..2 {
+        crate::canvas::testing::move_to(&mut app, [260.0, 92.0], Modifiers::NONE);
+    }
+    assert_eq!(app.canvas_tools.vector.freeform.draft.points().len(), taken, "and a pointer that has not moved lays nothing in its place");
+}
+
+/// The mode can change under a trace without changing the name of its step: the label follows the
+/// options the trace captured when it began, not the bar's state when it ends.
+#[test]
+fn a_trace_keeps_the_history_name_of_the_mode_it_began_in() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    crate::canvas::testing::control(&mut app, "ui.set", json!({"freeformMagnetic": false}));
+    let n = app.session.active().unwrap().history.past_len();
+    finish(&mut app);
+    assert_eq!(app.session.active().unwrap().history.past_len(), n + 1, "the trace ends as one step");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Magnetic Pen"), "under the name of the mode it ran in");
+}
+
+/// The draft follows the freehand rules again once the Magnetic trace is over: the rules are chosen
+/// between traces, so they have to come back the other way as well.
+#[test]
+fn the_freehand_gesture_returns_after_a_magnetic_trace_ends() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    stroke(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]]);
+    assert!(app.session.active().unwrap().doc.work_path.is_some(), "the magnetic trace committed a path");
+    crate::canvas::testing::control(&mut app, "ui.set", json!({"freeformMagnetic": false}));
+    held_stroke(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]]);
+    let points = anchors(&app);
+    assert!(edge_deviation(&points, TOP) > 4.0, "the next trace is the pointer's own line again: {points:?}");
+}
+
+/// What a right-click between clicks does, pinned rather than left to chance: the framework's
+/// click-a-vertex rule retracts the last point, as the Polygonal Lasso's right-click does. The
+/// reference measured only that no menu opens and the trace stays live; the retract is the rule the
+/// draft this mode uses already carries.
+#[test]
+fn a_right_click_between_clicks_takes_the_last_fastening_point_back() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    let laid = app.canvas_tools.vector.freeform.draft.points().len();
+    crate::canvas::testing::secondary_click(&mut app, [260.0, 92.0], Modifiers::NONE);
+    assert_eq!(app.canvas_tools.vector.freeform.draft.points().len(), laid - 1, "the right-click takes the last fastening back");
+    assert!(app.ui.canvas_tool_menu.as_ref().map(|m| m.tool).is_none(), "and opens no menu");
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "with the trace still live");
+}
+
+/// A Magnetic trace keeps drawing while the pointer moves with the button up, so it must not wait out
+/// a tool switch and go on laying points when the pen comes back.
+#[test]
+fn switching_tools_drops_an_open_magnetic_trace() {
+    let mut app = app();
+    app.ui.tool_options.freeform_magnetic_on = true;
+    traced_along(&mut app, &[[140.0, 92.0], [200.0, 92.0], [260.0, 92.0]], 1.0);
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "the trace is open between its clicks");
+    app.ui.tool = Tool::Move;
+    crate::canvas::testing::move_to(&mut app, [300.0, 92.0], Modifiers::NONE);
+    app.ui.tool = Tool::FreeformPen;
+    crate::canvas::testing::move_to(&mut app, [340.0, 92.0], Modifiers::NONE);
+    assert!(!app.canvas_tools.vector.freeform.draft.is_open(), "the open trace did not come back under the pen");
+    assert!(app.session.active().unwrap().doc.work_path.is_none(), "and it left no path behind");
 }

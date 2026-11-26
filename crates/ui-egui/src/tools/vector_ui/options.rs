@@ -256,9 +256,24 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             if let Some(Some(v)) = picked {
                 o.curve_fit = v as f32;
             }
+            let magnetic_on = o.freeform_magnetic_on;
             magnetic_cells(app, ui);
             let alt = crate::shortcuts::pretty("Alt");
-            hint(ui, &crate::i18n::fmt(tl!("Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close"), &[("alt", &alt)]));
+            // The hint words the gesture the tool is in: with Magnetic on the trace begins at a click
+            // and follows the pointer with the button up, and it is Enter, a double-click or a click on
+            // the first point that ends it — not the release of a held drag (#12693, as the review
+            // measured).
+            let text = if magnetic_on {
+                crate::i18n::fmt(
+                    tl!(
+                        "Click: begin the trace · Move: it fastens to the edge · {alt}-click: straight segment · Enter: finish · Double-click or click the start: close"
+                    ),
+                    &[("alt", &alt)],
+                )
+            } else {
+                crate::i18n::fmt(tl!("Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close"), &[("alt", &alt)])
+            };
+            hint(ui, &text);
         }
         Tool::CurvaturePen => hint(
             ui,

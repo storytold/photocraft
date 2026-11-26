@@ -135,6 +135,30 @@ impl FreeformPenTool {
         self.edges.sync(&app.session);
     }
 
+    /// Whether the Magnetic walk runs: the mode is on, and the draft follows the rules the mode needs.
+    /// Those rules are chosen between traces, so turning the checkbox on or off under an open one must
+    /// not switch the walk on or off in the middle of a gesture that began the other way — a fastening
+    /// put into a draft that does not take one closes the outline where it stands.
+    fn tracing(&self) -> bool {
+        self.magnetic.is_some() && self.draft.kind() == DraftKind::Polygonal
+    }
+
+    /// A Magnetic trace standing open between its clicks. It follows the pointer with the button up,
+    /// so the app ends it once another tool takes over ([`super::host::drain`]), the way it ends the
+    /// Pen's open path: the tool host cancels only a gesture in progress.
+    pub(crate) fn magnetic_trace_open(&self) -> bool {
+        self.magnetic.is_some() && self.draft.is_open()
+    }
+
+    /// Drop the open trace and everything it captured, without a path.
+    pub(crate) fn discard_trace(&mut self) {
+        self.draft.cancel();
+        self.owner = None;
+        self.target = None;
+        self.continuation = None;
+        self.drop_trace();
+    }
+
     /// Magnetic: the border found between the trace's last point and the edge near the pointer, with
     /// one point placed every [`MagneticSettings::spacing`] along it — the Magnetic Lasso's own
     /// cadence for fastening points, and here the points the trace (and so the path's anchors) is
@@ -213,7 +237,7 @@ impl FreeformPenTool {
     /// End the trace: a Magnetic one first puts its live end in at the pointer, then the draft closes
     /// and the finished trace goes to the commit the host runs after the pass.
     fn finish_trace(&mut self) {
-        if self.magnetic.is_some() {
+        if self.draft.kind() == DraftKind::Polygonal {
             let lived = self.place_live_end();
             self.apply(lived);
         }
@@ -356,8 +380,9 @@ impl CanvasTool for FreeformPenTool {
         }
         // Between clicks the trace takes its own keys: Backspace and Delete for its last point, and a
         // Magnetic trace also takes plain Enter, which is how the reference ends one — a freehand
-        // trace ends on the release and leaves Enter to the app, as today.
-        if self.magnetic.is_some() { ToolClaims::NONE.keyboard().deletes().keys(TRACE_KEYS) } else { ToolClaims::NONE.keyboard().deletes() }
+        // trace ends on the release and leaves Enter to the app, as today. The keys follow the rules
+        // the trace is running under, which a mid-trace toggle of the checkbox does not change.
+        if self.draft.kind() == DraftKind::Polygonal { ToolClaims::NONE.keyboard().deletes().keys(TRACE_KEYS) } else { ToolClaims::NONE.keyboard().deletes() }
     }
 
     /// The primary button always, the secondary between straight-segment clicks (it retracts the last vertex).
@@ -392,7 +417,7 @@ impl CanvasTool for FreeformPenTool {
         // ⌥, which asks for the straight segment to where the pointer actually clicked; and a click on
         // the point the trace began with, like a double-click anywhere, brings the trace back to its
         // start so the finished path closes.
-        let tracing = self.magnetic.is_some() && self.draft.is_open();
+        let tracing = self.tracing() && self.draft.is_open();
         let closing = tracing && (pointer.clicks >= 2 || self.on_the_start(pointer, cx));
         let at = match (tracing, closing, self.magnetic) {
             (true, false, Some(settings)) if !at.mods.alt => {
@@ -418,7 +443,7 @@ impl CanvasTool for FreeformPenTool {
         if let Some(at) = sample(pointer, cx) {
             // Magnetic: a held ⌥ draws freehand from the pointer, as the reference measures; a plain
             // drag is traced along the edges, which is what the button-up moves do in [`hover`].
-            let event = if self.magnetic.is_some() && self.draft.is_open() && !at.mods.alt { self.follow_edges(pointer, at) } else { self.draft.drag(at) };
+            let event = if self.tracing() && self.draft.is_open() && !at.mods.alt { self.follow_edges(pointer, at) } else { self.draft.drag(at) };
             self.apply(event);
         }
     }
@@ -439,7 +464,7 @@ impl CanvasTool for FreeformPenTool {
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let Some(at) = sample(pointer, cx) else { return };
         let mut at = at;
-        if self.magnetic.is_some() && self.draft.is_open() && !self.draft.is_down() {
+        if self.tracing() && self.draft.is_open() && !self.draft.is_down() {
             let event = self.follow_edges(pointer, at);
             self.apply(event);
             if let Some((edge, zoom)) = self.live_end {
@@ -453,11 +478,7 @@ impl CanvasTool for FreeformPenTool {
 
     /// Escape during a drag, a lost pointer or `ToolHost::cancel` drops the trace without a path.
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
-        self.draft.cancel();
-        self.owner = None;
-        self.target = None;
-        self.continuation = None;
-        self.drop_trace();
+        self.discard_trace();
     }
 
     /// Between clicks: Enter closes, Escape cancels, Backspace and Delete retract.
