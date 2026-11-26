@@ -42,6 +42,24 @@ const MAX_NAME: usize = 255;
 /// The parameter keys that name a curve, as opposed to the keys that only adjust it.
 const CURVE_KEYS: [&str; 12] = ["points", "gray", "red", "green", "blue", "cyan", "magenta", "yellow", "black", "lightness", "a", "b"];
 
+/// Everything a preset file owns outright: the curves and their channels, plus how they are drawn
+/// (`pencil` for a drawn map, `smooth` for the passes the command applies on the way in). A file
+/// names `pencil` only for a drawn curve, so the keys it does not name still replace what the host
+/// had: a preset of control points loaded into a Pencil-mode dialog leaves it in point mode.
+const OWNED_KEYS: [&str; 14] = ["points", "gray", "red", "green", "blue", "cyan", "magenta", "yellow", "black", "lightness", "a", "b", "pencil", "smooth"];
+
+/// `dialog`'s parameters with the loaded preset's `curves` written into them: everything the preset
+/// owns comes from the preset, and everything else (the addressing keys the dialog opened with)
+/// stays as the dialog has it. `None` when either side is not an object.
+pub fn over(dialog: &Value, curves: &Value) -> Option<Value> {
+    let mut object = dialog.as_object()?.clone();
+    for key in OWNED_KEYS {
+        object.remove(key);
+    }
+    object.extend(curves.as_object()?.clone());
+    Some(Value::Object(object))
+}
+
 /// One curve preset: a name and the curves as `image.adjustments.curves` takes them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CurvePreset {

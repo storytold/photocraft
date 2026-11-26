@@ -892,21 +892,29 @@ fn dialog_space(app: &PhotocraftApp, id: DialogId) -> Option<&'static str> {
     })
 }
 
+/// The open dialog's parameters, only when `id` is still the Curves dialog that is open: the file
+/// picker can answer after that dialog closed or another adjustment took its place.
+fn open_curve_params(app: &PhotocraftApp, id: DialogId) -> Option<Value> {
+    app.adjust_open.iter().any(|open| open.id == id && open.kind == "curves").then(|| open_params(app)).flatten()
+}
+
 /// Load Preset…: ask for a curve preset file, run `curves.presets.load` for it, and write its
 /// curves over the dialog's parameters, which is how a preset becomes the curve on screen.
 fn load_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, String> {
     app.pick_file_bytes_filtered(&[photocraft_engine::presets::curves::EXT], move |app, name, bytes| {
+        // The dialog is checked and its parameters read before the command runs: a picker answered
+        // after the dialog closed leaves no preset in the user's list.
+        let held = open_curve_params(app, id).ok_or("the Curves dialog closed")?;
         let mut asked = crate::swatches_ui::source(&name, &bytes);
         if let Some(space) = dialog_space(app, id) {
             asked["space"] = json!(space);
         }
         let loaded = app.run("curves.presets.load", asked)?;
         let given = loaded.get("curves").cloned().ok_or("the preset command returned no curves")?;
-        let mut params = open_params(app).ok_or("the Curves dialog closed")?;
-        let (Some(object), Some(curves)) = (params.as_object_mut(), given.as_object()) else {
-            return Err("the preset's curves are not the Curves command's parameters".into());
-        };
-        object.extend(curves.clone());
+        // The preset owns the curves and the mode they are drawn in: its points, channels and
+        // `pencil` replace what the dialog held, so a preset of control points loaded into a
+        // Pencil-mode dialog leaves the points editable instead of turning them into a sampled map.
+        let params = photocraft_engine::presets::curves::over(&held, &given).ok_or("the preset's curves are not the Curves command's parameters")?;
         if !apply_params(app, id, &params) {
             return Err("the preset's curves do not fit the open dialog".into());
         }

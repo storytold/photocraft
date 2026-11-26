@@ -287,6 +287,72 @@ fn a_file_that_cannot_be_written_leaves_no_preset_behind() {
     assert_eq!(rows_enabled(&h), vec![true, true, false], "so the Delete row stays greyed");
 }
 
+// --------------------------------------------------------------------------- points and pencil
+
+/// A drawn curve at the same lifted midtone as `lifted()`, in the form the Pencil mode holds it:
+/// 256 output levels, not control points.
+fn pencil_params() -> Value {
+    json!({"points": (0..=255).map(|k| (k as f64 * 1.5).min(255.0)).collect::<Vec<f64>>(), "pencil": true})
+}
+
+#[test]
+fn a_point_preset_loaded_into_a_pencil_dialog_keeps_its_points() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    adjust_dialog::apply_params(h.state_mut(), id, &pencil_params());
+    h.run_steps(2);
+    let drawn = params(&h, id);
+    assert_eq!(drawn["pencil"], json!(true), "the dialog is in Pencil mode");
+    assert_eq!(drawn["points"].as_array().map(Vec::len), Some(256), "a drawn curve is a map of 256 levels");
+
+    let bytes = curves::to_bytes(&CurvePreset { name: "Points".into(), curves: stored_curves() }).expect("a point preset writes");
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Points.pcrv"), &bytes);
+
+    let after = params(&h, id);
+    assert_ne!(after["pencil"], json!(true), "the point preset leaves Pencil mode: {after}");
+    assert_eq!(after["points"], stored_curves()["points"], "the preset's control points are what the dialog now edits");
+    assert_eq!(after["points"].as_array().map(Vec::len), Some(3), "they stayed points, not a sampled map");
+    assert_eq!(after["red"], stored_curves()["red"], "and the preset's red curve is there");
+    assert!(!h.state().ui.status_error, "the load reports no error: {}", h.state().ui.status);
+}
+
+#[test]
+fn a_pencil_preset_loaded_into_a_point_dialog_draws_instead() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    adjust_dialog::apply_params(h.state_mut(), id, &lifted());
+    h.run_steps(2);
+    assert!(params(&h, id).get("pencil").is_none(), "the dialog starts in point mode");
+
+    let bytes = curves::to_bytes(&CurvePreset { name: "Drawn".into(), curves: pencil_params() }).expect("a pencil preset writes");
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Drawn.pcrv"), &bytes);
+
+    let after = params(&h, id);
+    assert_eq!(after["pencil"], json!(true), "the preset's Pencil mode wins over the dialog's");
+    assert_eq!(after["points"].as_array().map(Vec::len), Some(256), "with the 256-level map it carries");
+}
+
+#[test]
+fn a_load_answered_after_the_dialog_closed_runs_no_command() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, _id) = curves_dialog(files.clone());
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    let bytes = curves::to_bytes(&CurvePreset { name: "Late".into(), curves: stored_curves() }).expect("a preset writes");
+    // Another adjustment takes the front while the file picker is still up.
+    adjust_dialog::open(h.state_mut(), "image.adjustments.levels").expect("the Levels dialog opens");
+    h.run_steps(3);
+    choose_file(&mut h, &files, std::path::Path::new("Late.pcrv"), &bytes);
+
+    let state = h.state();
+    assert!(state.session.presets().curves_presets.is_empty(), "the late answer recorded no preset");
+    assert!(state.session.presets().curves_preset.is_none(), "and selected none");
+}
+
 // ---------------------------------------------------------------------------- save, load and delete
 
 #[test]

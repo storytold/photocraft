@@ -375,6 +375,21 @@ fn a_current_name_is_kept_only_while_that_preset_is_in_the_list() {
 }
 
 #[test]
+fn a_loaded_preset_replaces_the_curves_and_the_mode_the_dialog_held() {
+    let drawn = json!({"target": { "layer": 3 }, "points": [0.0, 1.0, 2.0], "pencil": true, "smooth": 2});
+    let preset = json!({"points": [[0.0, 0.0], [128.0, 150.0], [255.0, 255.0]], "red": [[0.0, 20.0], [255.0, 235.0]]});
+    let merged = curves::over(&drawn, &preset).expect("both sides are objects");
+    assert_eq!(merged["target"], drawn["target"], "the dialog keeps what it addresses");
+    assert_eq!(merged["points"], preset["points"], "the preset's control points replace the drawn map");
+    assert_eq!(merged["red"], preset["red"], "and so do its channels");
+    assert!(merged.get("pencil").is_none(), "Pencil mode goes with the preset's own point mode");
+    assert!(merged.get("smooth").is_none(), "and the smoothing passes the dialog held are not carried over");
+    assert!(curves::over(&json!([3]), &preset).is_none(), "parameters that are not an object are refused");
+    let drawn_now = curves::over(&json!({"points": [0.0, 1.0]}), &json!({"points": [0.0, 2.0], "pencil": true})).expect("both are objects");
+    assert_eq!(drawn_now["pencil"], true, "a drawn preset sets Pencil mode on a dialog that had none");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();
