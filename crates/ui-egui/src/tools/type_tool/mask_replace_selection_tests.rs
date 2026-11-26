@@ -1,6 +1,10 @@
 //! #12073: committing a Type Mask always replaces the selection with the text outline, with ⇧,
 //! ⌥ or ⇧⌥ held too: every commit goes through `commit_with`. `type.createSelection` keeps its
 //! `operation` param for scripts.
+//!
+//! #12508 measured the same gestures from the other side: the modifiers held when the mask *starts*
+//! decide the combining (⇧ at the click adds, ⌥ at the start of a drag subtracts), so the ⇧-click
+//! that starts "C" in the test below adds it. `mask_start_modifiers_tests` holds those cases.
 
 use egui::Modifiers;
 use photocraft_raster::Surface;
@@ -73,10 +77,18 @@ fn every_commit_replaces_the_selection_whatever_modifiers_are_held() {
 }
 
 /// The reference application's "AB", then ⇧-clicks to commit it and to start "C", then "C"
-/// committed: only "C" is selected. (Here a click outside the text commits without starting new
+/// committed. #12508 measured that again and corrected the result: "C", started with the ⇧-click, is
+/// added to "AB" instead of replacing it. (Here a click outside the text commits without starting new
 /// text, so that is two ⇧-clicks.)
 #[test]
-fn the_next_mask_after_a_shift_click_commit_replaces_the_first() {
+fn the_next_mask_after_a_shift_click_commit_adds_to_the_first() {
+    // The engine's own Add on top of the committed "AB": the combining the ⇧ start must reach.
+    let mut oracle = new_app();
+    mask(&mut oracle, (100.0, 200.0), "AB");
+    super::commit_with(&mut oracle, Modifiers::NONE);
+    oracle.run("type.createSelection", json!({"text": "C", "x": 300.0, "y": 200.0, "size": 48.0, "operation": "add"})).unwrap();
+    let both = selection(&oracle);
+
     let second = outline((300.0, 200.0), "C");
     let mut app = new_app();
     mask(&mut app, (100.0, 200.0), "AB");
@@ -84,7 +96,8 @@ fn the_next_mask_after_a_shift_click_commit_replaces_the_first() {
     assert!(app.ui.text_edit.is_none(), "the ⇧-click commits");
     mask_with(&mut app, (300.0, 200.0), "C", Modifiers::SHIFT);
     click(&mut app, 450.0, 60.0, Modifiers::SHIFT);
-    assert!(selection(&app) == second, "{:?}, not only \"C\" {:?}", bounds(&selection(&app)), bounds(&second));
+    assert!(selection(&app) == both, "{:?}, not \"AB\" plus \"C\" {:?}", bounds(&selection(&app)), bounds(&both));
+    assert!(selection(&app) != second, "\"C\" alone is not the measured result");
 }
 
 #[test]

@@ -388,7 +388,16 @@ mod tests {
         app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
         let id = app.run("type.create", json!({"text": "Hello world", "size": 40, "x": 20, "y": 100, "color": "#ffffff"})).unwrap()["layer"].as_u64().unwrap();
         app.ui.tool = Tool::Type;
-        app.ui.text_edit = Some(crate::state::TextEdit { layer: id, document: None, caret: 0, anchor: 5, session: "s".into(), created: false, mask: false });
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id,
+            document: None,
+            caret: 0,
+            anchor: 5,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            mask_start_mode: None,
+        });
         use_swatch(&mut app, "Red", false);
         let red = [230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0, 1.0];
         assert_eq!(app.session.tools.foreground, red);

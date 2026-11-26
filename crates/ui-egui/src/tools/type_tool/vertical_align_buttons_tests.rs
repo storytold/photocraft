@@ -123,7 +123,16 @@ fn a_background_text_edit_decides_by_its_own_document() {
     let mut app = new_app(Tool::Type);
     let a = app.session.active().unwrap().doc.id.0;
     let id = text_layer(&mut app, "vertical");
-    app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, document: Some(a), caret: 0, anchor: 0, session: "s".into(), created: false, mask: false });
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: Some(a),
+        caret: 0,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        mask_start_mode: None,
+    });
     // The same file opened twice, its copy of the layer turned horizontal.
     let twin = app.session.active().unwrap().doc.as_ref().clone();
     app.session.open_document(twin, None);

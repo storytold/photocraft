@@ -149,6 +149,7 @@ fn only_the_selected_characters_are_previewed_in_the_new_colour() {
         session: "type-color-preview-test".into(),
         created: false,
         mask: false,
+        mask_start_mode: None,
     });
     let history = committed(&app).3;
     pick(&mut app, "#00ff00");

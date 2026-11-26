@@ -460,7 +460,16 @@ fn arrow_keys_ignored_during_text_edit() {
     let mut app = app_with_layer();
     let id = app.session.active().unwrap().active_layer.unwrap();
     let b0 = bounds(&app, id);
-    app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, document: None, caret: 0, anchor: 0, session: "test".into(), created: false, mask: false });
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "test".into(),
+        created: false,
+        mask: false,
+        mask_start_mode: None,
+    });
     assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
     assert!(!press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
     assert!(!press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::ALT));

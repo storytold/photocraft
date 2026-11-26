@@ -27,7 +27,7 @@ use crate::panels::brush_panel::brushes::BrushKey;
 
 pub use color_panel::ColorPanelState;
 pub use panel_state::{CurvesEditorState, PointCurveDrag, PointCurveState};
-pub use text_edit::{TextEdit, TypeInsertionStyle, TypeTransform};
+pub use text_edit::{MaskSelectionMode, TextEdit, TypeInsertionStyle, TypeTransform};
 pub use tool::Tool;
 pub use tool_options::{ObjectFinderMode, SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, yes};
