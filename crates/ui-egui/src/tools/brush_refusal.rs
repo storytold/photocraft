@@ -182,5 +182,7 @@ mod art_history_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../burn_refusal_alert_tests.rs"]
 mod burn_refusal_alert_tests;
+
+#[cfg(test)]
 #[path = "../healing_refusal_alert_tests.rs"]
 mod healing_refusal_alert_tests;
