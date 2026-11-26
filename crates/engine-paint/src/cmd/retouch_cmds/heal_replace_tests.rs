@@ -1,8 +1,10 @@
 //! #12101: the Healing Brush's Replace mode. `paint.healingBrush {"mode":"replace"}` copies the
-//! source pixels straight onto the layer: no healing solve, Normal compositing. Every covered pixel
-//! equals the source pixel the stroke maps there, bit for bit, as read from the document's state
-//! before the stroke. The other modes keep their results; an unknown `mode` string stays an error,
-//! and the stroke's History step keeps the name "Healing Brush".
+//! source pixels straight onto the layer: no healing solve, Normal compositing. Every pixel of the
+//! tip's full-coverage disc equals the source pixel the stroke maps there, bit for bit, as read
+//! from the document's state before the stroke (221 px for the 20 px hard tip); past that disc
+//! Replace lays the same source through the antialiased rim's coverage - strictly between ground
+//! and source. The other modes keep their results; an unknown `mode` string stays an error, and
+//! the stroke's History step keeps the name "Healing Brush".
 
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::Size;
@@ -58,8 +60,9 @@ fn replace_paints_the_source_pixels_bit_for_bit() {
     s.execute("paint.healingBrush", stroke(Some("replace"))).unwrap();
     assert_eq!(s.active().unwrap().history.undo_label(), Some("Healing Brush"), "the stroke's History name");
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "the stroke is one step");
-    // Every pixel the hard tip covers fully (7 px of the 10 px radius, away from the antialiased
-    // rim) is the source pixel mapped there, bit for bit; the samples are the pre-stroke pixels.
+    // Every pixel the hard tip covers fully (out to 8.48 px of its 10 px radius, away from the
+    // antialiased rim) is the source pixel mapped there, bit for bit; the samples are the
+    // pre-stroke pixels.
     let green: Vec<f32> = vec![40.0 / 255.0, 160.0 / 255.0, 60.0 / 255.0, 1.0];
     let ch = pixel(&s, 0, 0).len();
     let src = |x: i32, y: i32| {
@@ -67,9 +70,13 @@ fn replace_paints_the_source_pixels_bit_for_bit() {
         before[at..at + ch].to_vec()
     };
     let mut inside = 0;
-    for dy in -7..=7 {
-        for dx in -7..=7 {
-            if dx * dx + dy * dy > 49 {
+    for dy in -9i32..=9 {
+        for dx in -9i32..=9 {
+            // The exact-copy disc reaches to a pixel-centre distance under 9 px of the 10 px hard
+            // tip: (6, 6) has its centre at 9.19 px and already sits in the antialiased rim, where
+            // Replace lays the source through its coverage (the hardness-50 test below pins that).
+            let (ax, ay) = (f64::from(dx.abs()) + 0.5, f64::from(dy.abs()) + 0.5);
+            if ax * ax + ay * ay >= 81.0 {
                 continue;
             }
             let (x, y) = (30 + dx, 24 + dy);
@@ -77,10 +84,46 @@ fn replace_paints_the_source_pixels_bit_for_bit() {
             inside += 1;
         }
     }
-    assert!(inside > 0, "the dab covers pixels");
+    // The exact-copy disc this engine gives for a 20 px hard tip: 221 pixels (widened from the
+    // first round's r = 7 disc of 149; the rim test covers what lies beyond).
+    assert_eq!(inside, 221, "the loop's own shape");
     // Outside the tip nothing changed: the dab's edge is 10 px away, these are 13.
     assert_eq!(pixel(&s, 43, 24), green, "right of the dab");
     assert_eq!(pixel(&s, 30, 37), green, "below the dab");
+}
+
+#[test]
+fn replace_at_partial_coverage_lays_the_source_through_the_coverage() {
+    // The rim of Replace is coverage, not a hard copy edge: a pixel the tip covers only partly
+    // takes the source pixel composited over the ground by that coverage - strictly between the
+    // two, and neither one exactly. (The reference's rim, measured on its own document, is about
+    // 1 px wider than ours; the exact rim width here is not measured.)
+    let mut s = document();
+    let before = pixels(&s);
+    let mut p = stroke(Some("replace"));
+    p["hardness"] = json!(50);
+    s.execute("paint.healingBrush", p).unwrap();
+    let q = |v: f32| (v * 255.0).round() as i32;
+    let lvl = |x: i32, y: i32| {
+        let at = usize::try_from(y * 48 + x).unwrap() * 4;
+        [before[at], before[at + 1], before[at + 2]].map(q)
+    };
+    // The tip's centre still holds the full copy: source 6,6..26 puts a 60-cell under the centre.
+    let centre = pixel(&s, 30, 24);
+    assert_eq!(centre.iter().map(|&v| q(v)).collect::<Vec<i32>>(), vec![60, 60, 60, 255], "centre: straight copy at full coverage");
+    // 8 px out on a hardness-50 tip the coverage is partial: over the pre-stroke green the 200
+    // cell now lies at about 40 %, so the levels sit strictly between the ground and the source.
+    let rim = pixel(&s, 38, 24).iter().map(|&v| q(v)).collect::<Vec<i32>>();
+    let (src, ground) = (lvl(24, 16), [40, 160, 60]); // the 200-cell source pixel this rim copies from
+    assert_eq!(src, [200, 200, 200], "fixture check: the rim samples a 200-cell");
+    for c in 0..3 {
+        assert!(
+            rim[c] > ground[c].min(src[c]) && rim[c] < ground[c].max(src[c]),
+            "rim {rim:?} channel {c}: between ground {ground:?} and source {src:?}, not either"
+        );
+    }
+    // And not the full copy the interior shows.
+    assert_ne!(rim[..3], [200, 200, 200], "the rim is not a hard copy to the tip edge");
 }
 
 #[test]

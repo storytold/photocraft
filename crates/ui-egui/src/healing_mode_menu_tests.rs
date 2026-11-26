@@ -100,6 +100,42 @@ fn the_canvas_menu_replace_row_switches_the_stroke_without_a_history_step() {
 }
 
 #[test]
+fn the_options_bar_dropdown_replaces_and_picking_a_blend_mode_leaves_it() {
+    use crate::app::framework::BuildApp as _;
+    use egui::accesskit::Role;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    // The options bar alone, like the other bar tests: open the Mode dropdown, click a row.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.ui.tool = Tool::Healing;
+    crate::retouch_ui::set_source(&mut app, 8.0, 8.0);
+    let mut h = Harness::builder().with_size(egui::vec2(1800.0, 300.0)).with_step_dt(1.0 / 60.0).build_app(|ui, app| crate::panels::options_bar(app, ui), app);
+    h.run_steps(4);
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Mode").accesskit_node().value().as_deref(), Some("Normal"), "starts at Normal");
+    let before = steps(h.state());
+
+    h.get_by_role_and_label(Role::ComboBox, "Mode").click();
+    h.run_steps(2);
+    h.get_by_label("Replace").click();
+    h.run_steps(3);
+    assert!(h.state().ui.tool_options.healing_replace, "the dropdown's Replace row sets the option");
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Mode").accesskit_node().value().as_deref(), Some("Replace"), "the dropdown reads Replace");
+    assert_eq!(crate::retouch_ui::clone_params(h.state()).expect("the source is set")["mode"], json!("replace"), "the next stroke would run in Replace");
+    assert_eq!(steps(h.state()), before, "picking a Mode adds no History step");
+
+    h.get_by_role_and_label(Role::ComboBox, "Mode").click();
+    h.run_steps(2);
+    h.get_by_label("Multiply").click();
+    h.run_steps(3);
+    assert!(!h.state().ui.tool_options.healing_replace, "Multiply leaves Replace");
+    assert_eq!(h.state().session.tools.brush.mode, BlendMode::Multiply, "the brush takes the mode");
+    assert_eq!(crate::retouch_ui::clone_params(h.state()).expect("the source is set")["mode"], json!("Multiply"));
+    assert_eq!(steps(h.state()), before, "and no Mode pick ever adds a step");
+}
+
+#[test]
 fn the_mode_keys_keep_the_seven_modes_and_clear_replace() {
     // Replace stays out of the letter keys and the ⇧+ / ⇧− cycle: the seven modes and their order.
     let mut a = app();
