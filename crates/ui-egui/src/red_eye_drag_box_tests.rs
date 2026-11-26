@@ -187,6 +187,121 @@ fn an_edge_rect_is_clipped_to_the_document() {
     assert!(changed.iter().all(|p| in_box(*p)), "pixels outside the clipped rect changed: {changed:?}");
 }
 
+/// A white document holding one red disc of radius ~6 px at (`cx`, `cy`).
+fn one_dot(cx: i32, cy: i32) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": W, "height": H})).unwrap();
+    app.sync_views();
+    app.run("paint.pencil", json!({"points": [[cx, cy]], "size": 12, "hardness": 100, "color": "#f21818"})).unwrap();
+    *app
+}
+
+/// A white document with two separate red discs (radius ~6 px) at (30, 50) and (90, 50) - two
+/// strokes, so they are two regions, not one bar.
+fn two_dots() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": W, "height": H})).unwrap();
+    app.sync_views();
+    app.run("paint.pencil", json!({"points": [[30, 50]], "size": 12, "hardness": 100, "color": "#f21818"})).unwrap();
+    app.run("paint.pencil", json!({"points": [[90, 50]], "size": 12, "hardness": 100, "color": "#f21818"})).unwrap();
+    *app
+}
+
+/// One box over two red eyes corrects both of them, as one History state: the box is a region,
+/// not a single click at its centre.
+#[test]
+fn the_box_corrects_every_red_region_inside_it() {
+    let mut app = two_dots();
+    let past = steps(&app);
+    let (b1, b2) = (rgba(&app, 30, 50), rgba(&app, 90, 50));
+    assert!(b1[0] > 0.8 && b1[1] < 0.4 && b2[0] > 0.8 && b2[1] < 0.4, "both dots red first: {b1:?} {b2:?}");
+    app.run("paint.redEye", json!({"rect": [0, 0, W, H]})).unwrap();
+    let (a1, a2) = (rgba(&app, 30, 50), rgba(&app, 90, 50));
+    assert!(a1[0] < b1[0] - 0.1, "the near disc is corrected: {b1:?} -> {a1:?}");
+    assert!(a2[0] < b2[0] - 0.1, "the far disc is corrected too: {b2:?} -> {a2:?}");
+    assert_eq!(steps(&app), past + 1, "one state for the whole box");
+}
+
+/// Red farther from the box centre than the Pupil Size window still changes: the kernel runs at the
+/// red itself, not only within reach of the centre.
+#[test]
+fn a_box_fixes_red_farther_from_its_centre_than_the_pupil_window() {
+    let mut app = one_dot(5, 5);
+    let before = rgba(&app, 5, 5);
+    assert!(before[0] > 0.8 && before[1] < 0.4, "setup: {before:?}");
+    app.run("paint.redEye", json!({"rect": [0, 0, W, H]})).unwrap();
+    let after = rgba(&app, 5, 5);
+    assert!(after[0] < before[0] - 0.1, "the corner disc, 66 px from the centre, is corrected: {before:?} -> {after:?}");
+}
+
+/// Anchor pin (#12569 review L3): red at (90, 80) inside the box [20, 30, 80, 60] changes. A
+/// corner-anchored single click (distance 86 px) would leave it; a centre-anchored one reaches it at
+/// 36 px; the component seeding of this PR fixes it whatever the distance. Nothing outside the box
+/// changes. Green before and after this round by design: it is the anchor regression pin.
+#[test]
+fn the_box_fixed_a_component_at_its_far_side_as_of_the_centre_draft() {
+    let mut app = one_dot(90, 80);
+    let before = snapshot(&app);
+    app.run("paint.redEye", json!({"rect": [20, 30, 80, 60]})).unwrap();
+    let changed = changed_pixels(&app, &before);
+    assert!(changed.iter().any(|(x, y)| (90 - x).abs() <= 2 && (80 - y).abs() <= 2), "the far-side red changed: {changed:?}");
+    let in_box = inside_box((20, 30, 80, 60));
+    assert!(changed.iter().all(|p| in_box(*p)), "pixels outside the box changed: {changed:?}");
+}
+
+/// A box with no red, centred off the canvas, behaves like the same box inside it: one unchanged
+/// "Red Eye Removal Tool" state, not the miss error (#12569 review L5).
+#[test]
+fn an_empty_box_centred_off_the_canvas_still_leaves_one_unchanged_state() {
+    let mut app = one_dot(90, 80);
+    let past = steps(&app);
+    // The box covers x 20..40, y 20..40 (white; the clip's centre is inside the canvas, the
+    // rectangle's own centre at (-40, -40) is not).
+    let r = app.run("paint.redEye", json!({"rect": [-100, -100, 120, 120]})).unwrap();
+    assert_eq!(r["pixels"], 0, "no red in the clip: {r}");
+    assert_eq!(steps(&app), past + 1, "the same unchanged state an in-canvas empty box leaves");
+}
+
+/// A box straddling a live selection applies the correction where box and selection overlap; the
+/// part of a region outside the selection stays (#12569 review L6, with the #12576 clip).
+#[test]
+fn a_box_across_a_selection_corrects_only_inside_both() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 40, "y": 40, "width": 20, "height": 20})).unwrap();
+    let past = steps(&app);
+    let (b_in, b_out) = (rgba(&app, 45, 45), rgba(&app, 70, 55));
+    assert!(b_in[0] > 0.8 && b_in[1] < 0.4 && b_out[0] > 0.8 && b_out[1] < 0.4, "setup: {b_in:?} {b_out:?}");
+    app.run("paint.redEye", json!({"rect": [40, 40, 40, 30]})).unwrap();
+    assert!(rgba(&app, 45, 45)[0] < b_in[0] - 0.1, "box and selection: it corrects");
+    assert_eq!(rgba(&app, 70, 55), b_out, "in the box but off the selection: it stays");
+    assert_eq!(steps(&app), past + 1, "one state");
+}
+
+/// All of the box's red outside a live selection is refused like a press there (#12576 kept). Green
+/// before and after this round by design: it is the guard pin.
+#[test]
+fn a_box_whose_red_is_all_outside_the_selection_is_refused() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 0, "y": 30, "width": 40, "height": 40})).unwrap();
+    let past = steps(&app);
+    let before = snapshot(&app);
+    let err = app.run("paint.redEye", json!({"rect": [50, 40, 20, 20]})).unwrap_err();
+    assert!(err.contains("red-eye"), "{err}");
+    assert_eq!(steps(&app), past, "the refusal leaves no state");
+    assert!(changed_pixels(&app, &before).is_empty(), "the refusal changes nothing");
+}
+
+/// A box wider than the 512 x 512 px window the kernel reads at once is a parameter error, not a
+/// panic and not a silently clipped correction.
+#[test]
+fn a_box_wider_than_the_kernel_window_is_refused() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 1024, "height": 1024})).unwrap();
+    app.sync_views();
+    let err = app.run("paint.redEye", json!({"rect": [0, 0, 1024, 1024]})).unwrap_err();
+    assert!(err.contains("512"), "{err}");
+}
+
 /// Bad `rect` values (empty, negative size, off the canvas, wrong type, huge) answer an error and
 /// never a panic, and add no History state.
 #[test]

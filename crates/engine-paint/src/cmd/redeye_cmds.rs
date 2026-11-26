@@ -1,8 +1,9 @@
 //! Red Eye tool: click a pupil to neutralize the flash reflection.
 //!
 //! Toolbar-only (`paint.redEye`, empty menu path). The kernel in `photocraft-algo::redeye`
-//! runs on a window around each click plus the mask-filter halo. A `rect` (#12569) is a box drag:
-//! one click anchored at the rectangle's centre, its change clipped to the rectangle.
+//! runs on a window around each click plus the mask-filter halo. A `rect` (#12569) is a box
+//! drag: the kernel runs once per separate red region inside the rectangle, every change
+//! clipped to it, one History state.
 
 use photocraft_algo::redeye::{self, MAX_POINTS, MAX_WINDOW};
 use photocraft_color::ColorMode;
@@ -71,9 +72,9 @@ fn clicks(p: &Value) -> Result<Vec<(i32, i32)>> {
 }
 
 /// The box form (#12569): `rect: [x, y, w, h]` in document pixels corrects only inside the
-/// rectangle, anchored at its centre as a click there would be. Bad values (wrong type or length,
-/// empty or negative size, off the document, out of the pixel range) are errors, never a panic.
-fn rect_click(s: &Session, p: &Value) -> Result<Option<(Rect, (i32, i32))>> {
+/// rectangle. Bad values (wrong type or length, empty or negative size, off the document, out of
+/// the pixel range) are errors, never a panic.
+fn rect_click(s: &Session, p: &Value) -> Result<Option<Rect>> {
     let Some(v) = p.get("rect") else { return Ok(None) };
     if p.get("points").is_some() || p.get("x").is_some() || p.get("y").is_some() {
         return Err(bad("`rect` is its own form: give `rect` or `x`,`y` or `points`"));
@@ -101,8 +102,7 @@ fn rect_click(s: &Session, p: &Value) -> Result<Option<(Rect, (i32, i32))>> {
     if rect.intersect(&d.doc.bounds()).is_empty() {
         return Err(bad("`rect` is outside the document"));
     }
-    let centre = |lo: i32, hi: i32| ((i64::from(lo) + i64::from(hi)) / 2) as i32;
-    Ok(Some((rect, (centre(x0, x1), centre(y0, y1)))))
+    Ok(Some(rect))
 }
 
 fn read_rect(cx: i32, cy: i32, radius: f32) -> Result<Rect> {
@@ -278,7 +278,8 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     mode_refusal(s)?;
     let box_ = rect_click(s, p)?;
     let pts = match box_ {
-        Some((_, anchor)) => vec![anchor],
+        // The box's clicks are found in the pixels themselves, inside the edit (below).
+        Some(_) => Vec::new(),
         None => clicks(p)?,
     };
     let pupil_raw = num(p, "pupilSize", 50.0)?;
@@ -291,12 +292,41 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     let id = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|d| d.active_layer) };
     let (damage, total) = s.edit("Red Eye Removal Tool", |doc, active| {
         let canvas = doc.bounds();
-        // A box drag (#12569) changes nothing outside its rectangle; the kernel still runs its
-        // window around the anchor, clipped to the box.
-        let clip = box_.map_or(canvas, |(r, _)| r.intersect(&canvas));
+        // A box drag (#12569) changes nothing outside its rectangle; the kernel window is clipped to it.
+        let clip = box_.map_or(canvas, |r| r.intersect(&canvas));
         let sel = doc.selection.clone();
         let layer = id.or(*active);
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
+        // The box (#12569 review): the kernel runs once per separate red region inside the clip -
+        // a box over two pupils corrects both - each region clicked at its own seed and windowed,
+        // clipped to the box as a single click was. Regions inside the selection are clicked first,
+        // so the press-point rule below judges a region the box can actually reach. A box with no
+        // red keeps one click at the clip's centre, which makes a rectangle centred off the canvas
+        // behave like the same rectangle inside it.
+        let pts: Vec<(i32, i32)> = match box_ {
+            None => pts,
+            Some(_) => {
+                if clip.is_empty() {
+                    return Err(bad("`rect` is outside the document"));
+                }
+                let area = (clip.width() as u64).saturating_mul(clip.height() as u64);
+                if area > (MAX_WINDOW as u64).saturating_mul(MAX_WINDOW as u64) {
+                    return Err(bad(format!("`rect` covers more than the {MAX_WINDOW}² px the kernel reads at once")));
+                }
+                let (w, h) = (clip.width() as usize, clip.height() as usize);
+                let window = rgba_region(surf, clip);
+                let mut seeds: Vec<(i32, i32)> =
+                    redeye::region_seeds(&window, w, h, MAX_POINTS).into_iter().map(|(x, y)| (clip.x0.saturating_add(x), clip.y0.saturating_add(y))).collect();
+                if let Some(s) = sel.as_ref() {
+                    seeds.sort_by_key(|(x, y)| if s.sample_channel(*x, *y, 0) > 0.0 { 0 } else { 1 });
+                }
+                if seeds.is_empty() {
+                    let (half_w, half_h) = ((clip.width() / 2) as i32, (clip.height() / 2) as i32);
+                    seeds.push((clip.x0.saturating_add(half_w), clip.y0.saturating_add(half_h)));
+                }
+                seeds
+            }
+        };
         let Some(&first) = pts.first() else { return Err(EngineError::Other(MISS.into())) };
         // The press point decides (#12576): a press outside the selection is refused like a miss,
         // not clipped. Feathered (partly selected) and off-canvas presses were not measured and keep

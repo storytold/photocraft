@@ -75,10 +75,11 @@ impl RetouchTools {
     }
 }
 
-/// The Red Eye box in progress (#12569): the marquee's drag rules, run by the retouch tool the way
-/// `selection.rs` runs them for the Marquees - `MarqueeGesture` for ⇧/⌥/Space, `marquee_pixels` and
-/// `square_pixels` for the rectangle - with the dotted outline painted and the release running
-/// `paint.redEye` over the box.
+/// The Red Eye box in progress (#12569): the framework marquee's drag rules, run by the retouch
+/// tool - `MarqueeGesture` for ⇧/⌥/Space, `marquee_pixels` and `square_pixels` for the rectangle,
+/// the marching-ants paint (craft-libs `crates/imaging/src/ui/select/marquee.rs`, wired up for the
+/// Marquees by `selection.rs` and hosted here like this family's `LassoTool`) - with the release
+/// running `paint.redEye` over the box.
 #[derive(Clone, Copy, Debug)]
 struct RedEyeBox {
     /// ⇧ squares and ⌥ centres the drag, Space moves it; the press mods choose neither.
