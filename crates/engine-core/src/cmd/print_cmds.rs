@@ -1865,7 +1865,8 @@ mod package_clash_name_tests;
 mod package_layer_rename_tests;
 
 #[cfg(test)]
-#[path = "print_cmds/package_psd_embedded_tests.rs"]
-mod package_psd_embedded_tests;
 #[path = "print_cmds/package_format_tests.rs"]
 mod package_format_tests;
+#[cfg(test)]
+#[path = "print_cmds/package_psd_embedded_tests.rs"]
+mod package_psd_embedded_tests;
