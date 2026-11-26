@@ -37,7 +37,8 @@ fn fbm(x: f32, y: f32, size: f32, cells: i32, octaves: u32, salt: u64) -> f32 {
 pub fn pattern(style: PatternStyle, size: u32, seed: u32) -> PatternImage {
     let n = size.clamp(8, 1024) as usize;
     let s = n as f32;
-    let salt = u64::from(seed) * 0x0100_0000_01B3 + 17;
+    // Seed hashing wraps so every u32 seed also works in checked builds.
+    let salt = u64::from(seed).wrapping_mul(0x0100_0000_01B3).wrapping_add(17);
     let mut data = vec![0.0f32; n * n];
     for y in 0..n {
         for x in 0..n {
@@ -87,8 +88,20 @@ pub fn chalk_tip(n: u32, seed: u32) -> GrayTile {
     })
 }
 
+/// Most primitives one generated tip is drawn from, and most (pixel × primitive) visits it costs:
+/// every pixel is tested against every primitive, so both counts are the caller's to multiply.
+const MAX_PRIMITIVES: u32 = 4096;
+const MAX_TIP_WORK: u64 = 1 << 27;
+
+/// `count` limited so that an `n`×`n` tip tests at most [`MAX_TIP_WORK`] pixel/primitive pairs.
+fn clamp_primitives(n: u32, count: u32) -> u32 {
+    let per_primitive = (u64::from(n) * u64::from(n)).max(1);
+    count.min(MAX_PRIMITIVES).min(u32::try_from(MAX_TIP_WORK / per_primitive).unwrap_or(u32::MAX))
+}
+
 /// A spatter tip: a cluster of round droplets of different sizes.
 pub fn spatter_tip(n: u32, seed: u32, drops: u32) -> GrayTile {
+    let drops = clamp_primitives(n, drops);
     let salt = u64::from(seed) + 202;
     let s = n as f32;
     let blobs: Vec<(f32, f32, f32)> = (0..drops)
@@ -162,6 +175,7 @@ pub fn leaf_tip(n: u32) -> GrayTile {
 
 /// Grass: a tuft of tapered, slightly curved blades rising from the bottom edge.
 pub fn grass_tip(n: u32, seed: u32, blades: u32) -> GrayTile {
+    let blades = clamp_primitives(n, blades);
     let salt = u64::from(seed) + 505;
     let s = n as f32;
     let bl: Vec<(f32, f32, f32, f32)> = (0..blades)
@@ -217,7 +231,7 @@ pub fn star_tip(n: u32) -> GrayTile {
 pub fn rake_tip(n: u32, seed: u32, bristles: u32) -> GrayTile {
     let salt = u64::from(seed) + 707;
     let s = n as f32;
-    let k = bristles.max(1);
+    let k = clamp_primitives(n, bristles).max(1);
     let dots: Vec<(f32, f32, f32)> = (0..k)
         .map(|i| {
             let x = s * (i as f32 + 0.5) / k as f32;
@@ -240,6 +254,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tips_with_absurd_primitive_counts_stay_cheap() {
+        // 4 billion drops over a 1024² tip would be 4·10¹⁵ pixel tests.
+        let t = std::time::Instant::now();
+        assert_eq!(spatter_tip(1024, 1, u32::MAX).width, 1024);
+        assert_eq!(grass_tip(1024, 1, u32::MAX).height, 1024);
+        assert_eq!(rake_tip(1024, 1, u32::MAX).width, 1024);
+        assert!(t.elapsed().as_secs() < 60, "{:?}", t.elapsed());
+        assert!(clamp_primitives(1024, u32::MAX) <= MAX_PRIMITIVES);
+        assert!(clamp_primitives(60_000, 100) < 100, "a huge tip gets fewer primitives");
+        assert_eq!(clamp_primitives(0, 7), 7);
+    }
+
+    #[test]
     fn patterns_are_seamless_and_in_range() {
         for st in [PatternStyle::Noise, PatternStyle::Paper, PatternStyle::Canvas, PatternStyle::Dots] {
             let p = pattern(st, 64, 3);
@@ -253,6 +280,18 @@ mod tests {
         let p = pattern(PatternStyle::Noise, 64, 1);
         let seam: f32 = (0..64).map(|y| (p.data[y * 64] - p.data[y * 64 + 63]).abs()).sum::<f32>() / 64.0;
         assert!(seam < 0.08, "{seam}");
+    }
+
+    #[test]
+    fn patterns_accept_full_seed_range() {
+        for seed in [0, 1, (1 << 24) - 1, 1 << 24, u32::MAX] {
+            for style in [PatternStyle::Noise, PatternStyle::Paper, PatternStyle::Canvas, PatternStyle::Dots] {
+                let p = pattern(style, 8, seed);
+                assert_eq!((p.width, p.height, p.data.len()), (8, 8, 64));
+                assert!(p.data.iter().all(|v| (0.0..=1.0).contains(v)), "{style:?} seed {seed}");
+                assert_eq!(p.data, pattern(style, 8, seed).data);
+            }
+        }
     }
 
     #[test]

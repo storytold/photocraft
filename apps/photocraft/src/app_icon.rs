@@ -1,6 +1,6 @@
 //! The app icon, everywhere Windows, macOS and Linux show one (#248).
 //!
-//! - **Executable:** `build.rs` embeds `assets/app-icon/photocraft.ico` (16–256 px) as icon
+//! - **Executable:** `build.rs` selects the stable or nightly-only `.ico` (16–256 px) as icon
 //!   resource 1, which Explorer, Alt+Tab and an unpinned taskbar button fall back to.
 //! - **Window:** [`window_icon`] sets the title-bar and taskbar icon at runtime (`WM_SETICON` on
 //!   Windows, `_NET_WM_ICON` on X11, the Dock when running unbundled on macOS).
@@ -9,20 +9,31 @@
 //!   shortcut's icon under its `<Icon Id>`, so that id must carry the target's `.exe` extension
 //!   (ICE50); an extensionless id showed a blank page on the taskbar. The tests below check it.
 //!
-//! The process keeps Windows' implicit AppUserModelID (derived from the executable path), which
-//! is what makes that matching work for both the MSI shortcut and the portable exe. An explicit
-//! ID would need a Win32 call (`unsafe`, which the workspace forbids) and would then also have to
-//! be stamped on the shortcut, or the taskbar would stop matching the two.
+//! Stable keeps Windows' implicit AppUserModelID (derived from the executable path), which
+//! is what makes that matching work for both the MSI shortcut and the portable exe. Changing
+//! stable's ID would also require changing its matching shortcut policy. Nightly is separate:
+//! its app bootstrap uses the existing safe Windows bindings to set its persistent channel
+//! identity before any native window.
 
 /// Window, taskbar and (when running unbundled) Dock icon. macOS gets the padded 1024 px render
-/// on Apple's icon grid; elsewhere the tighter 256 px hicolor render reads better at small sizes.
+/// on Apple's icon grid; elsewhere the 256 px hicolor render of the full tile.
 pub fn window_icon() -> egui::IconData {
-    match eframe::icon_data::from_png_bytes(PNG) {
+    match eframe::icon_data::from_png_bytes(icon_png(crate::build_flavor::COMPILED, cfg!(target_os = "macos"))) {
         Ok(icon) => icon,
         Err(e) => {
             log::warn!("app icon: {e}");
             egui::IconData::default()
         }
+    }
+}
+
+fn icon_png(flavor: crate::build_flavor::BuildFlavor, macos: bool) -> &'static [u8] {
+    if flavor != crate::build_flavor::BuildFlavor::NightlyV1 {
+        PNG
+    } else if macos {
+        include_bytes!("../../../assets/app-icon/photocraft-nightly-1024.png")
+    } else {
+        include_bytes!("../../../assets/app-icon/photocraft-nightly.png")
     }
 }
 
@@ -32,6 +43,13 @@ pub fn window_icon() -> egui::IconData {
 /// replaced it with a flat picture (#5849). `exe` is the running executable.
 pub fn sets_runtime_icon(exe: Option<&std::path::Path>) -> bool {
     !(cfg!(target_os = "macos") && exe.is_some_and(in_app_bundle))
+}
+
+/// Value for [`egui::ViewportBuilder::with_icon`]: [`window_icon`] when [`sets_runtime_icon`]
+/// is true; otherwise [`egui::IconData::default`] so eframe does not substitute its own icon
+/// on the Dock after the window opens (#7253).
+pub fn viewport_icon(exe: Option<&std::path::Path>) -> egui::IconData {
+    if sets_runtime_icon(exe) { window_icon() } else { egui::IconData::default() }
 }
 
 /// Whether `exe` is an app bundle's executable: `…/Name.app/Contents/MacOS/binary`.
@@ -53,6 +71,41 @@ const PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nightly_uses_each_platforms_distinct_nonblank_native_size_icon() {
+        use crate::build_flavor::BuildFlavor;
+        assert_eq!(icon_png(BuildFlavor::Stable, true), PNG);
+        assert_eq!(icon_png(BuildFlavor::Stable, false), PNG);
+        for (macos, expected_size) in [(false, 256), (true, 1024)] {
+            let nightly = icon_png(BuildFlavor::NightlyV1, macos);
+            assert_ne!(nightly, PNG);
+            let icon = eframe::icon_data::from_png_bytes(nightly).unwrap();
+            assert_eq!((icon.width, icon.height), (expected_size, expected_size));
+            assert!(icon.rgba.chunks(4).any(|pixel| pixel[3] > 0));
+        }
+    }
+
+    #[test]
+    fn nightly_executable_icon_retains_all_six_shell_sizes() {
+        let ico = include_bytes!("../../../assets/app-icon/photocraft-nightly.ico");
+        assert_ne!(ico.as_slice(), ICO);
+        assert_eq!((u16_at(ico, 0), u16_at(ico, 2)), (0, 1));
+        let mut sizes = Vec::new();
+        for i in 0..u16_at(ico, 4) {
+            let entry = 6 + 16 * i;
+            let width = if ico[entry] == 0 { 256 } else { usize::from(ico[entry]) };
+            let height = if ico[entry + 1] == 0 { 256 } else { usize::from(ico[entry + 1]) };
+            assert_eq!(width, height);
+            let image = &ico[u32_at(ico, entry + 12)..][..u32_at(ico, entry + 8)];
+            assert!(image.starts_with(b"\x89PNG\r\n\x1a\n"));
+            let decoded = eframe::icon_data::from_png_bytes(image).unwrap();
+            assert_eq!((decoded.width as usize, decoded.height as usize), (width, height));
+            sizes.push(width);
+        }
+        for expected in [16, 24, 32, 48, 64, 256] {
+            assert!(sizes.contains(&expected), "missing nightly icon size {expected}");
+        }
+    }
 
     const ICO: &[u8] = include_bytes!("../../../assets/app-icon/photocraft.ico");
     const WXS: &str = include_str!("../../../packaging/windows/photocraft.wxs");
@@ -80,12 +133,35 @@ mod tests {
         assert_eq!(sets_runtime_icon(Some(Path::new("/Applications/PhotoCraft.app/Contents/MacOS/photocraft"))), !cfg!(target_os = "macos"));
     }
 
+    /// #7253: omitting `with_icon` made eframe paint its default glyph on the Dock once the window loaded.
+    #[test]
+    fn viewport_icon_blocks_eframe_default_when_runtime_icon_is_skipped() {
+        use std::path::Path;
+        let bundled = Some(Path::new("/Applications/PhotoCraft.app/Contents/MacOS/photocraft"));
+        if sets_runtime_icon(bundled) {
+            let icon = viewport_icon(bundled);
+            assert!(icon.width >= 256 && icon.width == icon.height);
+        } else {
+            assert_eq!(viewport_icon(bundled), egui::IconData::default());
+        }
+    }
+
     #[test]
     fn window_icon_decodes() {
         let icon = window_icon();
         assert!(icon.width >= 256 && icon.width == icon.height, "{}x{}", icon.width, icon.height);
         assert_eq!(icon.rgba.len(), icon.width as usize * icon.height as usize * 4);
         assert!(icon.rgba.chunks(4).any(|p| p[3] > 0), "the icon isn't blank");
+    }
+
+    #[test]
+    fn windows_and_linux_icons_keep_the_round_corners() {
+        // rx=112 of 512 leaves (10, 10) of a 256 px render transparent; the old crop filled it (#4478).
+        let png = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.photocraft.png");
+        let icon = eframe::icon_data::from_png_bytes(png).unwrap();
+        assert_eq!(icon.width, 256);
+        assert_eq!(icon.rgba[(10 * 256 + 10) * 4 + 3], 0, "corner is transparent");
+        assert_eq!(icon.rgba[(128 * 256 + 2) * 4 + 3], 255, "the tile is full bleed");
     }
 
     /// The `.ico` build.rs embeds: every size Windows asks for, each a valid PNG or BMP image.

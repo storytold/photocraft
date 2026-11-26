@@ -25,21 +25,31 @@ RUN set -eu; \
     asset="trunk-${arch}-unknown-linux-musl.tar.gz"; \
     url="https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}"; \
     cd /tmp; \
-    curl -fsSL --retry 3 -A Photocraft-dev "$url/$asset" -o "$asset"; \
-    curl -fsSL --retry 3 -A Photocraft-dev "$url/$asset.sha256" -o "$asset.sha256"; \
+    curl --proto '=https' -fsSL --retry 3 -A Photocraft-dev "$url/$asset" -o "$asset"; \
+    curl --proto '=https' -fsSL --retry 3 -A Photocraft-dev "$url/$asset.sha256" -o "$asset.sha256"; \
     printf '%s  %s\n' "$(cat "$asset.sha256")" "$asset" | sha256sum -c -; \
     tar -xzf "$asset" -C /usr/local/bin trunk; \
     rm "$asset" "$asset.sha256"; \
     trunk --version
 
 WORKDIR /src
+# The interface translations at the commit in craft-i18n.rev (crates/ui-egui/build.rs), as CI and
+# releases embed them; without them the build would be English only.
+COPY craft-i18n.rev ./
+RUN set -eu; \
+    rev="$(tr -d '[:space:]' < craft-i18n.rev)"; \
+    mkdir -p /opt/craft-i18n; \
+    curl --proto '=https' -fsSL --retry 3 -A Photocraft-dev "https://codeload.github.com/storytold/craft-i18n/tar.gz/$rev" \
+        | tar -xz --strip-components=1 -C /opt/craft-i18n; \
+    test -d /opt/craft-i18n/locales
+ENV CRAFT_I18N_DIR=/opt/craft-i18n CRAFT_I18N_REQUIRED=1
 COPY . .
 WORKDIR /src/apps/photocraft-web
 # Docker serving has no static-host per-file size cap. Thin LTO uses less build
 # memory than the release zip's fat LTO; retain the profile's other optimizations.
 ARG CARGO_PROFILE_WASM_RELEASE_LTO=thin
 ARG CARGO_BUILD_JOBS=1
-# Optional build provenance shown in About and `--version` (crates/engine/src/build_info.rs).
+# Optional build provenance shown in About and `--version` (crates/engine-core/src/build_info.rs).
 # .git is not in the build context, so pass it in, e.g.
 #   --build-arg PHOTOCRAFT_BUILD_SHA=$(git rev-parse HEAD) --build-arg PHOTOCRAFT_BUILD_DATE=$(date -u +%F)
 # Left empty, the build reports itself as a dev build.
@@ -57,8 +67,7 @@ FROM nginx:${NGINX_VERSION} AS runtime
 COPY packaging/web/nginx.conf /etc/nginx/nginx.conf
 COPY --from=builder /src/dist/web/ /usr/share/nginx/html/
 COPY LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md /usr/share/nginx/html/
-COPY assets/fonts/OFL-*.txt assets/icons/LICENSE-*.txt assets/dict/LICENSE-*.txt \
-    crates/ui-egui/src/i18n/LICENSE-translations.txt /usr/share/nginx/html/licenses/
+COPY assets/fonts/OFL-*.txt assets/icons/LICENSE-*.txt assets/dict/LICENSE-*.txt /usr/share/nginx/html/licenses/
 # Bypass the stock entrypoint: this configuration needs no runtime rewriting.
 USER nginx
 EXPOSE 8080

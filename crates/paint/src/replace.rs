@@ -8,7 +8,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{Footprint, Region, apply_dab_stroke};
+use crate::retouch::{Footprint, Region, StrokeTooLarge, apply_dab_stroke};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +55,10 @@ pub struct ReplaceSettings {
     pub anti_alias: bool,
     /// Replacement (foreground) colour, straight RGBA.
     pub color: [f32; 4],
+    /// The inks [`ReplaceSettings::color`] was picked as, when it was picked as CMYK (#4196, the
+    /// same pair a Brush stroke carries, `BrushSettings::color_cmyk`). In a CMYK document the ink
+    /// channels of the Color blend come from these rather than from converting `color` again.
+    pub color_inks: Option<[f32; 4]>,
     /// Background swatch for [`Sampling::BackgroundSwatch`].
     pub background: [f32; 4],
 }
@@ -68,6 +72,7 @@ impl Default for ReplaceSettings {
             tolerance: 0.3,
             anti_alias: true,
             color: [1.0, 0.0, 0.0, 1.0],
+            color_inks: None,
             background: [1.0; 4],
         }
     }
@@ -77,8 +82,14 @@ fn dist(a: &[f32; 4], b: [f32; 3]) -> f32 {
     (a[0] - b[0]).abs().max((a[1] - b[1]).abs()).max((a[2] - b[2]).abs())
 }
 
-/// Replace colours along a stroke. Returns the damaged rectangle.
-pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &ReplaceSettings, selection: Option<&Surface>, lock_transparency: bool) -> Rect {
+/// Replace colours along a stroke. Returns the damaged rectangle, or an error for a stroke too large to run.
+pub fn apply_color_replacement(
+    target: &mut Surface,
+    stroke: &Stroke,
+    rs: &ReplaceSettings,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+) -> Result<Rect, StrokeTooLarge> {
     let effect = color_replacement_effect(target.clone(), rs.clone());
     apply_dab_stroke(target, stroke, selection, lock_transparency, 0, effect)
 }
@@ -89,6 +100,15 @@ pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &Repla
 pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut(&mut Region, &Footprint) {
     let fmt = pre.format();
     let n = fmt.channels();
+    // The CMYK profile of the document being recoloured, in scope where this effect is built (the
+    // engine enters it for the command, as it does for a Brush stroke). Every conversion to and
+    // from the RGB blend space goes through it, so the inks mean the document's device colour and
+    // not the built-in coated CMYK (#11918). Captured here and re-entered for each dab: a live
+    // preview runs this closure after the command that built it has returned. The same scope covers
+    // the pre-stroke reads the match is measured on (`pre.rgba`, `pre.read_rgba_into`), so on a
+    // document that carries a CMYK profile of its own which pixels fall inside the tolerance can
+    // move as well as the inks the dab stores.
+    let cmyk = photocraft_color::convert::active_cmyk_space();
     let mode = match rs.mode {
         ReplaceMode::Hue => BlendMode::Hue,
         ReplaceMode::Saturation => BlendMode::Saturation,
@@ -96,6 +116,21 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         ReplaceMode::Luminosity => BlendMode::Luminosity,
     };
     let fg = [rs.color[0], rs.color[1], rs.color[2]];
+    // In a Lab/8 document Color mode keeps the pixel's L and takes the foreground's a and b, as in
+    // the reference application (#11922): the stored a, b channels move straight to its. Lab/16
+    // wasn't measured and keeps the RGB blend.
+    let lab_color = fmt.mode == photocraft_color::ColorMode::Lab && fmt.sample == photocraft_color::SampleType::U8 && rs.mode == ReplaceMode::Color;
+    // In a CMYK/8 document the Color mode works on the document's own ink channels, the rule
+    // ISO 32000-1 11.3.5.3 gives for a non-separable blend in a CMYK space (#11918): C, M and Y
+    // complemented, blended like RGB - Color is SetLum(source, L(backdrop)) with ClipColor pulling
+    // the result back into gamut towards grey, which is what keeps the lightness of the BOTTOM
+    // layer - and complemented back, K from the backdrop. No RGB round trip goes through the pixel.
+    // CMYK/16 and the other three modes were not measured and keep the RGB blend.
+    let cmyk_color = fmt.mode == photocraft_color::ColorMode::Cmyk && fmt.sample == photocraft_color::SampleType::U8 && rs.mode == ReplaceMode::Color;
+    let fg_ab = {
+        let l = photocraft_color::convert::srgb_to_lab(fg);
+        [(l[1] + 128.0) / 255.0, (l[2] + 128.0) / 255.0]
+    };
     let tol = rs.tolerance.clamp(0.0, 1.0);
     let soft = rs.anti_alias && rs.limits != Limits::FindEdges;
     let mut once: Option<[f32; 3]> = None;
@@ -109,7 +144,12 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
             1.0
         }
     };
-    move |work: &mut Region, fp: &Footprint| {
+    let mut dab = move |work: &mut Region, fp: &Footprint| {
+        // The foreground's inks for this dab, only where the blend runs on the ink channels: the
+        // values it was picked as when it was picked as CMYK, else its RGB through the CMYK profile
+        // of the document (the scope this runs in). The `[0.0; 4]` arm is never read: `recolor`
+        // only uses `fg_inks` where `cmyk_color` holds.
+        let fg_inks = if cmyk_color { rs.color_inks.unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(fg)) } else { [0.0; 4] };
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         let sampled = match rs.sampling {
             Sampling::Continuous => {
@@ -127,6 +167,8 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
             return;
         }
         let (w, h) = (r.width() as usize, r.height() as usize);
+        let mut pre_px = vec![[0.0f32; 4]; w * h];
+        pre.read_rgba_into(r, &mut pre_px);
         // Per-pixel match weight.
         let mut weight = vec![0.0f32; w * h];
         for y in r.y0..r.y1 {
@@ -136,7 +178,7 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 }
                 // Match against the pre-stroke colours, so pixels recoloured by earlier dabs of
                 // this stroke still count as the sampled colour.
-                let c = pre.rgba(x, y);
+                let c = pre_px[(y - r.y0) as usize * w + (x - r.x0) as usize];
                 if c[3] <= 0.0 {
                     continue;
                 }
@@ -179,23 +221,77 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 }
             }
         }
+        // A pixel recoloured by `k` (0..1), into `out`.
+        let recolor = |px: &[f32], k: f32, out: &mut [f32; 8]| {
+            out[..n].copy_from_slice(px);
+            if lab_color {
+                out[1] += (fg_ab[0] - px[1]) * k;
+                out[2] += (fg_ab[1] - px[2]) * k;
+                return;
+            }
+            if cmyk_color {
+                // The ink channels themselves, per the comment on `cmyk_color`: complement C, M,
+                // Y, blend like RGB, complement back. K (`out[3]`) and the alpha keep the
+                // backdrop's values, which is what the standard has Color take from it.
+                let cb = [1.0 - px[0], 1.0 - px[1], 1.0 - px[2]];
+                let cs = [1.0 - fg_inks[0], 1.0 - fg_inks[1], 1.0 - fg_inks[2]];
+                let b = blend_rgb(BlendMode::Color, cb, cs);
+                // `cmyk_color` only holds for a CMYK format, whose pixels carry the four inks
+                // first, so channels 0..3 of `px` and `out` are C, M, Y and K.
+                for i in 0..3 {
+                    let ink = (1.0 - b[i]).clamp(0.0, 1.0);
+                    out[i] = px[i] + (ink - px[i]) * k;
+                }
+                return;
+            }
+            let c = to_rgba(&fmt, px);
+            let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
+            let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
+            from_rgba_into(&fmt, o, out);
+        };
+        // A sample as the document stores it.
+        let stored = |v: f32| match fmt.sample {
+            photocraft_color::SampleType::U8 => (v.clamp(0.0, 1.0) * 255.0).round(),
+            photocraft_color::SampleType::U16 => (v.clamp(0.0, 1.0) * 65535.0).round(),
+            photocraft_color::SampleType::F32 => v,
+        };
         let mut enc = [0.0f32; 8];
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
-                let k = fp.at(x, y) * weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                let wt = weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                let k = fp.at(x, y) * wt;
                 if k <= 0.0 {
                     continue;
                 }
                 let px = work.px_mut(x, y);
-                let c = to_rgba(&fmt, px);
-                let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
-                let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
-                from_rgba_into(&fmt, o, &mut enc);
+                // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches takes
+                // the dab's full strength (its flow and pressure), not its partial coverage. A soft
+                // tip too, over the same reach as with Anti-alias on: the pixels its blended edge
+                // would change as stored, not its faint tail past them.
+                let k = if rs.anti_alias {
+                    k
+                } else {
+                    recolor(px, k, &mut enc);
+                    if enc[..n].iter().zip(px.iter()).all(|(a, b)| stored(*a) == stored(*b)) {
+                        continue;
+                    }
+                    fp.dab.alpha * wt
+                };
+                recolor(px, k, &mut enc);
                 px.copy_from_slice(&enc[..n]);
             }
         }
-    }
+    };
+    move |work: &mut Region, fp: &Footprint| photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || dab(work, fp))
 }
+
+#[cfg(test)]
+#[path = "replace_anti_alias_tests.rs"]
+mod replace_anti_alias_tests;
+
+#[cfg(test)]
+#[path = "replace_lab_tests.rs"]
+mod replace_lab_tests;
 
 #[cfg(test)]
 mod tests {
@@ -225,7 +321,7 @@ mod tests {
         for mode in [ReplaceMode::Hue, ReplaceMode::Saturation, ReplaceMode::Color, ReplaceMode::Luminosity] {
             let mut s = setup(PixelFormat::RGBA32F);
             let rs = ReplaceSettings { mode, sampling: Sampling::Once, limits: Limits::Discontiguous, tolerance: 0.1, color: fg, ..Default::default() };
-            apply_color_replacement(&mut s, &stroke(), &rs, None, false);
+            apply_color_replacement(&mut s, &stroke(), &rs, None, false).unwrap();
             let c = s.rgba(20, 20);
             let green = [0.2, 0.6, 0.2];
             match mode {
@@ -254,12 +350,12 @@ mod tests {
             color: [1.0, 0.0, 0.0, 1.0],
             ..Default::default()
         };
-        apply_color_replacement(&mut s, &stroke(), &rs, None, false);
+        apply_color_replacement(&mut s, &stroke(), &rs, None, false).unwrap();
         assert!(s.rgba(20, 20)[0] > 0.3 && s.rgba(70, 20)[0] > s.rgba(70, 20)[1], "both halves recoloured {:?} {:?}", s.rgba(20, 20), s.rgba(70, 20));
         // Background swatch = white: nothing matches.
         let mut s2 = setup(PixelFormat::RGBA8);
         let rs2 = ReplaceSettings { sampling: Sampling::BackgroundSwatch, background: [1.0; 4], ..rs };
-        apply_color_replacement(&mut s2, &stroke(), &rs2, None, false);
+        apply_color_replacement(&mut s2, &stroke(), &rs2, None, false).unwrap();
         assert_eq!(s2.rgba(20, 20), setup(PixelFormat::RGBA8).rgba(20, 20));
     }
 
@@ -281,7 +377,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 ..Default::default()
             };
-            apply_color_replacement(&mut t, &st, &rs, None, false);
+            apply_color_replacement(&mut t, &st, &rs, None, false).unwrap();
             let changed = (t.rgba(34, 20)[0] - 0.2).abs() > 0.05;
             assert_eq!(changed, island_changed, "{limits:?}");
             assert!(t.rgba(20, 20)[0] > 0.3);

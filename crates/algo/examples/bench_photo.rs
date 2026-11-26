@@ -4,7 +4,7 @@
 //! `cargo run --release -p photocraft-algo --example bench_photo [case-substring]`
 use std::time::Instant;
 
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop};
+use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, Wheel, develop};
 use photocraft_algo::hdr::{self, MergeOptions, ToneMethod};
 use photocraft_algo::lens::{self, LensCorrection};
 use photocraft_algo::panorama::{self, AlignOptions, Layout, RoiImage};
@@ -23,6 +23,13 @@ fn pattern(w: usize, h: usize) -> Vec<[f32; 4]> {
             [(x % 256) as f32 / 255.0 * 0.6 + 0.2 * t, ((x * 3 + y) / 11 % 256) as f32 / 255.0, ((x ^ y) % 256) as f32 / 255.0, 1.0]
         })
         .collect()
+}
+
+/// Default settings with some fields assigned (`CameraRaw` is `#[non_exhaustive]`).
+fn cr(set: impl FnOnce(&mut CameraRaw)) -> CameraRaw {
+    let mut p = CameraRaw::default();
+    set(&mut p);
+    p
 }
 
 fn time<T>(name: &str, only: &Option<String>, f: impl FnOnce() -> T) -> Option<T> {
@@ -50,23 +57,34 @@ fn main() {
             &mut a,
             w,
             h,
-            &CameraRaw {
-                temperature: 20.0,
-                exposure: 0.3,
-                contrast: 20.0,
-                highlights: -40.0,
-                shadows: 40.0,
-                whites: 10.0,
-                blacks: -10.0,
-                vibrance: 20.0,
-                ..Default::default()
-            },
+            &cr(|p| {
+                p.temperature = 20.0;
+                p.exposure = 0.3;
+                p.contrast = 20.0;
+                p.highlights = -40.0;
+                p.shadows = 40.0;
+                p.whites = 10.0;
+                p.blacks = -10.0;
+                p.vibrance = 20.0;
+            }),
+            &DevelopInputs::default(),
             false,
         );
     });
     time("camera raw: clarity + texture + dehaze", &only, || {
         let mut a = px.clone();
-        develop(&mut a, w, h, &CameraRaw { clarity: 30.0, texture: 20.0, dehaze: 25.0, ..Default::default() }, false);
+        develop(
+            &mut a,
+            w,
+            h,
+            &cr(|p| {
+                p.clarity = 30.0;
+                p.texture = 20.0;
+                p.dehaze = 25.0;
+            }),
+            &DevelopInputs::default(),
+            false,
+        );
     });
     time("camera raw: hsl + grading + curve", &only, || {
         let mut a = px.clone();
@@ -76,12 +94,12 @@ fn main() {
             &mut a,
             w,
             h,
-            &CameraRaw {
-                hsl_sat: hs,
-                grade_shadows: Wheel { hue: 220.0, sat: 30.0, lum: 0.0 },
-                point_curve: vec![[0.0, 10.0], [128.0, 140.0], [255.0, 250.0]],
-                ..Default::default()
-            },
+            &cr(|p| {
+                p.hsl_sat = hs;
+                p.grade_shadows = Wheel { hue: 220.0, sat: 30.0, lum: 0.0 };
+                p.point_curve = vec![[0.0, 10.0], [128.0, 140.0], [255.0, 250.0]];
+            }),
+            &DevelopInputs::default(),
             false,
         );
     });
@@ -91,7 +109,14 @@ fn main() {
             &mut a,
             w,
             h,
-            &CameraRaw { sharpen_amount: 40.0, noise_luminance: 30.0, noise_color: 25.0, grain_amount: 20.0, vignette_amount: -30.0, ..Default::default() },
+            &cr(|p| {
+                p.sharpen_amount = 40.0;
+                p.noise_luminance = 30.0;
+                p.noise_color = 25.0;
+                p.grain_amount = 20.0;
+                p.vignette_amount = -30.0;
+            }),
+            &DevelopInputs::default(),
             false,
         );
     });
@@ -111,16 +136,32 @@ fn main() {
         )
     });
     time("adaptive wide angle (fisheye, 2 constraints)", &only, || {
-        let p = WideAngle {
-            model: WideModel::Fisheye,
-            focal_length: 12.0,
-            constraints: vec![
-                Constraint { a: [500.0, 600.0], b: [5500.0, 600.0], orientation: Orientation::Horizontal },
-                Constraint { a: [700.0, 500.0], b: [700.0, 3500.0], orientation: Orientation::Vertical },
-            ],
-            ..Default::default()
-        };
+        let mut p = WideAngle::default();
+        p.model = WideModel::Fisheye;
+        p.focal_length = 12.0;
+        p.constraints = vec![
+            Constraint::new([500.0, 600.0], [5500.0, 600.0], Orientation::Horizontal),
+            Constraint::new([700.0, 500.0], [700.0, 3500.0], Orientation::Vertical),
+        ];
         wideangle::apply(&s, r, &p, Interp::Bicubic)
+    });
+    // The mesh solve alone, on the dialog's 800 x 533 proxy.
+    let proxy = Rect::new(0, 0, 800, 533);
+    let solve_case = |constraints: Vec<Constraint>| {
+        let mut p = WideAngle::default();
+        p.model = WideModel::Fisheye;
+        p.focal_length = 12.0;
+        p.constraints = constraints;
+        wideangle::solve(&p, proxy)
+    };
+    time("wide angle solve: 800x533 proxy, H + V", &only, || {
+        solve_case(vec![
+            Constraint::new([60.0, 80.0], [740.0, 80.0], Orientation::Horizontal),
+            Constraint::new([100.0, 60.0], [100.0, 470.0], Orientation::Vertical),
+        ])
+    });
+    time("wide angle solve: 800x533 proxy, 2 free", &only, || {
+        solve_case(vec![Constraint::new([60.0, 80.0], [740.0, 95.0], Orientation::Free), Constraint::new([100.0, 60.0], [110.0, 470.0], Orientation::Free)])
     });
     time("hdr: merge 3 exposures + local adaptation", &only, || {
         let shots: Vec<Vec<[f32; 4]>> =

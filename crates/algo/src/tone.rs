@@ -5,7 +5,7 @@
 //! convert any colour model / bit depth to RGBA first (as `Image › Adjustments` does for the
 //! per-pixel adjustments). Formulas are documented approximations of Photoshop's behaviour,
 //! derived from its manual and observation, not from its implementation; Shadows/Highlights is
-//! measured on Photoshop (see [`shadows_highlights`]).
+//! measured on Photoshop (see [`shadows_highlights()`]).
 
 use photocraft_color::convert::{lab_to_srgb, srgb_to_lab};
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,35 @@ pub fn replace_color(px: &mut [[f32; 4]], color: [f32; 3], fuzziness: f32, hue: 
     let mask = crate::selection::color_range(px, color, fuzziness);
     replace_color_masked(px, &mask, hue, saturation, lightness);
     mask
+}
+
+/// Replace Color's Result swatch: `color` after the hue (±180°), saturation and lightness (±100)
+/// shift, as a fully matched pixel of that colour becomes.
+pub fn replace_color_result(color: [f32; 3], hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let mut px = [[color[0], color[1], color[2], 1.0]];
+    replace_color_masked(&mut px, &[1.0], hue, saturation, lightness);
+    [px[0][0], px[0][1], px[0][2]]
+}
+
+/// The hue (±180°), saturation and lightness (±100) shift that turns `from` into `to`, as
+/// Photoshop's Result Color Picker sets the sliders. A shift the sliders can't reach (a grey has
+/// no hue to turn, black or white no saturation to give) goes as far as they do.
+pub fn replace_color_shift(from: [f32; 3], to: [f32; 3]) -> (f32, f32, f32) {
+    let [fh, fs, fl] = rgb_to_hsl(from);
+    let [th, ts, tl] = rgb_to_hsl(to);
+    // Hue turns the short way round; a grey target keeps the hue where it is.
+    let hue = if ts <= 0.0 { 0.0 } else { ((th - fh + 0.5).rem_euclid(1.0) - 0.5) * 360.0 };
+    // Inverse of the shift in `replace_color_masked`: up moves toward 1, down toward 0.
+    let amount = |from: f32, to: f32| {
+        if to >= from {
+            if from >= 1.0 { 0.0 } else { (to - from) / (1.0 - from) * 100.0 }
+        } else if from <= 0.0 {
+            0.0
+        } else {
+            (to / from - 1.0) * 100.0
+        }
+    };
+    (hue.clamp(-180.0, 180.0), amount(fs, ts).clamp(-100.0, 100.0), amount(fl, tl).clamp(-100.0, 100.0))
 }
 
 /// Replace Color's hue, saturation and lightness shift, applied to each pixel as far as `mask`
@@ -185,6 +214,9 @@ pub struct HdrToning {
     pub curve: Vec<(f32, f32)>,
 }
 
+pub mod auto_levels;
+pub mod checked_hdr;
+
 impl Default for HdrToning {
     fn default() -> Self {
         HdrToning {
@@ -218,11 +250,48 @@ fn curve_eval(pts: &[(f32, f32)], x: f32) -> f32 {
     pts[pts.len() - 1].1
 }
 
+/// The tone of a sample whose f32 exposure, gamma and shadow/highlight arithmetic overflowed (a
+/// low Gamma or a strong local contrast): the same curve evaluated in f64. A cap beyond every
+/// control's polynomial crossover keeps cubing finite; those values saturate at the display
+/// clamp. Both HDR Toning paths use it, so they stay equal.
+pub(crate) fn wide_range_tone(new_log: f32, exposure: f32, gamma: f32, shadow: f32, highlight: f32) -> f32 {
+    let log_value = (f64::from(new_log) + f64::from(exposure) * std::f64::consts::LN_2) / f64::from(gamma);
+    let value = log_value.exp().min(1e100);
+    let shadow = f64::from(shadow) / 200.;
+    let highlight = f64::from(highlight) / 200.;
+    let mapped = ((-(shadow + highlight) * value + 3. * shadow) * value + (1. - 3. * shadow)) * value + shadow;
+    mapped.clamp(0., 1.) as f32
+}
+
 /// Local adaptation tone mapping (Durand–Dorsey style base/detail split in log luminance): the
-/// blurred log luminance (radius) is the base layer, compressed toward its mean by `strength`;
-/// detail is boosted; then exposure, gamma, shadow/highlight lift, the toning curve, and
-/// vibrance/saturation. Like Photoshop the result is a flattened, low-dynamic-range image.
+/// blurred log luminance (radius) is the base layer, compressed by `strength` toward its brightest
+/// value, which becomes white, so an ordinary image is stretched to the full range and its dark
+/// tones are lifted (#14723); the detail (log luminance less the base, boosted by `detail`) is
+/// compressed with it, so a darker tone never comes out brighter on a smooth gradient; then
+/// exposure, gamma, shadow/highlight lift, the toning curve, and vibrance/saturation. Like
+/// Photoshop the result is a flattened, low-dynamic-range image.
 pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
+    local_adaptation(px, w, h, p, Anchor::White);
+}
+
+/// Merge to HDR Pro's Local Adaptation until the merge moves to the reference's radiance and
+/// [`hdr_toning`] (#14023, #14021): the base is compressed toward its mean, which stays put, and
+/// the detail is not compressed. On today's merge radiance this is closer to the reference than
+/// the white-anchored map (#14723).
+pub(crate) fn hdr_toning_mean_anchored(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
+    local_adaptation(px, w, h, p, Anchor::Mean);
+}
+
+/// The log luminance a Local Adaptation base is compressed toward.
+#[derive(Clone, Copy)]
+enum Anchor {
+    /// The brightest visible base, which becomes white.
+    White,
+    /// The mean visible base, which stays put.
+    Mean,
+}
+
+fn local_adaptation(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, anchor: Anchor) {
     if px.is_empty() {
         return;
     }
@@ -233,9 +302,18 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     });
     let mut base = logl.clone();
     gauss_blur_n(&mut base, w, h, 1, p.radius.max(1.0) / 2.0);
-    let n = px.iter().filter(|q| q[3] > 0.0).count().max(1) as f32;
-    let mean = base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| *b).sum::<f32>() / n;
-    let compress = 1.0 / (1.0 + p.strength.max(0.0));
+    // Only visible pixels are toned, so only they set the anchor.
+    let visible = || base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| *b);
+    let (anchor_log, compress) = match anchor {
+        // Fitted to the reference application's samples (#14723): Strength 0.5296 compresses the
+        // base's log range to about 0.39 of its span.
+        Anchor::White => (visible().fold(f32::NEG_INFINITY, f32::max), 1.0 / (1.0 + 3.0 * p.strength.max(0.0))),
+        Anchor::Mean => {
+            let n = visible().count().max(1) as f64;
+            // Match the checked path: narrow sums lose log-luminance samples on large scenes.
+            ((visible().map(f64::from).sum::<f64>() / n) as f32, 1.0 / (1.0 + p.strength.max(0.0)))
+        }
+    };
     let detail = 1.0 + p.detail / 100.0;
     let exposure = 2f32.powf(p.exposure);
     let gamma = p.gamma.clamp(0.1, 4.0);
@@ -250,11 +328,17 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
             }
             let c = [q[0], q[1], q[2]];
             let l0 = luma(c).max(0.0) + EPS;
-            let new_log = mean + (base[i] - mean) * compress + (logl[i] - base[i]) * detail;
+            let new_log = match anchor {
+                Anchor::White => ((base[i] - anchor_log) + (logl[i] - base[i]) * detail) * compress,
+                Anchor::Mean => anchor_log + (base[i] - anchor_log) * compress + (logl[i] - base[i]) * detail,
+            };
             // The contract is "lower = more contrast", i.e. gamma is the divisor of
             // the exponent, matching the crate's other gamma controls (hdr.rs, proof_sim.rs).
             let mut l1 = (new_log.exp() * exposure).max(0.0).powf(1.0 / gamma);
             l1 += p.shadow / 100.0 * (1.0 - l1).powi(3) * 0.5 - p.highlight / 100.0 * l1.powi(3) * 0.5;
+            if !l1.is_finite() {
+                l1 = wide_range_tone(new_log, p.exposure, gamma, p.shadow, p.highlight);
+            }
             l1 = curve_eval(&sorted, l1.clamp(0.0, 1.0));
             let ratio = l1 / l0;
             let mut out = c.map(|v| v * ratio);
@@ -276,6 +360,28 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #6278: the Result swatch is the sampled colour after the shift, and a picked Result sets
+    /// the sliders that give it.
+    #[test]
+    fn replace_color_result_and_shift_round_trip() {
+        let from = [0.8, 0.2, 0.2];
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 2e-3);
+        assert!(near(replace_color_result(from, 0.0, 0.0, 0.0), from), "no shift, no change");
+        for to in [[0.2, 0.3, 0.9], [0.9, 0.85, 0.1], [0.4, 0.1, 0.1], [0.95, 0.6, 0.6], [0.1, 0.6, 0.3]] {
+            let (h, s, l) = replace_color_shift(from, to);
+            assert!((-180.0..=180.0).contains(&h) && (-100.0..=100.0).contains(&s) && (-100.0..=100.0).contains(&l));
+            assert!(near(replace_color_result(from, h, s, l), to), "{to:?}: ({h}, {s}, {l}) gives {:?}", replace_color_result(from, h, s, l));
+        }
+        // Red to blue turns the short way (−120°, not +240°).
+        assert!((replace_color_shift([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]).0 + 120.0).abs() < 0.5);
+        // A grey target: saturation all the way down, the hue left alone.
+        let (h, s, _) = replace_color_shift(from, [0.5, 0.5, 0.5]);
+        assert_eq!((h, s), (0.0, -100.0));
+        // Black has no saturation to raise: the slider stays put rather than dividing by zero.
+        let (h, s, l) = replace_color_shift([0.0, 0.0, 0.0], [0.2, 0.6, 0.3]);
+        assert!(h.is_finite() && s.is_finite() && l > 0.0);
+    }
 
     fn ramp(w: usize, h: usize) -> Vec<[f32; 4]> {
         (0..w * h)
@@ -328,3 +434,6 @@ mod tests {
         assert!(luma([px[2][0], px[2][1], px[2][2]]) > luma([px[38][0], px[38][1], px[38][2]]));
     }
 }
+
+#[cfg(test)]
+mod hdr_toning_range_tests;

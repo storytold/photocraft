@@ -5,7 +5,7 @@
 use crate::PhotocraftApp;
 use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
@@ -16,11 +16,11 @@ fn harness() -> Option<Harness> {
             .wgpu_setup(crate::gpu_canvas::wgpu_setup())
             .build_eframe(|cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
                 if let Some(rs) = cc.wgpu_render_state.as_ref() {
                     app.set_wgpu(rs.clone());
                 }
-                app.ui.panels.navigator = true;
+                crate::panel_docking::show_panel(&mut app, "navigator", Some(true)).unwrap();
                 app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
                 app.run("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 300})).unwrap();
                 app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -38,9 +38,23 @@ fn harness() -> Option<Harness> {
     }
 }
 
-/// The colour at fractions (`fx`, `fy`) of the Navigator preview.
+/// The Navigator's preview box: the node the framework names for the panel, the smallest one big enough to be
+/// the box and not a dock tab.
+// PLAN: assumes the preview box is the accessibility node labelled "Navigator" (`Navigator::new(label, ..)`).
+fn preview_box(h: &Harness) -> egui::Rect {
+    use egui_kittest::kittest::Queryable as _;
+    h.get_all_by_label("Navigator")
+        .map(|node| node.rect())
+        .filter(|r| r.width() >= 40.0 && r.height() >= 40.0)
+        .min_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("navigator preview drawn")
+}
+
+/// The colour at fractions (`fx`, `fy`) of the Navigator's picture: the 400 × 300 document fitted in the box.
 fn preview_px(h: &mut Harness, fx: f32, fy: f32) -> [u8; 4] {
-    let r = crate::panels::last_navigator_preview(&h.ctx).expect("navigator preview drawn");
+    let frame = preview_box(h);
+    let scale = (frame.width() / 400.0).min(frame.height() / 300.0);
+    let r = egui::Rect::from_center_size(frame.center(), egui::vec2(400.0, 300.0) * scale);
     let img = h.render().expect("render");
     let (x, y) = ((r.left() + r.width() * fx) as u32, (r.top() + r.height() * fy) as u32);
     img.get_pixel(x, y).0
@@ -71,6 +85,20 @@ fn navigator_draws_the_gpu_canvas_texture_and_follows_edits() {
     h.run_steps(6);
     assert!(near(preview_px(&mut h, 0.75, 0.5), [0, 0, 255]), "right half now blue");
     assert!(!h.state().navigator_textures.contains_key(&id));
+
+    // Dragging the selected pixels with the Move tool keeps the Navigator on the GPU texture
+    // without falling back to a full-document CPU thumbnail composite on the UI thread.
+    h.state_mut().ui.tool = crate::state::Tool::Move;
+    crate::canvas::tool_event(h.state_mut(), crate::canvas::ToolEvent::Down { x: 250.0, y: 150.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    crate::canvas::tool_event(h.state_mut(), crate::canvas::ToolEvent::Move { x: 150.0, y: 150.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    h.run_steps(4);
+    assert!(h.state().navigator_gpu.contains_key(&id), "Navigator stays on GPU canvas during Move drag");
+    assert!(!h.state().navigator_textures.contains_key(&id), "no CPU thumbnail built during Move drag");
+    crate::canvas::tool_event(h.state_mut(), crate::canvas::ToolEvent::Up { x: 150.0, y: 150.0 }, egui::Modifiers::NONE);
+    h.state_mut().run("select.drop", json!({})).unwrap();
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.run_steps(4);
 
     // A flipped view draws on the CPU: the Navigator goes back to its CPU thumbnail.
     h.state_mut().ui.view.flip_horizontal = true;
