@@ -141,6 +141,21 @@ pub(crate) fn gpu() -> Option<Gpu> {
     Some(Gpu { device, queue, comp, paged, _lock: lock })
 }
 
+/// A compositor with half-float accumulation on `g`'s device, as on adapters that can't render
+/// `Rgba32Float`.
+pub(crate) fn half_float_compositor(g: &Gpu) -> Compositor {
+    Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba16Float).expect("half-float compositor")
+}
+
+/// `comp`'s render of `doc`, within `tolerance` of the CPU's (premultiplied).
+pub(crate) fn check_with(g: &Gpu, comp: &mut Compositor, doc: &Document, tolerance: f32, what: &str) -> Vec<[f32; 4]> {
+    let cpu = photocraft_compose::render(doc, doc.bounds());
+    let out = render_to_vec(comp, &g.device, &g.queue, doc, doc.bounds()).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let worst = worst_diff(&cpu.px, &out);
+    assert!(worst.0 <= tolerance, "{what}: max diff {:.2}/255 at pixel {}: cpu {:?} gpu {:?}", worst.0 * 255.0, worst.1, cpu.px[worst.1], out[worst.1]);
+    out
+}
+
 /// Any adapter and device, for the fallback-path tests (which don't need 32-bit float targets).
 /// The returned guard holds [`GPU_LOCK`] until the device is dropped.
 fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {

@@ -3,11 +3,12 @@
 //! match the CPU compositor within the parity tolerance, and the document must render on the GPU
 //! (a refusal fails the check).
 
-use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
-use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent};
+use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent, LayerMask};
 use photocraft_geom::{Rect, Size};
+use photocraft_raster::Surface;
 
-use crate::parity::{Gpu, base_doc, check, diff_rect, gpu, mask, noise_layer};
+use crate::parity::{Gpu, base_doc, check, check_with, diff_rect, gpu, half_float_compositor, mask, noise_layer};
 
 const KNOCKOUTS: [Knockout; 2] = [Knockout::Shallow, Knockout::Deep];
 
@@ -334,8 +335,6 @@ fn knockout_on_a_stroked_shape_with_a_clipped_layer_matches_the_cpu() {
             let mut c = noise_layer("clip", d.pixel_format(), Rect::new(4, 4, 44, 36), 42, 0.5);
             c.clipped = true;
             d.layers.extend([l, c]);
-            let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
-            assert!(st.is_ok(), "planned on the GPU");
             run(&mut g, &d, &format!("stroked shape, fill opacity {fill}, clipped layer"), knockout);
         }
     }
@@ -430,18 +429,31 @@ fn individually_clipped_shallow_knockout_reaches_beneath_an_opaque_fill() {
 }
 
 /// Where the base covers a pixel fully an individually blended clipped layer keeps its 32-bit
-/// values above 1; where the base is partly transparent the clamped mix applies, as on the CPU.
+/// values above 1; where the base is partly transparent, however slightly, the clamped mix
+/// applies, as on the CPU. Half-float accumulation tells the two apart as well.
 #[test]
 fn individually_clipped_hdr_values_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    for base_alpha in [1.0, 0.4] {
+    let mut half = half_float_compositor(&g);
+    // The base's alpha at every third pixel, and its mask there (sample depth, value, density).
+    let cases = [(1.0, None), (0.4, None), (0.9999, None), (1.0, Some((SampleType::U8, 254.0 / 255.0, 0.01))), (1.0, Some((SampleType::F32, 0.9999, 1.0)))];
+    for (base_alpha, masked) in cases {
         for opacity in [1.0, 0.7] {
+            let what = format!("HDR clipped layer, base alpha {base_alpha}, mask {masked:?}, opacity {opacity}");
             let mut d = doc(SampleType::F32, true);
             d.layers.push(underlay(&d, 2));
             let mut base = Layer::raster("base", d.pixel_format());
             let rect = Rect::new(4, 4, 40, 34);
             let px: Vec<f32> = (0..rect.width() * rect.height()).flat_map(|i| [0.3, 0.5, 0.2, if i % 3 == 0 { base_alpha } else { 1.0 }]).collect();
             base.surface_mut().unwrap().write_region(rect, &px);
+            if let Some((sample, value, density)) = masked {
+                let mut m = LayerMask::reveal_all();
+                m.surface = Surface::with_default(PixelFormat { sample, ..PixelFormat::GRAY8 }, &[1.0]);
+                let values: Vec<f32> = (0..rect.width() * rect.height()).map(|i| if i % 3 == 0 { value } else { 1.0 }).collect();
+                m.surface.write_region(rect, &values);
+                m.density = density;
+                base.mask = Some(m);
+            }
             base.opacity = opacity;
             base.advanced.blend_clipped = false;
             let mut c = Layer::raster("hdr clip", d.pixel_format());
@@ -450,13 +462,43 @@ fn individually_clipped_hdr_values_match_the_cpu() {
             c.surface_mut().unwrap().write_region(crect, &cpx);
             c.clipped = true;
             d.layers.extend([base, c]);
-            let cpu = photocraft_compose::render(&d, d.bounds());
             // Where the base covers fully (opaque pixels at opacity 1) the CPU keeps the clipped
             // value; below full coverage it mixes, which clamps.
-            if opacity >= 1.0 {
-                assert!(cpu.px.iter().any(|p| p[0] > 1.0), "the CPU keeps a value above 1 (base alpha {base_alpha})");
-            }
-            check(&mut g, &d, &format!("HDR clipped layer, base alpha {base_alpha}, opacity {opacity}"));
+            let partial = base_alpha < 1.0 || masked.is_some();
+            let full = |x: i32, y: i32| opacity >= 1.0 && !(partial && ((y - rect.y0) * rect.width() as i32 + x - rect.x0) % 3 == 0);
+            let classify = |px: &[[f32; 4]], backend: &str| {
+                for y in crect.y0..crect.y1 {
+                    for x in crect.x0..crect.x1 {
+                        let red = px[(y * d.bounds().width() as i32 + x) as usize][0];
+                        assert_eq!(red > 1.0, full(x, y), "{what}, {backend} at ({x},{y}): red {red}");
+                    }
+                }
+            };
+            classify(&photocraft_compose::render(&d, d.bounds()).px, "CPU");
+            check(&mut g, &d, &what);
+            classify(&check_with(&g, &mut half, &d, 3.0 / 255.0, &what), "half-float GPU");
+        }
+    }
+}
+
+/// A 32-bit base that takes several passes (a group) keeps Blend Clipped Layers as Group off on
+/// the CPU; at 8 bits it renders on the GPU.
+#[test]
+fn individually_clipped_multi_pass_bases_stay_on_the_cpu_at_32_bits() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::F32] {
+        let mut d = doc(depth, true);
+        d.layers.push(underlay(&d, 2));
+        let inner = noise_layer("inner", d.pixel_format(), Rect::new(0, 0, 40, 34), 5, 0.4);
+        let layers = clipped_pair(&d, group("base group", false, vec![inner]), 1.0);
+        d.layers.extend(layers);
+        if depth == SampleType::F32 {
+            let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+                .expect_err("the GPU must refuse a multi-pass 32-bit base");
+            assert!(e.to_string().contains("Blend Clipped Layers as Group off"), "{e}");
+            assert!(g.comp.supports(&d).is_err());
+        } else {
+            check(&mut g, &d, "group base at 8 bits");
         }
     }
 }

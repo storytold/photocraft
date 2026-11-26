@@ -115,8 +115,15 @@ pub const F_ADD_DIFF: u32 = 16384;
 /// backdrop becomes the knockout target B inside the layer's shape C); `p0.y` set keeps A's alpha
 /// from growing (clipped layers); `p0.z` set is `compose::advanced::composite_clipped_individually_with`:
 /// B is kept where C's coverage reaches 1 (values above 1 survive) and elsewhere the clamped mix
-/// applies, also at coverage 0.
+/// applies, also at coverage 0. `p0.x` set: C is an `F_COVER` record, whose R says whether the
+/// coverage is full.
 pub const F_MIX_C: u32 = 4_194_304;
+
+/// `Content`: the pass writes a coverage record instead of pixels. A is alpha × mask; R is 1
+/// where that is 1 or more and G is 1 where it is 0 or less, both tested before the value is
+/// stored (a half-float slot rounds a near-opaque alpha to 1); B is 0. Only the `F_MIX_C` mix
+/// reads such a slot.
+pub const F_COVER: u32 = 16_777_216;
 
 /// `Lerp`: B mixed back towards A (the backdrop) by the layer's Blend If weight
 /// (`compose::apply_blend_if`), from C ("This Layer": an adjustment layer's unmixed result; B when
@@ -511,11 +518,26 @@ impl<'a> Planner<'a> {
     /// clipped layer composited in its own mode onto the result and mixed back towards it by the
     /// base's shape (content alpha with masks) times the base's opacity. A clipped layer's shallow
     /// knockout stops at the backdrop beneath the base, which lives only for this clipping group.
-    /// Consumes `backdrop` and `ko`.
+    /// A base of one Content pass gives its shape as an `F_COVER` record. A base that takes more
+    /// passes goes through a slot, which may be half float: in a 32-bit document it stays on the
+    /// CPU. Consumes `backdrop` and `ko`.
     fn clipped_individually(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot, ko: Option<Slot>) -> Result<Slot, Unsupported> {
+        let single = single_content_pass(layer);
+        if !single && self.cx.depth == photocraft_color::SampleType::F32 {
+            return Err(Unsupported(format!(
+                "Blend Clipped Layers as Group off on `{}`, a 32-bit base that takes several passes (composited on the CPU)",
+                layer.name
+            )));
+        }
         let floor = if clipped.iter().any(|c| c.visible && c.advanced.knockout == Knockout::Shallow) { Some(self.retain(backdrop)) } else { None };
         let mut b = self.layer(layer, &[], backdrop, ko)?;
-        let clip = self.content(layer)?;
+        let clip = if single {
+            let mut p = self.content_pass(layer)?;
+            p.flags |= F_COVER;
+            self.emit(p)
+        } else {
+            self.content(layer)?
+        };
         let opacity = layer.opacity.clamp(0.0, 1.0);
         for c in clipped.iter().filter(|c| c.visible) {
             let before = self.retain(b);
@@ -526,7 +548,7 @@ impl<'a> Planner<'a> {
             p.b = Some(after);
             p.c = Some(self.retain(clip));
             p.flags = F_MIX_C;
-            p.params[0] = [0.0, 0.0, 1.0, 0.0];
+            p.params[0] = [if single { 1.0 } else { 0.0 }, 0.0, 1.0, 0.0];
             p.opacity = opacity;
             b = self.emit(p);
         }

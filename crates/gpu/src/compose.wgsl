@@ -58,11 +58,12 @@ const F_LAB: u32 = 65536u;      // Lab document: Normal mixes in CIELAB
 const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposure retain values above 1
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + opacity * (B - C) premultiplied (clips on pass-through groups, knockout); p0.x: gate on the shape in layer_tex (knockout)
-const F_MIX_C: u32 = 4194304u;   // lerp: A mixed towards B by C's alpha * opacity (knockout); p0.y: keep A's alpha at most; p0.z: individually blended clipped layers (B where C >= 1, else the clamped mix even at 0)
+const F_MIX_C: u32 = 4194304u;   // lerp: A mixed towards B by C's alpha * opacity (knockout); p0.y: keep A's alpha at most; p0.z: individually blended clipped layers (B where C >= 1, else the clamped mix even at 0; with p0.x, C is an F_COVER record)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
+const F_COVER: u32 = 16777216u;      // content: coverage record (r: alpha × mask >= 1, g: <= 0, b: 0, a: alpha × mask)
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
 @group(0) @binding(1) var<uniform> op: Op;
@@ -860,6 +861,10 @@ fn fs_content(in: VOut) -> @location(0) vec4<f32> {
     let d = doc_px(local(in.pos));
     var c = layer_texel(d);
     c.a = c.a * mask_value(d);
+    if ((op.flags & F_COVER) != 0u) {
+        // Full and no coverage are tested here: a half-float target rounds a near-opaque alpha to 1.
+        return vec4(select(0.0, 1.0, c.a >= 1.0), select(0.0, 1.0, c.a <= 0.0), 0.0, c.a);
+    }
     return c;
 }
 
@@ -1043,12 +1048,15 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         // compose::advanced::knockout_with: where the shape C is present the backdrop A is mixed
         // towards the knockout target B (premultiplied, as `advanced::mix`); `p0.y` keeps the
         // alpha from growing (clipped layers stay inside their base).
-        var k = min(textureLoad(tex_c, p, 0).a * op.opacity, 1.0);
+        let c = textureLoad(tex_c, p, 0);
+        var k = min(c.a * op.opacity, 1.0);
         if (op.p0.z > 0.5) {
             // compose::advanced::composite_clipped_individually_with: B untouched where the base
             // is fully covered (HDR values survive); elsewhere the clamped mix, also at 0 (which
-            // clamps A).
-            if (k >= 1.0) { return b; }
+            // clamps A). With p0.x, C is an F_COVER record, whose r says the coverage is full.
+            var full = k >= 1.0;
+            if (op.p0.x > 0.5) { full = c.r > 0.5 && op.opacity >= 1.0; }
+            if (full) { return b; }
             k = max(k, 0.0);
         } else if (k <= 0.0) {
             return a;

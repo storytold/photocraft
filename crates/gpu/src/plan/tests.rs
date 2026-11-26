@@ -333,18 +333,13 @@ fn opaque_fill_layers_skip_what_they_cover() {
     assert!(photocraft_compose::occludes_below(&d.layers[5], ColorMode::Rgb));
     // Clipped layers blended individually may knock out to what is beneath the fill, so the
     // layers below stay planned; with nothing clipped to the fill they are skipped as before.
+    let start = |d: &Document| plan(d).unwrap().checkpoints.first().map(|c| c.layer_start);
     let mut individually = d.clone();
     individually.layers[5].advanced.blend_clipped = false;
-    assert!(plan(&individually).unwrap().passes.len() > skipped, "a visible clipped layer blending individually keeps the layers below");
+    assert_eq!(start(&individually), Some(0), "a visible clipped layer blending individually keeps the layers below");
     let mut unclipped = individually.clone();
     unclipped.layers.pop();
-    let mut unclipped_alone = unclipped.clone();
-    unclipped_alone.layers.drain(..5);
-    assert_eq!(
-        plan(&unclipped).unwrap().passes.len(),
-        plan(&unclipped_alone).unwrap().passes.len(),
-        "nothing clipped to the fill: the layers below are skipped"
-    );
+    assert_eq!(start(&unclipped), Some(5), "nothing clipped to the fill: the layers below are skipped");
 }
 
 #[test]
