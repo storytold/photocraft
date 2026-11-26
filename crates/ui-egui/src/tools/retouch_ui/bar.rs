@@ -17,12 +17,14 @@ mod tone;
 #[cfg(test)]
 mod tests;
 
-/// The bar's commit and cancel button labels while the tool waits for an answer.
+/// The options bar's commit and cancel button labels, and whether they take input.
 pub(crate) struct Pending {
     /// The commit button's label.
     pub commit: Label,
     /// The cancel button's label.
     pub cancel: Label,
+    /// Whether the pair answers: `false` when the cells stand on the bar with nothing waiting (#12545).
+    pub enabled: bool,
 }
 
 /// Shows the options of the retouch and smart-selection tools. False for other tools.
@@ -56,16 +58,31 @@ pub(crate) fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool
     true
 }
 
-/// The commit and cancel buttons `tool`'s bar shows now: Remove with strokes waiting, Content-Aware
-/// Move with its transform box up.
-pub(crate) fn pending(app: &PhotocraftApp, tool: Tool) -> Option<Pending> {
+/// Whether Remove strokes wait for an answer: they grey the bar's answer cells, its Remove after
+/// each stroke box and the Layers panel (#12545).
+pub(crate) fn strokes_wait(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::Remove && !app.remove_pending.is_empty()
+}
+
+/// The commit and cancel cells `tool`'s bar draws. Remove keeps its pair at the end of the bar
+/// whether or not strokes wait, greyed while nothing does (#12545); Content-Aware Move shows its
+/// pair only while its transform box is up.
+pub(crate) fn cells(app: &PhotocraftApp, tool: Tool) -> Option<Pending> {
     match tool {
-        Tool::Remove if !app.remove_pending.is_empty() => Some(Pending { commit: tl!("Apply the removal").into(), cancel: tl!("Cancel").into() }),
+        Tool::Remove => {
+            Some(Pending { commit: tl!("Apply to current strokes").into(), cancel: tl!("Reset all strokes").into(), enabled: !app.remove_pending.is_empty() })
+        }
         Tool::ContentAwareMove if crate::cam_transform::active(app) => {
-            Some(Pending { commit: tl!("Commit transform").into(), cancel: tl!("Cancel transform").into() })
+            Some(Pending { commit: tl!("Commit transform").into(), cancel: tl!("Cancel transform").into(), enabled: true })
         }
         _ => None,
     }
+}
+
+/// The answer `tool` waits for now: its bar cells are enabled. Remove with strokes waiting,
+/// Content-Aware Move with its transform box up.
+pub(crate) fn pending(app: &PhotocraftApp, tool: Tool) -> Option<Pending> {
+    cells(app, tool).filter(|cell| cell.enabled)
 }
 
 /// Runs the answer of [`pending`]'s buttons.

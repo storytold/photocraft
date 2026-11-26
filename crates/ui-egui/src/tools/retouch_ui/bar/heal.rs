@@ -77,10 +77,13 @@ fn first(a: Option<RangeAlert>, b: Option<RangeAlert>) -> Option<RangeAlert> {
 /// Remove's options. The apply and cancel pair belongs to the bar's pending strip.
 pub(super) fn remove(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
+    // While strokes wait for the bar's answer the box cannot be switched (#12545); the other two
+    // boxes keep today's behaviour.
+    let waiting = super::strokes_wait(app);
     let o = &mut app.ui.tool_options;
     // The reference's options bar, in its order and words (#12546).
     check(ui, tl!("Sample all layers"), &mut o.sample_all.remove, true, Some(tl!("Sample content from all visible layers")));
-    check(ui, tl!("Remove after each stroke"), &mut o.remove_after_each_stroke, true, Some(tl!("Remove area after a single stroke")));
+    check(ui, tl!("Remove after each stroke"), &mut o.remove_after_each_stroke, !waiting, Some(tl!("Remove area after a single stroke")));
     check(ui, tl!("Create new layer"), &mut o.remove_new_layer, composite, Some(tl!("Create new layer with results")));
     None
 }

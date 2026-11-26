@@ -5,13 +5,14 @@
 use std::ops::RangeInclusive;
 
 use craft::behavior::{EditEvents, IconId, NumberCodec};
-use craft::ui::bars::{Bar, BarHome, BarKind, BarOutput, BarTool};
+use craft::ui::bars::{Bar, BarCommands, BarHome, BarKind, BarOutput, BarTool};
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::menu::Menu;
+use craft::ui::runtime::commands::{CommandState, Commands as _};
 use craft::ui::runtime::env::{Env, Label, UnitKind, WheelScope, with_env};
 use craft::ui::text::{NumberField, RangeAlert};
 use photocraft_paint::BrushSettings;
@@ -63,6 +64,8 @@ struct Ending {
     end: End,
     commit: Label,
     cancel: Label,
+    /// Whether the two cells answer; `false` draws them greyed (#12545).
+    enabled: bool,
 }
 
 /// Whether `tool` is one of the four type tools.
@@ -75,7 +78,7 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
     if app.ui.transform.is_some() {
         return None;
     }
-    let pair = |end, commit: &str, cancel: &str| Some(Ending { end, commit: commit.to_owned().into(), cancel: cancel.to_owned().into() });
+    let pair = |end, commit: &str, cancel: &str| Some(Ending { end, commit: commit.to_owned().into(), cancel: cancel.to_owned().into(), enabled: true });
     if crate::symmetry_ui::is_open(app) {
         return pair(End::Symmetry, tl!("Commit"), tl!("Cancel"));
     }
@@ -83,15 +86,17 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
         Tool::Crop if crate::crop_ui::bar::commits_shown(app) => pair(End::Crop, tl!("Commit current crop operation"), tl!("Cancel current crop operation")),
         Tool::PerspectiveCrop if crate::perspective_crop_ui::commit_shown(app) => pair(End::PerspectiveCrop, tl!("Commit"), tl!("Cancel")),
         tool if is_type_tool(tool) && app.ui.text_edit.is_some() => pair(End::Type, tl!("Commit any current edits"), tl!("Cancel any current edits")),
-        tool => crate::retouch_ui::bar::pending(app, tool).map(|p| Ending { end: End::Retouch, commit: p.commit, cancel: p.cancel }),
+        // Remove keeps its pair on the bar, greyed while nothing waits (#12545).
+        tool => crate::retouch_ui::bar::cells(app, tool).map(|p| Ending { end: End::Retouch, commit: p.commit, cancel: p.cancel, enabled: p.enabled }),
     }
 }
 
 /// A key of the bar's commit and cancel cells and of the open outline its hints follow: the canvas opens and ends these
 /// edits (a type session, a crop frame, a removal stroke, a lasso outline) without a command, so the options bar's
-/// content version holds this key.
-pub(crate) fn edit_key(app: &PhotocraftApp) -> (Option<End>, bool) {
-    (ending(app, app.ui.tool).map(|ending| ending.end), app.canvas_tools.selection.outline_open())
+/// content version holds this key. It holds which edit the cells end and whether they answer: Remove keeps its pair on
+/// the bar, greyed while nothing waits, so the enabled state is what moves (#12545).
+pub(crate) fn edit_key(app: &PhotocraftApp) -> (Option<(End, bool)>, bool) {
+    (ending(app, app.ui.tool).map(|ending| (ending.end, ending.enabled)), app.canvas_tools.selection.outline_open())
 }
 
 /// The options bar of the active tool. It is the same arrangement in every theme.
@@ -104,8 +109,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(ending) = &ending {
         bar = bar.commit_cancel(ending.commit.clone(), ending.cancel.clone());
     }
+    let answers = ending.as_ref().is_some_and(|ending| ending.enabled);
     // A value control of the bar takes the wheel without a click, as the Mode dropdown and the fields did.
-    let shown = bar.show(ui, |ui, _| with_env(ui, |set| set.wheel = Some(WheelScope::Free), |ui| body(app, ui)));
+    let shown = bar.show(ui, |ui, cx| {
+        if ending.is_some() {
+            // The bar owns its commit and cancel cells, so its body says whether they answer: greyed
+            // when they stand there with nothing to answer (#12545).
+            cx.publish(BarCommands::Commit, CommandState::new().enabled(answers));
+            cx.publish(BarCommands::Cancel, CommandState::new().enabled(answers));
+        }
+        with_env(ui, |set| set.wheel = Some(WheelScope::Free), |ui| body(app, ui))
+    });
     if let Some(ending) = ending {
         answer(app, ui, tool, ending.end, &shown.output);
     }
