@@ -374,4 +374,4 @@ egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev
 eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "f502d3b1d9ebc13c20e4795781d6f47b6957751e" }
