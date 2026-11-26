@@ -120,6 +120,8 @@ fn an_opacity_outside_its_range_keeps_the_closest_value_and_alerts_once() {
 fn the_colour_well_opens_the_color_picker_and_ok_keeps_what_it_answers() {
     let mut h = bar(Tool::Remove);
     open_gear(&mut h);
+    let rows_open = h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).count();
+    assert_eq!(rows_open, 1, "the popup is open and shows its Opacity row before the well is touched");
     control(&h, Role::ColorWell, "Color").click();
     h.run_steps(4);
     let id = crate::color_picker_ui::top(h.state()).expect("the well opens the Color Picker");
@@ -134,9 +136,9 @@ fn the_colour_well_opens_the_color_picker_and_ok_keeps_what_it_answers() {
     assert!(crate::color_picker_ui::top(h.state()).is_none(), "OK closes the picker");
     let rows_after = h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).count();
     assert_eq!(
-        (rows_while_picking, rows_after),
-        (0, 0),
-        "the picker closes the popup, and OK does not reopen it: {rows_while_picking} while picking, {rows_after} after"
+        (rows_open, rows_while_picking, rows_after),
+        (1, 0, 0),
+        "the row that was there closes with the picker and does not come back: {rows_open} open, {rows_while_picking} while picking, {rows_after} after"
     );
     let app = h.state();
     let rgb = app.ui.tool_options.remove_overlay_color.expect("the picked colour is kept in the tool options");
@@ -189,6 +191,16 @@ fn a_remembered_pair_the_field_could_never_hold_comes_back_inside_its_range() {
     crate::tool_memory::sanitize(&mut wild);
     assert_eq!(wild.remove_overlay_opacity, ToolOptions::default().remove_overlay_opacity, "an opacity that is not a number takes the fresh start");
     assert_eq!(wild.remove_overlay_color, None, "a colour with a channel that is not a number is dropped, so the tool's own overlay shows");
+    // A colour is three channels the picker answers with 0..=1; a hand-edited file can carry a number
+    // that is no answer, and it goes the same way.
+    for colour in [Some([2.0, 0.5, 0.5]), Some([-0.5, 0.5, 0.5]), Some([0.5, f32::INFINITY, 0.5])] {
+        let mut wide = ToolOptions { remove_overlay_color: colour, ..ToolOptions::default() };
+        crate::tool_memory::sanitize(&mut wide);
+        assert_eq!(wide.remove_overlay_color, None, "a colour outside the channels the picker answers ({colour:?}) is dropped");
+    }
+    let mut good = ToolOptions { remove_overlay_color: Some([0.0, 0.5, 1.0]), remove_overlay_opacity: 1.0, ..ToolOptions::default() };
+    crate::tool_memory::sanitize(&mut good);
+    assert_eq!((good.remove_overlay_color, good.remove_overlay_opacity), (Some([0.0, 0.5, 1.0]), 1.0), "a pair the fields can hold is left alone");
 }
 
 #[test]

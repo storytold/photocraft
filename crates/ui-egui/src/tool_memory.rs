@@ -656,10 +656,11 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
         *side = if side.is_nan() { 0.0 } else { side.clamp(0.0, f64::MAX) };
     }
     fit(&mut o.magic_eraser_opacity, 1.0, 100.0, d.magic_eraser_opacity);
-    // The Remove tool's Overlay options (#12549): its field allows 1-100 %, and a colour the Color
-    // Picker could not have answered is dropped so the tool's own overlay shows.
+    // The Remove tool's Overlay options (#12549): its field allows 1-100 %, and a colour outside the
+    // channels the Color Picker answers (0..=1, which a value that is not a number fails) is dropped
+    // so the tool's own overlay shows.
     fit(&mut o.remove_overlay_opacity, 1.0, 100.0, d.remove_overlay_opacity);
-    if o.remove_overlay_color.is_some_and(|c| !c.iter().all(|channel| channel.is_finite())) {
+    if o.remove_overlay_color.is_some_and(|c| !c.iter().all(|channel| (0.0..=1.0).contains(channel))) {
         o.remove_overlay_color = d.remove_overlay_color;
     }
     fit(&mut o.bg_tolerance, 0.0, 100.0, d.bg_tolerance);
