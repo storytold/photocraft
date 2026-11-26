@@ -7,6 +7,24 @@ use serde_json::json;
 use super::PhotocraftApp;
 use crate::state::Tool;
 
+/// Native ink sample and its document-profile RGB stand-in, sharing the RGB sampler's box and source.
+pub(crate) fn native_color(app: &PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<([f32; 3], [f32; 4])> {
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_cmyk_at};
+    let st = app.session.active()?;
+    let inks = sample_cmyk_at(&st.doc, st.active_layer, at[0], at[1], size.pixels(), Some(f64::from(app.current_zoom())), SampleLayers::parse(source.id())?)?;
+    let space = photocraft_compose::cmyk_space(&st.doc);
+    let rgb = photocraft_color::convert::with_cmyk_space(space.as_ref(), || photocraft_color::convert::cmyk_to_rgb(inks));
+    Some((rgb.map(|v| v.clamp(0.0, 1.0)), inks))
+}
+
+/// Pixel picks retain inks; mask, alpha and Quick Mask picks remain grayscale.
+pub(crate) fn native_pick(app: &PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<([f32; 3], [f32; 4])> {
+    if eyedropper_mask_source(app, source).is_some() || super::paint_target(app) != json!("pixels") {
+        return None;
+    }
+    native_color(app, at, size, source)
+}
+
 /// The colour at document point `at` averaged over `size`, from the layers `source` names
 /// (`document.sampleColor`). `None` off the image or over transparency.
 pub fn sample_color(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<[f32; 3]> {

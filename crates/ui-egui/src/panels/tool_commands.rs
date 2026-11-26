@@ -114,6 +114,8 @@ pub(crate) enum ToolCommand {
     Sharpen,
     #[command(label = "Smudge Tool", icon = "pointer", kind = "tool", group = "tools", alias = "tools.select.smudge")]
     Smudge,
+    #[command(label = "Adjustment Brush Tool", icon = "adjustment_layer", kind = "tool", group = "tools", alias = "tools.select.adjustmentBrush")]
+    AdjustmentBrush,
     #[command(label = "Dodge Tool", icon = "lollipop", kind = "tool", group = "O", default = "O", alias = "tools.select.dodge")]
     Dodge,
     #[command(label = "Burn Tool", icon = "flame", kind = "tool", group = "O", default = "O", alias = "tools.select.burn")]
@@ -218,6 +220,7 @@ pub(crate) fn command_of(tool: Tool) -> ToolCommand {
         Tool::Blur => ToolCommand::Blur,
         Tool::Sharpen => ToolCommand::Sharpen,
         Tool::Smudge => ToolCommand::Smudge,
+        Tool::AdjustmentBrush => ToolCommand::AdjustmentBrush,
         Tool::Dodge => ToolCommand::Dodge,
         Tool::Burn => ToolCommand::Burn,
         Tool::Sponge => ToolCommand::Sponge,
@@ -293,6 +296,7 @@ pub(crate) fn tool_of(command: ToolCommand) -> Tool {
         ToolCommand::Blur => Tool::Blur,
         ToolCommand::Sharpen => Tool::Sharpen,
         ToolCommand::Smudge => Tool::Smudge,
+        ToolCommand::AdjustmentBrush => Tool::AdjustmentBrush,
         ToolCommand::Dodge => Tool::Dodge,
         ToolCommand::Burn => Tool::Burn,
         ToolCommand::Sponge => Tool::Sponge,

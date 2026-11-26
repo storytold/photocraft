@@ -2,8 +2,7 @@
 
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 #[cfg(test)]
-use egui::Rect;
-use egui::vec2;
+use egui::{Rect, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::LayerId;
 use photocraft_engine::history_source_cmds::HistorySource;
@@ -76,6 +75,7 @@ pub(crate) use info::{SamplerReadouts, sampler_readouts};
 pub(crate) use layers::blend_options;
 pub(crate) use layers_tree::listed_filter;
 pub use options_bar::options_bar;
+pub(crate) use status_bar::document_window_status;
 pub use status_bar::status_bar;
 pub use title_bar::{title_bar, window_title};
 pub(crate) use toolbar::QUICK_MASK;
