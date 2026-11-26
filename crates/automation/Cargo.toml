@@ -60,3 +60,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "syn
 # Reading back an extended attribute the write path should have preserved (#7095).
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
+[[example]]
+name = "bench_live_stroke_gpu"
+required-features = ["gpu"]
