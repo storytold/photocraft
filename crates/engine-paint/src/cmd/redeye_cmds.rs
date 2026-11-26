@@ -249,7 +249,7 @@ fn mode_refusal(s: &Session) -> Result<()> {
 /// when the call names no layer. A set of colour channels edits the layer's pixels and still works.
 pub(crate) fn target_refusal(s: &Session, p: &Value) -> Result<()> {
     let Some(d) = s.active() else { return Ok(()) };
-    let named = p.get("layer").is_some();
+    let named = p.get("layer").is_some_and(|v| !v.is_null());
     let p = crate::channel_cmds::inject_target(s, "paint.redEye", p.clone());
     let id = if named { crate::commands::layer_param(s, &p).ok() } else { d.active_layer };
     let adjustment = id.and_then(|id| d.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Adjustment(_)));

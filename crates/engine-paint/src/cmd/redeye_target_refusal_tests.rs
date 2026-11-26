@@ -67,6 +67,19 @@ fn several_selected_layers_unless_one_is_named() {
     assert!(named["pixels"].as_u64().unwrap() > 0, "a named layer is corrected: {named}");
 }
 
+/// `"layer": null` names no layer, as everywhere else: it neither skips the several-layers refusal
+/// nor stops a lone layer from being corrected.
+#[test]
+fn a_null_layer_names_no_layer() {
+    let (mut s, _) = eye();
+    let r = s.execute("paint.redEye", json!({"x": 32, "y": 32, "layer": null})).unwrap();
+    assert!(r["pixels"].as_u64().unwrap() > 0, "a null layer falls back to the active one: {r}");
+    let (mut s, pupil) = eye();
+    let top = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layers": [pupil, top]})).unwrap();
+    refused(&mut s, json!({"x": 32, "y": 32, "layer": null}), MANY_LAYERS_REFUSAL);
+}
+
 #[test]
 fn one_visible_pixel_layer_is_corrected() {
     let (mut s, _) = eye();
