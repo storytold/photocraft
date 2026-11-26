@@ -166,9 +166,12 @@ fn the_opacity_row_is_a_whole_percent_field_whose_arrow_opens_a_slider() {
     let in_row = |node: &egui_kittest::Node<'_>| (node.rect().center().y - row.center().y).abs() < 8.0;
     assert!(h.query_all_by_label("%").any(|node| in_row(&node)), "the percent sign stands in the Opacity row");
     assert_eq!(h.query_all_by_role(Role::Slider).filter(|node| in_row(node)).count(), 0, "no slider is drawn in the row");
-    let arrow = h.query_all_by_role_and_label(Role::Button, "Slider").find(|node| in_row(node)).expect("the Opacity row carries the popup-slider arrow");
-    let at = arrow.rect().center();
-    drop(arrow);
+    let at = h
+        .query_all_by_role_and_label(Role::Button, "Slider")
+        .find(|node| in_row(node))
+        .expect("the Opacity row carries the popup-slider arrow")
+        .rect()
+        .center();
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
@@ -213,28 +216,41 @@ fn the_opacity_field_keeps_whole_percents_without_an_alert() {
 fn a_typed_value_with_too_many_digits_settles_on_the_rows_digits() {
     let (mut h, id) = calculations();
     write(&mut h, id, "blending", json!("add"));
-    settle(&mut h, id, "Opacity", "opacity", 100.0, "55.6", 56.0, false);
-    settle(&mut h, id, "Scale", "scale", 1.0, "1.23456", 1.235, true);
-    settle(&mut h, id, "Offset", "offset", 0.0, "10.6", 11.0, true);
+    settle(&mut h, id, &NumberRow { label: "Opacity", key: "opacity", from: 100.0, text: "55.6", want: 56.0, slider_row: false });
+    settle(&mut h, id, &NumberRow { label: "Scale", key: "scale", from: 1.0, text: "1.23456", want: 1.235, slider_row: true });
+    settle(&mut h, id, &NumberRow { label: "Offset", key: "offset", from: 0.0, text: "10.6", want: 11.0, slider_row: true });
     assert!(messages(&h).is_empty(), "settling inside the bounds raises no alert: {:?}", messages(&h));
 }
 
-/// Types `text` into the number field of the row `label` (with both decimal marks in turn, the row
-/// first set to `from`) and asserts it ends at `want`.
-fn settle(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, label: &str, key: &str, from: f64, text: &str, want: f64, at_edge: bool) {
+/// One row of the settling test: its caption and field key, the value to start from, the text to
+/// type, the value the row must end at, and whether the row draws a slider beside its field (then
+/// the click goes to the field's right edge, so it cannot move that slider).
+struct NumberRow<'a> {
+    label: &'a str,
+    key: &'a str,
+    from: f64,
+    text: &'a str,
+    want: f64,
+    slider_row: bool,
+}
+
+/// Types `text` (with both decimal marks in turn, the row first set to `from`) into the number field
+/// of the row and asserts it ends at `want`.
+fn settle(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, row: &NumberRow<'_>) {
     for mark in [",", "."] {
-        set(h.state_mut(), id, key, json!(from)).unwrap_or_else(|error| panic!("the {label} row starts at {from}: {error}"));
+        set(h.state_mut(), id, row.key, json!(row.from)).unwrap_or_else(|error| panic!("the {} row starts at {}: {error}", row.label, row.from));
         h.run_steps(2);
-        if at_edge {
-            type_into_at_edge(h, label, &text.replace('.', mark));
+        let text = row.text.replace('.', mark);
+        if row.slider_row {
+            type_into_at_edge(h, row.label, &text);
         } else {
-            type_into(h, label, &text.replace('.', mark));
+            type_into(h, row.label, &text);
         }
-        if fields(h.state(), id).number(key) == Some(want) {
+        if fields(h.state(), id).number(row.key) == Some(row.want) {
             return;
         }
     }
-    panic!("neither decimal mark settled {label} {text} to {want}: {:?}", fields(h.state(), id).number(key));
+    panic!("neither decimal mark settled {} {} to {}: {:?}", row.label, row.text, row.want, fields(h.state(), id).number(row.key));
 }
 
 /// Past the range the nearest end is kept: a typed 150 % becomes 100 %. The measured reference shows
