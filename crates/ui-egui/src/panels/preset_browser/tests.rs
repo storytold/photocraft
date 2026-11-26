@@ -84,7 +84,11 @@ fn each_panel_uses_a_preset_its_own_way() {
         (GRADIENTS, PresetEvent::activate(item("g"), none), run("gradient.presets.apply", json!({"preset": "g"}))),
         (GRADIENTS, PresetEvent::drop_at(item("g"), at, none), run("gradient.presets.apply", json!({"preset": "g"}))),
         (SHAPES, PresetEvent::select(item("Star"), none), Some(Act::CustomShapeTool)),
-        (SHAPES, PresetEvent::activate(item("Star"), none), run("shape.presets.place", json!({"preset": "Star", "fill": shape_fill(&app)}))),
+        (
+            SHAPES,
+            PresetEvent::activate(item("Star"), none),
+            run("shape.presets.place", json!({"preset": "Star", "fill": shape_fill(&app), "useAlignedRendering": app.ui.tool_options.align_edges})),
+        ),
         (TOOL_PRESETS, PresetEvent::select(item("T"), none), Some(Act::ToolPreset("T".into()))),
         (TOOL_PRESETS, PresetEvent::activate(item("T"), none), Some(Act::ToolPreset("T".into()))),
         (TOOL_PRESETS, PresetEvent::drop_at(item("T"), at, none), None),
@@ -96,7 +100,7 @@ fn each_panel_uses_a_preset_its_own_way() {
     let drop = canvas_drop_rect(&app).center();
     let c = crate::canvas::document_display::doc_point_at(&app, drop).expect("the drop is on the canvas");
     let side = (48.0_f64 * 0.3).max(8.0);
-    let expected = json!({"preset": "Star", "fill": shape_fill(&app), "rect": [c.x - side / 2.0, c.y - side / 2.0, side, side]});
+    let expected = json!({"preset": "Star", "fill": shape_fill(&app), "useAlignedRendering": app.ui.tool_options.align_edges, "rect": [c.x - side / 2.0, c.y - side / 2.0, side, side]});
     assert_eq!(panel_act(&app, SHAPES, &PresetEvent::drop_at(item("Star"), drop, none)), run("shape.presets.place", expected));
 }
 

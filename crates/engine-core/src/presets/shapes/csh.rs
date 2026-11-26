@@ -17,7 +17,7 @@ pub(super) fn spec() -> CommandSpec {
         label: "Import Shapes",
         menu: &[],
         shortcut: None,
-        params: r#"{"path":str (.csh) | "data":str (base64),"group":str?} → {group,count,names}; appends a uniquely named group, never replaces existing presets"#,
+        params: r#"{"path":str (.csh) or "data":str (base64),"group":str?} → {group,count,names}; appends a uniquely named group, never replaces existing presets"#,
         enabled: always,
         run: import,
         journal: true,

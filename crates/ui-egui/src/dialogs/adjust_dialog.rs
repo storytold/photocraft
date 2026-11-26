@@ -372,7 +372,7 @@ fn last_confirmed(app: &PhotocraftApp, kind: &str) -> Option<Value> {
 /// Opens the dialog for `command` at the kind's neutral settings, except the [`KEEPS_LAST`] ones,
 /// which keep their last confirmed value.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> {
-    let id = open_neutral(app, command).ok_or_else(|| refusal(app, command))?;
+    let id = open_with_params_checked(app, command, &json!({})).map_err(|reason| reason.unwrap_or_else(|| refusal(app, command)))?;
     let kind = command.strip_prefix(PREFIX).unwrap_or_default();
     let last = last_confirmed(app, kind);
     let kept: Map<String, Value> = KEEPS_LAST
@@ -389,10 +389,15 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> 
     Ok(id)
 }
 
-/// Why `command` has no dialog to open: no document, or no adjustment of that name.
+/// Why `command` has no dialog to open when the editor gave no reason of its own: no document, or no adjustment of
+/// that name.
 fn refusal(app: &PhotocraftApp, command: &str) -> String {
     if app.session.active().is_none() { "no document".to_string() } else { format!("{command} has no dialog") }
 }
+
+/// Why a dialog did not open: `Some` is the editor's refusal of these parameters, to show the user (a CMYK Channel
+/// Mixer, #8047); `None` means there is no dialog for them.
+pub(crate) type Refused = Option<String>;
 
 /// Opens a neutral adjustment dialog using the current edit target.
 pub fn open_neutral(app: &mut PhotocraftApp, command: &str) -> Option<DialogId> {
@@ -402,7 +407,12 @@ pub fn open_neutral(app: &mut PhotocraftApp, command: &str) -> Option<DialogId> 
 /// Seed an Action's dialog only after resolving its recorded target, so document-space
 /// defaults cannot overwrite the target's neutral grayscale values.
 pub(crate) fn open_with_params(app: &mut PhotocraftApp, command: &str, params: &Value) -> Option<DialogId> {
-    let params = if params.is_null() { json!({}) } else { Value::Object(params.as_object()?.clone()) };
+    open_with_params_checked(app, command, params).ok()
+}
+
+/// [`open_with_params`], with the reason it did not open.
+pub(crate) fn open_with_params_checked(app: &mut PhotocraftApp, command: &str, params: &Value) -> Result<DialogId, Refused> {
+    let params = if params.is_null() { json!({}) } else { Value::Object(params.as_object().ok_or(None)?.clone()) };
     let params = complete_params(app, command, &params).unwrap_or(params);
     let mut params = app.with_mask_target(command, params);
     if params.get("target").is_none()
@@ -414,13 +424,20 @@ pub(crate) fn open_with_params(app: &mut PhotocraftApp, command: &str, params: &
     open_hosted(app, command, params, None, None)
 }
 
-/// Reopen a captured Smart Filter with document-colour defaults, independent of channel targeting.
-/// Only the caller's validated snapshot may supply the Smart Filter target.
+/// [`open_smart_filter_checked`] without the reason (the tests' form).
+#[cfg(test)]
 pub(crate) fn open_smart_filter(app: &mut PhotocraftApp, command: &str, params: &Value, target: Value) -> Option<DialogId> {
+    open_smart_filter_checked(app, command, params, target).ok()
+}
+
+/// Reopen a captured Smart Filter with document-colour defaults, independent of channel targeting.
+/// Only the caller's validated snapshot may supply the Smart Filter target. When it does not open, the reason: the
+/// Layers panel shows an editor's refusal (#8047).
+pub(crate) fn open_smart_filter_checked(app: &mut PhotocraftApp, command: &str, params: &Value, target: Value) -> Result<DialogId, Refused> {
     let completed = complete_params(app, command, params);
     let mut recorded = completed.as_ref().unwrap_or(params).as_object().cloned().unwrap_or_default();
     recorded.retain(|key, _| !key.starts_with("__"));
-    let index = target.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())?;
+    let index = target.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or(None)?;
     open_hosted(app, command, Value::Object(recorded), Some((index, target)), Some(params.clone()))
 }
 
@@ -439,12 +456,12 @@ struct Seeded {
 /// `colors` row kept. With `normalized` (a Smart Filter edit: the captured parameters) those then replace the parameters
 /// through the engine's own reading of them, so a Lab `lightness` default cannot be read over recorded `points`. An
 /// unresolved Levels/Curves target opens with defaults and seeds again in [`take`] once it resolves.
-fn seed(app: &PhotocraftApp, kind: &str, recorded: &Value, smart: Option<&(usize, Value)>, normalized: Option<&Value>) -> Option<Seeded> {
+fn seed(app: &PhotocraftApp, kind: &str, recorded: &Value, smart: Option<&(usize, Value)>, normalized: Option<&Value>) -> Result<Seeded, Refused> {
     let resolved = target_context(app, smart, recorded);
     let valid_target = !matches!(kind, "levels" | "curves") || resolved.is_ok();
     let target = resolved.unwrap_or_else(|_| ToneTarget { layer: app.session.active().and_then(|s| s.active_layer), channel: None });
     let mode = curve_mode(app, kind, &target);
-    let defaults = if valid_target { Some(photocraft_engine::adjust_params::default_for(kind, mode).ok()?) } else { None };
+    let defaults = if valid_target { Some(photocraft_engine::adjust_params::default_for(kind, mode).map_err(|_| None)?) } else { None };
     let tone_kind = matches!(kind, "levels" | "curves");
     let gray_target = tone_kind && target.channel.as_ref().is_some_and(|c| c.gray.is_some());
     let color_set = if tone_kind { target.channel.as_ref().and_then(|c| c.components) } else { None };
@@ -502,8 +519,19 @@ fn seed(app: &PhotocraftApp, kind: &str, recorded: &Value, smart: Option<&(usize
     }
     let base = Value::Object(params);
     let cx = value_cx(mode, target.channel.clone(), base.clone());
-    let value = values::from_params(kind, &base, &cx).or_else(|_| values::from_params(kind, &Value::Object(defaults_only), &cx)).unwrap_or_default();
-    Some(Seeded { value, cx, target, mode, unresolved: !valid_target })
+    // A CMYK Channel Mixer has no framework editor yet (#8047): no dialog, rather than RGB sliders over its inks. Checked
+    // before the defaults fallback too, which in an RGB or Lab document reads (RGB defaults) and would open the RGB
+    // editor over a Smart Filter's ink keys.
+    let value = match values::from_params(kind, &base, &cx) {
+        Err(err) if err == values::CMYK_MIXER_UNAVAILABLE => return Err(Some(err)),
+        read => read.or_else(|_| values::from_params(kind, &Value::Object(defaults_only), &cx)),
+    };
+    let value = match value {
+        Ok(value) => value,
+        Err(err) if err == values::CMYK_MIXER_UNAVAILABLE => return Err(Some(err)),
+        Err(_) => AdjustValue::default(),
+    };
+    Ok(Seeded { value, cx, target, mode, unresolved: !valid_target })
 }
 
 /// Whether the kind's editor shows a histogram.
@@ -554,7 +582,7 @@ fn build_setup(app: &mut PhotocraftApp, kind: &str, target: &ToneTarget, mode: C
         swatches: adjust_editors::swatches(app),
         tone: None,
         stale: false,
-        reported_clipping: Default::default(),
+        reported_clipping: Arc::new(Mutex::new(None)),
     }
 }
 
@@ -593,9 +621,9 @@ fn reset_target(kind: String) -> impl Fn(&DialogValue, &DialogValue) -> DialogVa
 }
 
 /// Opens the dialog for `command` over `recorded` parameters (and a captured Smart Filter's `smart` index and target).
-fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: Option<(usize, Value)>, normalized: Option<Value>) -> Option<DialogId> {
-    let kind = command.strip_prefix(PREFIX).filter(|k| adjust_editors::has_editor(k))?.to_owned();
-    let spec = photocraft_engine::commands::find(command)?;
+fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: Option<(usize, Value)>, normalized: Option<Value>) -> Result<DialogId, Refused> {
+    let kind = command.strip_prefix(PREFIX).filter(|k| adjust_editors::has_editor(k)).ok_or(None)?.to_owned();
+    let spec = photocraft_engine::commands::find(command).ok_or(None)?;
     let seeded = seed(app, &kind, &recorded, smart.as_ref(), normalized.as_ref())?;
     // A dialog this one replaces on the host ends its Actions step with it.
     if let Some(previous) = app.adjust_open.take()
@@ -639,14 +667,14 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
         recorded,
         normalized,
     });
-    Some(id)
+    Ok(id)
 }
 
 /// Opens the dialog for `command` at the settings last confirmed in it (Photoshop's ⌥ plus the
 /// adjustment's shortcut, ⌥⌘L / ⌥⌘M, #8900), or at the neutral ones when there are none or they
 /// don't fit the current colour mode.
 pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> {
-    let id = open_neutral(app, command).ok_or_else(|| refusal(app, command))?;
+    let id = open_with_params_checked(app, command, &json!({})).map_err(|reason| reason.unwrap_or_else(|| refusal(app, command)))?;
     let kind = command.strip_prefix(PREFIX).unwrap_or_default();
     let Some(open) = app.adjust_open.as_ref().filter(|open| open.id == id) else { return Ok(id) };
     if matches!(kind, "levels" | "curves") && open.unresolved {
@@ -802,7 +830,7 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
         if resolved.is_err() {
             return;
         }
-        let Some(seeded) = seed(app, &open.kind, &open.recorded, open.smart_filter.as_ref(), open.normalized.as_ref()) else { return };
+        let Ok(seeded) = seed(app, &open.kind, &open.recorded, open.smart_filter.as_ref(), open.normalized.as_ref()) else { return };
         let kind = open.kind.clone();
         let setup = build_setup(app, &kind, &seeded.target, seeded.mode, false);
         let Some(open) = app.adjust_open.as_mut() else { return };
@@ -833,15 +861,23 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
     (open.mode, open.target, open.picker_base, open.picked) = (smart_mode, target, None, None);
 }
 
-/// Authorizes and runs the confirmed command (one history step), then remembers the settings.
-fn run_confirmed(app: &mut PhotocraftApp, ctx: &egui::Context, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(), String> {
+/// What OK on the open dialog runs, `(command, its params, the dialog's params)`: the adjustment command on the dialog's
+/// value, or for a Smart Filter edit the command that replaces the captured filter. OK and the CPU proxy preview
+/// (`canvas::ensure_filter_preview`) both take it from here, so the preview is what OK commits.
+pub(crate) fn confirmed_command(app: &PhotocraftApp, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(String, Value, Value), String> {
     let params = match open.smart_filter {
         Some(_) => smart_filter_params(app, open, value, edited)?,
         None => value.params(edited),
     };
-    crate::actions::authorize_panel_preview(app, open.id, &open.command, &params)?;
     let captured = open.smart_filter.as_ref().map_or(Value::Null, |(_, target)| target.clone());
     let (command, run_params) = crate::smart_ui::confirm_command(app, &captured, open.command.clone(), params.clone())?;
+    Ok((command, run_params, params))
+}
+
+/// Authorizes and runs the confirmed command (one history step), then remembers the settings.
+fn run_confirmed(app: &mut PhotocraftApp, ctx: &egui::Context, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(), String> {
+    let (command, run_params, params) = confirmed_command(app, open, value, edited)?;
+    crate::actions::authorize_panel_preview(app, open.id, &open.command, &params)?;
     // The editor Record Again opened answers the step it was opened for, not a new run of the command.
     if crate::actions::record_again::owns_dialog(app, open.id) {
         crate::actions::record_again::confirm(app, open.id, &command, run_params)?;
@@ -907,3 +943,6 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
