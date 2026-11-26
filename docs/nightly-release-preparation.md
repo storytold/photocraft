@@ -94,9 +94,12 @@ Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read 
 | Sonar conditions | `new_security_rating` accepted (max 5); the other five required | Quality gate of main analysis `19880b44` (commit `27c629f7`, 2026-11-24 12:40 UTC) |
 | Sonar `issue_types` / `debt` | `VULNERABILITY`; all 15 unresolved main vulnerabilities, accepted as debt for the first run (Skylar's decision) | `api/issues/search` on main at the same analysis |
 
-The candidate check refuses whenever main's unresolved vulnerability set differs from `debt`, whether
-an issue is new or fixed, and whenever a required condition fails or a listed CI job is renamed. Refresh
-those values in the same reviewed main change that `nightly-signer` is then advanced to.
+The candidate check refuses when any vulnerability that was open at the candidate commit (still
+unresolved on main, or resolved since the candidate's analysis) isn't in `debt`, when main has an
+unresolved vulnerability that isn't in `debt` (even one introduced after the candidate), when a
+required condition fails, or when a listed CI job is renamed. A `debt` entry that was fixed later
+doesn't refuse. Refresh those values in the same reviewed main change that `nightly-signer` is then
+advanced to.
 
 ## Ownership and interface
 
