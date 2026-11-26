@@ -446,6 +446,7 @@ fn multi_panel_group_tabs_do_not_overlap_and_wheel_keeps_active_panel() {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).expect("new document");
         app.run("window.panel.move", json!({"panel": "properties", "anchor": "color"})).unwrap();
         app.run("window.panel.move", json!({"panel": "adjustments", "anchor": "color"})).unwrap();
         app
