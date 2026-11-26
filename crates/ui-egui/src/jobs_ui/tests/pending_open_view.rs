@@ -1,5 +1,5 @@
 use super::*;
-use crate::jobs_ui::{OpenSource, finish_open};
+use crate::jobs_ui::{OpenSource, OpenTab, finish_open};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_engine::DocState;
 use photocraft_io::NativeImportTarget;
@@ -294,4 +294,37 @@ fn byte_backed_profile_hold_carries_known_import_origin_through_confirmation() {
     assert!(photocraft_engine::file_cmds::check_import_destination(state, source).is_err());
     unchanged.assert_untouched(&app);
     assert_eq!(std::fs::read(source).unwrap(), bytes);
+}
+
+#[test]
+fn opens_completed_in_one_frame_keep_each_tabs_saved_path() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut events = Vec::new();
+    for (index, name) in ["First path", "Second path"].into_iter().enumerate() {
+        let mut doc = Document::new(name, photocraft_geom::Size::new(2, 2), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        doc.paths.push(photocraft_doc::vector::NamedPath { name: name.into(), ..Default::default() });
+        let view = photocraft_io::NativeInitialView { selected_path: Some(0), ..Default::default() };
+        let (opened, warning) = app.session.admit_import_with_initial_view(doc, None, true, Some(view));
+        assert!(warning.is_none());
+        let id = app.session.documents()[opened].doc.id;
+        let job = JobId(100 + index as u64);
+        app.jobs.opens.push(OpenTab { job, name: name.into(), path: None, slot: None, order: None });
+        events.push(photocraft_engine::jobs::JobEvent {
+            id: job,
+            command: photocraft_engine::jobs::OPEN_JOB.into(),
+            label: name.into(),
+            document: None,
+            outcome: photocraft_engine::jobs::JobOutcome::Done(json!({"document": opened, "docId": id.0, "warnings": []})),
+            error: None,
+        });
+    }
+
+    let ctx = app.ctx().clone();
+    crate::jobs_ui::apply_job_events(&mut app, &ctx, events);
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Second path"));
+    assert_eq!(app.session.documents()[0].initial_path_selection, Some(0));
+    app.session.set_active(0);
+    app.sync_views();
+    assert_eq!(app.ui.selected_path.as_deref(), Some("First path"));
+    assert!(app.session.active().unwrap().initial_path_selection.is_none());
 }

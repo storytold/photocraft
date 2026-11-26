@@ -296,3 +296,102 @@ fn multiple_roots_do_not_grant_ambient_commands_or_nested_action_file_access() {
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);
 }
+
+/// An original XCF v11 with one opaque pixel layer and one selected alpha channel.
+fn xcf_with_selected_alpha() -> Vec<u8> {
+    fn words(bytes: &mut Vec<u8>, values: &[u32]) {
+        bytes.extend(values.iter().flat_map(|n| n.to_be_bytes()));
+    }
+
+    fn slot(bytes: &mut Vec<u8>) -> usize {
+        let at = bytes.len();
+        bytes.extend([0; 8]);
+        at
+    }
+
+    fn point_here(bytes: &mut [u8], at: usize) {
+        let offset = (bytes.len() as u64).to_be_bytes();
+        bytes[at..at + 8].copy_from_slice(&offset);
+    }
+
+    fn hierarchy(bytes: &mut Vec<u8>, at: usize, pixel: &[u8]) {
+        point_here(bytes, at);
+        words(bytes, &[1, 1, pixel.len() as u32]);
+        let level = slot(bytes);
+        slot(bytes);
+        point_here(bytes, level);
+        words(bytes, &[1, 1]);
+        let tile = slot(bytes);
+        slot(bytes);
+        point_here(bytes, tile);
+        bytes.extend_from_slice(pixel);
+    }
+
+    let mut bytes = b"gimp xcf v011\0".to_vec();
+    words(&mut bytes, &[1, 1, 0, 150, 17, 1]);
+    bytes.push(0); // Uncompressed tiles.
+    words(&mut bytes, &[0, 0]);
+    let layer = slot(&mut bytes);
+    slot(&mut bytes);
+    let alpha = slot(&mut bytes);
+    slot(&mut bytes);
+    point_here(&mut bytes, layer);
+    words(&mut bytes, &[1, 1, 1, 2]);
+    bytes.extend(b"L\0");
+    words(&mut bytes, &[2, 0, 8, 4, 1, 0, 0]);
+    let layer_pixels = slot(&mut bytes);
+    slot(&mut bytes);
+    hierarchy(&mut bytes, layer_pixels, &[255, 0, 0, 255]);
+    point_here(&mut bytes, alpha);
+    words(&mut bytes, &[1, 1, 2]);
+    bytes.extend(b"A\0");
+    words(&mut bytes, &[3, 0, 0, 0]); // Select this alpha channel.
+    let alpha_pixels = slot(&mut bytes);
+    hierarchy(&mut bytes, alpha_pixels, &[64]);
+    bytes
+}
+
+#[test]
+fn headless_open_applies_xcf_alpha_target_before_implicit_fill() {
+    let roots = Roots::new("xcf-editing-target");
+    std::fs::write(roots.library.join("source.xcf"), xcf_with_selected_alpha()).unwrap();
+    let mut headless = roots.headless();
+    headless.open(Path::new("source.xcf")).unwrap();
+    let before = headless.session.active().unwrap().doc.clone();
+    assert_eq!(headless.session.active().unwrap().channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Alpha(0));
+    headless.command_run("edit.fill", json!({"contents": "color", "color": "#ffffff"})).unwrap();
+    let after = &headless.session.active().unwrap().doc;
+    assert_eq!(after.layers[0].surface(), before.layers[0].surface());
+    assert_ne!(after.channels[0].surface, before.channels[0].surface);
+}
+
+#[test]
+fn headless_save_protects_each_opened_import_source_and_allows_a_distinct_output() {
+    let roots = Roots::new("xcf-import-source");
+    let bytes = xcf_with_selected_alpha();
+    let source = roots.work.join("source.png");
+    let alias = roots.work.join("alias.png");
+    std::fs::write(&source, &bytes).unwrap();
+    std::fs::hard_link(&source, &alias).unwrap();
+    let mut headless = roots.headless();
+    headless.open(Path::new("source.png")).unwrap();
+    assert!(headless.session.active().unwrap().path.is_none());
+    for destination in ["source.png", "alias.png"] {
+        let error = headless.save(None, Some(Path::new(destination)), None, &Default::default()).unwrap_err();
+        assert!(error.to_string().contains("import-only source"), "{error}");
+    }
+    let mut trusted = Headless::trusted_local();
+    trusted.open(&source).unwrap();
+    let error = trusted.save(None, Some(&source), None, &Default::default()).unwrap_err();
+    assert!(error.to_string().contains("import-only source"), "{error}");
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    assert_eq!(std::fs::read(&alias).unwrap(), bytes);
+
+    let library_source = roots.library.join("source.png");
+    std::fs::write(&library_source, &bytes).unwrap();
+    let mut headless = roots.headless();
+    headless.open(Path::new("source.png")).unwrap();
+    headless.save(None, Some(Path::new("source.png")), None, &Default::default()).unwrap();
+    assert_eq!(std::fs::read(library_source).unwrap(), bytes);
+    assert!(std::fs::read(source).unwrap().starts_with(b"\x89PNG"));
+}

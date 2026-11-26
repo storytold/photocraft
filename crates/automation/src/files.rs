@@ -5,7 +5,7 @@ use std::path::Path;
 
 use photocraft_doc::Document;
 use photocraft_format::{PcraftWriter, SaveOptions};
-use photocraft_io::{BandRenderer, ExportOptions};
+use photocraft_io::{BandRenderer, ExportOptions, NativeInitialView};
 
 use crate::AutomationError;
 
@@ -14,6 +14,7 @@ pub struct Opened {
     pub document: Document,
     pub warnings: Vec<String>,
     pub source_read_only: bool,
+    pub initial_view: Option<NativeInitialView>,
 }
 
 /// Decode a document that was read through a filesystem capability.
@@ -25,10 +26,10 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
 pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
         let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false, initial_view: None });
     }
     let r = photocraft_io::import_with_options(name, bytes, opts)?;
-    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
+    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only, initial_view: r.initial_view })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
@@ -41,7 +42,7 @@ pub fn open(path: &Path) -> Result<Opened, AutomationError> {
 pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if path.is_dir() {
         let document = photocraft_format::load_path(path)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false, initial_view: None });
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // A PSD/PSB is parsed from the open file (channel data read as it is decoded), so a CLI
@@ -52,7 +53,7 @@ pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Re
             photocraft_io::IoError::Read(msg) => AutomationError::Io(msg),
             e => e.into(),
         })?;
-        Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
+        Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only, initial_view: r.initial_view })
     }
     #[cfg(not(any(unix, windows)))]
     {

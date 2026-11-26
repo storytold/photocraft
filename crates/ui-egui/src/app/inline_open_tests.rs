@@ -498,3 +498,24 @@ fn automation_xcf_decode_failure_preserves_existing_document_and_view() {
     assert!(app.ui.recent_files.is_empty());
     assert!(app.held_opens.is_empty());
 }
+
+#[test]
+fn ordinary_automation_save_does_not_require_source_identity_resolution() {
+    let mut app = app();
+    app.run("file.new", json!({"width": 2, "height": 2})).unwrap();
+    app.services.automation_write_location = Some(Box::new(|_| Err("the destination leaf cannot be canonicalized".into())));
+    app.services.export = Some(Box::new(|_, _, _| Ok((vec![1], Vec::new()))));
+    let writes = Rc::new(Cell::new(0));
+    let count = writes.clone();
+    app.services.automation_write = Some(Box::new(move |path, bytes| {
+        assert_eq!(path, "copy.png");
+        assert_eq!(bytes, [1]);
+        count.set(count.get() + 1);
+        Ok(())
+    }));
+    let ctx = app.ctx().clone();
+    let (request, _) = crate::control::ControlRequest::new("app.save", json!({"path": "copy.png"}));
+    let crate::control::Reply::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("synchronous save") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(writes.get(), 1);
+}

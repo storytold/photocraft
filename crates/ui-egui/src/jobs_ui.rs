@@ -170,6 +170,8 @@ pub struct JobsUi {
     pub opens: Vec<OpenTab>,
     /// Sets of files opened together that still have members opening (see [`OpenOrder`]).
     pub(crate) batches: Vec<OpenBatch>,
+    /// Finished Opens can activate several tabs before the frame is drawn.
+    pub(crate) applying_job_events: bool,
     /// The id of the next set.
     next_batch: u64,
     /// Background saves.
@@ -494,13 +496,8 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    for e in app.session.poll_jobs() {
-        on_event(app, ctx, e);
-    }
-    // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
-    if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {
-        app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
-    }
+    let events = app.session.poll_jobs();
+    apply_job_events(app, ctx, events);
     close_after_saves(app, ctx);
     if app.saving() || app.printing() {
         // Keep checking on a cancelled save's worker until it returns.
@@ -521,6 +518,22 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else {
             cancel(app, job.id);
         }
+    }
+}
+
+fn apply_job_events(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<JobEvent>) {
+    let handled_events = !events.is_empty();
+    app.jobs.applying_job_events = true;
+    for event in events {
+        on_event(app, ctx, event);
+    }
+    app.jobs.applying_job_events = false;
+    // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
+    if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {
+        app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
+    }
+    if handled_events && !crate::open_prompt::waiting(app) {
+        crate::vector_ui::apply_imported_path_selection(app);
     }
 }
 

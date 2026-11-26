@@ -1072,3 +1072,36 @@ fn image_size_keeps_nearest_resampled_imported_shape_pixels() {
         }
     }
 }
+
+#[test]
+fn canvas_size_and_crop_carry_saved_shape_appearance() {
+    use photocraft_color::{ColorMode, SampleType};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (cmd, params) in
+            [("image.canvasSize", json!({"width": 6, "height": 6, "anchor": "center"})), ("image.crop", json!({"x": -1, "y": -1, "width": 6, "height": 6}))]
+        {
+            let mut doc = Document::new("Saved shape", Size::new(4, 4), ColorMode::Rgb, depth);
+            let mut cache = Surface::new(doc.pixel_format());
+            cache.fill_rect(Rect::new(1, 1, 2, 2), &[1., 0., 0., 1.]);
+            let expected = cache.pixel(1, 1);
+            let shape = photocraft_doc::ShapeLayer {
+                path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(1., 1.), (2., 1.), (2., 2.), (1., 2.)])]),
+                fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+                cache: Some(cache),
+                cache_preserves_appearance: true,
+                ..Default::default()
+            };
+            doc.layers.push(Layer::new("Saved shape", LayerContent::Shape(shape)));
+            let mut session = crate::session();
+            session.add_document(doc, None);
+            session.execute(cmd, params).unwrap();
+            let state = session.active().unwrap();
+            assert_eq!(state.doc.size, Size::new(6, 6));
+            let LayerContent::Shape(shape) = &state.doc.layers[0].content else { panic!("expected an editable shape") };
+            assert!(shape.cache_preserves_appearance);
+            let cache = shape.cache.as_ref().unwrap();
+            assert_eq!(cache.content_bounds(), Rect::new(2, 2, 3, 3));
+            assert_eq!(cache.pixel(2, 2), expected);
+        }
+    }
+}

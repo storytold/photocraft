@@ -92,7 +92,12 @@ impl AuthorizedWorkspace {
     /// save to a same-named file in the write root. Aliases and nested roots need an
     /// explicit Save As; this is not canonical desktop document identity.
     pub fn read_with_save_path(&self, path: &str) -> Result<(Vec<u8>, Option<String>), AutomationError> {
-        let (mut file, root) = self.open_read(path)?;
+        self.read_document(path).map(|(bytes, save_path, _)| (bytes, save_path))
+    }
+
+    /// Read a file and record its origin from the same capability that supplied its bytes.
+    pub(crate) fn read_document(&self, path: &str) -> Result<(Vec<u8>, Option<String>, PathBuf), AutomationError> {
+        let (mut file, root, relative) = self.open_read(path)?;
         let metadata = file.metadata().map_err(|e| file_error("read", path, e))?;
         if !metadata.is_file() {
             return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
@@ -100,7 +105,7 @@ impl AuthorizedWorkspace {
         // Retain main's bounded, growth-checked reads while keeping save provenance.
         let bytes = read_to_observed_length(&mut file, metadata.len())?;
         let save_path = self.write.as_ref().filter(|write| Arc::ptr_eq(&root.dir, &write.dir)).map(|_| path.to_owned());
-        Ok((bytes, save_path))
+        Ok((bytes, save_path, root.path.join(relative)))
     }
 
     /// Where the file or `.pcraft` folder that `path` names is on disk: below the first read
@@ -133,7 +138,7 @@ impl AuthorizedWorkspace {
         Ok(root.path.join(resolved))
     }
 
-    fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
+    fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability, PathBuf), AutomationError> {
         if self.read.is_empty() {
             return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
         }
@@ -141,7 +146,7 @@ impl AuthorizedWorkspace {
         for root in &self.read {
             let Some(relative) = scoped_path(path, root)? else { continue };
             match root.dir.open(&relative) {
-                Ok(file) => return Ok((file, root)),
+                Ok(file) => return Ok((file, root, relative)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => not_found = Some(error),
                 Err(error) => return Err(file_error("read", path, error)),
             }

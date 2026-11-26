@@ -13,6 +13,10 @@ use crate::theme::Tokens;
 /// Consume the saved import hint once, only after the host has finalized this
 /// tab. Name-based tool routing cannot safely address duplicate/reserved names.
 pub(crate) fn apply_imported_path_selection(app: &mut PhotocraftApp) {
+    // Intermediate job completions can activate tabs that never render on this frame.
+    if app.jobs.applying_job_events || app.jobs.focus.is_some() {
+        return;
+    }
     // Ordinary view synchronization must not advance the tracked document revision.
     let Some(index) = app.session.active().and_then(|st| st.initial_path_selection) else { return };
     let Some(st) = app.session.active_mut() else { return };

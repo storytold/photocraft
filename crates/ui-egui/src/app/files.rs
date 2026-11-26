@@ -854,11 +854,11 @@ impl PhotocraftApp {
     /// Use the write workspace's identity before an automation save is admitted.
     /// The original request path is still used by the capability-scoped writer.
     pub(crate) fn check_automation_save_destination(&self, state: &photocraft_engine::DocState, target: &str) -> Result<(), String> {
-        let identity = match self.services.automation_write_location.as_ref() {
-            Some(locate) => locate(target)?,
-            None if state.protected_import_source.is_some() => return Err("automation save destination identity is not configured".into()),
-            None => return Ok(()),
-        };
+        if state.protected_import_source.is_none() {
+            return Ok(());
+        }
+        let locate = self.services.automation_write_location.as_ref().ok_or("automation save destination identity is not configured")?;
+        let identity = locate(target)?;
         photocraft_engine::file_cmds::check_import_destination(state, &identity).map_err(|error| error.to_string())
     }
 }
