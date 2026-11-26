@@ -167,7 +167,7 @@ fn history_pattern_and_content_aware() {
     // History: back to state 1 (after the white fill).
     s.execute(CMD, json!({"contents": "history", "state": 1})).unwrap();
     assert_eq!(px(&s, 5, 5), [1.0; 4]);
-    // The default source is the oldest state: the empty layer.
+    // The default source is the open snapshot, the document as opened (the empty layer; #12845).
     s.execute(CMD, json!({"contents": "history"})).unwrap();
     assert_eq!(px(&s, 5, 5)[3], 0.0);
     assert!(s.execute(CMD, json!({"contents": "history", "state": 999})).is_err());

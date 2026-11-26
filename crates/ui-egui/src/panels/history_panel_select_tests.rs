@@ -438,6 +438,22 @@ fn the_source_icon_starts_on_the_open_snapshot_row() {
     assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::State(_))), "a state row again");
 }
 
+/// #12845: the source column answers a click. Clicking a snapshot row's source box sends
+/// `history.setSource {snapshot}` and the panel marks that row; a state row wins again when it is
+/// clicked.
+#[test]
+fn a_click_on_a_snapshot_source_box_makes_it_the_source() {
+    let mut app = app();
+    let state_row = state_key(&app, 1);
+    apply(&mut app, HistoryEvent::SetSource(state_row));
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::State(_))), "a state row first");
+    apply(&mut app, HistoryEvent::SetSource(HistoryKey::Snapshot(0)));
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::Snapshot(0))), "the open snapshot row");
+    let current_row = current_key(&app);
+    apply(&mut app, HistoryEvent::SetSource(current_row));
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::State(_))), "the current state row");
+}
+
 /// Snapshot thumbnails belong to the snapshot's document (#6087): a document reopened with the same id (a
 /// `.pcraft` keeps it) gets fresh ones rather than the closed document's, even before the views are synced.
 #[test]

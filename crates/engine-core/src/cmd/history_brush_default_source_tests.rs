@@ -58,7 +58,8 @@ fn deleting_the_open_snapshot_leaves_no_source() {
 
 #[test]
 fn the_default_follows_automatically_create_first_snapshot() {
-    // Preferences are process-wide, so the loop ends on the default (on) for the other tests.
+    // Each session starts from the default and carries its own preferences: the option is set on
+    // the session that then opens the document.
     for first in [false, true] {
         let mut s = crate::session();
         s.execute("history.options", json!({"automaticallyCreateFirstSnapshot": first})).unwrap();
@@ -98,4 +99,23 @@ fn without_an_open_snapshot_the_oldest_state_default_remains() {
     assert_eq!(source(&s), json!({"state": 0, "label": "New"}));
     s.execute("history.setSource", json!({"state": 1})).unwrap();
     assert_eq!(source(&s)["label"], "New Layer");
+}
+
+/// `history.newSnapshot` with `replaceExisting` drops a snapshot of that name, so taking the
+/// document's own name removes the open snapshot. Snapshot ids are never reused, so the new row is
+/// not the open snapshot, and the default source is gone with it (#12845).
+#[test]
+fn a_replacement_named_after_the_document_takes_the_default_source_away() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let name = s.active().unwrap().doc.name.clone();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let fresh = s.execute("history.newSnapshot", json!({"name": name, "replaceExisting": true})).unwrap()["snapshot"].as_u64().unwrap();
+    assert_ne!(fresh, 0, "the new row takes a fresh id");
+    assert!(source(&s).is_null(), "no open snapshot, so no default source");
+    // A snapshot or a state picked by hand still works.
+    s.execute("history.setSource", json!({"snapshot": fresh})).unwrap();
+    assert_eq!(source(&s)["snapshot"], json!(fresh));
+    s.execute("history.setSource", json!({"state": 0})).unwrap();
+    assert_eq!(source(&s)["state"], 0);
 }

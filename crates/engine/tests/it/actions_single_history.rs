@@ -238,6 +238,25 @@ fn in_action_undo_clear_restores_history_and_keeps_grouped_image_undo() {
     }
 }
 
+/// A source set on the row that is current when a play folds its steps into one state: the play
+/// moves that row, and Fill › History must still paint its exact pixels (#12845, review round two).
+#[test]
+fn source_on_the_current_row_survives_the_play_folding_its_steps() {
+    for single_state in [false, true] {
+        let mut s = history_control_session(single_state);
+        // `history_control_session` set the source on the row current then: the green document.
+        let green = s.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 0);
+        assert_eq!(green, [0.0, 1.0, 0.0, 1.0], "the source row is the green fill");
+        s.actions_mut().list = only("Fill blue", vec![("edit.fill".into(), json!({"color": "#0000ff"}))]);
+        let result = s.execute("actions.play", json!({"action": 0})).unwrap();
+        assert!(result.get("failed").is_none(), "singleState={single_state}: {result}");
+        let after_the_play = s.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 0);
+        assert_eq!(after_the_play, [0.0, 0.0, 1.0, 1.0], "singleState={single_state}: the play filled blue");
+        s.execute("edit.fill", json!({"contents": "history"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 0), green, "singleState={single_state}: the source row still paints");
+    }
+}
+
 /// A source held by Clear History becomes active on Undo Clear, with no additional image Undo row.
 #[test]
 fn cleared_intermediate_source_restores_exact_pixels_after_undo_redo() {
