@@ -497,7 +497,8 @@ fn theme_star_saves_favorite_and_menu_groups_it() {
     h.run_steps(2);
     h.get_by_label("Add to Favorites: Classic").click();
     h.run_steps(2);
-    h.get_by_label("Apply").click();
+    // The window has no Apply button (#17014): apply as the control channel does and keep it open.
+    apply_window(h.state_mut()).unwrap();
     h.run_steps(2);
     assert_eq!(h.state().session.prefs().interface.favorite_themes, vec!["craft.classic"]);
     assert!(h.query_by_label("Remove from Favorites: Classic").is_some());
@@ -1820,4 +1821,32 @@ fn self_labelled_performance_rows_show_their_label_once() {
     assert_eq!(count(&|t| t == "rendering mode"), 1, "Rendering Mode is labelled once: {texts:?}");
     assert_eq!(count(&|t| t.starts_with("memory usage") && t != "memory usage percent"), 1, "Memory Usage is labelled once: {texts:?}");
     assert_eq!(count(&|t| t == "memory usage percent"), 1, "Memory Usage Percent is labelled once: {texts:?}");
+}
+
+// --- the window's frame (#17014) -----------------------------------------------------------------------------------
+
+/// The page the open Preferences window shows, as `ui.inspect` reads it.
+fn shown_page(app: &PhotocraftApp) -> String {
+    use craft::ui::dialog::StackDialog as _;
+    let dialog = app.framework.dialogs.get::<super::dialogs::PrefsDialog>().expect("Preferences is open");
+    dialog.json_fields().and_then(|fields| fields["page"].as_str().map(str::to_string)).unwrap_or_default()
+}
+
+#[test]
+fn preferences_steps_pages_with_prev_and_next_and_has_no_apply() {
+    use egui_kittest::kittest::Queryable;
+    let (_, files) = app_with_store();
+    let mut h = prefs_harness(&files, "general", vec2(1280.0, 800.0), |_| {});
+    assert!(h.query_by_label("Apply").is_none(), "the reference application's window has no Apply button");
+    h.get_by_label("Next").click();
+    h.run_steps(2);
+    let next = shown_page(h.state());
+    assert_ne!(next, "general", "Next leaves the first page");
+    h.get_by_label("Prev").click();
+    h.run_steps(2);
+    assert_eq!(shown_page(h.state()), "general");
+    h.get_by_label("Prev").click();
+    h.run_steps(2);
+    assert_ne!(shown_page(h.state()), next, "Prev on the first page wraps to the last, not the second");
+    assert_ne!(shown_page(h.state()), "general");
 }
