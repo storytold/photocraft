@@ -310,14 +310,13 @@ fn ok_then_new_overlay_applies(app: &mut PhotocraftApp) -> Value {
 #[test]
 fn a_gradient_the_last_ok_leaves_out_keeps_its_make_default() {
     use photocraft_color::Color;
-    use photocraft_engine::layer_style::MAX_STOPS;
 
     let mut app = app_with_layer(20);
     let made = json!({"stops": [[0.0, "#00ff00"], [1.0, "#ffff00"]], "opacityStops": [], "scale": 50});
     app.run("layer.layerStyle.makeDefault", json!({"kind": GRADIENT.key(), "params": made})).unwrap();
     app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
-    let n = MAX_STOPS + 1;
-    load_stops(&mut app, (0..n).map(|i| (i as f32 / (n - 1) as f32, Color::rgb(i as f32 / (n - 1) as f32, 0.0, 0.0))).collect(), vec![]);
+    // One colour stop, which a command refuses, so the last OK leaves the gradient out.
+    load_stops(&mut app, vec![(0.5, Color::rgb(1.0, 0.0, 0.0))], vec![]);
 
     let shown = ok_then_new_overlay_applies(&mut app);
     assert_eq!(shown["stops"], made["stops"], "Make Default's gradient: {shown}");
@@ -364,4 +363,57 @@ fn reset_to_default_replaces_a_loaded_overlays_recorded_smoothness() {
     };
     assert_eq!(source.method, "perceptual");
     assert_eq!(source.smoothness, 100.0, "the engine's default smoothness");
+}
+
+/// The opacity of a Gradient Overlay effect, 0..=100.
+fn overlay_opacity(e: &photocraft_doc::Effect) -> f32 {
+    let photocraft_doc::Effect::GradientOverlay { common, .. } = e else { panic!("expected overlay: {e:?}") };
+    (common.opacity * 100.0).round()
+}
+
+/// A loaded overlay with more colour or transparency stops than a command takes, changed only in
+/// Opacity with OK: the next new overlay opens with all its stops and applies them (#16354 review).
+#[test]
+fn a_recalled_gradient_with_more_stops_than_a_command_takes_keeps_them() {
+    use photocraft_color::Color;
+    use photocraft_engine::layer_style::MAX_STOPS;
+
+    let n = MAX_STOPS + 1;
+    let at = |i: usize| i as f32 / (n - 1) as f32;
+    let many_colours: Vec<(f32, Color)> = (0..n).map(|i| (at(i), Color::rgb(at(i), 0.0, 1.0 - at(i)))).collect();
+    let two_colours = vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))];
+    let many_opacities: Vec<(f32, f32)> = (0..n).map(|i| (at(i), if i % 2 == 0 { 1.0 } else { 0.5 })).collect();
+    for (stops, opacity) in [(many_colours.clone(), vec![]), (two_colours, many_opacities.clone()), (many_colours, many_opacities)] {
+        let (colours, opacities) = (stops.len(), opacity.len());
+        let mut app = app_with_layer(20);
+        app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
+        load_stops(&mut app, stops.clone(), opacity.clone());
+
+        let shown = ok_then_new_overlay_applies(&mut app);
+        assert_eq!(shown["stops"].as_array().map(Vec::len), Some(colours), "the new overlay opens with every colour stop");
+        assert_eq!(shown["opacityStops"].as_array().map(Vec::len), Some(opacities), "and every transparency stop");
+        let effects = layer_effects(&app);
+        let photocraft_doc::Effect::GradientOverlay { gradient, .. } = &effects[0] else { panic!("expected overlay: {effects:?}") };
+        assert_eq!(gradient.stops, stops, "the new overlay has the recalled colour stops");
+        assert_eq!(gradient.opacity_stops, opacity, "and the recalled transparency stops");
+        assert_eq!(overlay_opacity(&effects[0]), 60.0, "and the last OK's Opacity");
+    }
+}
+
+/// A remembered snapshot that does not read as an effect (an edited settings file) is dropped: the
+/// new overlay opens without it and applies with the remembered values.
+#[test]
+fn a_remembered_snapshot_that_does_not_read_is_dropped() {
+    for fx in [json!("not json"), json!("{\"kind\": \"nothing\"}"), json!(7)] {
+        let mut app = app_with_layer(20);
+        let values = json!({"opacity": 60, "stops": [[0.0, "#ff0000"], [1.0, "#0000ff"]], "opacityStops": [], "fx": fx});
+        last_ok(GRADIENT).store(app.framework.host(), &values);
+        let id = open_gradient(&mut app);
+        let instance = first_of(&app, id, GRADIENT);
+        assert!(draft(&app, id).style.effect(instance).unwrap().params.get("fx").is_none(), "{fx}");
+        assert_eq!(page(&app, id)["opacity"], json!(60.0), "{fx}");
+        ok(&mut app, id);
+        assert!(!app.ui.status_error, "{fx}: {}", app.ui.status);
+        assert_eq!(overlay_opacity(&layer_effects(&app)[0]), 60.0, "{fx}");
+    }
 }

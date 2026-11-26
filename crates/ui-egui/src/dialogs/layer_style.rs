@@ -585,20 +585,31 @@ fn edited_in_dialog(e: &EffectInstance, light: f32) -> bool {
 /// `style` the user added or changed. A kind with no such instance keeps what it had.
 fn remember_last_ok(host: &craft::host::Host, style: &LayerStyle) {
     for kind in REMEMBERS_LAST_OK {
-        let last = style.effects.iter().rev().find(|e| e.kind == *kind && e.on && edited_in_dialog(e, style.global_light));
-        let Some(mut values) = last.map(|e| style_params_json(&e.params)) else { continue };
+        let Some(last) = style.effects.iter().rev().find(|e| e.kind == *kind && e.on && edited_in_dialog(e, style.global_light)) else { continue };
+        let mut values = style_params_json(&last.params);
         // Settings are TOML, which has no null: a value the grammar left empty is not stored.
         if let Some(o) = values.as_object_mut() {
             o.retain(|_, v| !v.is_null());
             // A loaded gradient can hold more stops than a command takes, or a single colour stop (a
-            // file has no limits). A new instance submits its stops, so such a gradient is not
-            // remembered: the next one opens with the default gradient and the rest of this OK. Fewer
-            // than two transparency stops read as none on the page, so only too many count there.
+            // file has no limits). Too many stops are remembered with the loaded effect's snapshot
+            // (`fx`): a new instance opened with them carries it, and while its stops are unchanged
+            // the engine takes them from the snapshot instead of the command (#16354 review). A
+            // single colour stop is not remembered: the next one opens with the default gradient
+            // and the rest of this OK. Fewer than two transparency stops read as none on the page,
+            // so only too many count there.
             let max = photocraft_engine::layer_style::MAX_STOPS;
             let count = |key: &str| o.get(key).and_then(Value::as_array).map(Vec::len);
-            if count(gradient_field::KEY).is_some_and(|n| !(2..=max).contains(&n)) || count(gradient_field::OPACITY_KEY).is_some_and(|n| n > max) {
-                o.remove(gradient_field::KEY);
-                o.remove(gradient_field::OPACITY_KEY);
+            let too_many = count(gradient_field::KEY).is_some_and(|n| n > max) || count(gradient_field::OPACITY_KEY).is_some_and(|n| n > max);
+            let too_few = count(gradient_field::KEY).is_some_and(|n| n < 2);
+            match fx_of(&last.params) {
+                Some(fx) if too_many && !too_few => {
+                    o.insert("fx".into(), Value::String(fx.to_string()));
+                }
+                _ if too_many || too_few => {
+                    o.remove(gradient_field::KEY);
+                    o.remove(gradient_field::OPACITY_KEY);
+                }
+                _ => {}
             }
         }
         last_ok(*kind).store(host, &values);
@@ -622,7 +633,12 @@ fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) 
                     spec.fields.insert(after + 1, field);
                 }
             }
-            spec.defaults = style_params(kind, &fresh_params(key, light, user.get(*key)), None).over(&spec.defaults);
+            let mut values = fresh_params(key, light, user.get(*key));
+            // A remembered snapshot (`fx`, see `remember_last_ok`) goes with a new instance as a
+            // loaded effect's does; one that does not read as an effect is dropped.
+            let fx = values.as_object_mut().and_then(|o| o.remove("fx")).and_then(|fx| serde_json::from_str::<Value>(fx.as_str()?).ok());
+            let fx = fx.filter(|fx| serde_json::from_value::<Effect>(fx.clone()).is_ok());
+            spec.defaults = style_params(kind, &values, fx.as_ref()).over(&spec.defaults);
             Some(spec)
         })
         .collect()
