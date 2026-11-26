@@ -4,7 +4,7 @@ use super::convert::lut_texture;
 use super::kit::FrameRes;
 use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, lru_victims, scoped_work, uniform_buffer_len};
 use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
-use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};
+use super::{Compositor, Document, LayerId, Plan, Rect, Role, Surface, Unsupported, plan, timing};
 
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
@@ -92,7 +92,10 @@ impl Compositor {
         // Cache metadata advances while recording. A failed encoder may never execute its
         // texture uploads or effect maps, so none of those cached pixels can be trusted.
         self.prefix.clear();
-        self.residents.clear();
+        // An external mask's pixels come from stamping, not from uploads this encoder may lose.
+        let external = std::mem::take(&mut self.external);
+        self.residents.retain(|k, _| k.1 == Role::Mask && external.contains_key(&k.0));
+        self.external = external;
         self.fx.clear();
         self.patterns.clear();
         self.temps.clear();
@@ -169,6 +172,7 @@ impl Compositor {
         let checkpoint = if flush {
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
+            self.invalidate_external_prefix(doc);
             self.prefix.prepare(doc, &resumable)
         } else {
             None
@@ -282,7 +286,9 @@ impl Compositor {
         // toggling visibility costs no upload).
         let frame = self.frame;
         let live: std::collections::HashSet<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
-        self.residents.retain(|(id, _, _), r| r.doc != doc.id || r.last_used == frame || live.contains(id));
+        let external: Vec<LayerId> = self.external.keys().copied().collect();
+        self.residents
+            .retain(|(id, role, _), r| r.doc != doc.id || r.last_used == frame || live.contains(id) || (*role == Role::Mask && external.contains(id)));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
@@ -347,8 +353,12 @@ impl Compositor {
     /// and their bytes.
     fn evict_residents(&mut self, budget: u64, incoming: u64, keep: Option<ResKey>) -> (usize, u64) {
         let stamp = self.stamp;
-        let pages: Vec<(u64, ResKey, u64)> =
-            self.residents.iter().filter(|(k, r)| r.stamp != stamp && Some(**k) != keep).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
+        let pages: Vec<(u64, ResKey, u64)> = self
+            .residents
+            .iter()
+            .filter(|(k, r)| r.stamp != stamp && Some(**k) != keep && !self.is_external_mask(k))
+            .map(|(k, r)| (r.stamp, *k, r.bytes()))
+            .collect();
         let (mut n, mut freed) = (0, 0u64);
         for k in lru_victims(pages, self.resident_bytes(), incoming, budget) {
             if let Some(r) = self.residents.remove(&k) {

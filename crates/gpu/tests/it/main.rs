@@ -37,6 +37,7 @@ mod device_loss;
 mod parity;
 mod pipeline_errors;
 mod pipelines;
+mod stamp;
 mod timing;
 mod uniform_limits;
 mod vector_mask;

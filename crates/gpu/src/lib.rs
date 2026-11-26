@@ -125,6 +125,10 @@ pub struct Compositor {
     /// Timestamp queries measuring how long the GPU spends on a refresh (see
     /// [`Compositor::measure_gpu_time`]); `None` = not measured.
     timer: Option<timing::GpuTimer>,
+    /// Layers whose mask the compositor owns (see [`Compositor::begin_external_mask`]).
+    external: HashMap<LayerId, stamp::External>,
+    /// The dab stamping pipelines, built when the first dabs are stamped.
+    stamper: Option<stamp::Stamper>,
 }
 use W::{F, I, U};
 
@@ -143,6 +147,8 @@ mod pipelines;
 pub mod readback;
 mod setup;
 pub use setup::{BuildFailure, BuildFailureKind};
+mod stamp;
+pub use stamp::{GpuDab, MaskPrecision, STAMP_SHADER, StampStats};
 mod textures;
 
 #[cfg(test)]

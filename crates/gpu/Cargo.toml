@@ -40,5 +40,7 @@ wgpu = { version = "30" }
 pollster = "1"
 # Shape layers in the effect parity tests.
 photocraft-vector = { workspace = true }
+# The CPU brush rasteriser the dab stamping tests compare with.
+photocraft-paint = { workspace = true }
 # A document-tagged CMYK profile in the tile conversion test.
 craft-cms = { workspace = true }

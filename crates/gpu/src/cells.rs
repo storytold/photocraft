@@ -346,6 +346,16 @@ impl Compositor {
         region: Rect,
         stats: &mut Stats,
     ) -> Option<(ResKey, [i32; 4])> {
+        // The compositor owns this mask's texture (`begin_external_mask`): the document's surface
+        // says nothing about it, so nothing is uploaded or cleared, and the page the stamping made
+        // is bound over its own region, whatever area the planner saw in the surface.
+        if self.is_external_mask(&key) {
+            let r = self.residents.get_mut(&key)?;
+            r.last_used = self.frame;
+            r.stamp = self.stamp;
+            let g = r.region;
+            return Some((key, [g.x0, g.y0, g.width() as i32, g.height() as i32]));
+        }
         // An earlier page of this cell didn't fit: the refresh ends after the cell anyway.
         if region.is_empty() || self.layer_alloc.is_some() {
             return None;
