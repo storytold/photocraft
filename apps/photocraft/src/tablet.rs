@@ -347,6 +347,8 @@ mod tests {
                 }
             };
             h.run_steps(4);
+            // Record the dispatched samples without timed stationary points from smoothing catch-up.
+            h.state_mut().session.execute("tools.setBrush", json!({"brush": {"smoothing": {"amount": 0}}})).unwrap();
             {
                 let view = &mut h.state_mut().ui.views[0];
                 view.zoom = 1.0;
