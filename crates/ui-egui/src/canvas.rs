@@ -49,6 +49,8 @@ mod paint_thread_tests;
 pub(crate) mod paint_tool;
 #[cfg(test)]
 mod pasteboard_menu_separator_tests;
+#[cfg(test)]
+mod pasteboard_menu_tools_tests;
 pub mod patch_preview;
 pub mod quick_pick;
 mod raster_source;
@@ -253,6 +255,10 @@ mod transform_controls_tests;
 
 #[cfg(test)]
 mod layer_edges_tests;
+
+#[cfg(test)]
+#[path = "canvas/move_readout_arrows_tests.rs"]
+mod move_readout_arrows_tests;
 
 #[cfg(test)]
 mod live_frame_tests;

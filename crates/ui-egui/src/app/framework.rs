@@ -45,10 +45,26 @@ use crate::i18n;
 use crate::state::Tool;
 use crate::theme::AppTheme;
 
-/// Installs the runtime on `ctx` with `fonts` and the root window's decided `frame` (`None` where
-/// the platform decides none), unless it is there already (`setup_window` again for the same
-/// context). Only `theme::install_runtime` calls it.
-pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>) {
+/// The store the dialogs that open their own window (RAW Develop, Vanishing Point) keep their size and place in:
+/// `window.json` in the settings folder `settings`. Without a settings folder (tests, the web) there is none, and those
+/// windows open at their default size each time.
+pub(crate) fn placement_store(settings: Option<&std::path::Path>) -> Option<Arc<Mutex<craft::window::restore::Store>>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        settings.map(|dir| Arc::new(Mutex::new(craft::window::restore::Store::at(&dir.join(craft::window::restore::FILE_NAME)))))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = settings;
+        None
+    }
+}
+
+/// Installs the runtime on `ctx` with `fonts`, the root window's decided `frame` (`None` where
+/// the platform decides none) and the window placement store of the settings folder `settings`
+/// ([`placement_store`]), unless it is there already (`setup_window` again for the same context).
+/// Only `theme::install_runtime` calls it.
+pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>, settings: Option<&std::path::Path>) {
     // The wheel zooms with the canvas's own keys and scrolls sideways with Shift or Command, as
     // PhotoCraft's input always has.
     let wheel = WheelModifiers::new(egui::Modifiers::NONE, egui::Modifiers::SHIFT | egui::Modifiers::COMMAND);
@@ -59,6 +75,10 @@ pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<De
         .system(SystemReader::start(move || wake.request_repaint()));
     if let Some(decision) = frame {
         spec = spec.frame(decision);
+    }
+    // Without it a dialog's own window saves its size and place nowhere and opens at its default each time (#17012).
+    if let Some(store) = placement_store(settings) {
+        spec = spec.placement(store);
     }
     // The platform's pen readings: the app writes them into this feed, the runtime pairs them with the pointer moves.
     let pen = crate::stylus::StylusFeed::default();
@@ -248,6 +268,9 @@ fn base_root() -> RootEnv {
     root.tab_toggles_chrome = true;
     // Tab in a dialog moves between its fields, as in Photoshop.
     root.dialog_tab = TabReach::Fields;
+    // The title bar keeps the arrow, also over the menu titles on it, as an OS title bar does: the default open hand
+    // shows as Windows' four-way Move cursor (#16993).
+    root.values.set(craft::ui::contract::MoveBandCursor::Arrow);
     root
 }
 
@@ -815,7 +838,7 @@ impl SectionStore for PrefSections {
 #[cfg(test)]
 pub(crate) fn close_path_frame(app: &mut PhotocraftApp, input: egui::RawInput) -> egui::FullOutput {
     let ctx = app.ctx().clone();
-    install(&ctx, &UiFonts::new(&craft::ui::fonts::I18nScripts), None);
+    install(&ctx, &UiFonts::new(&craft::ui::fonts::I18nScripts), None, None);
     ctx.run_ui(input, |ui| embed::logic(ui.ctx(), || crate::discard_ui::close_decision(app)))
 }
 
@@ -860,6 +883,26 @@ pub(crate) fn keys_pass(app: &mut PhotocraftApp, ctx: &egui::Context, input: egu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dialogs' own windows keep their place in the settings folder's `window.json` and find it there on the next
+    /// launch; without a settings folder nothing is kept (#17012).
+    #[test]
+    fn dialog_windows_keep_their_placement_in_the_settings_folder() {
+        use craft::window::restore::FILE_NAME;
+        let dir = tempfile::tempdir().unwrap();
+        let key = "craft_imaging.raw_develop.window";
+        let placement = craft::behavior::placement::Placement::new([1400.0, 900.0], 1.25);
+        let store = placement_store(Some(dir.path())).expect("a settings folder has a placement store");
+        {
+            let mut store = store.lock().unwrap();
+            store.set(key, &placement);
+            store.save().unwrap();
+        }
+        assert!(dir.path().join(FILE_NAME).is_file());
+        let reopened = placement_store(Some(dir.path())).unwrap();
+        assert_eq!(reopened.lock().unwrap().get(key).map(|p| p.normal.size), Some([1400.0, 900.0]), "the next launch reads it");
+        assert!(placement_store(None).is_none());
+    }
 
     fn table(n: i64) -> toml::Table {
         let mut t = toml::Table::new();

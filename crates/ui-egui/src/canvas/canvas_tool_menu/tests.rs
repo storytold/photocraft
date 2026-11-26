@@ -309,7 +309,7 @@ const ROWS: &[Case] = &[
     row("hand with Alt+Space held", Tool::Hand, Modifiers::ALT, Place::Image, Setup::Plain, Held::AltSpace, Want::Nothing),
     row("brush: picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker),
     row("eraser: picker", Tool::Eraser, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker),
-    row("brush outside the image keeps its picker", Tool::Brush, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Picker),
+    row("brush outside the image opens the pasteboard menu", Tool::Brush, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Menu("Pasteboard")),
     row("brush: a press that moved still opens the picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker).by(Gesture::Moved),
     row("brush: a release in the press's frame still opens the picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker)
         .by(Gesture::OneFrame),

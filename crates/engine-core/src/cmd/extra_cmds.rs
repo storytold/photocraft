@@ -495,7 +495,8 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     // `select: false`: the targeted layer stays targeted, as when a Photoshop action's `set`
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
-    let id = s.edit("Layer From Background", |doc, active| {
+    // The reference names the state "Make Layer" however the command runs (#16760).
+    let id = s.edit("Make Layer", |doc, active| {
         let bg = doc.background().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         let (id, name) = (bg.id, lowest_free_layer_name(doc, bg.id));
         // The name is read before the layer is unlocked, from the other layers' names.
@@ -1221,3 +1222,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "layer_from_background_history_tests.rs"]
+mod layer_from_background_history_tests;
