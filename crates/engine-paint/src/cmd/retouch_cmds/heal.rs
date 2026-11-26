@@ -314,3 +314,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "heal_indexed_tests.rs"]
 mod heal_indexed_tests;
+
+#[cfg(test)]
+#[path = "heal_replace_tests.rs"]
+mod heal_replace_tests;
