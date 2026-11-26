@@ -175,17 +175,20 @@ impl Runtime {
         self.run.is_some() || self.pumping
     }
 
-    fn log_line(&mut self, line: &str) {
-        let mut chars = line.chars();
-        let mut line: String = chars.by_ref().take(LOG_LINE_CHARS).collect();
-        if chars.next().is_some() {
-            line.push('…');
+    /// Keep `text`, one log row per line it holds: the output window lays out rows of one line.
+    fn log_line(&mut self, text: &str) {
+        for line in text.lines() {
+            let mut chars = line.chars();
+            let mut line: String = chars.by_ref().take(LOG_LINE_CHARS).collect();
+            if chars.next().is_some() {
+                line.push('…');
+            }
+            // The oldest line goes as each new one comes once the log is full: no shifting.
+            if self.log.len() >= LOG_LINES {
+                self.log.pop_front();
+            }
+            self.log.push_back(line);
         }
-        // The oldest line goes as each new one comes once the log is full: no shifting.
-        if self.log.len() >= LOG_LINES {
-            self.log.pop_front();
-        }
-        self.log.push_back(line);
     }
 }
 
@@ -200,7 +203,9 @@ pub(crate) fn start(app: &mut PhotocraftApp, start: ScriptStart) -> Result<Value
     let name = start.name.clone();
     let run = service(start)?;
     app.scripts.log_line(&format!("— {name}"));
-    let automation = app.automation_input;
+    // A control request runs under the engine's gate without marking its input as automation's:
+    // a run it starts is automation's all the same, and keeps the app's command policy too.
+    let automation = app.automation_input || app.session.authorize.is_some();
     let gate = app.session.authorize.or(if automation { app.services.automation_authorize } else { None });
     app.scripts.run =
         Some(Active { run, name: name.clone(), dialog: None, automation, gate, app_time: Duration::ZERO, started_ms: crate::gpu_canvas::now_ms() });

@@ -422,6 +422,36 @@ fn a_run_started_under_the_engines_gate_keeps_it() {
     assert!(app.session.authorize.is_none(), "the gate is put back");
 }
 
+/// A run a control request starts is automation's: the app's command policy judges its commands
+/// as it judged the request.
+#[test]
+fn a_run_a_control_request_starts_keeps_the_command_policy() {
+    fn allow(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Ok(())
+    }
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Try("layer.new.layer", json!({"name": "late"}))]], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.services.automation_authorize = Some(allow);
+    app.services.automation_command = Some(Box::new(|id, _| if id == "layer.new.layer" { Err("not for automation".into()) } else { Ok(()) }));
+    let started = call(&mut app, "engine.execute", json!({"id": "file.scripts.run", "params": {"name": "control.js", "source": "1"}}));
+    assert_eq!(started["ok"], true, "{started}");
+    settle(&mut app);
+    assert!(layer_names(&app).iter().all(|n| n != "late"), "{:?}", layer_names(&app));
+    assert!(app.scripts.log.iter().any(|l| l.contains("not for automation")), "{:?}", app.scripts.log);
+}
+
+/// A failed run's message keeps every line of its stack, one output row each.
+#[test]
+fn a_multiline_message_is_one_output_row_a_line() {
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Emit(ScriptEvent::Finished(Err("Error: boom\n    at f\n    at <main>".into())))]], &log);
+    start_named(&mut app, "trace.jsx");
+    settle(&mut app);
+    let tail: Vec<&str> = app.scripts.log.iter().rev().take(3).map(String::as_str).collect();
+    assert_eq!(tail, ["    at <main>", "    at f", "Error: boom"]);
+}
+
 #[test]
 fn no_run_starts_while_one_pumps() {
     let log = Log::default();
