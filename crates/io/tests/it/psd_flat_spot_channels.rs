@@ -6,12 +6,12 @@
 #[cfg(feature = "corpus")]
 use std::path::PathBuf;
 
+use craft_psd::PsdFile;
+use craft_psd::resources::ImageResource;
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::{ExportOptions, export, import};
-use photocraft_psd::PsdFile;
-use photocraft_psd::resources::ImageResource;
 use photocraft_raster::Surface;
 
 const W: u32 = 8;
@@ -201,10 +201,16 @@ fn psd_tools(name: &str) -> Vec<u8> {
 }
 
 /// The reference editor's flat CMYK file (24.7): the "light teal" spot (solid at 1348,1492) and "Alpha 1"
-/// both open, and the image stays opaque where the spot is inked.
+/// both open, and the image stays opaque where the spot is inked. Its one import (16.8 MP) takes
+/// seconds in a test build, so it runs in full sweeps only (`PHOTOCRAFT_FULL_SWEEP=1`, the nightly
+/// CI run); the generated files above check the same reading in every run.
 #[cfg(feature = "corpus")]
 #[test]
 fn corpus_flat_photoshop_file_keeps_its_spot() {
+    if !photocraft_testkit::full_sweep() {
+        eprintln!("cmyk-alpha-spot.psd runs with PHOTOCRAFT_FULL_SWEEP=1 only");
+        return;
+    }
     let doc = import("cmyk-alpha-spot.psd", &psd_tools("cmyk-alpha-spot.psd")).unwrap().document;
     let names: Vec<_> = doc.channels.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["light teal", "Alpha 1"]);

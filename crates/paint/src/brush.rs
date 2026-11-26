@@ -7,6 +7,7 @@
 //! Units: sizes are pixels, angles are degrees, every percentage is a 0..1 fraction (scatter and
 //! texture scale may exceed 1, like Photoshop's 1000 % scatter).
 
+use craft_tracked::Tracked;
 use photocraft_color::BlendMode;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +24,7 @@ pub const MAX_BRUSH_SIZE: f32 = 5000.0;
 pub const MAX_SCATTER: f32 = 10.0;
 
 /// What drives a dynamic parameter (Photoshop's "Control" pop-ups).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum Control {
     #[default]
@@ -42,7 +43,7 @@ pub enum Control {
 }
 
 /// One dynamic parameter: random jitter plus a controller with a floor.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Dynamic {
     /// 0..1 random variation per dab (for scatter: the amount, may exceed 1).
@@ -80,7 +81,7 @@ impl Dynamic {
 ///
 /// A loaded [`TipShape::Stored`] tip serialises as `sampled` (its full bitmap), so tool presets,
 /// recorded actions and `brush.get` see the same JSON as for an embedded tip.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum TipShape {
     /// Computed round/elliptical tip (hardness, angle, roundness).
@@ -124,6 +125,13 @@ impl TipShape {
             TipShape::Stored(r) => Some(r.bitmap()),
         }
     }
+    /// Whether the tip paints with its full bitmap: false only for a stored tip whose bitmap isn't loaded.
+    pub fn is_loaded(&self) -> bool {
+        match self {
+            TipShape::Stored(r) => r.is_loaded(),
+            TipShape::Round | TipShape::Sampled(_) => true,
+        }
+    }
     /// The tip's real pixel size (a stored tip's, not its preview's); `None` for a computed tip.
     pub fn bitmap_size(&self) -> Option<(u32, u32)> {
         match self {
@@ -135,7 +143,7 @@ impl TipShape {
 }
 
 /// Shape Dynamics.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ShapeDynamics {
     pub enabled: bool,
@@ -157,7 +165,7 @@ pub struct ShapeDynamics {
 }
 
 /// Scattering.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Scattering {
     pub enabled: bool,
@@ -178,7 +186,7 @@ impl Default for Scattering {
 }
 
 /// How a grayscale mask (texture or dual tip) combines with the brush coverage.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum MaskMode {
     #[default]
@@ -195,7 +203,7 @@ pub enum MaskMode {
 }
 
 /// Procedural pattern styles (generated deterministically; no bundled pattern files).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum PatternStyle {
     /// Smooth value noise.
@@ -211,7 +219,7 @@ pub enum PatternStyle {
 
 /// A texture pattern: a procedural generator or an explicit grayscale tile (tiled infinitely).
 /// A loaded [`Pattern::Stored`] tile serialises as `tile`, like [`TipShape::Stored`].
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum Pattern {
     Procedural {
@@ -265,11 +273,15 @@ impl Default for Pattern {
 }
 
 /// Texture.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Texture {
     pub enabled: bool,
     pub pattern: Pattern,
+    /// The id of the library pattern `pattern` was made from; `None` once `pattern` is anything else. The pattern
+    /// picker shows it as selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern_id: Option<String>,
     pub invert: bool,
     /// Pattern scale (1 = 100 %).
     pub scale: f32,
@@ -306,6 +318,7 @@ impl Default for Texture {
         Self {
             enabled: false,
             pattern: Pattern::default(),
+            pattern_id: None,
             invert: false,
             scale: 1.0,
             brightness: 0.0,
@@ -319,7 +332,7 @@ impl Default for Texture {
 }
 
 /// Dual Brush: a second tip stroked along the same path; the stroke is masked by it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DualBrush {
     pub enabled: bool,
@@ -356,7 +369,7 @@ impl Default for DualBrush {
 }
 
 /// Color Dynamics.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ColorDynamics {
     pub enabled: bool,
@@ -379,7 +392,7 @@ impl Default for ColorDynamics {
 }
 
 /// Transfer: per-dab opacity ceiling and flow, plus the Mixer Brush's wetness and mix.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Transfer {
     pub enabled: bool,
@@ -393,7 +406,7 @@ pub struct Transfer {
 
 /// The sections a lock can hold (the lock icons in Photoshop's Brush Settings list): a locked
 /// section keeps its settings when another brush preset is picked.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SectionLocks {
     pub shape_dynamics: bool,
@@ -411,7 +424,7 @@ pub struct SectionLocks {
 }
 
 /// Brush Pose: fixed values used for the selected stylus-component overrides.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(from = "PoseWire", into = "PoseWire")]
 pub struct Pose {
     pub enabled: bool,
@@ -519,18 +532,20 @@ impl From<Pose> for PoseWire {
 }
 
 /// Stroke smoothing (Photoshop's Smoothing % and its options).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Smoothing {
     /// Switch smoothing off without discarding its amount or mode. Old presets remain enabled.
     pub enabled: bool,
     /// 0..1.
     pub amount: f32,
-    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 100 px` taut.
+    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 300 px` taut
+    /// ([`crate::dynamics::MAX_STRING_PX`], screen pixels before Adjust for Zoom).
     pub pulled_string: bool,
     /// Keep catching up with the pointer while it pauses (uses point timestamps).
     pub catch_up: bool,
-    /// Finish the stroke at the last pointer position.
+    /// Finish the stroke at the last pointer position. No effect in Pulled String Mode, where the
+    /// stroke ends the string's length behind the pointer (measured, #11888).
     pub catch_up_on_end: bool,
     /// Divide the string length by the view zoom (the command's `zoom` param).
     pub adjust_for_zoom: bool,
@@ -538,12 +553,12 @@ pub struct Smoothing {
 
 impl Default for Smoothing {
     fn default() -> Self {
-        Self { enabled: true, amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: true, adjust_for_zoom: true }
+        Self { enabled: true, amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: false, adjust_for_zoom: true }
     }
 }
 
 /// A complete brush: tip shape, dynamics, and stroke-level options.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BrushSettings {
     /// Diameter in pixels.
@@ -579,9 +594,13 @@ pub struct BrushSettings {
     /// Paint beneath existing pixels; opaque pixels and transparency-locked layers are unchanged.
     pub behind: bool,
     /// Brush blend mode (Normal, Multiply, Dissolve…).
+    #[plain_data(assume = "a fieldless enum of blend modes")]
     pub mode: BlendMode,
     // --- Brush Tip Shape ---
-    pub tip: TipShape,
+    /// Tracked on its own, so a reader that shows the tip (a picker's tip picture) knows by its revision whether the
+    /// tip changed, without comparing bitmaps. `tools.setBrush` keeps the tip's revision when it leaves the tip as it
+    /// is.
+    pub tip: Tracked<TipShape>,
     /// Degrees, counter-clockwise.
     pub angle: f32,
     /// 0..1 (1 = circle).
@@ -639,7 +658,7 @@ impl Default for BrushSettings {
             erase: false,
             behind: false,
             mode: BlendMode::Normal,
-            tip: TipShape::Round,
+            tip: Tracked::new(TipShape::Round),
             angle: 0.0,
             roundness: 1.0,
             flip_x: false,
@@ -656,7 +675,8 @@ impl Default for BrushSettings {
             noise: false,
             wet_edges: false,
             build_up: false,
-            build_up_rate: 20.0,
+            // About ten dabs a second while held still, Photoshop's Airbrush rate (#11886).
+            build_up_rate: 10.0,
             smoothing: Smoothing::default(),
             protect_texture: false,
             locks: SectionLocks::default(),
@@ -772,10 +792,35 @@ impl BrushSettings {
     }
 }
 
+/// Keeps the pre-#12169 rate of 20 dabs per second for a saved Airbrush preset with no rate.
+pub fn deserialize_preset_brush<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BrushSettings, D::Error> {
+    fn present_build_up_rate<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+        f32::deserialize(d).map(Some)
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SavedBrush {
+        #[serde(default, deserialize_with = "present_build_up_rate")]
+        build_up_rate: Option<f32>,
+        #[serde(flatten)]
+        brush: BrushSettings,
+    }
+
+    let SavedBrush { mut brush, build_up_rate } = SavedBrush::deserialize(d)?;
+    if let Some(rate) = build_up_rate {
+        brush.build_up_rate = rate;
+    } else if brush.build_up {
+        brush.build_up_rate = 20.0;
+    }
+    Ok(brush)
+}
+
 /// A named brush preset (session tool state; serde round-trips).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct BrushPreset {
     pub name: String,
+    #[serde(deserialize_with = "deserialize_preset_brush")]
     pub brush: BrushSettings,
     /// Shipped with PhotoCraft (built-ins can be deleted from a session but are regenerated on reset).
     #[serde(default)]
@@ -796,7 +841,7 @@ pub struct BrushPreset {
 /// The New Brush Preset dialog's boxes, kept with the preset. The default is a preset made
 /// without the dialog (a built-in, an import, an older save): picking it brings its size and tool
 /// settings, as it always did, and leaves the foreground colour alone.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PresetCaptures {
     /// Capture Brush Size in Preset. Off: picking the preset keeps the tool's size.

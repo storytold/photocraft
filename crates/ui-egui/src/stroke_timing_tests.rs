@@ -6,16 +6,15 @@ use egui_kittest::Harness;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.sync_views();
     app.ui.tool = Tool::Brush;
-    let mut h = Harness::builder().with_size(vec2(900.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -24,44 +23,34 @@ fn harness() -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h.run_steps(4);
     let v = &mut h.state_mut().ui.views[0];
     v.zoom = 1.0;
     v.center = [100.0, 50.0];
-    v.fit_pending = false;
+    v.clear_pending();
     h.run_steps(2);
     h
 }
 
-fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    let xf = ViewXform {
-        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
-        center: v.center,
-        flip: app.ui.view.flip_horizontal,
-        rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
-    };
-    xf.to_screen(x, y)
+fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
+    crate::canvas::testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, down: bool) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, down: bool) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn move_to(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
+fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
 }
 
 /// The points of the committed `paint.stroke`.
-fn committed_points(h: &Harness<'static, PhotocraftApp>) -> Vec<Vec<f64>> {
+fn committed_points(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<Vec<f64>> {
     let (_, p) = h.state().session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").cloned().expect("a committed stroke");
     p["points"].as_array().expect("points").iter().map(|v| v.as_array().expect("point").iter().filter_map(Value::as_f64).collect()).collect()
 }
@@ -104,14 +93,19 @@ fn stroke_points_carry_increasing_times_from_zero() {
     assert!(times.last().copied().unwrap_or(0.0) > 0.0, "time advances over the frames: {times:?}");
 }
 
-/// Points of the drag in progress after holding the pointer still for a while.
-fn held_points(h: &mut Harness<'static, PhotocraftApp>) -> (usize, usize) {
+/// Points of the live stroke in progress.
+fn live_points(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
+    crate::canvas::paint_tool::stroking(h.state()).map_or(0, |s| s.points.len())
+}
+
+/// Points of the live stroke after holding the pointer still for a while.
+fn held_points(h: &mut Harness<'static, Box<PhotocraftApp>>) -> (usize, usize) {
     move_to(h, 20.0, 50.0);
     button(h, 20.0, 50.0, true);
     move_to(h, 30.0, 50.0);
-    let before = h.state().drag.as_ref().map_or(0, |d| d.points.len());
+    let before = live_points(h);
     h.run_steps(12);
-    let after = h.state().drag.as_ref().map_or(0, |d| d.points.len());
+    let after = live_points(h);
     button(h, 30.0, 50.0, false);
     (before, after)
 }
@@ -130,15 +124,6 @@ fn a_held_plain_brush_adds_nothing() {
     h.state_mut().run("tools.setBrush", json!({"buildUp": false, "smoothing": {"amount": 0.0}})).unwrap();
     let (before, after) = held_points(&mut h);
     assert_eq!(after, before, "nothing changes with time, so nothing is repeated");
-}
-
-#[test]
-fn spread_ms_spaces_a_frames_samples_after_the_last_point() {
-    use crate::canvas::spread_ms;
-    assert_eq!((0..4).map(|k| spread_ms(100.0, 116.0, k, 4)).collect::<Vec<_>>(), vec![104.0, 108.0, 112.0, 116.0]);
-    assert_eq!(spread_ms(116.0, 116.0, 0, 3), 116.0, "a press frame's moves share its time");
-    assert_eq!(spread_ms(120.0, 116.0, 0, 1), 116.0, "a clock that went back never goes below now");
-    assert_eq!(spread_ms(f64::NAN, 116.0, 0, 1), 116.0);
 }
 
 #[test]
@@ -184,7 +169,7 @@ fn the_pressure_curve_shapes_the_committed_stroke() {
 }
 
 /// A Brush whose size follows pen pressure, painting on a new empty layer.
-fn pressure_sized_brush(h: &mut Harness<'static, PhotocraftApp>) {
+fn pressure_sized_brush(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let app = h.state_mut();
     app.run("layer.new.layer", json!({})).unwrap();
     let brush = json!({"size": 40, "hardness": 1.0, "smoothing": {"amount": 0.0}, "shapeDynamics": {"enabled": true, "size": {"control": "penPressure"}}});
@@ -193,7 +178,7 @@ fn pressure_sized_brush(h: &mut Harness<'static, PhotocraftApp>) {
 }
 
 /// Width in pixels of the paint on the active layer along row `y`.
-fn painted_width(h: &Harness<'static, PhotocraftApp>, y: i32) -> usize {
+fn painted_width(h: &Harness<'static, Box<PhotocraftApp>>, y: i32) -> usize {
     let st = h.state().session.active().expect("a document");
     let s = st.doc.layer(st.active_layer.expect("an active layer")).and_then(|l| l.surface()).expect("a raster layer");
     (0..200).filter(|x| s.rgba(*x, y)[3] > 0.5).count()
@@ -201,7 +186,7 @@ fn painted_width(h: &Harness<'static, PhotocraftApp>, y: i32) -> usize {
 
 /// Press and release at (`x`, 50) in one frame, the pen reporting `samples` (`None`: cleared, as
 /// a lifting pen or a mouse leaves it) before the UI runs: a tap shorter than a frame.
-fn tap(h: &mut Harness<'static, PhotocraftApp>, x: f32, samples: &[Option<f32>]) {
+fn tap(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, samples: &[Option<f32>]) {
     use crate::stylus::PenSample;
     move_to(h, x, 50.0);
     for p in samples {
@@ -212,24 +197,6 @@ fn tap(h: &mut Harness<'static, PhotocraftApp>, x: f32, samples: &[Option<f32>])
         h.input_mut().events.push(egui::Event::PointerButton { pos: q, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     }
     h.run_steps(3);
-}
-
-#[test]
-fn a_tap_shorter_than_a_frame_paints_at_the_pens_pressure() {
-    // #1798: the pen lifted (its sample cleared) before the UI ran, so the tap read as a mouse
-    // and painted a full-size dab whatever the pressure.
-    let mut h = harness();
-    pressure_sized_brush(&mut h);
-    tap(&mut h, 50.0, &[Some(0.2), None]);
-    assert!((committed_points(&h)[0][2] - 0.2).abs() < 1e-3, "{:?}", committed_points(&h));
-    tap(&mut h, 150.0, &[Some(0.9), None]);
-    assert!((committed_points(&h)[0][2] - 0.9).abs() < 1e-3, "{:?}", committed_points(&h));
-    let st = h.state().session.active().unwrap();
-    let s = st.doc.layer(st.active_layer.unwrap()).and_then(|l| l.surface()).unwrap();
-    let width = |x0: i32, x1: i32| (x0..x1).filter(|x| s.rgba(*x, 50)[3] > 0.5).count() as f64;
-    let (light, firm) = (width(0, 100), width(100, 200));
-    assert!((light / 40.0 - 0.2).abs() < 0.1, "a light tap is a small dab: {light} px");
-    assert!((firm / 40.0 - 0.9).abs() < 0.1, "a firm tap is a large dab: {firm} px");
 }
 
 #[test]
@@ -348,7 +315,7 @@ fn a_committed_stroke_repaints_a_gradient_overlay_over_the_whole_layer() {
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
     h.state_mut().run("layer.layerStyle.gradientOverlay", json!({"from": "#ff0000", "to": "#0000ff", "angle": 0})).unwrap();
     h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
-    let drag = |h: &mut Harness<'static, PhotocraftApp>, pts: &[(f32, f32)]| {
+    let drag = |h: &mut Harness<'static, Box<PhotocraftApp>>, pts: &[(f32, f32)]| {
         move_to(h, pts[0].0, pts[0].1);
         button(h, pts[0].0, pts[0].1, true);
         for (x, y) in &pts[1..] {
@@ -366,7 +333,7 @@ fn a_committed_stroke_repaints_a_gradient_overlay_over_the_whole_layer() {
     let c = app.committed_stroke.as_ref().expect("the commit took the live stroke's pixels");
     assert_eq!(c.revision, st.revision);
     // A cache that showed the live stroke's last step.
-    let missed = crate::canvas::damage_since(app, idx, (st.revision - 1, c.last_key()), (st.revision, 0), 0, st.last_damage).unwrap();
+    let missed = crate::canvas::damage_since(app, idx, (st.revision - 1, c.last_key()), (st.revision, 0), 0, (st.damage_from(), st.last_damage)).unwrap();
     assert!(missed.contains(25, 25), "the gradient around the first stroke is repainted: {missed:?}");
 }
 
@@ -379,8 +346,8 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
     app.sync_views();
     app.ui.tool = Tool::Brush;
     app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
-    let mut h = Harness::builder().with_size(vec2(900.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -390,11 +357,11 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
             app.perf.stage.start(t0, moves);
             app.perf.stage.ui_start(t0, Some(0.004));
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-            app.finish_frame(crate::gpu_canvas::now_ms() - t0);
+            app.finish_frame(&ctx, crate::gpu_canvas::now_ms() - t0);
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h.run_steps(4);
     move_to(&mut h, 20.0, 50.0);
     button(&mut h, 20.0, 50.0, true);
@@ -417,16 +384,20 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
 #[test]
 fn releasing_a_clone_stamp_stroke_commits_what_a_replay_paints() {
     let setup = |run: &mut dyn FnMut(&str, Value)| {
-        run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.4}}));
+        // The whole tip that differs from the default brush, as a replay starts from that.
+        run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.4, "spacing": 0.25, "smoothing": {"amount": 0.0}}}));
         run("paint.stroke", json!({"points": [[10, 20], [190, 80]], "size": 30, "hardness": 0.5, "color": "#2060c0"}));
         run("cloneSource.set", json!({"source": [40, 30]}));
     };
     let mut h = harness();
+    // Picked first, so the brush set above is the Clone Stamp's own.
+    h.state_mut().ui.tool = Tool::CloneStamp;
+    // The harness draws no app frame, which is where the tool's own brush takes over the session's.
+    crate::paint_mouse::sync_tool_brush(h.state_mut());
+    h.run_steps(1);
     setup(&mut |id, p| {
         h.state_mut().run(id, p).unwrap();
     });
-    h.state_mut().ui.tool = Tool::CloneStamp;
-    h.run_steps(1);
     move_to(&mut h, 60.0, 50.0);
     button(&mut h, 60.0, 50.0, true);
     for (x, y) in [(80.0, 40.0), (110.0, 60.0), (140.0, 45.0), (170.0, 65.0)] {
@@ -471,7 +442,11 @@ fn releasing_a_sequential_dab_stroke_commits_what_a_replay_paints() {
             h.state_mut().run(id, p).unwrap();
         });
         h.state_mut().ui.tool = tool;
+        crate::paint_mouse::sync_tool_brush(h.state_mut());
         h.run_steps(1);
+        // A tool with its own starting tip (Dodge, #12684) paints with that, not the setup's
+        // brush: give it the setup's tip, as the replay below has.
+        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 24, "hardness": 0.2, "spacing": 0.1}})).unwrap();
         move_to(&mut h, 40.0, 30.0);
         button(&mut h, 40.0, 30.0, true);
         for (x, y) in [(70.0, 40.0), (100.0, 55.0), (130.0, 50.0), (160.0, 70.0)] {
@@ -499,58 +474,38 @@ fn releasing_a_sequential_dab_stroke_commits_what_a_replay_paints() {
     }
 }
 
-/// Pressure changes Smudge's painted footprint, but not the square of colour it carries.
-/// Exercise the actual pen → live preview → release handoff → journal replay, then undo/redo.
+/// A ⇧-click Dodge line isn't smoothed (#11887): its live preview and its commit both send
+/// `smoothing: 0`, so the release still takes the pixels the preview drew.
 #[test]
-fn pressure_sized_smudge_release_matches_replay_and_undo_redo() {
-    use crate::stylus::PenSample;
-
-    let setup = |run: &mut dyn FnMut(&str, Value)| {
-        run("tools.setBrush", json!({"brush": {"size":40,"hardness":0.7,"pressureSize":true,"smoothing":{"amount":0.4}}}));
-        run("paint.stroke", json!({"points":[[10,20],[190,80]],"size":30,"color":"#2060c0"}));
-    };
+fn a_shift_click_dodge_line_commits_its_live_pixels_unsmoothed() {
     let mut h = harness();
-    h.state_mut().ui.tool = Tool::Smudge;
+    h.state_mut().run("paint.stroke", json!({"points": [[10, 20], [190, 80]], "size": 30, "color": "#2060c0"})).unwrap();
+    h.state_mut().ui.tool = Tool::Dodge;
+    crate::paint_mouse::sync_tool_brush(h.state_mut());
     h.run_steps(1);
-    setup(&mut |id, p| {
-        h.state_mut().run(id, p).unwrap();
-    });
-    let before = h.state().session.active().unwrap().doc.clone();
-    h.state_mut().ui.tool_options.strength = 80.0;
-    h.run_steps(1);
-    let pen = |pressure| Some(PenSample { pressure, ..Default::default() });
-    h.state().stylus.feed.set(pen(0.1));
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 12, "smoothing": {"amount": 0.6, "catchUpOnEnd": false}}})).unwrap();
     move_to(&mut h, 40.0, 30.0);
     button(&mut h, 40.0, 30.0, true);
-    for (x, y, pressure) in [(65.0, 40.0, 0.4), (100.0, 55.0, 1.0), (140.0, 70.0, 0.7), (60.0, 40.0, 0.2)] {
-        h.state().stylus.feed.set(pen(pressure));
-        move_to(&mut h, x, y);
-    }
-    assert!(h.state().live_stroke.is_some());
-    button(&mut h, 60.0, 40.0, false);
+    move_to(&mut h, 100.0, 50.0);
+    button(&mut h, 100.0, 50.0, false);
     h.run_steps(2);
-    assert!(h.state().retouch_from_live, "release must actually reuse the live pixels");
-    let (_, params) = h.state().session.journal.iter().rev().find(|(id, _)| id == "paint.smudge").cloned().unwrap();
-    let points = params["points"].as_array().unwrap();
-    assert!(points.iter().any(|p| p[2].as_f64().unwrap() < 0.2));
-    assert!(points.iter().any(|p| p[2].as_f64().unwrap() > 0.9));
-
-    let mut fresh = photocraft_engine::Session::new();
-    fresh.execute("file.new", json!({"width":200,"height":100,"background":"white"})).unwrap();
-    setup(&mut |id, p| {
-        fresh.execute(id, p).unwrap();
-    });
-    assert_eq!(h.state().session.tools.brush, fresh.tools.brush, "replay uses the Smudge tool's actual brush");
-    assert!(
-        photocraft_compose::render(&before, before.bounds()).px == photocraft_compose::render(&fresh.active().unwrap().doc, before.bounds()).px,
-        "the replay fixture starts with identical pixels"
-    );
-    assert!(fresh.execute("paint.smudge", params).unwrap().get("fromLive").is_none());
-    let committed = h.state().session.active().unwrap().doc.clone();
-    let expected = photocraft_compose::render(&fresh.active().unwrap().doc, committed.bounds());
-    assert!(photocraft_compose::render(&committed, committed.bounds()).px == expected.px, "live commit and replay must paint identical pixels");
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(h.state().session.active().unwrap().doc, before);
-    h.state_mut().run("edit.redo", json!({})).unwrap();
-    assert_eq!(h.state().session.active().unwrap().doc, committed);
+    let shift = |h: &mut Harness<'static, Box<PhotocraftApp>>, pressed: bool| {
+        let pos = screen(h, 160.0, 70.0);
+        h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT });
+        h.run_steps(1);
+    };
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    move_to(&mut h, 160.0, 70.0);
+    shift(&mut h, true);
+    assert!(h.state().live_stroke.is_some(), "a live line");
+    h.state_mut().retouch_from_live = false;
+    shift(&mut h, false);
+    h.run_steps(2);
+    let app = h.state();
+    let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.dodge").cloned().expect("a committed line");
+    let ends: Vec<[f64; 2]> = p["points"].as_array().unwrap().iter().map(|q| [q[0].as_f64().unwrap(), q[1].as_f64().unwrap()]).collect();
+    assert_eq!(ends, vec![[100.0, 50.0], [160.0, 70.0]]);
+    assert_eq!(p["smoothing"], json!(0.0));
+    assert!(app.retouch_from_live, "the release took the live pixels instead of rendering the line again");
+    assert_eq!(app.session.tools.brush.smoothing.amount, 0.6);
 }

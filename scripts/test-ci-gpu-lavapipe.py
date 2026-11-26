@@ -1,5 +1,7 @@
 import importlib.util
+import io
 from pathlib import Path
+import sys
 import unittest
 
 spec = importlib.util.spec_from_file_location('gpu_check', Path(__file__).with_name('ci-gpu-lavapipe.py'))
@@ -29,15 +31,29 @@ class LogChecks(unittest.TestCase):
             'SKIP the comparison: this GPU finishes a 6 MP composite in 1 ms against 2 ms of encoding',
             'SKIP the sum: this refresh still fit one command buffer']))
 
-    def test_selects_all_gpu_filters_from_config(self):
-        config = {'profile': {'default': {'overrides': [
-            {'filter': 'package(a)', 'test-group': 'gpu'},
-            {'filter': 'package(b)', 'test-group': 'cpu'},
-            {'filter': 'test(c)', 'test-group': 'gpu'}]}}}
-        self.assertEqual(check.gpu_filter(config), '(package(a)) | (test(c))')
-        config['profile']['default']['overrides'] = []
-        with self.assertRaises(ValueError):
-            check.gpu_filter(config)
+
+class Wrapper(unittest.TestCase):
+    """The gate's GPU shard runs xtask through `run`: its output is shown and checked."""
+
+    def status(self, script, icds=('/icd/lvp_icd.x86_64.json',)):
+        out = io.StringIO()
+        return check.run([sys.executable, '-c', script], list(icds), out), out.getvalue()
+
+    def test_runs_on_the_given_vulkan_driver_and_shows_the_output(self):
+        status, out = self.status(
+            "import os; print('GPU parity backend: Vulkan', os.environ['WGPU_BACKEND'], os.environ['VK_ICD_FILENAMES'])")
+        self.assertEqual(status, 0)
+        self.assertIn('GPU parity backend: Vulkan vulkan /icd/lvp_icd.x86_64.json', out)
+
+    def test_a_passing_run_with_a_skip_fails(self):
+        status, _ = self.status("print('GPU parity backend: Vulkan'); print('skipping GPU parity tests: no device')")
+        self.assertEqual(status, 1)
+        status, _ = self.status("print('no parity test ran')")
+        self.assertEqual(status, 1)
+
+    def test_a_failing_run_keeps_its_status(self):
+        status, _ = self.status("print('GPU parity backend: Vulkan'); raise SystemExit(100)")
+        self.assertEqual(status, 100)
 
 
 if __name__ == '__main__':

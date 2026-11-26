@@ -35,6 +35,27 @@ Warnings do not change the saved document's font declarations and do not stop
 the operation. To list or replace the missing families intentionally, use
 `type.resolveMissingFonts` on the document.
 
+### Document metadata
+
+`convert`, `run --out` and `batch` keep the document's XMP packet in a flat
+export whose format holds one (PNG, JPEG, WebP, TIFF, …), and its free-form
+text where the format holds that too (PNG text chunks, TIFF's named text tags
+such as ImageDescription; JPEG and WebP have no place for it), as Save As
+does. `--metadata none` leaves them out, as Export As's Metadata: None does:
+a Photoshop file's XMP can list every placed document's id
+(`DocumentAncestors`) and the text of every type layer, and can be far larger
+than the image. `--metadata all` is the default. The option changes nothing
+else: the ICC profile, EXIF and resolution are written as they are without
+it, where the format holds them. An Indexed Color document saved as a palette
+PNG carries no XMP, text, ICC profile or EXIF with either value, only its
+resolution. PSD, PSB and `.pcraft` saves always keep the XMP. It is not a full
+metadata scrub.
+
+```sh
+photocraft-cli batch --actions resize.json --in masters/ --out web/ \
+  --format webp --metadata none
+```
+
 ### Export selected adjustment layers as a .cube LUT
 
 The engine command `file.export.colorLookupTables` creates a 3D LUT from an
@@ -63,7 +84,7 @@ layers because that would lose their group's blending semantics.
 
 Paths supplied to the current CLI are ordinary operating-system paths. The CLI does not restrict them to a workspace root. Batch output creates the requested output directory, and save operations may create parent directories. `batch` refuses an output directory that is its input directory (the results would replace the originals) unless `--in-place` is given. Run untrusted action files only in an appropriately isolated account or environment.
 
-CLI parsing checks the flags and their values before any work starts. A flag the subcommand doesn't take (a typo such as `--fromat`), a flag given twice (only `--cmd` and `--params` may repeat), a value out of range (`--quality 0`), malformed `--new` or `--params` JSON, `<FILE>` together with `--new`, and `--control-token` together with `--control-token-file` are all usage errors (exit status 2), rather than being ignored or failing later. A value flag never takes the next flag as its value, so a value starting with `-` is written with `=` (`--out=-image.png`) or as `./-image.png`; negative numbers such as `--filter -1` still work. A path that is not valid Unicode reaches the command instead of being a usage error: `convert` reads and writes it, while `info`, `run` and `batch` open files through the automation layer, which still needs UTF-8 paths and fails with exit status 1 (`droplet` takes its arguments as text, so it refuses such a path as a usage error). `photocraft-cli --version` (or `-V`) prints the version; there is no `version` subcommand.
+CLI parsing checks the flags and their values before any work starts. A flag the subcommand doesn't take (a typo such as `--fromat`), a flag given twice (`--cmd`, `--params` and `--automation-read-root` may repeat), a value out of range (`--quality 0`), malformed `--new` or `--params` JSON, `<FILE>` together with `--new`, and `--control-token` together with `--control-token-file` are all usage errors (exit status 2), rather than being ignored or failing later. A value flag never takes the next flag as its value, so a value starting with `-` is written with `=` (`--out=-image.png`) or as `./-image.png`; negative numbers such as `--filter -1` still work. A path that is not valid Unicode reaches the command instead of being a usage error: `convert` reads and writes it, while `info`, `run` and `batch` open files through the automation layer, which still needs UTF-8 paths and fails with exit status 1 (`droplet` takes its arguments as text, so it refuses such a path as a usage error). `photocraft-cli --version` (or `-V`) prints the version; there is no `version` subcommand.
 
 `mcp` and `serve` reject positional arguments, empty values and options for the wrong mode before
 starting a server. Explicit control-token flags require `mcp --bridge` or `serve --port` (or

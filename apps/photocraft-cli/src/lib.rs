@@ -40,6 +40,16 @@ where
     T: Into<OsString>,
 {
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    // nightly-v1 is a desktop-only contract. Never let GUI profile arguments fall through
+    // to stable CLI/MCP directory and credential discovery.
+    if args.iter().take_while(|arg| arg.as_os_str() != std::ffi::OsStr::new("--")).any(|arg| {
+        let text = arg.to_string_lossy();
+        text == "--launch-profile" || text == "--profile-root" || text.starts_with("--launch-profile=") || text.starts_with("--profile-root=")
+    }) {
+        let _ = writeln!(err, "nightly-v1 is supported only by the PhotoCraft desktop launcher protocol");
+        return 2;
+    }
+
     // Help and `--version` (`help`, `-h`, `<subcommand> --help`, `-V`) come back as errors too,
     // for `out`, exit 0: the subcommand never runs.
     let cli = match parse(&args) {
@@ -82,5 +92,16 @@ pub(crate) mod test_support {
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let code = crate::run(args, &mut stdout, &mut stderr);
         Invoke { code, stdout: String::from_utf8(stdout).unwrap(), stderr: String::from_utf8(stderr).unwrap() }
+    }
+}
+
+#[cfg(test)]
+mod nightly_protocol_tests {
+    #[test]
+    fn gui_profile_protocol_is_refused_before_any_cli_command() {
+        let result = super::test_support::invoke(&["--launch-profile", "nightly-v1", "--profile-root", "a-private-root", "--", "file.psd"]);
+        assert_eq!(result.code, 2);
+        assert!(result.stdout.is_empty());
+        assert!(result.stderr.contains("desktop launcher protocol"));
     }
 }

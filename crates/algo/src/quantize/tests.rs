@@ -271,6 +271,34 @@ fn exact_palette_and_failure() {
 }
 
 #[test]
+fn exact_palette_counts_forced_colours_without_dropping_image_colours() {
+    let pixels = |count: u16| (0..count).map(|r| [f32::from(r) / 255.0, 42.0 / 255.0, 7.0 / 255.0, 1.0]).collect::<Vec<_>>();
+    let px = pixels(256);
+    let error = build_palette(&px, PaletteKind::Exact, 256, Forced::BlackWhite).unwrap_err();
+    assert!(error.contains("258") && error.contains("forced"), "{error}");
+
+    let boundary = pixels(254);
+    let palette = build_palette(&boundary, PaletteKind::Exact, 256, Forced::BlackWhite).unwrap();
+    assert_eq!(palette.len(), 256);
+    assert_eq!(&palette[..2], &[[0, 0, 0], [255, 255, 255]], "forced colours retain their order");
+    for r in 0..254u8 {
+        assert!(palette.contains(&[r, 42, 7]), "the source colour {r} was dropped");
+    }
+
+    let mut overlap = boundary;
+    overlap.extend([[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]]);
+    let palette = build_palette(&overlap, PaletteKind::Exact, 256, Forced::BlackWhite).unwrap();
+    assert_eq!(palette.len(), 256, "forced colours already in the image count only once");
+    for colors in [2, 256] {
+        let palette = build_palette(&px, PaletteKind::Exact, colors, Forced::None).unwrap();
+        assert_eq!(palette.len(), 256, "Exact still retains every image colour regardless of the requested count");
+        for r in 0..=255u8 {
+            assert!(palette.contains(&[r, 42, 7]), "the source colour {r} was dropped");
+        }
+    }
+}
+
+#[test]
 fn adaptive_and_perceptual_respect_count_and_forced() {
     let px = gradient(40, 40);
     for kind in [PaletteKind::Adaptive, PaletteKind::Perceptual, PaletteKind::Selective] {
@@ -414,15 +442,15 @@ fn custom_pattern_thresholds_match_photoshop() {
     // Photoshop (Image › Mode › Bitmap, Custom Pattern) on a 0..255 ramp: the first white
     // level per pattern pixel, measured against defined patterns.
     let l = |v: &[u8]| v.iter().map(|v| f32::from(*v) / 255.0).collect::<Vec<_>>();
-    let ramp7 = custom_pattern_thresholds(&l(&[0, 40, 80, 120, 160, 200, 240]));
+    let ramp7 = custom_pattern_thresholds(&l(&[0, 40, 80, 120, 160, 200, 240])).unwrap();
     assert_eq!(ramp7.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [237, 201, 164, 128, 92, 55, 19]);
-    let five = custom_pattern_thresholds(&l(&[10, 200, 90, 250, 150]));
+    let five = custom_pattern_thresholds(&l(&[10, 200, 90, 250, 150])).unwrap();
     assert_eq!(five.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [230, 77, 179, 26, 128]);
     // Equal pixels share their rank: 100, 100 both sit at 50%.
-    let ties = custom_pattern_thresholds(&l(&[100, 100, 200, 50]));
+    let ties = custom_pattern_thresholds(&l(&[100, 100, 200, 50])).unwrap();
     assert_eq!(ties.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [128, 128, 32, 224]);
-    assert!(custom_pattern_thresholds(&[]).is_empty());
-    assert_eq!(custom_pattern_thresholds(&[f32::NAN, 0.3]).len(), 2);
+    assert!(custom_pattern_thresholds(&[]).unwrap().is_empty());
+    assert_eq!(custom_pattern_thresholds(&[f32::NAN, 0.3]).unwrap().len(), 2);
 }
 
 #[test]
@@ -461,7 +489,7 @@ fn bitmap_strips_match_the_whole_image_however_it_is_cut() {
     // #8477: strip boundaries must preserve diffusion state and keep patterns/screens anchored.
     let (w, h) = (37, 29);
     let gray: Vec<f32> = (0..w * h).map(|i| ((i % w) as f32 / w as f32 * 0.7 + (i / w) as f32 / h as f32 * 0.3).fract()).collect();
-    let map = custom_pattern_thresholds(&[0.1, 0.9, 0.4, 0.6, 0.2, 0.8]);
+    let map = custom_pattern_thresholds(&[0.1, 0.9, 0.4, 0.6, 0.2, 0.8]).unwrap();
     let methods = [
         BitmapMethod::Threshold,
         BitmapMethod::Pattern,
@@ -546,4 +574,14 @@ fn bitmap_strips_handle_empty_and_ragged_input() {
         assert!(gray.iter().all(|v| *v == 0.0 || *v == 1.0), "{method:?}: {gray:?}");
         to_bitmap(&mut [], 3, method);
     }
+}
+
+/// Threshold workspace is bounded before allocations, including multiplication overflow.
+#[test]
+fn custom_pattern_workspace_is_preflighted() {
+    let limit = (256 << 20) / 12;
+    assert_eq!(custom_pattern_working_bytes(limit).unwrap(), limit * 12);
+    assert!(custom_pattern_working_bytes(limit + 1).is_err());
+    assert!(custom_pattern_working_bytes(usize::MAX).is_err());
+    assert!(custom_pattern_working_bytes(4097 * 4096).is_ok());
 }

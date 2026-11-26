@@ -248,7 +248,7 @@ fn feature_and_exceptional_dabs_match_scalar_bits() {
                 b.aliased = true;
                 b.square = true;
             }
-            3 => b.tip = TipShape::Sampled(tip.clone()),
+            3 => b.tip = TipShape::Sampled(tip.clone()).into(),
             4 => {
                 b.texture.enabled = true;
                 b.texture.each_tip = true;
@@ -337,7 +337,7 @@ fn general_loop_cases() -> Vec<(&'static str, BrushContext, Dab, bool, bool)> {
     };
     let ctx = |b: BrushSettings| BrushContext::new(&b);
     vec![
-        ("sampled", ctx(BrushSettings { tip: TipShape::Sampled(tip.clone()), ..base() }), dab(0.4, 1.0, 1.0), false, false),
+        ("sampled", ctx(BrushSettings { tip: TipShape::Sampled(tip.clone()).into(), ..base() }), dab(0.4, 1.0, 1.0), false, false),
         (
             "per-tip texture",
             ctx({
@@ -439,7 +439,7 @@ fn parallel_general_loop_matches_the_frozen_reference() {
 fn general_loop_survives_empty_rects_and_nan_dabs() {
     let _restore = RestoreThreshold;
     let tip = GrayTile::from_fn(8, 5, |x, y| ((x + y) % 7) as f32 / 6.0);
-    let sampled = BrushContext::new(&BrushSettings { tip: TipShape::Sampled(tip), ..Default::default() });
+    let sampled = BrushContext::new(&BrushSettings { tip: TipShape::Sampled(tip).into(), ..Default::default() });
     let plain = BrushContext::new(&BrushSettings::default());
     for threshold in [0, usize::MAX] {
         set_parallel_min_pixels(threshold);

@@ -5,18 +5,18 @@
 //! layer record's extra data unaligned: a Pattern Fill's `PtFl` came out 2 bytes short of the
 //! boundary for half of all pattern names.
 
+use craft_psd::PsdFile;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, Pattern};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
 use photocraft_raster::Surface;
 
 fn pattern(name: &str) -> Pattern {
     let mut s = Surface::new(PixelFormat::RGBA8);
     s.fill_rect(Rect::new(0, 0, 8, 8), &[0.8, 0.8, 0.8, 1.0]);
     s.fill_rect(Rect::new(0, 0, 4, 4), &[0.2, 0.4, 0.9, 1.0]);
-    Pattern { id: "059289fb-0000-4000-8000-000000000001".into(), name: name.into(), width: 8, height: 8, surface: s }
+    Pattern { id: "059289fb-0000-4000-8000-000000000001".into(), name: name.into(), width: 8, height: 8, source_mode: None, surface: s }
 }
 
 /// One Pattern Fill layer per name; the name's length moves the descriptor's size by two bytes
@@ -57,7 +57,7 @@ fn generated_gradient_map_blocks_are_four_byte_aligned() {
     let cases = [(vec![(0.0, [0.04, 0.1, 0.18]), (1.0, [1.0; 3])], 128), (vec![(0.0, [0.04, 0.1, 0.18]), (0.5, [0.4, 0.2, 0.1]), (1.0, [1.0; 3])], 148)];
     for (stops, expected_length) in cases {
         let mut doc = Document::new("gradient", Size::new(16, 16), ColorMode::Rgb, SampleType::U8);
-        doc.layers.push(Layer::new("Gradient Map", LayerContent::Adjustment(Adjustment::GradientMap { stops, reverse: false, dither: false })));
+        doc.layers.push(Layer::new("Gradient Map", LayerContent::Adjustment(Adjustment::GradientMap { stops, reverse: false, dither: false, source: None })));
         let bytes = export(&doc, "gradient.psd", &ExportOptions::default()).expect("export").bytes;
         let file = PsdFile::from_bytes(&bytes).expect("reparse");
         let block = file.layers().iter().find_map(|layer| layer.block(b"grdm")).expect("Gradient Map block");
@@ -72,7 +72,10 @@ fn legacy_unaligned_gradient_map_is_repaired_on_resave() {
     let stops = vec![(0.0, [0.04, 0.1, 0.18]), (0.5, [0.4, 0.2, 0.1]), (1.0, [1.0; 3])];
     for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
         let mut doc = Document::new("gradient", Size::new(16, 16), mode, SampleType::U8);
-        doc.layers.push(Layer::new("Gradient Map", LayerContent::Adjustment(Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false })));
+        doc.layers.push(Layer::new(
+            "Gradient Map",
+            LayerContent::Adjustment(Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false, source: None }),
+        ));
         let mut file = PsdFile::from_bytes(&export(&doc, "gradient.psd", &ExportOptions::default()).expect("export").bytes).expect("reparse");
         let legacy = file.layers_mut().iter_mut().find_map(|layer| layer.block_mut(b"grdm")).expect("Gradient Map block");
         let unpadded = legacy.data.len() - 2;
