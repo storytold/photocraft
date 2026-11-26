@@ -85,6 +85,8 @@ pub(crate) struct OpenAdjust {
     pub(crate) setup: Arc<Mutex<EditorSetup>>,
     /// The recorded parameters the value was seeded from, for seeding again when an unresolved target resolves.
     recorded: Value,
+    /// Whether this interactive Color Balance opening saves Preview as a user preference.
+    remember_color_balance_preview: bool,
     /// The captured parameters a Smart Filter edit lays over the recorded ones through the engine's normal form.
     normalized: Option<Value>,
 }
@@ -397,7 +399,11 @@ fn refusal(app: &PhotocraftApp, command: &str) -> String {
 
 /// Opens a neutral adjustment dialog using the current edit target.
 pub fn open_neutral(app: &mut PhotocraftApp, command: &str) -> Option<DialogId> {
-    open_with_params(app, command, &json!({}))
+    let id = open_with_params(app, command, &json!({}))?;
+    if let Some(open) = &mut app.adjust_open {
+        open.remember_color_balance_preview = open.kind == "colorBalance";
+    }
+    Some(id)
 }
 
 /// Seed an Action's dialog only after resolving its recorded target, so document-space
@@ -642,6 +648,7 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
         picked: None,
         setup,
         recorded,
+        remember_color_balance_preview: false,
         normalized,
     });
     Some(id)
@@ -893,7 +900,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(id) = app.adjust_open.as_ref().map(|open| open.id)
         && hosted(app, id).is_some()
     {
-        if app.adjust_open.as_ref().is_some_and(|open| open.kind == "colorBalance" && open.smart_filter.is_none() && open.recorded == json!({}))
+        if app.adjust_open.as_ref().is_some_and(|open| open.remember_color_balance_preview)
             && let Some(preview) = hosted(app, id).map(HostedAdjustDialog::is_previewing)
             && preview != app.session.prefs().dialogs.get(COLOR_BALANCE_PREVIEW).and_then(Value::as_bool).unwrap_or(true)
         {
@@ -918,5 +925,32 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             app.adjust_open = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod color_balance_preview_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn color_balance_remembers_preview_for_a_targeted_channel() {
+        const COMMAND: &str = "image.adjustments.colorBalance";
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "rgb"})).unwrap();
+        app.run("channel.target", json!({"channel": "red"})).unwrap();
+        let mut h =
+            Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 650.0)).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        let id = open(h.state_mut(), COMMAND).unwrap();
+        assert!(h.state().adjust_open.as_ref().unwrap().recorded.get("target").is_some());
+        h.run_steps(3);
+        h.get_by_label("Preview").click();
+        h.run_steps(3);
+        assert!(!hosted(h.state(), id).unwrap().is_previewing());
+        let ctx = h.ctx.clone();
+        crate::dialogs::cancel(h.state_mut(), &ctx, id).unwrap();
+        let reopened = open(h.state_mut(), COMMAND).unwrap();
+        assert!(!hosted(h.state(), reopened).unwrap().is_previewing());
     }
 }
