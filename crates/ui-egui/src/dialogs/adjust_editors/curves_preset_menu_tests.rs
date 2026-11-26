@@ -251,6 +251,56 @@ fn an_rgb_preset_is_refused_by_a_grayscale_dialog_that_edits_only_the_composite(
 }
 
 #[test]
+fn a_preset_for_another_channel_is_refused_by_a_dialog_aimed_at_one_channel() {
+    let files = Arc::new(ScriptedFiles::held());
+    let mut application = app(files.clone());
+    application.run("channel.target", json!({"channel": {"color": 1}})).expect("the Green channel is the edit target");
+    let mut h = harness(application);
+    let id = adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the Curves dialog opens");
+    h.run_steps(4);
+    let before = params(&h, id);
+    let red_lift = curves::to_bytes(&CurvePreset { name: "Red lift".into(), curves: stored_curves() }).expect("a preset writes");
+
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Red lift.pcrv"), &red_lift);
+
+    let state = h.state();
+    assert!(state.ui.status_error, "the aimed dialog refuses a preset whose red curve it cannot show, instead of dropping it on the way to OK");
+    assert!(state.ui.status.contains("red"), "the message names the channel the dialog does not edit: {}", state.ui.status);
+    assert_eq!(params(&h, id), before, "and the dialog keeps the curve it had");
+    assert!(state.session.presets().curves_presets.is_empty(), "nothing was added to the user's preset list");
+
+    // The channel the dialog is aimed at is all it edits: that curve, with the composite left
+    // straight, loads, and the dialog keeps its own straight composite as it does today.
+    let green = json!({"points": [[0.0, 0.0], [255.0, 255.0]], "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]]});
+    let stored_green = photocraft_engine::adjust_params::to_params(
+        &photocraft_engine::adjust_params::from_params("curves", &green, None, photocraft_doc::ColorMode::Rgb).expect("the parameters parse"),
+    );
+    let bytes = curves::to_bytes(&CurvePreset { name: "Green lift".into(), curves: stored_green.clone() }).expect("a preset writes");
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Green lift.pcrv"), &bytes);
+    assert!(!h.state().ui.status_error, "the aimed channel loads: {}", h.state().ui.status);
+    let after = params(&h, id);
+    assert_eq!(after["green"], stored_green["green"], "its green curve reaches the dialog");
+    assert_eq!(after["points"], stored_green["points"], "and the composite stays the straight line this dialog holds");
+    assert_eq!(h.state().session.presets().curves_presets.len(), 1, "and that preset is in the user's list");
+
+    // A preset that bends the composite has no place here either: this dialog lists Green alone.
+    let composite = json!({"points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]]});
+    let lifted = curves::to_bytes(&CurvePreset { name: "Lift".into(), curves: composite }).expect("a preset writes");
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Lift.pcrv"), &lifted);
+    let state = h.state();
+    assert!(state.ui.status_error, "a composite curve is refused rather than dropped: {}", state.ui.status);
+    assert!(state.ui.status.contains("composite"), "the message says which curve: {}", state.ui.status);
+    assert_eq!(params(&h, id), after, "and the dialog keeps the curve it had");
+    assert_eq!(state.session.presets().curves_presets.len(), 1, "and no second preset was recorded");
+}
+
+#[test]
 fn a_preset_of_the_same_colour_mode_loads_into_the_dialog() {
     // The dialog's own mode: the same curves that `stored_curves()` holds, named rgb.
     let files = Arc::new(ScriptedFiles::held());

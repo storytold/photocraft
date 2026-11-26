@@ -458,6 +458,49 @@ fn the_saved_selection_follows_the_list_that_is_read_back() {
 }
 
 #[test]
+fn a_dialog_aimed_at_one_channel_refuses_the_other_channels_of_its_mode() {
+    let mut s = crate::session();
+    let two_channels = json!({
+        "points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]],
+        "red": [[0.0, 20.0], [255.0, 235.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+    });
+    let two = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Red and green".into(), curves: two_channels }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": two.clone(), "space": "rgb", "channel": "green"})).unwrap_err().to_string();
+    assert!(err.contains("red"), "the refusal names the channel this dialog has no place for: {err}");
+    assert!(err.contains("green"), "and says which channel the dialog does edit: {err}");
+    assert_eq!(list(&mut s)["count"], 0, "a preset that cannot be shown is not put in the user's list");
+    // The aimed component, with the composite curve left straight, is all that dialog edits.
+    let green_only = json!({
+        "points": [[0.0, 0.0], [255.0, 255.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+    });
+    let green = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Green".into(), curves: green_only }).expect("a preset writes"));
+    assert!(load(&mut s, &json!({"data": green.clone(), "space": "rgb", "channel": "green"})).is_ok(), "the aimed channel loads into that dialog");
+    // An aimed dialog lists that component and nothing else, so it holds no composite curve either:
+    // the measured dialog keeps its own straight one, and a preset that bends it is refused.
+    let plain = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Plain".into(), curves: one_curve() }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": plain.clone(), "space": "rgb", "channel": "green"})).unwrap_err().to_string();
+    assert!(err.contains("composite"), "the refusal says so: {err}");
+    assert!(load(&mut s, &json!({"data": plain, "space": "rgb"})).is_ok(), "the same preset fits a dialog over the whole image");
+    // A channel knows the colour mode it belongs to, and a `space` beside it has to agree.
+    assert!(load(&mut s, &json!({"data": green.clone(), "channel": "green"})).is_ok(), "a channel on its own says which mode to check in");
+    assert!(
+        load(&mut s, &json!({"data": green.clone(), "space": "cmyk", "channel": "green"})).is_err(),
+        "a channel that is not part of the named mode is an error"
+    );
+    assert!(load(&mut s, &json!({"data": green.clone(), "space": "rgb", "channel": "chartreuse"})).is_err(), "and so is a name that is not a channel");
+    assert!(load(&mut s, &json!({"data": green.clone(), "space": "gray", "channel": "green"})).is_err(), "and a channel named for a dialog that has none");
+    // A preset of another colour mode is refused the way it always was, naming its channels.
+    let ink = json!({"points": [[0.0, 0.0], [255.0, 255.0]], "cyan": [[0.0, 10.0], [255.0, 240.0]]});
+    let ink_data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Ink".into(), curves: ink }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": ink_data, "space": "rgb", "channel": "green"})).unwrap_err().to_string();
+    assert!(err.contains("cyan"), "the refusal still names the ink channel: {err}");
+    // Without `channel` the dialog's whole mode is open to the preset, as before.
+    assert!(load(&mut s, &json!({"data": two, "space": "rgb"})).is_ok(), "an ordinary rgb dialog takes both channels");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();
