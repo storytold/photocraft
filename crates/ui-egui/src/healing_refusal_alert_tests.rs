@@ -109,6 +109,7 @@ fn the_clone_stamp_keeps_the_status_bar() {
 /// the refusals run, so the Alt-click that sets the source must get past it.
 mod canvas {
     use egui::Modifiers;
+    use photocraft_engine::presets::PresetsExt;
     use serde_json::json;
 
     use crate::alt_click_tests::{click, harness, two_colours};
@@ -127,7 +128,7 @@ mod canvas {
                 h.state_mut().run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
             }
             click(&mut h, 150.0, 50.0, Modifiers::ALT);
-            assert!(h.state().session.presets.clone.active().source.is_some(), "lock {lock}: the source is set");
+            assert!(h.state().session.presets().clone.active().source.is_some(), "lock {lock}: the source is set");
             assert!(alerts(h.state()).is_empty(), "lock {lock}: no alert: {:?}", alerts(h.state()));
             // A plain click is still refused.
             click(&mut h, 50.0, 50.0, Modifiers::NONE);
