@@ -20,7 +20,7 @@ pub(crate) mod tool_presets;
 
 pub use super::preset_browser::{finish_custom_shape, gradients_panel, patterns_panel, shape_picker, shapes_panel, styles_panel, tool_presets_panel};
 pub use clone_offsets::{clone_mapping_at, clone_sample_point};
-pub(crate) use clone_offsets::{clone_offset_edit, clone_offset_readout, clone_overlay_key, remember_clone_cursor};
+pub(crate) use clone_offsets::{clone_offset_edit, clone_offset_readout, clone_overlay_key, clone_overlay_raw_keys, remember_clone_cursor};
 pub use clone_source::panel as clone_source_panel;
 pub use tool_presets::select as select_tool_preset;
 

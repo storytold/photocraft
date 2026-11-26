@@ -83,6 +83,38 @@ pub(crate) fn clone_overlay_key(app: &mut PhotocraftApp, direction: Option<[f64;
     true
 }
 
+/// ⇧⌥-arrows and ⇧⌥-Enter reach [`clone_overlay_key`] wherever keyboard focus is (a frame changed on the timeline
+/// leaves it there, where the arrows would step frames and Enter press a control), unless text is being typed, a
+/// dialog is open or a stroke is under way. A key it uses, and its release, leave the frame's input. Runs from
+/// `raw_input_hook`, before any widget sees the keys.
+pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing)
+        || ctx.text_edit_focused()
+        || app.ui.text_edit.is_some()
+        || app.dialog_open()
+        || crate::canvas::tools::in_gesture(app)
+    {
+        return;
+    }
+    raw.events.retain(|event| {
+        let egui::Event::Key { key, pressed, modifiers: m, .. } = event else { return true };
+        let direction = match key {
+            egui::Key::ArrowLeft => Some([-1.0, 0.0]),
+            egui::Key::ArrowRight => Some([1.0, 0.0]),
+            egui::Key::ArrowUp => Some([0.0, -1.0]),
+            egui::Key::ArrowDown => Some([0.0, 1.0]),
+            egui::Key::Enter => None,
+            _ => return true,
+        };
+        let mods = craft::keymap::Mods { cmd: m.mac_cmd, ctrl: m.ctrl, alt: m.alt, shift: m.shift };
+        if !*pressed {
+            // The release of a key used here: no control acts on it either.
+            return !(mods.shift && mods.alt && !mods.ctrl && !mods.cmd);
+        }
+        !clone_overlay_key(app, direction, mods)
+    });
+}
+
 /// One pixel along an arrow's axis, none across it (`f64::signum` gives 1 for 0).
 fn step(v: f64) -> f64 {
     if v.abs() < 0.5 { 0.0 } else { v.signum() }

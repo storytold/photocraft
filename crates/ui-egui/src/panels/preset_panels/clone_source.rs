@@ -168,7 +168,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // On a video timeline: which frame a stroke samples, relative to the frame painted.
     if app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
         let mut frame_set: Option<(Value, Option<GestureId>)> = None;
-        let mut shown = Some(slot.frame_offset as f64);
+        let painting = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map_or(0, |t| t.current);
+        // Until the first stroke after a new source, the gap to the frame it was set on.
+        let offset_now = slot.frame_offset_at(painting);
+        let mut shown = Some(offset_now as f64);
         let mut hold = slot.hold_frame;
         // The offset with a visible label, − / + buttons that step it by one frame, and Hold Frame beside them.
         let (field, step) = Row::new()
@@ -199,17 +202,20 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             .unwrap_or((None, 0));
         if let Some(out) = field
             && let Some(Some(landed)) = out.events.landed().copied()
-            && landed.round() as i64 != slot.frame_offset
+            && landed.round() as i64 != offset_now
         {
             frame_set = Some((json!({"frameOffset": landed.round() as i64}), out.events.last().and_then(EditEvent::id)));
         }
         if step != 0 {
-            frame_set = Some((json!({"frameOffset": (slot.frame_offset + step).clamp(-9999, 9999)}), None));
+            frame_set = Some((json!({"frameOffset": (offset_now + step).clamp(-9999, 9999)}), None));
         }
         if hold != slot.hold_frame {
             frame_set = Some((json!({"holdFrame": hold}), None));
         }
-        let line = match (slot.hold_frame, slot.frame, slot.frame_offset) {
+        let line = match (slot.hold_frame, slot.frame, offset_now) {
+            (false, Some(f), _) if slot.frame_follows => {
+                crate::i18n::fmt(tl!("Samples frame {frame}, where the source was set, until the first stroke keeps the gap"), &[("frame", &(f + 1).to_string())])
+            }
             (true, Some(f), _) => crate::i18n::fmt(tl!("Samples frame {frame}"), &[("frame", &(f + 1).to_string())]),
             (true, None, _) => tl!("Samples the frame on screen until a source is set").to_string(),
             (false, _, 0) => tl!("Samples the frame being painted").to_string(),

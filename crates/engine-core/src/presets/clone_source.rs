@@ -66,6 +66,11 @@ pub struct CloneSource {
     /// The playhead of the source document when the source was set.
     #[serde(default)]
     pub frame: Option<usize>,
+    /// From a new source until the first aligned stroke, strokes sample the frame the source was
+    /// set on ([`CloneSource::frame`]) wherever the playhead is, and the frame offset shows the gap
+    /// to it; that stroke keeps the gap in [`CloneSource::frame_offset`]. Off once the offset is set.
+    #[serde(default)]
+    pub frame_follows: bool,
 }
 
 impl Default for CloneSource {
@@ -85,6 +90,7 @@ impl Default for CloneSource {
             frame_offset: 0,
             hold_frame: false,
             frame: None,
+            frame_follows: false,
         }
     }
 }
@@ -101,7 +107,20 @@ impl CloneSource {
     /// timeline: the caller refuses that).
     pub fn source_frame(&self, painting: usize) -> i64 {
         let painting = i64::try_from(painting).unwrap_or(i64::MAX);
-        if self.hold_frame { self.frame.and_then(|f| i64::try_from(f).ok()).unwrap_or(painting) } else { painting.saturating_add(self.frame_offset) }
+        let set_on = self.frame.and_then(|f| i64::try_from(f).ok());
+        match set_on {
+            Some(f) if self.hold_frame || self.frame_follows => f,
+            _ if self.hold_frame => painting,
+            _ => painting.saturating_add(self.frame_offset),
+        }
+    }
+    /// The frame offset a stroke painted on frame `painting` uses: the gap to the frame the source
+    /// was set on until the first stroke keeps it, the kept offset after that.
+    pub fn frame_offset_at(&self, painting: usize) -> i64 {
+        match self.frame.and_then(|f| i64::try_from(f).ok()) {
+            Some(f) if self.frame_follows => f.saturating_sub(i64::try_from(painting).unwrap_or(i64::MAX)),
+            _ => self.frame_offset,
+        }
     }
     /// Offset X/Y of the most recently used pairing, in source-minus-destination document pixels.
     pub fn offset(&self) -> Option<[f64; 2]> {
@@ -125,7 +144,7 @@ impl CloneSource {
         json!({
             "index": i, "source": self.source, "anchor": self.anchor, "lastAnchor": self.last_anchor, "offset": self.offset(), "layer": self.layer, "document": document, "documentId": self.document,
             "width": self.scale[0], "height": self.scale[1], "linked": self.linked, "rotation": self.rotation, "flipH": self.flip_h, "flipV": self.flip_v,
-            "frameOffset": self.frame_offset, "holdFrame": self.hold_frame, "frame": self.frame,
+            "frameOffset": self.frame_offset, "frameFollows": self.frame_follows, "holdFrame": self.hold_frame, "frame": self.frame,
         })
     }
 }
@@ -253,11 +272,19 @@ pub fn remember_mapping(s: &mut Session, p: &Value, map: &Mapping) {
     if !uses_slot(p) {
         return;
     }
+    let painting = s.active().and_then(|st| st.doc.timeline.as_ref()).map(|t| t.current);
     let slot = s.presets_mut().clone.active_mut();
     let anchor = [map.anchor.0, map.anchor.1];
     slot.last_anchor = Some(anchor);
     if p.get("aligned").and_then(Value::as_bool).unwrap_or(true) {
         slot.anchor = Some(anchor);
+        // The first aligned stroke keeps the gap from the frame painted to the source's frame.
+        if slot.frame_follows
+            && let Some(painting) = painting
+        {
+            slot.frame_offset = slot.frame_offset_at(painting);
+            slot.frame_follows = false;
+        }
     }
 }
 
@@ -469,6 +496,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         slot.document = document;
         slot.document_closed = false;
         slot.frame = playhead;
+        slot.frame_follows = playhead.is_some();
     }
     if let Some([dx, dy]) = offset {
         // Edit the pairing shown in the panel, including an unaligned stroke or a live preview.
@@ -517,6 +545,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = p.get("frameOffset").filter(|v| !v.is_null()) {
         let max = i64::try_from(crate::timeline_cmds::MAX_DURATION).unwrap_or(i64::MAX);
         slot.frame_offset = v.as_i64().filter(|n| n.abs() < max).ok_or_else(|| bad(CMD, format!("frameOffset must be a whole number of frames within ±{max}")))?;
+        slot.frame_follows = false;
     }
     if let Some(b) = p.get("holdFrame").and_then(Value::as_bool) {
         slot.hold_frame = b;
@@ -577,7 +606,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Clone Sources",
             menu: &[],
             shortcut: None,
-            params: "{} → {active,sources:[{index,source,anchor,lastAnchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV,frameOffset,holdFrame,frame}],overlay}; offset is source minus the last used destination reference in document pixels",
+            params: "{} → {active,sources:[{index,source,anchor,lastAnchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV,frameOffset,frameFollows,holdFrame,frame}],overlay}; offset is source minus the last used destination reference in document pixels",
             enabled: always,
             run: list,
             journal: false,
@@ -597,7 +626,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Clone Source",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]? (source minus destination in document pixels),"anchor":[x,y]? (with offset: the preview/destination reference being edited; otherwise the last used reference),"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"frameOffset":frames? (on a video timeline: sample the painted frame plus this, −1 = the previous frame),"holdFrame":bool? (sample the frame the source was set on),"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
+            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke; on a timeline, strokes sample the frame it was set on until the first aligned stroke keeps that gap as frameOffset),"offset":[dx,dy]? (source minus destination in document pixels),"anchor":[x,y]? (with offset: the preview/destination reference being edited; otherwise the last used reference),"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"frameOffset":frames? (on a video timeline: sample the painted frame plus this, −1 = the previous frame),"holdFrame":bool? (sample the frame the source was set on),"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
             enabled: always,
             run: set,
             journal: true,

@@ -831,6 +831,18 @@ fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
 /// the source up with the canvas (offset 0), with the pointer over the canvas.
 #[test]
 fn clone_stamp_shift_alt_keys_move_and_line_up_the_source() {
+    shift_alt_keys_line_up_the_source(false);
+}
+
+/// The same with keyboard focus moved off the canvas (as a frame change on the timeline leaves it): the keys still
+/// move the source, and no focused control takes them.
+#[test]
+fn clone_stamp_shift_alt_keys_work_with_focus_off_the_canvas() {
+    shift_alt_keys_line_up_the_source(true);
+}
+
+fn shift_alt_keys_line_up_the_source(focus_elsewhere: bool) {
+    use egui_kittest::kittest::Queryable as _;
     use photocraft_engine::presets::PresetsExt as _;
     let mut h = harness();
     h.state_mut().ui.tool = crate::state::Tool::CloneStamp;
@@ -852,6 +864,13 @@ fn clone_stamp_shift_alt_keys_move_and_line_up_the_source() {
     let readout = |h: &Harness<'static, Box<PhotocraftApp>>| crate::preset_panels::clone_offset_readout(h.state()).unwrap();
     let start = readout(&h);
     assert_ne!(start, [0.0, 0.0]);
+    if focus_elsewhere {
+        let on_canvas = h.ctx.memory(|m| m.focused());
+        h.query_all_by_role(egui::accesskit::Role::Button).next().expect("a button outside the canvas").focus();
+        h.run_steps(2);
+        let now = h.ctx.memory(|m| m.focused());
+        assert!(now.is_some() && now != on_canvas, "Tab moved focus to another control: {on_canvas:?} → {now:?}");
+    }
     // ⇧⌥ held: the arrows and Enter reach the ⌥ stand-in.
     h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT | Modifiers::ALT));
     h.run_steps(2);

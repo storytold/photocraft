@@ -1130,3 +1130,27 @@ fn the_whole_source_image_shows_the_offset_frame() {
     let (_, previous) = clone_source_image(&s, &map, 8).unwrap();
     assert!(previous.px[0][0] < on_screen.px[0][0], "frame 1 is darker: {:?} vs {:?}", previous.px[0], on_screen.px[0]);
 }
+
+/// A source set on frame 0 and painted on frame 2 samples frame 0, in the whole source image too,
+/// and the first stroke keeps that gap: on frame 3 it samples frame 1.
+#[test]
+fn a_new_source_samples_its_own_frame_until_the_first_stroke_keeps_the_gap() {
+    let (mut s, id) = video_doc(0);
+    s.execute("cloneSource.set", json!({"source": [16, 16]})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 2})).unwrap();
+    let on_screen = red(&s, id);
+    let map = Mapping { source: (16.0, 16.0), anchor: (16.0, 16.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
+    let (_, whole) = clone_source_image(&s, &map, 8).unwrap();
+    assert!(whole.px[0][0] < 0.01, "the overlay shows frame 0, not the frame on screen: {:?}", whole.px[0]);
+    let r = stamp(&mut s).unwrap();
+    assert_eq!(r["sourceFrame"], json!(0));
+    assert!(red(&s, id) < on_screen, "frame 2 painted from frame 0: {} vs {on_screen}", red(&s, id));
+    let slot = s.presets().clone.active().clone();
+    assert!(!slot.frame_follows && slot.frame_offset < 0, "the stroke kept the gap back to frame 0: {slot:?}");
+
+    s.execute("timeline.setFrame", json!({"frame": 3})).unwrap();
+    let frame_3 = red(&s, id);
+    stamp(&mut s).unwrap();
+    let painted = red(&s, id);
+    assert!(painted > 0.01 && painted < frame_3, "frame 3 painted from frame 1, between frame 0 and frame 3: {painted} vs {frame_3}");
+}

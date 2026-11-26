@@ -175,7 +175,7 @@ pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2], held: bool) ->
         1.0
     };
     // The frame the source samples: its offset or held frame, against the playhead.
-    let frame = (slot.frame_offset, slot.hold_frame, slot.frame, st.doc.timeline.as_ref().map(|t| t.current));
+    let frame = (slot.frame_offset, slot.frame_follows, slot.hold_frame, slot.frame, st.doc.timeline.as_ref().map(|t| t.current));
     let key = format!(
         "{tool:?}:{source_revision:?}:{frame:?}:{:?}:{}:{:?}:{:?}:{map:?}:{:?}:{}:{}:{}:{}:{wrap}:{}:{}:{}:{}",
         st.doc.id,
@@ -297,7 +297,7 @@ pub(crate) fn clone_source_whole(app: &mut PhotocraftApp, at: [f64; 2]) -> Optio
     let source_revision =
         slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| (st.doc.id, st.revision, st.active_layer));
     let (display, display_key) = canvas_display(app, &st.doc, None);
-    let frame = (slot.frame_offset, slot.hold_frame, slot.frame, st.doc.timeline.as_ref().map(|t| t.current));
+    let frame = (slot.frame_offset, slot.frame_follows, slot.hold_frame, slot.frame, st.doc.timeline.as_ref().map(|t| t.current));
     let key = format!(
         "{source_revision:?}:{frame:?}:{:?}:{}:{:?}:{display_key}:{}:{}",
         st.doc.id,
