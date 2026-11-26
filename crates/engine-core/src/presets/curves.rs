@@ -79,6 +79,35 @@ struct File {
     curves: Value,
 }
 
+/// The colour mode whose channel keys `curves` names, `None` when it names none of them. A preset
+/// holds the curves of one colour mode, because one colour mode is what one dialog writes. Naming
+/// the channels of two is a hand-edited file: parsing it would keep the family its mode happens to
+/// use and lose the other without a word, so it is refused here, on the input as it stands.
+fn named_space(curves: &Value) -> Result<Option<ToneSpace>> {
+    let Some(object) = curves.as_object() else { return Ok(None) };
+    let named: Vec<ToneSpace> = [ToneSpace::Cmyk, ToneSpace::Lab, ToneSpace::Rgb]
+        .into_iter()
+        .filter(|space| adjust_params::channel_keys(*space).iter().any(|key| object.contains_key(*key)))
+        .collect();
+    match named.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(*only)),
+        many => {
+            let keys = |space: ToneSpace| -> String {
+                let mut named: Vec<&str> = Vec::new();
+                for key in adjust_params::channel_keys(space) {
+                    if object.contains_key(*key) {
+                        named.push(*key);
+                    }
+                }
+                named.join(", ")
+            };
+            let spelled = many.iter().map(|space| format!("{} ({})", space_name(*space), keys(*space))).collect::<Vec<_>>().join(" and ");
+            Err(bad("curve preset", format!("the curves name channels of {spelled}; a preset holds the curves of one colour mode")))
+        }
+    }
+}
+
 /// `curves`, checked the way the Curves command checks its parameters, in the form the command
 /// writes them back. An object naming no curve is refused: a preset of nothing to apply.
 fn normalized(curves: &Value) -> Result<Value> {
@@ -89,6 +118,7 @@ fn normalized(curves: &Value) -> Result<Value> {
     if !CURVE_KEYS.iter().any(|key| object.contains_key(*key)) {
         return Err(EngineError::BadParams { cmd: "curve preset".into(), msg: "`curves` must name at least one curve".into() });
     }
+    named_space(curves)?;
     let parsed = adjust_params::from_params("curves", curves, None, photocraft_doc::ColorMode::Rgb)?;
     Ok(adjust_params::to_params(&parsed))
 }
@@ -144,36 +174,49 @@ fn space_name(space: ToneSpace) -> &'static str {
     }
 }
 
-/// A `space` parameter: absent, or one of `rgb`, `cmyk`, `lab`.
-fn wanted_space(cmd: &str, p: &Value) -> Result<Option<ToneSpace>> {
+/// What a dialog can take from a preset: the channels of one colour mode, or the composite curve
+/// alone. A gray document - and a mask or saved channel, which holds gray levels - edits its tone in
+/// the composite curve only, so a preset with channel curves has no place there even when its
+/// channels are the ones the document's colour mode would have.
+#[derive(Clone, Copy, PartialEq)]
+enum Applies {
+    Space(ToneSpace),
+    Composite,
+}
+
+/// A `space` parameter: absent, or one of `rgb`, `cmyk`, `lab`, `gray`.
+fn wanted_space(cmd: &str, p: &Value) -> Result<Option<Applies>> {
     let want = match p.get("space") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::String(s)) => s.trim().to_ascii_lowercase(),
-        Some(_) => return Err(bad(cmd, "`space` must be \"rgb\", \"cmyk\" or \"lab\"")),
+        Some(_) => return Err(bad(cmd, "`space` must be \"rgb\", \"cmyk\", \"lab\" or \"gray\"")),
     };
-    let space = match want.as_str() {
-        "rgb" => ToneSpace::Rgb,
-        "cmyk" => ToneSpace::Cmyk,
-        "lab" => ToneSpace::Lab,
-        other => return Err(bad(cmd, format!("`space` must be \"rgb\", \"cmyk\" or \"lab\", not \"{other}\""))),
+    let applies = match want.as_str() {
+        "rgb" => Applies::Space(ToneSpace::Rgb),
+        "cmyk" => Applies::Space(ToneSpace::Cmyk),
+        "lab" => Applies::Space(ToneSpace::Lab),
+        "gray" => Applies::Composite,
+        other => return Err(bad(cmd, format!("`space` must be \"rgb\", \"cmyk\", \"lab\" or \"gray\", not \"{other}\""))),
     };
-    Ok(Some(space))
+    Ok(Some(applies))
 }
 
 /// Why a preset whose channels belong to another colour mode cannot be applied in `want`, naming
 /// both channel sets. Reading a file into the user's list is one thing; writing curves the open
 /// dialog has no place for into it is a silent half-apply, so it is refused.
-fn check_space(cmd: &str, curves: &Value, want: ToneSpace) -> Result<()> {
+fn check_space(cmd: &str, curves: &Value, want: Applies) -> Result<()> {
     let Some(found) = curves_space(curves) else { return Ok(()) };
-    if found == want {
+    if let Applies::Space(space) = want
+        && found == space
+    {
         return Ok(());
     }
     let named = moved_channels(found, curves);
-    let keys = |space: ToneSpace| adjust_params::channel_keys(space).join(", ");
-    Err(bad(
-        cmd,
-        format!("the preset curves {} for {} do not fit this {} dialog, which has {}", named.join(", "), space_name(found), space_name(want), keys(want)),
-    ))
+    let here = match want {
+        Applies::Space(space) => format!("this {} dialog, which has {}", space_name(space), adjust_params::channel_keys(space).join(", ")),
+        Applies::Composite => "this gray dialog, which edits the composite curve only".to_string(),
+    };
+    Err(bad(cmd, format!("the preset curves {} for {} do not fit {here}", named.join(", "), space_name(found))))
 }
 
 /// The preset in `bytes`, or why the file is not one. A file naming no curve of its own comes back
@@ -369,7 +412,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Curve Preset…",
             menu: &[],
             shortcut: None,
-            params: r##"{"curves":{"points":[[in 0..255,out 0..255],…],"red":…,"pencil":bool?} (all channels),"name":str? (default: `path`'s file name),"path":".pcrv file"?,"record":bool (default true; false only answers with the bytes, for a host that writes the file itself)} → {name (made unique), count, path | data (base64 when no path)} (Curves dialog › gear › Save Preset…)"##,
+            params: r##"{"curves":{"points":[[in 0..255,out 0..255],…],"red":…,"pencil":bool?} (all channels of one colour mode: a preset naming channels of two is refused, naming them),"name":str? (default: `path`'s file name),"path":".pcrv file"?,"record":bool (default true; false only answers with the bytes, for a host that writes the file itself)} → {name (made unique), count, path | data (base64 when no path)} (Curves dialog › gear › Save Preset…)"##,
             enabled: always,
             run: save,
             journal: true,
@@ -379,7 +422,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Load Curve Preset…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".pcrv file"?,"data":base64 bytes?,"space":"rgb"|"cmyk"|"lab"? (the colour mode the curves are applied in: a preset whose channels belong to another one is refused, naming them)} → {name, curves (params for image.adjustments.curves), count, current} (Curves dialog › gear › Load Preset…)"##,
+            params: r##"{"path":".pcrv file"?,"data":base64 bytes?,"space":"rgb"|"cmyk"|"lab"|"gray"? (the colour mode the curves are applied in: a preset whose channels belong to another one is refused, naming them, and `gray` - a dialog that edits the composite curve only - refuses any channel curve)} → {name, curves (params for image.adjustments.curves), count, current} (Curves dialog › gear › Load Preset…)"##,
             enabled: always,
             run: load,
             journal: true,

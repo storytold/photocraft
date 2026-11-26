@@ -164,8 +164,11 @@ struct Persisted {
     // Read entry by entry: a bad curve preset must not discard the other presets.
     #[serde(default)]
     curves_presets: Option<Value>,
+    /// The selected preset as the file has it, kept as a value: a name selects that preset, `null`
+    /// (which is what saving with none selected writes) selects the Default curve, and no key at all
+    /// leaves the session's choice alone.
     #[serde(default)]
-    curves_preset: Option<String>,
+    curves_preset: Option<Value>,
 }
 
 impl PresetState {
@@ -186,7 +189,7 @@ impl PresetState {
             swatches: Some(self.swatches.clone()),
             contours: Some(crate::contour_lib_cmds::to_json(&self.contours)),
             curves_presets: Some(curves::to_json(&self.curves_presets)),
-            curves_preset: self.curves_preset.clone(),
+            curves_preset: self.curves_preset.clone().map(Value::String),
         };
         serde_json::to_value(p).unwrap_or(Value::Null)
     }
@@ -238,7 +241,9 @@ impl PresetsExt for Session {
             },
             contours: take(&mut m, "contours"),
             curves_presets: take(&mut m, "curves_presets"),
-            curves_preset: take(&mut m, "curves_preset"),
+            // Read as it stands, null included: the difference between a null and no key at all is
+            // the difference between "no preset is selected" and "this file says nothing".
+            curves_preset: m.remove("curves_preset"),
         };
         if let Some(c) = p.custom_shapes {
             self.edit_state.custom_shapes = c;
@@ -312,12 +317,20 @@ impl PresetsExt for Session {
         if let Some(c) = p.curves_presets.filter(Value::is_array) {
             st.curves_presets = curves::from_json(&c);
         }
-        // A selected name only means something while that preset is in the list: a hand-edited
-        // preferences file, or a list read entry by entry that dropped it, leaves Default current.
-        if let Some(name) = p.curves_preset
-            && st.curves_presets.iter().any(|preset| preset.name == name)
-        {
-            st.curves_preset = Some(name);
+        // The selection is read three ways, because the file says three things: a name selects that
+        // preset, an explicit null (what saving with the Default curve writes) clears the selection,
+        // and no key at all leaves the session alone. Either way a selection only means something
+        // while that preset is in the list the same file just loaded: a hand-edited file, or a list
+        // read entry by entry that dropped it, must not leave Delete aimed at a preset that is gone.
+        if let Some(given) = p.curves_preset {
+            let listed = matches!(&given, Value::String(name) if st.curves_presets.iter().any(|preset| &preset.name == name));
+            st.curves_preset = match given {
+                Value::String(name) if listed => Some(name),
+                _ => None,
+            };
+        }
+        if st.curves_preset.as_ref().is_some_and(|name| !st.curves_presets.iter().any(|preset| &preset.name == name)) {
+            st.curves_preset = None;
         }
     }
 }

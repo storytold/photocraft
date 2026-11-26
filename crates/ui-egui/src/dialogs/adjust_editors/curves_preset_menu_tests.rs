@@ -48,10 +48,10 @@ fn stored_curves() -> Value {
     )
 }
 
-/// An app with a document, a scripted file service, and a writer that really writes.
-fn app(files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
+/// An app with a document in `mode`, a scripted file service, and a writer that really writes.
+fn app_in(files: Arc<ScriptedFiles>, mode: &str) -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
-    s.execute("file.new", json!({"width": 64, "height": 48})).expect("a document");
+    s.execute("file.new", json!({"width": 64, "height": 48, "mode": mode})).expect("a document");
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).expect("a selection");
     s.execute("edit.fill", json!({"color": "#b04020"})).expect("a fill");
     s.execute("select.deselect", json!({})).expect("deselect");
@@ -61,6 +61,11 @@ fn app(files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
         ..Default::default()
     };
     PhotocraftApp::new(s, services)
+}
+
+/// An app with an RGB document.
+fn app(files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
+    app_in(files, "rgb")
 }
 
 /// A harness over `app(files)`, running the app's dialogs.
@@ -223,6 +228,26 @@ fn a_preset_of_another_colour_mode_is_refused_naming_its_channels() {
     assert!(state.session.presets().curves_preset.is_none(), "and none was selected");
     open_gear(&mut h);
     assert_eq!(rows_enabled(&h), vec![true, true, false], "so Delete is still greyed");
+}
+
+#[test]
+fn an_rgb_preset_is_refused_by_a_grayscale_dialog_that_edits_only_the_composite() {
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness(app_in(files.clone(), "grayscale"));
+    let id = adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the Curves dialog opens");
+    h.run_steps(4);
+    let before = params(&h, id);
+    let bytes = curves::to_bytes(&CurvePreset { name: "Red lift".into(), curves: stored_curves() }).expect("a preset writes");
+
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, std::path::Path::new("Red lift.pcrv"), &bytes);
+
+    let state = h.state();
+    assert!(state.ui.status_error, "the gray dialog refuses the preset instead of applying half of it");
+    assert!(state.ui.status.contains("red"), "the message names the channel this dialog has no place for: {}", state.ui.status);
+    assert_eq!(params(&h, id), before, "and the dialog keeps the curve it had");
+    assert!(state.session.presets().curves_presets.is_empty(), "no preset was added to the user list");
 }
 
 #[test]

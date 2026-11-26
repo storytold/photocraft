@@ -390,6 +390,74 @@ fn a_loaded_preset_replaces_the_curves_and_the_mode_the_dialog_held() {
 }
 
 #[test]
+fn a_preset_that_names_channels_of_two_colour_modes_is_refused() {
+    let mut s = crate::session();
+    let mixed = json!({"points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]], "red": [[0.0, 20.0], [255.0, 235.0]], "cyan": [[0.0, 10.0], [255.0, 240.0]]});
+    let err = save(&mut s, &json!({"curves": mixed.clone(), "name": "Mixed"})).unwrap_err().to_string();
+    assert!(err.contains("red") && err.contains("cyan"), "the refusal names a channel of each mode: {err}");
+    assert!(err.contains("one colour mode"), "and says what a preset holds: {err}");
+    assert_eq!(list(&mut s)["count"], 0, "nothing is stored, because the file cannot say which half survived");
+    let bytes = to_bytes(&CurvePreset { name: "Mixed".into(), curves: mixed }).expect("a preset writes");
+    assert!(from_bytes(&bytes).is_err(), "reading such a file fails instead of quietly keeping one family");
+    let data = photocraft_paint::tile::b64_encode(&bytes);
+    let err = load(&mut s, &json!({"data": data})).unwrap_err().to_string();
+    assert!(err.contains("red") && err.contains("cyan"), "and the load says the same thing: {err}");
+    // What the format does hold: one mode's channels, with the composite curve beside them.
+    assert!(
+        save(&mut s, &json!({"curves": json!({"points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]], "cyan": [[0.0, 10.0], [255.0, 240.0]]}), "name": "Ink"}))
+            .is_ok(),
+        "one mode plus the composite saves"
+    );
+    assert!(
+        save(&mut s, &json!({"curves": json!({"points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]], "red": [[0.0, 20.0], [255.0, 235.0]]}), "name": "Red"}))
+            .is_ok(),
+        "and so does the same shape in rgb"
+    );
+    assert_eq!(list(&mut s)["count"], 2, "both of those are in the list");
+}
+
+#[test]
+fn a_gray_dialog_refuses_a_preset_that_names_channel_curves() {
+    let mut s = crate::session();
+    let rgb = to_bytes(&CurvePreset { name: "Red lift".into(), curves: curves_params() }).expect("a preset writes");
+    let data = photocraft_paint::tile::b64_encode(&rgb);
+    let err = load(&mut s, &json!({"data": data, "space": "gray"})).unwrap_err().to_string();
+    assert!(err.contains("red"), "the refusal names the channel the dialog has no place for: {err}");
+    assert!(err.contains("composite"), "and says what that dialog does edit: {err}");
+    let plain = to_bytes(&CurvePreset { name: "Plain".into(), curves: one_curve() }).expect("a preset writes");
+    assert!(
+        load(&mut s, &json!({"data": photocraft_paint::tile::b64_encode(&plain), "space": "gray"})).is_ok(),
+        "the composite curve alone fits a gray dialog"
+    );
+    assert!(load(&mut s, &json!({"data": data, "space": "grey"})).is_err(), "a space this command does not spell is an error");
+    assert!(load(&mut s, &json!({"data": data, "space": "rgb"})).is_ok(), "the same preset fits the dialog of its own channels");
+}
+
+#[test]
+fn the_saved_selection_follows_the_list_that_is_read_back() {
+    let mut s = crate::session();
+    save(&mut s, &json!({"curves": curves_params(), "name": "Mine"})).expect("a save works");
+    let saved = s.presets().to_json(&s);
+    assert_eq!(saved["curves_preset"], "Mine", "a session with a preset current writes its name");
+    // The file is read back into the session it came from: the name is still there, the list is not.
+    s.load_presets_json(json!({"curves_presets": [], "curves_preset": "Mine"}));
+    assert!(s.presets().curves_preset.is_none(), "a selection the reloaded list does not hold is dropped, not kept");
+    assert!(list(&mut s)["current"].is_null(), "so Default is current again");
+    let mut t = crate::session();
+    t.load_presets_json(json!({"curves_presets": saved["curves_presets"], "curves_preset": "Mine"}));
+    assert_eq!(t.presets().curves_preset.as_deref(), Some("Mine"), "a named preset in the list is selected");
+    // Saving with no preset current writes null: reading that back is a choice, not a silence.
+    t.load_presets_json(json!({"curves_preset": null}));
+    assert!(t.presets().curves_preset.is_none(), "an explicit null selects the Default curve again");
+    // A file that says nothing about the selection leaves the session's choice alone.
+    t.load_presets_json(json!({"curves_presets": saved["curves_presets"], "curves_preset": "Mine"}));
+    t.load_presets_json(json!({"curves_presets": saved["curves_presets"]}));
+    assert_eq!(t.presets().curves_preset.as_deref(), Some("Mine"), "an omitted key keeps a choice that is still listed");
+    t.load_presets_json(json!({"curves_presets": []}));
+    assert!(t.presets().curves_preset.is_none(), "and an omitted key still cannot leave a choice outside the list");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();

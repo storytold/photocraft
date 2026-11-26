@@ -882,10 +882,15 @@ fn save_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, Str
 
 /// The colour mode the open dialog edits its curves in, as `curves.presets.load` spells it: the
 /// preset's channels are checked against it so a preset of another mode is refused instead of
-/// half-applied.
+/// half-applied. A gray document, or a mask or saved channel holding its own gray levels, edits its
+/// tone in the composite curve alone - the editor draws no channel curves for it - and is named
+/// `gray`, which is the check a preset with channel curves then fails.
 fn dialog_space(app: &PhotocraftApp, id: DialogId) -> Option<&'static str> {
-    let mode = app.adjust_open.iter().find(|open| open.id == id).map(|open| open.mode)?;
-    Some(match photocraft_engine::adjust_params::default_space(mode) {
+    let open = app.adjust_open.iter().find(|open| open.id == id)?;
+    if gray_context(app, "curves", &open.target) {
+        return Some("gray");
+    }
+    Some(match photocraft_engine::adjust_params::default_space(open.mode) {
         photocraft_doc::adjust::ToneSpace::Rgb => "rgb",
         photocraft_doc::adjust::ToneSpace::Cmyk => "cmyk",
         photocraft_doc::adjust::ToneSpace::Lab => "lab",
