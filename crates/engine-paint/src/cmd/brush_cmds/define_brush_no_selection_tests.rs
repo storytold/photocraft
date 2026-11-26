@@ -105,9 +105,10 @@ fn no_document_is_disabled_and_a_group_active_capture_uses_visible_pixels() {
 #[test]
 fn a_large_canvas_is_trimmed_before_the_existing_tip_side_limit() {
     let mut s = crate::session();
-    s.execute("file.new", json!({"width": MAX_TIP + 1, "height": 2, "background": "#ffffff"})).unwrap();
+    s.execute("file.new", json!({"width": MAX_DEFINED_TIP, "height": 2, "background": "#ffffff"})).unwrap();
     s.edit("One black pixel", |doc, active| {
-        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(MAX_TIP as i32, 0, MAX_TIP as i32 + 1, 1), &[0.0, 0.0, 0.0, 1.0]);
+        let x = MAX_DEFINED_TIP as i32 - 1;
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(x, 0, x + 1, 1), &[0.0, 0.0, 0.0, 1.0]);
         Ok(())
     })
     .unwrap();
@@ -115,18 +116,14 @@ fn a_large_canvas_is_trimmed_before_the_existing_tip_side_limit() {
     assert_eq!((made["width"].as_u64(), made["height"].as_u64()), (Some(1), Some(1)));
     assert_eq!(tip(&s).get(0, 0), 1.0);
 
-    s.edit("Too wide painted area", |doc, active| {
+    s.edit("Full-width painted area", |doc, active| {
         let bounds = doc.bounds();
         doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, 1.0]);
         Ok(())
     })
     .unwrap();
-    let brush = (*s.tools.brush).clone();
-    let presets = (*s.tools.presets).clone();
-    let err = s.execute("edit.defineBrushPreset", json!({"name": "Too wide"})).unwrap_err();
-    assert!(err.to_string().contains("too large for a brush tip"), "{err}");
-    assert_eq!(*s.tools.brush, brush);
-    assert_eq!(*s.tools.presets, presets);
+    let made = s.execute("edit.defineBrushPreset", json!({"name": "Full width"})).unwrap();
+    assert_eq!((made["width"].as_u64(), made["height"].as_u64()), (Some(u64::from(MAX_DEFINED_TIP)), Some(2)));
 }
 
 #[test]
@@ -172,7 +169,9 @@ fn budget_source(width: u32, height: u32, selected: bool) -> Session {
     s
 }
 
-fn assert_budget_refusal(s: &mut Session, command: &str) {
+// Areas over MAX_DEFINED_TIP disable the command, so the budget guard behind it is
+// exercised through the handler directly.
+fn assert_budget_refusal(s: &mut Session) {
     let brush = (*s.tools.brush).clone();
     let presets = (*s.tools.presets).clone();
     let current = s.tools.current_preset.clone();
@@ -182,7 +181,7 @@ fn assert_budget_refusal(s: &mut Session, command: &str) {
     // This also makes the regression safe on the unfixed code: its first dense
     // allocation fails instead of trying to fill the enormous buffer.
     crate::allocation::fail_next_for_test();
-    let result = s.execute(command, json!({"name": "Over budget"}));
+    let result = define_from_selection(s, &json!({"name": "Over budget"}));
     let unspent = crate::allocation::capacity::<u8>(0, "consume budget test failpoint");
     let err = result.unwrap_err().to_string();
     assert!(err.contains("working memory") && err.contains("defining a brush from the selection"), "{err}");
@@ -201,11 +200,9 @@ fn an_over_budget_canvas_is_refused_before_sampling() {
     // The pixel count fits usize on both targets, while its f32 density buffer
     // alone is just over that target's dense-memory budget.
     let height = (crate::allocation::MAX_DENSE_BYTES / (4 * u64::from(WIDTH))) as u32 + 1;
-    for command in COMMANDS {
-        let mut s = budget_source(WIDTH, height, false);
-        assert!(s.active().unwrap().doc.selection.is_none());
-        assert_budget_refusal(&mut s, command);
-    }
+    let mut s = budget_source(WIDTH, height, false);
+    assert!(s.active().unwrap().doc.selection.is_none());
+    assert_budget_refusal(&mut s);
 }
 
 #[test]
@@ -214,11 +211,9 @@ fn selection_capture_counts_density_and_mask_buffers_together() {
     let height = (crate::allocation::MAX_DENSE_BYTES / (4 * u64::from(WIDTH))) as u32;
     let density_bytes = u64::from(WIDTH) * u64::from(height) * 4;
     assert_eq!(density_bytes, crate::allocation::MAX_DENSE_BYTES, "density alone would fit; the live mask must also count");
-    for command in COMMANDS {
-        let mut s = budget_source(WIDTH, height, true);
-        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().channels(), 1);
-        assert_budget_refusal(&mut s, command);
-    }
+    let mut s = budget_source(WIDTH, height, true);
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().channels(), 1);
+    assert_budget_refusal(&mut s);
 }
 
 #[test]

@@ -154,7 +154,6 @@ pub const PASTEBOARD_MENU: &[Row] = &[
     Some(("Medium Gray", "pasteboard.mediumGray")),
     Some(("Light Gray", "pasteboard.lightGray")),
     Some(("Custom", "pasteboard.custom")),
-    None,
     Some(("Select Custom Color…", PASTEBOARD_PICK)),
 ];
 
@@ -898,7 +897,7 @@ pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
     if menu.tool == Tool::AddAnchorPoint {
         return add_anchor_row_label(app, menu, label, command);
     }
-    if command != "path.transform" || menu.tool != Tool::Pen {
+    if command != "path.transform" || !matches!(menu.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         return label;
     }
     if pen_pending(app) {
@@ -1065,10 +1064,26 @@ pub fn path_menu(tool: Tool) -> bool {
     matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection) || point_menu(tool)
 }
 
-/// The anchor tools whose path menu also heads with the entry for the point under the right-click
-/// (#12771, #12744, #12710).
+/// The tools whose path menu also heads with the entry for the point under the right-click: the anchor tools
+/// (#12771, #12744, #12710), and the Freeform and Curvature Pens, which open the Pen's path menu (#12837, #12753).
 fn point_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint | Tool::FreeformPen | Tool::CurvaturePen)
+}
+
+/// The path part under screen point `at` for a Freeform Pen right-click (#12837). That tool draws no path overlay, so
+/// its right-click brings no part along: the part is looked up as the overlay's press would take it, so the menu gets
+/// the same point entry as the anchor tools'.
+fn freeform_pen_hit(app: &PhotocraftApp, tool: Tool, at: Pos2) -> Option<(PathRef, BezierHit)> {
+    use craft::draw::ui::{BezierOverlay, BezierTool, HandlesShown};
+    if tool != Tool::FreeformPen {
+        return None;
+    }
+    let view = crate::canvas::document_display::active_view(app)?;
+    let (paths, _) = crate::direct_select::edit_paths(app, BezierTool::Direct);
+    let selection = crate::direct_select::selection(app, BezierTool::Direct);
+    let reach = craft::ui::runtime::env::Env::root_hit_reach(app.ctx());
+    let hit = BezierOverlay::hit_test(&paths, &selection, HandlesShown::Selected, &view, at, reach)?;
+    Some((PathRef::from_key(hit.path())?, hit))
 }
 
 /// The Add Anchor Point tool's right-click on anchor `knot` of `target` selects it, as measured
@@ -1377,14 +1392,17 @@ fn spelling_call(menu: &CanvasToolMenu, command: &str) -> (String, Value) {
     }
 }
 
-/// Does a right-click with `tool` at document point `doc` open the pasteboard menu? Outside the
-/// image, for the tools whose right-click has no job there: not the painting tools (their Brush
-/// Preset picker or right-button erase), the Pen (its path menu) or text being edited.
+/// Does a right-click with `tool` at document point `doc` open the pasteboard menu?
+/// Outside the image, some tools give the pasteboard menu priority over their canvas menu or picker.
 pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
+    let uses_pasteboard_menu = matches!(
+        tool,
+        Tool::Brush | Tool::SpotHealing | Tool::CloneStamp | Tool::Eraser | Tool::Blur | Tool::Dodge | Tool::Pen | Tool::PathSelection | Tool::QuickSelection
+    ) || (!path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool));
+    outside && uses_pasteboard_menu && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
 }
 
 /// A guide row: every row is a View › Guides command, the two Selected Guides ones included.
@@ -1531,6 +1549,12 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
     if !at.x.is_finite() || !at.y.is_finite() || !doc.iter().all(|v| v.is_finite()) {
         return false;
     }
+    // The Freeform and Curvature Pens' path menu was measured in Path mode only: their Shape-mode right-click keeps
+    // opening nothing (#12837, #12753).
+    if matches!(tool, Tool::FreeformPen | Tool::CurvaturePen) && kind == MenuKind::Tool && app.ui.tool_options.vector_mode == craft::draw::ui::VectorMode::Shape
+    {
+        return false;
+    }
     let mut menu = CanvasToolMenu {
         pos: [at.x, at.y],
         tool,
@@ -1617,6 +1641,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if shape_tool_menu(tool) && !shape_menu_measured(app, tool, doc) {
                 return false;
             }
+            let point = point.or_else(|| freeform_pen_hit(app, tool, at));
             capture(app, &mut menu, doc, point);
             // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
             // Size, whatever its Sample setting (#11747). Picking a row later copies this colour.
@@ -1994,6 +2019,12 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+#[cfg(test)]
+#[path = "canvas_tool_menu/curvature_pen_menu_tests.rs"]
+mod curvature_pen_menu_tests;
+#[cfg(test)]
+#[path = "canvas_tool_menu/freeform_pen_menu_tests.rs"]
+mod freeform_pen_menu_tests;
 
 #[cfg(test)]
 mod layer_plural_tests;

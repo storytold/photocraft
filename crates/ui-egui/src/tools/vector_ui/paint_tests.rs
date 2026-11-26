@@ -11,7 +11,7 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use photocraft_doc::ShapeLayer;
+use photocraft_doc::{Fill, ShapeLayer};
 use photocraft_engine::presets::PresetsExt;
 
 fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
@@ -323,6 +323,34 @@ fn float_paints_match_preview_creation_native_roundtrip_and_document_depth() {
             assert_eq!(shape(&app), &committed);
         }
     }
+}
+
+#[test]
+fn cmyk_shape_keeps_native_fill_and_stroke_inks() {
+    use photocraft_color::{Color, ColorMode};
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_cmyk_at};
+
+    let mut app = app("cmyk", 8);
+    let cyan = [1.0, 0.0, 0.0, 0.0];
+    let magenta = [0.0, 1.0, 0.0, 0.0];
+    app.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.0, 0.6, 0.9, 1.0], "foregroundCmyk": cyan,
+            "background": [0.9, 0.0, 0.5, 1.0], "backgroundCmyk": magenta,
+        }),
+    )
+    .unwrap();
+    app.ui.tool_options.shape_fill = true;
+    app.ui.tool_options.stroke_width = 8.0;
+    draw(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0]);
+
+    let solid = |c| Fill::Solid(Color { mode: ColorMode::Cmyk, c, alpha: 1.0 });
+    let shape = shape(&app);
+    assert_eq!(shape.fill, Some(solid(cyan)));
+    assert_eq!(shape.stroke.as_ref().unwrap().paint, solid(magenta));
+    let state = app.session.active().unwrap();
+    assert_eq!(sample_cmyk_at(&state.doc, state.active_layer, 60.0, 50.0, 1, None, SampleLayers::Current), Some(cyan));
 }
 
 #[test]

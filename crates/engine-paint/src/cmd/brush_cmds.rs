@@ -18,7 +18,7 @@ use photocraft_paint::GrayTile;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-pub use crate::brush_defs::MAX_TIP;
+pub use crate::brush_defs::{MAX_DEFINED_TIP, MAX_TIP};
 use crate::brush_defs::{sampled_brush, validate_brush};
 use crate::cmd::has_paintable;
 use crate::commands::{CommandSpec, is_mask_target, paint_surface};
@@ -926,6 +926,10 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
         tolerance: pct(p, "tolerance", 30.0).max(0.01),
         anti_alias: flag(p, "antiAlias", true),
         color: brush.color,
+        // The inks the foreground was picked as, when it was picked as CMYK (the same pair a Brush
+        // stroke carries, `BrushSettings::color_cmyk`): in a CMYK document the Color blend works on
+        // those channels (#11918).
+        color_inks: brush.color_cmyk.map(|(_, inks)| inks),
         background: s.tools.background,
     };
     let id = layer_id(s, p)?;
@@ -937,13 +941,17 @@ pub const COLOR_REPLACEMENT_STEP: &str = "Color Replacement Tool";
 
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
+    let cmyk = doc_cmyk_space(s);
     // The reference application names every click, stroke and Shift+click segment "Color
     // Replacement Tool" (#11933); the command's label is the same, so recorded actions match.
-    let dmg = s.edit(COLOR_REPLACEMENT_STEP, |doc, _| {
-        let sel = doc.selection.clone();
-        let lock = doc.effective_locks(id).transparency;
-        let surf = paint_surface(doc, id, &json!({}))?;
-        apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
+    // The dab's colour conversions run in the document's own CMYK space, as a Brush stroke's do (#11918).
+    let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        s.edit(COLOR_REPLACEMENT_STEP, |doc, _| {
+            let sel = doc.selection.clone();
+            let lock = doc.effective_locks(id).transparency;
+            let surf = paint_surface(doc, id, &json!({}))?;
+            apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
+        })
     })?;
     Ok(damage_json(s, dmg))
 }
@@ -952,8 +960,14 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
 /// recolouring per dab as the commit, so the preview at the last point is the committed result.
 pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
-    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| Box::new(color_replacement_effect(pre.clone(), rs)))?
-        .with_tail_preview()
+    let cmyk = doc_cmyk_space(s);
+    // The same CMYK space as the commit, so the preview's dabs recolour the same device colours.
+    photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| {
+            Box::new(color_replacement_effect(pre.clone(), rs))
+        })
+    })?
+    .with_tail_preview()
 }
 
 fn brush_json(b: &BrushSettings) -> Value {
@@ -1067,7 +1081,13 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    s.active().ok_or("no document")?;
+    let d = s.active().ok_or("no document")?;
+    // The area the command reads (selection, else canvas) is limited, not just the painted
+    // extent, like Photoshop (#14275).
+    let area = d.doc.selection.as_ref().map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
+    if area.width().max(area.height()) > MAX_DEFINED_TIP {
+        return Err(format!("the area is larger than {MAX_DEFINED_TIP} px"));
+    }
     Ok(())
 }
 
@@ -1574,6 +1594,10 @@ mod tests;
 mod color_replacement_modes_tests;
 
 #[cfg(test)]
+#[path = "color_replacement_cmyk_tests.rs"]
+mod color_replacement_cmyk_tests;
+
+#[cfg(test)]
 mod mixer_live_tests;
 
 #[cfg(test)]
@@ -1591,3 +1615,6 @@ mod define_brush_color_density_tests;
 
 #[cfg(test)]
 mod filter_mask_stroke_tests;
+
+#[cfg(test)]
+mod define_brush_size_limit_tests;

@@ -357,7 +357,7 @@ fn export_comps_to_files_naming() {
     let r = s.execute("file.export.layerCompsToFiles", json!({"dir": d, "prefix": "doc"})).unwrap();
     let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(files.len(), 2);
-    assert!(files[0].ends_with("doc_0000_With B.png"), "{files:?}");
+    assert!(files[0].ends_with("doc_0000_With-B.png"), "{files:?}");
     assert!(files[1].ends_with("doc_0001_No_B.png"), "{files:?}");
     // Each file shows its comp: B's blue square only in the first.
     let blue = |path: &str| {
