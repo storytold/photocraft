@@ -35,6 +35,10 @@ pub fn target_ref(cls: &str) -> D {
     D::Reference(vec![ReferenceItem::Enumerated { class: class(cls), type_id: Id::new("Ordn"), value: Id::new("Trgt") }])
 }
 
+pub fn name_ref(cls: &str, name: &str) -> D {
+    D::Reference(vec![ReferenceItem::Name { class: class(cls), name: UnicodeString::new_nul(name) }])
+}
+
 pub fn class_ref(cls: &str) -> D {
     D::Reference(vec![ReferenceItem::Class(class(cls))])
 }

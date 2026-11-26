@@ -40,16 +40,13 @@ const TABLES: &[Table] = &[
     ("solid_fill_cmds", crate::solid_fill_cmds::specs),
     ("pattern_fill_cmds", crate::pattern_fill_cmds::specs),
     ("type_cmds", crate::type_cmds::specs),
-    ("type_mask_cmds", crate::type_mask_cmds::specs),
     ("transform_cmds", crate::transform_cmds::specs),
     ("float_cmds", crate::float_cmds::specs),
     ("vector_cmds", crate::vector_cmds::specs),
-    ("path_edit_cmds", crate::path_edit_cmds::specs),
     ("smartselect_cmds", crate::smartselect_cmds::specs),
     ("cutout_cmds", crate::cutout_cmds::specs),
     ("symmetry_cmds", crate::symmetry_cmds::specs),
     ("edit_cmds", crate::edit_cmds::specs),
-    ("smart_svg_cmds", crate::smart_svg_cmds::specs),
     ("color_cmds", crate::color_cmds::specs),
     ("brush_preset_cmds", crate::brush_preset_cmds::specs),
     ("preset_import_cmds", crate::preset_import_cmds::specs),
@@ -67,17 +64,13 @@ const TABLES: &[Table] = &[
     ("file_cmds", crate::file_cmds::specs),
     ("exr_cmds", crate::exr_cmds::specs),
     ("type_extra_cmds", crate::type_extra_cmds::specs),
-    ("type_area_cmds", crate::type_area_cmds::specs),
-    ("type_styles_cmds", crate::type_styles_cmds::specs),
     ("type_spell_cmds", crate::type_spell_cmds::specs),
-    ("type_caret_cmds", crate::type_caret_cmds::specs),
     ("smart_cmds", crate::smart_cmds::specs),
     ("layer_multi_cmds", crate::layer_multi_cmds::specs),
     ("layer_copy_cmds", crate::layer_copy_cmds::specs),
     ("prefs", crate::prefs::specs),
     ("edit_menu_cmds", crate::edit_menu_cmds::specs),
     ("sample_cmds", crate::sample_cmds::specs),
-    ("align_cmds", crate::align_cmds::specs),
     ("photo_cmds", crate::photo_cmds::specs),
     ("lens_cmds", crate::lens_cmds::specs),
     ("vp_cmds", crate::vp_cmds::specs),
@@ -85,17 +78,13 @@ const TABLES: &[Table] = &[
     ("adjust_cmds", crate::adjust_cmds::specs),
     ("layer_menu_cmds", crate::layer_menu_cmds::specs),
     ("layer_label_cmds", crate::layer_label_cmds::specs),
-    ("layer_css_cmds", crate::layer_css_cmds::specs),
-    ("layer_xmp_cmds", crate::layer_xmp_cmds::specs),
     ("mode_cmds", crate::mode_cmds::specs),
     ("multichannel_cmds", crate::multichannel_cmds::specs),
     ("pattern_cmds", crate::pattern_cmds::specs),
     ("warp_cmds", crate::warp_cmds::specs),
-    ("comps_cmds", crate::comps_cmds::specs),
     ("artboard_cmds", crate::artboard_cmds::specs),
     ("distort_cmds", crate::distort_cmds::specs),
     ("analysis_cmds", crate::analysis_cmds::specs),
-    ("notes_cmds", crate::notes_cmds::specs),
     ("font_library_cmds", crate::font_library_cmds::specs),
     ("history_cmds", crate::history_cmds::specs),
     ("history_options_cmds", crate::history_options_cmds::specs),
@@ -115,12 +104,10 @@ const TABLES: &[Table] = &[
     ("layer_nav_cmds", crate::layer_nav_cmds::specs),
     ("frame_cmds", crate::frame_cmds::specs),
     ("migrate_cmds", crate::migrate_cmds::specs),
-    ("trap_cmds", crate::trap_cmds::specs),
     ("timeline_cmds", crate::timeline_cmds::specs),
     ("video_cmds", crate::video_cmds::specs),
     ("jobs", crate::jobs::specs),
     ("wia_cmds", crate::wia_cmds::specs),
-    ("rasterize_style_cmds", crate::rasterize_style_cmds::specs),
     ("variables_cmds", crate::variables_cmds::specs),
     ("plugin_cmds", crate::plugin_cmds::specs),
     ("group_view_cmds", crate::group_view_cmds::specs),
@@ -175,10 +162,7 @@ pub fn register(install: &mut Install) {
         Some(crate::artboard_cmds::recorded_duplicate(s, crate::layer_multi_cmds::recorded_step(s, id, p.clone(), pre_selected)))
     }));
     hooks.recorded_step = Some(crate::layer_multi_cmds::recorded_step);
-
-    // vector
     hooks.before_command.push(crate::float_cmds::before_dispatch);
-    hooks.recorded_steps.push(("layerComp.apply", |s, _, p, _| Some(crate::comps_cmds::recorded_apply(s, p.clone()))));
     hooks.recorded_steps.push(("edit.checkSpelling", |_, _, p, _| crate::type_spell_cmds::records(p).then(|| crate::type_spell_cmds::recorded_step(p))));
     hooks.prefs_applied.push(|s| crate::transform_cmds::set_budget(u64::from(s.prefs().performance.effective_memory_usage_mb()) << 20));
     // An edited Edit Contents document updates its parent as it closes.
@@ -188,7 +172,7 @@ pub fn register(install: &mut Install) {
     hooks.redirect.push(crate::filters::repeat_last_filter);
     hooks.check_params.push(|_, id, p| crate::filters::validate_params(id, p));
     hooks.run_params.push(crate::filters_ext::journal_shape_path);
-    hooks.after_command.push(crate::edit_menu_cmds::after_command);
+    hooks.after_edit.push(crate::edit_menu_cmds::after_command);
     hooks.prefs_applied.push(|s| crate::plugin_cmds::sync_prefs(s));
     hooks.document_closing.push(|s, index| {
         if let Some(id) = s.docs.get(index).map(|d| d.doc.id) {

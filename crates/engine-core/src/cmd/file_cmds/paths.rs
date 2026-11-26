@@ -176,7 +176,7 @@ pub fn template_name(s: &Session, path: &str) -> Option<String> {
     is_template(path).then(|| untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n)))
 }
 
-pub(crate) fn stem(path: &str) -> String {
+pub fn stem(path: &str) -> String {
     let n = file_name(path);
     match n.rfind('.') {
         Some(i) if i > 0 => n[..i].to_string(),
@@ -313,7 +313,7 @@ pub(crate) fn forward_slashes(path: String) -> String {
     if path.starts_with(r"\\") { path } else { path.replace('\\', "/") }
 }
 
-pub(crate) fn join(dir: &str, name: &str) -> String {
+pub fn join(dir: &str, name: &str) -> String {
     if dir.is_empty() {
         name.to_string()
     } else if dir.ends_with('/') || dir.ends_with('\\') {
@@ -325,7 +325,7 @@ pub(crate) fn join(dir: &str, name: &str) -> String {
 
 /// A file-name-safe version of a layer name. A Windows device name (`nul`, `con.v2`) gets a `_`
 /// before its first dot, so the file or folder is usable on Windows, wherever it was written.
-pub(crate) fn sanitize(name: &str) -> String {
+pub fn sanitize(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
     let s = s.trim().trim_matches('.').to_string();
     if s.is_empty() { "layer".into() } else { portable_device_name(s) }

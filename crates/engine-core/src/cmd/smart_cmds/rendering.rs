@@ -442,7 +442,7 @@ struct WarningSource {
 /// One command's bounded source-space renders. Placement, warp, filters and masks
 /// are instance-specific and must never be cached here. Weak identity pins only the
 /// allocation header; the borrowed document owns encoded bytes throughout the command.
-pub(crate) struct WarningRenderSources<'a> {
+pub struct WarningRenderSources<'a> {
     document: &'a Document,
     srgb: Option<bool>,
     entries: VecDeque<WarningSource>,
@@ -452,7 +452,7 @@ pub(crate) struct WarningRenderSources<'a> {
 }
 
 impl<'a> WarningRenderSources<'a> {
-    pub(crate) fn new(document: &'a Document) -> Self {
+    pub fn new(document: &'a Document) -> Self {
         Self { document, srgb: None, entries: VecDeque::new(), budget: if cfg!(target_arch = "wasm32") { 128 << 20 } else { 384 << 20 }, limit: 32, bytes: 0 }
     }
 
@@ -536,7 +536,7 @@ impl<'a> WarningRenderSources<'a> {
 }
 
 /// Reuse only warning-aware source pixels during one shared-content update.
-pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
+pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
     render_with_warnings_using_in(sm, sources, &JobCtx::new())
 }
 

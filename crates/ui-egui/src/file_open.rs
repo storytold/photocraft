@@ -59,7 +59,7 @@ pub enum DropRoute {
 /// Where a web-build drop at `at` lands, from what the last frame drew: the canvas (a drop is
 /// placed only while a document is open) and whether `at` is free of windows and dialogs above
 /// the workspace (`uncovered`). No pointer, a covered one, or no canvas means [`DropTo::Window`].
-/// The web build's own drop path until FW-264; native drops arrive through framework drop targets.
+/// The web build's own drop path until FW-264, and native drops the tab strip does not take (`canvas::window_drop`).
 pub(crate) fn target_at(at: Option<egui::Pos2>, uncovered: bool, canvas: Option<egui::Rect>, has_document: bool) -> DropTo {
     let Some(p) = at.filter(|_| uncovered) else {
         return DropTo::Window;
@@ -439,7 +439,7 @@ impl PhotocraftApp {
         }
     }
 
-    /// The pointer position (the web build's drop path until FW-264), from the OS cursor service when available, falling back to egui's
+    /// The pointer position (where a web or window-wide drop lands), from the OS cursor service when available, falling back to egui's
     /// last-known pointer position (e.g. on Wayland).
     pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
         self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
@@ -464,7 +464,7 @@ impl PhotocraftApp {
         places
     }
 
-    /// Where a web-build drop at `at` lands (the web build's own drop path until FW-264). Over a
+    /// Where a web-build or window-wide drop at `at` lands (`canvas::window_drop`). Over a
     /// window or dialog it's not the canvas. On the canvas it carries the document point under `at`.
     pub(crate) fn drop_to(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTo {
         let uncovered = at.is_some_and(|p| {

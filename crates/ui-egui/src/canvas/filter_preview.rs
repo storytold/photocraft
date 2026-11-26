@@ -54,6 +54,9 @@ fn adjust_request(app: &PhotocraftApp) -> Option<(craft::ui::dialog::DialogId, S
 /// deterministic inline path (#1676), which also lets headless/CPU tests inspect previews
 /// without a GPU texture.
 pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &egui::Context) -> Option<(u32, u64, [u32; 2])> {
+    // Alt+P toggles the Calculations dialog's Preview box: the pinned framework draws the box but keys no
+    // shortcut to it, and the canvas pass is where a live preview is asked for (#14530).
+    crate::dialogs::calculations_ui::preview_shortcut(app, ctx);
     if let Some(held) = committed_filter_preview(app, idx) {
         return held;
     }
@@ -86,6 +89,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             crate::smart_filter_dialog::blend_command(app, &target, &dialog_fields).ok()?
         } else if crate::smart_filter_dialog::is_target(&target) {
             crate::smart_filter_dialog::params_command(app, &target, &key, crate::filter_dialog::params_of(&fields)).ok()?
+        } else if key == crate::dialogs::calculations_ui::COMMAND {
+            // Calculations previews the result channel as a grey image over the whole canvas, not the
+            // (unchanged) post-OK document: the values run as their New Document result (#14530).
+            crate::dialogs::calculations_ui::preview_request(app, &fields)
         } else {
             (key.clone(), app.with_mask_target(&key, crate::filter_dialog::params_of(&fields)))
         };

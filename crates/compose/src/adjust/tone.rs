@@ -201,13 +201,15 @@ fn lut_extended(table: &[f32], v: f32) -> f32 {
 /// and `b = 0` is the identity. Raised, it is a line of slope `s = 1.375^(b/50)` from the origin
 /// up to a knee at output 126/255, then a cubic Hermite to (1, 1) whose end slope is
 /// `1 / (1 + 0.084 b)`; past about +110, where no such cubic stays below white, the roll-off is
-/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). Lowered, it
-/// is the inverse of the curve raised by as much.
+/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). From +109.5
+/// to +150 that curve eases into [`brightness_150`]. Lowered, it is the inverse of the curve
+/// raised by as much.
 ///
 /// Fit to every Photoshop measurement we have, all within about a level and a half: its ±50
 /// samples (`modern_brightness_matches_photoshop`), the photoshop corpus's brightness-contrast.psd
-/// (+25 with contrast +30) and psd-tools' brightnesscontrast_rgb.psd, whose masked layers give
-/// +23, -31 and -95 (+150 within 6 levels there, where every curve family tried bottoms out).
+/// (+25 with contrast +30), psd-tools' brightnesscontrast_rgb.psd, whose masked layers give
+/// +23, -31 and -95 (and +150, within 2 levels), and full 8-bit ramps at +150 and -150 (within a
+/// level once rounded).
 pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
     if brightness == 0.0 || !brightness.is_finite() {
         return v;
@@ -218,6 +220,14 @@ pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
 /// [`modern_brightness`] for one slider value, its curve's constants worked out once.
 struct Brightness {
     raise: bool,
+    roll: Roll,
+    /// How far the curve has eased into [`brightness_150`]: 0 up to ±109.5, 1 at ±150.
+    toward_150: f32,
+}
+
+/// The raised curve's line and roll-off for one slider value.
+#[derive(Clone, Copy)]
+struct Roll {
     s: f32,
     e: f32,
     x0: f32,
@@ -230,15 +240,16 @@ struct Brightness {
 /// Output level of the Brightness curve's knee.
 const BRIGHTNESS_KNEE: f32 = 126.0 / 255.0;
 
+/// The slider value where the curve starts to ease into [`brightness_150`]: the last Hermite
+/// roll-off before the power roll-off takes over (about 109.7). Every curve up to here stays at
+/// or below [`brightness_150`]; the power roll-offs come closer to white past input 220.
+const BRIGHTNESS_EASE_FROM: f32 = 109.5;
+
 impl Brightness {
     fn new(brightness: f32) -> Self {
         let b = brightness.abs();
-        let s = 1.375f32.powf(b / 50.0);
-        let e = 1.0 / (1.0 + 0.084 * b);
-        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
-        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
-        let (alpha, beta) = (s / secant, e / secant);
-        Brightness { raise: brightness > 0.0, s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0 }
+        let toward_150 = ((b - BRIGHTNESS_EASE_FROM) / (150.0 - BRIGHTNESS_EASE_FROM)).clamp(0.0, 1.0);
+        Brightness { raise: brightness > 0.0, roll: Roll::new(b), toward_150 }
     }
 
     fn eval(&self, v: f32) -> f32 {
@@ -262,9 +273,40 @@ impl Brightness {
         0.5 * (lo + hi)
     }
 
-    /// The curve raised: the line, then a monotone roll-off to (1, 1).
+    /// The curve raised: the line and its roll-off, eased into [`brightness_150`] past +109.5.
+    ///
+    /// Each input must rise with the slider, not only the output with the input. The roll-off
+    /// alone rises with the slider, but past about input 220 the power roll-offs come closer to
+    /// white than [`brightness_150`], so a plain mix of the two fell there as the slider neared
+    /// +150 (input 200 gave 253.55 at +134 and 253.32 at +150). So the ease starts from the
+    /// roll-off held at or below [`brightness_150`]: in `held + t (target - held)` both `held`
+    /// and `t` rise with the slider, and `target - held` is never negative. It is a mix of two
+    /// monotone curves that pin black and white, so it stays monotone and pinned, and reaches
+    /// [`brightness_150`] itself at +150.
     fn raised(&self, x: f32) -> f32 {
-        let Brightness { s, e, x0, alpha, hermite, .. } = *self;
+        let y = self.roll.eval(x);
+        if self.toward_150 <= 0.0 {
+            return y;
+        }
+        let target = brightness_150(x);
+        let held = y.min(target);
+        (held + self.toward_150 * (target - held)).clamp(0.0, 1.0)
+    }
+}
+
+impl Roll {
+    fn new(b: f32) -> Self {
+        let s = 1.375f32.powf(b / 50.0);
+        let e = 1.0 / (1.0 + 0.084 * b);
+        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
+        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
+        let (alpha, beta) = (s / secant, e / secant);
+        Roll { s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0 }
+    }
+
+    /// The line, then a monotone roll-off to (1, 1).
+    fn eval(&self, x: f32) -> f32 {
+        let Roll { s, e, x0, alpha, hermite } = *self;
         let y0 = BRIGHTNESS_KNEE;
         if x <= x0 {
             return y0.min(s * x);
@@ -279,6 +321,33 @@ impl Brightness {
         };
         y.clamp(0.0, 1.0)
     }
+}
+
+/// The modern Brightness curve at +150, fit to the reference application's 8-bit ramp (and,
+/// inverted, to its -150 ramp; both within a level and a quarter before rounding). A line of
+/// slope 2.585 up to input 52/255, then a cubic Hermite to input 168/255, then an exponential
+/// approach to white, `1 - d(e^((1 - x)/c) - 1)`, that is still rising there (slope `d/c`, about
+/// 0.012). The power roll-off, flat at white, comes too close to white past input 200 (254.5
+/// where the reference has 253), so lowered it gave 254 -> 191 instead of 214.
+fn brightness_150(x: f32) -> f32 {
+    const S: f32 = 2.585;
+    const C: f32 = 0.131;
+    const D: f32 = 0.4 / 255.0;
+    const X1: f32 = 52.0 / 255.0;
+    const X2: f32 = 168.0 / 255.0;
+    let tail = |x: f32| 1.0 - D * (((1.0 - x) / C).exp() - 1.0);
+    let x = x.clamp(0.0, 1.0);
+    if x <= X1 {
+        return S * x;
+    }
+    if x >= X2 {
+        return tail(x).min(1.0);
+    }
+    let (y1, y2, m2) = (S * X1, tail(X2), D / C * ((1.0 - X2) / C).exp());
+    let h = X2 - X1;
+    let t = (x - X1) / h;
+    let (t2, t3) = (t * t, t * t * t);
+    (2.0 * t3 - 3.0 * t2 + 1.0) * y1 + (t3 - 2.0 * t2 + t) * h * S + (-2.0 * t3 + 3.0 * t2) * y2 + (t3 - t2) * h * m2
 }
 
 /// Modern Brightness/Contrast as one channel's lookup table (4096 samples over 0..1):

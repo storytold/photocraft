@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
-pub use craft::color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchKind};
+pub use craft::color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchKind, SwatchPaint};
 
 /// Rewrites a saved `swatches` value from the shape before craft-color's model (groups holding
 /// `items`) to the current one (`entries`). Called once, where the preferences are read.
@@ -36,16 +36,18 @@ pub fn upgrade_saved(saved: &mut Value) {
     }
 }
 
-/// The id of a swatch kind (`process`, `global`, `spot`).
+/// The id of a swatch kind (`process`, `global`, `spot`, `registration`).
 pub fn kind_id(kind: SwatchKind) -> &'static str {
     match kind {
         SwatchKind::Process => "process",
         SwatchKind::Global => "global",
         SwatchKind::Spot => "spot",
+        SwatchKind::Registration => "registration",
     }
 }
 
-/// The swatch kind an id names (`normal` is a synonym of `process`).
+/// The swatch kind an id names (`normal` is a synonym of `process`). `registration` names none: the Registration
+/// swatch is built in, never made by a command.
 pub fn parse_kind(s: &str) -> Option<SwatchKind> {
     Some(match s {
         "process" | "normal" => SwatchKind::Process,
@@ -263,7 +265,7 @@ mod tests {
         uniq.dedup();
         assert_eq!(uniq.len(), 46, "names are unique: {names:?}");
         assert_eq!(b[3].name, "Pure");
-        assert_eq!(b[3].entries[0].color, SwatchColor::Rgb([230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0]));
+        assert_eq!(b[3].entries[0].color(), Some(&SwatchColor::Rgb([230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0])));
     }
 
     #[test]
@@ -273,7 +275,7 @@ mod tests {
         let g = &b[1];
         assert_eq!(g.name, "RGB");
         let conv = SwatchConv::builtin();
-        let hexes: Vec<String> = g.entries.iter().map(|s| hex(conv.rgb(&s.color))).collect();
+        let hexes: Vec<String> = g.entries.iter().map(|s| hex(conv.rgb(s.color().unwrap()))).collect();
         assert_eq!(hexes, ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"]);
     }
 
@@ -352,9 +354,9 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "Old");
         let e = &groups[0].entries;
-        assert_eq!((e[0].color, e[0].kind), (SwatchColor::Gray(0.5), SwatchKind::Process));
-        assert_eq!((e[1].color, e[1].kind), (SwatchColor::Lab([50.0, -1.5, 2.25]), SwatchKind::Spot));
-        assert_eq!(e[2].color, SwatchColor::Book { space: 3, values: [1, 2, 3, 4] });
+        assert_eq!((e[0].color(), e[0].kind), (Some(&SwatchColor::Gray(0.5)), SwatchKind::Process));
+        assert_eq!((e[1].color(), e[1].kind), (Some(&SwatchColor::Lab([50.0, -1.5, 2.25])), SwatchKind::Spot));
+        assert_eq!(e[2].color(), Some(&SwatchColor::Book { space: 3, values: [1, 2, 3, 4] }));
         let mut t = crate::session();
         t.load_presets_json(s.presets().to_json(&s));
         assert_eq!(t.presets().swatches, s.presets().swatches);

@@ -582,7 +582,7 @@ fn build_setup(app: &mut PhotocraftApp, kind: &str, target: &ToneTarget, mode: C
         swatches: adjust_editors::swatches(app),
         tone: None,
         stale: false,
-        reported_clipping: Default::default(),
+        reported_clipping: Arc::new(Mutex::new(None)),
     }
 }
 

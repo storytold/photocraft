@@ -50,16 +50,21 @@ pub(crate) fn sample_target() -> Cursor {
 
 /// The pointer of a painting tool that acts on a click and has no brush tip: the Paint Bucket's
 /// arrow with the bucket below right of it, the hotspot on the arrow's tip, so a click fills the
-/// pixel under the tip (#12539), and the Magic Eraser's crosshair. Precise Other Cursors (or Caps
-/// Lock, `precise`) gives the Paint Bucket the crosshair too (#3968). `None` for a tool that
-/// strokes with the brush.
+/// pixel under the tip (#12539), and the Magic Eraser's own icon with the hotspot on the eraser's
+/// end at the lower left (#12001). Precise Other Cursors (or Caps Lock, `precise`) gives both the
+/// crosshair (#3968). `None` for a tool that strokes with the brush.
 pub(crate) fn click_tool_cursor(tool: Tool, precise: bool) -> Option<Cursor> {
     match tool {
         Tool::PaintBucket if !precise => Some(Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Arrow, crate::icons::tool_icon(tool)))),
+        Tool::MagicEraser if !precise => Some(Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(tool), MAGIC_ERASER_HOTSPOT, None))),
         Tool::PaintBucket | Tool::MagicEraser => Some(Cursor::Painted(PaintedCursor::Crosshair)),
         _ => None,
     }
 }
+
+/// The Magic Eraser icon's point that sits on the pointer, in its 24-unit box: the middle of the eraser's end, which
+/// lies at the lower left of the `eraser_magic` glyph (#12001).
+pub(crate) const MAGIC_ERASER_HOTSPOT: egui::Vec2 = egui::vec2(4.6, 18.4);
 
 /// Path Selection's own pointer (#13295): the light arrow, and the solid one with ⌥ (without ⌘)
 /// where a press would land on a component (`path_components::over_component`). ⌘ keeps the light
@@ -89,11 +94,11 @@ pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
 
 /// Shape tools whose Alt Eyedropper also updates the tool's Fill.
 pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
-    matches!(tool, Tool::Triangle | Tool::CustomShape)
+    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon)
 }
 
-/// Whether an Alt or Shift+Alt press samples the Triangle or Custom Shape foreground and Fill
-/// (#13364, #15856). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
+/// Whether an Alt or Shift+Alt press samples the foreground and Fill for the Triangle, Custom Shape,
+/// Rectangle, Ellipse and Polygon tools (#13364, #15856, #13333, #13224, #13317). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
 /// Control+Alt is excluded here, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
@@ -155,9 +160,25 @@ mod healing_alt_cursor_tests;
 mod paint_bucket_cursor_tests;
 
 #[cfg(test)]
+#[path = "rectangle_alt_eyedropper_tests.rs"]
+mod rectangle_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "ellipse_alt_eyedropper_tests.rs"]
+mod ellipse_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "polygon_alt_eyedropper_tests.rs"]
+mod polygon_alt_eyedropper_tests;
+
+#[cfg(test)]
 #[path = "triangle_alt_eyedropper_tests.rs"]
 mod triangle_alt_eyedropper_tests;
 
 #[cfg(test)]
 #[path = "custom_shape_alt_eyedropper_tests.rs"]
 mod custom_shape_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "magic_eraser_cursor_tests.rs"]
+mod magic_eraser_cursor_tests;

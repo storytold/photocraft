@@ -487,8 +487,9 @@ pub fn preset_table(name: &str) -> Option<Vec<[u8; 3]>> {
         "grayscale" => ramp(&|t| [t; 3]),
         // Black → red → yellow → white, the incandescence scale.
         "blackBody" => ramp(&|t| [(t * 3.0).min(1.0), (t * 3.0 - 1.0).clamp(0.0, 1.0), (t * 3.0 - 2.0).clamp(0.0, 1.0)]),
+        // From magenta at index 0 down to red at index 255 (#14344).
         "spectrum" => ramp(&|t| {
-            let h = t * 300.0 / 60.0;
+            let h = (1.0 - t) * 300.0 / 60.0;
             let x = 1.0 - (h % 2.0 - 1.0).abs();
             match h as i32 {
                 0 => [1.0, x, 0.0],
@@ -900,3 +901,6 @@ mod color_table_index_tests;
 #[cfg(test)]
 #[path = "rotate_canvas_tiny_angle_tests.rs"]
 mod rotate_canvas_tiny_angle_tests;
+
+#[cfg(test)]
+mod color_table_presets_tests;
