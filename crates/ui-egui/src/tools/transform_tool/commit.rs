@@ -151,9 +151,21 @@ pub fn auto_commit(app: &mut PhotocraftApp, edits: &[TransformEdit<SessionWarp>]
     true
 }
 
-/// Whether a document point is outside the document, on the pasteboard around the canvas.
+/// Whether a document point is on the pasteboard: outside the document, or in an artboard document
+/// outside the bounding box of its visible boards, also within the canvas size (#17019).
 fn on_pasteboard(app: &PhotocraftApp, p: [f64; 2]) -> bool {
-    app.session.active().is_some_and(|st| p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height))
+    let Some(st) = app.session.active() else { return false };
+    if let Some(span) = boards_span(&st.doc) {
+        return p[0].is_finite() && p[1].is_finite() && !span.contains(p[0].floor() as i32, p[1].floor() as i32);
+    }
+    p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height)
+}
+
+/// The bounding box of the visible artboards, `None` without one. Measured in the reference
+/// application (#17019): with boards shown, a click applies the box only outside it; a click inside
+/// keeps the box open, on a board, in a gap between boards, and on a loose layer's pixels there.
+fn boards_span(doc: &photocraft_doc::Document) -> Option<photocraft_geom::Rect> {
+    doc.layers.iter().filter(|l| l.visible).filter_map(|l| l.artboard()).map(|a| a.rect).reduce(|a, b| a.union(&b))
 }
 
 /// Whether a document point lands on pixels of a layer the box doesn't move: the frontmost hit
@@ -169,6 +181,10 @@ fn on_other_layer(app: &PhotocraftApp, t: &FreeTransform, p: [f64; 2]) -> bool {
     }
     let Some(st) = app.session.active() else { return false };
     let doc = &st.doc;
+    // With boards shown only the pasteboard applies the box (#17019).
+    if boards_span(doc).is_some() {
+        return false;
+    }
     // The layers the commit moves: `edit.transform` takes the link group along as it is then, so a
     // layer linked after the box opened counts as moved too.
     let moved = photocraft_engine::transform_cmds::box_targets(doc, &moving_layers(t));
