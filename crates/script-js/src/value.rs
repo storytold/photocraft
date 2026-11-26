@@ -238,6 +238,11 @@ impl Join {
         let mut result = Ok(());
         for i in 0..len {
             if i > 0 {
+                // The separator counts too: past the limit, no further element is read.
+                if self.out.len() >= MAX_TEXT_UNITS {
+                    result = Err(too_long());
+                    break;
+                }
                 self.out.push(u16::from(b','));
             }
             let element = match array.get(i, ctx) {

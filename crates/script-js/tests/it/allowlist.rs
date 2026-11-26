@@ -12,7 +12,13 @@ fn every_allowed_command_and_parameter_is_one_the_engine_takes() {
             missing.push(format!("{id}: no such command"));
             continue;
         };
-        let Some(schema) = photocraft_engine::param_schema::of(spec) else { continue };
+        let Some(schema) = photocraft_engine::param_schema::of(spec) else {
+            // Without a schema nothing says the engine takes these parameters.
+            if !params.is_empty() {
+                missing.push(format!("{id}: no parameter schema to check its parameters against"));
+            }
+            continue;
+        };
         if schema.open() || photocraft_engine::registry::is_incomplete(id) {
             continue;
         }

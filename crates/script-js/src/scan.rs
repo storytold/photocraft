@@ -478,7 +478,11 @@ impl Scanner {
                     let rest = line.get(at..).unwrap_or_default();
                     let was_bare = std::mem::replace(&mut bare, space(c) || (c == '/' && next == Some('*')));
                     match c {
-                        '/' if next == Some('/') => break,
+                        // A comment is no token: what the last one was carries over to the next.
+                        '/' if next == Some('/') => {
+                            (self.ambiguous, self.member, self.label) = (ambiguous, member, label);
+                            break;
+                        }
                         '/' if next == Some('*') => {
                             chars.next();
                             self.mode = Mode::BlockComment;
@@ -493,8 +497,14 @@ impl Scanner {
                             }
                         }
                         // HTML-like comments, which scripts (not modules) allow.
-                        '<' if rest.starts_with("<!--") => break,
-                        '-' if was_bare && rest.starts_with("-->") => break,
+                        '<' if rest.starts_with("<!--") => {
+                            (self.ambiguous, self.member, self.label) = (ambiguous, member, label);
+                            break;
+                        }
+                        '-' if was_bare && rest.starts_with("-->") => {
+                            (self.ambiguous, self.member, self.label) = (ambiguous, member, label);
+                            break;
+                        }
                         '\'' | '"' => self.mode = Mode::Str(c),
                         '`' => self.mode = Mode::Template,
                         '(' | '[' => {

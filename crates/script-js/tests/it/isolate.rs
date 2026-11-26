@@ -533,10 +533,13 @@ fn the_host_starts_without_the_apps_environment_or_working_directory() {
     assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some(), "the test process has the variable");
     let said = |line: &str| frame(&json!({"type": "output", "line": line}));
     let done = frame(&json!({"type": "finished", "error": null}));
-    let files = [("leaked", [said("leaked"), done.clone()].concat()), ("clean", [said("clean"), done.clone()].concat())];
     let tmp = std::env::temp_dir().canonicalize().unwrap();
-    let check = format!(r#"if [ -z "$CARGO_MANIFEST_DIR" ] && [ "$(pwd -P)" = "{}" ]; then cat {{clean}}; else cat {{leaked}}; fi"#, tmp.display());
-    let (mut job, paths) = shell_host("environment", &files, &check);
+    // The folder the host should start in is a fixture file, compared as text: no character of
+    // it is read as shell code.
+    let want = tmp.as_os_str().as_encoded_bytes().to_vec();
+    let files = [("leaked", [said("leaked"), done.clone()].concat()), ("clean", [said("clean"), done.clone()].concat()), ("want", want)];
+    let check = r#"if [ -z "$CARGO_MANIFEST_DIR" ] && [ "$(pwd -P)" = "$(cat {want})" ]; then cat {clean}; else cat {leaked}; fi"#;
+    let (mut job, paths) = shell_host("environment", &files, check);
     let seen = drive(&mut job, None, &[], |_, _| {});
     paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
     assert_eq!(seen.lines, ["clean"], "{:?}", seen.result);
@@ -673,7 +676,11 @@ fn a_host_that_exits_while_a_descendant_holds_the_output_is_reported() {
     assert!(seen.elapsed < Duration::from_secs(10), "{:?}", seen.elapsed);
     let pid = std::fs::read_to_string(&pid_file).unwrap();
     drop(std::fs::remove_file(&pid_file));
-    assert!(gone(pid.trim()), "the host's descendant {} outlived the host", pid.trim());
+    // OpenBSD sees a host that exits on its own only once it is reaped, so its group is not
+    // signalled then (`isolate::limits`): what it started may outlive it there.
+    if cfg!(not(target_os = "openbsd")) {
+        assert!(gone(pid.trim()), "the host's descendant {} outlived the host", pid.trim());
+    }
 }
 
 /// Whether process `pid` ends within a few seconds.

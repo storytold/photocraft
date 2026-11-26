@@ -111,7 +111,8 @@ fn host_errors_are_catchable() {
 
 #[test]
 fn the_time_limit_stops_a_loop_that_catches_errors() {
-    let src = "for (;;) { try { $.writeln('x') } catch (e) {} }";
+    // Finite, so a stop the script could catch fails the test instead of hanging it.
+    let src = "for (var i = 0; i < 1000; i++) { try { $.writeln('x') } catch (e) {} }";
     // A counted budget, not a clock: room for a few writes whatever the machine's speed.
     let seen = run_probe(src, Probe::default(), Box::new(Countdown(8)), RunOptions::default());
     assert!(seen.result.as_ref().is_err_and(|m| m.contains("time limit")), "{:?}", seen.result);
@@ -351,7 +352,8 @@ fn long_operator_chains_and_many_lines_finish_quickly() {
 /// with its reason, not as a success.
 #[test]
 fn a_time_limit_stop_after_an_await_ends_the_run_by_name() {
-    let src = "(async function () { await 0; for (;;) { app.documents.length; } })(); $.writeln('sync done');";
+    // Finite, so a job that stopped charging the budget fails the test instead of hanging it.
+    let src = "(async function () { await 0; for (var i = 0; i < 1000; i++) { app.documents.length; } })(); $.writeln('sync done');";
     // Counted, not timed: the synchronous part always finishes, and the job's loop spends the rest.
     let seen = run_probe(src, Probe::default(), Box::new(Countdown(64)), RunOptions::default());
     assert!(seen.result.as_ref().is_err_and(|m| m.contains("time limit")), "{:?}", seen.result);
@@ -619,6 +621,10 @@ fn a_top_level_string_is_held_to_the_same_size_cap_as_a_nested_one() {
     assert_eq!(lines_of(too_big), ["true text is too long to pass to the host (more than 16777216 UTF-16 units)"]);
     let nested = "var s = 'x'.repeat(20000000); try { alert([s]) } catch (e) { $.writeln(e instanceof RangeError, ' ', e.message) }";
     assert_eq!(lines_of(nested), ["true text is too long to pass to the host (more than 16777216 UTF-16 units)"]);
+    // Text at the cap leaves no room for the separator: the next element is never read.
+    let at_cap = "var a = ['x'.repeat(16777216)]; Object.defineProperty(a, 1, { get: function () { throw new Error('read') } }); \
+                  try { alert(a) } catch (e) { $.writeln(e instanceof RangeError, ' ', e.message) }";
+    assert_eq!(lines_of(at_cap), ["true text is too long to pass to the host (more than 16777216 UTF-16 units)"]);
     assert_eq!(first_dialog_text("alert('ok');"), "ok");
 }
 

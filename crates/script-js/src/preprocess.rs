@@ -159,6 +159,11 @@ mod tests {
     #[test]
     fn directives_after_closed_tokens_are_found() {
         assert_eq!(preprocess("var t = `\n`;\n#target x\nvar a;").unwrap(), "var t = `\n`;\n\nvar a;");
+        // A line comment after `o.` leaves `return` a property name, so `/` divides: what
+        // follows is a class whose `#target` field stays, or a template whose text stays.
+        for member in ["o. // the name follows\nreturn / new (class {\n#target x\n})", "x = o. // the name follows\nreturn / `\n#target x\n`;"] {
+            assert_eq!(preprocess(member).unwrap(), member);
+        }
         assert_eq!(preprocess("// `\n#target x\n").unwrap(), "// `\n\n");
         assert_eq!(preprocess("var s = '`';\n#target x\n").unwrap(), "var s = '`';\n\n");
         assert_eq!(preprocess("/* `\n*/ var a;\n#target x\n").unwrap(), "/* `\n*/ var a;\n\n");
