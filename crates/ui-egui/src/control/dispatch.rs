@@ -90,15 +90,19 @@ fn place_svg(app: &mut PhotocraftApp, params: &Value) -> Reply {
     }
     let raw_name = params.get("name").and_then(Value::as_str).unwrap_or("artwork");
     let name = if raw_name.to_ascii_lowercase().ends_with(".svg") { raw_name.to_owned() } else { format!("{raw_name}.svg") };
+    let wait = wait_param(params);
     let mut opts = params.as_object().cloned().unwrap_or_default();
     opts.remove("svg");
     opts.remove("name");
+    opts.remove("wait");
     opts.entry("smartObject".to_owned()).or_insert(Value::Bool(true));
-    // Apply any Type box drag in progress before mutating the document, matching `execute_command`.
-    crate::type_box_preview::end_drag(app);
-    Reply::from_result(
-        photocraft_engine::file_cmds::place_bytes(&mut app.session, &name, svg.as_bytes().to_vec(), None, &Value::Object(opts)).map_err(|e| e.to_string()),
-    )
+    // Run through `place_bytes_with` + `run_waiting` so background placement defers the reply
+    // until completion and inline placement updates `pixel_revision` and views.
+    run_waiting(app, wait, |app| {
+        // Apply any Type box drag in progress before mutating the document, matching `execute_command`.
+        crate::type_box_preview::end_drag(app);
+        app.place_bytes_with(&name, svg.as_bytes().to_vec(), None, &Value::Object(opts))
+    })
 }
 
 /// The menu rows as `ui.menu.list` reports them: one flat entry per row, its menu path in `path`.

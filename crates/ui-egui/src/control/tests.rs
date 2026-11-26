@@ -2384,11 +2384,13 @@ fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
 fn doc_place_svg_places_valid_svg_and_preserves_smart_object_option() {
     let (mut app, ctx) = app_with_document();
     let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="blue"/></svg>"#;
+    let rev_before = app.session.active().unwrap().pixel_revision;
 
     let placed = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": svg, "name": "icon"}));
     assert_eq!(placed["ok"], true, "{placed}");
-    let doc = &app.session.active().unwrap().doc;
-    let smart_layer = doc.layers.last().unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.pixel_revision > rev_before, "doc.placeSvg must advance pixel_revision");
+    let smart_layer = st.doc.layers.last().unwrap();
     assert!(matches!(smart_layer.content, photocraft_doc::LayerContent::Smart(_)), "defaults to Smart Object layer");
 
     let raster = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": svg, "name": "flat.svg", "smartObject": false}));

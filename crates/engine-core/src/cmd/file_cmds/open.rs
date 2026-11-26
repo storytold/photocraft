@@ -338,7 +338,16 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// step on the calling thread, as one undo step.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let input = PlaceInput::new(s, name, bytes, linked, p)?;
-    place_input(s, input)
+    let command = input.command();
+    if let Some(conflict) = s.job_conflict(command, true) {
+        return Err(EngineError::Disabled(command.to_string(), conflict));
+    }
+    let before = s.active().map(|st| (st.doc.id, st.revision));
+    let value = place_input(s, input)?;
+    if let Some((doc, from)) = before {
+        s.note_pixel_change(doc, from);
+    }
+    Ok(value)
 }
 
 /// Run a place: in the background when the command was started with [`Session::start`].
