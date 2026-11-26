@@ -96,6 +96,38 @@ fn sprite_commands_are_disabled_without_a_sprite_or_with_unsupported_samples() {
     }
 }
 
+#[test]
+fn duplicating_a_linked_tilemap_or_deleting_its_source_preserves_tile_records() {
+    let bytes = include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite");
+    let mut doc = photocraft_io::import("tiles.aseprite", bytes).unwrap().document;
+    let id = doc.layers[0].id;
+    let sprite = doc.sprite.as_mut().unwrap();
+    assert!(sprite.tilemap_descriptor(id).is_some());
+    sprite.frames.truncate(1);
+    sprite.tags.clear();
+    Arc::make_mut(&mut sprite.frames[0]).metadata.retain(|chunk| matches!(chunk.kind, 0x2004 | 0x2005 | 0x2023));
+    let mut linked = sprite.frames[0].as_ref().clone();
+    Arc::make_mut(linked.cels.get_mut(&id).unwrap()).linked_frame = Some(0);
+    linked.metadata.clear();
+    sprite.frames.push(Arc::new(linked));
+    doc.timeline = Some(photocraft_doc::Timeline::new(2, 10.0));
+    let expected = doc.layers[0].surface().unwrap().to_interleaved(doc.bounds());
+
+    for (start, cmd, output_frame) in [(1, "sprite.duplicateFrame", 2), (0, "sprite.deleteFrame", 0)] {
+        let mut s = add_to_session(doc.clone());
+        s.execute("timeline.setFrame", json!({"frame": start})).unwrap();
+        s.execute(cmd, json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let frame = &doc.sprite.as_ref().unwrap().frames[output_frame];
+        assert!(frame.cels[&id].linked_frame.is_none(), "{cmd}");
+        assert!(frame.metadata.iter().any(|chunk| chunk.kind == 0x2005), "{cmd}");
+        let bytes = photocraft_io::export(doc, "aseprite", &Default::default()).unwrap().bytes;
+        let mut reopened = photocraft_io::import("roundtrip.aseprite", &bytes).unwrap().document;
+        reopened.select_sprite_frame(output_frame).unwrap();
+        assert_eq!(reopened.layers[0].surface().unwrap().to_interleaved(reopened.bounds()), expected, "{cmd}");
+    }
+}
+
 /// Each mutating sprite command records one reversible transaction with exact document restoration.
 #[test]
 fn every_sprite_edit_adds_one_history_step_and_roundtrips_undo_redo() {

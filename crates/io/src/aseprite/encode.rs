@@ -35,6 +35,7 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
     sprite.validate().map_err(invalid)?;
     validate_tilemaps(sprite, copy.mode, ctl)?;
     let layers = layers(&copy, sprite)?;
+    let tilemap_layers: std::collections::BTreeSet<_> = sprite.tilemap_layers().collect();
     if layers.len() > MAX_LAYERS {
         return Err(invalid("layer count exceeds 4096"));
     }
@@ -108,6 +109,9 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
             }
             let Some(cel) = frame.cels.get(&layer.id) else { continue };
             let tilemap = frame.metadata.iter().find(|m| m.kind == 0x2005 && m.target == MetadataTarget::Cel(layer.id)).map(|m| m.bytes.as_slice());
+            if tilemap_layers.contains(&layer.id) && cel.linked_frame.is_none() && tilemap.is_none() {
+                return Err(invalid("tilemap cel has no source record; rasterize the tilemap before exporting"));
+            }
             chunks.push(cel_chunk(index, cel, sprite.indexed, tilemap, ctl)?);
             if let Some(precise) = cel.precise {
                 let mut data = 1u32.to_le_bytes().to_vec();

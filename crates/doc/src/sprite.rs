@@ -300,6 +300,26 @@ impl Sprite {
         self.frames.first().and_then(|f| f.metadata.iter().find(|c| c.kind == 0x2004 && c.target == MetadataTarget::Layer(id))).map(|c| c.bytes.as_slice())
     }
 
+    /// Layers that retain an editable tilemap descriptor in the first frame.
+    pub fn tilemap_layers(&self) -> impl Iterator<Item = LayerId> + '_ {
+        self.frames.first().into_iter().flat_map(|frame| &frame.metadata).filter_map(|chunk| match (chunk.kind, &chunk.target) {
+            (0x2004, MetadataTarget::Layer(id)) => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// Find the retained tilemap record for a cel, following its links to the source map.
+    pub fn tilemap_cel_record(&self, mut frame: usize, id: LayerId) -> Option<&SpriteChunk> {
+        for _ in 0..self.frames.len() {
+            let state = self.frames.get(frame)?;
+            match state.cels.get(&id)?.linked_frame {
+                Some(link) => frame = link,
+                None => return state.metadata.iter().find(|chunk| chunk.kind == 0x2005 && chunk.target == MetadataTarget::Cel(id)),
+            }
+        }
+        None
+    }
+
     /// Total stored frame duration for one forward pass, without playback scheduling clamps.
     pub fn duration_ms(&self) -> u64 {
         self.frames.iter().map(|f| u64::from(f.duration_ms)).sum()

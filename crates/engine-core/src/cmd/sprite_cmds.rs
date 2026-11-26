@@ -225,7 +225,12 @@ fn duplicate(s: &mut Session) -> Result<Value> {
         let mut copied = sprite.frames.get(sprite.current).ok_or_else(|| bad("selected frame is missing"))?.as_ref().clone();
         copied.metadata.retain(|c| matches!(c.target, photocraft_doc::sprite::MetadataTarget::Cel(_)));
         // A duplicate is initially independent; sharing Arc tiles gives COW pixel storage.
-        for cel in copied.cels.values_mut() {
+        let tilemap_layers: std::collections::BTreeSet<_> = sprite.tilemap_layers().collect();
+        for (&id, cel) in &mut copied.cels {
+            if cel.linked_frame.is_some() && tilemap_layers.contains(&id) {
+                let record = sprite.tilemap_cel_record(sprite.current, id).ok_or_else(|| bad("linked tilemap cel has no source record"))?;
+                copied.metadata.push(record.clone());
+            }
             Arc::make_mut(cel).linked_frame = None;
         }
         for frame in &mut sprite.frames {
@@ -265,12 +270,20 @@ fn remove_frame(s: &mut Session) -> Result<Value> {
         if at == 0 && sprite.frames.first().is_some_and(|frame| frame.metadata.iter().any(|chunk| chunk.target == MetadataTarget::Palette)) {
             return Err(bad("palette user data belongs to frame zero; remove that metadata from a copy before deleting frame zero"));
         }
+        let tilemaps: std::collections::BTreeMap<_, _> =
+            sprite.tilemap_layers().filter(|id| sprite.frames[at].cels.contains_key(id)).map(|id| (id, sprite.tilemap_cel_record(at, id).cloned())).collect();
         let removed = sprite.frames.remove(at);
         for frame in &mut sprite.frames {
-            for cel in Arc::make_mut(frame).cels.values_mut() {
+            let frame = Arc::make_mut(frame);
+            for (&id, cel) in &mut frame.cels {
                 let cel = Arc::make_mut(cel);
                 cel.linked_frame = match cel.linked_frame {
-                    Some(link) if link == at => None,
+                    Some(link) if link == at => {
+                        if let Some(record) = tilemaps.get(&id) {
+                            frame.metadata.push(record.clone().ok_or_else(|| bad("linked tilemap cel has no source record"))?);
+                        }
+                        None
+                    }
                     Some(link) if link > at => Some(link - 1),
                     other => other,
                 };
