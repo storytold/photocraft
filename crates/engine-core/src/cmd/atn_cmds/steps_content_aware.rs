@@ -98,6 +98,9 @@ fn descriptor(p: &Value) -> Option<Descriptor> {
     )
 }
 
+/// Why an empty recorded step refuses remembered Custom sampling ([`caf_remembered`]). The shell shows it translated.
+pub const CAF_CUSTOM_AREA_NOT_REMEMBERED: &str = "This step plays with the remembered Content-Aware Fill settings, and their Custom sampling area isn't remembered. Fill once with Auto or Rectangular sampling in Content-Aware Fill, then play it again.";
+
 /// Resolve an empty recorded step: the remembered settings fill what the step doesn't name, and
 /// before any were remembered it writes to a new layer. Playing never changes what is remembered.
 /// Remembered Custom sampling is refused: its area is painted in the workspace, which keeps none
@@ -117,8 +120,7 @@ pub(crate) fn caf_remembered(p: &mut Value, prefs: &crate::prefs::Preferences) -
     }
     object.entry("output").or_insert_with(|| "new".into());
     if object.get("sampling").and_then(Value::as_str) == Some("custom") && !["area", "channel", "samplingStrokes"].iter().any(|key| object.contains_key(*key)) {
-        let msg = "this step plays with the remembered settings, and their Custom sampling area isn't remembered: fill once with Auto or Rectangular sampling in Content-Aware Fill, then play it again";
-        return Err(EngineError::BadParams { cmd: CMD.into(), msg: msg.into() });
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: CAF_CUSTOM_AREA_NOT_REMEMBERED.into() });
     }
     Ok(())
 }

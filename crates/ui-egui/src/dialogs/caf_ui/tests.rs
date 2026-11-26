@@ -393,6 +393,10 @@ fn an_empty_recorded_step_after_a_custom_fill_stops_and_says_why() {
     assert_eq!(result["ran"], 0, "{result}");
     let error = result["failed"]["error"].as_str().unwrap_or_default();
     assert!(error.contains("Custom sampling area isn't remembered"), "{result}");
+    // The status bar shows the shell's translatable copy of the message, not the engine's parameter error.
+    crate::actions::report_play(&mut app, &result);
+    let status = &app.ui.status;
+    assert!(status.contains(photocraft_engine::atn_cmds::CAF_CUSTOM_AREA_NOT_REMEMBERED) && !status.contains("invalid parameters"), "{status}");
     assert_eq!(app.session.active().unwrap().revision, revision, "the document is unchanged");
     assert_eq!(app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS), Some(&remembered), "playing remembers nothing");
 }
