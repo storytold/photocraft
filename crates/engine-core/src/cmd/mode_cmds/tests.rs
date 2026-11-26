@@ -876,7 +876,8 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         let v = ((x % 61) as f32 / 61.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
         [v, v, v, 1.0]
     });
-    add_pattern(&mut s, "Cells", 3, 2, &[10, 200, 90, 250, 150, 40]);
+    // Three pattern rows do not divide the 256-row band: restarting at its edge changes the result.
+    add_pattern(&mut s, "Cells", 3, 3, &[10, 200, 90, 250, 150, 40, 70, 220, 120]);
     let cases = [
         ("threshold", None, Some(BitmapMethod::Threshold)),
         ("pattern", None, Some(BitmapMethod::Pattern)),

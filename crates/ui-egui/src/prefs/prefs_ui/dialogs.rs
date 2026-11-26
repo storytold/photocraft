@@ -15,7 +15,7 @@ use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog
 #[cfg(test)]
 use craft::ui::patterns::preferences::PrefValue;
 use craft::ui::patterns::preferences::{
-    Closed, PageInfo, PreferencesDraft, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
+    Closed, PageInfo, PreferencesDraft, PreferencesLayout, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
 };
 use craft::ui::runtime::env::{Words, WordsOverride, with_env};
 use craft::ui::runtime::memory::SaveKey;
@@ -184,7 +184,14 @@ impl StackDialog for PrefsDialog {
         let out = with_env(
             ui,
             |set| set.words = Some(WordsOverride::Replace(words)),
-            |ui| PreferencesWindow::new(Bind::bound(&mut self.state)).remember(SaveKey::new("photocraft.preferences")).show(ui, &mut with_custom),
+            |ui| {
+                PreferencesWindow::new(Bind::bound(&mut self.state))
+                    // The reference application's layout: framed page list and groups, OK, Cancel, Prev and Next
+                    // in a column at the right (#17014).
+                    .layout(PreferencesLayout::Classic)
+                    .remember(SaveKey::new("photocraft.preferences"))
+                    .show(ui, &mut with_custom)
+            },
         );
         self.doc = Some(with_custom.custom(()));
         if let Some(request) = out.pick_color {
