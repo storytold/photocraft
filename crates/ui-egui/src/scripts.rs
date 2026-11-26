@@ -254,7 +254,9 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
         // it is one PhotoCraft can't run); without a script service the engine refuses it.
         "file.scripts.browse" if can_run(app) => {
             let path = params.get("path").and_then(Value::as_str).filter(|p| is_js(p))?;
-            Some(resolve_and_start(app, &json!({ "path": path })))
+            // It runs a script: judged as `file.scripts.run` (the app's policy, the engine's
+            // gate), as the picker's choice is.
+            Some(app.run_command("file.scripts.run", json!({ "path": path })))
         }
         _ => None,
     }
@@ -346,6 +348,9 @@ fn in_last_dir(app: &PhotocraftApp, request: PickRequest) -> PickRequest {
 
 /// Pump the run once a frame: commands and output, until it waits or ends.
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.scripts.run.is_none() {
+        return;
+    }
     if held(app) {
         // Its next command waits, as a click would: the host waits for the answer meanwhile.
         ctx.request_repaint_after(WAITING_REPAINT);

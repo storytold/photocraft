@@ -380,6 +380,22 @@ fn a_script_browse_runs_keeps_the_engine_gate_it_was_opened_under() {
     assert!(h.state().session.authorize.is_none(), "the gate is put back");
 }
 
+/// Browse that names a script runs it: judged as running one, whatever Browse itself may do.
+#[test]
+fn a_named_browse_of_a_script_is_judged_as_running_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("named.jsx");
+    std::fs::write(&path, "1").unwrap();
+    let log = Log::default();
+    let mut app = app(vec![vec![]], &log);
+    app.services.automation_command = Some(Box::new(|id, _| if id == "file.scripts.run" { Err("not for agents".into()) } else { Ok(()) }));
+    app.automation_input = true;
+    let r = app.run("file.scripts.browse", json!({"path": path}));
+    app.automation_input = false;
+    assert_eq!(r.unwrap_err(), "not for agents");
+    assert!(log.starts.borrow().is_empty());
+}
+
 /// `file.scripts.run` starts a run however it is reached: the menu, or `engine.execute`'s path
 /// through the app; so does `file.scripts.browse` of a `.jsx`, and one PhotoCraft can't run is
 /// refused with its reason. Without a script service it says no script can run.
