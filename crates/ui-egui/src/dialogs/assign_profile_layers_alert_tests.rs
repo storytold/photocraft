@@ -1,9 +1,12 @@
 //! #14235: Edit › Assign Profile on a document with layers asks first, with OK, Cancel and an unticked "Don't show
 //! again". OK opens the Assign Profile dialog, Cancel changes nothing; a flat document and a run with params never ask;
-//! a ticked box with OK keeps the question away.
+//! a ticked box with OK keeps the question away. #16683: the question shows a warning icon beside its text.
 
 use craft::ui::dialog::{DialogId, StackDialog as _, StandardPrompt};
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use egui::accesskit::Role;
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
 use super::alerts;
@@ -54,6 +57,24 @@ fn a_document_with_layers_asks_before_the_dialog() {
     let fields = app.framework.dialogs.get::<StandardPrompt>().and_then(|p| p.json_fields()).unwrap();
     assert_eq!(fields["skip"], json!(false), "Don't show again starts unticked");
     assert_eq!(steps(&app), before);
+}
+
+#[test]
+fn the_question_shows_a_warning_icon_beside_its_text() {
+    let app = app(true);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1200.0, 800.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    menu(h.state_mut());
+    h.run_steps(4);
+    let title = h.get_by_role_and_label(Role::Heading, "Assign Profile").rect();
+    let message = h.get_by_label_contains("Assign a profile anyway?").rect();
+    // The prompt draws the icon unnamed, so it shows in the layout: the title starts at the content's start, the
+    // message after the icon on its row.
+    assert!(message.left() > title.left() + 8.0, "the message starts after the icon: {message:?} vs title {title:?}");
 }
 
 #[test]

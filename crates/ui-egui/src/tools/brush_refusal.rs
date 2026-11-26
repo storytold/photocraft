@@ -38,7 +38,7 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 }
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
+/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Burn tool (#12672), the Art History Brush
 /// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
@@ -50,6 +50,7 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Smudge => Some(tl!("smudge tool")),
         // The Spot Healing Brush (#12581).
         Tool::SpotHealing => Some(tl!("spot healing brush")),
+        Tool::Burn => Some(tl!("burn tool")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
@@ -125,11 +126,11 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge and Smudge tools and the
+/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge, Smudge and Burn tools and the
 /// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
 /// behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
+    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::Burn | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
 }
 
 /// A Spot Healing press on an empty pixel layer with Sample All Layers off (#12581): when that layer is hidden, the
@@ -171,3 +172,7 @@ mod remove_hidden_layer_tests;
 #[cfg(test)]
 #[path = "art_history_refusal_alert_tests.rs"]
 mod art_history_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../burn_refusal_alert_tests.rs"]
+mod burn_refusal_alert_tests;

@@ -509,6 +509,32 @@ fn theme_star_saves_favorite_and_menu_groups_it() {
     assert_eq!(listed.len(), 2, "the settings row and the one favourite: {listed:?}");
 }
 
+/// #17096: Comfortable picked in the Appearance page's Size row stays picked, is saved and goes to the suite; before,
+/// the page dropped the pick and showed Compact again on the next frame.
+#[test]
+fn appearance_size_row_keeps_comfortable_and_shares_it_with_the_suite() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let (_, files) = app_with_store();
+    let mut h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let size = |h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>| {
+        h.get_by_role_and_label(Role::ComboBox, "Size").accesskit_node().value().map(|v| v.to_string())
+    };
+    assert_eq!(size(&h).as_deref(), Some("Compact"));
+    h.get_by_role_and_label(Role::ComboBox, "Size").click();
+    h.run_steps(2);
+    h.get_by_label("Comfortable").click();
+    h.run_steps(4);
+    assert_eq!(size(&h).as_deref(), Some("Comfortable"), "the row keeps the pick");
+    apply_window(h.state_mut()).unwrap();
+    h.run_steps(4);
+    let app = h.state_mut();
+    assert_eq!(app.session.prefs().interface.density, prefs::UiDensity::Comfortable);
+    assert_eq!(stored(&files)["interface"]["density"], "comfortable");
+    app.framework.sync_theme(&mut app.session);
+    assert_eq!(app.framework.suite().shown().size, Some(craft::theme::Size::Comfortable), "the suite has it");
+}
+
 // --- the settings store -------------------------------------------------------------------------------------------
 
 #[test]
