@@ -551,6 +551,9 @@ fn patterns_survive_a_restart() {
     let paper = t.patterns.items.iter().find(|p| p.name == "Paper").unwrap();
     let px = paper.surface.pixel(3, 3);
     assert!((px[0] - 240.0 / 255.0).abs() < 0.01, "{px:?}");
+    // So does the mode it was defined from: the `.pat` file names its pixels, and the index
+    // (#13071) names the source, so a tool that cares about one still sees it after a restart.
+    assert_eq!(paper.source_mode, Some(photocraft_color::ColorMode::Rgb), "defined from an RGB document");
 
     let before = std::fs::metadata(dir.0.join(&pattern_files(&dir)[0])).unwrap().modified().unwrap();
     t.execute("pattern.rename", json!({"pattern": "Grit", "name": "Toner"})).unwrap();
@@ -560,6 +563,20 @@ fn patterns_survive_a_restart() {
 
     let (u, _) = session(&dir);
     assert_eq!(user_patterns(&u), [("Toner".to_string(), 8)]);
+
+    // An index written before the source member: the pattern still loads, whole but with no
+    // source recorded, so nothing written by the older build is lost or refused differently.
+    let index = dir.0.join(PATTERNS_FILE);
+    let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+    for entry in manifest["patterns"].as_array_mut().unwrap() {
+        assert!(entry.as_object_mut().unwrap().remove("source_mode").is_some(), "the writer named the member");
+    }
+    std::fs::write(&index, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let (older, w) = session(&dir);
+    assert!(w.iter().all(|w| !w.contains("Toner")), "{w:?}");
+    let toner = older.patterns.items.iter().find(|p| p.name == "Toner").cloned().unwrap();
+    assert_eq!(toner.source_mode, None, "an older index records no source");
+    assert_eq!((toner.width, toner.height), (8, 6), "its pixels and size still load");
 }
 
 fn define_pattern(s: &mut Session, name: &str, color: &str, width: u32) {

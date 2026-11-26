@@ -649,7 +649,7 @@ fn bitmap_custom_pattern_accepts_compact_pattern_past_full_rgba_limit() {
     let mut surface = photocraft_raster::Surface::new(PixelFormat::RGBA8);
     surface.write_pixel(0, 0, &[0., 0., 0., 1.]);
     surface.write_pixel(w as i32 - 1, h as i32 - 1, &[0., 0., 0., 1.]);
-    let pattern = photocraft_doc::Pattern { id: "compact".into(), name: "Compact".into(), width: w, height: h, surface };
+    let pattern = photocraft_doc::Pattern { id: "compact".into(), name: "Compact".into(), width: w, height: h, source_mode: None, surface };
     assert!(pattern.is_paintable());
     assert!(pattern.pixel_count() * 16 > photocraft_doc::pattern::MAX_WORKING_BYTES);
     s.edit("pattern", |doc, _| {
@@ -675,6 +675,7 @@ fn bitmap_custom_pattern_rejects_excessive_ranking_workspace_before_reading_pixe
         name: "Large rank".into(),
         width: 6000,
         height: 5000,
+        source_mode: None,
         surface: photocraft_raster::Surface::new(PixelFormat::RGBA8),
     };
     assert!(pattern.is_paintable());

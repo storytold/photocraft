@@ -703,7 +703,7 @@ fn main() -> eframe::Result {
             let session = Session::new();
             // Before the first pass: the one install of the craft runtime must see every pass from
             // the first (R71); the app then runs on that context.
-            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
+            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision, services::config_dir().as_deref());
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
             app.open_suite(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);

@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::{DirectSelection, Owner, PathRef, keep_after_command};
 use crate::PhotocraftApp;
+use crate::nudge_bundle::Seen;
 use crate::state::Tool;
 
 /// Applies the reports of one overlay pass. `refs` are the refs of the `EditPath`s the pass showed
@@ -39,7 +40,11 @@ pub(crate) fn apply(app: &mut PhotocraftApp, output: &BezierOutput, refs: &[Path
                 named_mods = std::mem::take(&mut app.ui.direct_selection.editing_mods);
             }
             EditEvent::Cancel { .. } => app.ui.direct_selection.editing = None,
-            EditEvent::Set { .. } => commit = true,
+            EditEvent::Set { .. } => {
+                commit = true;
+                // An arrow-key nudge: the clock its run of nudges is measured by (`nudge`).
+                app.nudge_bundle.now = output.edit.response.ctx.input(|i| i.time);
+            }
             _ => {}
         }
     }
@@ -155,13 +160,19 @@ fn known(key: u64, refs: &[PathRef]) -> Option<PathRef> {
 /// The overlay's selection replaces this one and its owner; a running gesture stays.
 fn select(app: &mut PhotocraftApp, selection: &PathSelection) {
     let owner = Owner::current(app);
+    let target = selection.path.and_then(PathRef::from_key);
+    let anchors = ids(&selection.anchors);
+    // Other anchors selected end a run of nudges (`nudge`), also when the first ones come back.
+    if app.ui.direct_selection.target != target || app.ui.direct_selection.anchors != anchors {
+        app.nudge_bundle.reset();
+    }
     let ds = &mut app.ui.direct_selection;
     let editing = ds.editing.take();
     let editing_mods = ds.editing_mods;
     let editing_overlay = ds.editing_overlay;
     *ds = DirectSelection {
-        target: selection.path.and_then(PathRef::from_key),
-        anchors: selection.anchors.iter().map(|k| [k.subpath, k.knot]).collect(),
+        target,
+        anchors,
         segment: selection.segment.map(|k| [k.subpath, k.knot]),
         shown: selection.shown.clone(),
         owner,
@@ -189,7 +200,8 @@ fn moved(x: f64, y: f64) -> bool {
 }
 
 /// Runs the command a finished edit stands for. `dragged` is whether a pointer gesture made it:
-/// an arrow-key nudge (`Set`) keeps the command's own step name.
+/// an arrow-key nudge (`Set`) keeps the command's own step name, or is Direct Selection's
+/// "Nudge Path" (`nudge`).
 fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], tool: Tool, mods: Mods, dragged: bool) {
     let Some(r) = known(change.path(), refs) else { return };
     if r == PathRef::Pen {
@@ -208,6 +220,9 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
                 // One anchor is "Drag Anchor Point" in History, two or more the command's
                 // default "Drag Anchor Points", as in Photoshop (#13205).
                 params["stepName"] = json!("Drag Anchor Point");
+            } else if !dragged && tool == Tool::DirectSelection {
+                nudge(app, r, tool, anchors, params);
+                return;
             }
             command_ask(app, r, tool, "path.moveAnchors", params);
         }
@@ -350,6 +365,26 @@ fn command_ask(app: &mut PhotocraftApp, r: PathRef, tool: Tool, id: &'static str
         return None;
     }
     command(app, r, id, params)
+}
+
+/// Direct Selection's arrow-key nudge of `anchors` (#13204): a "Nudge Path" step, and a run of
+/// nudges of the same anchors is that one step, as the Move tool's nudges are (`nudge_bundle`).
+/// A pause, another anchor selection or any other edit in between starts a new step.
+fn nudge(app: &mut PhotocraftApp, r: PathRef, tool: Tool, anchors: &[KnotRef], mut params: Value) {
+    params["stepName"] = json!("Nudge Path");
+    let (Some(pause), Some(st)) = (crate::nudge_bundle::pause(app), app.session.active()) else {
+        app.nudge_bundle.reset();
+        command_ask(app, r, tool, "path.moveAnchors", params);
+        return;
+    };
+    let what = format!("anchors:{r:?}:{:?}", ids(anchors));
+    let run = app.nudge_bundle.join(&what, Seen::of(st), pause);
+    params["coalesce"] = json!(format!("nudge:{run}"));
+    let done = command_ask(app, r, tool, "path.moveAnchors", params).is_some();
+    match app.session.active().filter(|_| done) {
+        Some(st) => app.nudge_bundle.record(run, &what, Seen::of(st)),
+        None => app.nudge_bundle.reset(),
+    }
 }
 
 /// Runs `id` on `r`. The selection stays off the live UI while its own command runs (`sync_views`

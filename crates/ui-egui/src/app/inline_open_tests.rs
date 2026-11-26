@@ -344,6 +344,115 @@ fn automation_relative_save_checks_write_root_identity_before_any_writer() {
 }
 
 #[test]
+fn automation_sync_and_worker_save_use_the_same_authorized_destination() {
+    use std::sync::{Arc, Mutex};
+
+    let exports = tempfile::tempdir().unwrap();
+    let write_root = std::fs::canonicalize(exports.path()).unwrap();
+    // A temporary ambient file gives the identity check a real same-file
+    // witness. Neither of the stub save writers opens it or the destination.
+    let ambient_file = tempfile::Builder::new().prefix("relative-xcf-save-").suffix(".psd").tempfile_in(std::env::current_dir().unwrap()).unwrap();
+    let request_path = ambient_file.path().file_name().unwrap().to_str().unwrap();
+    let ambient = ambient_file.path().to_string_lossy().into_owned();
+    for background in [false, true] {
+        let mut app = app();
+        let origin = ambient.clone();
+        app.services.automation_read =
+            Some(Box::new(|path| Ok(crate::AutomationReadResult { name: path.into(), bytes: BZIP_XCF.to_vec(), save_path: Some(path.into()) })));
+        app.services.automation_locate = Some(Box::new(move |_| Some(origin.clone())));
+        assert_eq!(automation_open(&mut app, request_path, false)["ok"], true);
+        let state = app.session.active().unwrap();
+        assert_eq!(state.protected_import_source.as_deref(), Some(ambient.as_str()));
+        assert!(photocraft_engine::file_cmds::check_import_destination(state, request_path).is_err());
+
+        let write_root = write_root.clone();
+        let resolutions = Rc::new(Cell::new(0));
+        let seen = resolutions.clone();
+        app.services.automation_write_location = Some(Box::new(move |path| {
+            seen.set(seen.get() + 1);
+            Ok(write_root.join(path).to_string_lossy().into_owned())
+        }));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let seen = writes.clone();
+        app.services.automation_save = Some(Arc::new(move |_, path, _, _| {
+            seen.lock().unwrap().push(path.to_owned());
+            Ok(Vec::new())
+        }));
+        let seen = writes.clone();
+        app.services.automation_write = Some(Box::new(move |path, _| {
+            seen.lock().unwrap().push(path.to_owned());
+            Ok(())
+        }));
+        app.services.export = Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new()))));
+        app.background_jobs = background;
+        let reply = app.save_automation(Some(request_path.into())).unwrap();
+        assert_eq!(reply["path"], request_path);
+        let ctx = app.ctx().clone();
+        if background {
+            assert_eq!(reply["pending"], true);
+            for _ in 0..200 {
+                crate::jobs_ui::tick(&mut app, &ctx);
+                if !app.saving() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        assert!(!app.saving());
+        assert_eq!(resolutions.get(), 1);
+        assert_eq!(*writes.lock().unwrap(), [request_path]);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(request_path));
+    }
+    assert!(std::fs::read_dir(exports.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn imported_text_edits_follow_the_saved_xcf_naming_flag() {
+    for (flags, expected) in [(None, "Goodbye"), (Some(0u32), "Goodbye"), (Some(1u32), "Hello")] {
+        let mut xcf = Wire(b"gimp xcf v003\0".to_vec());
+        for value in [1, 1, 0] {
+            xcf.word(value);
+        }
+        xcf.property(17, &[0]);
+        xcf.end();
+        let layer = xcf.slot();
+        xcf.word(0);
+        xcf.word(0);
+        xcf.point_here(layer);
+        for value in [1, 1, 1] {
+            xcf.word(value);
+        }
+        xcf.string("Hello");
+        xcf.property(8, &1u32.to_be_bytes());
+        if let Some(flags) = flags {
+            xcf.property(26, &flags.to_be_bytes());
+        }
+        let style = br#"(text "Hello") (box-mode fixed) (box-width 64) (box-height 32)"#;
+        let mut parasite = Wire::default();
+        parasite.string("gimp-text-layer");
+        parasite.word(0);
+        parasite.word(style.len() as u32);
+        parasite.0.extend_from_slice(style);
+        xcf.property(21, &parasite.0);
+        xcf.end();
+        let hierarchy = xcf.slot();
+        xcf.word(0);
+        xcf.point_here(hierarchy);
+        xcf.pixels(4, &[0, 0, 0, 255]);
+
+        let imported = photocraft_io::import("text.xcf", &xcf.0).unwrap();
+        let mut session = Session::new();
+        let id = imported.document.layers[0].id;
+        assert_eq!(imported.document.layers[0].name, "Hello", "import keeps the saved name");
+        session.admit_import_with_initial_view(imported.document, None, imported.source_read_only, imported.initial_view);
+        session.execute("type.edit", json!({"layer": id.0, "text": "Goodbye"})).unwrap();
+        let layer = session.active().unwrap().doc.layer(id).unwrap();
+        assert_eq!(layer.name, expected, "saved flags: {flags:?}");
+        assert!(matches!(&layer.content, photocraft_doc::LayerContent::Text(text) if text.text == "Goodbye"));
+    }
+}
+
+#[test]
 fn automation_non_xcf_keeps_configured_importer_approval_and_save_provenance() {
     let mut app = app();
     let calls = Rc::new(Cell::new(0));

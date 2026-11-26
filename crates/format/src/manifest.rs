@@ -135,6 +135,10 @@ pub struct PatternM {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    /// The colour mode Edit › Define Pattern took this pattern from
+    /// (`photocraft_doc::Pattern::source_mode`); absent in older files, which recorded no source.
+    #[serde(default)]
+    pub source_mode: Option<ColorMode>,
     pub surface: SurfaceM,
 }
 

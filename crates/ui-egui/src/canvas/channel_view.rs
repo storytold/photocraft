@@ -472,7 +472,7 @@ fn render_with_source(
 
 /// `r` of a one-channel surface sampled every `factor` px, mapped to colours row by row (in
 /// parallel off the web).
-fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + Sync) -> Vec<Color32> {
+pub(crate) fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + Sync) -> Vec<Color32> {
     let (w, h) = (r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize);
     let mut px = vec![Color32::TRANSPARENT; w * h];
     let row = |y: usize, out: &mut [Color32]| {

@@ -154,7 +154,6 @@ pub const PASTEBOARD_MENU: &[Row] = &[
     Some(("Medium Gray", "pasteboard.mediumGray")),
     Some(("Light Gray", "pasteboard.lightGray")),
     Some(("Custom", "pasteboard.custom")),
-    None,
     Some(("Select Custom Color…", PASTEBOARD_PICK)),
 ];
 
@@ -750,6 +749,20 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
+/// Several layers are selected in the front document (#12358).
+fn several_layers_selected(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.selected_layers().len() > 1)
+}
+
+/// Several layers are selected in the front document, every one a pixel layer: the case #12358
+/// measured on the Count tool's layer menu.
+fn several_pixel_layers_selected(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| {
+        let selected = st.selected_layers();
+        selected.len() > 1 && selected.iter().all(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_))))
+    })
+}
+
 /// Is a path with at least two points being drawn with the Pen?
 pub(crate) fn pen_pending(app: &PhotocraftApp) -> bool {
     app.ui.pen.as_ref().is_some_and(|p| p.draft.knots.len() >= 2)
@@ -871,11 +884,20 @@ fn inside_corners(corners: &[craft::draw::ui::corner::CornerPoint], p: [f64; 2])
 /// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
 /// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
 /// menus, keep the table's label. The Add Anchor Point menu names the selected anchors (#12710).
+/// The layer rows that act on every selected layer (Duplicate, Delete, Rasterize) read in the
+/// plural with several layers selected, as in the Layers panel menu (#12358).
 pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    // Only these rows count the selected layers (the menu asks for every row each frame).
+    if crate::layer_menu_ui::layer_count_label(command, false).is_some() {
+        let multi = several_layers_selected(app);
+        if let Some(label) = crate::layer_menu_ui::layer_count_label(command, multi) {
+            return label;
+        }
+    }
     if menu.tool == Tool::AddAnchorPoint {
         return add_anchor_row_label(app, menu, label, command);
     }
-    if command != "path.transform" || menu.tool != Tool::Pen {
+    if command != "path.transform" || !matches!(menu.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         return label;
     }
     if pen_pending(app) {
@@ -1042,10 +1064,26 @@ pub fn path_menu(tool: Tool) -> bool {
     matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection) || point_menu(tool)
 }
 
-/// The anchor tools whose path menu also heads with the entry for the point under the right-click
-/// (#12771, #12744, #12710).
+/// The tools whose path menu also heads with the entry for the point under the right-click: the anchor tools
+/// (#12771, #12744, #12710), and the Freeform and Curvature Pens, which open the Pen's path menu (#12837, #12753).
 fn point_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint | Tool::FreeformPen | Tool::CurvaturePen)
+}
+
+/// The path part under screen point `at` for a Freeform Pen right-click (#12837). That tool draws no path overlay, so
+/// its right-click brings no part along: the part is looked up as the overlay's press would take it, so the menu gets
+/// the same point entry as the anchor tools'.
+fn freeform_pen_hit(app: &PhotocraftApp, tool: Tool, at: Pos2) -> Option<(PathRef, BezierHit)> {
+    use craft::draw::ui::{BezierOverlay, BezierTool, HandlesShown};
+    if tool != Tool::FreeformPen {
+        return None;
+    }
+    let view = crate::canvas::document_display::active_view(app)?;
+    let (paths, _) = crate::direct_select::edit_paths(app, BezierTool::Direct);
+    let selection = crate::direct_select::selection(app, BezierTool::Direct);
+    let reach = craft::ui::runtime::env::Env::root_hit_reach(app.ctx());
+    let hit = BezierOverlay::hit_test(&paths, &selection, HandlesShown::Selected, &view, at, reach)?;
+    Some((PathRef::from_key(hit.path())?, hit))
 }
 
 /// The Add Anchor Point tool's right-click on anchor `knot` of `target` selects it, as measured
@@ -1354,14 +1392,17 @@ fn spelling_call(menu: &CanvasToolMenu, command: &str) -> (String, Value) {
     }
 }
 
-/// Does a right-click with `tool` at document point `doc` open the pasteboard menu? Outside the
-/// image, for the tools whose right-click has no job there: not the painting tools (their Brush
-/// Preset picker or right-button erase), the Pen (its path menu) or text being edited.
+/// Does a right-click with `tool` at document point `doc` open the pasteboard menu?
+/// Outside the image, some tools give the pasteboard menu priority over their canvas menu or picker.
 pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
+    let uses_pasteboard_menu = matches!(
+        tool,
+        Tool::Brush | Tool::SpotHealing | Tool::CloneStamp | Tool::Eraser | Tool::Blur | Tool::Dodge | Tool::Pen | Tool::PathSelection | Tool::QuickSelection
+    ) || (!path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool));
+    outside && uses_pasteboard_menu && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
 }
 
 /// A guide row: every row is a View › Guides command, the two Selected Guides ones included.
@@ -1423,6 +1464,16 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     // selection channel (non-spot alpha channel) has been saved.
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
+    }
+    // #12358, measured on the Count tool's layer menu: with several pixel layers selected,
+    // Blending Options…, Color Range… and Load Selection… work on one layer, so they are greyed.
+    // Other layer kinds and the other tools' layer menus weren't measured with several layers and
+    // keep `menus::is_enabled`.
+    if menu.tool == Tool::Count
+        && matches!(command, "layer.layerStyle.blendingOptions" | "select.colorRange" | "select.loadSelection")
+        && several_pixel_layers_selected(app)
+    {
+        return false;
     }
     if !(path_menu(menu.tool) || shape_tool_menu(menu.tool)) {
         return crate::menus::is_enabled(app, command);
@@ -1496,6 +1547,12 @@ pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [
 /// a tool without the menu, Content-Aware Move outside RGB, Gray and Lab, or an unmeasured Red Eye.
 pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
     if !at.x.is_finite() || !at.y.is_finite() || !doc.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    // The Freeform and Curvature Pens' path menu was measured in Path mode only: their Shape-mode right-click keeps
+    // opening nothing (#12837, #12753).
+    if matches!(tool, Tool::FreeformPen | Tool::CurvaturePen) && kind == MenuKind::Tool && app.ui.tool_options.vector_mode == craft::draw::ui::VectorMode::Shape
+    {
         return false;
     }
     let mut menu = CanvasToolMenu {
@@ -1584,6 +1641,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if shape_tool_menu(tool) && !shape_menu_measured(app, tool, doc) {
                 return false;
             }
+            let point = point.or_else(|| freeform_pen_hit(app, tool, at));
             capture(app, &mut menu, doc, point);
             // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
             // Size, whatever its Sample setting (#11747). Picking a row later copies this colour.
@@ -1695,10 +1753,10 @@ fn choose_eyedropper(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMe
         return Ok(());
     }
     let rgb = menu.color.ok_or("No colour under the pointer")?;
-    use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMenu, ColorPanelState};
+    use craft::color_ui::ui::{ColorPanelAction, ColorPanelCommand, ColorPanelMenu, ColorPanelState};
     let copy = if command == EYEDROPPER_COPY_HTML { ColorPanelCommand::CopyHtml } else { ColorPanelCommand::CopyHex };
     let color = craft::theme::Srgba::rgb(rgb[0], rgb[1], rgb[2]);
-    if let Some(text) = ColorPanelMenu::run_command(&mut ColorPanelState::default(), copy, color) {
+    if let Some(ColorPanelAction::Copy(text)) = ColorPanelMenu::run_command(&mut ColorPanelState::default(), copy, color) {
         ctx.copy_text(text);
     }
     Ok(())
@@ -1848,6 +1906,12 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
             "Stroke Subpath…" => tl!("Stroke Subpath…"),
             "Stroke Subpaths…" => tl!("Stroke Subpaths…"),
             "Rasterize Vector Mask" => tl!("Rasterize Vector Mask"),
+            // `layer_menu_ui::layer_count_label`'s labels, likewise (#12358).
+            "Duplicate Layer…" => tl!("Duplicate Layer…"),
+            "Delete Layer" => tl!("Delete Layer"),
+            "Duplicate Layers…" => tl!("Duplicate Layers…"),
+            "Delete Layers" => tl!("Delete Layers"),
+            "Rasterize Layers" => tl!("Rasterize Layers"),
             key => tl!(key),
         };
         out.push(Entry::new(command.to_string(), text.to_string()).enabled(entry_enabled(app, menu, command)).checked(mode_checked(app, menu, command)));
@@ -1955,6 +2019,15 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+#[cfg(test)]
+#[path = "canvas_tool_menu/curvature_pen_menu_tests.rs"]
+mod curvature_pen_menu_tests;
+#[cfg(test)]
+#[path = "canvas_tool_menu/freeform_pen_menu_tests.rs"]
+mod freeform_pen_menu_tests;
+
+#[cfg(test)]
+mod layer_plural_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
