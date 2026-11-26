@@ -24,6 +24,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if let Some(on) = crate::vector_ui::pen_history_enabled(app, id) {
         return on;
     }
+    // Waiting Remove strokes can be taken back even when the document has no History entries (#12544).
+    if id == "edit.undo" && app.ui.tool == crate::state::Tool::Remove && !app.remove_pending.is_empty() {
+        return true;
+    }
     if id == "edit.undo" && crate::actions::library::edit_undo_label(app).is_some() {
         return true;
     }

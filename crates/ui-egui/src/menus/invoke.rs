@@ -151,6 +151,10 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     // where a Pen path was finished (closed, ↩/Esc, another tool) gives the path back to the Pen
     // rather than deleting it; Redo finishes it again. Step Backward/Forward step the same way.
     // An open Free Transform or Crop box steps itself first.
+    // Waiting Remove strokes are gesture state too: Undo takes back the last one first (#12544).
+    if id == "edit.undo" && crate::retouch_ui::remove_pending_undo_last(app) {
+        return Some(Ok(json!({"strokes": app.remove_pending.len()})));
+    }
     if let Some(r) = crate::vector_ui::pen_history_step(app, id) {
         return Some(r.map(|_| Value::Null));
     }

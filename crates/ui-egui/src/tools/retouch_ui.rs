@@ -388,6 +388,30 @@ pub fn remove_pending_cancel(app: &mut PhotocraftApp) -> bool {
     true
 }
 
+/// Undo while strokes wait takes back the last one, as the Pen takes back its last point (#12544): the document and
+/// its history stay as they are, and the tint is redrawn from the strokes left. The last one taken back leaves nothing
+/// waiting. False when none wait, so Undo goes on to the document.
+pub fn remove_pending_undo_last(app: &mut PhotocraftApp) -> bool {
+    if !remove_pending_live(app) {
+        return false;
+    }
+    if app.remove_pending.len() == 1 {
+        return remove_pending_cancel(app);
+    }
+    app.remove_pending.pop();
+    if let Some(st) = app.session.active() {
+        let mut trail = crate::stroke_trail::Trail::new([st.doc.size.width, st.doc.size.height]);
+        for entry in &app.remove_pending {
+            let points: Vec<[f64; 3]> = serde_json::from_value(entry["points"].clone()).unwrap_or_default();
+            trail.feed_stroke_reach(&points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, entry));
+        }
+        app.remove_trail = Some(trail);
+    }
+    app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
+    app.ui.status_error = false;
+    true
+}
+
 /// Whether Remove strokes are still waiting: they are dropped when the tool or the document
 /// changed under them (checked every frame).
 pub fn remove_pending_live(app: &mut PhotocraftApp) -> bool {
@@ -754,3 +778,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "remove_pending_undo_tests.rs"]
+mod remove_pending_undo_tests;
