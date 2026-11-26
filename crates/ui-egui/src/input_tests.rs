@@ -25,7 +25,7 @@ fn zoom(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
 
 /// The highest zoom the ladder allows.
 fn max_zoom() -> f32 {
-    craft::behavior::canvas::ZoomLadder::MAX as f32
+    craft::behavior::canvas::ZoomScheme::PHOTOSHOP.max as f32
 }
 
 /// The values of the dialog opened last, as automation lists them (`ui.inspect`).

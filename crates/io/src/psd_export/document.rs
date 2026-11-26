@@ -116,6 +116,7 @@ fn export_supported_document(
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),
+        pattern_space: photocraft_compose::pattern::PatternSpace::of_pixels(doc),
         background: psd_background(doc),
         stage: {
             let raw = doc.size.area().saturating_mul(fmt.bytes_per_pixel() as u64).saturating_mul(doc.walk().len() as u64 + 1);
@@ -527,7 +528,7 @@ mod pattern_failure_tests {
             for name in ["Retained first", "Refused second"] {
                 let mut surface = Surface::new(PixelFormat::RGBA8);
                 surface.fill_rect(photocraft_geom::Rect::new(0, 0, 2, 2), &[0.25, 0.5, 0.75, 1.]);
-                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, surface });
+                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, source_mode: None, surface });
             }
             let before = doc.clone();
             let error = document_to_psd_with_pattern_limit(&doc, 16).unwrap_err();

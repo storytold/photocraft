@@ -327,3 +327,24 @@ fn a_replaced_or_deleted_edit_target_is_not_previewed_or_committed() {
     assert_eq!(*app.session.active().unwrap().doc, *deleted);
     assert_eq!(steps(&app), count, "a stale OK adds no History step");
 }
+
+/// The picker paints its swatches by texture id and doesn't ask the texture cache again, so the dialog owns them:
+/// emptying the cache (as it frees textures once it holds more than its capacity) leaves every swatch, and closing
+/// the dialog frees them (#16252).
+#[test]
+fn the_open_dialog_keeps_its_swatch_textures_when_the_texture_cache_lets_go() {
+    use craft::ui::primitives::textures::TextureCache;
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    let allocated = |ctx: &egui::Context| ctx.tex_manager().read().num_allocated();
+    TextureCache::clear(&ctx);
+    let before = allocated(&ctx);
+    let patterns = app.session.patterns.items.len();
+    assert!(patterns > 0, "the library has patterns");
+    crate::menus::invoke(&mut app, &ctx, cmds::CREATE, json!({})).unwrap();
+    let dialog = app.framework.dialogs.open_dialogs()[0].id;
+    TextureCache::clear(&ctx);
+    assert!(allocated(&ctx) >= before + patterns, "the {patterns} swatches outlive the cache");
+    cancel(&mut app, dialog);
+    assert_eq!(allocated(&ctx), before, "closing the dialog frees them");
+}
