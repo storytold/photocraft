@@ -251,7 +251,7 @@ fn an_rgb_preset_is_refused_by_a_grayscale_dialog_that_edits_only_the_composite(
 }
 
 #[test]
-fn a_preset_for_another_channel_is_refused_by_a_dialog_aimed_at_one_channel() {
+fn a_gear_load_into_a_green_channel_dialog_refuses_a_preset_that_moves_red() {
     let files = Arc::new(ScriptedFiles::held());
     let mut application = app(files.clone());
     application.run("channel.target", json!({"channel": {"color": 1}})).expect("the Green channel is the edit target");
@@ -270,6 +270,9 @@ fn a_preset_for_another_channel_is_refused_by_a_dialog_aimed_at_one_channel() {
     assert!(state.ui.status.contains("red"), "the message names the channel the dialog does not edit: {}", state.ui.status);
     assert_eq!(params(&h, id), before, "and the dialog keeps the curve it had");
     assert!(state.session.presets().curves_presets.is_empty(), "nothing was added to the user's preset list");
+    assert!(state.session.presets().curves_preset.is_none(), "and nothing became current: the refusal runs before the selection changes");
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "and the gear is as it was before the file was chosen");
 
     // The channel the dialog is aimed at is all it edits: that curve, with the composite left
     // straight, loads, and the dialog keeps its own straight composite as it does today.

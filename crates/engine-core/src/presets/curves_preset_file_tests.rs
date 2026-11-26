@@ -458,8 +458,12 @@ fn the_saved_selection_follows_the_list_that_is_read_back() {
 }
 
 #[test]
-fn a_dialog_aimed_at_one_channel_refuses_the_other_channels_of_its_mode() {
+fn a_curves_dialog_editing_only_green_refuses_a_preset_that_moves_red() {
     let mut s = crate::session();
+    // A current preset is in place first, so the refusal is checked against the selection the load
+    // was about to change, not against an empty list.
+    save(&mut s, &json!({"curves": one_curve(), "name": "Chosen"})).expect("a save works");
+    let before = list(&mut s);
     let two_channels = json!({
         "points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]],
         "red": [[0.0, 20.0], [255.0, 235.0]],
@@ -469,7 +473,7 @@ fn a_dialog_aimed_at_one_channel_refuses_the_other_channels_of_its_mode() {
     let err = load(&mut s, &json!({"data": two.clone(), "space": "rgb", "channel": "green"})).unwrap_err().to_string();
     assert!(err.contains("red"), "the refusal names the channel this dialog has no place for: {err}");
     assert!(err.contains("green"), "and says which channel the dialog does edit: {err}");
-    assert_eq!(list(&mut s)["count"], 0, "a preset that cannot be shown is not put in the user's list");
+    assert_eq!(list(&mut s), before, "the refusal comes before the list and the current preset change: both are as they were");
     // The aimed component, with the composite curve left straight, is all that dialog edits.
     let green_only = json!({
         "points": [[0.0, 0.0], [255.0, 255.0]],
