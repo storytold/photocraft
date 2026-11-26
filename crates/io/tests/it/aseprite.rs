@@ -63,6 +63,26 @@ fn an_indexed_sprite_refuses_a_grayscale_display_cache() {
 }
 
 #[test]
+fn editable_export_refuses_partial_opacity_on_pass_through_groups() {
+    use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Document, Layer};
+    use photocraft_geom::Size;
+
+    let mut doc = Document::new("Export", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let mut group = Layer::group("Group", vec![Layer::raster("Paint", PixelFormat::RGBA8)]);
+    group.blend = BlendMode::PassThrough;
+    doc.layers.push(group);
+    let export = |doc: &Document| photocraft_io::export(doc, "aseprite", &Default::default());
+
+    assert!(export(&doc).is_ok());
+    doc.layers[0].opacity = 0.5;
+    let error = export(&doc).err().unwrap();
+    assert!(error.to_string().contains("opacity on pass-through groups"), "{error}");
+    doc.layers[0].blend = BlendMode::Normal;
+    assert!(export(&doc).is_ok());
+}
+
+#[test]
 fn group_opacity_is_valid_without_the_image_layer_opacity_flag() {
     use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
     use photocraft_doc::{Document, Layer};

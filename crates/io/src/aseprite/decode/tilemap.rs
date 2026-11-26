@@ -104,14 +104,37 @@ pub(in crate::aseprite) fn layer_tileset(data: &[u8]) -> Result<usize> {
     Ok(index)
 }
 
-pub(in crate::aseprite) struct Map {
-    pub width: u16,
-    pub height: u16,
-    pub masks: [u32; 4],
-    pub tiles: Vec<u8>,
+pub(in crate::aseprite) struct Map<'a> {
+    width: u16,
+    height: u16,
+    masks: [u32; 4],
+    compressed: &'a [u8],
 }
-/// Decode bounded tile IDs and transformation masks from a retained map cel.
-pub(in crate::aseprite) fn map(data: &[u8], ctl: &Interrupt<'_>) -> Result<Map> {
+
+impl Map<'_> {
+    pub(in crate::aseprite) fn rect(&self, tileset: &Tileset, at: (i32, i32), bpp: usize) -> Result<Rect> {
+        let width = u32::from(self.width) * u32::from(tileset.width);
+        let height = u32::from(self.height) * u32::from(tileset.height);
+        let rect = Rect::from_xywh(at.0, at.1, width, height);
+        if rect.width() != width || rect.height() != height {
+            return Err(invalid("tilemap rectangle exceeds the supported coordinate range"));
+        }
+        sprite::pixels::checked_rect(rect, bpp).map_err(invalid)?;
+        Ok(rect)
+    }
+
+    pub(in crate::aseprite) fn inflate(&self, budget: usize, ctl: &Interrupt<'_>) -> Result<Vec<u8>> {
+        let expected =
+            usize::from(self.width).checked_mul(usize::from(self.height)).and_then(|n| n.checked_mul(4)).ok_or_else(|| invalid("tile map size overflow"))?;
+        if expected > budget {
+            return Err(invalid("tile map words exceed the remaining decoded memory budget"));
+        }
+        inflate(self.compressed, expected, ctl)
+    }
+}
+
+/// Parse dimensions and transformation masks before allocating map words.
+pub(in crate::aseprite) fn map(data: &[u8]) -> Result<Map<'_>> {
     let mut r = Reader::new(data);
     r.take(7)?;
     if r.u16()? != 3 {
@@ -135,27 +158,31 @@ pub(in crate::aseprite) fn map(data: &[u8], ctl: &Interrupt<'_>) -> Result<Map> 
         }
         used |= m;
     }
-    let expected = usize::from(width).checked_mul(usize::from(height)).and_then(|n| n.checked_mul(4)).ok_or_else(|| invalid("tile map size overflow"))?;
-    let tiles = inflate(r.take(r.remaining())?, expected, ctl)?;
-    Ok(Map { width, height, masks, tiles })
+    let compressed = r.take(r.remaining())?;
+    Ok(Map { width, height, masks, compressed })
 }
 
 /// Render supported tile transformations while refusing invalid IDs and non-square diagonal tiles.
-pub(in crate::aseprite) fn render(map: &Map, tileset: &Tileset, at: (i32, i32), fmt: PixelFormat, transparent: Option<u8>) -> Result<(Rect, Surface)> {
+pub(in crate::aseprite) fn render(
+    map: &Map<'_>,
+    tiles: &[u8],
+    tileset: &Tileset,
+    rect: Rect,
+    fmt: PixelFormat,
+    transparent: Option<u8>,
+    ctl: &Interrupt<'_>,
+) -> Result<Surface> {
     let data =
         tileset.pixels.as_ref().ok_or_else(|| invalid("tilemap needs an external-only tileset; embed it in Aseprite first (no external files were read)"))?;
     let (tw, th) = (u32::from(tileset.width), u32::from(tileset.height));
-    let w = u32::from(map.width).checked_mul(tw).ok_or_else(|| invalid("tilemap width overflow"))?;
-    let h = u32::from(map.height).checked_mul(th).ok_or_else(|| invalid("tilemap height overflow"))?;
-    let rect = Rect::from_xywh(at.0, at.1, w, h);
-    sprite::pixels::checked_rect(rect, if fmt.mode == ColorMode::Grayscale && !fmt.alpha { 5 } else { fmt.bytes_per_pixel() }).map_err(invalid)?;
     let mut out = if let Some(index) = transparent { Surface::with_default(fmt, &[f32::from(index) / 255.0]) } else { Surface::new(fmt) };
     let bpp = fmt.bytes_per_pixel();
     if rect.is_empty() {
-        return Ok((rect, out));
+        return Ok(out);
     }
     let [id_mask, x_mask, y_mask, d_mask] = map.masks;
-    for (i, word) in map.tiles.as_chunks::<4>().0.iter().enumerate() {
+    for (i, word) in tiles.as_chunks::<4>().0.iter().enumerate() {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let value = u32::from_le_bytes(*word);
         let id = (value & id_mask) >> id_mask.trailing_zeros();
         if tileset.flags & 4 != 0 && id == 0 || tileset.flags & 4 == 0 && value == u32::MAX {
@@ -170,6 +197,7 @@ pub(in crate::aseprite) fn render(map: &Map, tileset: &Tileset, at: (i32, i32), 
         }
         let (cx, cy) = (i % usize::from(map.width), i / usize::from(map.width));
         for dy in 0..th {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut row = Vec::with_capacity(tw as usize * bpp);
             for dx in 0..tw {
                 let (mut sx, mut sy) = (dx, dy);
@@ -187,12 +215,12 @@ pub(in crate::aseprite) fn render(map: &Map, tileset: &Tileset, at: (i32, i32), 
                     .ok_or_else(|| invalid("tile pixel offset overflow"))?;
                 row.extend_from_slice(data.get(offset..offset + bpp).ok_or_else(|| invalid("tileset pixel is missing"))?);
             }
-            let x = at.0 + cx as i32 * tw as i32;
-            let y = at.1 + cy as i32 * th as i32 + dy as i32;
+            let x = rect.x0 + cx as i32 * tw as i32;
+            let y = rect.y0 + cy as i32 * th as i32 + dy as i32;
             out.try_write_interleaved(Rect::from_xywh(x, y, tw, 1), &row).map_err(|e| invalid(e.to_string()))?;
         }
     }
-    Ok((rect, out))
+    Ok(out)
 }
 
 impl Decoder<'_> {
@@ -226,23 +254,29 @@ impl Decoder<'_> {
             }
         }
         self.budget = self.budget.checked_sub(decoded).ok_or_else(|| invalid("tileset budget exceeded"))?;
-        let descriptors = self.frames.first().map(|f| f.metadata.iter().filter(|c| c.kind == 0x2004).cloned().collect::<Vec<_>>()).unwrap_or_default();
+        let mut layer_sets = std::collections::BTreeMap::new();
+        for descriptor in self.frames.first().into_iter().flat_map(|frame| &frame.metadata).filter(|c| c.kind == 0x2004) {
+            let MetadataTarget::Layer(id) = descriptor.target else { return Err(invalid("tilemap layer attachment is invalid")) };
+            let set = sets.get(&layer_tileset(&descriptor.bytes)?).ok_or_else(|| invalid("tilemap layer refers to a missing tileset"))?;
+            layer_sets.insert(id, set);
+        }
         for frame_index in 0..self.frames.len() {
             self.ctl.check().map_err(|_| IoError::Cancelled)?;
             let records = self.frames.get(frame_index).map(|f| f.metadata.iter().filter(|c| c.kind == 0x2005).cloned().collect::<Vec<_>>()).unwrap_or_default();
             for record in records {
                 let MetadataTarget::Cel(id) = record.target else { return Err(invalid("tile cel attachment is invalid")) };
-                let descriptor = descriptors.iter().find(|c| c.target == MetadataTarget::Layer(id)).ok_or_else(|| invalid("tile cel has no tilemap layer"))?;
-                let set = sets.get(&layer_tileset(&descriptor.bytes)?).ok_or_else(|| invalid("tilemap layer refers to a missing tileset"))?;
-                let parsed = map(&record.bytes, self.ctl)?;
+                let set = layer_sets.get(&id).ok_or_else(|| invalid("tile cel has no tilemap layer"))?;
+                let parsed = map(&record.bytes)?;
                 let frame = self.frames.get(frame_index).ok_or_else(|| invalid("tilemap frame is missing"))?;
                 let cel = frame.cels.get(&id).ok_or_else(|| invalid("tilemap cel is missing"))?.clone();
                 let palette = frame.palette.clone();
-                let projected =
-                    Rect::from_xywh(cel.rect.x0, cel.rect.y0, u32::from(parsed.width) * u32::from(set.width), u32::from(parsed.height) * u32::from(set.height));
-                self.charge(projected, if self.indexed { 5 } else { self.fmt.bytes_per_pixel() })?;
+                let bpp = if self.indexed { 5 } else { self.fmt.bytes_per_pixel() };
+                let rect = parsed.rect(set, (cel.rect.x0, cel.rect.y0), bpp)?;
+                self.charge(rect, bpp)?;
+                let tiles = parsed.inflate(self.budget, self.ctl)?;
                 let fmt = if self.indexed { PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false) } else { self.fmt };
-                let (rect, pixels) = render(&parsed, set, (cel.rect.x0, cel.rect.y0), fmt, self.indexed.then_some(self.transparent))?;
+                let pixels = render(&parsed, &tiles, set, rect, fmt, self.indexed.then_some(self.transparent), self.ctl)?;
+                drop(tiles);
                 let display = if self.indexed {
                     sprite::pixels::render_indices(&pixels, rect, &palette, Some(self.transparent)).map_err(invalid)?
                 } else {
@@ -255,6 +289,8 @@ impl Decoder<'_> {
                 Arc::make_mut(self.frames.get_mut(frame_index).ok_or_else(|| invalid("tilemap frame is missing"))?).cels.insert(id, Arc::new(replacement));
             }
         }
+        drop(sets);
+        self.budget += decoded;
         Ok(())
     }
 }
@@ -333,6 +369,25 @@ mod cancellation_tests {
         assert!(inflate(&trailing, raw.len(), &Interrupt::NONE).is_err());
     }
 
+    #[test]
+    fn map_words_respect_the_remaining_budget_and_render_can_cancel() {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Default::default());
+        encoder.write_all(&[0; 16]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let map = Map { width: 2, height: 2, masks: [1, 0, 0, 0], compressed: &compressed };
+        let set = Tileset { id: 0, width: 1, height: 1, count: 1, flags: 0, pixels: Some(vec![255; 4]) };
+
+        assert!(map.rect(&set, (i32::MAX, 0), 4).is_err());
+        let rect = map.rect(&set, (0, 0), 4).unwrap();
+        let error = map.inflate(15, &Interrupt::NONE).unwrap_err().to_string();
+        assert!(error.contains("map words exceed"), "{error}");
+        let tiles = map.inflate(16, &Interrupt::NONE).unwrap();
+        let checks = AtomicUsize::new(0);
+        let cancel = || checks.fetch_add(1, Ordering::Relaxed) == 2;
+        assert!(matches!(render(&map, &tiles, &set, rect, PixelFormat::RGBA8, None, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+        assert_eq!(render(&map, &tiles, &set, rect, PixelFormat::RGBA8, None, &Interrupt::NONE).unwrap().to_interleaved(rect), [255; 16]);
+    }
+
     /// Multiple tilesets share one decoded budget; reject aggregate overflow before decoding the next image.
     #[test]
     fn render_tilemaps_rejects_combined_tileset_overflow_before_inflating_the_second() {
@@ -374,7 +429,7 @@ mod cancellation_tests {
         };
         let error = run(31, b"not zlib").unwrap_err().to_string();
         assert!(error.contains("remaining decoded memory budget"), "{error}");
-        assert_eq!(run(32, &compressed).unwrap(), 0, "two distinct tilesets fit the exact combined budget");
+        assert_eq!(run(32, &compressed).unwrap(), 32, "both temporary reservations are released after rendering");
         assert!(run(32, b"not zlib").unwrap_err().to_string().contains("invalid tile data"));
     }
 }

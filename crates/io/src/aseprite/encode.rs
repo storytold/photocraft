@@ -43,6 +43,9 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
     if pass != 0 && pass != groups {
         return Err(invalid("Aseprite cannot encode mixed pass-through/isolated groups; use a converted copy"));
     }
+    if pass != 0 && layers.iter().any(|(layer, _)| layer.is_group() && layer.opacity != 1.0) {
+        return Err(invalid("Aseprite cannot encode opacity on pass-through groups; use a converted copy"));
+    }
     let uuids = sprite.layers.iter().any(|l| l.uuid.is_some());
     let flags = 1 | if pass == 0 { 2 } else { 0 } | if uuids { 4 } else { 0 };
     let mut bytes = vec![0; 128];
@@ -513,8 +516,10 @@ fn validate_tilemaps(sprite: &Sprite, mode: ColorMode, ctl: &Interrupt<'_>) -> R
                 let descriptor = sprite.tilemap_descriptor(id).ok_or_else(|| invalid("tilemap cel has no layer descriptor"))?;
                 let set = sets.get(&tilemap::layer_tileset(descriptor)?).ok_or_else(|| invalid("tilemap layer's tileset is missing"))?;
                 let cel = frame.cels.get(&id).ok_or_else(|| invalid("tilemap cel is missing"))?;
-                let (rect, pixels) =
-                    tilemap::render(&tilemap::map(&c.bytes, ctl)?, set, (cel.rect.x0, cel.rect.y0), fmt, sprite.indexed.then_some(sprite.transparent_index))?;
+                let map = tilemap::map(&c.bytes)?;
+                let rect = map.rect(set, (cel.rect.x0, cel.rect.y0), if sprite.indexed { 5 } else { fmt.bytes_per_pixel() })?;
+                let tiles = map.inflate(sprite::MAX_BYTES.saturating_sub(bytes), ctl)?;
+                let pixels = tilemap::render(&map, &tiles, set, rect, fmt, sprite.indexed.then_some(sprite.transparent_index), ctl)?;
                 let stored = if sprite.indexed { cel.indices.as_ref().ok_or_else(|| invalid("tilemap index image is missing"))? } else { &cel.pixels };
                 if rect != cel.rect || pixels != *stored {
                     return Err(invalid("tilemap display was edited without rasterization; original tile records were preserved"));
