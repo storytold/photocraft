@@ -625,12 +625,17 @@ pub struct LiveStroke {
     /// Set when the doc shows the stroke as a masked colour layer instead of blended pixels (see
     /// [`overlay_path`]).
     overlay: Option<Overlay>,
+    /// An overlay stroke's pixels as far as they are composited: `pre` with the coverage tiles
+    /// that [`settle`](Self::settle) has blended in, which the commit completes (see
+    /// [`into_commit`](Self::into_commit)).
+    shadow: Option<Surface>,
 }
 
 /// Where a live stroke that is shown as a masked layer keeps its mask.
 struct Overlay {
     /// Path of the layer holding the stroke's mask in `LiveStroke::doc`: the colour layer for
-    /// painting, the target layer itself for erasing.
+    /// painting (above the target, or beside it in the group that replaces it), the target layer
+    /// itself for erasing (inside the group that replaces it, when there is one).
     mask_layer: Vec<usize>,
     /// The mask holds what stays (1 minus the stroke), as the eraser's does.
     invert: bool,
@@ -654,7 +659,8 @@ pub use photocraft_engine_core::LiveCommit;
 ///   colour layer cannot show it);
 /// - the layer has effects, Blend If, excluded channels, non-default advanced blending, a vector
 ///   mask, a frame or video data, or sits in a frame: the group that replaces it in the preview
-///   would blend differently from the layer;
+///   would blend differently from the layer (a Normal, fully opaque layer without a mask takes no
+///   group, see `enter_overlay`);
 /// - the layer is clipped (it would no longer be clipped to what is below), or a layer above is
 ///   clipped to it (its clipping base would become the group);
 /// - its layer mask is disabled, has a density below 100 % or a feather: the group takes the mask,
@@ -729,8 +735,8 @@ impl LiveStroke {
 
     /// [`begin_with`](Self::begin_with) where the doc shows the stroke as a masked colour layer
     /// when it can ([`overlay_path`]), so a step rewrites a mask's few tiles instead of blending
-    /// into the layer's pixels. The doc then differs from the committed one in structure (the
-    /// target sits in a group beside the stroke's layer) and in the 8-bit dither the commit adds;
+    /// into the layer's pixels. The doc then differs from the committed one in structure (a colour
+    /// layer above the target, or a group that holds both) and in the 8-bit dither the commit adds;
     /// [`into_commit`](Self::into_commit) still gives the pixels `paint.stroke` writes. A stroke
     /// that cannot be an overlay is [`begin_with`](Self::begin_with)'s.
     pub fn begin_overlay(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
@@ -794,9 +800,11 @@ impl LiveStroke {
             points: Vec::new(),
             base,
             overlay: None,
+            shadow: None,
         };
         if let Some(path) = overlay_at {
             live.enter_overlay(&path, paint, erase, fmt);
+            live.shadow = live.overlay.is_some().then(|| live.pre.clone());
         }
         live.push(&pts)?;
         Ok(live)
@@ -805,22 +813,36 @@ impl LiveStroke {
     /// The stroke as its commit would take it over (see [`LiveCommit`]).
     pub fn into_commit(mut self) -> Result<LiveCommit> {
         let (surface, bounds) = if self.overlay.is_some() {
-            // The doc holds no stroke pixels: blend the whole stroke into the pre-stroke ones once,
-            // as `paint.stroke` does.
-            let mut surf = self.pre.clone();
+            // The doc holds no stroke pixels: blend the stroke into the pre-stroke ones as
+            // `paint.stroke` does. `settle` has done most of it; what is left is the tiles the
+            // last pushes touched and the smoothing tail.
+            let mut surf = self.shadow.take().unwrap_or_else(|| self.pre.clone());
             let cmyk = self.cmyk.clone();
             let (renderer, pre, sel, lock) = (&mut self.renderer, &self.pre, self.sel.as_ref(), self.lock);
-            let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+            photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
                 renderer.finish();
-                renderer.composite(pre, &mut surf, sel, lock, true)
+                renderer.settle_all(pre, &mut surf, sel, lock);
             });
-            (surf, self.bounds().union(&dmg))
+            (surf, self.bounds())
         } else {
             let bounds = self.bounds();
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
             (surf.clone(), bounds)
         };
         Ok(LiveCommit { mixer: None, cmd: self.cmd, base: self.base, params: self.params, seed: Some(self.seed), points: self.points, surface, bounds })
+    }
+
+    /// Composite up to `max_tiles` of what the stroke has drawn into the pixels the commit will
+    /// take, so [`into_commit`](Self::into_commit) has little left to do on release: work for a
+    /// moment when no points are waiting. It leaves the tiles the latest `push` touched, which
+    /// the next push is likely to change again, and never changes the doc. Returns whether
+    /// more is left to settle. A stroke that is not an overlay has nothing to settle (its doc
+    /// already holds the pixels).
+    pub fn settle(&mut self, max_tiles: usize) -> bool {
+        let Some(shadow) = self.shadow.as_mut() else { return false };
+        let cmyk = self.cmyk.clone();
+        let (renderer, pre, sel, lock) = (&mut self.renderer, &self.pre, self.sel.as_ref(), self.lock);
+        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || renderer.settle(pre, shadow, sel, lock, max_tiles)) > 0
     }
 
     /// Whether the doc shows the stroke as a masked colour layer ([`begin_overlay`](Self::begin_overlay))
@@ -830,21 +852,58 @@ impl LiveStroke {
         self.overlay.is_some()
     }
 
-    /// Replace the target layer at `path` in the doc by an isolated group that draws the layer as
-    /// it was, then the stroke: a layer of `paint` through a mask (clipped to the layer when its
-    /// transparency is locked), or, when `erase`, the layer under a mask of what the eraser leaves.
-    /// The group takes the layer's place, blend mode, opacity and layer mask, so the stack blends
-    /// as it does with the stroke in the layer's pixels.
+    /// Show the stroke on the target layer at `path` in the doc as a layer of `paint` through a
+    /// mask (clipped to the layer when its transparency is locked), or, when `erase`, as a mask
+    /// on the layer itself of what the eraser leaves.
+    ///
+    /// A layer that is Normal, fully opaque (opacity times fill 1) and has no layer mask stays as
+    /// it is, with no group: normal over-compositing is associative, so the colour layer just
+    /// above it (clipped to it when locked) composites as the stroke blended into its pixels, and
+    /// the eraser's mask scales its alpha. Any other layer is replaced by an isolated group that
+    /// draws the layer as it was, then the stroke, and takes the layer's place, blend mode,
+    /// opacity and layer mask, so the stack blends as it does with the stroke in the layer's
+    /// pixels. (A group costs the GPU three more passes a frame and breaks its layer batching.)
+    ///
+    /// The mask has the depth of the target's samples (8-bit gray for an 8-bit target, which the
+    /// GPU takes as it is; 16-bit gray for deeper ones): the strength it holds is quantised to
+    /// nearest, well inside the 8-bit dither the commit adds.
     fn enter_overlay(&mut self, path: &[usize], paint: [f32; 4], erase: bool, fmt: photocraft_color::PixelFormat) {
+        use photocraft_color::{BlendMode, PixelFormat, SampleType};
         use photocraft_doc::{Color, Fill, Layer, LayerContent, LayerMask};
         let doc = std::sync::Arc::make_mut(&mut self.doc);
         let Some(target) = doc.layer_at_mut(path) else { return };
-        let original = target.clone();
-        let mask_format = photocraft_color::PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::F32);
+        let mask_format = if fmt.sample == SampleType::U8 { PixelFormat::GRAY8 } else { PixelFormat::GRAY8.with_sample(SampleType::U16) };
         let mask =
             |default: f32| LayerMask { surface: Surface::with_default(mask_format, &[default]), enabled: true, linked: true, density: 1.0, feather: 0.0 };
+        // The colour as the stroke stores it, so the layer shows what the commit blends.
+        let stroke_layer = |visible: bool, clipped: bool| {
+            let mut src = [0.0f32; 8];
+            photocraft_raster::from_rgba_into(&fmt, paint, &mut src);
+            let [r, g, b, _] = photocraft_raster::to_rgba(&fmt, &src[..fmt.channels()]);
+            let mut stroke = Layer::new("Stroke", LayerContent::Fill(Fill::Solid(Color::rgba(r, g, b, paint[3]))));
+            stroke.mask = Some(mask(0.0));
+            stroke.clipped = clipped;
+            stroke.visible = visible;
+            stroke
+        };
+        let plain = target.blend == BlendMode::Normal && target.opacity * target.fill_opacity == 1.0 && target.mask.is_none();
+        if plain {
+            if erase {
+                target.mask = Some(mask(1.0));
+                self.overlay = Some(Overlay { mask_layer: path.to_vec(), invert: true });
+            } else {
+                let (id, visible) = (target.id, target.visible);
+                let Some((&at, parent)) = path.split_last() else { return };
+                let mut mask_layer = parent.to_vec();
+                mask_layer.push(at + 1);
+                doc.insert_above(Some(id), stroke_layer(visible, self.lock));
+                self.overlay = Some(Overlay { mask_layer, invert: false });
+            }
+            return;
+        }
+        let original = target.clone();
         let mut inner = original.clone();
-        inner.blend = photocraft_color::BlendMode::Normal;
+        inner.blend = BlendMode::Normal;
         inner.opacity = 1.0;
         inner.fill_opacity = 1.0;
         inner.mask = None;
@@ -854,15 +913,8 @@ impl LiveStroke {
             mask_layer.push(0);
             vec![inner]
         } else {
-            // The colour as the stroke stores it, so the layer shows what the commit blends.
-            let mut src = [0.0f32; 8];
-            photocraft_raster::from_rgba_into(&fmt, paint, &mut src);
-            let [r, g, b, _] = photocraft_raster::to_rgba(&fmt, &src[..fmt.channels()]);
-            let mut stroke = Layer::new("Stroke", LayerContent::Fill(Fill::Solid(Color::rgba(r, g, b, paint[3]))));
-            stroke.mask = Some(mask(0.0));
-            stroke.clipped = self.lock;
             mask_layer.push(1);
-            vec![inner, stroke]
+            vec![inner, stroke_layer(true, self.lock)]
         };
         let mut group = Layer::group(original.name.clone(), children);
         group.visible = original.visible;

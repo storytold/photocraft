@@ -1,6 +1,9 @@
-//! The GPU compositor draws a live Brush stroke's overlay document (the target inside an isolated
-//! group beside a colour layer through a mask) as the CPU flatten of the document the commit
-//! writes. The overlay is the doc the canvas hands the GPU while a stroke is drawn.
+//! The GPU compositor draws a live Brush stroke's overlay document as the CPU flatten of the
+//! document the commit writes. The overlay is the doc the canvas hands the GPU while a stroke is
+//! drawn: a colour layer through a mask right above a plain target (or the mask on the target
+//! itself, for an erase), or, for a target with opacity, a blend mode or a layer mask, the target
+//! inside an isolated group beside the colour layer. Both shapes are drawn, on 8 and 16-bit
+//! documents (an 8-bit gray mask or a 16-bit one).
 //!
 //! Tolerance: 3/255 in premultiplied channels, the GPU parity tests' one 8-bit step
 //! (`crates/gpu/tests/it/parity.rs`) plus the 2/255 the preview may differ from the commit by (the
@@ -18,9 +21,9 @@ const H: i32 = 80;
 const TOLERANCE: f32 = 1.0 / 255.0 + 2.0 / 255.0 + 4.0 * f32::EPSILON;
 const PTS: [[f64; 3]; 6] = [[14.0, 40.0, 1.0], [34.0, 20.0, 0.8], [56.0, 52.0, 1.0], [78.0, 24.0, 0.6], [100.0, 44.0, 1.0], [70.0, 70.0, 1.0]];
 
-fn scene(setup: &dyn Fn(&mut Session)) -> Session {
+fn scene(depth: u64, setup: &dyn Fn(&mut Session)) -> Session {
     let mut s = Session::new();
-    s.execute("file.new", json!({"width": W, "height": H, "background": "white"})).unwrap();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": depth, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.edit("texture", |doc, active| {
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
@@ -115,17 +118,39 @@ fn the_gpu_draws_the_overlay_as_the_committed_stroke() {
             l.fill_opacity = 0.8;
         })
     });
-    let plain: Setup = Box::new(|_| ());
-    let erase_setup: Setup = Box::new(|_| ());
-    let locked: Setup = Box::new(|s| tweak(s, |l| l.locks.transparency = true));
-    let cases: Vec<(&str, Setup, Value)> = vec![
-        ("plain Normal", plain, json!({})),
-        ("lock transparency", locked, json!({})),
-        ("erase", erase_setup, json!({"erase": true})),
-        ("opacity, Multiply and mask", masked, json!({})),
+    let none = || -> Setup { Box::new(|_| ()) };
+    let lock = || -> Setup { Box::new(|s| tweak(s, |l| l.locks.transparency = true)) };
+    let faded = || -> Setup { Box::new(|s| tweak(s, |l| l.opacity = 0.6)) };
+    let multiply = || -> Setup {
+        Box::new(|s| {
+            tweak(s, |l| {
+                l.blend = photocraft_color::BlendMode::Multiply;
+                l.locks.transparency = true;
+            })
+        })
+    };
+    let cases: Vec<(&str, u64, Setup, Value)> = vec![
+        // No group: a colour layer above the target, or the mask on the target.
+        ("plain Normal", 8, none(), json!({})),
+        ("plain Normal, 16-bit", 16, none(), json!({})),
+        ("lock transparency", 8, lock(), json!({})),
+        ("lock transparency, 16-bit", 16, lock(), json!({})),
+        ("erase", 8, none(), json!({"erase": true})),
+        ("erase, 16-bit", 16, none(), json!({"erase": true, "opacity": 0.6})),
+        // An isolated group around the target.
+        ("opacity, Multiply and mask", 8, masked, json!({})),
+        ("opacity, 16-bit", 16, faded(), json!({})),
+        ("opacity, erase", 8, faded(), json!({"erase": true})),
+        ("Multiply, lock transparency", 8, multiply(), json!({})),
     ];
-    for (name, setup, extra) in cases {
-        let (live, committed) = overlay_doc(&|| scene(&*setup), extra);
+    for (name, depth, setup, extra) in cases {
+        let (live, committed) = overlay_doc(&|| scene(depth, &*setup), extra);
+        let grouped = live.walk().iter().any(|(_, _, l)| l.is_group());
+        assert_eq!(
+            grouped,
+            !matches!(name, "plain Normal" | "plain Normal, 16-bit" | "lock transparency" | "lock transparency, 16-bit" | "erase" | "erase, 16-bit"),
+            "{name}: the overlay's shape"
+        );
         let cpu = photocraft_compose::flatten(&committed.active().unwrap().doc);
         let gpu = photocraft_gpu::render_to_vec(&mut comp, ctx.device(), ctx.queue(), &live, live.bounds()).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let d = worst(&cpu.px, &gpu);

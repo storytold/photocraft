@@ -1,7 +1,7 @@
 //! A live stroke shown as a masked colour layer (`LiveStroke::begin_overlay`) draws what its
 //! commit writes: flattening the live document after the last step and the committed document
 //! agree to within the 8-bit dither the commit adds, and the commit itself takes exactly the
-//! pixels `paint.stroke` renders.
+//! pixels `paint.stroke` renders, whether or not the stroke was settled along the way.
 
 use super::*;
 use crate::brush_cmds::LiveStrokeExt;
@@ -59,6 +59,16 @@ fn active(s: &Session) -> LayerId {
 fn tweak(s: &mut Session, f: impl FnOnce(&mut Layer)) {
     s.edit("tweak", |doc, active| {
         f(doc.layer_mut(active.unwrap()).unwrap());
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Puts the active layer into a pass-through group on top of the stack.
+fn grouped(s: &mut Session) {
+    s.edit("group", |doc, active| {
+        let layer = doc.remove(active.unwrap()).unwrap();
+        doc.layers.push(Layer::group("Group", vec![layer]));
         Ok(())
     })
     .unwrap();
@@ -135,6 +145,19 @@ fn the_overlay_shows_what_the_commit_writes() {
             brush(json!({})),
         ),
         ("opacity, mode and mask", 8, masked, brush(json!({}))),
+        ("inside a group", 8, t(grouped), brush(json!({}))),
+        (
+            "inside a group, locked",
+            8,
+            t(|s| {
+                grouped(s);
+                tweak(s, |l| l.locks.transparency = true);
+            }),
+            brush(json!({})),
+        ),
+        ("opacity only", 8, t(|s| tweak(s, |l| l.opacity = 0.6)), brush(json!({}))),
+        ("opacity only, erase", 8, t(|s| tweak(s, |l| l.fill_opacity = 0.6)), brush(json!({"erase": true}))),
+        ("Multiply only", 8, t(|s| tweak(s, |l| l.blend = photocraft_color::BlendMode::Multiply)), brush(json!({}))),
     ];
     for (name, depth, setup, p) in cases {
         let (live, committed, d) = run(&|| scene(depth, &*setup), p);
@@ -155,10 +178,86 @@ fn the_overlay_leaves_the_targets_pixels_alone_until_the_commit() {
     p["points"] = json!(PTS);
     let live = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
     assert!(live.is_overlay());
-    assert!(live.doc.layers.iter().all(|l| l.id != id), "the target sits inside a group");
     let shown = live.doc.layer(id).unwrap().surface().unwrap();
     assert!(same_pixels(shown, &before, Rect::new(0, 0, W, H)), "no stroke pixels in the target");
     assert!(live.overlay_bounds().is_some_and(|b| !b.is_empty()));
+}
+
+/// How the live document holds the stroke next to the target `id`.
+#[derive(Debug, PartialEq)]
+enum Shape {
+    /// The target is untouched except for the mask an erase puts on it; a paint stroke is a layer
+    /// right above it (clipped to it when `clipped`).
+    NoGroup { clipped: bool },
+    /// The target is inside an isolated group that holds the stroke too.
+    Group,
+}
+
+fn shape(live: &LiveStroke, before: &photocraft_doc::Document, id: LayerId, erase: bool) -> Shape {
+    use photocraft_doc::LayerContent;
+    let doc = &*live.doc;
+    let path = doc.path_of(id).unwrap();
+    let parent_path = &path[..path.len() - 1];
+    let (at, siblings): (usize, &[Layer]) =
+        (*path.last().unwrap(), if parent_path.is_empty() { doc.layers.as_slice() } else { doc.layer_at(parent_path).unwrap().children().unwrap() });
+    let was = before.path_of(id).unwrap();
+    if was == path {
+        // No group around the target: the same stack, plus the stroke's layer when painting.
+        let groups = |d: &photocraft_doc::Document| d.walk().iter().filter(|(_, _, l)| l.is_group()).count();
+        assert_eq!(groups(doc), groups(before), "no group was added");
+        let layers = |d: &photocraft_doc::Document| d.walk().len();
+        assert_eq!(layers(doc), layers(before) + usize::from(!erase), "a paint stroke adds one layer, an erase none");
+        let target = doc.layer(id).unwrap();
+        assert_eq!(target.mask.is_some(), erase, "only an erase puts a mask on the target");
+        if erase {
+            return Shape::NoGroup { clipped: false };
+        }
+        let above = &siblings[at + 1];
+        assert!(matches!(above.content, LayerContent::Fill(_)), "the stroke's layer sits right above the target");
+        assert!(above.mask.is_some());
+        return Shape::NoGroup { clipped: above.clipped };
+    }
+    let group = doc.layer_at(parent_path).unwrap();
+    assert!(group.is_group() && parent_path.len() == was.len(), "the target moved into a new group");
+    Shape::Group
+}
+
+#[test]
+fn a_plain_target_takes_no_group_and_any_other_keeps_the_isolated_one() {
+    let nogroup = |clipped| Shape::NoGroup { clipped };
+    let cases: Vec<(&str, Tweak, Value, Shape)> = vec![
+        ("paint", t(|_| ()), brush(json!({})), nogroup(false)),
+        ("lock transparency", t(|s| tweak(s, |l| l.locks.transparency = true)), brush(json!({})), nogroup(true)),
+        ("erase", t(|_| ()), brush(json!({"erase": true})), nogroup(false)),
+        ("inside a group", t(grouped), brush(json!({})), nogroup(false)),
+        ("opacity", t(|s| tweak(s, |l| l.opacity = 0.5)), brush(json!({})), Shape::Group),
+        ("fill opacity, erase", t(|s| tweak(s, |l| l.fill_opacity = 0.5)), brush(json!({"erase": true})), Shape::Group),
+        ("Multiply", t(|s| tweak(s, |l| l.blend = photocraft_color::BlendMode::Multiply)), brush(json!({})), Shape::Group),
+        ("layer mask", t(|s| tweak(s, |l| l.mask = Some(LayerMask::reveal_all()))), brush(json!({})), Shape::Group),
+        ("layer mask, erase", t(|s| tweak(s, |l| l.mask = Some(LayerMask::reveal_all()))), brush(json!({"erase": true})), Shape::Group),
+    ];
+    for (name, setup, mut p, expected) in cases {
+        let s = scene(8, &*setup);
+        let (id, before) = (active(&s), s.active().unwrap().doc.clone());
+        p["points"] = json!(PTS);
+        let live = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
+        assert!(live.is_overlay(), "{name}");
+        let erase = p["erase"] == json!(true);
+        assert_eq!(shape(&live, &before, id, erase), expected, "{name}");
+    }
+}
+
+#[test]
+fn the_mask_has_the_depth_of_the_document() {
+    for (depth, fmt) in [(8, photocraft_color::PixelFormat::GRAY8), (16, photocraft_color::PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::U16))] {
+        let s = scene(depth, &|_| ());
+        let mut p = brush(json!({}));
+        p["points"] = json!(PTS);
+        let live = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
+        let path = live.doc.path_of(active(&s)).unwrap();
+        let stroke = &live.doc.layers[path[0] + 1];
+        assert_eq!(stroke.mask.as_ref().unwrap().surface.format(), fmt, "{depth}-bit");
+    }
 }
 
 #[test]
@@ -251,4 +350,72 @@ fn a_layer_the_group_would_blend_differently_keeps_the_pixel_path() {
         assert!(!live.is_overlay(), "{name}");
         assert!(d <= TOLERANCE, "{name}: {d}");
     }
+}
+
+/// A longer stroke than `PTS`, for settling along the way.
+fn long_stroke() -> Vec<[f64; 3]> {
+    (0..40).map(|i| [10.0 + 2.6 * f64::from(i), 40.0 + 24.0 * (f64::from(i) / 5.0).sin(), 0.5 + 0.5 * f64::from((i * 3) % 5) / 4.0]).collect()
+}
+
+#[test]
+fn a_stroke_settled_along_the_way_commits_the_pixels_paint_stroke_renders() {
+    let pts = long_stroke();
+    let cases = [
+        ("plain", brush(json!({}))),
+        ("dual brush", brush(json!({"brush": {"size": 26, "hardness": 0.3, "flow": 0.6, "dualBrush": {"enabled": true, "size": 9, "spacing": 0.4}}}))),
+        ("wet edges", brush(json!({"brush": {"size": 26, "hardness": 0.3, "flow": 0.6, "wetEdges": true}}))),
+        ("texture", brush(json!({"brush": {"size": 26, "hardness": 0.3, "flow": 0.6, "texture": {"enabled": true, "depth": 0.7}}}))),
+        ("smoothing", brush(json!({"smoothing": 0.6}))),
+        ("erase", brush(json!({"erase": true}))),
+        ("selection and lock", brush(json!({}))),
+    ];
+    let mut backlog = false;
+    for (name, mut p) in cases {
+        let setup = |s: &mut Session| {
+            if name == "selection and lock" {
+                s.execute("select.rect", json!({"x": 20, "y": 15, "width": 70, "height": 50})).unwrap();
+                tweak(s, |l| l.locks.transparency = true);
+            }
+        };
+        let mut fresh: Option<Session> = None;
+        p["points"] = json!(pts);
+        // Settled every `every` pushes, a few tiles at a time or until nothing is left.
+        for (every, max) in [(1, 2), (3, 1), (5, usize::MAX)] {
+            let s = scene(8, &setup);
+            let mut q = p.clone();
+            q["points"] = json!([pts[0]]);
+            let mut live = LiveStroke::begin_overlay(&s, "paint.stroke", &q).unwrap();
+            assert!(live.is_overlay(), "{name}");
+            for (n, pt) in pts[1..].iter().enumerate() {
+                live.push(&points(std::slice::from_ref(pt))).unwrap();
+                if n % every == 0 {
+                    backlog |= live.settle(max);
+                }
+            }
+            let seed = live.seed;
+            let commit = live.into_commit().unwrap();
+            // The commit is what `paint.stroke` renders, once.
+            let fresh = fresh.get_or_insert_with(|| {
+                p["seed"] = json!(seed);
+                let mut f = scene(8, &setup);
+                f.execute("paint.stroke", p.clone()).unwrap();
+                f
+            });
+            assert!(
+                same_pixels(&commit.surface, &surface(fresh), Rect::new(0, 0, W, H)),
+                "{name}: settling every {every} pushes ({max} tiles) changed the commit"
+            );
+        }
+    }
+    assert!(backlog, "settle never left a tile for later, so the test did not settle partway");
+}
+
+#[test]
+fn a_stroke_that_is_not_an_overlay_has_nothing_to_settle() {
+    let s = scene(8, &|_| ());
+    let mut p = brush(json!({"mode": "multiply"}));
+    p["points"] = json!(PTS);
+    let mut live = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
+    assert!(!live.is_overlay());
+    assert!(!live.settle(16));
 }

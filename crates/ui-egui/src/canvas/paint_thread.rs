@@ -3,6 +3,11 @@
 //! the newest step the stroke has painted. While the thread is behind, points that arrive meanwhile
 //! are painted together as one step, and the cursor, panels and pen input keep their frame rate.
 //!
+//! While no points are waiting, the thread also settles the stroke (`EngineStroke::settle`): it
+//! composites what the stroke has drawn into the pixels the commit will take, a few tiles at a
+//! time, so that releasing the pen has little left to do. Settling shows nothing and is never
+//! work for the canvas; new points always go first.
+//!
 //! Each step is the stroke's own copy of the document, as when it painted on the UI thread, so the
 //! canvas shows and refreshes it the same way (`LiveStroke::since`).
 
@@ -39,6 +44,10 @@ impl Shown {
     }
 }
 
+/// Tiles settled per batch (see the module docs): few enough that points handed over meanwhile
+/// wait a few milliseconds at most.
+const SETTLE_BATCH: usize = 16;
+
 struct State {
     /// Points handed over that the stroke hasn't painted yet.
     pending: Vec<StrokePoint>,
@@ -47,6 +56,10 @@ struct State {
     /// Steps painted since the canvas last took them, and what the last one shows.
     steps: Vec<Step>,
     shown: Shown,
+    /// The stroke may have more to settle (see `EngineStroke::settle`).
+    settling: bool,
+    /// The stroke is out of `stroke`, being settled.
+    settling_now: bool,
     /// A step failed: later points are dropped and `shown` stays the last good step, as when the
     /// canvas stopped feeding the stroke after its error.
     failed: bool,
@@ -61,8 +74,14 @@ struct State {
 }
 
 impl State {
+    /// Everything handed over is painted and the stroke is back.
     fn idle(&self) -> bool {
         self.stroke.is_some() && self.pending.is_empty()
+    }
+
+    /// Everything handed over is painted; the stroke may be out being settled.
+    fn painted(&self) -> bool {
+        self.pending.is_empty() && (self.stroke.is_some() || self.settling_now)
     }
 }
 
@@ -93,11 +112,34 @@ impl Shared {
         let mut st = self.lock();
         if step.is_ok() {
             st.shown = Shown::of(&stroke);
+            st.settling = true;
         } else {
             st.failed = true;
+            st.settling = false;
             st.pending.clear();
         }
         st.steps.push(step);
+        st.stroke = Some(stroke);
+        drop(st);
+        self.changed.notify_all();
+    }
+
+    /// Settle a batch of the stroke's tiles, if no points are waiting and the stroke is free. The
+    /// canvas sees nothing of it: no step, no change to what is shown.
+    fn settle_some(&self) {
+        let mut stroke = {
+            let mut st = self.lock();
+            if !st.pending.is_empty() || !st.settling {
+                return;
+            }
+            let Some(stroke) = st.stroke.take() else { return };
+            st.settling_now = true;
+            stroke
+        };
+        let more = stroke.settle(SETTLE_BATCH);
+        let mut st = self.lock();
+        st.settling = more;
+        st.settling_now = false;
         st.stroke = Some(stroke);
         drop(st);
         self.changed.notify_all();
@@ -119,7 +161,7 @@ impl Shared {
         loop {
             {
                 let mut st = self.lock();
-                while st.pending.is_empty() && !st.closed {
+                while st.pending.is_empty() && !(st.settling && st.stroke.is_some()) && !st.closed {
                     st = self.changed.wait(st).unwrap_or_else(PoisonError::into_inner);
                 }
                 if st.closed {
@@ -127,6 +169,7 @@ impl Shared {
                 }
             }
             self.paint_pending();
+            self.settle_some();
         }
     }
 }
@@ -147,6 +190,8 @@ impl PaintThread {
             stroke: Some(stroke),
             steps: Vec::new(),
             shown: shown.clone(),
+            settling: false,
+            settling_now: false,
             failed: false,
             closed: false,
             #[cfg(test)]
@@ -188,7 +233,7 @@ impl PaintThread {
     /// the last call, oldest first, and updates what `shown` shows.
     pub(super) fn catch_up(&mut self, wait: Duration) -> Vec<Step> {
         let (shown, steps) = {
-            let mut st = self.wait_idle(wait);
+            let mut st = self.wait_until(wait, State::painted);
             (st.shown.clone(), std::mem::take(&mut st.steps))
         };
         self.shown = shown;
@@ -197,9 +242,11 @@ impl PaintThread {
 
     /// Is the stroke still painting points it was given, or holding steps `catch_up` hasn't taken?
     /// (A step can finish just after a frame's wait ran out; the next frame must collect it.)
+    /// Settling is not work for the canvas.
     pub(super) fn busy(&self) -> bool {
         let st = self.shared.lock();
-        !st.steps.is_empty() || (!st.idle() && self.thread.as_ref().is_some_and(|t| !t.is_finished()))
+        let painting = !st.pending.is_empty() || (st.stroke.is_none() && !st.settling_now);
+        !st.steps.is_empty() || (painting && self.thread.as_ref().is_some_and(|t| !t.is_finished()))
     }
 
     pub(super) fn shown(&self) -> &Shown {
@@ -210,7 +257,8 @@ impl PaintThread {
     /// stroke itself (`None` if its thread stopped mid-step).
     pub(super) fn finish(mut self) -> (Vec<Step>, Option<EngineStroke>) {
         let steps = self.catch_up(Duration::MAX);
-        let stroke = self.shared.lock().stroke.take();
+        // The stroke may be out for a batch of settling.
+        let stroke = self.wait_until(Duration::MAX, State::idle).stroke.take();
         (steps, stroke)
     }
 
@@ -242,14 +290,15 @@ impl PaintThread {
     /// Look at the stroke once it has painted everything handed over.
     #[cfg(test)]
     pub(super) fn peek<R>(&self, f: impl FnOnce(&EngineStroke) -> R) -> Option<R> {
-        self.wait_idle(Duration::MAX).stroke.as_ref().map(f)
+        self.wait_until(Duration::MAX, State::idle).stroke.as_ref().map(f)
     }
 
-    fn wait_idle(&self, wait: Duration) -> MutexGuard<'_, State> {
+    /// Wait up to `wait` for `done` to hold of the state (see [`State::painted`], [`State::idle`]).
+    fn wait_until(&self, wait: Duration, done: fn(&State) -> bool) -> MutexGuard<'_, State> {
         let deadline = Instant::now().checked_add(wait);
         let mut st = self.shared.lock();
         // A stopped thread (inline painting never waits) has nothing more to give.
-        while !st.idle() && self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
+        while !done(&st) && self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
             let left = deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(Instant::now()));
             if left.is_zero() {
                 break;
@@ -308,6 +357,47 @@ mod tests {
         let (a, b) = (surface(&painted), surface(&inline));
         let differ = (0..120).flat_map(|y| (0..400).map(move |x| (x, y))).filter(|&(x, y)| a.rgba(x, y) != b.rgba(x, y)).count();
         assert_eq!(differ, 0, "pixels differ from the inline stroke");
+        assert!(b.rgba(200, 60 + (20.0 * (30.0f64 / 9.0).sin()) as i32)[3] > 0.5, "the stroke is there");
+    }
+
+    #[test]
+    fn a_stroke_settled_on_the_thread_commits_the_pixels_of_one_that_was_not() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 120, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "paint"})).unwrap();
+        let begin = || {
+            let p = json!({"points": [[20, 60, 1.0]], "brush": {"size": 40, "hardness": 0.3}, "seed": 3, "target": "pixels"});
+            let live = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
+            assert!(live.is_overlay());
+            EngineStroke::Brush(Box::new(live))
+        };
+        let pts: Vec<StrokePoint> = (1..=60).map(|i| StrokePoint::new(20.0 + 6.0 * f64::from(i), 60.0 + 20.0 * (f64::from(i) / 9.0).sin(), 1.0)).collect();
+        let commit = |e: EngineStroke| match e {
+            EngineStroke::Brush(l) => l.into_commit().unwrap().surface,
+            _ => unreachable!("a Brush stroke"),
+        };
+
+        let mut thread = PaintThread::start(begin());
+        for chunk in pts.chunks(10) {
+            thread.push(chunk.to_vec());
+            thread.catch_up(Duration::MAX);
+            // Settling is the thread's own business: it is never work for the canvas.
+            assert!(!thread.busy(), "settling made the stroke busy");
+        }
+        // With no points waiting, the thread settles what the last push left alone.
+        let start = Instant::now();
+        while thread.shared.lock().settling && start.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!thread.shared.lock().settling, "the thread settled everything it could");
+        assert!(thread.catch_up(Duration::ZERO).is_empty(), "settling pushed no step");
+        let (_, painted) = thread.finish();
+
+        let mut inline = begin();
+        inline.push(&pts).unwrap();
+        let (a, b) = (commit(painted.expect("the stroke comes back")), commit(inline));
+        let differ = (0..120).flat_map(|y| (0..400).map(move |x| (x, y))).filter(|&(x, y)| a.rgba(x, y) != b.rgba(x, y)).count();
+        assert_eq!(differ, 0, "the settled stroke commits other pixels");
         assert!(b.rgba(200, 60 + (20.0 * (30.0f64 / 9.0).sin()) as i32)[3] > 0.5, "the stroke is there");
     }
 
