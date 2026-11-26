@@ -4,6 +4,9 @@
 //! Nothing here grows with the documents, presets, recent files or layers, so an idle frame keys the same few bytes
 //! whatever the model's size.
 
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 use craft::ui::contract::{MemoProps, Revision, Tracked};
@@ -205,11 +208,11 @@ impl<'a> RuleFacts<'a> {
                 active_index: s.active_index(),
                 active: s.active_tracked(),
                 all: all_revisions(s.documents()),
-                scratch: photocraft_raster::spill::read_error_generation(),
+                scratch: crate::scratch_reads::generation(),
                 jobs: (s.has_jobs(), s.active_job().map(|job| job.id.0)),
                 smart_child: active.is_some_and(|d| s.smart_links.iter().any(|link| link.child == d.doc.id)),
                 fade: s.edit_state.fade.as_ref().map(|fade| (fade.doc, fade.revision)),
-                proofs: s.color.proofs_revision(),
+                proofs: s.color().proofs_revision(),
                 image_assets: &s.file_menu.image_assets,
                 slices_locked: s.file_menu.slices_locked,
             },
@@ -217,12 +220,12 @@ impl<'a> RuleFacts<'a> {
                 clipboard: s.clipboard.revision(),
                 style_clipboard: s.style_clipboard.revision(),
                 path_clipboards: (s.path_fill_clipboard.is_some(), s.path_stroke_clipboard.is_some()),
-                presets: s.presets.revision(),
+                presets: s.presets().revision(),
                 no_patterns: s.patterns.items.is_empty(),
                 type_defaults: s.type_defaults.is_some(),
                 measurement_log: s.analysis.log.is_empty(),
                 mask_targeted: s.tools.mask_targeted,
-                actions: (s.actions.list.revision(), s.actions.recording, s.actions.playing),
+                actions: (s.actions().list.revision(), s.recording.target, s.recording.playing),
                 undo_label: crate::actions::library::edit_undo_label(app),
                 plugins: photocraft_plugins::registry::revision(),
             },

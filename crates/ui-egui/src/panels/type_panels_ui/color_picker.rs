@@ -88,8 +88,11 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: Kind, id: u32) -> Result<Dialo
     let color = Srgba::from_rgb_array(rgb);
     panel_docking::show_panel(app, kind.panel(), Some(true))?;
     app.ui.type_panels.options = Some((kind.paragraph(), id));
-    // The instance keeps two style pickers apart: the host replaces a dialog only by one of the same instance.
-    let picker = ColorPickerDialog::new(format!("textStyle.{}.{id}", kind.name()), tl!("Color Picker (Text Color)"), color).instance((kind.name(), id));
+    // The instance keeps two style pickers apart: the host replaces a dialog only by one of the same instance. No
+    // screen eyedropper button, as in the reference application (#17017).
+    let picker = ColorPickerDialog::new(format!("textStyle.{}.{id}", kind.name()), tl!("Color Picker (Text Color)"), color)
+        .eyedropper(false)
+        .instance((kind.name(), id));
     let dialog = app.framework.dialogs.open(picker);
     app.ui.type_panels.color_target = Some(Target { document, revision, kind, id, color, dialog });
     Ok(dialog)

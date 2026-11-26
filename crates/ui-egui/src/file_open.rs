@@ -59,7 +59,7 @@ pub enum DropRoute {
 /// Where a web-build drop at `at` lands, from what the last frame drew: the canvas (a drop is
 /// placed only while a document is open) and whether `at` is free of windows and dialogs above
 /// the workspace (`uncovered`). No pointer, a covered one, or no canvas means [`DropTo::Window`].
-/// The web build's own drop path until FW-264; native drops arrive through framework drop targets.
+/// The web build's own drop path until FW-264, and native drops the tab strip does not take (`canvas::window_drop`).
 pub(crate) fn target_at(at: Option<egui::Pos2>, uncovered: bool, canvas: Option<egui::Rect>, has_document: bool) -> DropTo {
     let Some(p) = at.filter(|_| uncovered) else {
         return DropTo::Window;
@@ -100,7 +100,8 @@ pub(crate) fn log_drag_over(ctx: &egui::Context, hovering: usize) {
 }
 
 /// A file dropped on the canvas, waiting its turn to be placed in the document it was dropped on
-/// (queued with its [`DocId`] in `drop_places`).
+/// (queued with its [`DocId`] in `drop_places`), or one of several files chosen at once in File ›
+/// Place Embedded's dialog, waiting its turn in the document the command was given in.
 pub(crate) enum DropPlace {
     /// Destination captured when the file is dropped, before a later pointer move.
     At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId> },
@@ -109,6 +110,10 @@ pub(crate) enum DropPlace {
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
+    /// Chosen in File › Place Embedded's dialog (desktop), by its full path: read when its turn
+    /// comes and placed as that dialog places a single file. The web's picks carry their contents
+    /// and wait as [`Self::Bytes`].
+    Path(String),
 }
 
 impl DropPlace {
@@ -117,6 +122,7 @@ impl DropPlace {
         match self {
             Self::At { source, .. } => source.queued_bytes(),
             Self::File(f) => f.bytes.as_ref().map_or(0, |b| b.len()),
+            Self::Path(_) => 0,
             Self::Bytes(_, bytes) => bytes.len(),
         }
     }
@@ -127,6 +133,7 @@ impl DropPlace {
         match self {
             Self::At { source, .. } => source.holds_bytes(),
             Self::File(f) => f.bytes.is_some(),
+            Self::Path(_) => false,
             Self::Bytes(..) => true,
         }
     }
@@ -432,7 +439,7 @@ impl PhotocraftApp {
         }
     }
 
-    /// The pointer position (the web build's drop path until FW-264), from the OS cursor service when available, falling back to egui's
+    /// The pointer position (where a web or window-wide drop lands), from the OS cursor service when available, falling back to egui's
     /// last-known pointer position (e.g. on Wayland).
     pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
         self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
@@ -457,7 +464,7 @@ impl PhotocraftApp {
         places
     }
 
-    /// Where a web-build drop at `at` lands (the web build's own drop path until FW-264). Over a
+    /// Where a web-build or window-wide drop at `at` lands (`canvas::window_drop`). Over a
     /// window or dialog it's not the canvas. On the canvas it carries the document point under `at`.
     pub(crate) fn drop_to(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTo {
         let uncovered = at.is_some_and(|p| {
@@ -557,6 +564,12 @@ impl PhotocraftApp {
                     let placed = self.place_bytes_with(&name, bytes, None, &params);
                     (name, placed)
                 }
+                DropPlace::Path(path) => {
+                    let placed = photocraft_format::read_file(std::path::Path::new(&path))
+                        .map_err(|e| e.to_string())
+                        .and_then(|bytes| self.place_bytes_with(&path, bytes, None, &params));
+                    (display_name(&path), placed)
+                }
             };
             match placed {
                 // Running in the background: Free Transform starts when the layer has landed.
@@ -573,6 +586,32 @@ impl PhotocraftApp {
                 Err(e) => self.place_failed(&name, &e),
             }
         }
+    }
+
+    /// File › Place Embedded with several files chosen (#14107): as in the reference application,
+    /// each is placed in `doc` in turn, in the order the dialog returned them, with its own Free
+    /// Transform and its own history state. They wait in the queue of files dropped on the canvas,
+    /// so the next one is placed once the previous one's transform is committed or cancelled (Esc
+    /// takes back only that file), and with Skip Transform when Placing all of them are placed at
+    /// once. A file that can't be read or placed is reported and the next one placed.
+    ///
+    /// Every chosen file is queued: the drop queue's admission limits ([`queue_takes_drop`]) are
+    /// not applied to them. A desktop pick waits as its path, and a web pick's contents were
+    /// already read by the browser when the dialog answered, so refusing it would free nothing
+    /// and only lose a file the user chose. Each is released as soon as it is placed, and while
+    /// they wait they count against the limit for later drops.
+    ///
+    /// None of them fills a selected Frame layer (`"frame": false`), as a single file would: each
+    /// would replace the previous one's image there, without a box or a layer of its own.
+    pub(crate) fn place_picked(&mut self, ctx: &egui::Context, doc: DocId, files: Vec<crate::file_dialog::PickedFile>) {
+        for file in files {
+            let place = match file {
+                crate::file_dialog::PickedFile::Path(path) => DropPlace::Path(path),
+                crate::file_dialog::PickedFile::Contents(name, bytes) => DropPlace::Bytes(name, bytes),
+            };
+            self.drop_places.push_back((doc, DropPlace::At { source: Box::new(place), frame: None }));
+        }
+        self.place_next_dropped(ctx);
     }
 
     /// Queue the web drops onto the canvas that the shell has read since the last frame
@@ -620,8 +659,15 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read. With background jobs
     /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
+    ///
+    /// As in the reference application, Place Embedded centres the file on a selection, removing
+    /// it (#14102); otherwise a place centres it on the part of the canvas in view (#14103).
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
+        let mut params = serde_json::json!({"centerOnSelection": linked.is_none()});
+        if let Some(centre) = visible_canvas_centre(self) {
+            params["center"] = serde_json::json!(centre);
+        }
+        self.place_bytes_with(name, bytes, linked, &params)
     }
 
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
@@ -653,6 +699,31 @@ impl PhotocraftApp {
             }
         }
     }
+}
+
+/// Where a place lands when only part of the canvas is in view (#14103): the centre of the part
+/// of the canvas the active view shows, in document pixels. `None` (the canvas centre) when the
+/// whole canvas is in view, and in the cases not measured in the reference application: a
+/// rotated view, or one that shows the canvas whole on one axis. `None` too when the place fills
+/// the active layer's frame, whose `center` is in the frame's own space.
+fn visible_canvas_centre(app: &PhotocraftApp) -> Option<[f64; 2]> {
+    let view = crate::canvas::document_display::active_view(app)?;
+    if view.rotation.abs() > 1e-6 {
+        return None;
+    }
+    let st = app.session.active()?;
+    if st.active_layer.is_some_and(|id| photocraft_engine::frame_cmds::frame_of(&st.doc, id).is_some()) {
+        return None;
+    }
+    let size = st.doc.size;
+    let shown = view.visible();
+    // The shown span of the canvas on one axis, if the view cuts it there.
+    let cut = |(lo, hi): (f64, f64), len: u32| {
+        let len = f64::from(len);
+        let (lo, hi) = (lo.max(0.0), hi.min(len));
+        (lo < hi && (lo > 0.0 || hi < len)).then_some((lo + hi) / 2.0)
+    };
+    Some([cut((shown.x0, shown.x1), size.width)?, cut((shown.y0, shown.y1), size.height)?])
 }
 
 /// Order names like a file browser does: runs of digits by their value (`File_2` before
@@ -728,5 +799,8 @@ fn same_file(p: &str, path: &str, canon: Option<&std::path::Path>) -> bool {
 
 #[cfg(test)]
 mod dialog_order_tests;
+#[cfg(test)]
+#[path = "place_multiple_files_tests.rs"]
+mod place_multiple_files_tests;
 #[cfg(test)]
 mod tests;
