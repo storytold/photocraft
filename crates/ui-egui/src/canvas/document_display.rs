@@ -290,6 +290,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     let queued = view.pending.clone();
     let mut bound = given;
     let mut ruler_zero = Point::ZERO;
+    let (ruler_x, ruler_y) = super::rulers::canvas_rulers(app, idx);
     let mut canvas = Canvas::new(label.clone())
         .id(id)
         .view(Bind::bound(&mut bound))
@@ -299,6 +300,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         .snap(snap)
         .pasteboard(pasteboard)
         .navigation(navigation)
+        .rulers(ruler_x, ruler_y)
         // The canvas shows the rulers along its top and left edges, and its view lies inside the strips.
         .with_rulers(super::rulers::strips(app, host, &mut ruler_zero))
         .view_follows_pointer(follows_pointer)

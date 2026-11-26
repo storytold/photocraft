@@ -3,9 +3,9 @@
 //! every change runs as an undoable engine command (`view.newGuide` / `view.moveGuide` / `view.deleteGuide`).
 
 use craft::behavior::kurbo::{Point, Rect as DocRect, Vec2};
-use craft::behavior::{Axis, EditEvent};
+use craft::behavior::{Axis, EditEvent, RulerUnits, Ticks};
 use craft::theme::Rgba;
-use craft::ui::canvas::{Guide, GuideDrag, GuideKey, GuideLine, Rulers};
+use craft::ui::canvas::{Guide, GuideDrag, GuideKey, GuideLine, RulerText, Rulers};
 use craft::ui::canvas_controls::{CanvasGrid, GridLine, Guides, GuidesOutput};
 use craft::ui::contract::{Bind, Show as _};
 use craft::ui::runtime::env::UnitKind;
@@ -89,6 +89,20 @@ fn moves_with_command(app: &PhotocraftApp, tool: Tool) -> bool {
     let takes = crate::canvas::tools::takes_command_stand_in(tool) || crate::canvas::tools::family(tool) == Family::Selection;
     let idle = !app.canvas_tools.selection.outline_open() && app.ui.transform.is_none() && app.ui.text_edit.is_none();
     takes && idle
+}
+
+/// The rulers' X and Y units for document `idx`, from `unitsAndRulers.rulers` and the document's
+/// resolution and size (for percent).
+pub(crate) fn canvas_rulers(app: &PhotocraftApp, idx: usize) -> (RulerText, RulerText) {
+    let ur = &app.session.prefs().units_and_rulers;
+    let (dpi, width, height) = app.session.documents().get(idx).map_or((72.0, 1.0, 1.0), |state| {
+        let doc = &state.doc;
+        (f64::from(doc.resolution_dpi.max(1.0)), f64::from(doc.size.width), f64::from(doc.size.height))
+    });
+    let ppi = ur.point_size.per_inch();
+    let unit = ur.rulers;
+    let text = |extent: f64| RulerText::new(RulerUnits::new(unit.from_px(1.0, dpi, extent, ppi), Ticks::decimal(unit == Unit::Pixels)), unit_kind(unit));
+    (text(width), text(height))
 }
 
 /// The rulers of document `host.idx`'s canvas, which the canvas shows along its top and left edges while View >
