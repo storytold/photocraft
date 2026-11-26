@@ -108,6 +108,7 @@ mod rotate_canvas_bitmap_tests;
 mod rotate_canvas_guides_tests;
 pub mod sample_cmds;
 pub mod script_cmds;
+pub mod script_options_cmds;
 
 pub mod select_extra_cmds;
 pub mod selection_cmds;

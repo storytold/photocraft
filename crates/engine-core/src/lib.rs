@@ -137,6 +137,7 @@ pub use cmd::print_cmds;
 pub use cmd::render_cmds;
 pub use cmd::sample_cmds;
 pub use cmd::script_cmds;
+pub use cmd::script_options_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
@@ -303,6 +304,9 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// (`photocraft_engine_paint::brush_cmds::LiveStrokeExt` and `retouch_cmds::LiveRetouchExt` offer it).
     pub live_commit: Option<state::LiveCommit>,
+    /// Custom options scripts keep for this session only (`scripts.customOptions.put` with
+    /// `persistent: false`). Not in the preferences, which are saved and rebuilt.
+    pub(crate) script_options: std::collections::BTreeMap<String, serde_json::Value>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].

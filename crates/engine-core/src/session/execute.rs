@@ -83,6 +83,7 @@ impl Session {
         if let Some(why) = self.job_conflict(id, spec.journal) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
+        crate::new_layer::admit(self, id, params)?;
         // Painting on or moving a hidden layer is refused, as in Photoshop (#571).
         if let Some(why) = hidden_target::refusal(self, id, params) {
             return Err(EngineError::Other(why.into()));

@@ -937,6 +937,9 @@ file.scripts.statistics
 file.scripts.browse
 file.scripts.scriptEventsManager
 file.scripts.run
+scripts.customOptions.get
+scripts.customOptions.put
+scripts.customOptions.erase
 file.print
 file.print.printers
 file.print.page

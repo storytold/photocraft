@@ -38,14 +38,17 @@ pub fn document(d: &DocState) -> Value {
 /// document's layers or its History.
 #[derive(Clone, Copy, Debug)]
 pub struct Parts {
-    /// The History panel's rows (`history`).
+    /// The History panel's rows (`history`, `historyRedo`, `historyIds`).
     pub history: bool,
     /// The layer tree (`layers`).
     pub layers: bool,
+    /// One layer and what it holds (`layer`), with its group (`parent`): a caller reading one
+    /// layer of a large document needn't have the whole tree built.
+    pub layer: Option<photocraft_doc::LayerId>,
 }
 
 impl Parts {
-    pub const ALL: Parts = Parts { history: true, layers: true };
+    pub const ALL: Parts = Parts { history: true, layers: true, layer: None };
 }
 
 /// [`document`] with only the `parts` asked for (a script reading a document's name needs
@@ -76,6 +79,7 @@ fn document_with(d: &DocState, detail: bool, parts: Parts) -> Value {
         "depth": doc.depth.bits(),
         "resolution": doc.resolution_dpi,
         "activeLayer": d.active_layer.map(|l| l.0),
+        "backgroundLayer": doc.background().map(|l| l.id.0),
         "selectedLayers": selected.iter().map(|l| l.0).collect::<Vec<_>>(),
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
@@ -105,8 +109,30 @@ fn document_with(d: &DocState, detail: bool, parts: Parts) -> Value {
         let instances = smart_instances(&doc.layers);
         m.insert("layers".into(), json!(doc.layers.iter().rev().map(|l| layer_sel(l, selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>()));
     }
+    if let Some(id) = parts.layer {
+        let (node, parent) = match doc.path_of(id) {
+            Some(path) => {
+                let parent = path.split_last().filter(|(_, up)| !up.is_empty()).and_then(|(_, up)| doc.layer_at(up)).map(|g| g.id.0);
+                let node = doc.layer_at(&path).map(|l| {
+                    // Smart object instances are counted over the whole document, as in `layers`.
+                    let instances = smart_instances(&doc.layers);
+                    layer_sel(l, selected, &instances, Some(&doc.metadata), detail)
+                });
+                (node, parent)
+            }
+            None => (None, None),
+        };
+        m.insert("layer".into(), node.unwrap_or(Value::Null));
+        m.insert("parent".into(), json!(parent));
+    }
     if parts.history {
         m.insert("history".into(), json!(d.history.entries()));
+        // The History panel rows after the current state (its last `history` entry), as
+        // `history.selectState` counts them.
+        m.insert("historyRedo".into(), json!(d.history.redo_labels().collect::<Vec<_>>()));
+        // A stable id per History panel row, in the rows' order (`history` then `historyRedo`):
+        // a row keeps its id while it exists.
+        m.insert("historyIds".into(), json!(d.history.row_ids().collect::<Vec<_>>()));
     }
     v
 }
@@ -208,7 +234,7 @@ fn layer_sel(
             v["smartContents"] = json!({"id": sm.contents_id.0, "instances": instances.get(&sm.contents_id).copied().unwrap_or(1)});
         }
         LayerContent::Text(t) => {
-            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt});
+            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt, "transform": t.transform.m});
             if detail {
                 v["text"]["antialias"] = serde_json::to_value(t.antialias).unwrap_or(Value::Null);
                 v["text"]["runs"] = serde_json::to_value(t.char_runs()).unwrap_or(Value::Null);
@@ -216,6 +242,11 @@ fn layer_sel(
             }
         }
         _ => {}
+    }
+    // The layer's own locks (only when one is set; a group's locks also hold its layers).
+    if l.locks.any() {
+        let k = l.locks;
+        v["locks"] = json!({"transparency": k.transparency, "pixels": k.pixels, "position": k.position, "artboard": k.artboard, "all": k.all});
     }
     // Advanced Blending › Channels (only when some channel is left out).
     if l.excluded_channels != 0 {

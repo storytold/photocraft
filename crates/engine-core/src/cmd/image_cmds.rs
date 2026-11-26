@@ -1276,7 +1276,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
-    Ok(json!({ "document": index, "name": name }))
+    let (id, serial) = s.documents().get(index).map(|d| (d.doc.id.0, d.serial)).unzip();
+    Ok(json!({ "document": index, "name": name, "id": id, "serial": serial }))
 }
 
 macro_rules! spec {

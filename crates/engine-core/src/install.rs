@@ -101,6 +101,7 @@ const TABLES: &[Table] = &[
     ("automate_cmds", crate::automate_cmds::specs),
     ("print_cmds", crate::print_cmds::specs),
     ("script_cmds", crate::script_cmds::specs),
+    ("script_options_cmds", crate::script_options_cmds::specs),
     ("installed_profiles", crate::installed_profiles::specs),
     ("layer_nav_cmds", crate::layer_nav_cmds::specs),
     ("frame_cmds", crate::frame_cmds::specs),
