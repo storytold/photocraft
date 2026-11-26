@@ -1047,18 +1047,25 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
 /// (built-ins regenerate with their factory settings).
 fn presets_update(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.update";
-    let name = match p.get("name").filter(|v| !v.is_null()) {
-        Some(_) => name_param(p, cmd)?,
-        None => s.tools.current_preset.clone().ok_or_else(|| bad(cmd, "the current brush was not picked from a preset"))?,
+    let explicit_name = p.get("name").filter(|v| !v.is_null()).is_some();
+    let name = match explicit_name {
+        true => name_param(p, cmd)?,
+        false => s.tools.current_preset.clone().ok_or_else(|| bad(cmd, "the current brush was not picked from a preset"))?,
     };
     let brush = match p.get("brush").filter(|v| v.is_object()) {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
         None => (*s.tools.brush).clone(),
     };
-    let pr = std::sync::Arc::make_mut(&mut *s.tools.presets)
-        .iter_mut()
-        .find(|x| x.name.eq_ignore_ascii_case(&name))
-        .ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
+    let presets = std::sync::Arc::make_mut(&mut *s.tools.presets);
+    let index = if explicit_name {
+        presets.iter().position(|x| x.name.eq_ignore_ascii_case(&name))
+    } else {
+        // A duplicate defined from the current brush is the last matching entry. Keep unnamed
+        // updates attached to that newly-defined preset instead of overwriting an older one.
+        presets.iter().rposition(|x| x.name.eq_ignore_ascii_case(&name))
+    }
+    .ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
+    let pr = presets.get_mut(index).ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
     pr.brush = brush;
     pr.builtin = false;
     let (name, group) = (pr.name.clone(), pr.group.clone());
@@ -1626,6 +1633,6 @@ mod define_brush_color_density_tests;
 mod filter_mask_stroke_tests;
 
 #[cfg(test)]
-mod define_brush_size_limit_tests;
-#[cfg(test)]
 mod define_brush_duplicate_name_tests;
+#[cfg(test)]
+mod define_brush_size_limit_tests;

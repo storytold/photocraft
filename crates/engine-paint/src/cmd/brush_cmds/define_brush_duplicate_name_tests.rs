@@ -1,7 +1,7 @@
 use super::*;
 
 fn session(depth: u32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
     s.execute("select.all", json!({})).unwrap();
     set_source(&mut s, Rect::new(1, 1, 3, 4), 0.0);
@@ -39,10 +39,10 @@ fn check_duplicate_names(command: &str) {
             assert_eq!(added.name, name);
             assert!(!added.builtin && added.group.is_empty() && added.folder.is_empty(), "append at the root");
             assert_ne!(added.brush.tip, old_tip);
-            assert_eq!(s.tools.brush, added.brush, "the new tip becomes current immediately");
+            assert_eq!(&*s.tools.brush, &added.brush, "the new tip becomes current immediately");
             assert_eq!(s.tools.current_preset.as_deref(), Some(name));
             assert!(s.tools.presets_rev > revision, "the store is notified of the added preset");
-            assert!(matches!(&added.brush.tip, TipShape::Sampled(tip) if tip.width == 4 && tip.height == 2));
+            assert!(matches!(&*added.brush.tip, TipShape::Sampled(tip) if tip.width == 4 && tip.height == 2));
             let listed = s.execute("brush.presets.list", json!({})).unwrap();
             assert_eq!(listed["presets"].as_array().unwrap().len(), before.len() + 1);
             assert_eq!(listed["presets"].as_array().unwrap().last().unwrap()["name"], name);
@@ -94,6 +94,20 @@ fn save_still_replaces_the_first_case_insensitive_name_match() {
 
     assert_eq!(s.tools.presets.len(), count, "save replaces instead of appending");
     assert_eq!(s.tools.presets[first_index].name, "duplicate");
-    assert_eq!(s.tools.presets[first_index].brush, saved);
+    assert_eq!(&s.tools.presets[first_index].brush, &*saved);
     assert_eq!(s.tools.presets.last().unwrap(), &second, "later duplicates are untouched");
+}
+
+#[test]
+fn unnamed_update_targets_the_newest_duplicate() {
+    let mut s = session(8);
+    s.execute("edit.defineBrushPreset", json!({"name": "Duplicate"})).unwrap();
+    s.execute("tools.setBrush", json!({"spacing": 0.42})).unwrap();
+    s.execute("edit.defineBrushPreset", json!({"name": "DUPLICATE"})).unwrap();
+    s.execute("tools.setBrush", json!({"spacing": 0.77})).unwrap();
+    s.execute("brush.presets.update", json!({})).unwrap();
+    let presets = s.tools.presets.iter().filter(|p| p.name.eq_ignore_ascii_case("duplicate")).collect::<Vec<_>>();
+    assert_eq!(presets.len(), 2);
+    assert!((presets[0].brush.spacing - 0.77).abs() >= f32::EPSILON);
+    assert!((presets[1].brush.spacing - 0.77).abs() < f32::EPSILON);
 }
