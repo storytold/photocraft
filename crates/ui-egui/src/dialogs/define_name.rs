@@ -28,4 +28,3 @@ pub(crate) fn check(app: &mut PhotocraftApp, command: &str, fields: &Map<String,
     }
     Err(Label::from(String::new()))
 }
-
