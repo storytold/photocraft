@@ -14,7 +14,10 @@ use super::*;
 /// straight copy and a heal cannot agree anywhere inside the dab.
 fn document() -> Session {
     let mut s = crate::session();
-    s.add_document(Document::with_background("t", Size::new(48, 48), ColorMode::Rgb, SampleType::U8, Color::rgb(40.0 / 255.0, 160.0 / 255.0, 60.0 / 255.0)), None);
+    s.add_document(
+        Document::with_background("t", Size::new(48, 48), ColorMode::Rgb, SampleType::U8, Color::rgb(40.0 / 255.0, 160.0 / 255.0, 60.0 / 255.0)),
+        None,
+    );
     for cx in 0..4 {
         for cy in 0..4 {
             let color = if (cx + cy) % 2 == 0 { "#3c3c3c" } else { "#c8c8c8" };
@@ -92,7 +95,10 @@ fn an_unknown_mode_is_an_error_and_paints_nothing() {
 #[test]
 fn replace_is_the_healing_brush_command_s_alone() {
     let mut s = document();
-    let err = s.execute("paint.cloneStamp", json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100, "mode": "replace"})).unwrap_err().to_string();
+    let err = s
+        .execute("paint.cloneStamp", json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100, "mode": "replace"}))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("unknown blend mode `replace`"), "the Clone Stamp still refuses it: {err}");
     // The live stroke parser reads the same mode: a Healing live stroke starts with Replace.
     crate::cmd::retouch_cmds::clone::LiveRetouch::begin(&s, "paint.healingBrush", &stroke(Some("replace"))).unwrap();

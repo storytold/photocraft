@@ -46,7 +46,11 @@ const BAR_ROWS: [Option<PaintMode>; 10] = [
 #[test]
 fn both_healing_mode_lists_show_replace_and_the_two_separators() {
     assert_eq!(items(Tool::Healing), MENU_ROWS, "the Shift+right-click menu rows");
-    assert_eq!(labels(Tool::Healing), ["Normal", "Replace", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"], "the labels, separators left out");
+    assert_eq!(
+        labels(Tool::Healing),
+        ["Normal", "Replace", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"],
+        "the labels, separators left out"
+    );
     let entries = mode_entries(Tool::Healing, true, false);
     let values: Vec<Option<PaintMode>> = entries.iter().map(|e| e.value().cloned()).collect();
     assert_eq!(values, BAR_ROWS, "the options bar dropdown");
