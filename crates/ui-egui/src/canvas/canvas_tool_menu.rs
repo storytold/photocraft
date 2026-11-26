@@ -59,6 +59,12 @@ pub enum MenuKind {
     Layers {
         /// The layers listed.
         layers: Vec<(u64, String)>,
+        /// Each row's level: a frame's image one in, under its frame (the Frame tool, #13885); empty: none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depth: Vec<u8>,
+        /// A separator and Isolate Layers end the rows (the Frame tool, #13885).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        isolate: bool,
     },
     /// A painting tool's Shift+right-click mode list (`brush_mode_menu`).
     BrushMode { plain: bool },
@@ -1606,7 +1612,10 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if layers.is_empty() {
                 return false;
             }
-            menu.kind = MenuKind::Layers { layers };
+            // The Frame tool's picker nests frames' images and ends with Isolate Layers (#13885).
+            let frame = tool == Tool::Frame;
+            let (layers, depth) = if frame { crate::layer_pick_ui::frame_rows(app, layers) } else { (layers, Vec::new()) };
+            menu.kind = MenuKind::Layers { layers, depth, isolate: frame };
         }
         MenuKind::TypeEdit { .. } => {
             if !editing_text(app, tool) {
@@ -1700,8 +1709,10 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
             }
             return;
         }
-        Some(MenuKind::Layers { .. }) => {
-            if let Some(layer) = command.strip_prefix(crate::layer_pick_ui::ROW).and_then(|n| n.parse::<u64>().ok()) {
+        Some(MenuKind::Layers { isolate, .. }) => {
+            if *isolate && command == crate::layer_pick_ui::ISOLATE {
+                crate::layer_pick_ui::isolate(app);
+            } else if let Some(layer) = command.strip_prefix(crate::layer_pick_ui::ROW).and_then(|n| n.parse::<u64>().ok()) {
                 crate::layer_pick_ui::choose(app, layer);
             }
             return;
@@ -1862,8 +1873,8 @@ pub fn close_stale(app: &mut PhotocraftApp) {
 /// `layer_pick_ui::entries`, the brush-mode menu `brush_mode_menu::entries`.
 pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>> {
     match &menu.kind {
-        MenuKind::Layers { layers } => {
-            return crate::layer_pick_ui::entries(layers, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
+        MenuKind::Layers { layers, depth, isolate } => {
+            return crate::layer_pick_ui::entries(layers, depth, *isolate, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
         }
         MenuKind::BrushMode { plain } => return crate::brush_mode_menu::entries(app, menu.tool, *plain),
         _ => {}
