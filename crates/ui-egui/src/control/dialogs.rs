@@ -342,6 +342,13 @@ fn command_of(app: &PhotocraftApp, id: DialogId, choice: &str) -> Option<(String
     }
 }
 
+/// The automation policy's refusal of answering a script's dialog `id`, judged as running a
+/// script: `None` when `id` is no script's dialog or the policy allows it.
+fn script_answer_refused(app: &PhotocraftApp, id: DialogId) -> Option<String> {
+    let authorize = app.services.automation_command.as_ref()?;
+    (crate::scripts::waits_at(app) == Some(id)).then(|| authorize("file.scripts.run", &json!({})).err()).flatten()
+}
+
 /// The command a hosted parameter dialog stands for, with its values: the dialog's key, when the key is a command (an
 /// engine command or a shell one such as `file.save`). Automation is judged for it when the dialog is confirmed.
 pub(crate) fn hosted_command(app: &PhotocraftApp, id: DialogId) -> Option<(String, Value)> {
@@ -385,6 +392,8 @@ pub(crate) fn method(app: &mut PhotocraftApp, ctx: &egui::Context, req: &Control
     Some(match req.method.as_str() {
         "ui.dialog.set" => set(app, ctx, id, p),
         "ui.dialog.confirm" => confirm(app, ctx, id, p),
+        // Cancelling a script's dialog answers it too (`null`, `false`): judged as confirming is.
+        "ui.dialog.cancel" if let Some(error) = script_answer_refused(app, id) => err(error),
         "ui.dialog.cancel" => Reply::from_result(crate::dialogs::cancel(app, ctx, id).map(|()| Value::Null)),
         _ => apply(app, id),
     })

@@ -278,7 +278,23 @@ fn is_js(name: &str) -> bool {
 /// action scripts as before.
 fn browse(app: &mut PhotocraftApp) -> Result<Value, String> {
     let request = in_last_dir(app, PickRequest::open("script").filter(tl!("Scripts"), &["jsx", "js", "jsxbin", "psjs", "ccjs", "json", "txt", "pcdroplet"]));
-    app.ask_file(request, |app, picked| match picked {
+    // The pick is answered in a later frame: what it runs keeps the gates of the request that
+    // opened the picker, and gains those of the frame that answers it (an agent may answer a
+    // picker a person opened).
+    let opened = (app.automation_input, app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None }));
+    app.ask_file(request, move |app, picked| {
+        let automation = opened.0 || app.automation_input;
+        let gate = opened.1.or(app.session.authorize).or(if app.automation_input { app.services.automation_authorize } else { None });
+        let was = (std::mem::replace(&mut app.automation_input, automation), std::mem::replace(&mut app.session.authorize, gate));
+        let ran = run_picked(app, picked);
+        (app.automation_input, app.session.authorize) = was;
+        ran
+    })
+}
+
+/// Run the file Browse picked: a JavaScript file as a script, anything else as an action script.
+fn run_picked(app: &mut PhotocraftApp, picked: Picked) -> Result<Value, String> {
+    match picked {
         Picked::Paths(paths) => {
             let Some(path) = paths.into_iter().next() else { return Err(crate::file_dialog::CANCELLED.into()) };
             let path = path.to_string_lossy().into_owned();
@@ -306,7 +322,7 @@ fn browse(app: &mut PhotocraftApp) -> Result<Value, String> {
         Picked::Saved { .. } | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {
             Err(tl!("The file dialog gave an unexpected answer.").into())
         }
-    })
+    }
 }
 
 /// An action script's result, said in the status bar when it ran.

@@ -312,8 +312,10 @@ fn an_agent_that_may_not_run_scripts_may_not_answer_their_dialogs() {
     settle(&mut app);
     app.services.automation_command = Some(Box::new(|id, _| if id == "file.scripts.run" { Err("not for agents".into()) } else { Ok(()) }));
     let id = open_id(&app);
-    let reply = call(&mut app, "ui.dialog.confirm", json!({"dialog": id.value()}));
-    assert_ne!(reply["ok"], true, "{reply}");
+    for method in ["ui.dialog.confirm", "ui.dialog.cancel"] {
+        let reply = call(&mut app, method, json!({"dialog": id.value()}));
+        assert_ne!(reply["ok"], true, "{method}: {reply}");
+    }
     assert!(log.answers.borrow().is_empty());
     assert_eq!(waits_at(&app), Some(id), "the run still waits");
 }
@@ -331,6 +333,51 @@ fn browse_runs_the_picked_script() {
     h.run_steps(4);
     let starts = log.starts.borrow();
     assert_eq!((starts[0].name.as_str(), starts[0].source.as_str()), ("hello.jsx", "alert('hi')"));
+}
+
+/// A script Browse runs keeps the gates of the request that opened the picker, though the pick is
+/// answered in a later frame.
+#[test]
+fn a_script_browse_runs_keeps_the_gates_of_the_request_that_opened_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agent.jsx");
+    std::fs::write(&path, "1").unwrap();
+    let log = Log::default();
+    let mut h = harness(vec![vec![Act::Try("layer.new.layer", json!({"name": "late"}))]], &log, vec![Picked::Paths(vec![path])]);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.services.automation_command = Some(Box::new(|id, _| if id == "layer.new.layer" { Err("not for automation".into()) } else { Ok(()) }));
+    app.automation_input = true;
+    crate::menus::invoke(app, &ctx, "file.scripts.browse", json!({})).unwrap();
+    app.automation_input = false;
+    h.run_steps(8);
+    assert_eq!(log.starts.borrow().len(), 1, "the picked script ran");
+    assert!(layer_names(h.state()).iter().all(|n| n != "late"), "{:?}", layer_names(h.state()));
+    assert!(h.state().scripts.log.iter().any(|l| l.contains("not for automation")), "{:?}", h.state().scripts.log);
+}
+
+/// The engine's gate a control request opened Browse under stays with the script it picks.
+#[test]
+fn a_script_browse_runs_keeps_the_engine_gate_it_was_opened_under() {
+    fn refuse_layers(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "layer.new.layer" { Err(photocraft_engine::EngineError::Other("not under this gate".into())) } else { Ok(()) }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gated.jsx");
+    std::fs::write(&path, "1").unwrap();
+    let log = Log::default();
+    let mut h = harness(vec![vec![Act::Try("layer.new.layer", json!({"name": "late"}))]], &log, vec![Picked::Paths(vec![path])]);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.session.authorize = Some(refuse_layers);
+    crate::menus::invoke(app, &ctx, "file.scripts.browse", json!({})).unwrap();
+    app.session.authorize = None;
+    h.run_steps(8);
+    assert_eq!(log.starts.borrow().len(), 1, "the picked script ran");
+    assert!(layer_names(h.state()).iter().all(|n| n != "late"), "{:?}", layer_names(h.state()));
+    assert!(h.state().session.authorize.is_none(), "the gate is put back");
 }
 
 /// `file.scripts.run` starts a run however it is reached: the menu, or `engine.execute`'s path
