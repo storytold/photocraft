@@ -145,12 +145,13 @@ impl FreeformPenTool {
         // this call's border alone: one fastening point every `spacing` of edge, as the Lasso counts it.
         let mut along = 0.0;
         for i in 1..border.len() {
-            along += border[i].distance(border[i - 1]);
+            let (Some(before), Some(next)) = (border.get(i - 1), border.get(i)) else { continue };
+            along += next.distance(*before);
             let last = i + 1 == border.len();
             if along < spacing && !(end && last) {
                 continue;
             }
-            let placed = border[i];
+            let placed = *next;
             // The fastening point goes in as a freehand sample of the draft, so the trace, its
             // painting and its fit stay the machinery they are.
             if self.draft.drag(DraftPoint::new(placed, at.mods, at.zoom)).is_some() {
