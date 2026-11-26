@@ -683,8 +683,8 @@ fn channel_form(app: &PhotocraftApp, id: &str, recorded_alpha: Option<usize>) ->
             }
             let default = target.and_then(|index| sources.get(index)).map_or_else(|| chans[0].clone(), |(key, _)| key.clone());
             let source = choice("sourceChannel", tl!("Source Channel"), sources, &default);
-            // An explicit single target wins over the last successfully used source.
-            let source = if target.is_some() { source.not_remembered() } else { source };
+            // A single channel or the full composite sets the source independently of saved settings.
+            let source = if target.is_some() || matches!(st.channel_view.target, ChannelTarget::Composite) { source.not_remembered() } else { source };
             // Scale and Offset only affect Add and Subtract.
             vec![
                 choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),

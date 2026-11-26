@@ -30,26 +30,29 @@ fn opens_with_the_single_target_and_keeps_the_other_defaults() {
 }
 
 #[test]
-fn single_target_takes_precedence_over_a_successfully_remembered_source() {
+fn single_channel_and_composite_take_precedence_over_a_remembered_source() {
     let (mut app, ctx) = app_with(1);
+    app.run("channel.target", json!({"channel": "red"})).unwrap();
+    app.run("channel.target", json!({"channel": "green", "extend": true})).unwrap();
     let dialog = open_form(&mut app, &ctx, APPLY);
     set(&mut app, &ctx, dialog, "sourceChannel", json!("Blue"));
     set(&mut app, &ctx, dialog, "opacity", json!(40.0));
     confirm(&mut app, &ctx, dialog).unwrap();
+
+    for (target, expected) in [("red", "Red"), ("composite", "RGB")] {
+        app.run("channel.target", json!({"channel": target})).unwrap();
+        let dialog = open_form(&mut app, &ctx, APPLY);
+        let shown = fields(&app, dialog);
+        assert_eq!(shown["sourceChannel"], expected, "{target}");
+        assert_eq!(shown["opacity"], 40.0);
+        cancel(&mut app, &ctx, dialog);
+    }
+
+    app.run("channel.target", json!({"channel": "red"})).unwrap();
+    app.run("channel.target", json!({"channel": "green", "extend": true})).unwrap();
     let dialog = open_form(&mut app, &ctx, APPLY);
     assert_eq!(fields(&app, dialog)["sourceChannel"], "Blue");
     cancel(&mut app, &ctx, dialog);
-
-    app.run("channel.target", json!({"channel": "red"})).unwrap();
-    let dialog = open_form(&mut app, &ctx, APPLY);
-    let shown = fields(&app, dialog);
-    assert_eq!(shown["sourceChannel"], "Red");
-    assert_eq!(shown["opacity"], 40.0);
-    cancel(&mut app, &ctx, dialog);
-
-    app.run("channel.target", json!({"channel": "composite"})).unwrap();
-    let dialog = open_form(&mut app, &ctx, APPLY);
-    assert_eq!(fields(&app, dialog)["sourceChannel"], "Blue", "cancel leaves the remembered source intact");
 }
 
 #[test]
