@@ -1363,9 +1363,10 @@ impl MenuCustomization {
     }
 }
 
-/// Edit › Toolbar: the toolbar's group layout (tool names as in `ui.set {tool}`), plus the older
-/// flat `hidden` list.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Edit › Toolbar: the toolbar's group layout (tool names as in `ui.set {tool}`), the older flat
+/// `hidden` list, and the four Show flags that say which of the toolbar's further items it draws
+/// (#14622).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ToolbarCustomization {
     /// Tools taken off the toolbar one by one (the Keyboard Shortcuts dialog's Toolbar tab). The
@@ -1377,6 +1378,24 @@ pub struct ToolbarCustomization {
     /// Extra Tools: groups that get no slot of their own. Like `toolbar`, `null` is the default
     /// (stored as such, so `prefs.reset` of one path finds its default).
     pub extras: Option<Vec<Vec<String>>>,
+    /// Draw the "…" (Edit Toolbar…) slot after the last tool slot, which opens the drawer listing
+    /// the tools that get no slot of their own.
+    pub show_more: bool,
+    /// Draw the foreground/background colour chips in the toolbar's footer.
+    pub show_colors: bool,
+    /// Draw the Quick Mask button in the toolbar's footer.
+    pub show_quick_mask: bool,
+    /// Draw the Screen Mode button in the toolbar's footer.
+    pub show_screen_mode: bool,
+}
+
+impl Default for ToolbarCustomization {
+    /// The default layout with every item shown. The Show flags are on here, so a settings file
+    /// written before they existed loads all-on and `edit.toolbar {"reset": true}` turns them all
+    /// on again (#14622).
+    fn default() -> Self {
+        Self { hidden: Vec::new(), toolbar: None, extras: None, show_more: true, show_colors: true, show_quick_mask: true, show_screen_mode: true }
+    }
 }
 
 /// The default toolbar layout: one group per slot, in toolbar order (the same as the toolbar's

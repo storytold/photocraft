@@ -145,10 +145,18 @@ fn last_used(slots: &[ToolSlot<Tool>], group_tools: &[Tool]) -> LastUsed<Tool> {
     last
 }
 
-/// The cells of the toolbar's grid: its visible slots and the Edit Toolbar button. The dock column's width in steps goes
+/// The cells of the toolbar's grid: its visible slots and the Edit Toolbar button, the last of them
+/// only while the toolbar's Show flags ask for it (#14622). The dock column's width in steps goes
 /// up to this many content columns.
 pub(crate) fn cells(app: &PhotocraftApp) -> usize {
-    visible_slots(&app.toolbar_slots.get(&app.session.prefs), &[]).len() + 1
+    visible_slots(&app.toolbar_slots.get(&app.session.prefs), &[]).len() + usize::from(app.session.prefs().toolbar.show_more)
+}
+
+/// The toolbar's four Show flags (#14622): its "…" slot, then the footer's colour chips, Quick Mask
+/// button and Screen Mode button.
+fn shown(app: &PhotocraftApp) -> (bool, bool, bool, bool) {
+    let toolbar = &app.session.prefs().toolbar;
+    (toolbar.show_more, toolbar.show_colors, toolbar.show_quick_mask, toolbar.show_screen_mode)
 }
 
 /// The Edit in Quick Mask Mode command, which the rail's footer shows as a rail button.
@@ -168,34 +176,49 @@ fn quick_mask_button(app: &PhotocraftApp, ui: &mut egui::Ui) {
 /// other side only when they would leave the window.
 const FLYOUTS_OPEN: Side = Side::End;
 
-/// The rail over `slots`, its flyouts and drawer opening on `opens`.
+/// The rail over `slots`, its flyouts and drawer opening on `opens`, with the "…" slot when
+/// `show_more` asks for it.
 fn rail<'a>(
     slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
     current: &'a Tool,
     remembered: &'a Tracked<LastUsed<Tool>>,
     opens: Side,
     editing: bool,
+    show_more: bool,
 ) -> ToolRail<'a, Tool> {
-    let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens).edit_toolbar(tl!("Edit Toolbar…").to_string());
+    let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens);
+    // Without the "…" slot the rail lays out its tool slots alone (#14622).
+    let rail = if show_more { rail.edit_toolbar(tl!("Edit Toolbar…").to_string()) } else { rail };
     // The drawer's open flag is the one source of "editing".
     if editing { rail.editing() } else { rail }
 }
 
-/// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons.
+/// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons, each drawn only
+/// while its Show flag is on (#14622).
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
-    color_chips(app, ui);
+    let (_, show_colors, show_quick_mask, show_screen_mode) = shown(app);
+    if show_colors {
+        color_chips(app, ui);
+    }
     let modes = |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
-        quick_mask_button(app, ui);
-        ScreenModeButton::new(app.ui.view.screen_mode).show(ui);
-    };
-    // The two buttons sit centred in the rail's columns, side by side in two columns.
-    Row::new().fill_width().align(RowAlign::Center).gap(Gap::Tight).show(ui, |ui, _| {
-        if rail.columns > 1 {
-            modes(ui, app);
-        } else {
-            Stack::new().gap(Gap::Tight).show(ui, |ui, _| modes(ui, app));
+        if show_quick_mask {
+            quick_mask_button(app, ui);
         }
-    });
+        if show_screen_mode {
+            ScreenModeButton::new(app.ui.view.screen_mode).show(ui);
+        }
+    };
+    // The two buttons sit centred in the rail's columns, side by side in two columns. With neither
+    // shown the footer draws nothing at all.
+    if show_quick_mask || show_screen_mode {
+        Row::new().fill_width().align(RowAlign::Center).gap(Gap::Tight).show(ui, |ui, _| {
+            if rail.columns > 1 {
+                modes(ui, app);
+            } else {
+                Stack::new().gap(Gap::Tight).show(ui, |ui, _| modes(ui, app));
+            }
+        });
+    }
 }
 
 /// What the rail's measured height depends on: the width and room it is laid out in, the slots (the same `Arc` while
@@ -260,7 +283,8 @@ fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
     let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
-    rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
+    let (show_more, ..) = shown(app);
+    rail(&slots, &current, &remembered, opens, editing, show_more).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
 }
 
 /// The tool palette: a `ToolRail` over the slots, with the colour chips and then the Quick Mask and Screen Mode buttons
@@ -275,7 +299,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
-    let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
+    let (show_more, ..) = shown(app);
+    let out = rail(&slots, &current, &remembered, opens, editing, show_more).show_rail(ui, |ui, at| footer(app, ui, at));
 
     if let Some(tool) = out.select {
         crate::tool_memory::select(app, tool);
