@@ -558,9 +558,11 @@ fn the_printable_area_goes_only_with_a_print_to_the_printer() {
     f.set("printable", fv(area.clone()));
     // Four numbers read back as the dialog fields' four-component (f32) value, so they come back within f32's
     // precision; `file.print` allows 2 pt between the driver's area and the paper.
-    let sent: Vec<f64> = print_params(&f)["printable"].as_array().expect("the area goes with the print").iter().filter_map(Value::as_f64).collect();
-    let want: Vec<f64> = area.as_array().unwrap().iter().filter_map(Value::as_f64).collect();
-    assert_eq!(sent.len(), 4, "the area is [x, y, w, h]: {sent:?}");
+    // Every element must be a number: one that is not fails here rather than being dropped.
+    let numbers = |v: &Value| -> Option<[f64; 4]> { <[f64; 4]>::try_from(v.as_array()?.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>()?).ok() };
+    let params = print_params(&f);
+    let sent = numbers(&params["printable"]).unwrap_or_else(|| panic!("the area is four numbers [x, y, w, h]: {}", params["printable"]));
+    let want = numbers(&area).expect("the test's area is four numbers");
     assert!(sent.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-3), "the driver's area goes with the print: {sent:?}");
     f.set("output", "/tmp/out.pdf");
     assert!(print_params(&f).get("printable").is_none());
