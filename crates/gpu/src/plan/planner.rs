@@ -130,7 +130,8 @@ pub const F_ADD_DIFF: u32 = 16384;
 /// (A the base's result so far, B the clipped layer composited onto it, C the base's coverage) and
 /// `compose::advanced::apply_hiding_mask` (A the backdrop, B the layer with its effects, C the
 /// masks that hide the effects): B unchanged where C is 1 or more, else the mix, which clamps even
-/// where C is 0. `p0.x` set: C is an `F_COVER` record, whose R says whether the coverage is full.
+/// where C is 0. `p0.x` set: C is an `F_COVER` record, whose R says whether the coverage is full
+/// and G whether there is none. `p0.w` set (masks hiding effects): A unchanged without coverage.
 pub const F_MIX_C: u32 = 4_194_304;
 
 /// `Content`: the pass writes a coverage record instead of pixels. A is alpha × mask; R is 1
@@ -1095,8 +1096,10 @@ impl<'a> Planner<'a> {
     /// the layer's content and effects are planned without those masks (`unhid`; the effect maps
     /// are built from `effects_source`), then the finished result is mixed back towards the
     /// backdrop by them (`advanced::apply_hiding_mask`: `mix(before, after, k)`, B untouched where
-    /// `k >= 1` and A where `k <= 0`, so HDR values survive: `p0.z` and `p0.w`). Drawn atop a clipping base the same mix works on the base's own alpha, which
-    /// both sides share: the CPU's opaque copies of the base give the same colours. Consumes `backdrop`.
+    /// `k >= 1` and A where `k <= 0`, so HDR values survive: `p0.z` and `p0.w`). `k` comes as an
+    /// `F_COVER` record (`p0.x`), so a half-float slot can't make partial coverage full or none.
+    /// Drawn atop a clipping base the same mix works on the base's own alpha, which both sides
+    /// share: the CPU's opaque copies of the base give the same colours. Consumes `backdrop`.
     fn effects_hiding(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
         if !photocraft_compose::advanced::hides_effects(layer) {
             return self.effects(layer, clipped, backdrop, atop);
@@ -1113,13 +1116,14 @@ impl<'a> Planner<'a> {
         let mut p = Pass::new(Kernel::Content, 0);
         p.color = [1.0; 4];
         p.mask = Some(hide);
+        p.flags = F_COVER;
         let shape = self.emit(p);
         let mut p = Pass::new(Kernel::Lerp, 0);
         p.a = Some(before);
         p.b = Some(after);
         p.c = Some(shape);
         p.flags = F_MIX_C;
-        p.params[0] = [0.0, 0.0, 1.0, 1.0];
+        p.params[0] = [1.0, 0.0, 1.0, 1.0];
         p.opacity = 1.0;
         Ok(self.emit(p))
     }
@@ -1428,7 +1432,6 @@ impl<'a> Planner<'a> {
     }
 
     fn effect_inside_strokes(&mut self, work: &mut EffectState<'a>) {
-        let layer = work.layer;
         let rev = work.rev.clone();
         let fx = work.fx;
         let content = work.content;
@@ -1443,6 +1446,7 @@ impl<'a> Planner<'a> {
                 let (in_w, _) = stroke_widths(st);
                 if in_w > 0.0 {
                     let paint = self.fx_paint(&st.paint, anchor);
+                    let frame = self.fx.get(fx).and_then(|f| photocraft_compose::stroke_frame(self.cx.doc, &f.layer, st)).unwrap_or(sb);
                     l = self.paint(
                         l,
                         content,
@@ -1452,7 +1456,7 @@ impl<'a> Planner<'a> {
                         st.common.opacity,
                         if st.common.blend == BlendMode::Normal { F_GATE | F_REPLACE } else { F_GATE },
                         clip,
-                        photocraft_compose::stroke_frame(self.cx.doc, &photocraft_compose::advanced::effects_source(layer), st).unwrap_or(sb),
+                        frame,
                     );
                 }
             }
@@ -1501,7 +1505,6 @@ impl<'a> Planner<'a> {
     }
 
     fn effect_outside_strokes(&mut self, work: &mut EffectState<'a>) {
-        let layer = work.layer;
         let items = work.items.clone();
         let fx = work.fx;
         let content = work.content;
@@ -1534,18 +1537,9 @@ impl<'a> Planner<'a> {
             for (n, &(i, st)) in outs.iter().enumerate() {
                 let paint = self.fx_paint(&st.paint, anchor);
                 let flags = F_STROKE_OUT | if vector_shape { F_VECTOR } else { 0 } | if outline { F_OUTLINE } else { 0 } | if n == 0 { F_FIRST } else { 0 };
+                let frame = self.fx.get(fx).and_then(|f| photocraft_compose::stroke_frame(self.cx.doc, &f.layer, st)).unwrap_or(sb);
                 // Share × blended colour, then coverage (both read the coverage so far).
-                let mut p = self.fx_pass_kernel(
-                    Kernel::FxStroke,
-                    w,
-                    content,
-                    &paint,
-                    st.common.blend,
-                    st.common.opacity,
-                    flags,
-                    clip,
-                    photocraft_compose::stroke_frame(self.cx.doc, &photocraft_compose::advanced::effects_source(layer), st).unwrap_or(sb),
-                );
+                let mut p = self.fx_pass_kernel(Kernel::FxStroke, w, content, &paint, st.common.blend, st.common.opacity, flags, clip, frame);
                 if matches!(paint, Paint::None) {
                     // A missing pattern paints nothing: the stroke's share keeps the result as is.
                     p.params[2][2] = 3.0;

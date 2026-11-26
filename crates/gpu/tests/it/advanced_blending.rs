@@ -1137,6 +1137,67 @@ fn masks_hiding_effects_keep_hdr_values_where_they_let_everything_through() {
     }
 }
 
+/// Under a mask that hides the effects, a 32-bit layer keeps its values above 1 only where the
+/// mask covers fully, the backdrop is copied where it covers nothing, and every coverage between,
+/// however near either end, takes the clamped mix. Half-float accumulation tells them apart too.
+#[test]
+fn masks_hiding_effects_tell_near_full_coverage_from_full() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    let backdrop = 3.0;
+    // The mask over the left half (sample depth, value, density); the right half reveals fully.
+    let cases = [
+        (SampleType::U8, 1.0, 1.0),
+        (SampleType::U8, 254.0 / 255.0, 0.01),
+        (SampleType::U16, 65534.0 / 65535.0, 1.0),
+        (SampleType::U16, 1.0 / 65535.0, 1.0),
+        (SampleType::U8, 0.0, 1.0),
+        (SampleType::U16, 0.0, 1.0),
+    ];
+    for (sample, value, density) in cases {
+        let what = format!("hiding mask {sample:?} {value} at density {density}");
+        let mut d = doc(SampleType::F32, false);
+        let mut bottom = Layer::raster("hdr", d.pixel_format());
+        bottom.surface_mut().unwrap().fill_rect(d.bounds(), &[backdrop, 1.5, 0.25, 1.0]);
+        let mut l = Layer::raster("fx", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(6, 5, 42, 35), &[2.5, 0.4, 0.6, 1.0]);
+        let Effect::DropShadow(mut shadow) = Effect::default_drop_shadow() else { unreachable!() };
+        shadow.common.opacity = 0.5;
+        l.effects.items.push(Effect::DropShadow(shadow));
+        d.layers.extend([bottom, l]);
+        // The layer with its effects, which the mask reveals, is above 1 everywhere.
+        let revealed = photocraft_compose::render(&d, d.bounds());
+        assert!(revealed.px.iter().all(|p| p[0] > 1.0), "{what}: the revealed result is above 1");
+        let mut m = LayerMask::reveal_all();
+        m.surface = Surface::with_default(PixelFormat { sample, ..PixelFormat::GRAY8 }, &[1.0]);
+        m.surface.fill_rect(Rect::new(0, 0, 24, 40), &[value]);
+        m.density = density;
+        let top = d.layers.last_mut().unwrap();
+        top.mask = Some(m);
+        top.advanced.layer_mask_hides_effects = true;
+        let coverage = 1.0 - density * (1.0 - value);
+        let classify = |px: &[[f32; 4]], backend: &str| {
+            for y in 0..40 {
+                for x in 0..48 {
+                    let red = px[(y * 48 + x) as usize][0];
+                    let k = if x < 24 { coverage } else { 1.0 };
+                    let ok = if k >= 1.0 {
+                        red > 1.0
+                    } else if k <= 0.0 {
+                        (red - backdrop).abs() < 1e-3
+                    } else {
+                        red <= 1.0
+                    };
+                    assert!(ok, "{what}, {backend} at ({x},{y}), coverage {k}: red {red}");
+                }
+            }
+        };
+        classify(&photocraft_compose::render(&d, d.bounds()).px, "CPU");
+        check(&mut g, &d, &what);
+        classify(&check_with(&g, &mut half, &d, 3.0 / 255.0, &what), "half-float GPU");
+    }
+}
+
 /// A mask that hides a layer's effects completely leaves the backdrop as it was, even for 32-bit
 /// values above 1, over a canvas wider than one CPU render tile: the GPU matches the CPU, which
 /// is tile-independent there.
