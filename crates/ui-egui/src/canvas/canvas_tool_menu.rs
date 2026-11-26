@@ -1018,8 +1018,9 @@ fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
 
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
 /// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's, the shape
-/// tools' (in Shape mode only: [`open`] checks it) and the Horizontal Type tool's layer or
-/// selection menu away from text (#12042).
+/// tools' (in Shape mode only: [`open`] checks it), the Horizontal Type tool's layer or
+/// selection menu away from text (#12042) and the Vertical Type Mask tool's selection or layer
+/// menu while it edits no mask (#12091).
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -1038,9 +1039,13 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // The layer menu (#11772).
             | Tool::Count
-            // The layer or selection menu away from text (#12042); Vertical Type and the Type
-            // Mask tools are not measured and stay on their no-menu path.
+            // The layer or selection menu away from text (#12042); Vertical Type and the
+            // Horizontal Type Mask tool are not measured and stay on their no-menu path.
             | Tool::Type
+            // The selection menu with an active selection, the layer menu without one (#12091).
+            // Only the Vertical Type Mask tool was measured; while its mask is edited the type
+            // edit menu of #12084 comes first.
+            | Tool::VerticalTypeMask
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
@@ -1197,6 +1202,11 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
                 SAMPLER_MENU
             } else if menu.tool == Tool::Count {
                 COUNT_MENU
+            } else if menu.tool == Tool::VerticalTypeMask {
+                // #12091: the selection tools' menu when the document has an active selection, the
+                // generic layer menu of #12042 when it has none. Which rows are greyed was not
+                // measured, so this tool adds no rule: `entry_enabled` keeps the menu bar's.
+                if menu.has_selection { SELECTION_MENU } else { COUNT_MENU }
             } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection | Tool::Type) {
                 if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if menu.tool == Tool::Eyedropper {
@@ -2011,6 +2021,9 @@ mod type_layer_menu_tests;
 
 #[cfg(test)]
 mod type_off_text_tests;
+
+#[cfg(test)]
+mod vertical_mask_idle_menu_tests;
 
 #[cfg(test)]
 mod add_anchor_menu_tests;
