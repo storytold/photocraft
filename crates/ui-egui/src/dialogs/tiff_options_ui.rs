@@ -256,4 +256,18 @@ mod tests {
         // No layers answer keeps what the save would do.
         assert!(TiffChoice::default().apply(base).tiff_layers);
     }
+
+    #[test]
+    fn cancelling_a_packaged_tiff_writes_no_package_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "background": "#336699"})).unwrap();
+        app.session.saved_to(root.path().join("Artwork.tif").to_string_lossy().into_owned());
+        let package_dir = root.path().join("Artwork Folder");
+        let dialog = park_package(&mut app, package_dir.to_string_lossy().into_owned()).unwrap();
+        assert!(app.parked_save.is_some());
+        crate::dialogs::testing::cancel(&mut app, dialog).unwrap();
+        assert!(app.parked_save.is_none());
+        assert!(!package_dir.exists(), "cancel must not create the package folder");
+    }
 }
