@@ -156,12 +156,12 @@ fn source_mode_keeps_the_selection() {
 fn content_aware_keeps_the_selection_and_changes_the_pixels() {
     let mut s = session();
     select_rect(&mut s);
-    // Content-Aware ignores the mode and fills the selection itself from the dragged-to place (the
-    // green half), so the pixels under the selection change.
-    let before = px(&s, 140, 140);
+    // Content-Aware fills the selection from its surroundings (the grey checker here), not from
+    // the dragged-to place (the green half), and keeps the selection (#12118).
     s.execute("paint.patch", json!({"offset": [400, 0], "contentAware": true})).unwrap();
     assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
-    assert_ne!(px(&s, 140, 140), before, "the selected area was filled");
+    let got = px(&s, 140, 140);
+    assert!((got[0] - got[1]).abs() < 0.05 && (got[1] - got[2]).abs() < 0.05, "filled with the grey surroundings, not the dragged-to green: {got:?}");
 }
 
 #[test]

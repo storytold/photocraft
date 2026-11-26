@@ -1,9 +1,10 @@
 //! ⌘F command palette: the framework's `CommandPalette` over every menu command and tool.
 
 use craft::ui::contract::Bind;
-use craft::ui::menu::HelpEntry;
+use craft::ui::menu::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft::ui::patterns::panels::CommandPalette;
 use craft::ui::runtime::commands::CommandRef;
+use craft::ui::runtime::env::Env;
 
 use crate::PhotocraftApp;
 use crate::state::Tool;
@@ -40,8 +41,11 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let ctx = ui.ctx().clone();
     let listed = entries(app, &ctx);
+    let env = Env::of(ui);
+    let view = env.view();
+    let index = SearchIndex::new(&view, &listed, &Synonyms::of(&view.words::<SearchWords>()));
     let PaletteState { open, recents } = &mut app.ui.palette;
-    CommandPalette::new(tl!("Command Palette"), &listed, Bind::bound(open)).recents(Bind::bound(recents)).show(ui);
+    CommandPalette::new(tl!("Command Palette"), &listed, &index, Bind::bound(open)).recents(Bind::bound(recents)).show(ui);
 }
 
 /// Records `id` as the most recently run command. The palette records its own picks; this covers commands run from

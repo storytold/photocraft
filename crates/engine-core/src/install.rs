@@ -172,7 +172,7 @@ pub fn register(install: &mut Install) {
     hooks.redirect.push(crate::filters::repeat_last_filter);
     hooks.check_params.push(|_, id, p| crate::filters::validate_params(id, p));
     hooks.run_params.push(crate::filters_ext::journal_shape_path);
-    hooks.after_command.push(crate::edit_menu_cmds::after_command);
+    hooks.after_edit.push(crate::edit_menu_cmds::after_command);
     hooks.prefs_applied.push(|s| crate::plugin_cmds::sync_prefs(s));
     hooks.document_closing.push(|s, index| {
         if let Some(id) = s.docs.get(index).map(|d| d.doc.id) {

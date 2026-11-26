@@ -35,7 +35,7 @@ pub const MAX_RENDER_PIXELS: u64 = 1 << 30;
 
 /// [`render`] with an explicit tile size (tests check tile independence).
 pub fn render_tiled(doc: &Document, rect: Rect, tile: i32) -> Buffer {
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     let cx = Ctx::for_doc(doc, &patterns);
     render_tiled_with(doc, rect, tile, &cx)
 }
@@ -221,7 +221,7 @@ fn render_bands_with_alloc<A: BufferAlloc + Sync, E>(
         return Ok(());
     }
     // Keep prepared pixels and compiled vector masks across bands without retaining any rendered band.
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     let cx = Ctx::for_doc(doc, &patterns);
     let rows = band_rows_for(rect.width(), band_rows);
     let mut y = rect.y0;
@@ -399,7 +399,7 @@ pub fn render_layer_in(doc: &Document, layer: &Layer, rect: Rect) -> Buffer {
     if u64::from(rect.width()) * u64::from(rect.height()) > MAX_RENDER_PIXELS {
         return Buffer::transparent(Rect::EMPTY);
     }
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     // A lone layer: a deep knockout reveals transparency, not the document's Background.
     let cx = Ctx { doc: None, ..Ctx::for_doc(doc, &patterns) };
     let lab = doc.mode == photocraft_color::ColorMode::Lab;
@@ -506,7 +506,7 @@ mod fallible_bands_tests {
     fn fail_nth_buffer_constructor_propagates_through_nested_rendering() {
         let doc = nested_document();
         let rect = doc.bounds();
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(&doc);
         let ctx = Ctx::for_doc(&doc, &patterns);
         let count = {
             let mut backdrop = Buffer::filled(rect, [0.0; 4]);
@@ -556,7 +556,7 @@ mod fallible_bands_tests {
         let mut layer = Layer::group("styled group", vec![fill]);
         layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
         doc.layers.push(layer);
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(&doc);
         let cx = Ctx::for_doc(&doc, &patterns);
 
         for _ in 0..2 {

@@ -317,7 +317,8 @@ fn unrepresented_units_and_mode_choices_stay_verbatim() {
         (*b"CnvM", mode().with("Rstr", D::Boolean(true))),
         (*b"CnvM", mode().with("Rstr", D::Integer(0))),
         (*b"CnvS", canvas().with("Hght", D::UnitFloat { unit: *b"#Pxl", value: 40.0 })),
-        (*b"CnvS", canvas().with("Rltv", D::Boolean(true))),
+        // Relative percent maps since #14541; a Relative flag that is not a boolean still doesn't.
+        (*b"CnvS", canvas().with("Rltv", D::Integer(1))),
         (*b"ImgS", point().with("Hght", D::UnitFloat { unit: *b"#Pxl", value: 40.0 })),
         (*b"ImgS", point().with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: 144.0 })),
         (*b"ImgS", point().with("CnsP", D::Boolean(false))),
@@ -473,7 +474,7 @@ fn native_units_validate_before_edit_and_no_resample_remains_resolution_only() {
     for (id, params, refuse_export) in [
         ("image.canvasSize", json!({"width":200,"units":"unknown"}), true),
         ("image.canvasSize", json!({"width":"200","units":"percent"}), true),
-        ("image.canvasSize", json!({"width":200,"units":"percent","relative":true}), true),
+        ("image.canvasSize", json!({"width":"200","units":"percent","relative":true}), true),
         ("image.imageSize", json!({"width":72,"units":1}), true),
         ("image.imageSize", json!({"width":"72","units":"pt"}), true),
         // A finite recorded point value is representable; overflow depends on playback dpi.

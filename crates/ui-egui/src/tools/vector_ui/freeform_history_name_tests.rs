@@ -116,6 +116,15 @@ fn pen_and_curvature_keep_default_history_names_even_with_freeform_selected_at_c
                 assert!(!app.ui.status_error, "{}", app.ui.status);
                 continue;
             }
+            if mode == VectorMode::Path && !curvature {
+                // #12890: the Pen draws live into the Work Path, one step per click, and the commit adds none; none of
+                // those steps takes the Freeform name either.
+                let h = &app.session.active().unwrap().history;
+                assert_eq!(h.past_len(), n + 3);
+                assert_eq!(h.undo_label(), Some("New Anchor Point"));
+                assert!(!app.ui.status_error, "{}", app.ui.status);
+                continue;
+            }
             assert_step(&app, n, if mode == VectorMode::Path { "Work Path" } else { "New Shape Layer" });
         }
     }
