@@ -13,7 +13,7 @@ use crate::canvas::{ToolEvent, tool_event};
 const ERROR: &str = photocraft_engine::hidden_target::HIDDEN;
 
 /// [`app`] with its active layer hidden.
-fn hidden(tool: Tool) -> PhotocraftApp {
+fn hidden(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = app(tool);
     let id = active(&app);
     app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
@@ -49,7 +49,8 @@ fn a_hidden_active_layer_is_quiet() {
 fn the_other_tools_keep_their_message() {
     refused(&mut hidden(Tool::Brush), "Could not use the brush tool because the target layer is hidden.");
     refused(&mut hidden(Tool::Smudge), "Could not use the smudge tool because the target layer is hidden.");
-    for tool in [Tool::Pencil, Tool::Eraser, Tool::SpotHealing, Tool::Healing, Tool::CloneStamp] {
+    // The Spot Healing Brush has its own alert since #12581.
+    for tool in [Tool::Pencil, Tool::Eraser, Tool::Healing, Tool::CloneStamp] {
         let mut app = hidden(tool);
         let before = steps(&app);
         stroke(&mut app);

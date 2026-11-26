@@ -17,7 +17,7 @@ fn rows(list: &[(ScaleSize, &str)]) -> Vec<ScaleRow> {
 
 /// A 200 x 150 document named `harbor.psd` with Export As open, its exporter encoding for real and its writer keeping
 /// each file. Its file dialogs stay open until the test answers them.
-fn opened() -> (PhotocraftApp, DialogId, Writes, Arc<ScriptedFiles>) {
+fn opened() -> (Box<PhotocraftApp>, DialogId, Writes, Arc<ScriptedFiles>) {
     let writes = Writes::default();
     let captured = writes.clone();
     let files = Arc::new(ScriptedFiles::held());

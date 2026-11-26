@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::{Tool, ToolOptions};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
     let mut app = PhotocraftApp::new(s, crate::Services::default());
@@ -104,7 +104,7 @@ fn reset_tool_keeps_each_tools_kept_options_and_reset_all_keeps_none() {
 }
 
 /// A fresh app with `row`'s options customized.
-fn app_with(row: &Row) -> PhotocraftApp {
+fn app_with(row: &Row) -> Box<PhotocraftApp> {
     let mut app = app();
     app.ui.tool = row.tool;
     (row.customize)(&mut app.ui.tool_options);

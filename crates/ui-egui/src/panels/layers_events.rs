@@ -188,7 +188,7 @@ fn map_event(app: &mut PhotocraftApp, ctx: &egui::Context, event: LayersEvent<La
                 SelectionChange::Set(ids) if ids.len() == 1 => ids.first().copied(),
                 _ => None,
             };
-            selection_actions(select.change, &selection, actions);
+            selection_actions(select.change, selection, actions);
             let Some(id) = single else { return };
             let Some(l) = layer(&id) else { return };
             target_on_click(app, l, active == Some(id), select.part, actions);
@@ -494,8 +494,12 @@ fn footer(app: &mut PhotocraftApp, picked: Option<crate::smart_ui::FilterDrag>, 
         LayersFooterAction::NewGroup { from_selection, ask, below, .. } => {
             let groups = from_selection && active.is_some();
             if ask {
-                // Null params go through the menu path, which opens the dialog.
-                let cmd = if groups { crate::new_group_ui::FROM_LAYERS } else { crate::new_group_ui::NEW_GROUP };
+                // Null params go through the menu path, which opens the dialog. Like Photoshop,
+                // ⌥-click asks for New Group from Layers also with one non-Background layer
+                // active, and OK puts that layer in the group (#14717). An artboard can't go into
+                // a group, so a lone artboard keeps New Group.
+                let one = active.is_some_and(|l| !doc.is_background(l.id) && l.artboard().is_none());
+                let cmd = if groups || one { crate::new_group_ui::FROM_LAYERS } else { crate::new_group_ui::NEW_GROUP };
                 actions.push((cmd.into(), Value::Null));
             } else if below {
                 actions.push(("layer.new.group".into(), json!({"position": "below"})));
@@ -594,13 +598,23 @@ pub(crate) fn selection_actions(change: SelectionChange<LayerId>, selected: &[La
     }
 }
 
+/// The layer ids a `layer.select` payload names: the single `layer`, or every id of the `layers`
+/// list a multi-row selection carries.
+fn select_param_ids(p: &Value) -> Vec<u64> {
+    match p.get("layer").and_then(Value::as_u64) {
+        Some(id) => vec![id],
+        None => p.get("layers").and_then(Value::as_array).map(|ids| ids.iter().filter_map(Value::as_u64).collect()).unwrap_or_default(),
+    }
+}
+
 /// Runs the actions in order: a type session commits before a select, the mask targets switch,
 /// `Value::Null` params (and the fill layers that open a dialog) run as the menu item does.
 pub(crate) fn run_actions(app: &mut PhotocraftApp, ctx: &egui::Context, actions: Vec<Action>) {
     for (id, p) in actions {
-        // A row click commits even when it selects the layer already being edited (#5584).
+        // A row click commits even when it selects the layer already being edited (#5584); a
+        // multi-row selection that leaves the edited layer out is a layer switch (#6483).
         if id == "layer.select" && app.ui.text_edit.is_some() {
-            crate::type_tool::commit(app);
+            crate::type_tool::commit_before_selecting(app, &select_param_ids(&p));
         }
         if id == "ui.maskTarget" {
             app.end_filter_mask_view();

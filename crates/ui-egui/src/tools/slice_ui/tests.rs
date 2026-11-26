@@ -3,7 +3,7 @@ use craft::behavior::{EditEvent, GestureId, Mixed};
 
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 100, "height": 80})).unwrap();
     app

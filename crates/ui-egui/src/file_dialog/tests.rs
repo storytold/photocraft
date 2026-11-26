@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Services, menus};
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -8,17 +9,20 @@ use craft::automation::actions::ActionStep;
 use craft::host::{FileFilter, ScriptedFiles};
 use craft::ui::dialog::DialogId;
 
+#[path = "tests/save_a_copy_format_list_tests.rs"]
+mod save_a_copy_format_list_tests;
+
 /// The paths the app's writer was given.
 type Written = Rc<RefCell<Vec<String>>>;
 
 /// An app with an untitled document, whose file dialogs stay open until the test answers them
 /// (`answer`), and whose writer records the paths it wrote.
-fn app() -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn app() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     app_with(Arc::new(ScriptedFiles::held()))
 }
 
 /// [`app`] over `files`, for a test whose dialogs answer themselves.
-fn app_with(files: Arc<ScriptedFiles>) -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn app_with(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let written: Written = Default::default();
     let w = written.clone();
     let services = Services {
@@ -50,11 +54,11 @@ fn chose(path: &str) -> Picked {
     Picked::Paths(vec![PathBuf::from(path)])
 }
 
-/// The file a Save request suggests: its folder and name together.
+/// The file a Save request suggests: its folder and name together (see [`joined`]).
 fn suggested(request: &PickRequest) -> String {
     let name = request.file_name.clone().unwrap_or_default();
     match &request.directory {
-        Some(dir) => dir.join(name).to_string_lossy().into_owned(),
+        Some(dir) => joined(&dir.to_string_lossy(), &name),
         None => name,
     }
 }
@@ -89,7 +93,7 @@ fn pdn_save_requests_a_native_copy_without_overwriting_the_source() {
 
 /// A real flat JPEG import, optionally edited to contain another layer. A filename without a
 /// path is the web/download case; desktop opens also retain their source location.
-fn jpeg_app(path: Option<&str>, layered: bool) -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn jpeg_app(path: Option<&str>, layered: bool) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let (mut app, files, written) = app();
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "My image.JPEG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("My image.JPEG", &bytes).unwrap().document;
@@ -238,7 +242,7 @@ fn a_layer_without_alpha_is_opaque() {
 #[test]
 fn transparent_png_keeps_its_format_until_its_lone_layer_becomes_smart() {
     let (mut app, files, written) = app();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "transparent.PNG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("transparent.PNG", &bytes).unwrap().document;
     assert_eq!(doc.layers.len(), 1);
@@ -313,7 +317,7 @@ fn plain_save_of_a_flat_jpeg_asks_jpeg_options_and_records_a_plain_save() {
     confirm_options(&mut app);
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(*written.borrow(), ["/pics/photo.jpg"]);
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({}))]);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({}))]);
 }
 
 /// A plain Save confirmed in the dialog keeps a changed JPEG Options answer in its recorded step,
@@ -341,7 +345,7 @@ fn plain_save_of_a_flat_jpeg_records_and_replays_a_changed_quality() {
     set_option(&mut app, "format", json!("progressive"));
     confirm_options(&mut app);
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 3, "jpegFormat": "progressive"}))]);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 3, "jpegFormat": "progressive"}))]);
     // Played on another flat JPEG: written over itself at quality 3, with no dialog or prompt.
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "other.jpg", &Default::default()).unwrap().bytes;
     let index = app.session.add_document(photocraft_io::import("other.jpg", &bytes).unwrap().document, Some("/pics/other.jpg".into()));
@@ -504,7 +508,7 @@ fn menu_place_preserves_an_unfinished_transform() {
 fn open_starts_in_the_last_used_folder() {
     let (mut app, files, _) = app();
     let ctx = egui::Context::default();
-    app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
+    *app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     let asked = last_request(&files);
     assert_eq!(asked.kind, PickKind::OpenMany);
@@ -515,7 +519,7 @@ fn open_starts_in_the_last_used_folder() {
 #[test]
 fn ask_folder_uses_the_async_dialog_and_returns_the_selected_path() {
     let (mut app, files, _) = app();
-    app.ui.recent_files = vec!["/pics/cat.psd".into()];
+    *app.ui.recent_files = vec!["/pics/cat.psd".into()];
     let selected = Rc::new(RefCell::new(None));
     let result = selected.clone();
 
@@ -589,10 +593,10 @@ fn save_and_export_dialogs_start_beside_the_document() {
     }
 }
 
-/// The path `pick_save` suggests for `name` in `dir` on this platform: it joins with `Path::join`,
-/// which uses `\` on Windows, so the expected values must be built the same way (#2745).
+/// `name` in the folder `dir`, joined with `/` as the tests' paths are written. A Save request
+/// carries its folder and name apart, and `Path::join` would put `\` between them on Windows.
 fn joined(dir: &str, name: &str) -> String {
-    Path::new(dir).join(name).to_string_lossy().into_owned()
+    format!("{}/{name}", dir.trim_end_matches('/'))
 }
 
 /// #1826: after the user navigates a save or export dialog elsewhere, the document's next dialog
@@ -743,7 +747,7 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
 }
 
 /// The app with a painted layer converted to a smart object and a duplicate instance of it.
-fn smart_app() -> (PhotocraftApp, Arc<ScriptedFiles>, Written, [u64; 2]) {
+fn smart_app() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written, [u64; 2]) {
     let (mut app, files, written) = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.session
@@ -775,7 +779,7 @@ fn place_embedded_uses_the_single_file_picker_and_accepts_contents() {
 
     // Cancel leaves the document alone and does not report an error.
     menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
-    assert_eq!(last_request(&files).kind, PickKind::Open);
+    assert_eq!(last_request(&files).kind, PickKind::OpenMany);
     cancel(&files);
     app.poll_file_dialog();
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before);
@@ -911,7 +915,7 @@ fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
     app.run("paint.bucket", json!({"x": 0, "y": 0, "color": "#00ff00"})).unwrap();
     app.run("select.allLayers", json!({})).unwrap();
-    let selected = app.session.active().unwrap().selected_layers();
+    let selected = app.session.active().unwrap().selected_layers().to_vec();
     let before = app.session.active().unwrap().doc.clone();
     let sources = Rc::new(RefCell::new(Vec::new()));
     let capture = sources.clone();
@@ -1253,7 +1257,7 @@ type Qualities = Rc<RefCell<Vec<Option<u8>>>>;
 
 /// [`jpeg_app`] opened from `path` and edited, whose exporter records the JPEG quality of each
 /// save (#2223).
-fn flat_jpeg_app(path: &str) -> (PhotocraftApp, Arc<ScriptedFiles>, Written, Qualities) {
+fn flat_jpeg_app(path: &str) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written, Qualities) {
     let (mut app, files, written) = jpeg_app(Some(path), false);
     let qualities = Qualities::default();
     let q = qualities.clone();
@@ -1338,7 +1342,7 @@ fn flat_jpeg_saves_are_recorded_and_replay_over_the_open_file() {
     set_option(&mut app, "quality", json!(5));
     confirm_options(&mut app);
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 5}))]);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 5}))]);
     add_flat_jpeg(&mut app, "/pics/other.jpg");
     written.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
@@ -1428,7 +1432,7 @@ fn a_scripted_quality_survives_the_changed_on_disk_prompt() {
 fn save_a_copy_appends_copy_unless_the_preference_says_not_to() {
     let ctx = egui::Context::default();
     for (off, name) in [(false, "My image copy.psd"), (true, "My image.psd")] {
-        let want = Path::new("/pics").join(name).to_string_lossy().into_owned();
+        let want = joined("/pics", name);
         let (mut app, files, _) = jpeg_app(Some("/pics/My image.JPEG"), false);
         app.run("prefs.set", json!({"path": "fileHandling.doNotAppendCopy", "value": off})).unwrap();
         menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
@@ -1597,7 +1601,7 @@ fn every_open_format_has_its_own_filter() {
 
 /// The save types of a Save dialog suggesting `suggested`: (name, extensions).
 fn save_types(suggested: &str) -> Vec<(String, Vec<String>)> {
-    save_request("document", suggested).filters.into_iter().map(|f| (f.name, f.extensions)).collect()
+    save_request("document", suggested, None).filters.into_iter().map(|f| (f.name, f.extensions)).collect()
 }
 
 /// Every flat format Save As offers is one PhotoCraft writes, and ICO is among them (#4357).
@@ -1619,12 +1623,12 @@ fn save_as_offers_only_writable_formats_including_ico() {
     let netpbm = save_types("Untitled").into_iter().find(|(name, _)| name == "Netpbm").map(|(_, exts)| exts);
     assert_eq!(netpbm, Some(vec!["pnm".to_string()]));
     // The suggested name itself becomes .pnm, as macOS keeps it (CodeRabbit on #9775).
-    let named = |suggested: &str| save_request("document", suggested).file_name;
+    let named = |suggested: &str| save_request("document", suggested, None).file_name;
     assert_eq!(named("scans/image.pgm").as_deref(), Some("image.pnm"));
     assert_eq!(named("image.PFM").as_deref(), Some("image.pnm"));
     assert_eq!(named("image.png").as_deref(), Some("image.png"));
     assert_eq!(named("Untitled-1").as_deref(), Some("Untitled-1"));
-    assert_eq!(save_request("document", "scans/image.pgm").directory.as_deref(), Some(Path::new("scans")));
+    assert_eq!(save_request("document", "scans/image.pgm", None).directory.as_deref(), Some(Path::new("scans")));
     // Also when Save As starts from a subtype's name: no filter offers that subtype again.
     for name in ["image.pbm", "image.pgm", "image.ppm", "image.pam", "image.pfm"] {
         let types = save_types(name);

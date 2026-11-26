@@ -21,7 +21,7 @@ fn fixture(rgb: [f32; 3], opacity: f32, isolated: bool, visible: bool, empty: bo
         clip.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.0, 1.0, 0.0, 1.0]);
         clip.opacity = 0.0;
     }
-    doc.layers = vec![group, clip];
+    doc.layers = vec![group, clip].into();
     doc
 }
 
@@ -88,7 +88,7 @@ fn depth_fixture(depth: SampleType, opacity: f32, alpha: f32, empty_clip: bool) 
         clip.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.0, 1.0, 0.0, 1.0]);
         clip.opacity = 0.0;
     }
-    doc.layers = vec![group, clip];
+    doc.layers = vec![group, clip].into();
     doc
 }
 
@@ -148,7 +148,7 @@ fn integer_clamp_fixture(depth: SampleType) -> Document {
     let mut clip = Layer::raster("white clip", format);
     clip.clipped = true;
     clip.surface_mut().unwrap().fill_rect(doc.bounds(), &[1.0; 4]);
-    doc.layers = vec![base, group, clip];
+    doc.layers = vec![base, group, clip].into();
     doc
 }
 

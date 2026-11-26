@@ -5,7 +5,7 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui::{Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app
@@ -90,10 +90,10 @@ pub(super) fn pen_clicks(app: &mut PhotocraftApp, at: &[(f64, f64)]) {
     }
 }
 
-pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -107,7 +107,7 @@ pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp>
     h
 }
 
-pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+pub(crate) fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -119,7 +119,7 @@ pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modi
 }
 
 /// The right button goes down at `at` with `mods` held and comes up as `gesture` says.
-fn secondary_press(h: &mut Harness<'static, PhotocraftApp>, at: Pos2, mods: Modifiers, gesture: Gesture) {
+fn secondary_press(h: &mut Harness<'static, Box<PhotocraftApp>>, at: Pos2, mods: Modifiers, gesture: Gesture) {
     let by = match gesture {
         Gesture::Still => return right_click(h, at, mods),
         Gesture::Moved => vec2(7.0, 3.0),
@@ -156,7 +156,7 @@ pub(super) fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
 fn document_state(app: &PhotocraftApp) -> impl PartialEq + use<> {
     let state = app.session.active().unwrap();
     let strokes = app.session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
-    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers(), strokes)
+    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers().to_vec(), strokes)
 }
 
 fn view_of(app: &PhotocraftApp) -> Option<(craft::behavior::kurbo::Point, f64)> {
@@ -189,7 +189,7 @@ fn committed_type(app: &mut PhotocraftApp) -> u64 {
 
 /// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
 /// untouched default frame.
-fn crop_app() -> PhotocraftApp {
+fn crop_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.ui.tool = Tool::Crop;
     app.ui.tool_options.crop.shield.classic_mode = true;
@@ -309,7 +309,7 @@ const ROWS: &[Case] = &[
     row("hand with Alt+Space held", Tool::Hand, Modifiers::ALT, Place::Image, Setup::Plain, Held::AltSpace, Want::Nothing),
     row("brush: picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker),
     row("eraser: picker", Tool::Eraser, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker),
-    row("brush outside the image keeps its picker", Tool::Brush, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Picker),
+    row("brush outside the image opens the pasteboard menu", Tool::Brush, NO, Place::Pasteboard, Setup::Plain, Held::Nothing, Want::Menu("Pasteboard")),
     row("brush: a press that moved still opens the picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker).by(Gesture::Moved),
     row("brush: a release in the press's frame still opens the picker", Tool::Brush, NO, Place::Image, Setup::Plain, Held::Nothing, Want::Picker)
         .by(Gesture::OneFrame),
@@ -361,7 +361,7 @@ fn kind_name(kind: &MenuKind) -> &'static str {
     }
 }
 
-fn row_app(row: &Case) -> PhotocraftApp {
+fn row_app(row: &Case) -> Box<PhotocraftApp> {
     let mut app = if matches!(row.setup, Setup::UntouchedCrop | Setup::PendingCrop) { crop_app() } else { self::app() };
     match row.setup {
         // Zoomed needs a canvas to run its view command: `context_popup_table` zooms once the canvas shows.
@@ -513,8 +513,9 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     let ctx = app.ctx().clone();
     let active = |app: &PhotocraftApp| app.session.active().unwrap().active_layer.map(|l| l.0);
     assert_ne!(active(&app), Some(id));
-    // Away from the type, or with a Type Mask tool, nothing opens and nothing is selected.
-    assert!(!open_here(&mut app, Tool::Type, [30.0, 2.0]));
+    // Away from the type the Type tool opens the generic layer menu but selects nothing (#12042);
+    // with a Type Mask tool, nothing opens.
+    assert!(open_here(&mut app, Tool::Type, [30.0, 2.0]));
     assert!(!open_here(&mut app, Tool::HorizontalTypeMask, [16.0, 16.0]));
     assert!(!open_here(&mut app, Tool::Type, [f64::NAN, 16.0]));
     assert_ne!(active(&app), Some(id));
@@ -636,7 +637,8 @@ fn completed_pen_path_right_click_makes_selection() {
 fn pen_menu_finishes_in_progress_path_before_selection() {
     let mut app = app();
     pen_clicks(&mut app, &[(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)]);
-    assert!(app.session.active().unwrap().doc.work_path.is_none());
+    // #12890: the Work Path is in the document while the path is still being drawn.
+    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().map(|p| p.subpaths[0].knots.len()), Some(3));
     assert!(open_here(&mut app, Tool::Pen, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
     assert!(entry_enabled(&app, menu, "path.toSelection"));
@@ -682,7 +684,7 @@ fn pen_options_bar_makes_a_selection_from_the_path() {
 
 /// A document with the Pen tool picked and a Work Path. Every route to the Stroke Path dialog ends in
 /// `pen_dialogs::open`, so driving that covers the Paths panel's routes.
-fn stroke_app() -> PhotocraftApp {
+fn stroke_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.ui.tool = Tool::Pen;
     work_path(&mut app);

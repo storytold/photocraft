@@ -3,7 +3,7 @@ use crate::canvas::{ToolEvent, tool_event, tool_event_response};
 use craft::behavior::geometry::SnapLine;
 use serde_json::json;
 
-fn app_with_box() -> PhotocraftApp {
+fn app_with_box() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -200,7 +200,7 @@ fn snap_targets_follow_the_document() {
 }
 
 /// A group of two layers (40..90 x 40..80 and 100..140 x 100..130) selected, as one layer.
-fn app_with_group() -> PhotocraftApp {
+fn app_with_group() -> Box<PhotocraftApp> {
     let mut app = app_with_box();
     app.run("layer.new.layer", json!({"name": "second"})).unwrap();
     app.run("select.rect", json!({"x": 100, "y": 100, "width": 40, "height": 30})).unwrap();

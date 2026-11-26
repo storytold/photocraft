@@ -19,7 +19,7 @@ fn session_with_doc() -> photocraft_engine::Session {
     s
 }
 
-fn app_with_doc() -> PhotocraftApp {
+fn app_with_doc() -> Box<PhotocraftApp> {
     PhotocraftApp::new(session_with_doc(), crate::Services::default())
 }
 
@@ -28,7 +28,7 @@ fn coverage(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
 }
 
 /// The app's UI on its own context: the menu bar and the dialog host, as a frame orders them.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, app| {
             crate::menus::menu_bar(app, ui);
@@ -56,13 +56,13 @@ fn set_field(app: &mut PhotocraftApp, key: &str, v: Value) {
     app.framework.dialogs.set_json_field(&ctx, id, key, v).unwrap_or_else(|e| panic!("the dialog takes `{key}`: {e}"));
 }
 
-fn set(h: &mut Harness<'static, PhotocraftApp>, key: &str, v: Value) {
+fn set(h: &mut Harness<'static, Box<PhotocraftApp>>, key: &str, v: Value) {
     set_field(h.state_mut(), key, v);
     h.run_steps(3);
 }
 
 /// OK through the host, then the frames in which the dialog's answer is taken.
-fn ok(h: &mut Harness<'static, PhotocraftApp>) {
+fn ok(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let id = dialog_id(h.state());
     let _ = crate::dialogs::testing::confirm(h.state_mut(), id);
     h.run_steps(3);

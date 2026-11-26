@@ -36,7 +36,7 @@ pub(crate) fn layer_id(app: &PhotocraftApp, name: &str) -> LayerId {
 /// The rect of the thumbnail that shows `part` of the layer named `name` on the row named
 /// `row_name`, as the row drew it last pass; `None` when the row shows no such thumbnail. A Smart
 /// Filter mask's thumbnail is on the layer's Smart Filters row; every other one on the layer's row.
-pub(crate) fn thumb_on(h: &Harness<'_, PhotocraftApp>, name: &str, row_name: &str, part: LayerPart) -> Option<Rect> {
+pub(crate) fn thumb_on(h: &Harness<'_, Box<PhotocraftApp>>, name: &str, row_name: &str, part: LayerPart) -> Option<Rect> {
     let app = h.state();
     let st = app.session.active().expect("a document");
     let filter = &app.ui.layer_filter;
@@ -46,13 +46,13 @@ pub(crate) fn thumb_on(h: &Harness<'_, PhotocraftApp>, name: &str, row_name: &st
 }
 
 /// The rect of the thumbnail that shows `part` of the layer named `name`.
-pub(crate) fn thumb(h: &Harness<'_, PhotocraftApp>, name: &str, part: LayerPart) -> Rect {
+pub(crate) fn thumb(h: &Harness<'_, Box<PhotocraftApp>>, name: &str, part: LayerPart) -> Rect {
     thumb_on(h, name, name, part).unwrap_or_else(|| panic!("{name:?} shows no {part:?} thumbnail"))
 }
 
 /// A point on the name of the row of the layer named `name`, past its thumbnails: a press there
 /// takes the row itself, where one on a thumbnail is the thumbnail's.
-pub(crate) fn name_point(h: &Harness<'_, PhotocraftApp>, name: &str) -> Pos2 {
+pub(crate) fn name_point(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> Pos2 {
     let at = row(h, name);
     let parts = [LayerPart::Pixels, LayerPart::LayerMask, LayerPart::VectorMask, LayerPart::FrameShape, LayerPart::FrameContent];
     let past = parts.into_iter().filter_map(|part| thumb_on(h, name, name, part)).map(|thumb| thumb.right()).fold(at.left(), f32::max);

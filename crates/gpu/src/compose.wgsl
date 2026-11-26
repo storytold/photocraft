@@ -827,7 +827,7 @@ fn dither_noise(d: vec2<i32>) -> f32 {
     h = h ^ (h >> 15u);
     h = h * 0x2C1B3C6Du;
     h = h ^ (h >> 12u);
-    return f32(h & 0xFFFFu) / 65535.0;
+    return f32(h & 0xFFFFu) / 65536.0;
 }
 
 fn layer_texel(d: vec2<i32>) -> vec4<f32> {
@@ -1061,12 +1061,14 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
 
 // ---- Blend If (photocraft_doc::BlendRange, compose::blend_if_weight) ---------------------------
 
-// 0 at or below `lo`, 1 at or above `hi`; a hard step at `lo` when unsplit.
+// 0 at or below `lo`, 1 at or above `hi`; a hard step at `lo` when unsplit. In an 8-bit
+// RGB document (`p4.z`) a split ramp counts both ends, 0 only below `lo` (BlendRange::weight_8bit).
 fn bi_ramp(lo: f32, hi: f32, x: f32) -> f32 {
     if (hi <= lo) {
         return select(0.0, 1.0, x >= lo);
     }
-    return clamp((x - lo) / (hi - lo), 0.0, 1.0);
+    let lo_end = select(lo, lo - 1.0, op.p4.z > 0.5);
+    return clamp((x - lo_end) / (hi - lo_end), 0.0, 1.0);
 }
 
 // How much of value `v` (0..255) shows through range `e` (0 = Gray, then the channels) on side
@@ -1411,14 +1413,31 @@ fn ra(p: vec2<i32>) -> f32 {
 }
 fn mout(v: f32) -> vec4<f32> { return vec4(v, 0.0, 0.0, 1.0); }
 
-// Map::shifted by whole pixels: p0 = (dx, dy, outside, invert (1 - a before shifting)).
+// Map::shifted, whole-pixel or sub-pixel: p0 = (dx, dy, outside, invert). The invert is taken per
+// tap, as the CPU inverts its map before sampling it and uses `outside` for taps off the map. A
+// whole-pixel offset weights its four taps 1 and 0, so it reads exactly the one texel the old
+// whole-pixel path read; the arithmetic order matches `Map::shifted` term by term.
+fn mtap(p: vec2<i32>, outside: f32, invert: f32) -> f32 {
+    if (!inside(p, chunk.size)) { return outside; }
+    let v = textureLoad(tex_a, p, 0).r;
+    if (invert > 0.5) { return 1.0 - v; }
+    return v;
+}
 @fragment
 fn fs_mshift(in: VOut) -> @location(0) vec4<f32> {
-    let s = local(in.pos) - vec2<i32>(i32(op.p0.x), i32(op.p0.y));
-    if (!inside(s, chunk.size)) { return mout(op.p0.z); }
-    var v = textureLoad(tex_a, s, 0).r;
-    if (op.p0.w > 0.5) { v = 1.0 - v; }
-    return mout(v);
+    let p = local(in.pos);
+    let fx = floor(op.p0.x);
+    let fy = floor(op.p0.y);
+    let ax = op.p0.x - fx;
+    let ay = op.p0.y - fy;
+    let s = p - vec2<i32>(i32(fx), i32(fy));
+    let v00 = mtap(s, op.p0.z, op.p0.w);
+    let v10 = mtap(s - vec2<i32>(1, 0), op.p0.z, op.p0.w);
+    let v01 = mtap(s - vec2<i32>(0, 1), op.p0.z, op.p0.w);
+    let v11 = mtap(s - vec2<i32>(1, 1), op.p0.z, op.p0.w);
+    let top = v00 * (1.0 - ax) + v10 * ax;
+    let bot = v01 * (1.0 - ax) + v11 * ax;
+    return mout(top * (1.0 - ay) + bot * ay);
 }
 
 // effects::dilate: inside (distance < 0) min(A + r, 1), else max(A, clamp(r + 0.5 - dist_outside));
@@ -1555,8 +1574,9 @@ fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
     let shade = (n.x * op.p0.x + n.y * op.p0.y + n.z * op.p0.z) / len;
     let se = op.p0.w;
     var k = shade - se;
-    // effects::bevel_maps: the gloss contour maps the shading, a flat face's as the neutral (#7360).
-    if (op.p1.w > 0.5) { k = lut(0, shade) - lut(0, se); }
+    // effects::bevel_maps: the gloss contour maps the shading; a flat face's unmapped shading
+    // stays the neutral (#7360).
+    if (op.p1.w > 0.5) { k = lut(0, shade) - se; }
     var v = 0.0;
     if (op.p1.z > 0.5) {
         if (k <= 0.0) { v = clamp(-k / max(se, 1e-3), 0.0, 1.0) * region; }

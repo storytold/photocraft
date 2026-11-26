@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 use crate::canvas::testing;
 use crate::state::Tool;
 
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -51,7 +51,7 @@ pub(super) fn added(app: &mut PhotocraftApp, gesture: impl FnOnce(&mut Photocraf
 
 /// `tool` with the smooth anchor selected so its handles show: a ⌘-click, Direct Selection in
 /// each of these tools (a selection made with another tool is dropped when the Pen is taken).
-fn with_shown_handles(tool: Tool) -> PhotocraftApp {
+fn with_shown_handles(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = app(tool);
     with_path(&mut app);
     click(&mut app, [120.0, 40.0], Modifiers::COMMAND);

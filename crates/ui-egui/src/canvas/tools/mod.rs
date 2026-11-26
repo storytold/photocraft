@@ -307,6 +307,9 @@ fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
 /// case was measured: a layer inside a hidden group, a targeted mask, Sample All Layers and the other layer kinds keep
 /// the status-bar error. Hidden is checked before the lock, so a hidden layer with Lock All is quiet too.
 fn quiet_hidden_refusal(app: &PhotocraftApp, tool: Tool) -> bool {
+    if crate::brush_refusal::spot_healing_quiet(app, tool) {
+        return true;
+    }
     if tool != Tool::Remove || app.ui.tool_options.sample_all.remove || super::paint_target(app) != serde_json::json!("pixels") {
         return false;
     }
@@ -364,7 +367,7 @@ impl CanvasTool for Preflight<'_, '_> {
                 return ToolAction::Done;
             }
             let at = [doc.x, doc.y];
-            // The Triangle's ⌥ press that samples is the Eyedropper stand-in's, not a shape (#13364).
+            // Let the Eyedropper take an Alt press that samples the shape tool's Fill.
             if self.alt_stand_in && self.scope.with_app(|app| super::cursor_policy::shape_alt_samples(app, pointer.mods, at[0], at[1])) {
                 return ToolAction::Ignored;
             }
@@ -460,6 +463,11 @@ impl Preflight<'_, '_> {
         let pressure = pointer.sample.pressure;
         let mods = pointer.mods;
         self.scope.with_app(|app| {
+            // The Adjustment Brush paints a new layer's mask whatever the active layer is (hidden, locked, a group or
+            // type): only Indexed Color refuses it (#12519).
+            if tool == Tool::AdjustmentBrush {
+                return crate::adjustment_brush::press_refused(app);
+            }
             // Auto-Select's press picks the layer to move, so the hidden active layer is not its target.
             let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.cmd;
             (!picks && press_refused(app, tool))
@@ -477,6 +485,8 @@ pub(crate) struct BodyShown {
     pub(crate) crop: Option<CropShown>,
     /// The snap lines of the open Free Transform's box, which its canvas tool hands to the host.
     pub(crate) transform_snapped: Vec<SnapLine>,
+    /// The open Free Transform's preview, which the body adds to the canvas's picture slot after the document.
+    pub(crate) transform_picture: Vec<egui::Shape>,
 }
 
 /// Borrows a family tool as the host's `dyn`.
@@ -513,7 +523,7 @@ fn with_rig<R>(
     let transform_open = app.ui.transform.is_some();
     let lends_transform = stand_ins && (!in_gesture || tools.gesture_pick == GesturePick::Transform);
     let free_transform = if lends_transform { app.ui.transform.take() } else { None };
-    let BodyShown { crop: crop_shown, transform_snapped } = shown;
+    let BodyShown { crop: crop_shown, transform_snapped, .. } = shown;
     let mut transform = free_transform.as_ref().map(|session| crate::transform_tool::canvas_tool(session, transform_snapped));
     // The symmetry session moves into the pass the same way.
     let symmetry_transform = if stand_ins && fam == Family::Paint { app.ui.symmetry_transform.take() } else { None };
@@ -668,7 +678,7 @@ fn with_rig<R>(
         if let Some(tool) = crop_tool {
             tools.crop.tool = tool;
         }
-        crop::finish(app, output);
+        crop::finish(app, &mut tools.crop.tool, output);
     }
     result
 }
