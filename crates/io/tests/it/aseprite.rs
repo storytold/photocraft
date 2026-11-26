@@ -38,7 +38,7 @@ fn aseprite_signature_routes_short_names_and_misleading_extensions() {
 
 #[test]
 fn a_legacy_frame_uses_the_header_speed_when_its_own_duration_is_zero() {
-    let mut bytes = LAYERS.to_vec();
+    let mut bytes = include_bytes!("../fixtures/aseprite/animation.aseprite").to_vec();
     bytes[18..20].copy_from_slice(&125u16.to_le_bytes());
     bytes[136..138].fill(0);
     let doc = photocraft_io::import("legacy.ase", &bytes).unwrap().document;
