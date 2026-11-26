@@ -650,6 +650,13 @@ fn a_top_level_string_is_held_to_the_same_size_cap_as_a_nested_one() {
                   try { alert(a) } catch (e) { $.writeln(e instanceof RangeError, ' ', e.message) }";
     assert_eq!(lines_of(at_cap), ["true text is too long to pass to the host (more than 16777216 UTF-16 units)"]);
     assert_eq!(first_dialog_text("alert('ok');"), "ok");
+    // An array holding itself joins it as '' without converting it, as the engine's own join
+    // does: its `toString` getter is read once, as `'' + a` reads it.
+    let own = "var n = 0, a = [1]; a[1] = a; \
+               Object.defineProperty(a, 'toString', { get: function () { return n++ ? function () { return 'Z' } : Array.prototype.toString } }); \
+               var engine = '' + a; n = 0; alert(a); $.writeln(engine);";
+    assert_eq!(first_dialog_text(own), "1,");
+    assert_eq!(lines_of(own), ["1,"]);
 }
 
 #[test]

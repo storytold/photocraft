@@ -252,7 +252,9 @@ impl Join {
                     break;
                 }
             };
-            if element.is_null_or_undefined() {
+            // The array itself joins as '' unconverted, as Boa's own `join` has it (a script's
+            // `'' + a` and the host's text agree).
+            if element.is_null_or_undefined() || element.as_object().is_some_and(|e| JsObject::equals(&e, array)) {
                 continue;
             }
             if let Err(e) = self.value(&element, ctx) {
