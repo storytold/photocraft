@@ -16,6 +16,23 @@ use crate::state::Tool;
 
 const M: egui::Modifiers = egui::Modifiers::NONE;
 
+/// What the preview of a stroke may differ from its commit by: the 8-bit dither the commit adds.
+const DITHER: f32 = 2.0 / 255.0;
+
+/// The largest difference between what two documents show over `w × h` pixels, in premultiplied
+/// channels. A live stroke's document draws the stroke as a masked layer inside a group, so what it
+/// shows is compared, not the target layer's pixels.
+fn shown_diff(a: &Document, b: &Document, w: i32, h: i32) -> f32 {
+    let (a, b) = (photocraft_compose::flatten(a), photocraft_compose::flatten(b));
+    (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let (p, q) = (a.get(x, y), b.get(x, y));
+            (0..3).map(|c| (p[c] * p[3] - q[c] * q[3]).abs()).chain([(p[3] - q[3]).abs()]).fold(0.0, f32::max)
+        })
+        .fold(0.0, f32::max)
+}
+
 /// The revision of document `idx`'s canvas composite on `output` this pass, recorded as shown, as a display draws it.
 fn composite_revision(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output: Option<u32>) -> Revision {
     let prep = CompositePrep::new(app, ctx, idx, output, None).expect("an open document");
@@ -95,8 +112,8 @@ fn smoothing_preview_redraws_the_tail_each_step() {
     let live = display_doc(&mut app, 0).0;
     tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 110.0 }, M);
     let done = app.session.documents()[0].doc.clone();
-    let (a, b) = (live.layers[0].surface().unwrap(), done.layers[0].surface().unwrap());
-    assert!((0..120).all(|y| (0..200).all(|x| a.rgba(x, y) == b.rgba(x, y))), "no stale tails in the preview");
+    let d = shown_diff(&live, &done, 200, 120);
+    assert!(d <= DITHER, "no stale tails in the preview ({d})");
 }
 
 #[test]
@@ -348,7 +365,7 @@ fn brush_drag_shows_the_real_stroke_and_commits_it() {
     app.run("file.new", json!({"width": 120, "height": 60, "background": "transparent"})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 0.0}})).unwrap();
     app.ui.tool = Tool::Brush;
-    let alpha = |d: &Document, x, y| d.layers[0].surface().unwrap().rgba(x, y)[3];
+    let alpha = |d: &Document, x, y| photocraft_compose::flatten(d).get(x, y)[3];
     let rev = app.session.documents()[0].revision;
     tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, M);
     for x in [40.0, 70.0, 100.0] {
@@ -366,7 +383,10 @@ fn brush_drag_shows_the_real_stroke_and_commits_it() {
     tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 30.0 }, M);
     let doc = app.session.documents()[0].doc.clone();
     assert!(app.live_stroke.is_none() && display_doc(&mut app, 0).1 == 0);
-    assert_eq!((alpha(&doc, 40, 30), alpha(&doc, 40, 38)), (alpha(&shown, 40, 30), alpha(&shown, 40, 38)), "commit matches the preview");
+    assert!(
+        (alpha(&doc, 40, 30) - alpha(&shown, 40, 30)).abs() <= DITHER && (alpha(&doc, 40, 38) - alpha(&shown, 40, 38)).abs() <= DITHER,
+        "commit matches the preview"
+    );
 }
 
 #[test]
@@ -395,10 +415,11 @@ fn live_stroke_uses_pen_tilt_and_redraws_partially() {
     tool_event(&mut app, ToolEvent::Up { x: 900.0, y: 45.0 }, M);
     assert!(redrawn_since(&mut app, &ctx, seen).is_some(), "the commit redraws only the stroke");
     let doc = app.session.documents()[0].doc.clone();
-    let (a, b) = (doc.layers[0].surface().unwrap(), shown.layers[0].surface().unwrap());
+    let a = doc.layers[0].surface().unwrap();
     // 60° tilt shrinks the dab well below 30 px: the preview shows that size, as committed.
     assert!(a.rgba(500, 45)[3] > 0.5 && a.rgba(500, 45 + 12)[3] == 0.0);
-    assert!((0..90).all(|y| (0..700).all(|x| a.rgba(x, y) == b.rgba(x, y))), "commit matches the preview");
+    let d = shown_diff(&doc, &shown, 700, 90);
+    assert!(d <= DITHER, "commit matches the preview ({d})");
 }
 
 /// Brush drag along y = 40 with one canvas frame per pointer move; returns the document the
@@ -431,8 +452,7 @@ fn drag_frames(smoothing: f32, xs: &[f64]) -> (std::sync::Arc<Document>, std::sy
 }
 
 fn same_pixels(a: &Document, b: &Document) -> bool {
-    let (a, b) = (a.layers[0].surface().unwrap(), b.layers[0].surface().unwrap());
-    (0..80).all(|y| (0..200).all(|x| a.rgba(x, y) == b.rgba(x, y)))
+    shown_diff(a, b, 200, 80) <= DITHER
 }
 
 #[test]
@@ -454,7 +474,10 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     let (live, done, partial, _) = drag_frames(0.5, &xs);
     assert!(same_pixels(&live, &done), "preview at the last move = committed stroke, tail included");
     assert!(partial);
-    let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
+    let end = |d: &Document| {
+        let shown = photocraft_compose::flatten(d);
+        (0..200).rev().find(|&x| (0..80).any(|y| shown.get(x, y)[3] > 0.0)).unwrap()
+    };
     assert!(end(&live) >= 170, "the end reaches the pointer while drawing ({})", end(&live));
     // The options-bar value reaches the stroke: 50 % smooths the wiggle, 0 % doesn't.
     let (_, rough, _, _) = drag_frames(0.0, &xs);
