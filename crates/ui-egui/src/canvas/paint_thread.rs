@@ -373,8 +373,8 @@ mod tests {
         };
         let pts: Vec<StrokePoint> = (1..=60).map(|i| StrokePoint::new(20.0 + 6.0 * f64::from(i), 60.0 + 20.0 * (f64::from(i) / 9.0).sin(), 1.0)).collect();
         let commit = |e: EngineStroke| match e {
-            EngineStroke::Brush(l) => l.into_commit().unwrap().surface,
-            _ => unreachable!("a Brush stroke"),
+            EngineStroke::Brush(l) => l.into_commit().ok().map(|c| c.surface),
+            _ => None,
         };
 
         let mut thread = PaintThread::start(begin());
@@ -395,7 +395,7 @@ mod tests {
 
         let mut inline = begin();
         inline.push(&pts).unwrap();
-        let (a, b) = (commit(painted.expect("the stroke comes back")), commit(inline));
+        let (a, b) = (commit(painted.expect("the stroke comes back")).expect("a Brush stroke commits"), commit(inline).expect("a Brush stroke commits"));
         let differ = (0..120).flat_map(|y| (0..400).map(move |x| (x, y))).filter(|&(x, y)| a.rgba(x, y) != b.rgba(x, y)).count();
         assert_eq!(differ, 0, "the settled stroke commits other pixels");
         assert!(b.rgba(200, 60 + (20.0 * (30.0f64 / 9.0).sin()) as i32)[3] > 0.5, "the stroke is there");
