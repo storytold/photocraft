@@ -14,9 +14,10 @@ gh api repos/storytold/photocraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `fc7124a1defa96813aee060031dc8b4d2afa3652`, the craft-common-actions
-main commit that merged [#370](https://github.com/storytold/craft-common-actions/pull/370). It
-includes #369 (the clean-source fix and the macos-15 runner), #367 and
+Shared tooling is pinned to `8389cad8b849ea6bdb5e15fbce16772c3457565a`, the craft-common-actions
+main commit that merged [#371](https://github.com/storytold/craft-common-actions/pull/371), which
+admits the built commit on its own Sonar analysis rather than main's latest. It includes #370,
+#369 (the clean-source fix and the macos-15 runner), #367 and
 [#364](https://github.com/storytold/craft-common-actions/pull/364), which
 lets the signer run on the policy's signer branch (`release` or `nightly-signer`). It includes
 [#363](https://github.com/storytold/craft-common-actions/pull/363) (the multi-app pipeline, which
@@ -49,15 +50,17 @@ producer's `manual-actors` and the policy's `manual_actors`. The list mirrors th
 team (id 19837241), leaving out `echelon-robot`, which can only read photocraft; update it by PR
 in both places when the team changes.
 
-**Admission timing.** The candidate check reads the newest CI run on the candidate commit and
-main's latest finished Sonar analysis, so when to dispatch matters:
+**Admission timing.** The candidate check reads the newest CI run on the candidate commit and,
+since #371, the candidate's own main Sonar analysis, so when to dispatch matters:
 - Dispatch the producer only on a main commit pushed after that day's scheduled CI run
   (03:11 UTC). The scheduled run leaves out most of the 19 required jobs (the Windows legs,
   git-sources, the test without HEIF and the web build), and if it ran on the same commit it is
   the newest run there, so admission refuses.
-- The candidate must be main's latest finished Sonar analysis. Pick a quiet main, wait for its
-  CI and SonarCloud analysis to finish green, then dispatch the producer and, once it succeeds,
-  the signer, before another main push lands a newer analysis.
+- The candidate needs its own finished main SonarCloud analysis, at most a day old (Sonar keeps
+  intraday analyses for only a day or two). Later merges and their analyses no longer stop
+  admission, but every unresolved main vulnerability, and every one resolved since the
+  candidate's analysis, must be in the reviewed debt. Wait for the candidate's CI and SonarCloud
+  analysis to finish, then dispatch the producer and, once it succeeds, the signer within a day.
 
 **Platform rows.** The producer caller lists
 `platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'` on its single job: one producer
@@ -82,7 +85,7 @@ Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read 
 |---|---|---|
 | `repository_id` | `1398080271` | `gh api repos/storytold/photocraft --jq .id` |
 | `producer_workflow_id` | `428462603` | `gh api repos/storytold/photocraft/actions/workflows/nightly.yml` after `nightly.yml` reached main (path `.github/workflows/nightly.yml`, state `active`) |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `fc7124a1…` (craft-common-actions #370, with #369, #367 and #364) | The callers' pin |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `8389cad8…` (craft-common-actions #375, with #371, #370, #369, #367 and #364) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push (4 admin, FredApps write); equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist (Linux tarball is about 126 MB) |
 | `platforms` | three rows | v0.23.1 stable identities, as in the example; the Windows publisher subject was confirmed by reading the stable v0.23.1 `photocraft.exe` Authenticode signature on Windows |
@@ -91,9 +94,12 @@ Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read 
 | Sonar conditions | `new_security_rating` accepted (max 5); the other five required | Quality gate of main analysis `19880b44` (commit `27c629f7`, 2026-11-24 12:40 UTC) |
 | Sonar `issue_types` / `debt` | `VULNERABILITY`; all 15 unresolved main vulnerabilities, accepted as debt for the first run (Skylar's decision) | `api/issues/search` on main at the same analysis |
 
-The candidate check refuses whenever main's unresolved vulnerability set differs from `debt`, whether
-an issue is new or fixed, and whenever a required condition fails or a listed CI job is renamed. Refresh
-those values in the same reviewed main change that `nightly-signer` is then advanced to.
+The candidate check refuses when any vulnerability that was open at the candidate commit (still
+unresolved on main, or resolved since the candidate's analysis) isn't in `debt`, when main has an
+unresolved vulnerability that isn't in `debt` (even one introduced after the candidate), when a
+required condition fails, or when a listed CI job is renamed. A `debt` entry that was fixed later
+doesn't refuse. Refresh those values in the same reviewed main change that `nightly-signer` is then
+advanced to.
 
 ## Ownership and interface
 
