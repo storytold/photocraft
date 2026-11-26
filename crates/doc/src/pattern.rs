@@ -2,9 +2,9 @@
 //! and brush textures. Pure data; rendering lives in `photocraft-compose`, the PSD mapping
 //! (`Patt`/`Pat2`/`Pat3` global blocks) in `photocraft-io`.
 
-use photocraft_color::SampleType;
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_raster::{AllocationError, Interrupt, Surface};
 
 /// Largest pattern edge a file may declare (the PSD reader's limit; Define Pattern stops at 8000).
 pub const MAX_EDGE: u32 = 30_000;
@@ -13,6 +13,36 @@ pub const MAX_EDGE: u32 = 30_000;
 /// patterns paint nothing.
 pub const MAX_PAINT_PIXELS: u64 = 1 << 26;
 
+/// A bounded, cancellable pattern hash could not be completed.
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
+pub enum PatternBuildError {
+    InvalidDimensions,
+    ScratchLimit { required: usize, available: usize },
+    Allocation(AllocationError),
+    Cancelled,
+}
+
+impl std::fmt::Display for PatternBuildError {
+    /// Report pattern dimension, scratch, allocation and cancellation failures with the relevant bounded-build context.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidDimensions => f.write_str("pattern dimensions exceed native edge or paint limits"),
+            Self::ScratchLimit { required, available } => write!(f, "pattern hash needs {required} scratch bytes; {available} available"),
+            Self::Allocation(error) => error.fmt(f),
+            Self::Cancelled => f.write_str("pattern creation cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for PatternBuildError {
+    /// Expose an underlying allocation failure while keeping validation and cancellation errors self-contained.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Allocation(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 /// Most bytes of working copy the CPU compositor holds for one pattern (`photocraft-compose`
 /// checks the two agree at build time). See [`Pattern::working_bytes`]. A browser tab has far less
 /// memory than a desktop process, and a failed allocation there aborts the tab, so the web build
@@ -28,7 +58,7 @@ pub const BAND_ROWS: u32 = 256;
 
 /// One pattern tile. Pixels cover `0..width × 0..height` of `surface`, in any pixel format
 /// (depth and colour model are the pattern's own, as in Photoshop).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Pattern {
     /// Unique id (a UUID string, as Photoshop's `Idnt`).
     pub id: String,
@@ -37,6 +67,15 @@ pub struct Pattern {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    /// The colour mode of the source this pattern was made from, when that is known: Edit ›
+    /// Define Pattern names the document's mode. The pixels keep their own format either way (an
+    /// Indexed source stores an RGB surface), so this is the only place the mode survives. `None`
+    /// for a pattern whose source is not a document of a known mode: the built-ins, and patterns
+    /// read from a `.pat` or PSD block, which say what their pixels are but not what they came
+    /// from. Not part of the id: the same pixels keep one id whatever their source, and the id is
+    /// how the library and a document dedupe, so defining pixels that are already stored keeps the
+    /// source mode of the pattern that got there first.
+    pub source_mode: Option<ColorMode>,
     pub surface: Surface,
 }
 
@@ -46,6 +85,51 @@ fn fnv(h: u64, bytes: &[u8]) -> u64 {
 }
 
 impl Pattern {
+    /// Construct a pattern using at most one fallibly allocated normalized pixel
+    /// row while hashing. The id matches [`Self::new`] for the same input.
+    ///
+    /// `max_scratch_bytes` is the caller's remaining allowance for the temporary
+    /// hash row; the already-owned surface must be accounted for separately.
+    /// Native edge/paint limits and scratch size are checked before allocation.
+    /// Cancellation is checked before each row and before committing the result.
+    pub fn try_new_in(
+        name: impl Into<String>,
+        surface: Surface,
+        width: u32,
+        height: u32,
+        max_scratch_bytes: usize,
+        ctl: &Interrupt<'_>,
+    ) -> Result<Pattern, PatternBuildError> {
+        ctl.check().map_err(|_| PatternBuildError::Cancelled)?;
+        if width == 0 || height == 0 || width > MAX_EDGE || height > MAX_EDGE || u64::from(width) * u64::from(height) > MAX_PAINT_PIXELS {
+            return Err(PatternBuildError::InvalidDimensions);
+        }
+        let row_bytes = usize::try_from(width)
+            .ok()
+            .and_then(|w| w.checked_mul(surface.channels()))
+            .and_then(|n| n.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or(PatternBuildError::Allocation(AllocationError::SizeOverflow))?;
+        if row_bytes > max_scratch_bytes {
+            return Err(PatternBuildError::ScratchLimit { required: row_bytes, available: max_scratch_bytes });
+        }
+        let name = name.into();
+        let mut h1 = fnv(0xcbf2_9ce4_8422_2325, name.as_bytes());
+        h1 = fnv(h1, &width.to_le_bytes());
+        h1 = fnv(h1, &height.to_le_bytes());
+        // Dimensions are already bounded by MAX_EDGE < i32::MAX.
+        for y in 0..height {
+            ctl.check().map_err(|_| PatternBuildError::Cancelled)?;
+            let row = surface.try_read_region(Rect::new(0, y as i32, width as i32, (y + 1) as i32)).map_err(PatternBuildError::Allocation)?;
+            for value in row {
+                h1 = fnv(h1, &value.to_bits().to_le_bytes());
+            }
+        }
+        ctl.check().map_err(|_| PatternBuildError::Cancelled)?;
+        let h2 = fnv(h1 ^ 0x9e37_79b9_7f4a_7c15, format!("{:?}", surface.format()).as_bytes());
+        let id = format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", (h1 >> 32) as u32, (h1 >> 16) as u16, h1 as u16, (h2 >> 48) as u16, h2 & 0xffff_ffff_ffff);
+        Ok(Pattern { id, name, width, height, source_mode: None, surface })
+    }
+
     /// A pattern with an id derived from its name and pixels (same content → same id, so
     /// defining a pattern is deterministic and replayable).
     pub fn new(name: impl Into<String>, surface: Surface, width: u32, height: u32) -> Pattern {
@@ -65,7 +149,7 @@ impl Pattern {
         }
         let h2 = fnv(h1 ^ 0x9e37_79b9_7f4a_7c15, format!("{:?}", surface.format()).as_bytes());
         let id = format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", (h1 >> 32) as u32, (h1 >> 16) as u16, h1 as u16, (h2 >> 48) as u16, h2 & 0xffff_ffff_ffff);
-        Pattern { id, name, width, height, surface }
+        Pattern { id, name, width, height, source_mode: None, surface }
     }
 
     /// The name shown in UIs: Photoshop's localisation keys (`$$$/Patterns/…=Water`) show
@@ -190,6 +274,57 @@ mod tests {
         assert!(find(&list, "nope", "").is_none());
     }
 
+    #[test]
+    /// Compare streamed pattern creation with the existing content IDs across modes/depths, alpha layouts and sparse
+    /// row/tile boundaries.
+    fn bounded_row_hash_matches_existing_ids_for_native_depths_models_and_alpha() {
+        use photocraft_color::{ColorMode, SampleType};
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                for alpha in [false, true] {
+                    let format = PixelFormat::new(mode, depth, alpha);
+                    let mut surface = Surface::new(format);
+                    // Cross both a tile and a row boundary, including sparse pixels.
+                    let rect = Rect::new(0, 0, 67, 3);
+                    let values = (0..67 * 3 * format.channels()).map(|n| (n % 19) as f32 / 16.0 - 0.125).collect::<Vec<_>>();
+                    surface.write_region(rect, &values);
+                    let existing = Pattern::new("Original row hash", surface.clone(), 67, 4);
+                    let streamed = Pattern::try_new_in("Original row hash", surface, 67, 4, 67 * format.channels() * 4, &Interrupt::NONE).unwrap();
+                    assert_eq!(streamed, existing, "{mode:?}/{depth:?}/alpha={alpha}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    /// Refuse invalid dimensions and insufficient row scratch before reading or allocating pixel data.
+    fn bounded_hash_rejects_hostile_extents_and_scratch_before_pixel_reads() {
+        for (width, height) in [(0, 1), (1, 0), (MAX_EDGE + 1, 1), (1, MAX_EDGE + 1), (MAX_EDGE, MAX_EDGE), (u32::MAX, 1)] {
+            let result = Pattern::try_new_in("Too large", Surface::new(PixelFormat::RGBA8), width, height, usize::MAX, &Interrupt::NONE);
+            assert_eq!(result, Err(PatternBuildError::InvalidDimensions));
+        }
+        assert_eq!(
+            Pattern::try_new_in("No scratch", Surface::new(PixelFormat::RGBA8), 30000, 1, 0, &Interrupt::NONE),
+            Err(PatternBuildError::ScratchLimit { required: 30000 * 4 * 4, available: 0 })
+        );
+    }
+
+    #[test]
+    /// Verify cancellation is checked both before pattern work and during row-wise hashing.
+    fn bounded_hash_checks_cancellation_before_and_between_rows() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cancelled = || true;
+        assert_eq!(
+            Pattern::try_new_in("Cancelled", Surface::new(PixelFormat::RGBA8), 1, 1, 16, &Interrupt::cancel_only(&cancelled)),
+            Err(PatternBuildError::Cancelled)
+        );
+        let checks = AtomicUsize::new(0);
+        let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 3;
+        let result = Pattern::try_new_in("Mid-row cancellation", Surface::new(PixelFormat::RGBA8), 1, 20, 16, &Interrupt::cancel_only(&cancel));
+        assert_eq!(result, Err(PatternBuildError::Cancelled));
+        assert_eq!(checks.load(Ordering::Relaxed), 4);
+    }
+
     /// The id is a hash of every sample in row-major order; reading a tall pattern a band of rows
     /// at a time must give the id one whole read gave, or saved documents would lose their
     /// pattern links.
@@ -217,8 +352,14 @@ mod tests {
 
     #[test]
     fn working_bytes_keep_a_pattern_exact_in_less_memory() {
-        let sparse =
-            |format: PixelFormat, width: u32, height: u32| Pattern { id: String::new(), name: String::new(), width, height, surface: Surface::new(format) };
+        let sparse = |format: PixelFormat, width: u32, height: u32| Pattern {
+            id: String::new(),
+            name: String::new(),
+            width,
+            height,
+            source_mode: None,
+            surface: Surface::new(format),
+        };
         let float = PixelFormat::new(photocraft_color::ColorMode::Rgb, SampleType::F32, true);
         // What fits is expanded as before.
         assert_eq!(sparse(PixelFormat::RGBA8, 10, 10).working_bytes(), 1600);
@@ -236,8 +377,14 @@ mod tests {
 
     #[test]
     fn a_pattern_that_paints_nothing_says_why() {
-        let sparse =
-            |format: PixelFormat, width: u32, height: u32| Pattern { id: String::new(), name: String::new(), width, height, surface: Surface::new(format) };
+        let sparse = |format: PixelFormat, width: u32, height: u32| Pattern {
+            id: String::new(),
+            name: String::new(),
+            width,
+            height,
+            source_mode: None,
+            surface: Surface::new(format),
+        };
         let float = PixelFormat::new(photocraft_color::ColorMode::Rgb, SampleType::F32, true);
         assert_eq!(sparse(PixelFormat::RGBA8, 8000, 8000).paint_problem(), None);
         assert_eq!(sparse(PixelFormat::RGBA8, 0, 4).paint_problem().as_deref(), Some("it is empty"));

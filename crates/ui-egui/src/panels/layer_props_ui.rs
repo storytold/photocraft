@@ -2,23 +2,43 @@
 //! (W/H/X/Y of the layer content, editable), Align and Distribute, the kind's sections and Quick Actions. Edits dispatch
 //! `edit.transform`, `layer.translate`, `layer.align.*` and selection commands.
 
-use egui::{Rect, Sense, Stroke, pos2, vec2};
-use photocraft_doc::{Layer, LayerContent};
+use craft::behavior::geometry::quad::BoxState;
+use craft::behavior::kurbo::{Point, Rect, Size};
+use craft::behavior::{ColumnWidth, EditEvent, EditEvents, Mixed, RulerUnits, Ticks};
+use craft::draw::ui::{SizeUnit, TransformFields, TransformGroups, TransformRow};
+use craft::ui::bars::AlignBar;
+use craft::ui::buttons::Button;
+use craft::ui::canvas::{CanvasRulers, RulerText};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft::ui::layout_components::Grid;
+use craft::ui::runtime::commands::CommandRef;
+use craft::ui::sections::Section;
+use photocraft_doc::{Layer, LayerContent, LayerId};
+use photocraft_engine::prefs::Unit;
 use serde_json::{Value, json};
 
-use crate::props_layout::{LABEL_GAP, LABEL_W, quick_actions_ui, section, stacked_label};
-use crate::theme::{ROW_GAP, Tokens};
-use crate::{PhotocraftApp, widgets};
+use crate::PhotocraftApp;
+use crate::prefs::unit_kind;
+
+/// The panel width, in points, from which Quick Actions take two columns.
+const TWO_COLUMNS_FROM: f32 = 360.0;
+/// Quick Actions in two columns that share the width.
+const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+/// Quick Actions in one column.
+const ONE_COLUMN: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 
 /// `edit.transform` params that scale the content box `b` = [x0, y0, x1, y1] to `w` x `h`, keeping
 /// the top-left corner (Photoshop's Properties W/H fields), or `layer.translate` params for X/Y.
 /// `tol` is the smallest change, in px, that counts as an edit (see [`edit_tolerance`]).
 pub fn transform_params(layer: u64, b: [f64; 4], w: Option<f32>, h: Option<f32>, linked: bool, tol: f32) -> Option<Value> {
-    let (bw, bh) = ((b[2] - b[0]) as f32, (b[3] - b[1]) as f32);
-    if bw <= 0.0 || bh <= 0.0 {
+    // Keep the transform geometry in f64. Rounding the linked W/H ratio and
+    // quad corners to f32 can introduce a tiny anisotropic scale, which makes
+    // a diagonal live ArrowLine lose its editable parameters after resizing.
+    let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
+    if !bw.is_finite() || !bh.is_finite() || bw <= 0.0 || bh <= 0.0 {
         return None;
     }
-    let (mut nw, mut nh) = (w.unwrap_or(bw).max(1.0), h.unwrap_or(bh).max(1.0));
+    let (mut nw, mut nh) = (w.map(f64::from).unwrap_or(bw).max(1.0), h.map(f64::from).unwrap_or(bh).max(1.0));
     if linked {
         if w.is_some() {
             nh = (nw * bh / bw).max(1.0);
@@ -26,10 +46,10 @@ pub fn transform_params(layer: u64, b: [f64; 4], w: Option<f32>, h: Option<f32>,
             nw = (nh * bw / bh).max(1.0);
         }
     }
-    if (nw - bw).abs() < tol && (nh - bh).abs() < tol {
+    if (nw - bw).abs() < f64::from(tol) && (nh - bh).abs() < f64::from(tol) {
         return None;
     }
-    let (x0, y0) = (b[0] as f32, b[1] as f32);
+    let (x0, y0) = (b[0], b[1]);
     let quad = [[x0, y0], [x0 + nw, y0], [x0 + nw, y0 + nh], [x0, y0 + nh]];
     Some(json!({"layer": layer, "rect": b, "quad": quad}))
 }
@@ -38,98 +58,11 @@ pub fn transform_params(layer: u64, b: [f64; 4], w: Option<f32>, h: Option<f32>,
 /// half a pixel is noise. A shape's path is fractional and is scaled to exactly the typed size,
 /// so anything past the field's own rounding (half its last shown decimal) is an edit: 400.25 px
 /// typed as 400 applies, while focusing and leaving the field (which re-reads its rounded text)
-/// doesn't.
-fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
+/// doesn't. `step_px` is one shown decimal step of the ruler unit, in px.
+fn edit_tolerance(layer: &Layer, step_px: f64) -> f32 {
     match &layer.content {
-        LayerContent::Shape(sh) if !sh.path.inverted => ((u.px(0.05, extent) - u.px(0.0, extent)).abs() as f32 + 1e-3).min(0.5),
+        LayerContent::Shape(sh) if !sh.path.inverted => (step_px as f32 + 1e-3).min(0.5),
         _ => 0.5,
-    }
-}
-
-/// A number field that reports a value once committed (drag released, Enter, focus lost). `label` is its own
-/// label and the one stacked with it in the same column ("W" over "X"), which share a centre.
-/// `len` is the unit shown and its 100% extent (for percent); `name` is the field's accessible name.
-// The explicit accessible name accompanies the existing numeric-field parameters.
-#[expect(clippy::too_many_arguments)]
-fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
-    let (u, extent) = len;
-    stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
-    let key = ui.make_persistent_id(("layer-props-field", id));
-    let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
-    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
-    if resp.dragged() || resp.has_focus() {
-        ui.data_mut(|d| d.insert_temp(key, v));
-        return None;
-    }
-    ui.data_mut(|d| d.remove::<f32>(key));
-    if !(resp.drag_stopped() || resp.lost_focus() || resp.changed()) {
-        return None;
-    }
-    let px = u.px(v, extent) as f32;
-    ((px - current).abs() >= tol).then_some(px)
-}
-
-/// Lengths in the Units & Rulers unit, as Photoshop's Properties panel shows them (cm when the
-/// rulers are in centimeters): document px ↔ that unit at the document's resolution.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LenUnit {
-    pub unit: photocraft_engine::prefs::Unit,
-    pub dpi: f64,
-    pub ppi: f64,
-}
-
-impl LenUnit {
-    pub(crate) fn of(app: &PhotocraftApp) -> Self {
-        let ur = &app.session.prefs().units_and_rulers;
-        let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
-        LenUnit { unit: ur.rulers, dpi, ppi: ur.point_size.per_inch() }
-    }
-    /// `px` shown in the unit (`extent` is 100% for percent).
-    pub(crate) fn shown(&self, px: f64, extent: f64) -> f32 {
-        self.unit.from_px(px, self.dpi, extent, self.ppi) as f32
-    }
-    /// A value typed in the unit, in document px.
-    pub(crate) fn px(&self, v: f32, extent: f64) -> f64 {
-        self.unit.to_px(f64::from(v), self.dpi, extent, self.ppi)
-    }
-}
-
-/// Align glyph: a reference line and two bars (Photoshop's align icons).
-fn align_glyph(ui: &egui::Ui, r: Rect, kind: &str, color: egui::Color32) {
-    let p = ui.painter();
-    let c = r.center();
-    let s = Stroke::new(1.2, color);
-    let vertical_ref = matches!(kind, "leftEdges" | "horizontalCenters" | "rightEdges");
-    if vertical_ref {
-        let x = match kind {
-            "leftEdges" => c.x - 6.0,
-            "rightEdges" => c.x + 6.0,
-            _ => c.x,
-        };
-        p.line_segment([pos2(x, c.y - 7.0), pos2(x, c.y + 7.0)], s);
-        for (dy, w) in [(-3.0, 10.0), (3.0, 6.0)] {
-            let x0 = match kind {
-                "leftEdges" => x,
-                "rightEdges" => x - w,
-                _ => x - w / 2.0,
-            };
-            p.rect_filled(Rect::from_min_size(pos2(x0, c.y + dy - 1.5), vec2(w, 3.0)), 0.0, color);
-        }
-    } else {
-        let y = match kind {
-            "topEdges" => c.y - 6.0,
-            "bottomEdges" => c.y + 6.0,
-            _ => c.y,
-        };
-        p.line_segment([pos2(c.x - 7.0, y), pos2(c.x + 7.0, y)], s);
-        for (dx, h) in [(-3.0, 10.0), (3.0, 6.0)] {
-            let y0 = match kind {
-                "topEdges" => y,
-                "bottomEdges" => y - h,
-                _ => y - h / 2.0,
-            };
-            p.rect_filled(Rect::from_min_size(pos2(c.x + dx - 1.5, y0), vec2(3.0, h)), 0.0, color);
-        }
     }
 }
 
@@ -144,63 +77,121 @@ fn frame(layer: &Layer, px: photocraft_geom::Rect) -> [f64; 4] {
     path.map_or([f64::from(px.x0), f64::from(px.y0), f64::from(px.x1), f64::from(px.y1)], |c| [c.0, c.1, c.2, c.3])
 }
 
-/// Width of the link toggle between the W and H fields (the X/Y row leaves the same gap).
-const LINK_W: f32 = 20.0;
+/// The Units & Rulers unit, the document's resolution and the points per inch: what a length shown in
+/// the rulers' unit needs.
+fn ruler_unit(app: &PhotocraftApp) -> (Unit, f64, f64) {
+    let ur = &app.session.prefs().units_and_rulers;
+    let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+    (ur.rulers, dpi, ur.point_size.per_inch())
+}
 
-/// Pro Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
+/// The framework's text for lengths in `unit` along an axis `extent` px long (the 100% of percent).
+fn ruler_text(unit: Unit, dpi: f64, ppi: f64, extent: f64) -> RulerText {
+    RulerText::new(RulerUnits::new(unit.from_px(1.0, dpi, extent, ppi), Ticks::decimal(unit == Unit::Pixels)), unit_kind(unit))
+}
+
+/// The width and height of a row's box.
+fn box_size(row: &TransformRow) -> (f64, f64) {
+    let q = &row.state.quad;
+    ((q[1] - q[0]).hypot(), (q[3] - q[0]).hypot())
+}
+
+/// Runs a command; a refusal goes to the status line.
+fn run(app: &mut PhotocraftApp, id: &str, params: Value) {
+    if let Err(e) = app.run(id, params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// The layer's Transform box as it is now, read again after an edit of the same pass.
+fn current_frame(app: &mut PhotocraftApp, id: LayerId) -> Option<[f64; 4]> {
+    let doc = app.session.active()?.doc.clone();
+    let layer = doc.layer(id)?;
+    let surface = layer.surface()?;
+    Some(frame(layer, app.layer_frame_bounds(layer, surface)))
+}
+
+/// Applies the edits the Transform fields committed in this pass: a W or H change past `tol` is one
+/// `edit.transform`, an X or Y change one `layer.translate`. A commit that left the box where it was
+/// (a click with no change, a value the field rounds back to the shown one) changes nothing.
+fn apply_transform(app: &mut PhotocraftApp, layer: &Layer, linked: bool, tol: (f32, f32), events: &EditEvents<TransformRow>) {
+    for event in events.iter() {
+        let (EditEvent::Commit { before: Mixed::Same(before), after, .. } | EditEvent::Set { before: Mixed::Same(before), after, .. }) = event else {
+            continue;
+        };
+        let (bw, bh) = box_size(before);
+        let (aw, ah) = box_size(after);
+        let w_changed = (aw - bw).abs() >= f64::from(tol.0);
+        let h_changed = (ah - bh).abs() >= f64::from(tol.1);
+        if w_changed || h_changed {
+            // Linked, the typed side carries the other one along.
+            let w = w_changed.then_some(aw as f32);
+            let h = (h_changed && !(linked && w.is_some())).then_some(ah as f32);
+            let tolerance = match (w, h) {
+                (Some(_), None) => tol.0,
+                (None, Some(_)) => tol.1,
+                _ => tol.0.min(tol.1),
+            };
+            if let Some(bb) = current_frame(app, layer.id)
+                && let Some(params) = transform_params(layer.id.0, bb, w, h, linked, tolerance)
+            {
+                run(app, "edit.transform", params);
+            }
+        }
+        let (dx, dy) = ((after.state.pivot.x - before.state.pivot.x).round() as i32, (after.state.pivot.y - before.state.pivot.y).round() as i32);
+        if dx != 0 || dy != 0 {
+            let params = crate::move_ui::pattern_wrap(app, json!({"layer": layer.id.0, "dx": dx, "dy": dy}));
+            run(app, "layer.translate", params);
+        }
+    }
+}
+
+/// The Transform section: X, Y, W and H with the aspect link, in the Units & Rulers unit. The reference
+/// point is the box's top-left corner, so W and H scale from it and X and Y are its position.
+///
+/// The edits are the ones the fields report in this pass, applied once after the section has shown. A
+/// pass that reruns inside the frame gets no input events, so it applies nothing a second time.
+fn transform_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, bb: [f64; 4]) {
+    let (unit, dpi, ppi) = ruler_unit(app);
+    let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
+    let step = |extent: f64| (unit.to_px(0.05, dpi, extent, ppi) - unit.to_px(0.0, dpi, extent, ppi)).abs();
+    let tol = (edit_tolerance(layer, step(dw)), edit_tolerance(layer, step(dh)));
+    let (x_text, y_text) = (ruler_text(unit, dpi, ppi, dw), ruler_text(unit, dpi, ppi, dh));
+    // `TransformGroups` is non-exhaustive: start from none and switch the shown groups on.
+    let mut groups = TransformGroups::NONE;
+    groups.position = true;
+    groups.size = true;
+    let rect = Rect::new(bb[0], bb[1], bb[2], bb[3]);
+    let corners = [Point::new(bb[0], bb[1]), Point::new(bb[2], bb[1]), Point::new(bb[2], bb[3]), Point::new(bb[0], bb[3])];
+    let row = TransformRow::new(BoxState::new(corners, corners[0]), 0.0);
+    let shown = Section::new(tl!("Transform")).show(ui, |ui, _| {
+        TransformFields::new(tl!("Transform"), Bind::given(row), rect, Bind::bound(&mut app.ui.properties_linked))
+            .groups(groups)
+            .document(Size::new(dw, dh))
+            .rulers(CanvasRulers::new(x_text, y_text, Point::ZERO))
+            .size_unit(SizeUnit::length(x_text, y_text))
+            .show(ui)
+    });
+    let Some(out) = shown.inner else { return };
+    // The bound link already holds this pass's toggle; a toggle carries no edit.
+    let linked = app.ui.properties_linked;
+    apply_transform(app, layer, linked, tol, &out.events);
+}
+
+/// Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
 /// sections (Character/Paragraph/Type Options for type, Appearance/Shape for shapes), then Quick
 /// Actions, all with the same collapsible headers (#155).
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
-    let mut run: Vec<(String, Value)> = Vec::new();
     if let Some(s) = layer.surface() {
         let bb = frame(layer, app.layer_frame_bounds(layer, s));
-        let u = LenUnit::of(app);
-        let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
-        let (tw, th) = (edit_tolerance(layer, u, dw), edit_tolerance(layer, u, dh));
-        if section(ui, "transform", tl!("Transform")) {
-            let link_key = egui::Id::unique("layer-props-link");
-            let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
-            // Two label+field columns with the link toggle between them, filling the panel.
-            let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
-                    run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
-                }
-                if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
-                    ui.data_mut(|d| d.insert_temp(link_key, !linked));
-                }
-                if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh), th) {
-                    run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
-                }
-            });
-            ui.add_space(ROW_GAP);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
-                }
-                ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
-                }
-            });
-            ui.add_space(ROW_GAP);
-        }
+        transform_section(app, ui, layer, bb);
     }
     // Gradient fills: their gradient first, as in Photoshop's Properties panel.
-    let gradient = matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. }));
-    if gradient {
+    if matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. })) {
         crate::gradient_ui::properties(app, ui, layer);
-    }
-    if !gradient {
-        align_and_distribute(app, ui, &mut run);
-    }
-    for (id, p) in run.drain(..) {
-        if let Err(e) = app.run(&id, p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
+    } else {
+        align_and_distribute(ui);
     }
     match &layer.content {
         LayerContent::Text(_) => crate::type_tool::type_properties(app, ui),
@@ -212,151 +203,115 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     }
     // Re-read: a section above may have changed the layer (e.g. point to paragraph type).
     let content = app.session.active().and_then(|s| s.doc.layer(layer.id)).map_or_else(|| layer.content.clone(), |l| l.content.clone());
-    if let Some(id) = quick_actions_ui(app, ui, &content) {
-        let ctx = ui.ctx().clone();
-        if let Err(e) = crate::menus::invoke(app, &ctx, id, json!({})) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-    }
+    quick_actions_section(app, ui, &content);
 }
 
-/// The Align and Distribute section: its buttons run `layer.align.*` and `layer.distribute.*` on
-/// the selected layers (pushed onto `run`), greyed where the engine says they can't.
-fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(String, Value)>) {
-    let t = Tokens::get(ui.ctx());
-    if !section(ui, "align", tl!("Align and Distribute")) {
-        return;
-    }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for (i, kind) in ["leftEdges", "horizontalCenters", "rightEdges", "topEdges", "verticalCenters", "bottomEdges"].into_iter().enumerate() {
-            if i == 3 {
-                ui.add_space(8.0);
-            }
-            let id = format!("layer.align.{kind}");
-            let on = app.session.is_enabled(&id);
-            let label = photocraft_engine::commands::find(&id).map_or(kind, |c| c.label);
-            let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), if on { Sense::click() } else { Sense::hover() });
-            if resp.hovered() && on {
-                ui.painter().rect_filled(r, t.radius_sm, t.hover);
-            }
-            align_glyph(ui, r, kind, if on { t.icon } else { t.text_faint });
-            let tip = crate::i18n::fmt(tl!("Align {what}"), &[("what", tl!(&label))]);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &tip));
-            if resp.on_hover_text(tip).clicked() {
-                run.push((id, json!({})));
-            }
-        }
+/// The Align and Distribute section: the framework's align bar. The align commands are app commands
+/// that `crate::align_bar` states and runs, so the section only shows the bar.
+fn align_and_distribute(ui: &mut egui::Ui) {
+    Section::new(tl!("Align and Distribute")).show(ui, |ui, _| {
+        AlignBar::new().show(ui);
     });
-    // The engine already supports equal-gap distribution in both axes. Make those
-    // existing commands discoverable here as well as through Layer > Distribute (#2349).
-    // Three or more selected layers are required; the engine remains authoritative.
-    ui.horizontal_wrapped(|ui| {
-        for (kind, text) in [("horizontally", tl!("Horizontally")), ("vertically", tl!("Vertically"))] {
-            let id = format!("layer.distribute.{kind}");
-            if ui.add_enabled(app.session.is_enabled(&id), egui::Button::new(text)).clicked() {
-                run.push((id, json!({})));
-            }
-        }
-    });
-    ui.add_space(ROW_GAP);
 }
 
 /// Several layers selected with the Background active: Photoshop's Properties keeps Align and
 /// Distribute for the selection there, above the Document properties (#4608).
-pub fn selection_align(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let mut run = Vec::new();
-    align_and_distribute(app, ui, &mut run);
-    for (id, p) in run {
-        if let Err(e) = app.run(&id, p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
+pub fn selection_align(ui: &mut egui::Ui) {
+    align_and_distribute(ui);
+}
+
+/// The Quick Actions a layer kind offers, as (label, command id), Photoshop-style: pixel layers get
+/// subject selection, type layers its conversions, shapes and smart objects their own.
+pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'static str)] {
+    match content {
+        LayerContent::Raster(_) => &[("Remove Background", "layer.removeBackground"), ("Select Subject", "select.subject")],
+        LayerContent::Text(_) => &[
+            ("Convert to Shape", "type.convertToShape"),
+            ("Convert to Paragraph Text", "type.convertToParagraphText"),
+            ("Convert to Point Text", "type.convertToPointText"),
+            ("Create Warped Text", "type.warpText"),
+            ("Rasterize Type", "type.rasterizeTypeLayer"),
+        ],
+        LayerContent::Shape(_) => &[("Rasterize Shape", "layer.rasterize.shape"), ("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")],
+        LayerContent::Smart(_) => &[
+            ("Edit Contents", "layer.smartObjects.editContents"),
+            ("Convert to Layers", "layer.smartObjects.convertToLayers"),
+            ("Rasterize Smart Object", "layer.rasterize.smartObject"),
+        ],
+        LayerContent::Group(_) => &[("Ungroup Layers", "layer.ungroupLayers"), ("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")],
+        LayerContent::Fill(_) => &[("Rasterize Fill Content", "layer.rasterize.fillContent")],
+        LayerContent::Adjustment(_) => &[],
     }
+}
+
+/// The Quick Actions shown right now: the kind's list, limited to commands that exist and are
+/// enabled (Convert to Paragraph Text only for point type, and vice versa).
+pub fn visible_quick_actions(app: &PhotocraftApp, content: &LayerContent) -> Vec<(&'static str, &'static str)> {
+    quick_actions(content).iter().copied().filter(|(_, id)| crate::menus::is_live(id) && crate::menus::is_enabled(app, id)).collect()
+}
+
+/// The Quick Actions section: one command button per shown action, two columns when the panel is
+/// wide enough. A click fires the command, which the menus run (the ones with dialogs open them).
+fn quick_actions_section(app: &PhotocraftApp, ui: &mut egui::Ui, content: &LayerContent) {
+    let actions = visible_quick_actions(app, content);
+    if actions.is_empty() {
+        return;
+    }
+    Section::new(tl!("Quick Actions")).show(ui, |ui, _| {
+        let columns = if ui.available_width() >= TWO_COLUMNS_FROM { TWO_COLUMNS } else { ONE_COLUMN };
+        Grid::new(columns).label(tl!("Quick Actions")).sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            for (_, id) in &actions {
+                Button::command(CommandRef::new(*id)).sizing(Sizing::FillWidth).show(ui);
+            }
+        });
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A document with one layer of each kind; returns the session and the ids by kind.
+    fn kinds() -> (photocraft_engine::Session, Vec<(&'static str, u64)>) {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+        let id = |v: serde_json::Value| v["layer"].as_u64().unwrap();
+        let pixel = id(s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap());
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 60})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let shape = id(s.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap());
+        let ty = id(s.execute("type.create", json!({"text": "Headline", "size": 48, "x": 40, "y": 200})).unwrap());
+        (s, vec![("pixel", pixel), ("shape", shape), ("type", ty)])
+    }
+
+    fn layer_of(app: &PhotocraftApp, id: u64) -> Layer {
+        app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().clone()
+    }
+
+    /// Every kind's Quick Actions are live commands (a renamed id would show a dead button), Select
+    /// Subject and Remove Background are for pixel layers only, and the shown list drops disabled ones.
     #[test]
-    fn switching_between_gradient_and_raster_keeps_alignment_on_raster_only() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                if ui.ctx().cumulative_pass_nr() == 0 {
-                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                    return;
-                }
-                let state = app.session.active().unwrap();
-                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
-                properties(app, ui, &layer);
-            },
-            app,
-        );
-        for gradient in [false, true, false] {
-            if gradient {
-                h.state_mut().run("gradient.fill.create", json!({"from": [20, 60], "to": [180, 60]})).unwrap();
-            } else {
-                h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    fn every_quick_action_is_a_live_command_and_only_enabled_ones_show() {
+        let (s, layers) = kinds();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let ids = |layer: &Layer| quick_actions(&layer.content).iter().map(|(_, id)| *id).collect::<Vec<_>>();
+        for (kind, id) in &layers {
+            let layer = layer_of(&app, *id);
+            for command in ids(&layer) {
+                assert!(crate::menus::is_live(command), "{kind}: {command} is not a live command");
             }
-            h.run_steps(3);
-            let sections = crate::props_layout::sections_drawn(&h.ctx);
-            assert_eq!(sections.iter().any(|(title, _)| title == "Align and Distribute"), !gradient);
-            assert_eq!(sections.iter().any(|(title, _)| title == "Gradient"), gradient);
-            assert_eq!(sections.iter().any(|(title, _)| title == "Gradient Options"), gradient);
-            assert!(!sections.iter().any(|(title, _)| title == "Color stops" || title == "Opacity stops"));
+            let pixel_only = ids(&layer).iter().any(|c| matches!(*c, "select.subject" | "layer.removeBackground"));
+            assert_eq!(pixel_only, *kind == "pixel", "{kind}");
         }
-    }
-
-    /// #7314: in the Transform section W sits over X and H over Y, and each pair shares a centre.
-    #[test]
-    fn transform_labels_are_centred_on_each_other() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
-        app.run("layer.new.layer", json!({})).unwrap();
-        app.run("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 60})).unwrap();
-        app.run("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                if ui.ctx().cumulative_pass_nr() == 0 {
-                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                    return;
-                }
-                let state = app.session.active().unwrap();
-                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
-                properties(app, ui, &layer);
-            },
-            app,
-        );
-        h.run_steps(3);
-        let centres: Vec<(String, f32)> = h
-            .output()
-            .shapes
-            .iter()
-            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t) } else { None })
-            .filter(|t| t.galley.text().chars().count() == 1)
-            .map(|t| (t.galley.text().to_string(), t.pos.x + t.galley.size().x * 0.5))
-            .collect();
-        let at = |l: &str| centres.iter().find(|(s, _)| s == l).map(|(_, x)| *x).unwrap_or_else(|| panic!("no {l} label in {centres:?}"));
-        assert!((at("W") - at("X")).abs() < 0.01, "W and X: {centres:?}");
-        assert!((at("H") - at("Y")).abs() < 0.01, "H and Y: {centres:?}");
-    }
-
-    #[test]
-    fn transform_fields_show_and_take_the_ruler_unit() {
-        use photocraft_engine::prefs::Unit;
-        // 72 dpi: 1644 px = 58 cm; typing 60 cm sets 1700.8 px
-        let u = LenUnit { unit: Unit::Centimeters, dpi: 72.0, ppi: 72.0 };
-        assert!((u.shown(1644.0, 1.0) - 58.0).abs() < 0.01);
-        assert!((u.px(60.0, 1.0) - 1700.787).abs() < 0.01);
-        let px = LenUnit { unit: Unit::Pixels, dpi: 150.0, ppi: 72.0 };
-        assert_eq!(px.shown(170.0, 1.0), 170.0);
-        assert_eq!(px.px(170.0, 1.0), 170.0);
-        let pc = LenUnit { unit: Unit::Percent, dpi: 72.0, ppi: 72.0 };
-        assert_eq!(pc.shown(822.0, 1644.0), 50.0);
+        let pixel = layers.iter().find(|(k, _)| *k == "pixel").unwrap().1;
+        app.run("layer.select", json!({"layer": pixel})).unwrap();
+        let shown: Vec<&str> = visible_quick_actions(&app, &layer_of(&app, pixel).content).iter().map(|(_, id)| *id).collect();
+        assert!(shown.contains(&"layer.removeBackground"), "{shown:?}");
+        let ty = layers.iter().find(|(k, _)| *k == "type").unwrap().1;
+        app.run("layer.select", json!({"layer": ty})).unwrap();
+        let shown: Vec<&str> = visible_quick_actions(&app, &layer_of(&app, ty).content).iter().map(|(l, _)| *l).collect();
+        assert_eq!(shown, ["Convert to Shape", "Convert to Paragraph Text", "Create Warped Text", "Rasterize Type"], "point type has no Convert to Point Text");
     }
 
     #[test]
@@ -383,6 +338,67 @@ mod tests {
         s.execute("edit.transform", p).unwrap();
         let b = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds();
         assert_eq!((b.x0, b.y0, b.width(), b.height()), (10, 20, 50, 25));
+    }
+
+    /// Linked W/H edits must generate a truly uniform affine scale, not one
+    /// rounded independently on each axis to f32 precision.
+    #[test]
+    fn linked_transform_preserves_scale_precision() {
+        let b = [203.6, 171.7, 712.4, 690.3];
+        let p = transform_params(7, b, Some(600.0), None, true, 0.05).unwrap();
+        let x0 = p["quad"][0][0].as_f64().unwrap();
+        let y0 = p["quad"][0][1].as_f64().unwrap();
+        let x1 = p["quad"][1][0].as_f64().unwrap();
+        let y1 = p["quad"][2][1].as_f64().unwrap();
+        let sx = (x1 - x0) / (b[2] - b[0]);
+        let sy = (y1 - y0) / (b[3] - b[1]);
+        assert!((sx - sy).abs() < 1e-12, "linked resize produced different scales: {sx} and {sy}");
+    }
+
+    /// A diagonal arrow must remain live after a proportional width edit in
+    /// Properties, while its outline is transformed by the engine as usual.
+    #[test]
+    fn linked_properties_resize_keeps_diagonal_arrow_editable() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 1200, "height": 1200})).unwrap();
+        s.execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [203.6, 171.7],
+                "to": [712.4, 690.3],
+                "weight": 20.0,
+                "arrowStart": false,
+                "arrowEnd": true,
+                "arrowWidth": 55.0,
+                "arrowLength": 85.0,
+                "arrowConcavity": 50.0
+            }),
+        )
+        .unwrap();
+        let (id, b) = {
+            let st = s.active().unwrap();
+            let id = st.active_layer.unwrap();
+            let layer = st.doc.layer(id).unwrap();
+            let LayerContent::Shape(shape) = &layer.content else { panic!("expected shape layer") };
+            assert!(matches!(shape.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { .. })));
+            let px = photocraft_compose::bounds::content_bounds(layer.surface().unwrap());
+            (id, frame(layer, px))
+        };
+        let p = transform_params(id.0, b, Some(600.0), None, true, 0.05).unwrap();
+        s.execute("edit.transform", p).unwrap();
+        let layer = s.active().unwrap().doc.layer(id).unwrap();
+        let LayerContent::Shape(shape) = &layer.content else { panic!("expected shape layer") };
+        assert!(
+            matches!(shape.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { .. })),
+            "proportional Properties resize must preserve live arrow settings"
+        );
+
+        // The next live-property edit must still be accepted after resizing.
+        s.execute("shape.edit", json!({"layer": id.0, "arrowConcavity": 40.0})).unwrap();
+        let layer = s.active().unwrap().doc.layer(id).unwrap();
+        let LayerContent::Shape(shape) = &layer.content else { panic!("expected shape layer") };
+        assert!(matches!(shape.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { concavity, .. }) if (*concavity - 40.0).abs() < 1e-9));
     }
 
     /// A stroked shape's Transform fields show its path, not the stroke's pixels, and a W edit
@@ -416,10 +432,11 @@ mod tests {
         let st = s.active().unwrap();
         let id = st.active_layer.unwrap();
         let layer = st.doc.layer(id).unwrap();
-        let u = LenUnit { unit: photocraft_engine::prefs::Unit::Pixels, dpi: 72.0, ppi: 72.0 };
+        // One shown decimal step of the pixel ruler at 72 ppi.
+        let step_px = 0.05;
         let bb = frame(layer, photocraft_compose::bounds::content_bounds(layer.surface().unwrap()));
         assert_eq!(bb[2] - bb[0], 400.25);
-        let tol = edit_tolerance(layer, u, 800.0);
+        let tol = edit_tolerance(layer, step_px);
         assert!(tol < 0.25, "{tol}");
         let p = transform_params(id.0, bb, Some(400.0), None, false, tol).expect("a quarter-pixel edit applies");
         s.execute("edit.transform", p).unwrap();
@@ -430,6 +447,6 @@ mod tests {
         assert!(transform_params(id.0, bb, Some(400.3), None, false, tol).is_none());
         s.execute("layer.new.layer", json!({})).unwrap();
         let st = s.active().unwrap();
-        assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), u, 800.0), 0.5, "a pixel layer keeps half a pixel");
+        assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), step_px), 0.5, "a pixel layer keeps half a pixel");
     }
 }

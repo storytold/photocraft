@@ -316,8 +316,8 @@ fn combine(cmy: &Buffer, k: &Buffer) -> CmykBuffer {
 pub(super) fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, tile: i32, mut sink: impl FnMut(CmykBuffer) -> Result<(), E>) -> Result<(), E> {
     let (cmy, k) = (stand_in(doc, CMY), stand_in(doc, K));
     let no_patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
-    let a = StandIn { doc: &cmy, cx: Ctx::for_doc(&cmy, &no_patterns) };
-    let b = StandIn { doc: &k, cx: Ctx::for_doc(&k, &no_patterns) };
+    let a = StandIn { doc: &cmy, cx: Ctx { curve_levels: false, ..Ctx::for_doc(&cmy, &no_patterns) } };
+    let b = StandIn { doc: &k, cx: Ctx { curve_levels: false, ..Ctx::for_doc(&k, &no_patterns) } };
     let rows = crate::band_rows_for(rect.width(), band_rows);
     let mut y = rect.y0;
     while y < rect.y1 {
@@ -336,7 +336,7 @@ pub(super) fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, tile: 
 pub(super) fn render_planes(doc: &Document, rect: Rect, planes: Planes) -> Buffer {
     let d = stand_in(doc, planes);
     let no_patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
-    let s = StandIn { doc: &d, cx: Ctx::for_doc(&d, &no_patterns) };
+    let s = StandIn { doc: &d, cx: Ctx { curve_levels: false, ..Ctx::for_doc(&d, &no_patterns) } };
     s.prepare(rect);
     s.tile(rect)
 }
