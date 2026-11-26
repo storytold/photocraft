@@ -148,7 +148,7 @@ impl Compositor {
             prefix: prefix::Prefix::default(),
             temps: Vec::new(),
             patterns: HashMap::new(),
-            pattern_mode: photocraft_color::ColorMode::Rgb,
+            pattern_space: photocraft_compose::pattern::PatternSpace::Mode(photocraft_color::ColorMode::Rgb),
             pattern_doc: DocId(0),
             pattern_budget: PATTERN_BUDGET,
             max_dim: 0,

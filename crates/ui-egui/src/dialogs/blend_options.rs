@@ -1,5 +1,6 @@
 //! The Blending rows that Fill, Stroke and the Smart Filter Blending Options dialog share: the mode list is the
-//! Layers panel's, so a mode has one key and one shortcut everywhere.
+//! Layers panel's, so a mode has one key and one shortcut everywhere. Fill, Stroke and Fade grey the modes the active
+//! document's colour mode and depth can't use (#13806, #14647).
 
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
@@ -20,6 +21,14 @@ pub(crate) fn blend_param(key: &str, label: impl Into<Label>, group: bool, curre
     Param::new(key, label, ParamKind::blend(modes, Some(current.key().to_string())))
 }
 
+/// A Mode row `"mode"`, labelled `label`, opening on Normal, with the modes the active document can't use greyed
+/// (listed, never chosen). A remembered mode that is greyed opens as Normal: the framework drops a saved value that
+/// names a disabled option.
+pub(crate) fn document_mode_param(app: &PhotocraftApp, label: impl Into<Label>) -> Param {
+    let greyed = app.session.active().map_or(&[][..], |st| photocraft_engine::fill_cmds::greyed_modes(st.doc.mode, st.doc.depth));
+    blend_param("mode", label, false, BlendMode::Normal).disabled_options(greyed.iter().map(|m| m.key().to_string()))
+}
+
 /// The mode a blend row `key` holds; Normal when the field is missing or unreadable.
 pub(crate) fn blend_mode(fields: &DialogFields, key: &str) -> BlendMode {
     fields.text(key).and_then(photocraft_engine::commands::parse_blend).unwrap_or(BlendMode::Normal)
@@ -27,13 +36,13 @@ pub(crate) fn blend_mode(fields: &DialogFields, key: &str) -> BlendMode {
 
 /// The Blending section, Mode, Opacity (percent) and Preserve Transparency: the rows Fill and Stroke share. A
 /// `forced` Preserve Transparency ([`forced_preserve_transparency`]) shows greyed at that state and is not remembered.
-pub(crate) fn blending_rows(forced: Option<bool>) -> Vec<Param> {
+pub(crate) fn blending_rows(app: &PhotocraftApp, forced: Option<bool>) -> Vec<Param> {
     let mut preserve = Param::new(PRESERVE, tl!("Preserve Transparency"), ParamKind::bool(forced.unwrap_or(false)));
     if forced.is_some() {
         // No value enables it, so neither the user nor automation can change the target's state.
         preserve = preserve.enabled_when_in(PRESERVE, Vec::<FieldValue>::new()).not_remembered();
     }
-    vec![Param::section(tl!("Blending")), blend_param("mode", tl!("Mode:"), false, BlendMode::Normal), super::new_layer_ui::opacity_param(), preserve]
+    vec![Param::section(tl!("Blending")), document_mode_param(app, tl!("Mode:")), super::new_layer_ui::opacity_param(), preserve]
 }
 
 /// The Preserve Transparency that Fill's or Stroke's `target` (as `edit.fill` takes it) forces: off on the Background
@@ -81,3 +90,6 @@ pub(crate) fn blending_params(fields: &DialogFields) -> Map<String, Value> {
     }
     p
 }
+
+#[cfg(test)]
+mod document_modes_tests;

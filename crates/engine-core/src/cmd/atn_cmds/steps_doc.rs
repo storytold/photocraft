@@ -1,7 +1,7 @@
 use super::convert::clip_name;
 use super::descriptors::{
-    PCT, PT, PX, Target, ang, class, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum, jstr, long,
-    path_text, path_value, pct, px, target, target_ref, text, trimmed,
+    PCT, PT, PX, Target, ang, boolean, class, color_desc, color_hex, desc, enm, enumerated, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool,
+    jnum, jstr, long, path_text, path_value, pct, px, target, target_ref, text, trimmed,
 };
 use super::fields::{Mapped, none, step, steps};
 use super::tables::{ALIGN, EXTENSION, INTENT, INTERPOLATION, MODES, PROFILES, PURGE, SAVE_FORMATS, lookup, lookup_back};
@@ -326,10 +326,12 @@ pub(super) fn convert_mode_to(id: &str, p: &Value) -> Option<Descriptor> {
 pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     let mut units = None;
+    // A relative percentage is a change, so zero and below (a shrink) are valid there.
+    let relative = matches!(d.get("Rltv"), Some(D::Boolean(true)));
     for (k, param) in [("Wdth", "width"), ("Hght", "height")] {
         match d.get(k) {
             Some(D::UnitFloat { unit, value }) if (*unit == PX || *unit == PCT) && value.is_finite() => {
-                if units.is_some_and(|previous| previous != *unit) || (*unit == PCT && *value <= 0.0) {
+                if units.is_some_and(|previous| previous != *unit) || (*unit == PCT && !relative && *value <= 0.0) {
                     return Mapped::Unsupported { harmless: false };
                 }
                 units = Some(*unit);
@@ -340,7 +342,7 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
         }
     }
     if units == Some(PCT) {
-        if !matches!(d.get("Rltv"), None | Some(D::Boolean(false))) {
+        if !matches!(d.get("Rltv"), None | Some(D::Boolean(_))) {
             return Mapped::Unsupported { harmless: false };
         }
         p.insert("units".into(), "percent".into());
@@ -389,12 +391,14 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     let units = match p.get("units") {
         None => PX,
         Some(Value::String(unit)) if unit == "px" => PX,
-        Some(Value::String(unit)) if unit == "percent" && jbool(p, "relative") != Some(true) => PCT,
+        Some(Value::String(unit)) if unit == "percent" => PCT,
         _ => return None,
     };
+    // A relative percentage may be zero or negative (a shrink); an absolute one is a size.
+    let relative = jbool(p, "relative") == Some(true);
     if units == PCT {
         for key in ["width", "height"] {
-            if p.get(key).is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|number| !number.is_finite() || number <= 0.0)) {
+            if p.get(key).is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|number| !number.is_finite() || (!relative && number <= 0.0))) {
                 return None;
             }
         }
@@ -422,13 +426,13 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         d = d.with("Rltv", D::Boolean(r));
     }
     if let Some(w) = jnum(p, "width") {
-        if units == PCT && w <= 0.0 {
+        if units == PCT && !relative && w <= 0.0 {
             return None;
         }
         d = d.with("Wdth", D::UnitFloat { unit: units, value: w });
     }
     if let Some(hh) = jnum(p, "height") {
-        if units == PCT && hh <= 0.0 {
+        if units == PCT && !relative && hh <= 0.0 {
             return None;
         }
         d = d.with("Hght", D::UnitFloat { unit: units, value: hh });
@@ -722,14 +726,83 @@ pub(super) fn merge_visible_to(id: &str, _: &Value) -> Option<Descriptor> {
     Some(if id == "layer.stampVisible" { desc("null").with("Dplc", D::Boolean(true)) } else { desc("null") })
 }
 
+/// The `Algn` step's `using` value for Edit › Auto-Align Layers (#14201).
+const AUTO_ALIGN: &str = "ADSContent";
+
+/// Auto-Align's `apply` (`projection` enum) ↔ `edit.autoAlignLayers` `projection`.
+const PROJECTIONS: &[(&str, &str)] = &[
+    ("auto", "auto"),
+    ("perspective", "perspective"),
+    ("sceneCollage", "collage"),
+    ("cylindrical", "cylindrical"),
+    ("spherical", "spherical"),
+    ("translation", "reposition"),
+];
+
 pub(super) fn align_from(d: &Descriptor) -> Mapped {
-    match get_enum(d, "Usng").and_then(|u| lookup(ALIGN, &u)) {
+    let using = get_enum(d, "Usng");
+    if using.as_deref() == Some(AUTO_ALIGN) {
+        return auto_align_from(d);
+    }
+    match using.and_then(|u| lookup(ALIGN, &u)) {
         Some(a) => step(&format!("layer.align.{a}"), if get_bool(d, "alignToCanvas") == Some(true) { json!({"to": "canvas"}) } else { json!({}) }),
         None => Mapped::Unsupported { harmless: false },
     }
 }
 
+/// An Auto-Align step: `apply` names the projection (Auto when absent), `radialDistort` is
+/// Geometric Distortion and `vignette` Vignette Removal, both off when absent. PhotoCraft has no
+/// Vignette Removal yet (#14197), so a step that turns it on is unsupported rather than played
+/// without it; an unknown projection or a wrong-typed key is unsupported too. The command aligns
+/// the selected layers, so a step that targets any other layers is unsupported.
+fn auto_align_from(d: &Descriptor) -> Mapped {
+    if d.get("null").is_some_and(|t| *t != target_ref("Lyr ")) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let projection = match d.get("apply") {
+        None => Some("auto"),
+        Some(v) => enumerated(v).and_then(|a| lookup(PROJECTIONS, &a)),
+    };
+    let flag = |key: &str| match d.get(key) {
+        None => Some(false),
+        Some(v) => boolean(v),
+    };
+    match (projection, flag("radialDistort"), flag("vignette")) {
+        (Some(projection), Some(geometric), Some(false)) => step("edit.autoAlignLayers", json!({"projection": projection, "geometricCorrection": geometric})),
+        _ => Mapped::Unsupported { harmless: false },
+    }
+}
+
+/// The `Algn` / `ADSContent` step of an Auto-Align run. `None` when the run used what the step
+/// cannot hold: a chosen reference layer, or an interpolation or registration other than the
+/// dialog's defaults.
+fn auto_align_to(p: &Value) -> Option<Descriptor> {
+    let default_or = |key: &str, default: &str| p.get(key).is_none_or(|v| v.is_null() || v.as_str() == Some(default));
+    if !p.get("reference").is_none_or(Value::is_null) || !default_or("interpolation", "bicubic") || !default_or("registration", "auto") {
+        return None;
+    }
+    let projection = match p.get("projection") {
+        None | Some(Value::Null) => "auto",
+        Some(v) => v.as_str()?,
+    };
+    let geometric = match p.get("geometricCorrection") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool()?,
+    };
+    Some(
+        desc("null")
+            .with("null", target_ref("Lyr "))
+            .with("Usng", enm("ADSt", AUTO_ALIGN))
+            .with("apply", enm("projection", lookup_back(PROJECTIONS, projection)?))
+            .with("vignette", D::Boolean(false))
+            .with("radialDistort", D::Boolean(geometric)),
+    )
+}
+
 pub(super) fn align_to(id: &str, p: &Value) -> Option<Descriptor> {
+    if id == "edit.autoAlignLayers" {
+        return auto_align_to(p);
+    }
     let a = lookup_back(ALIGN, id.strip_prefix("layer.align.")?)?;
     Some(desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", a)).with("alignToCanvas", D::Boolean(jstr(p, "to") == Some("canvas"))))
 }
@@ -814,3 +887,7 @@ pub(super) fn profile_to(id: &str, p: &Value) -> Option<Descriptor> {
     }
     Some(d)
 }
+
+#[cfg(test)]
+#[path = "auto_align_step_tests.rs"]
+mod auto_align_step_tests;

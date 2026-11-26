@@ -11,7 +11,7 @@ use craft::imaging::ui::selection::PointMap;
 use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, TransformPreview};
 use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::primitives::PaintSlot;
 use photocraft_doc::DocId;
 use photocraft_geom::warp::WarpStyle;
@@ -36,6 +36,7 @@ struct Shown {
     discard: bool,
     /// The warp grid's events and whether it placed a split this pass.
     mesh: Option<(EditEvents<WarpMesh>, bool)>,
+    picked: Option<usize>,
     cylinder: Option<EditEvents<CylinderValues>>,
     /// A warp control has the pointer button down on it.
     busy: bool,
@@ -57,11 +58,17 @@ struct Shown {
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
 pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.warp_grid.sync(app.ui.transform.as_ref().and_then(|t| t.session.warp()));
+    }
     let shown = {
         let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
         show_session(app, t, pv, ui, rect)
     };
-    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy, picture } = shown;
+    let Shown { edits, snapped, apply, discard, mesh, picked, cylinder, busy, picture } = shown;
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.warp_grid.picked = picked;
+    }
     let mut need_warp = false;
     if let Some(t) = app.ui.transform.as_mut() {
         for edit in edits.iter().cloned() {
@@ -225,7 +232,7 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     let preset = one_patch && !matches!(w.warp.style, WarpStyle::None | WarpStyle::Custom);
     // No splits on type (#3004).
     let split = pv.split.filter(|_| !w.on_type);
-    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect());
+    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect()).id_salt((pv.session, pv.warp_grid.generation));
     if preset {
         grid = grid.preset();
     }
@@ -237,6 +244,7 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     }
     let shown = grid.show_at(ui, rect);
     out.busy |= gesture_open(&shown.mesh.events);
+    out.picked = shown.picked;
     out.mesh = Some((shown.mesh.events, matches!(shown.edit, Some(WarpEdit::Split { .. }))));
 }
 

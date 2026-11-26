@@ -197,3 +197,21 @@ fn a_refused_shape_edit_leaves_the_next_shapes_colour_alone() {
         app.session.join_cancelled_jobs();
     }
 }
+
+#[test]
+fn cmyk_shape_picker_commits_inks_and_reopens_with_them() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 48, "mode": "cmyk"})).unwrap();
+    let id = LayerId(app.run("shape.create", json!({"rect": [8, 8, 40, 30], "fill": "#0098d3"})).unwrap()["layer"].as_u64().unwrap());
+    let dialog = open(&mut app).unwrap();
+    let cyan = PickedColor::cmyk(Srgba::from_rgb_array([0.0, 0.6, 0.9]), [100.0, 0.0, 0.0, 0.0]);
+    app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(dialog).unwrap().set_color(cyan);
+    ok(&mut app, dialog).unwrap();
+    let inks = [1.0, 0.0, 0.0, 0.0];
+    assert_eq!(fill(&app, id), Some(Fill::Solid(Color { mode: ColorMode::Cmyk, c: inks, alpha: 1.0 })));
+
+    let dialog = open(&mut app).unwrap();
+    assert_eq!(inks_of(&testing::current(&app, dialog).unwrap()), Some(inks));
+    ok(&mut app, dialog).unwrap();
+    assert_eq!(fill(&app, id), Some(Fill::Solid(Color { mode: ColorMode::Cmyk, c: inks, alpha: 1.0 })));
+}

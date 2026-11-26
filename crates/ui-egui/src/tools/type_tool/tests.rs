@@ -374,3 +374,17 @@ fn closed_path_aligned_selection_highlights_every_visible_cluster() {
         assert_eq!(quads, visible, "{align}: the selection highlights every visible cluster");
     }
 }
+
+/// A pasted CRLF is stored as one line break, so the editor's count and the caret stop at the end of what was
+/// inserted, not one past it per pair.
+#[test]
+fn a_crlf_paste_counts_and_places_the_caret_as_stored() {
+    let mut app = app();
+    click(&mut app, 100.0, 100.0, Modifiers::NONE);
+    let layer = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    let added = LayerHost::new(&mut app, layer).replace(0..0, "A\r\nB\rC", craft::text::ui::editor::EditKind::Pasted);
+    // A new layer holds its placeholder after the insertion point.
+    assert!(layer_text(&app).starts_with("A\nB\nC"), "{:?}", layer_text(&app));
+    assert_eq!(added, Some(5), "five characters were stored");
+    assert_eq!(app.ui.text_edit.as_ref().expect("editing").caret, 5, "the caret ends after the C");
+}

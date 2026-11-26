@@ -70,19 +70,20 @@ impl PhotocraftApp {
     /// (and again for a replacement Context) before the first `run_ui` so the very first frame
     /// renders; otherwise `logic` does it and the first frame is skipped.
     pub fn setup_context(ctx: &egui::Context, theme: theme::AppTheme) {
-        Self::setup(ctx, theme, None);
+        Self::setup(ctx, theme, None, None);
     }
 
     /// [`setup_context`](Self::setup_context) for a window whose frame the platform decided
-    /// (`decision`): the runtime installs the frame's look with the fonts.
-    pub fn setup_window(ctx: &egui::Context, theme: theme::AppTheme, decision: craft::window::policy::Decision) {
-        Self::setup(ctx, theme, Some(decision));
+    /// (`decision`): the runtime installs the frame's look with the fonts, and the dialogs that
+    /// open their own window keep their size and place in the settings folder `settings`.
+    pub fn setup_window(ctx: &egui::Context, theme: theme::AppTheme, decision: craft::window::policy::Decision, settings: Option<&std::path::Path>) {
+        Self::setup(ctx, theme, Some(decision), settings);
     }
 
     /// The one setup both entry points run.
-    fn setup(ctx: &egui::Context, theme: theme::AppTheme, frame: Option<craft::window::policy::Decision>) {
+    fn setup(ctx: &egui::Context, theme: theme::AppTheme, frame: Option<craft::window::policy::Decision>, settings: Option<&std::path::Path>) {
         crate::icons::register();
-        theme::install_runtime(ctx, frame);
+        theme::install_runtime(ctx, frame, settings);
         egui_extras::install_image_loaders(ctx);
         theme::apply(ctx, &theme);
         // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead
