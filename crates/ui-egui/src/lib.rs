@@ -735,6 +735,8 @@ mod artboards_to_files_background_tests;
 #[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
+mod blur_bar_pressure_size_tests;
+#[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
 mod burn_bar_angle_pressure_tests;

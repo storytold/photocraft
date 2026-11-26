@@ -94,6 +94,14 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     if tool == Tool::Smudge {
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
     }
+    // Blur ends with Pressure for Size on its own brush, off by default, as the reference's bar does (#12648).
+    if tool == Tool::Blur {
+        let before = app.session.tools.brush.clone();
+        if let (Some(on), key) = crate::eraser_ui::pressure_size_toggle(ui, before.pressure_size) {
+            let brush = photocraft_engine::BrushSettings { pressure_size: on, ..before.clone() };
+            crate::brush_panel::commit_keyed(app, &before, &brush, key);
+        }
+    }
     strength
 }
 
