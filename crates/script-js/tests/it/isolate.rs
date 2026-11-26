@@ -34,12 +34,15 @@ fn test_name(f: &str) -> String {
 /// The host executable: one that serves `--script-host` (such as a release build of this one)
 /// named by `PHOTOCRAFT_TEST_SCRIPT_HOST`, or else this crate's own. A test run from a nextest
 /// archive finds it where nextest unpacked it (`NEXTEST_BIN_EXE_*`), not at the path it was built
-/// at, which is on another machine.
+/// at, which is on another machine. A relative `PHOTOCRAFT_TEST_SCRIPT_HOST` is taken from the
+/// folder the tests run in (the crate's folder, under Cargo).
 fn host_program() -> std::path::PathBuf {
-    std::env::var_os("PHOTOCRAFT_TEST_SCRIPT_HOST")
+    let program: std::path::PathBuf = std::env::var_os("PHOTOCRAFT_TEST_SCRIPT_HOST")
         .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_photocraft_script_host"))
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_photocraft-script-host").into())
-        .into()
+        .into();
+    // Absolute: the host starts in another folder, where a relative path may not resolve.
+    if program.is_relative() { std::env::current_dir().unwrap().join(program) } else { program }
 }
 
 fn options(key: &str) -> IsolateOptions {
@@ -355,9 +358,10 @@ fn sh(script: &str, paths: &[&std::path::Path]) -> HelperCommand {
 enum Settle {
     /// Nothing: the interface polls at once.
     No,
-    /// Until the app holds the host's requests void (its output ended, its result came, it
-    /// exited), so a request it queued before can't be told from one still live.
-    Done,
+    /// Until the reader has queued this many requests, and then until the app holds the host's
+    /// requests void (its output ended, its result came, it exited): a request known to have
+    /// been queued before it became void.
+    Queued(usize),
 }
 
 /// Write a fixture file the test made the name of: a new file, never through what was already
@@ -382,8 +386,12 @@ fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], se
     paths.extend_from_slice(more);
     opts.helper = sh(&format!("cat \"$1\"; {then}"), &paths);
     let mut job = IsolatedJob::spawn("1".into(), opts).unwrap();
-    if let Settle::Done = settle {
+    if let Settle::Queued(n) = settle {
         let start = Instant::now();
+        while job.requests_queued() < n {
+            assert!(start.elapsed() < Duration::from_secs(60), "{name}: the host's requests were never queued");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         while !job.requests_void() {
             assert!(start.elapsed() < Duration::from_secs(60), "{name}: the host's requests never became void");
             std::thread::sleep(Duration::from_millis(5));
@@ -757,24 +765,44 @@ fn the_host_exits_when_the_app_dies() {
     use std::io::{BufRead, Write};
     use std::process::{Command, Stdio};
 
-    use photocraft_script_js::isolate::protocol::{MAX_TO_HOST, ToHost, write_frame};
+    use photocraft_script_js::isolate::protocol::{FromHost, MAX_FROM_HOST, MAX_TO_HOST, ToHost, read_frame, write_frame};
+
+    /// Kills the host if the test fails while it is still running: the stand-in that would
+    /// have is already gone.
+    struct KillOnFailure(Option<u32>);
+    impl Drop for KillOnFailure {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0 {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+            }
+        }
+    }
 
     if std::env::var_os(STAND_IN_APP).is_some() {
         // The stand-in app: start a host on a busy script, report its id, and wait to be killed.
         let mut host = Command::new(host_program())
             .arg(photocraft_script_js::isolate::SCRIPT_HOST_FLAG)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
         let start = ToHost::Start {
-            source: "for (;;) {}".into(),
+            source: "$.writeln('busy'); for (;;) {}".into(),
             app_name: None,
             script_name: None,
             memory_limit: photocraft_script_js::isolate::DEFAULT_MEMORY_LIMIT,
         };
         write_frame(host.stdin.as_mut().unwrap(), &start, MAX_TO_HOST).unwrap();
+        // Reported once the script runs its loop: the line it writes just before.
+        let mut out = host.stdout.take().unwrap();
+        loop {
+            match read_frame::<_, FromHost>(&mut out, MAX_FROM_HOST) {
+                Ok(Some(FromHost::Output { line })) if line == "busy" => break,
+                Ok(Some(_)) => {}
+                other => panic!("the host stopped before its loop: {other:?}"),
+            }
+        }
         println!("host-pid {}", host.id());
         std::io::stdout().flush().unwrap();
         std::thread::sleep(Duration::from_secs(60));
@@ -790,16 +818,28 @@ fn the_host_exits_when_the_app_dies() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let mut lines = std::io::BufReader::new(app.stdout.take().unwrap()).lines();
-    let pid: u32 = loop {
-        let line = lines.next().expect("the stand-in app reported no host").unwrap();
-        // The test harness may print the test's name on the same line first.
-        if let Some((_, pid)) = line.split_once("host-pid ") {
-            break pid.trim().parse().unwrap();
+    // Read on a thread of its own, so a stand-in whose host never reaches its loop fails the
+    // test at a deadline instead of hanging it.
+    let out = app.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            // The test harness may print the test's name on the same line first.
+            if let Some((_, pid)) = line.split_once("host-pid ") {
+                let _ = tx.send(pid.trim().parse::<u32>().unwrap());
+                return;
+            }
+        }
+    });
+    let pid = match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(pid) => pid,
+        Err(e) => {
+            let _ = app.kill();
+            panic!("the stand-in app reported no running host: {e}");
         }
     };
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!exited(pid), "the host is running before the app dies");
+    let mut cleanup = KillOnFailure(Some(pid));
+    assert!(!exited(pid), "the host is running its loop before the app dies");
     // The app dies without closing anything itself; the system closes its end of the pipe.
     app.kill().unwrap();
     app.wait().unwrap();
@@ -808,6 +848,7 @@ fn the_host_exits_when_the_app_dies() {
         assert!(start.elapsed() < Duration::from_secs(10), "the host outlived the app by {:?}", start.elapsed());
         std::thread::sleep(Duration::from_millis(10));
     }
+    cleanup.0 = None;
     eprintln!("host gone {:?} after the app died", start.elapsed());
 }
 
@@ -844,7 +885,7 @@ fn a_request_still_queued_when_the_host_is_done_is_dropped() {
         // It reported its result without waiting for the answer.
         ("finished", [command.clone(), finished].concat(), "sleep 30"),
     ] {
-        let seen = stand_in("done-host", &frames, then, &[], Settle::Done);
+        let seen = stand_in("done-host", &frames, then, &[], Settle::Queued(1));
         report(name, &seen);
         if name == "finished" {
             assert_eq!(seen.result, Ok(()), "{name}");
@@ -1038,12 +1079,20 @@ fn a_result_with_too_many_values_is_a_command_error() {
 /// the rest of the script silently skipped.
 #[test]
 fn runaway_recursion_after_an_await_does_not_finish_as_a_success() {
-    let src = "function r(n) { return r(n + 1) + 1; } (async function () { await 0; r(0); $.writeln('finished'); })();";
+    let src = "function r(n) { return r(n + 1) + 1; } (async function () { await 0; $.writeln('resumed'); r(0); $.writeln('finished'); })();";
     let mut opts = options("async recursion");
     opts.time_limit = SLOW_LIMIT;
     let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
     let seen = drive(&mut job, None, &[], |_, _| {});
     report("async recursion", &seen);
-    assert!(seen.result.is_err(), "it ended as a success: {:?}", seen.lines);
-    assert!(seen.lines.is_empty(), "{:?}", seen.lines);
+    // The continuation ran, and stopped at the recursion: by the engine's own recursion error,
+    // or (as Boa grows an async continuation's stack on the heap) by the memory limit. Not by
+    // the host failing in some other way.
+    assert_eq!(seen.lines, ["resumed"]);
+    let f = failure(&seen);
+    match f.kind {
+        FailureKind::Script => assert!(f.message.to_lowercase().contains("recursion") || f.message.contains("call stack"), "{f}"),
+        FailureKind::MemoryLimit => assert!(f.message.contains("memory limit"), "{f}"),
+        _ => panic!("it ended some other way: {f:?}"),
+    }
 }

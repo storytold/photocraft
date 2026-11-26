@@ -327,6 +327,8 @@ struct Shared {
     output: std::sync::atomic::AtomicUsize,
     /// Output lines relayed so far.
     relayed: std::sync::atomic::AtomicUsize,
+    /// Requests (commands and dialogs) handed to the interface's queue so far.
+    requests: std::sync::atomic::AtomicUsize,
     time_limit: Duration,
     memory_limit: u64,
     /// See [`IsolateOptions::reply_limits`].
@@ -615,6 +617,7 @@ impl IsolatedJob {
             reported: AtomicBool::new(false),
             output: std::sync::atomic::AtomicUsize::new(0),
             relayed: std::sync::atomic::AtomicUsize::new(0),
+            requests: std::sync::atomic::AtomicUsize::new(0),
             time_limit: options.time_limit,
             memory_limit,
             reply_limits: options.reply_limits,
@@ -730,6 +733,14 @@ impl IsolatedJob {
     #[doc(hidden)]
     pub fn requests_void(&self) -> bool {
         self.shared.dead()
+    }
+
+    /// How many requests (commands and dialogs) the reader has put on the interface's queue,
+    /// handed out by [`Self::poll`] or not. For tests that must know a request was queued
+    /// without taking it.
+    #[doc(hidden)]
+    pub fn requests_queued(&self) -> usize {
+        self.shared.requests.load(Ordering::SeqCst)
     }
 }
 
@@ -1104,10 +1115,14 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
             // Handled before this match; listed so the match is complete.
             FromHost::Finished { .. } => return None,
         };
+        let request = matches!(event, Event::Execute { .. } | Event::Dialog(_));
         if !shared.deliver(events, event) {
             // The job was dropped.
             shared.kill(Verdict::Cancelled);
             return None;
+        }
+        if request {
+            shared.requests.fetch_add(1, Ordering::SeqCst);
         }
     }
 }
