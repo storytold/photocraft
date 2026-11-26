@@ -1,5 +1,5 @@
 use super::rendering::{refresh_or_fail, unapplied_filters};
-use super::source::{SourceImage, cache_put, can_cache, source_bytes, source_cache_key};
+use super::source::{SourceImage, cache_limit_bytes, cache_put, can_cache_translated, source_bytes, source_cache_key};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, PixelFormat, Rect, Result, Session, Size,
     SmartContentsId, SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
@@ -215,9 +215,10 @@ fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
 }
 
 /// Preflight check for Smart Object conversion working memory and renderer limits.
-/// Returns the estimated peak working bytes (tiled output surface, one RGBA composite band,
-/// retained compositor effect maps, and transient effect-shape construction buffers) to reserve
-/// before rendering begins.
+/// Returns the estimated peak working bytes across banded rendering (tiled output surface, one
+/// RGBA composite band, retained compositor effect maps, and transient effect-shape construction
+/// buffers) and post-render `SOURCE_CACHE` seeding (including a sub-tile translated copy up to
+/// `CACHE_BYTES`) to reserve before rendering begins.
 fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers: &[Layer]) -> Result<u64> {
     let (width, height) = (region.width(), region.height());
     let pixels = region.size().area();
@@ -234,7 +235,14 @@ fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers:
     let surface_bytes = photocraft_raster::tile_storage_bytes(region, &fmt);
     let effect_memory = photocraft_compose::estimated_effect_memory(layers, canvas, region, band_rows)
         .ok_or_else(|| other("Smart Object conversion effect maps exceed the renderer's working-memory limit. Reduce the canvas or effects"))?;
-    let total = surface_bytes.saturating_add(band_bytes).saturating_add(effect_memory.peak_bytes());
+    let render_peak = surface_bytes.saturating_add(band_bytes).saturating_add(effect_memory.peak_bytes());
+    // After banded rendering releases the band buffer and render-local effect maps, seeding
+    // `SOURCE_CACHE` with a sub-tile origin shift holds both `cache` and its translated copy
+    // (each bounded by `cache_limit_bytes()`).
+    let cache_limit = cache_limit_bytes();
+    let origin_surface_bytes = photocraft_raster::tile_storage_bytes(Rect::from_xywh(0, 0, width, height), &fmt);
+    let cache_seed_peak = surface_bytes.min(cache_limit).saturating_add(origin_surface_bytes.min(cache_limit));
+    let total = render_peak.max(cache_seed_peak);
     if total > crate::allocation::MAX_DENSE_BYTES {
         return Err(other(format!(
             "Smart Object conversion at {width} x {height} px needs about {} MiB of working memory, exceeding the {} MiB working-memory limit. Convert fewer layers or reduce the canvas or effect extents",
@@ -386,11 +394,8 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // The encoded native document is non-SVG; match the classified render/bounds path.
-    if can_cache(&cache) {
-        cache_put(
-            source_cache_key(&sub.name, &bytes, fmt, Some(false)),
-            SourceImage { surface: Arc::new(translate_surface(&cache, dx, dy)), bounds: sub.bounds() },
-        );
+    if can_cache_translated(&cache, b, dx, dy) {
+        cache_put(source_cache_key(&sub.name, &bytes, fmt, Some(false)), SourceImage { surface: Arc::new(cache.translated(dx, dy, b)), bounds: sub.bounds() });
     }
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
@@ -600,6 +605,19 @@ mod budget_tests {
         assert_eq!(origin_shift(Rect::new(-12, 34, 10, 50)).unwrap(), (12, -34));
         assert!(origin_shift(Rect::new(i32::MIN, 0, i32::MIN + 8, 8)).is_err());
         assert!(origin_shift(Rect::new(0, i32::MIN, 8, i32::MIN + 8)).is_err());
+    }
+
+    #[test]
+    fn conversion_budget_accounts_for_sub_tile_source_cache_translation() {
+        let region = Rect::new(12, 16, 6_012, 6_016);
+        let fmt = PixelFormat::RGBA16;
+        let surface_bytes = photocraft_raster::tile_storage_bytes(region, &fmt);
+        let origin_bytes = photocraft_raster::tile_storage_bytes(Rect::from_xywh(0, 0, region.width(), region.height()), &fmt);
+        let band_rows = photocraft_compose::band_rows_for(region.width(), 0);
+        let band_bytes = u64::from(region.width()) * u64::from(band_rows as u32).min(u64::from(region.height())) * 16;
+        assert!(surface_bytes <= cache_limit_bytes() && origin_bytes > band_bytes, "fixture must sit below CACHE_BYTES and above one band");
+        let work = check_conversion_budget(region, region, fmt, &[]).unwrap();
+        assert_eq!(work, surface_bytes + origin_bytes, "preflight must cover cache + sub-tile translated SOURCE_CACHE copy");
     }
 
     #[cfg(target_pointer_width = "64")]
