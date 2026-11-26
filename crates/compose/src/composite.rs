@@ -599,9 +599,10 @@ fn composite_layer_effects_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer]
 }
 
 /// The coverage-mixing gamma of a layer: the text blending gamma
-/// ([`psblend::set_text_gamma`], Photoshop's default 1.45) for type layers, else 1.
+/// ([`psblend::set_text_gamma`], Photoshop's default 1.45) for native-rendered type,
+/// else 1. Imported authoritative text pixels retain their source's raster blending.
 pub fn text_gamma(layer: &Layer) -> f32 {
-    if matches!(layer.content, LayerContent::Text(_)) { psblend::text_gamma() } else { 1.0 }
+    if matches!(&layer.content, LayerContent::Text(text) if !text.cache_uses_raster_blending) { psblend::text_gamma() } else { 1.0 }
 }
 
 /// Unmasked shape fill, vector stroke and shared mask values.

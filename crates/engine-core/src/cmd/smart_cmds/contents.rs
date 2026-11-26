@@ -120,16 +120,31 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let source = &smart(&st.doc, id)?.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let mut child = decode_source(&name, &bytes)?;
+    let imported = super::decode_source_import(&name, &bytes, photocraft_io::svg::is_svg(&bytes))?;
+    admit_contents_import(s, parent, id, contents_id, name, imported)
+}
+
+/// Admit already-decoded contents without discarding its one-time view or import diagnostics.
+fn admit_contents_import(
+    s: &mut Session,
+    parent: DocId,
+    id: LayerId,
+    contents_id: SmartContentsId,
+    name: String,
+    imported: photocraft_io::ImportResult,
+) -> Result<Value> {
+    let mut child = imported.document;
+    let mut warnings = imported.warnings;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
     child.name = name;
-    let index = s.add_document(child, None);
+    let (index, view_warning) = s.admit_import_with_initial_view(child, None, imported.source_read_only, imported.initial_view);
+    warnings.extend(view_warning);
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
     s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id });
-    Ok(json!({"document": index, "parentLayer": id.0}))
+    Ok(json!({"document": index, "parentLayer": id.0, "warnings": warnings}))
 }
 
 /// Writes an Edit Contents document back into all its parent instances (one undoable step in the
@@ -211,3 +226,6 @@ pub(super) fn update_all(s: &mut Session) -> Result<Value> {
     })?;
     Ok(json!({"updated": updated}))
 }
+
+#[cfg(test)]
+mod initial_view_tests;

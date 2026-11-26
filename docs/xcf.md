@@ -1,9 +1,12 @@
 # GIMP XCF documents
 
-PhotoCraft opens GIMP's native `.xcf` files (and `.xcf.gz`) with their layers, read only. File ›
+PhotoCraft opens GIMP's native `.xcf` files and gzip, bzip2, and XZ wrapped XCF files with their layers, read only. File ›
 Open, recent files, drops, the CLI (`convert`, `info`, `batch`) and automation (`doc.open`, MCP)
-use the same import in `photocraft-io` (`crates/io/src/xcf.rs`), on craft-libs' `craft-xcf` reader. A file is recognised by its
-`gimp xcf ` signature, so an XCF with another extension still opens as one. Save suggests
+use the same importer in `photocraft-io` (`crates/io/src/xcf.rs`). The shared
+[`craft-xcf` reader](https://github.com/storytold/craft-libs/tree/main/crates/xcf) recognizes the
+`gimp xcf ` signature, reads the wrapper and records, and delivers source samples one tile at a time.
+PhotoCraft maps those records into editable native data and applies its own color, blending,
+and document policies. A signature match also opens XCF files with a different extension. Save suggests
 `.pcraft`, which keeps everything PhotoCraft holds; exporting as `.xcf` fails with a message.
 
 ## What is kept
@@ -16,18 +19,35 @@ use the same import in `photocraft-io` (`crates/io/src/xcf.rs`), on craft-libs' 
 | Layer masks | yes, applied or disabled as in GIMP |
 | Blend modes | the 2.10 set and the legacy set, mapped to Photoshop's (table below) |
 | Locks (alpha, content, position), colour tags | yes |
-| Precision | 8 and 16-bit integer as such; 32-bit integer as 16-bit; 16/32/64-bit float as 32-bit float |
-| Linear-light precisions | the document gets a linear sRGB (or linear gray) profile |
+| Precision | 8-bit and 16-bit integers retain their depth. 32-bit integers and 16-bit, 32-bit, and 64-bit floats open as 32-bit floats. |
+| Linear and perceptual encodings | PhotoCraft preserves usable assigned colorants while adapting the native ICC transfer curve for the stored samples |
 | Colour profile (`icc-profile` parasite), resolution, guides, comment | yes |
+| Raw EXIF | Complete TIFF packets within the metadata allowance |
 | Grayscale, RGB | as such; indexed images open as RGB |
 | Extra channels, the saved selection | yes (alpha channels, the selection) |
-| Text, vector and link layers | as their pixels, with a note |
+| Saved paths | Supported Bézier strokes open as editable named paths |
+| Text layers | Supported text configurations open as editable text with their saved appearance. Native typography applies after editing. Other text keeps its saved pixels. |
+| Vector and link layers | Their saved pixels |
+| Saved view | Supported layer, mask, channel, path, and sampler hints accompany the first native admission |
 | Compression | none, RLE, zlib |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
-Not kept, each with a note on open: non-destructive layer effects (GIMP 3's layer filters; the
-layer opens unfiltered), paths, floating selections, item sets, sample points. Layer effects are
-not representable without GEGL's operations; paths could follow later.
+The conversion report describes how each GIMP layer filter was handled. An Open request with native
+filter permission can turn supported Exposure and Brightness/Contrast stages on raster layers into
+editable Smart Filters. The report records that the stages use PhotoCraft's native rendering rules.
+A single masked Exposure in an XCF 22 file can retain independent filter opacity and coverage on an
+opaque 8-bit or 16-bit RGB raster layer when the stored mask covers the image frame and uses supported settings.
+Supported graph chains consisting of sequential Invert stages open as ordinary native Invert filters.
+One unmasked, full-strength source-over graph can place an inverted copy over the original as two
+editable layers inside a Smart Object. Unsupported stages, other graph branches, and unresolved
+blend settings keep the saved layer pixels. The
+report can retain the original source records for inspection within its storage limits. Floating
+selection attachment and item-set behavior remain outside the native mapping.
+
+Open As accepts an explicit sample order for unmarked multi-byte XCF 4–11 files. PhotoCraft records
+the order used in the native document's conversion report. Text color blobs have a separate source
+encoding. Text that needs a float color with an unknown byte order keeps the saved raster, and the
+report can retain the original configuration for inspection. Portable numeric colors remain editable.
 
 ## Blend modes
 
@@ -72,10 +92,11 @@ Written from the public XCF specification (https://developer.gimp.org/core/stand
 files GIMP 3.2 writes; no GIMP code. Every read is bounds-checked and returns an error on a
 malformed file, never a panic: canvases at most 300,000 px a side and 1 GiB of decoded pixels,
 at most 8,192 layers and 1,024 channels, nesting at most 64 deep, property payloads at most
-64 MiB, strings 1 MiB, gzipped files inflating to at most 1 GiB. Tile data is decoded into the
-exact size the drawable declares; a run that crosses a tile or a zlib stream that ends early is an
-error. The property lengths the specification warns about (`PROP_COLORMAP`, `PROP_USER_UNIT`) are
-computed from the payload instead of trusted. Truncated files are covered by tests at every cut.
+64 MiB and strings at most 1 MiB. Wrappers inflate to at most 1 GiB and use bounded decoder
+working memory. The reader validates tile framing and compressed stream completion. PhotoCraft
+checks the logical drawable size separately from simultaneously live native tiles and scratch
+data. The reader computes the payload length of `PROP_COLORMAP` and `PROP_USER_UNIT` by file
+version. Truncated files are covered by tests at every cut.
 
 ## Verification
 
@@ -83,12 +104,12 @@ Unit tests (`crates/io/src/xcf/tests.rs`) build XCF files from the specification
 writer and check every compression, precisions, pointer widths, groups by item path, masks,
 channels, the colour map, parasites, limits and malformed input.
 
-Real files come from GIMP 3.2.6 itself: `gimp/` of [photocraft-corpus](https://github.com/storytold/photocraft-corpus)
-(generator `tools/gimp-xcf/xcf_fixtures.py`, run inside GIMP), fetched into `corpus/gimp/` by
-`cargo xtask corpus --gimp` (28 files, 251 KB): procedural layers the tests regenerate sample for
-sample, and for each file GIMP's own merged rendering as a PNG. `crates/io/tests/it/xcf.rs` (feature
-`corpus`, run by `cargo xtask test-corpus -p io`) checks the layer data against the formulas and our
-composite against GIMP's:
+The `gimp/` directory of [photocraft-corpus](https://github.com/storytold/photocraft-corpus) stores
+authored GIMP files from several releases, merged PNG oracles, and wrapped samples. Run
+`cargo xtask corpus --gimp` to fetch the 112 checksum-pinned assets into `corpus/gimp/`.
+`crates/io/tests/it/xcf_source_evidence.rs` verifies native text and path handling and effect inventory
+against the archived source. `crates/io/tests/it/xcf.rs` checks procedural layer samples and compares
+the PhotoCraft composite with GIMP's. Run both through `cargo xtask test-corpus -p io`.
 
 | File | Composite vs GIMP |
 |---|---|

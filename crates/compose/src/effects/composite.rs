@@ -31,8 +31,7 @@ pub(crate) fn map_count(layer: &Layer) -> usize {
     let has_stroke = items.iter().any(|e| matches!(e, Effect::Stroke(_)));
     let outside = usize::from(out_widths.iter().any(|&w| !stroke_outside_exact(w))) + usize::from(out_widths.iter().any(|&w| stroke_outside_exact(w)));
     let stroke = if has_stroke { 1 + outside } else { 0 };
-    let vector_outline =
-        if has_stroke && matches!(layer.content, photocraft_doc::LayerContent::Shape(_)) && crate::effect_outline(layer).is_none() { outside } else { 0 };
+    let vector_outline = if has_stroke && crate::uses_vector_effects(layer) && crate::effect_outline(layer).is_none() { outside } else { 0 };
     1 + per + stroke + vector_outline
 }
 
@@ -97,7 +96,7 @@ pub(crate) fn build_maps_prepared(
         })
         .collect();
     let has_stroke = items.iter().any(|e| matches!(e, Effect::Stroke(_)));
-    let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
+    let vector_shape = crate::uses_vector_effects(layer);
     // A stroke's outer edge keeps the 5 × 5 chamfer while its outside width is under
     // `STROKE_CHAMFER_MAX` — Photoshop matches the chamfer's sub-pixel edge seeding at small
     // offsets — and uses the exact Euclidean transform at or above it, where the chamfer's octagon
@@ -690,7 +689,7 @@ impl<'a> EffectPass<'a> {
         let (w, big) = (self.w, self.big);
         // Shape layers without a filled outline stroke their vector outline, estimated from local
         // coverage; every other layer strokes its shape. The width then picks the field.
-        let vector_shape = matches!(self.layer.content, photocraft_doc::LayerContent::Shape(_));
+        let vector_shape = crate::uses_vector_effects(self.layer);
         let vector_outline = vector_shape && !self.maps.outline;
         // Shape layers: Photoshop strokes the vector outline (estimated from local coverage
         // for unfilled shapes); the stroke never shows through the shape's pixels. Along a

@@ -66,7 +66,7 @@ fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
 /// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
 /// preview-only refusal wherever the import came from.
-pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
+pub(crate) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
     import_result_for_open(name, bytes, opts).map(|(r, _)| r)
 }
 
@@ -180,22 +180,40 @@ pub fn open_bytes_as_with_options(
     path: Option<String>,
     approve_high_memory: bool,
 ) -> Result<Value> {
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.psd_high_memory_approved = approve_high_memory;
+    opts.psd_approved_estimate = None;
+    open_bytes_as_with_import_options(s, name, bytes, as_ext, path, &opts)
+}
+
+/// Import these exact bytes with the caller's explicit per-source decoding options.
+/// The compatibility byte APIs above retain their existing default sample-order policy.
+pub fn open_bytes_as_with_import_options(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    opts: &photocraft_io::ImportOptions,
+) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let mut opts = crate::jobs::import_options(s.prefs());
-    opts.psd_high_memory_approved = approve_high_memory;
-    opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes)?;
-    let (r, raw_settings) = if let Some((imported, settings)) = raw {
+    let (mut r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, &opts).map_err(|e| match as_ext {
-            Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, e),
-            None => crate::error::io_open_error(&decode_name, e),
-        })?;
+        let r = super::with_native_xcf_import_authority(s.authorize, || photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, opts)).map_err(
+            |error| match error {
+                photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                error => match as_ext {
+                    Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, error),
+                    None => crate::error::io_open_error(&decode_name, error),
+                },
+            },
+        )?;
         (r, None)
     };
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
@@ -204,6 +222,8 @@ pub fn open_bytes_as_with_options(
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
     raw_defaults(s, &r.warnings, &mut doc);
+    // Keep the actual source even when template policy opens an untitled copy.
+    let protected_import_source = path.as_ref().filter(|_| r.source_read_only).cloned();
     let path = match template_name(s, name) {
         Some(untitled) => {
             doc.name = untitled;
@@ -218,9 +238,14 @@ pub fn open_bytes_as_with_options(
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.open_document(doc, path.filter(|_| !r.source_read_only));
+    let color = s.color().open_policy(&mut doc, s.prefs().file_handling.ignore_exif_profile_tag);
+    let (i, view_warning) = s.admit_import_with_initial_view(doc, path.filter(|_| !r.source_read_only), r.source_read_only, r.initial_view.take());
+    if let Some(warning) = view_warning {
+        r.warnings.push(warning);
+    }
     if let Some(st) = s.active_mut() {
         st.source_read_only = r.source_read_only;
+        st.protected_import_source = protected_import_source;
     }
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
@@ -241,6 +266,7 @@ fn is_open_as_format(ext: &str) -> bool {
     let ext = ext.trim_start_matches('.').to_ascii_lowercase();
     let ext = ext.as_str();
     OPEN_AS_EXTRA.contains(&ext)
+        || photocraft_io::is_xcf_input_name(&format!("input.{ext}"))
         || photocraft_io::raw::EXTENSIONS.contains(&ext)
         || photocraft_io::affinity::EXTENSIONS.contains(&ext)
         || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read)
@@ -250,20 +276,14 @@ fn is_open_as_format(ext: &str) -> bool {
 pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.openAs")?.to_string();
     let as_ext = p.get("as").or_else(|| p.get("format")).and_then(Value::as_str);
-    let approve_high_memory = match p.get("approveHighMemory") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(_) => {
-            return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
-        }
-    };
+    let opts = super::sample_order::import_options_from_params(crate::jobs::import_options(s.prefs()), p, "file.openAs")?;
     if let Some(ext) = as_ext
         && !is_open_as_format(ext)
     {
         return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: format!("\"as\" names no format PhotoCraft reads: {ext:?}") });
     }
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let result = open_bytes_as_with_import_options(s, &path, &bytes, as_ext, Some(path.clone()), &opts)?;
     remember_batch_open(s);
     Ok(result)
 }

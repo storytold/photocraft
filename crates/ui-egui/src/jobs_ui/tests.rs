@@ -18,6 +18,8 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+mod pending_open_view;
+
 fn app_harness() -> Harness<'static, Box<PhotocraftApp>> {
     app_harness_with(crate::Services::default())
 }

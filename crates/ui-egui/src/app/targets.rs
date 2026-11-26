@@ -45,7 +45,7 @@ impl PhotocraftApp {
         let Some(id) = st.active_layer.filter(|id| self.ui.filter_mask_target == Some(id.0)) else { return false };
         let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
             || (matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
-                && photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| v.filter)))
+                && photocraft_engine::mask_view_cmds::editing(st).is_some_and(|v| v.filter)))
             && st.doc.quick_mask.is_none();
         composite && st.doc.layer(id).is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
     }
@@ -66,14 +66,14 @@ impl PhotocraftApp {
     /// is the picture. An alpha channel or Quick Mask wins, as the engine routes those itself.
     pub fn layer_mask_targeted(&self) -> bool {
         let Some(st) = self.session.active() else { return false };
-        if photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| v.filter) {
+        if photocraft_engine::mask_view_cmds::editing(st).is_some_and(|v| v.filter) {
             return false;
         }
         let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
         let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask) && st.doc.quick_mask.is_none();
         let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
         if matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
-            && photocraft_engine::mask_view_cmds::current(st).is_some()
+            && photocraft_engine::mask_view_cmds::editing(st).is_some()
         {
             return true;
         }
@@ -133,7 +133,7 @@ impl PhotocraftApp {
         let raster_with_mask =
             st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some() && matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
         if matches!(st.channel_view.target, ChannelTarget::Color(_))
-            && photocraft_engine::mask_view_cmds::current(st).is_none()
+            && photocraft_engine::mask_view_cmds::editing(st).is_none()
             && raster_with_mask
             && let Some(st) = self.session.active_mut()
         {
@@ -142,6 +142,15 @@ impl PhotocraftApp {
             v.selected_colors.clear();
             v.color_hidden.clear();
         }
+    }
+
+    /// Thumbnail targets belong to the document that was active when selected.
+    /// On a document identity change, let the new authoritative channel/view
+    /// restore a target instead of inheriting the previous document's UI flags.
+    pub(crate) fn reset_mask_targets_for_document(&mut self) {
+        self.ui.mask_target = false;
+        self.ui.vector_mask_target = false;
+        self.ui.filter_mask_target = None;
     }
 
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
@@ -155,6 +164,15 @@ impl PhotocraftApp {
             use photocraft_engine::channel_cmds::ChannelTarget;
             let channel = st.channel_view.target;
             match photocraft_engine::mask_view_cmds::current(st) {
+                Some(_) if photocraft_engine::mask_view_cmds::editing(st).is_none() => {
+                    // Saved display state does not grant mask edit ownership. An
+                    // explicit thumbnail click in this document may still select
+                    // the mask while the imported view targets Composite. Document
+                    // switches already clear those flags before synchronization.
+                    self.ui.mask_target = channel == ChannelTarget::LayerMask || (channel == ChannelTarget::Composite && self.ui.mask_target);
+                    self.ui.vector_mask_target = channel == ChannelTarget::VectorMask;
+                    self.ui.filter_mask_target = None;
+                }
                 Some(v) if v.filter => {
                     self.ui.filter_mask_target = Some(v.layer.0);
                     self.ui.mask_target = false;
@@ -199,3 +217,6 @@ impl PhotocraftApp {
         self.session.tools.target_mask(mask);
     }
 }
+
+#[cfg(test)]
+mod tests;

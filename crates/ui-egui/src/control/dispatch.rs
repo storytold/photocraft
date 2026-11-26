@@ -1371,10 +1371,15 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
         if !crate::preset_files_ui::is_preset_file(&name) {
             let recent = automation_location(app, path);
             app.opened_from_listed(path, recent.as_deref());
-            if let Some(state) = app.session.active_mut()
-                && state.path.is_some()
-            {
-                state.path = save_path;
+            if let Some(state) = app.session.active_mut() {
+                if state.source_read_only {
+                    // A writable capability never makes an import-only format
+                    // safe for ordinary Save, even under a writable suffix.
+                    state.path = None;
+                    state.protected_import_source = Some(recent.as_deref().unwrap_or(path).to_string());
+                } else if state.path.is_some() {
+                    state.path = save_path;
+                }
             }
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
