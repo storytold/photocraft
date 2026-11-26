@@ -872,6 +872,10 @@ impl Ex<'_> {
             return true;
         }
         let old = self.smart.old_fx.iter().find(|i| i.id == t.placed);
+        // A missing mask skips mask decoding, but the cached colour planes still have a depth.
+        if old.is_some_and(|item| item.depth != u32::from(crate::pixels::psd_depth(self.fmt.sample))) {
+            return false;
+        }
         match crate::smart_map::mask_from_item_preserving_switches(old, self.mask_fmt.sample, stack) {
             Ok(mask) => mask == sm.filter_mask,
             Err(_) => false,

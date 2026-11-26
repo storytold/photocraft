@@ -166,6 +166,72 @@ fn shared_filter_mask_cache_keeps_each_layers_switches_in_both_orders() {
     }
 }
 
+/// Depth changes rebuild both the original and re-keyed cache; same-depth missing sources keep their bytes.
+#[test]
+fn shared_filter_caches_follow_export_depth_without_rebuilding_same_depth_items() {
+    let mut source = fixture();
+    source.size = Size::new(2, 2);
+    let sm = smart_mut(&mut source.layers[0]);
+    sm.smart_filters.push(gaussian(1.0));
+    let mut mask = photocraft_doc::LayerMask::reveal_all();
+    // Implicit white must not let mask decoding reject the stale cache depth by itself.
+    mask.linked = false;
+    sm.filter_mask = Some(mask);
+    for extension in ["psd", "psb"] {
+        let (mut file, _) = round_trip(&source, extension);
+        let old_placed = sold(&file, "original").placed;
+        let block = file.global_blocks.iter_mut().find(|block| &block.key == b"FEid").unwrap();
+        let mut effects = craft_psd::filter_effects::FilterEffects::parse(&block.data).unwrap();
+        assert_eq!(effects.items.len(), 1);
+        assert_eq!(effects.items[0].depth, 8);
+        effects.items[0].mask = None;
+        let old_item = effects.items[0].clone();
+        let mut data = effects.to_bytes();
+        data.resize(data.len().next_multiple_of(4), 0);
+        block.data = data;
+        let mut records = Vec::new();
+        for name in ["original", "shared"] {
+            let mut record = file.layers()[0].clone();
+            record.name = name.as_bytes().to_vec();
+            record.blocks.retain(|block| !matches!(&block.key, b"luni" | b"lyid"));
+            records.push(record);
+        }
+        *file.layers_mut() = records;
+        for (sample, missing_source) in [(SampleType::U16, false), (SampleType::U8, true)] {
+            let mut input = file.clone();
+            if missing_source {
+                input.global_blocks.retain(|block| !matches!(&block.key, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE"));
+            }
+            let mut doc = import(extension, &input.to_bytes().unwrap()).unwrap().document;
+            for name in ["original", "shared"] {
+                assert!(smart(&doc, name).filter_mask.is_none(), "the missing payload is implicit white");
+            }
+            doc.depth = sample;
+            let (saved, back) = round_trip(&doc, extension);
+            assert_eq!(back.depth, sample);
+            let block = saved.global_blocks.iter().find(|block| &block.key == b"FEid").unwrap();
+            let effects = craft_psd::filter_effects::FilterEffects::parse(&block.data).unwrap();
+            assert_eq!(effects.items.len(), 2, "both placements retain a filter cache");
+            let placements: std::collections::HashSet<_> = ["original", "shared"].into_iter().map(|name| sold(&saved, name).placed).collect();
+            assert_eq!(placements.len(), 2);
+            assert!(placements.contains(&old_placed), "exercise both the original placement and a re-keyed one");
+            let fmt = photocraft_color::PixelFormat::new(ColorMode::Rgb, sample, true);
+            for name in ["original", "shared"] {
+                let placed = sold(&saved, name).placed;
+                let item = effects.items.iter().find(|item| item.id == placed).unwrap();
+                assert_eq!(item.depth, if sample == SampleType::U16 { 16 } else { 8 }, "{extension} {name}");
+                let pixels = smart_map::unfiltered_from_item(item, fmt).expect("cache planes must decode at the export depth");
+                assert_eq!(pixels.rgba(0, 0), [1.0, 0.0, 0.0, 1.0], "{extension} {sample:?} {name}");
+                if missing_source {
+                    let mut expected = old_item.clone();
+                    expected.id = placed;
+                    assert_eq!(*item, expected, "same-depth reuse changes only the placement ID");
+                }
+            }
+        }
+    }
+}
+
 /// Missing mask pixels are implicit white, but their layer-local switches still survive.
 #[test]
 fn smart_filter_mask_switches_survive_without_an_feid_mask_payload() {
