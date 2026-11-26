@@ -6,12 +6,13 @@
 //! [`open_prompt`] (a second open is refused, not replaced) and tags its prompt with its own type.
 //! [`prompt_tagged`] and [`prompt_tag`] find the open prompt by that tag.
 
+use craft::behavior::IconId;
 use craft::ui::dialog::{Alert, DialogId, HostedAlert, PromptAnswer, PromptChoice, StackDialog, StandardPrompt};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-/// The tag of an alert opened by [`alert_once`]: the dialog preference its "Don't show again" box sets.
+/// The tag of an alert opened by [`alert_once`] or [`info_once`]: the dialog preference its "Don't show again" box sets.
 pub(crate) struct AlertOnce {
     pref: &'static str,
 }
@@ -54,6 +55,21 @@ pub fn alert_once(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'s
 /// Whether "Don't show again" was ticked on the question remembered as `pref`.
 pub fn dismissed(app: &PhotocraftApp, pref: &str) -> bool {
     app.session.prefs().dialogs.get(pref).and_then(|v| v.get("skip")).and_then(Value::as_bool) == Some(true)
+}
+
+/// [`alert_once`] with the catalog's info icon beside the message, as the reference shows for the
+/// Content-Aware Fill workspace's Custom sampling alert (#16693). The other alerts keep their look.
+pub fn info_once(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'static str) -> Option<DialogId> {
+    if dismissed(app, pref) {
+        return None;
+    }
+    let prompt = StandardPrompt::custom(message.into())
+        .title(TITLE)
+        .icon(IconId::new("info"))
+        .button(PromptChoice::Proceed, tl!("OK").to_owned())
+        .dont_show_again()
+        .tag(AlertOnce { pref });
+    open_prompt(app, prompt).ok().or_else(|| prompt_tagged::<AlertOnce>(app))
 }
 
 /// Keeps "Don't show again" for the question remembered as `pref`, with the other dialog preferences.

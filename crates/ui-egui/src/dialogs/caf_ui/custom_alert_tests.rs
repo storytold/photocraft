@@ -2,7 +2,9 @@
 //! reference's info alert, "Use the Sampling Brush Tool to add to the sampling area in order to
 //! fill the selected region.", with "Don't show again" and OK, once per choice. OK closes it and the
 //! Sampling Brush adds. With "Don't show again" ticked it stays closed. Other choices show nothing.
+//! #16693: the alert shows an info icon beside its text.
 
+use egui::accesskit::Role;
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
@@ -92,6 +94,25 @@ fn choosing_custom_shows_the_alert_once_and_ok_leaves_the_brush_adding() {
     assert!(app.caf.is_some(), "the workspace stays open");
     let d = facts(&app);
     assert_eq!((d["settings"]["sampling"].as_str(), d["brushMode"].as_str()), (Some("custom"), Some("add")));
+}
+
+#[test]
+fn the_alert_shows_an_icon_beside_its_text() {
+    let mut app = app();
+    open(&mut app).unwrap();
+    choose(&mut app, "custom");
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_max_steps(16)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    let title = h.get_by_role_and_label(Role::Heading, "PhotoCraft").rect();
+    let message = h.get_by_label_contains(CUSTOM_SAMPLING_ALERT).rect();
+    // The prompt draws the icon unnamed, so it shows in the layout: the title starts at the content's start, the
+    // message after the icon on its row.
+    assert!(message.left() > title.left() + 8.0, "the message starts after the icon: {message:?} vs title {title:?}");
 }
 
 #[test]
