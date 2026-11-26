@@ -172,6 +172,8 @@ impl Compositor {
             cmyk: 0,
             health: None,
             timer: None,
+            external: HashMap::new(),
+            stamper: None,
         }
         .with_texture_limit(device_max)
     }

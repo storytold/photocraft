@@ -99,6 +99,24 @@ impl Prefix {
         }
     }
 
+    /// Drop the chunks that include root layer `root` or any above it, and stop capturing at a
+    /// checkpoint that does: for a layer whose pixels change without its document layer changing
+    /// (an external mask, see `stamp.rs`).
+    pub(crate) fn invalidate_from(&mut self, root: usize) {
+        let mut freed = 0u64;
+        self.chunks.retain(|_, c| {
+            let keep = c.checkpoint.layer_end <= root;
+            if !keep {
+                freed = freed.saturating_add(c.bytes);
+            }
+            keep
+        });
+        self.bytes = self.bytes.saturating_sub(freed);
+        if self.checkpoint.is_some_and(|c| c.layer_end > root) {
+            self.checkpoint = None;
+        }
+    }
+
     /// The document the cached composite belongs to, if any.
     pub(crate) fn doc(&self) -> Option<photocraft_doc::DocId> {
         self.context.as_ref().map(|d| d.id)
