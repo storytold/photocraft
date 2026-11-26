@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::Session;
 
 fn layered_source(depth: u32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "oracle", "background": "white", "depth": depth})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -75,7 +75,7 @@ fn unsaved_copies_refuse_ask_but_allow_explicit_discard() {
 fn duplicating_leaves_clean_and_dirty_sources_and_their_history_unchanged() {
     for dirty in [false, true] {
         for merged in [false, true] {
-            let mut s = Session::new();
+            let mut s = crate::session();
             open_png(&mut s);
             if dirty {
                 s.execute("layer.new.layer", json!({})).unwrap();
@@ -97,7 +97,7 @@ fn duplicating_leaves_clean_and_dirty_sources_and_their_history_unchanged() {
 
 #[test]
 fn new_and_opened_documents_keep_their_clean_initial_states_next_to_a_duplicate() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     open_png(&mut s);
     s.execute("image.duplicate", json!({})).unwrap();
