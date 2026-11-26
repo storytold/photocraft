@@ -238,7 +238,7 @@ pub(crate) fn render_reduced_cells(
         // composited once per colour and summed per run of source columns, not per pixel
         // (#4017). Tiles lie on the document's tile grid whatever `damage` is, so a damage
         // render sums exactly what the whole reduction does.
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
         let cx = Ctx::for_doc(doc, &patterns);
         let t = RENDER_TILE as usize;
         // The document tile grid (the surfaces' own), in `b`-relative coordinates: the start of

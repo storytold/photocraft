@@ -49,11 +49,17 @@ pub(super) fn set_font(app: &mut PhotocraftApp, props: &serde_json::Value) -> bo
     true
 }
 
+/// How many characters `text` adds once the engine stores it: a CRLF pair becomes one `\n` (a lone CR is one
+/// character either way), so a pasted Windows line break moves the caret by one, not two.
+pub(super) fn stored_chars(text: &str) -> usize {
+    text.chars().count().saturating_sub(text.matches("\r\n").count())
+}
+
 /// Replace and style the inserted characters atomically, including paste and a composition's marked text.
 pub(super) fn replace(app: &mut PhotocraftApp, start: usize, end: usize, text: &str, kind: EditKind) -> bool {
     let Some(ed) = app.ui.text_edit.clone() else { return false };
     let pending = pending(app).cloned().or_else(|| pending_across_deletion(app, start, end, kind));
-    let caret = start.saturating_add(text.chars().count());
+    let caret = start.saturating_add(stored_chars(text));
     let mut params = json!({"layer": ed.layer, "replace": {"start": start, "end": end, "text": text}, "coalesce": ed.session});
     if let Some(p) = &pending
         && !text.is_empty()

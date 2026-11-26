@@ -240,7 +240,8 @@ fn a_menu_key_typed_in_a_panel_windows_text_field_goes_to_the_field() {
 }
 
 /// PhotoCraft's dialogs are framework layers, so the runtime's modal blocking reaches the panel windows:
-/// under a dialog the window takes no click and no key, and once it is closed the window works again.
+/// under a dialog the window takes no click and no key and is hidden, so a click cannot bring it over the dialog,
+/// also while the app is in the background; once the dialog is closed the window shows and works again.
 #[test]
 fn a_dialog_blocks_the_panel_windows() {
     for name in ["About", "Gaussian Blur"] {
@@ -263,12 +264,13 @@ fn a_dialog_blocks_the_panel_windows() {
         assert_eq!(desktop.h.state().ui.tool, crate::state::Tool::Move, "{name}: nor do the shortcuts get its keys");
         desktop.host.borrow_mut().focus = Some(ViewportId::from_hash_of("another app"));
         desktop.steps(30);
-        assert!(!desktop.host.borrow().windows[&viewport].hidden, "{name}: the panel window stays shown while the app is in the background");
+        assert!(desktop.host.borrow().windows[&viewport].hidden, "{name}: the panel window stays hidden under the dialog while the app is in the background");
         desktop.host.borrow_mut().focus = Some(viewport);
 
         crate::dialogs::testing::cancel(desktop.h.state_mut(), id).unwrap();
         desktop.steps(3);
         assert!(!desktop.h.state().dialog_open(), "{name}");
+        assert!(!desktop.host.borrow().windows[&viewport].hidden, "{name}: the panel window shows again once the dialog is gone");
         desktop.click(viewport, close);
         assert!(!is_shown(desktop.h.state(), "layers"), "{name}: the × closes the panel once the dialog is gone");
     }

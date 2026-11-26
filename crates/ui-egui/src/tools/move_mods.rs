@@ -121,7 +121,7 @@ pub fn abandon(app: &mut PhotocraftApp) {
 /// The document pixels one plain arrow press moves layers by with the Move tool: one screen
 /// pixel, as in Photoshop (#9511). Zoomed out that is several document pixels (2 at 50 %, 4 at
 /// 25 %; 1 at 66.7 %: whole pixels only), zoomed in still one. No cap: the zoom bottoms out
-/// with the document's shorter side 2 px on screen (`ZoomLadder::min`), so a step is at most
+/// with the document's shorter side 2 px on screen (`ZoomScheme::min`), so a step is at most
 /// half that side. ⇧'s 10 px don't scale.
 fn screen_pixel_step(app: &PhotocraftApp) -> f64 {
     let zoom = f64::from(app.current_zoom());

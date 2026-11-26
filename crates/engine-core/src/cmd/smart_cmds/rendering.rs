@@ -233,8 +233,36 @@ fn place_with_svg(
     })
 }
 
-#[cfg(test)]
-thread_local! { pub(crate) static DISPLAY_NATIVE_HASH_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+/// Work the smart-object source caches have done on the calling thread. Each field counts a
+/// cache miss, so the difference around an operation states how often the caches let it repeat
+/// expensive work: an SVG update renders each source once per scale however many instances share
+/// it, and a native vector source is hashed once per allocation however often it is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceCacheStatistics {
+    /// SVG sources rendered by [`WarningRenderSources`] (renders its memo did not hold).
+    pub svg_decodes: usize,
+    /// Bytes of native vector sources hashed to verify their preview (digests not remembered
+    /// for that source allocation).
+    pub native_hash_bytes: usize,
+}
+
+thread_local! {
+    static STATISTICS: std::cell::Cell<SourceCacheStatistics> = const { std::cell::Cell::new(SourceCacheStatistics { svg_decodes: 0, native_hash_bytes: 0 }) };
+}
+
+/// The calling thread's [`SourceCacheStatistics`] so far. Counted per thread, so work on other
+/// threads never mixes in.
+pub fn source_cache_statistics() -> SourceCacheStatistics {
+    STATISTICS.with(std::cell::Cell::get)
+}
+
+fn record(update: impl FnOnce(&mut SourceCacheStatistics)) {
+    STATISTICS.with(|cell| {
+        let mut statistics = cell.get();
+        update(&mut statistics);
+        cell.set(statistics);
+    });
+}
 
 /// BLAKE3 digests of native vector sources, remembered per source allocation so explicit
 /// refreshes and warp source frames of shared contents hash a (up to 16 MiB) source once.
@@ -290,8 +318,7 @@ fn native_digest(bytes: &Arc<Vec<u8>>) -> [u8; 32] {
     if let Some(digest) = lock().get(bytes) {
         return digest;
     }
-    #[cfg(test)]
-    DISPLAY_NATIVE_HASH_BYTES.with(|count| count.set(count.get().saturating_add(bytes.len())));
+    record(|statistics| statistics.native_hash_bytes = statistics.native_hash_bytes.saturating_add(bytes.len()));
     let digest = *blake3::hash(bytes).as_bytes();
     lock().insert(bytes, digest);
     digest
@@ -357,7 +384,7 @@ struct WarningSource {
 /// One command's bounded source-space renders. Placement, warp, filters and masks
 /// are instance-specific and must never be cached here. Weak identity pins only the
 /// allocation header; the borrowed document owns encoded bytes throughout the command.
-pub(crate) struct WarningRenderSources<'a> {
+pub struct WarningRenderSources<'a> {
     document: &'a Document,
     srgb: Option<bool>,
     entries: VecDeque<WarningSource>,
@@ -366,19 +393,9 @@ pub(crate) struct WarningRenderSources<'a> {
     bytes: usize,
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(crate) static WARNING_SOURCE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    pub(crate) static WARNING_SOURCE_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-}
-
 impl<'a> WarningRenderSources<'a> {
-    pub(crate) fn new(document: &'a Document) -> Self {
-        #[cfg(test)]
-        let limit = WARNING_SOURCE_LIMIT.with(|limit| limit.get().unwrap_or(32));
-        #[cfg(not(test))]
-        let limit = 32;
-        Self { document, srgb: None, entries: VecDeque::new(), budget: if cfg!(target_arch = "wasm32") { 128 << 20 } else { 384 << 20 }, limit, bytes: 0 }
+    pub fn new(document: &'a Document) -> Self {
+        Self { document, srgb: None, entries: VecDeque::new(), budget: if cfg!(target_arch = "wasm32") { 128 << 20 } else { 384 << 20 }, limit: 32, bytes: 0 }
     }
 
     #[cfg(test)]
@@ -410,8 +427,7 @@ impl<'a> WarningRenderSources<'a> {
             doc.mode == photocraft_color::ColorMode::Rgb
                 && crate::color_cmds::document_profile(doc).to_bytes().as_ref() == craft_cms::Builtin::Srgb.profile().to_bytes().as_ref()
         });
-        #[cfg(test)]
-        WARNING_SOURCE_DECODES.with(|count| count.set(count.get().saturating_add(1)));
+        record(|statistics| statistics.svg_decodes = statistics.svg_decodes.saturating_add(1));
         let (buf, warnings) = photocraft_io::svg::rasterize_bounded_with_warnings(bytes, scale as f32, 24_000_000)
             .map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
         // Charge owned native tiles, entry and warning storage, not borrowed encoded bytes.
@@ -458,7 +474,7 @@ impl<'a> WarningRenderSources<'a> {
 }
 
 /// Reuse only warning-aware source pixels during one shared-content update.
-pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
+pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
     let doc = sources.document;
     if sm.vector_preview.is_some() || sm.stack_mode.is_some() {
         return render(doc, sm).map(|surface| (surface, Vec::new()));
