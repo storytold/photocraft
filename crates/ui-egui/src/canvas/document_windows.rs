@@ -18,8 +18,18 @@ use super::document_display::CanvasHost;
 use crate::PhotocraftApp;
 use crate::state::View;
 
-/// The smallest a document window gets: the Zoom Resizes Windows wrap never shrinks it below this.
+/// The smallest size that leaves room for the document window's controls.
 const MIN_SIZE: Vec2 = vec2(240.0, 160.0);
+
+/// The document's size at 100% in screen points, scaled uniformly to fit the available window area or to make room
+/// for the controls. Extreme aspect ratios may need extra room on their shorter side to meet the window minimum.
+pub(crate) fn initial_size(size: photocraft_geom::Size, available: Vec2, pixels_per_point: f32) -> Vec2 {
+    let image = vec2(size.width.max(1) as f32, size.height.max(1) as f32) / pixels_per_point;
+    let available = available.max(MIN_SIZE);
+    let minimum_scale = (MIN_SIZE.x / image.x).max(MIN_SIZE.y / image.y);
+    let maximum_scale = (available.x / image.x).min(available.y / image.y);
+    (image * 1.0_f32.max(minimum_scale).min(maximum_scale)).ceil().clamp(MIN_SIZE, available)
+}
 
 /// Whether a zoom edit in a window asks the window to wrap the image (Preferences › General › Zoom
 /// Resizes Windows): the preference is on, the zoom differs between `before` and `after` (compared
