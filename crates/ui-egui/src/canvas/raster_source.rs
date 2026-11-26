@@ -1,6 +1,6 @@
 //! A document's canvas pictures as the framework's raster displays read them: [`PhotoComposite`], the composite with
-//! the live preview and the colour management folded in, and [`ChannelOverlay`], the Channels panel's view, which a
-//! second display draws over the composite or the GPU picture.
+//! the live preview and the colour management folded in, and [`ChannelOverlay`], the Channels panel's view and the
+//! Adjustment Brush's mask tint, which a second display draws over the composite or the GPU picture.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -23,6 +23,10 @@ const LOG_LEN: usize = 8;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tools/adjustment_brush_overlay_tests.rs"]
+mod adjustment_brush_overlay_tests;
 
 /// What a source's picture showed at one [`Revision`]: the state [`damage_since`] compares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,13 +254,61 @@ impl RasterSource for PhotoComposite<'_> {
     }
 }
 
+/// The Adjustment Brush's Overlay (#12520): a magenta tint over what the active adjustment layer's mask reveals,
+/// scaled by the mask value (white: the full tint, black: none). The tint's colour and opacity were not measured;
+/// this is the layer mask rubylith's 50 %, in magenta. It shows while the Adjustment Brush is the tool and its
+/// Overlay box is ticked, and only over an adjustment layer with a mask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MaskTint {
+    layer: photocraft_doc::LayerId,
+}
+
+impl MaskTint {
+    const OPACITY: f32 = 0.5;
+
+    /// The tint document `idx` shows; `None` while it shows none.
+    fn of(app: &PhotocraftApp, idx: usize) -> Option<Self> {
+        if app.ui.tool != crate::state::Tool::AdjustmentBrush || !app.ui.tool_options.adjustment_brush_overlay {
+            return None;
+        }
+        let st = app.session.documents().get(idx)?;
+        let layer = st.active_layer?;
+        let l = st.doc.layer(layer)?;
+        (matches!(l.content, photocraft_doc::LayerContent::Adjustment(_)) && l.mask.is_some()).then_some(MaskTint { layer })
+    }
+
+    /// Changes with the layer tinted, so another layer redraws everything. The constant ("masktint") keeps it apart
+    /// from a channel view's key alone.
+    fn key(&self) -> u64 {
+        0x6d61_736b_7469_6e74 ^ self.layer.0.rotate_left(29)
+    }
+
+    /// `px` (`r` of `doc` at `factor`, premultiplied; `None`: transparent) with the tint over it. `px` unchanged
+    /// when `doc` has no such layer or mask, as a preview of another layout may not.
+    fn over(&self, doc: &Document, r: DRect, factor: u32, px: Option<Vec<Color32>>) -> Option<Vec<Color32>> {
+        let Some(mask) = doc.layer(self.layer).and_then(|l| l.mask.as_ref()) else { return px };
+        let tint = super::channel_view::mask_px(&mask.surface, r, factor, |g| {
+            let a = (g.clamp(0.0, 1.0) * Self::OPACITY * 255.0 + 0.5) as u8;
+            Color32::from_rgba_premultiplied(a, 0, a, a)
+        });
+        Some(match px {
+            Some(px) => px.into_iter().zip(tint).map(|(under, over)| under.blend(over)).collect(),
+            None => tint,
+        })
+    }
+}
+
 /// Document `idx`'s channel or mask view on one display (Quick Mask, a layer mask, alpha or single colour
-/// channels), drawn by a second `RasterDisplay` over the canvas picture. It shows the live preview the canvas picture
-/// shows, and also an adjustment's proxy preview, which the GPU picture draws and [`PhotoComposite`] does not.
-/// Built once per pass, only while the view is not the plain composite.
+/// channels), and the Adjustment Brush's mask tint over it, drawn by a second `RasterDisplay` over the canvas picture.
+/// It shows the live preview the canvas picture shows, and also an adjustment's proxy preview, which the GPU picture
+/// draws and [`PhotoComposite`] does not. Built once per pass, only while the view is not the plain composite or the
+/// tint shows.
 pub(crate) struct ChannelOverlay<'a> {
     picture: Picture<'a>,
-    overlay: Overlay,
+    overlay: Option<Overlay>,
+    tint: Option<MaskTint>,
+    /// The overlay's key with the tint's folded in.
+    key: u64,
     revision: Revision,
     log: Option<&'a SourceLog<OverlayShown>>,
 }
@@ -265,28 +317,36 @@ pub(crate) struct ChannelOverlay<'a> {
 pub(crate) struct OverlayPrep {
     idx: usize,
     picture: CanvasPicture,
-    overlay: Overlay,
+    overlay: Option<Overlay>,
+    tint: Option<MaskTint>,
+    key: u64,
     revision: Revision,
     log_key: (photocraft_doc::DocId, u32),
 }
 
 impl OverlayPrep {
     /// Document `idx`'s view on `output` (`None`: the main window's display); `None` when no such document is open or
-    /// it shows the plain composite. `live` is the gradient a tool proposes this pass.
+    /// it shows the plain composite and no mask tint. `live` is the gradient a tool proposes this pass.
     pub(crate) fn new(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output: Option<u32>, live: LiveProposal<'_>) -> Option<Self> {
         let p = canvas_picture(app, ctx, idx, output, ProxyPreview::Preview, live)?;
-        let overlay = Overlay::of(app, idx, &p.doc, output)?;
-        let shown = OverlayShown { picture: Shown::of(&p, 0), view: overlay.key };
-        let revision = shown.picture.revision(p.id, overlay.key);
+        let overlay = Overlay::of(app, idx, &p.doc, output);
+        let tint = MaskTint::of(app, idx);
+        if overlay.is_none() && tint.is_none() {
+            return None;
+        }
+        let key = overlay.as_ref().map_or(0, |o| o.key) ^ tint.map_or(0, |t| t.key());
+        let shown = OverlayShown { picture: Shown::of(&p, 0), view: key };
+        let revision = shown.picture.revision(p.id, key);
         let log_key = cache_key(p.id, output);
         app.raster_logs.entry(log_key).or_default().overlay.record(revision, shown);
-        Some(OverlayPrep { idx, picture: p, overlay, revision, log_key })
+        Some(OverlayPrep { idx, picture: p, overlay, tint, key, revision, log_key })
     }
 
     /// The source over `app`, the app this was prepared with.
     pub(crate) fn source(self, app: &PhotocraftApp) -> ChannelOverlay<'_> {
         let log = app.raster_logs.get(&self.log_key).map(|l| &l.overlay);
-        ChannelOverlay { picture: Picture::new(app, self.idx, self.picture, 0), overlay: self.overlay, revision: self.revision, log }
+        let picture = Picture::new(app, self.idx, self.picture, 0);
+        ChannelOverlay { picture, overlay: self.overlay, tint: self.tint, key: self.key, revision: self.revision, log }
     }
 }
 
@@ -304,8 +364,8 @@ impl RasterSource for ChannelOverlay<'_> {
             return Some(PixelRect::default());
         }
         let seen = self.log?.find(since)?;
-        // Another view, look or display transform draws everything differently.
-        if seen.view != self.overlay.key {
+        // Another view, look, display transform or tinted layer draws everything differently.
+        if seen.view != self.key {
             return None;
         }
         self.picture.damage(seen.picture)
@@ -315,7 +375,12 @@ impl RasterSource for ChannelOverlay<'_> {
         let doc = &self.picture.doc;
         self.picture.read(region, factor, out, |area, factor| {
             let w = area.width().div_ceil(factor) as usize;
-            self.overlay.render(doc, area, factor).map(|px| (w, px))
+            let px = self.overlay.as_ref().and_then(|o| o.render(doc, area, factor));
+            let px = match &self.tint {
+                Some(tint) => tint.over(doc, area, factor, px),
+                None => px,
+            };
+            px.map(|px| (w, px))
         });
     }
 }

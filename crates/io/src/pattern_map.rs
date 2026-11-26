@@ -126,7 +126,9 @@ fn pattern_from_psd(p: &PsdPattern, oom: &mut Option<String>) -> Option<Pattern>
         *oom = Some(error.to_string());
         return None;
     }
-    Some(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface })
+    // A file's block says what its pixels are, not which document they came from, so the source
+    // mode stays unrecorded: an Indexed document keeps refusing such a pattern (#12887, #13071).
+    Some(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, source_mode: None, surface })
 }
 
 /// A document pattern as a PSD pattern (its own depth and colour model; other models as RGB).
@@ -263,6 +265,8 @@ pub fn export_global_blocks_with_warnings(doc: &Document, warnings: &mut Vec<Str
 
 fn export_global_blocks_with_warnings_limit(doc: &Document, warnings: &mut Vec<String>, limit: u64) -> Vec<photocraft_doc::PsdGlobalBlock> {
     let raw = &doc.metadata.psd_global_blocks;
+    // The comparison covers every field, `Pattern::source_mode` included; a pattern this reader
+    // decoded names no source on either side, so a file's blocks are still reused verbatim.
     if from_global_blocks(doc) == doc.patterns {
         return repair_legacy_blocks(raw);
     }
@@ -445,6 +449,7 @@ mod unpaintable_tests {
             name: name.into(),
             width: side,
             height: side,
+            source_mode: None,
             surface: Surface::new(format),
         };
         let patterns =
@@ -465,7 +470,7 @@ mod allocation_tests {
         for name in ["First", "Second"] {
             let mut surface = Surface::new(PixelFormat::RGBA8);
             surface.fill_rect(Rect::new(0, 0, 2, 2), &[1., 0., 0., 1.]);
-            doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, surface });
+            doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, source_mode: None, surface });
         }
         let before = doc.clone();
         let error = export_global_blocks_with_limit(&doc, 16).unwrap_err();
@@ -488,7 +493,14 @@ mod allocation_tests {
                 let mut doc = Document::new("Stored pattern declaration", photocraft_geom::Size::new(2, 2), mode, depth);
                 let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
                 surface.write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.]);
-                doc.patterns.push(Pattern { id: "oversized".into(), name: "Oversized retained pattern".into(), width: 30_000, height: 30_000, surface });
+                doc.patterns.push(Pattern {
+                    id: "oversized".into(),
+                    name: "Oversized retained pattern".into(),
+                    width: 30_000,
+                    height: 30_000,
+                    source_mode: None,
+                    surface,
+                });
                 let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
                 let loaded = photocraft_format::load_from_bytes(&bytes).unwrap();
                 let before = loaded.clone();
@@ -523,6 +535,7 @@ mod allocation_tests {
             name: "Large float declaration".into(),
             width: 5000,
             height: 5000,
+            source_mode: None,
             surface: Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true)),
         };
         assert!(p.pixel_count() <= photocraft_doc::pattern::MAX_PAINT_PIXELS);
@@ -543,12 +556,19 @@ mod allocation_tests {
         let mut doc = Document::new("Patterns", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
         let mut surface = Surface::new(PixelFormat::RGBA8);
         surface.write_pixel(0, 0, &[1., 0., 0., 1.]);
-        let small = Pattern { id: "small".into(), name: "Small".into(), width: 2, height: 2, surface };
+        let small = Pattern { id: "small".into(), name: "Small".into(), width: 2, height: 2, source_mode: None, surface };
         doc.patterns.push(small.clone());
         let raw = export_global_blocks(&doc).unwrap();
         doc.metadata.psd_global_blocks = raw.clone();
         assert_eq!(export_global_blocks(&doc).unwrap(), raw, "unchanged raw patterns pass through");
-        doc.patterns.push(Pattern { id: "large".into(), name: "Large".into(), width: 30_000, height: 30_000, surface: Surface::new(PixelFormat::RGBA8) });
+        doc.patterns.push(Pattern {
+            id: "large".into(),
+            name: "Large".into(),
+            width: 30_000,
+            height: 30_000,
+            source_mode: None,
+            surface: Surface::new(PixelFormat::RGBA8),
+        });
         let mut warnings = Vec::new();
         let blocks = export_global_blocks_with_warnings(&doc, &mut warnings);
         assert_eq!(warnings.len(), 1);

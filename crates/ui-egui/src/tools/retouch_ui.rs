@@ -4,6 +4,7 @@
 //! and the clone-source marker point. The options bars are in [`bar`].
 
 use craft::keymap::Mods;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -17,6 +18,19 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
         (Tool::Blur, true) => Tool::Sharpen,
         (Tool::Sharpen, true) => Tool::Blur,
         _ => tool,
+    }
+}
+
+/// A Smudge stroke with ⌥ held at the press turns Finger Painting the other way for that one stroke, as in Photoshop
+/// (#12957): `p` is the stroke's `paint.smudge` params. The options bar keeps its value. Only measured at Strength
+/// 100 %, so a lower Strength keeps today's behaviour (the issue's "not measured" case).
+pub(crate) fn alt_finger_painting(tool: Tool, alt: bool, p: &mut Value) {
+    if tool == Tool::Smudge
+        && alt
+        && p.get("strength").and_then(Value::as_f64).is_some_and(|s| s >= 100.0)
+        && let Some(on) = p.get("fingerPainting").and_then(Value::as_bool)
+    {
+        p["fingerPainting"] = json!(!on);
     }
 }
 
@@ -42,7 +56,7 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
     // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
     // so falling back to them would read another document's coordinates from this one's pixels.
-    app.session.presets.clone.active().source?;
+    app.session.presets().clone.active().source?;
     Some(p)
 }
 
@@ -64,7 +78,7 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
 fn history_brush_params_with(app: &PhotocraftApp, erase_to_history: bool) -> Value {
     // The tool's tip goes in the params: the session's brush changes with the tool, if a tool key
     // is pressed mid-stroke.
-    let brush = &app.session.tools.brush;
+    let brush = &*app.session.tools.brush;
     let mut p = json!({
         "mode": brush.mode.label(),
         "opacity": brush.opacity * 100.0,
@@ -204,6 +218,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: Mods, line: bool, history: Option<Value>) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
+    // Which Remove stroke writes its fill to a new layer above a Smart Object (#12555), settled
+    // before the run: the new layer is the active one afterwards.
+    let remove_edits = tool == Tool::Remove && remove_on_smart_object(app);
     let (cmd, mut p): (&str, Value) = match tool {
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {
@@ -211,7 +228,7 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
                 remove_pending_add(app, points);
                 return true;
             }
-            ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels")))
+            ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels"), remove_edits))
         }
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
@@ -251,6 +268,11 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
             None => return false,
         },
         Tool::QuickSelection => {
+            // Indexed Color and Bitmap: the reference application's alert with OK (#12934), and nothing runs.
+            if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::quick_mode_refusal(st.doc.mode)) {
+                let _ = crate::dialogs::alerts::alert(app, tl!(why));
+                return true;
+            }
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
@@ -261,10 +283,12 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         }
         _ => return false,
     };
+    alt_finger_painting(tool, mods.alt, &mut p);
     p["points"] = pts;
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
     crate::canvas::unsmoothed_line(&mut p, line);
+    let pixels = crate::brush_refusal::pixels_target(&p["target"]);
     let result = app.run(cmd, p);
     app.retouch_from_live = matches!(&result, Ok(r) if r.get("fromLive").and_then(Value::as_bool) == Some(true));
     match result {
@@ -275,7 +299,18 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Ok(r) if tool == Tool::PatternStamp => {
             app.ui.pattern_stamp_phase = r.get("phase").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.pattern_stamp_aligned);
         }
+        // A removal that wrote to a new layer above a Smart Object says so in its result: the inline
+        // one lands here, the job one in [`crate::jobs_ui`]'s end (#12555).
+        Ok(r) if removal_edits_a_smart_object(&r) => notice_edits_layer(app),
         Ok(_) => {}
+        // The Art History Brush's source refusals are alerts with OK, as the press-time ones, and
+        // not in the status bar as well (#12638). They were measured on a layer's pixels only: a
+        // mask or channel target keeps the status bar.
+        Err(e) if tool == Tool::ArtHistoryBrush && pixels && e.starts_with("Could not use the art history brush because") => {
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            let _ = crate::dialogs::alerts::alert(app, tl!(&e).to_owned());
+        }
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -284,9 +319,42 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
     true
 }
 
-/// `paint.remove` params from the options bar (without the strokes).
-fn remove_params(o: &crate::state::ToolOptions, composite: bool) -> Value {
-    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer && composite})
+/// `paint.remove` params from the options bar (without the strokes). A Smart Object is never
+/// painted into: its fill always goes to a new layer above it (#12555).
+fn remove_params(o: &crate::state::ToolOptions, composite: bool, smart_object: bool) -> Value {
+    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": (o.remove_new_layer || smart_object) && composite})
+}
+
+/// Whether the Remove tool's stroke lands on a Smart Object layer, which keeps its own pixels while
+/// the fill goes to a new layer above it (#12555).
+fn remove_on_smart_object(app: &PhotocraftApp) -> bool {
+    app.session
+        .active()
+        .is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.layer(id).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Smart(_)))))
+}
+
+/// What the reference says the first time the Remove tool keeps a Smart Object intact (#12555).
+pub(crate) const EDITS_NOTICE: &str = "We created a new layer with your edits to help you make changes without affecting the original content.";
+
+/// The notice's dismiss key: the card's Do not show again stores it, and the notice center then
+/// keeps the notice out of later removals.
+pub(crate) const EDITS_NOTICE_PREF: &str = "removeTool.newLayerNotice";
+
+/// Whether a finished `paint.remove` wrote its fill to a new layer above a Smart Object, which kept
+/// its own pixels (#12555). The result says so itself, which is how the job path learns it too.
+pub(crate) fn removal_edits_a_smart_object(result: &Value) -> bool {
+    result.get("smartObject").and_then(Value::as_bool) == Some(true)
+}
+
+/// Post [`EDITS_NOTICE`]: it stays until closed, and one card at a time.
+pub(crate) fn notice_edits_layer(app: &mut PhotocraftApp) {
+    if crate::notices::shown_titled(app, EDITS_NOTICE) {
+        return;
+    }
+    let id = crate::notices::post(app, EDITS_NOTICE, Vec::new(), craft::theme::variant::Tone::Neutral, Some(EDITS_NOTICE_PREF));
+    if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
+        notice.sticky = true;
+    }
 }
 
 /// The selection a queued Remove stroke was drawn against. A later selection must not
@@ -320,7 +388,7 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
     let b = &app.session.tools.brush;
     let entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
     let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
-    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke_reach(points, brush);
+    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(&mut app.texture_serials, size)).feed_stroke_reach(points, brush);
     app.remove_pending.push(entry);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;
@@ -335,13 +403,22 @@ pub fn remove_pending_commit(app: &mut PhotocraftApp) -> bool {
     let strokes = std::mem::take(&mut app.remove_pending);
     app.remove_trail = None;
     app.remove_pending_target = None;
-    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"));
+    // Taken before the run: a removal that writes to a new layer above a Smart Object makes that
+    // layer the active one (#12555).
+    let smart_object = remove_on_smart_object(app);
+    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"), smart_object);
     p["strokes"] = json!(strokes);
     p["target"] = crate::canvas::paint_target(app);
     app.ui.status.clear();
-    if let Err(e) = app.run("paint.remove", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match app.run("paint.remove", p) {
+        // Inline (the web build, and the tests): the notice. With background jobs on, the run ends
+        // in [`crate::jobs_ui`]'s end, which posts the same notice from the job's result.
+        Ok(r) if removal_edits_a_smart_object(&r) => notice_edits_layer(app),
+        Ok(_) => {}
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
     true
 }
@@ -461,6 +538,18 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         return;
     }
     let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
+    // #12121: on a Type layer the reference asks its rasterize question instead of refusing, and OK
+    // applies this very patch on the layer it just rasterized. Only the measured case asks: the
+    // layer's own pixels in plain mode, and only on a layer that is actually shown: the engine never
+    // writes to a hidden one, so a prompt there would let OK destroy the text for no patch. Every
+    // other target, hidden layer and layer kind keeps the engine's refusal.
+    if let Some((kind, layer)) = crate::rasterize_prompt::needed(app)
+        && kind == crate::rasterize_prompt::Kind::Type
+        && photocraft_engine::hidden_target::refusal(&app.session, "paint.patch", &p).is_none()
+    {
+        crate::rasterize_prompt::open_patch(app, kind, layer, p);
+        return;
+    }
     match app.run("paint.patch", p) {
         Ok(_) => crate::patch_preview::committed(app, preview, off),
         Err(e) => {
@@ -583,10 +672,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 
 /// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
 /// rectangle: with Object Finder on it selects the object under the pointer, the one hovering
-/// highlighted (#4087). With it off it falls back to a Quick Selection dab at the brush size
-/// instead of looking dead (⌥ or Subtract mode subtracts, otherwise it adds). Larger drags
-/// run the rectangle GrabCut. Both combine as the options bar's New / Add / Subtract /
-/// Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥ intersecting (#12853).
+/// highlighted (#4087), and finding nothing stays silent. With it off it falls back to a Quick
+/// Selection dab at the brush size instead of looking dead (⌥ or Subtract mode subtracts,
+/// otherwise it adds). Larger drags run the rectangle GrabCut; one that finds nothing opens the
+/// reference application's alert with "Don't show again" (#12861). Both combine as the options
+/// bar's New / Add / Subtract / Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥
+/// intersecting (#12853).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: Mods) {
     // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
     if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
@@ -606,9 +697,17 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     ));
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
-        let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}));
+        // A click that finds nothing stays silent, as in the reference application (#12861):
+        // where the sampled layer has no pixels the engine's error is not run into either.
+        let here = photocraft_geom::Rect::from_xywh((end[0] as f32).floor() as i32, (end[1] as f32).floor() as i32, 1, 1);
+        let empty = app
+            .session
+            .active()
+            .is_some_and(|st| photocraft_engine::smartselect_cmds::empty_sampled_area(&st.doc, st.active_layer, sample_all, here).is_some());
+        if !empty {
+            let _ = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}));
+        }
         crate::object_finder::clear(app);
-        report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
     }
     if w < 2.0 || h < 2.0 {
@@ -620,15 +719,21 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     }
     let r = app.run(
         "select.object",
-        json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}),
+        json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge, "recordEmptyArea": true}),
     );
-    report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
+    if matches!(r, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(false)) {
+        let why = tl!("Couldn't find an object to select. There might not be enough edge contrast, or the object might be too small.");
+        let _ = crate::dialogs::alerts::alert_once(app, why, OBJECT_NOT_FOUND_PREF);
+    }
 }
+
+/// The "Don't show again" of the alert for an Object Selection rectangle that finds nothing.
+const OBJECT_NOT_FOUND_PREF: &str = "objectSelection.notFound";
 
 /// Reports a smart-selection command result in the status bar. Engine errors are already
 /// reported by [`PhotocraftApp::run`], but an empty result (`changed: false`) is a silent
-/// success that looks like a dead button (Select Subject finding nothing on a busy photo,
-/// Object Selection missing its rectangle). `empty_msg` says what to try next.
+/// success that looks like a dead button (Select Subject finding nothing on a busy photo).
+/// `empty_msg` says what to try next.
 pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, empty_msg: &str) {
     if matches!(res, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(false)) {
         app.ui.status = empty_msg.into();
@@ -674,7 +779,7 @@ pub fn source_marker_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
         return None;
     }
-    let slot = app.session.presets.clone.active();
+    let slot = app.session.presets().clone.active();
     if slot.document_closed || slot.document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         return None;
     }

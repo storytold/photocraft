@@ -125,7 +125,10 @@ impl RasterSource for AfterRaster {
     }
 
     fn revision(&self) -> Revision {
-        Revision::of(&(RasterSource::revision(&*self.picture), self.detail().ready))
+        // The canvas asks every pass: a refinement that landed since is collected here.
+        let mut detail = self.detail();
+        detail.refresh();
+        Revision::of(&(RasterSource::revision(&*self.picture), detail.shown()))
     }
 
     fn damage(&self, since: Revision) -> Option<PixelRect> {
@@ -159,6 +162,9 @@ pub(crate) struct SourceInit {
     pub(crate) ctx: egui::Context,
 }
 
+#[cfg(test)]
+type BeforePreviewPublish = Arc<dyn Fn(u64, &CameraRaw) + Send + Sync>;
+
 /// PhotoCraft's develop for the RAW Develop workspace: the proxy, the selection coverage, the GPU handle and the
 /// result slot the develop jobs fill. Nothing in it is kept across passes beyond those results.
 pub(crate) struct PcRawSource {
@@ -191,6 +197,9 @@ pub(crate) struct PcRawSource {
     running: Arc<AtomicUsize>,
     /// Develops started so far: the order of the results.
     issued: AtomicU64,
+    /// Tests can hold one real job after its cancellation check, before the revision guard.
+    #[cfg(test)]
+    before_preview_publish: Mutex<Option<BeforePreviewPublish>>,
     /// The side of the blocks the proxy averaged: the pictures' reduction.
     block: u32,
     /// Wakes the UI when a refinement lands.
@@ -237,6 +246,8 @@ impl PcRawSource {
             developed: Arc::default(),
             running: Arc::default(),
             issued: AtomicU64::new(0),
+            #[cfg(test)]
+            before_preview_publish: Mutex::new(None),
             block: block as u32,
             ctx,
         }
@@ -308,12 +319,18 @@ impl RawDevelopSource for PcRawSource {
     }
 
     fn develop(&self, request: &RawPreviewRequest) -> Job<PreviewDone, String> {
-        if self.needs_detail(request) {
-            self.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner).request(&self.ctx, request.revision, &request.settings, &self.inputs);
-        }
         // The request's revision only counts source changes; the develops of one source are told apart by this order, so
-        // an older job that finishes after a newer one does not replace its result.
+        // an older job that finishes after a newer one does not replace its result, and the refinement follows the
+        // settings.
         let order = self.issued.fetch_add(1, Ordering::Relaxed) + 1;
+        {
+            let mut detail = self.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.needs_detail(request) {
+                detail.want(&self.ctx, order, &request.settings, &self.inputs);
+            } else {
+                detail.unwant();
+            }
+        }
         let job = self.proxy_job(&request.settings);
         let settings = request.settings.clone();
         let picture = self.after.picture.clone();
@@ -324,6 +341,8 @@ impl RawDevelopSource for PcRawSource {
         let before_histogram = self.before_histogram.clone();
         let (pw, ph) = (self.pw, self.ph);
         let block = self.block;
+        #[cfg(test)]
+        let before_preview_publish = self.before_preview_publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let running = Running::start(&self.running);
         Job::new(move |_progress, cancel| {
             let _running = running;
@@ -354,6 +373,10 @@ impl RawDevelopSource for PcRawSource {
                 backend: frame.backend,
                 scope,
             };
+            #[cfg(test)]
+            if let Some(before_publish) = before_preview_publish {
+                before_publish(order, &result.settings);
+            }
             // A job for older settings that finishes after a newer one must not replace its result.
             let mut slot = developed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if slot.as_ref().is_none_or(|current| current.revision <= result.revision) {
@@ -489,7 +512,8 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
             "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows,
             "highlights": h.highlights})
     });
-    let detail = source.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut detail = source.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    detail.refresh();
     let mut result = json!({
         "layer": session.layer.0,
         "params": serde_json::to_value(hosted.workspace().session()).unwrap_or(Value::Null),

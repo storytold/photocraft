@@ -7,6 +7,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::app::framework::BuildApp as _;
 use crate::state::Tool;
 use crate::theme::AppTheme;
 
@@ -20,8 +21,13 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
-    let mut h =
-        Harness::builder().with_size(vec2(1800.0, 300.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_app(
+        |ui, app| {
+            crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
     PhotocraftApp::setup_context(&h.ctx, AppTheme::pro_medium());
     h.run_steps(4);
     h
@@ -29,6 +35,14 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
 
 fn angle<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().description().as_deref() == Some("Set the brush angle")).expect("Healing Angle")
+}
+
+fn has_control(h: &Harness<'static, Box<PhotocraftApp>>, role: Role, label: &str) -> bool {
+    h.query_all_by_role(role).any(|node| node.accesskit_node().label().is_some_and(|name| name.trim_end_matches(':') == label))
+}
+
+fn clone_source_is_on(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
+    h.get_by_role_and_label(Role::Button, PANEL).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
 }
 
 fn type_angle(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
@@ -49,7 +63,7 @@ fn alerts(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
 fn healing_bar_orders_source_angle_and_pressure_without_extra_brush_controls() {
     let h = bar(Tool::Healing);
     let picker = h.get_by_label("Brush Preset picker").rect();
-    let panel = h.get_by_label(PANEL).rect();
+    let panel = h.get_by_role_and_label(Role::Button, PANEL).rect();
     let mode = h
         .query_all_by_role(Role::ComboBox)
         .find(|n| n.accesskit_node().label().is_some_and(|label| label.trim_end_matches(':') == "Mode"))
@@ -57,15 +71,20 @@ fn healing_bar_orders_source_angle_and_pressure_without_extra_brush_controls() {
         .rect();
     let sample = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Current Layer")).expect("Sample").rect();
     let field = angle(&h).rect();
-    let pressure = h.get_by_label(PRESSURE);
+    let pressure = h.get_by_role_and_label(Role::Button, PRESSURE);
     assert!(picker.right() <= panel.left() && panel.right() <= mode.left(), "picker, Clone Source, Mode");
     assert!(sample.right() <= field.left() && field.right() <= pressure.rect().left(), "Sample, Angle, Pressure");
     assert_eq!(h.state().session.tools.brush.angle, 0.0);
     assert!(!h.state().session.tools.brush.pressure_size);
     assert_eq!(pressure.accesskit_node().description().as_deref(), Some(PRESSURE_TIP));
-    assert!(h.query_by_label(SETTINGS).is_none());
-    for label in ["Opacity:", "Flow:", "Smoothing", "Always use pressure for opacity"] {
-        assert!(h.query_by_label(label).is_none(), "Healing has no {label}");
+    assert!(!has_control(&h, Role::Button, SETTINGS));
+    for (role, label) in [
+        (Role::SpinButton, "Opacity"),
+        (Role::SpinButton, "Flow"),
+        (Role::SpinButton, "Smoothing"),
+        (Role::Button, "Always use pressure for opacity"),
+    ] {
+        assert!(!has_control(&h, role, label), "Healing has no {label}");
     }
 }
 
@@ -73,19 +92,24 @@ fn healing_bar_orders_source_angle_and_pressure_without_extra_brush_controls() {
 fn clone_source_toggle_uses_the_existing_panel_command_in_both_directions() {
     let mut h = bar(Tool::Healing);
     assert!(!crate::panel_docking::is_shown(h.state(), "cloneSource"));
-    h.get_by_label(PANEL).click();
+    assert!(!clone_source_is_on(&h));
+    h.get_by_role_and_label(Role::Button, PANEL).click();
     h.run_steps(3);
     assert!(crate::panel_docking::is_shown(h.state(), "cloneSource"));
+    assert!(clone_source_is_on(&h));
     assert!(!crate::panel_docking::is_shown(h.state(), "brushSettings"));
-    h.get_by_label(PANEL).click();
+    h.get_by_role_and_label(Role::Button, PANEL).click();
     h.run_steps(3);
     assert!(!crate::panel_docking::is_shown(h.state(), "cloneSource"));
+    assert!(!clone_source_is_on(&h));
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "window.panel.cloneSource", json!({"show": true})).unwrap();
     h.run_steps(3);
-    h.get_by_label(PANEL).click();
+    assert!(clone_source_is_on(&h));
+    h.get_by_role_and_label(Role::Button, PANEL).click();
     h.run_steps(3);
     assert!(!crate::panel_docking::is_shown(h.state(), "cloneSource"), "the button reads the panel's current state");
+    assert!(!clone_source_is_on(&h));
     assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
 }
 
@@ -150,7 +174,7 @@ fn healing_angle_pressure_and_reset_preserve_brush_clone_and_pattern_settings() 
     h.state_mut().ui.tool = Tool::Healing;
     h.run_steps(3);
     type_angle(&mut h, "30");
-    h.get_by_label(PRESSURE).click();
+    h.get_by_role_and_label(Role::Button, PRESSURE).click();
     h.run_steps(2);
     let got = h.state_mut().run("brush.get", json!({})).unwrap();
     assert_eq!(got["angle"], json!(30.0));
@@ -176,15 +200,15 @@ fn brush_settings_changes_show_in_healing_and_clone_bar_stays_unchanged() {
     h.state_mut().run("tools.setBrush", json!({"brush": {"angle": -75.0, "pressureSize": true}})).unwrap();
     h.run_steps(3);
     assert_eq!(angle(&h).accesskit_node().numeric_value(), Some(-75.0));
-    h.get_by_label(PRESSURE).click();
+    h.get_by_role_and_label(Role::Button, PRESSURE).click();
     h.run_steps(2);
     assert!(!h.state().session.tools.brush.pressure_size);
     let clone = bar(Tool::CloneStamp);
-    assert!(clone.query_by_label(SETTINGS).is_some());
-    assert!(clone.query_by_label(PANEL).is_none());
-    assert!(clone.query_by_label("Angle").is_none());
-    assert!(clone.query_by_label(PRESSURE).is_none());
-    assert!(clone.query_by_label("Opacity:").is_some());
-    assert!(clone.query_by_label("Flow:").is_some());
+    assert!(has_control(&clone, Role::Button, SETTINGS));
+    assert!(!has_control(&clone, Role::Button, PANEL));
+    assert!(!has_control(&clone, Role::SpinButton, "Angle"));
+    assert!(!has_control(&clone, Role::Button, PRESSURE));
+    assert!(has_control(&clone, Role::SpinButton, "Opacity"));
+    assert!(has_control(&clone, Role::SpinButton, "Flow"));
     assert!(clone.get_by_role_and_label(Role::CheckBox, "Aligned").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True));
 }

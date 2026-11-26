@@ -126,7 +126,12 @@ fn a_launch_waiting_on_a_closing_instance_takes_over() {
     let primary = primary(&dir);
     // The UI never drains (it is shutting down, or never came up).
     let waiting = launch(&dir, &["a.psd"], FAST);
-    std::thread::sleep(Duration::from_millis(200));
+    // Shut down only once the launch has handed its path over and waits for the UI to take it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while primary.shared.inbox.lock().unwrap().pending.is_empty() {
+        assert!(Instant::now() < deadline, "the launch never queued its path");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     primary.shutdown();
     assert!(matches!(waiting.join().unwrap(), Launch::Primary(_)), "the waiting launch becomes the primary");
     // After shutdown new connections are refused too.

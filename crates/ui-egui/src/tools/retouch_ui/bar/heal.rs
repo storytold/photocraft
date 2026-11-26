@@ -11,10 +11,12 @@ use craft::ui::pickers::Select;
 use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Env;
 use craft::ui::text::{NumberField, NumberValue, RangeAlert};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::Value as Json;
 
 use crate::PhotocraftApp;
 use crate::option_cells::{hint, number};
+use crate::state::Tool;
 
 /// The tooltip of the Structure field of Content-Aware Move.
 const STRUCTURE_TIP: &str = "Adjust how strictly the source structure is preserved";
@@ -167,7 +169,7 @@ impl NumberValue for HealingAngle {
 /// Healing-only Angle and Pressure for Size, after Sample. The shell switches in the active
 /// tool's brush; the same keyed command path as Brush Settings keeps the other tools independent.
 fn healing_brush_controls(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = HealingAngle(brush.angle);
     let shown = Field::new(tl!("Angle"))
@@ -208,15 +210,16 @@ fn healing_brush_controls(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<
 /// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
 /// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let source_unset = app.session.presets.clone.active().source.is_none();
+    let source_unset = app.session.presets().clone.active().source.is_none();
+    let clone_stamp = app.ui.tool == Tool::CloneStamp;
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
     let o = &mut app.ui.tool_options;
-    check(ui, tl!("Aligned"), &mut o.clone_aligned, true, None);
+    check(ui, tl!("Aligned"), &mut o.clone_aligned, true, clone_stamp.then(|| tl!("Keep the same source offset between strokes")));
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
-    choose(ui, tl!("Sample"), sample, &samples, !indexed, None);
-    let alert = if app.ui.tool == crate::state::Tool::Healing { healing_brush_controls(ui, app) } else { None };
+    choose(ui, tl!("Sample"), sample, &samples, !indexed, clone_stamp.then(|| tl!("Choose which layers to sample")));
+    let alert = if app.ui.tool == Tool::Healing { healing_brush_controls(ui, app) } else { None };
     if source_unset {
         Divider::vertical().show(ui);
         hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
