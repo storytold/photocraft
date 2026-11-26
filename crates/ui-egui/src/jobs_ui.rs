@@ -372,7 +372,7 @@ pub fn start_save(
     if app.jobs.saves.iter().any(|s| s.path == path) {
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
-    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let (snapshot, doc, revision, previous) = (Arc::clone(&st.doc), st.doc.id, st.revision, st.saved_revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();
@@ -397,7 +397,7 @@ pub fn start_save(
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
             } else {
-                app.saved(doc, revision, &path, &warnings, copy);
+                app.saved(doc, crate::services::saved_revision_after_write(!app.services.write_unconfirmed, revision, previous), &path, &warnings, copy);
             }
             Ok(Some((path, warnings)))
         }
