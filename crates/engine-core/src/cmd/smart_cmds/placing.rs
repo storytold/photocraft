@@ -177,18 +177,7 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
 /// each visible layer's bounded compositor effect reach. Hidden layers and layers clipped to a
 /// hidden base contribute nothing.
 fn conversion_region(layers: &[Layer], canvas: Rect) -> Rect {
-    let mut out = Rect::EMPTY;
-    let mut base_visible = true;
-    for layer in layers {
-        if !layer.clipped {
-            base_visible = layer.visible;
-        }
-        if !layer.visible || !base_visible {
-            continue;
-        }
-        out = out.union(&layer_conversion_bounds(layer, canvas));
-    }
-    out
+    photocraft_compose::visible_in_stack(layers).fold(Rect::EMPTY, |out, layer| out.union(&layer_conversion_bounds(layer, canvas)))
 }
 
 /// Conservative rendered bounds for one visible `layer` (and its visible descendants): unclipped
@@ -227,7 +216,8 @@ fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
 
 /// Preflight check for Smart Object conversion working memory and renderer limits.
 /// Returns the estimated peak working bytes (tiled output surface, one RGBA composite band,
-/// and retained compositor effect maps) to reserve before rendering begins.
+/// retained compositor effect maps, and transient effect-shape construction buffers) to reserve
+/// before rendering begins.
 fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers: &[Layer]) -> Result<u64> {
     let (width, height) = (region.width(), region.height());
     let pixels = region.size().area();
@@ -240,17 +230,11 @@ fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers:
     let band_rows = photocraft_compose::band_rows_for(width, 0);
     let band_height = u64::from(u32::try_from(band_rows).unwrap_or(u32::MAX)).min(u64::from(height));
     let band_pixels = u64::from(width).saturating_mul(band_height);
-    if band_pixels > photocraft_compose::MAX_RENDER_PIXELS {
-        return Err(other(format!(
-            "Smart Object conversion at {width} x {height} px exceeds the renderer's {} pixel band limit. Reduce the canvas or effect extents",
-            photocraft_compose::MAX_RENDER_PIXELS
-        )));
-    }
     let band_bytes = band_pixels.saturating_mul(std::mem::size_of::<[f32; 4]>() as u64);
     let surface_bytes = photocraft_raster::tile_storage_bytes(region, &fmt);
-    let effect_bytes = photocraft_compose::estimated_effect_map_bytes(layers, canvas, region, band_rows)
+    let effect_memory = photocraft_compose::estimated_effect_memory(layers, canvas, region, band_rows)
         .ok_or_else(|| other("Smart Object conversion effect maps exceed the renderer's working-memory limit. Reduce the canvas or effects"))?;
-    let total = surface_bytes.saturating_add(band_bytes).saturating_add(effect_bytes);
+    let total = surface_bytes.saturating_add(band_bytes).saturating_add(effect_memory.peak_bytes());
     if total > crate::allocation::MAX_DENSE_BYTES {
         return Err(other(format!(
             "Smart Object conversion at {width} x {height} px needs about {} MiB of working memory, exceeding the {} MiB working-memory limit. Convert fewer layers or reduce the canvas or effect extents",
@@ -259,6 +243,12 @@ fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers:
         )));
     }
     Ok(total)
+}
+
+/// Whole-pixel translation moving `bounds`'s top-left corner to the origin, rejecting `i32::MIN`
+/// coordinates whose negation cannot be represented in `i32`.
+fn origin_shift(bounds: Rect) -> Result<(i32, i32)> {
+    bounds.x0.checked_neg().zip(bounds.y0.checked_neg()).ok_or_else(|| other("Smart Object conversion bounds exceed the supported coordinate range"))
 }
 
 /// Scans `buf` for the tight bounding rectangle of pixels with alpha > 0.
@@ -271,11 +261,11 @@ fn alpha_bounds(buf: &photocraft_compose::Buffer) -> Rect {
     for (row_idx, row) in buf.px.chunks_exact(w).enumerate() {
         let Some(first) = row.iter().position(|p| p[3] > 0.0) else { continue };
         let last = row.iter().rposition(|p| p[3] > 0.0).unwrap_or(first);
-        let y = buf.rect.y0 + row_idx as i32;
-        x0 = x0.min(buf.rect.x0 + first as i32);
-        x1 = x1.max(buf.rect.x0 + last as i32 + 1);
+        let y = (i64::from(buf.rect.y0) + row_idx as i64) as i32;
+        x0 = x0.min((i64::from(buf.rect.x0) + first as i64) as i32);
+        x1 = x1.max((i64::from(buf.rect.x0) + last as i64 + 1) as i32);
         y0 = y0.min(y);
-        y1 = y1.max(y + 1);
+        y1 = y1.max((i64::from(y) + 1) as i32);
     }
     if x0 < x1 && y0 < y1 { Rect::new(x0, y0, x1, y1) } else { Rect::EMPTY }
 }
@@ -391,14 +381,15 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     }
     cache.prune();
 
-    sub.layers.iter_mut().for_each(|l| shift_layer(l, -b.x0, -b.y0));
+    let (dx, dy) = origin_shift(b)?;
+    sub.layers.iter_mut().for_each(|l| shift_layer(l, dx, dy));
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // The encoded native document is non-SVG; match the classified render/bounds path.
     if can_cache(&cache) {
         cache_put(
             source_cache_key(&sub.name, &bytes, fmt, Some(false)),
-            SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() },
+            SourceImage { surface: Arc::new(translate_surface(&cache, dx, dy)), bounds: sub.bounds() },
         );
     }
 
@@ -557,11 +548,58 @@ mod budget_tests {
 
     #[test]
     fn a_full_canvas_shadow_fits_comfortably_within_the_32_bit_budget() {
+        use photocraft_color::Color;
+        use photocraft_doc::{Effect, Fill};
+
         let canvas = Rect::new(0, 0, 6_000, 6_000);
         let region = canvas.inflate(402);
         let work = check_conversion_budget(region, canvas, PixelFormat::RGBA8, &[]).unwrap();
         // Banded conversion holds one ~139 MiB RGBA band plus the ~182 MiB RGBA8 surface (~321 MiB total).
         assert!(work < 512 << 20, "banded 36 MP RGB8 conversion should stay under 512 MiB without effects, got {work}");
+
+        let mut styled = Layer::new("Fill with shadow", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        styled.effects.enabled = true;
+        let mut shadow = Effect::default_drop_shadow();
+        if let Effect::DropShadow(d) = &mut shadow {
+            d.distance = 400.0;
+            d.size = 0.0;
+            d.spread = 0.0;
+            d.use_global_light = false;
+            d.angle = 180.0;
+        }
+        styled.effects.items.push(shadow);
+        let styled_work = check_conversion_budget(region, canvas, PixelFormat::RGBA8, std::slice::from_ref(&styled)).unwrap();
+        // Includes the ~706 MiB full-region RGBA effect-shape buffer plus ~353 MiB retained maps,
+        // while staying well inside the 2 GiB 32-bit working budget.
+        assert!(styled_work > 1 << 30 && styled_work < 2 << 30, "unexpected 36 MP styled work estimate: {styled_work}");
+    }
+
+    #[test]
+    fn conversion_budget_accounts_for_effect_shape_construction() {
+        use photocraft_color::Color;
+        use photocraft_doc::{Effect, Fill, FxCommon};
+
+        let (side, fmt) = if cfg!(target_pointer_width = "64") { (20_000, PixelFormat::RGBA8) } else { (7_500, PixelFormat::RGBA32F) };
+        let canvas = Rect::new(0, 0, side, side);
+        let mut shaped = Layer::new("Non-local styled fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        shaped.effects.enabled = true;
+        shaped.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Dissolve, 1.0), color: Color::BLACK });
+        assert!(
+            check_conversion_budget(canvas, canvas, fmt, std::slice::from_ref(&shaped)).is_err(),
+            "full-region RGBA effect-shape construction must push this extent over the working-memory limit"
+        );
+        shaped.advanced.transparency_shapes = false;
+        assert!(
+            check_conversion_budget(canvas, canvas, fmt, std::slice::from_ref(&shaped)).is_ok(),
+            "without transparency_shapes, no full-region RGBA shape buffer is allocated"
+        );
+    }
+
+    #[test]
+    fn origin_shift_rejects_i32_min_coordinates() {
+        assert_eq!(origin_shift(Rect::new(-12, 34, 10, 50)).unwrap(), (12, -34));
+        assert!(origin_shift(Rect::new(i32::MIN, 0, i32::MIN + 8, 8)).is_err());
+        assert!(origin_shift(Rect::new(0, i32::MIN, 8, i32::MIN + 8)).is_err());
     }
 
     #[cfg(target_pointer_width = "64")]

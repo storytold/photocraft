@@ -4,6 +4,19 @@ use super::{
     BlendMode, BufferAlloc, Document, InfallibleBufferAlloc, Layer, LayerContent, Rect, adjustment_quantum, advanced, bounds, effects, masks, shape_split,
 };
 
+/// Iterates the layers in a sibling slice (bottom to top) that the compositor draws: visible
+/// layers whose clipping base (if they are clipped) is also visible. Orphan clipped layers at the
+/// bottom of a stack have no base below them and follow their own visibility.
+pub fn visible_in_stack(layers: &[Layer]) -> impl Iterator<Item = &Layer> {
+    let mut base_visible = true;
+    layers.iter().filter(move |layer| {
+        if !layer.clipped {
+            base_visible = layer.visible;
+        }
+        layer.visible && base_visible
+    })
+}
+
 /// Bounds of a layer's own pixels (union over group children; the canvas
 /// for fill layers; an artboard's board).
 pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
@@ -23,7 +36,7 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
     }
     match &layer.content {
         LayerContent::Group(g) if g.artboard.is_some() => g.artboard.as_ref().map_or(Rect::EMPTY, |a| a.rect),
-        LayerContent::Group(g) => g.children.iter().filter(|c| c.visible).fold(frame_stroke_bounds(layer, canvas), |acc, c| {
+        LayerContent::Group(g) => visible_in_stack(&g.children).fold(frame_stroke_bounds(layer, canvas), |acc, c| {
             let b = layer_bounds(c, canvas);
             if b.is_empty() {
                 acc
@@ -79,7 +92,7 @@ pub fn effect_source_bounds(layer: &Layer, canvas: Rect) -> Rect {
     match &layer.content {
         // A Frame's stroke is part of the group's content its effects are built from.
         LayerContent::Group(g) if g.artboard.is_none() && !advanced::shapeless(layer) => {
-            g.children.iter().filter(|c| c.visible).fold(frame_stroke_bounds(layer, canvas), |acc, c| {
+            visible_in_stack(&g.children).fold(frame_stroke_bounds(layer, canvas), |acc, c| {
                 let m = if effects::has_effects(c) { effects::margin(c) } else { 0 };
                 let b = effect_source_bounds(c, canvas);
                 let b = if b.is_empty() { b } else { b.inflate(m) };
@@ -399,7 +412,7 @@ pub fn composite_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
             // effects are built past the canvas).
             let near = canvas.inflate(m);
             let mut acc = frame_stroke_bounds(layer, near);
-            for c in g.children.iter().filter(|c| c.visible) {
+            for c in visible_in_stack(&g.children) {
                 let b = composite_bounds(c, near)?;
                 if !b.is_empty() {
                     acc = if acc.is_empty() { b } else { acc.union(&b) };
@@ -629,7 +642,7 @@ pub fn layer_change_bounds(doc: &Document, id: photocraft_doc::LayerId) -> Optio
 /// by their reach.
 pub fn transparent_outside(layer: &Layer) -> bool {
     match &layer.content {
-        LayerContent::Group(g) => g.children.iter().filter(|c| c.visible).all(transparent_outside),
+        LayerContent::Group(g) => visible_in_stack(&g.children).all(transparent_outside),
         // Fill layers cover the canvas (their bounds); adjustments draw nothing of their own.
         LayerContent::Fill(_) | LayerContent::Adjustment(_) => true,
         _ => layer.surface().is_none_or(|s| s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0)),

@@ -203,12 +203,17 @@ pub(crate) fn restore_unrendered<E>(
 }
 
 pub(super) fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surface {
+    let mut s = Surface::new(fmt);
     let n = fmt.channels();
+    let empty = s.default_pixel();
     let mut data = vec![0.0f32; buf.px.len() * n];
     for (p, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
-        photocraft_raster::from_rgba_into(&fmt, *p, out);
+        if fmt.alpha && (p[3] <= 0.0 || p[3].is_nan()) && empty.len() == n {
+            out.copy_from_slice(&empty);
+        } else {
+            photocraft_raster::from_rgba_into(&fmt, *p, out);
+        }
     }
-    let mut s = Surface::new(fmt);
     if !buf.rect.is_empty() {
         s.write_region(buf.rect, &data);
     }
@@ -219,7 +224,8 @@ pub(super) fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelForm
 /// A source's pixels in `fmt` from a flattened `buf` (the stack-mode combine, which has no
 /// document to composite).
 pub(super) fn source_surface_from_buffer(src: &Document, buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Result<Surface> {
-    let raster = |f| buffer_to_surface(buf, f);
+    let cmyk = photocraft_compose::cmyk_space(src);
+    let raster = |f| photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || buffer_to_surface(buf, f));
     convert_source(src, fmt, raster)
 }
 

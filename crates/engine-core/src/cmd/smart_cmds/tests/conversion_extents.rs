@@ -240,6 +240,137 @@ fn conversion_ignores_hidden_off_canvas_descendants() {
 }
 
 #[test]
+fn conversion_ignores_clipped_off_canvas_children_of_hidden_base_in_styled_group() {
+    let mut s = shadow_fixture(8, 0, 180, 128);
+    let visible = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().clone();
+    let mut hidden = Layer::raster("far hidden", PixelFormat::RGBA8);
+    hidden.visible = false;
+    hidden.surface_mut().unwrap().fill_rect(Rect::new(100_000, 100_000, 100_008, 100_008), &[1.0, 0.0, 0.0, 1.0]);
+    let mut clipped_to_hidden = Layer::raster("clipped far", PixelFormat::RGBA8);
+    clipped_to_hidden.clipped = true;
+    clipped_to_hidden.surface_mut().unwrap().fill_rect(Rect::new(120_000, 120_000, 120_008, 120_008), &[0.0, 1.0, 0.0, 1.0]);
+    let mut group = Layer::group("styled with hidden clip base", vec![visible, hidden, clipped_to_hidden]);
+    group.effects.enabled = true;
+    group.effects.items.push(Effect::default_drop_shadow());
+    let id = group.id;
+    s.edit("styled group with hidden clipped descendant", |doc, _| {
+        doc.layers = vec![group].into();
+        Ok(())
+    })
+    .unwrap();
+    s.select_layer(id).unwrap();
+    convert(&mut s);
+    let bounds = active_smart(&s).cache.as_ref().unwrap().content_bounds();
+    assert!(bounds.width() < 256 && bounds.height() < 256, "clipped child of hidden base must not expand styled group bounds: {bounds:?}");
+}
+
+#[test]
+fn conversion_preserves_long_off_canvas_shadows_on_editable_text() {
+    for depth in [8u64, 32u64] {
+        let tolerance = if depth == 8 { 1.0 / 255.0 + 1e-6 } else { 1e-6 };
+        for distance in [320u64, 400u64] {
+            let mut s = crate::session();
+            s.execute("file.new", json!({"width": 128, "height": 128, "depth": depth, "background": "transparent"})).unwrap();
+            s.execute("type.create", json!({"text": "H", "size": 30, "x": 16, "y": 48})).unwrap();
+            s.execute(
+                "layer.layerStyle.dropShadow",
+                json!({"color": "#ff0000", "opacity": 100, "blend": "normal", "useGlobalLight": false,
+                    "angle": 180, "distance": distance, "size": 0, "spread": 0}),
+            )
+            .unwrap();
+
+            let region = Rect::new(-64, 0, 640, 128);
+            let shadow_region = Rect::new(300, 0, 640, 128);
+            let before = s.active().unwrap().doc.clone();
+            let expected = photocraft_compose::render(&before, region).into_px();
+            let expected_shadow = photocraft_compose::render(&before, shadow_region).into_px();
+            let red_pixels = expected_shadow.iter().filter(|p| p[0] > 0.9 && p[1] < 0.1 && p[3] > 0.5).count();
+            assert!(red_pixels > 0, "direct editable-text shadow control must paint past the old 256 px margin: depth {depth}, distance {distance}");
+
+            convert(&mut s);
+            let actual = photocraft_compose::render(&s.active().unwrap().doc, region).into_px();
+            let diff = max_diff(&actual, &expected);
+            assert!(diff <= tolerance, "cropped editable-text shadow: depth {depth}, distance {distance}, diff {diff}, tolerance {tolerance}");
+            let actual_shadow = photocraft_compose::render(&s.active().unwrap().doc, shadow_region).into_px();
+            let actual_red = actual_shadow.iter().filter(|p| p[0] > 0.9 && p[1] < 0.1 && p[3] > 0.5).count();
+            assert_eq!(actual_red, red_pixels, "off-canvas editable-text shadow pixel count must match: depth {depth}, distance {distance}");
+
+            let sm = active_smart(&s);
+            let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("expected embedded contents") };
+            let child = decode_source(file_name, bytes).unwrap();
+            assert!(matches!(&child.layers[0].content, LayerContent::Text(t) if t.text == "H"), "conversion must keep the embedded Type layer editable");
+            assert!(child.size.width > distance as u32, "embedded text canvas must hold the {distance} px shadow: {:?}", child.size);
+
+            let after = s.active().unwrap().doc.clone();
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+            assert!(s.redo());
+            assert_eq!(s.active().unwrap().doc, after);
+
+            let saved = photocraft_format::save_to_bytes(&after, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+            let reopen_diff = max_diff(&photocraft_compose::render(&reopened, region).px, &expected);
+            assert!(reopen_diff <= tolerance, "native reopen retains the editable-text shadow: diff {reopen_diff}");
+
+            s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+            s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+            s.set_active(0);
+            let save_diff = max_diff(&photocraft_compose::render(&s.active().unwrap().doc, region).px, &expected);
+            assert!(save_diff <= tolerance, "saving editable text Smart Object contents retains the shadow: diff {save_diff}");
+        }
+    }
+}
+
+#[test]
+fn conversion_preserves_custom_cmyk_profile_across_source_cache_rebuild() {
+    let params =
+        craft_cms::synth::CmykParams { description: "Test Uncoated".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() };
+    let profile = craft_cms::synth::cmyk_profile(&params).unwrap().to_bytes();
+
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 64, "height": 64, "mode": "cmyk", "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("custom CMYK profile and layer", |doc, active| {
+        doc.icc_profile = Some(profile.clone());
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(8, 8, 24, 24), &[0.15, 0.72, 0.65, 0.08, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute(
+        "layer.layerStyle.dropShadow",
+        json!({"color": "#d05a33", "opacity": 100, "blend": "normal", "useGlobalLight": false,
+            "angle": 180, "distance": 40, "size": 0, "spread": 0}),
+    )
+    .unwrap();
+
+    convert(&mut s);
+    let sm = active_smart(&s).clone();
+    let initial_cache = sm.cache.as_ref().unwrap().clone();
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("expected embedded contents") };
+    let fmt = s.active().unwrap().doc.pixel_format();
+
+    // Force a cold rebuild from the embedded .pcraft document (as after reopening or purging caches).
+    super::super::purge_source_cache();
+    let rebuilt = super::super::source::source_image_classified(file_name, bytes, fmt, false).unwrap();
+    let child = decode_source(file_name, bytes).unwrap();
+    assert_eq!(child.icc_profile.as_deref().map(Vec::as_slice), Some(profile.as_slice()), "embedded CMYK source must retain its ICC profile");
+
+    // Translate the initial cache to source space and compare bit-for-bit against the rebuilt cache.
+    let origin_x = sm.transform.m[4].round() as i32;
+    let origin_y = sm.transform.m[5].round() as i32;
+    let initial_in_source = crate::layer_multi_cmds::shift_surface(&initial_cache, -origin_x, -origin_y);
+    assert_eq!(
+        rebuilt.surface.read_region(rebuilt.bounds),
+        initial_in_source.read_region(rebuilt.bounds),
+        "cold source-cache rebuild must preserve the document's custom CMYK ICC profile"
+    );
+
+    // Confirm the custom profile actually changed the rebuilt CMYK separation compared to default coated CMYK.
+    let default_encoded = super::super::source::buffer_to_surface(&photocraft_compose::flatten(&child), fmt);
+    assert_ne!(rebuilt.surface.pixel(4, 4), default_encoded.pixel(4, 4), "rebuilt custom-profile CMYK pixels must differ from default coated CMYK");
+}
+
+#[test]
 fn conversion_accepts_a_36_megapixel_rgb8_canvas() {
     let mut s = shadow_fixture(8, 400, 180, 128);
     s.edit("Paint a 36 MP layer", |doc, active| {
