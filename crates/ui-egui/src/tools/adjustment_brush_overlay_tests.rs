@@ -68,7 +68,7 @@ fn the_box_is_off_with_its_tooltip_and_ticking_it_changes_nothing_in_the_documen
     );
     h.run_steps(4);
     let tip = h.get_by_label("Overlay").accesskit_node().description().map(|d| d.to_string());
-    assert_eq!(tip.as_deref(), Some("Show or hide the painted mask areas"));
+    assert_eq!(tip.as_deref(), Some("Turn the overlay on or off to quickly see the affected areas"));
     h.get_by_label("Overlay").click();
     h.run_steps(4);
     assert!(h.state().ui.tool_options.adjustment_brush_overlay, "ticked");

@@ -154,7 +154,7 @@ pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bo
     // On, the canvas tints what the active adjustment layer's mask reveals (`raster_source::MaskTint`, #12520).
     Checkbox::new(Bind::bound(&mut app.ui.tool_options.adjustment_brush_overlay))
         .label(tl!("Overlay").to_owned())
-        .tooltip(tl!("Show or hide the painted mask areas").to_owned())
+        .tooltip(tl!("Turn the overlay on or off to quickly see the affected areas").to_owned())
         .show(ui);
     Divider::vertical().show(ui);
 
