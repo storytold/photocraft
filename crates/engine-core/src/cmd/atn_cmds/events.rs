@@ -1128,6 +1128,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.align.topEdges",
             "layer.align.verticalCenters",
             "layer.align.bottomEdges",
+            "edit.autoAlignLayers",
         ],
         from: align_from,
         to: align_to,

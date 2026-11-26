@@ -224,7 +224,7 @@ impl PhotocraftApp {
                 if id == "file.scripts.imageProcessor" && e == "There were no source files that could be opened by PhotoCraft." {
                     crate::dialogs::alerts::alert(self, e.clone());
                 }
-                self.ui.status = e.clone();
+                self.ui.status = translated_refusal(e).map_or_else(|| e.clone(), |reason| tl!(reason).into());
                 self.ui.status_error = true;
                 // The reference application refuses a locked type layer (#14499) and a missing
                 // replacement file (#14500) with an alert; the alert names no layer or file.
@@ -437,6 +437,16 @@ const ADDS_LAYER_MASK: [&str; 5] = [
     "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency",
 ];
+
+/// The engine refusal in `error` that the status bar shows in the interface language: Brightness/
+/// Contrast's hidden and empty layer alerts (#14359), alone or as a greyed command's reason. The
+/// command's own error keeps the English text for automation.
+fn translated_refusal(error: &str) -> Option<&'static str> {
+    use photocraft_engine::adjust_cmds::{BRIGHTNESS_CONTRAST_EMPTY, BRIGHTNESS_CONTRAST_UNAVAILABLE};
+    [BRIGHTNESS_CONTRAST_UNAVAILABLE, BRIGHTNESS_CONTRAST_EMPTY]
+        .into_iter()
+        .find(|reason| error == *reason || error.strip_suffix(reason).is_some_and(|rest| rest.ends_with(": ")))
+}
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod image_processor_empty_source_tests {

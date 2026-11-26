@@ -50,7 +50,15 @@ pub(crate) struct ShortcutsSession {
     /// the same frame finds nothing to review.
     pub(crate) pending_import: Option<String>,
     /// The user's answers to earlier import questions, for the next import of this session.
-    pub(crate) remembered: BTreeMap<String, CommandRef>,
+    pub(crate) remembered: ImportAnswers,
+}
+
+/// The user's answers to an import's questions: the command of each foreign entry and the chord text of each key or
+/// modifier code, `None` for "No equivalent".
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ImportAnswers {
+    pub(crate) targets: BTreeMap<String, Option<CommandRef>>,
+    pub(crate) codes: BTreeMap<String, Option<String>>,
 }
 
 /// What the Menus tab edits: the hidden items and the colour of each item, by command id.
@@ -94,8 +102,14 @@ pub(crate) fn draft_keymap(app: &PhotocraftApp) -> Keymap {
 
 /// How a `.kys` set is read for review and for the offer: rows without a key leave their command
 /// alone, and the user's earlier answers come first.
-pub(crate) fn import_options(remembered: &BTreeMap<String, CommandRef>) -> ImportOptions {
-    ImportOptions { remembered: remembered.clone(), none_defined: NoneDefined::Keep, suggest: true, ..ImportOptions::default() }
+pub(crate) fn import_options(answers: &ImportAnswers) -> ImportOptions {
+    ImportOptions {
+        remembered: answers.targets.clone(),
+        codes: answers.codes.clone(),
+        none_defined: NoneDefined::Keep,
+        suggest: true,
+        ..ImportOptions::default()
+    }
 }
 
 /// The text of a set file's bytes, or why it is not one.
@@ -115,7 +129,7 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
         keymap: draft_keymap(app),
         menus: MenusDraft::of(&prefs.menus),
         pending_import: None,
-        remembered: BTreeMap::new(),
+        remembered: ImportAnswers::default(),
     };
     app.prefs_rt.shortcuts = Some(session);
 }
@@ -214,7 +228,10 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
             save_text(app, state, &format!("{name}.kys"), kys::write(&name, &exported));
         }
         Some(Outcome::Summary { name, html, .. }) => save_text(app, state, &format!("{name}.html"), html),
-        Some(Outcome::Remembered(answers)) => remembered.extend(answers),
+        Some(Outcome::Remembered { targets, codes, .. }) => {
+            remembered.targets.extend(targets);
+            remembered.codes.extend(codes);
+        }
         _ => {}
     }
     if state.is_open() {
@@ -224,7 +241,7 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
 
 /// Opens the review of the set `text` holds (a `.kys` file, or craft-keymap JSON), or shows why it
 /// cannot be read.
-fn review(ui: &egui::Ui, state: &mut DialogState, dialog: ShortcutsDialog<'_>, text: &str, remembered: &BTreeMap<String, CommandRef>) {
+fn review(ui: &egui::Ui, state: &mut DialogState, dialog: ShortcutsDialog<'_>, text: &str, remembered: &ImportAnswers) {
     if text.trim_start().starts_with(['{', '[']) {
         if let Err(e) = dialog.import_json(ui, state, text) {
             state.show_error(e.to_string());

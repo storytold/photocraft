@@ -3,7 +3,7 @@ use craft::ui::dialog::{DialogId, DialogResult, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamKind};
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::runtime::requests::PathKind;
-use craft_print::ui::{Duplex, HostedPrint, PrintAnswer, PrintFinish, PrintMarks, PrintSection, PrintSheet, Printer, Settings, State};
+use craft_print::ui::{Destination, Duplex, HostedPrint, PrintAnswer, PrintFinish, PrintMarks, PrintSection, PrintSheet, Printer, Settings, State};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -55,7 +55,7 @@ fn field_value(key: &str, v: &Value) -> Option<FieldValue> {
 fn last_settings(m: &Map<String, Value>) -> Settings {
     let mut settings = Settings::default();
     if let Some(printer) = m.get("printer").and_then(Value::as_str) {
-        settings.printer = printer.to_string();
+        settings.destination = Destination::Printer(printer.to_string());
     }
     if let Some(copies) = m.get("copies").and_then(Value::as_u64) {
         settings.copies = copies.clamp(1, 999) as u32;
@@ -72,7 +72,12 @@ fn last_settings(m: &Map<String, Value>) -> Settings {
 
 /// Writes the panel's settings into the `file.print` fields that carry them.
 fn write_settings(fields: &mut DialogFields, settings: &Settings) {
-    fields.set("printer", FieldValue::Text(settings.printer.clone()));
+    // The image layout lists printers only: Save as PDF is the dialog's own `output` row, not a destination.
+    let printer = match &settings.destination {
+        Destination::Printer(name) => name.clone(),
+        _ => String::new(),
+    };
+    fields.set("printer", FieldValue::Text(printer));
     fields.set("copies", FieldValue::Int(i64::from(settings.copies)));
     match settings.duplex {
         Some(Duplex::Off) => fields.set("duplex", FieldValue::Text("off".into())),
@@ -187,11 +192,14 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
 
     // The rows are shown in the section's Units menu; stored values keep their units (paper in points, position in
     // inches). A typed zero reaches the value, and the engine refuses a paper that small.
+    // Points are 1/72 in and picas 12 points, as the reference application's Units menu takes them (#14136).
     let lengths = |per_unit: f64| {
         vec![
+            NumberUnit::new("in", UnitKind::Inches, tl!("Inches"), per_unit),
             NumberUnit::new("cm", UnitKind::Centimetres, tl!("Centimeters"), per_unit / 2.54),
             NumberUnit::new("mm", UnitKind::Millimetres, tl!("Millimeters"), per_unit / 25.4),
-            NumberUnit::new("in", UnitKind::Inches, tl!("Inches"), per_unit),
+            NumberUnit::new("pt", UnitKind::Points, tl!("Points"), per_unit / 72.0),
+            NumberUnit::new("pica", UnitKind::Picas, tl!("Picas"), per_unit / 6.0),
         ]
     };
     let pt = |key: &str, label: &'static str| {
@@ -244,7 +252,15 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
         PrintSection::new(
             tl!("Position and Size"),
             vec![
-                Param::new("units", tl!("Units"), choice(&[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], "cm")),
+                // The reference application's order (#14136); Centimeters stays the default.
+                Param::new(
+                    "units",
+                    tl!("Units"),
+                    choice(
+                        &[("in", tl!("Inches")), ("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("pt", tl!("Points")), ("pica", tl!("Picas"))],
+                        "cm",
+                    ),
+                ),
                 Param::new("paper", tl!("Paper"), ParamKind::choice(papers, Some("letter".into()))),
                 pt("paperWidth", tl!("Paper Width")),
                 pt("paperHeight", tl!("Paper Height")),

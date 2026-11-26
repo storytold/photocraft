@@ -1,7 +1,9 @@
-//! The question the Delete Anchor Point tool asks before it turns a live shape into a regular path
-//! (#12768): "This operation will turn a live shape into a regular path. Continue?", Yes (the
-//! default) and No, and a "Don't show again" box kept with the other dialog preferences. Yes runs
-//! the `path.deleteAnchor` the click would have run; No changes nothing.
+//! The question the path tools ask before an edit turns a live shape into a regular path
+//! (#12768, #13216): "This operation will turn a live shape into a regular path. Continue?", Yes
+//! (the default) and No, and a "Don't show again" box kept with the other dialog preferences. Yes
+//! runs the command the click or drag would have run; No changes nothing. The Delete Anchor Point
+//! tool asks it before `path.deleteAnchor`; Direct Selection's anchor, handle and segment drags
+//! and nudges ask the same question before their command, sharing its answer preference (`PREF`).
 
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
 use serde_json::Value;
@@ -16,13 +18,14 @@ pub const PREF: &str = "path.deleteAnchor.liveShape";
 
 const QUESTION: &str = "This operation will turn a live shape into a regular path. Continue?";
 
-/// What the question asked about: the anchor deletion of `params` on `layer`. The layer id means
+/// What the question asked about: running `command` with `params` on `layer`. The layer id means
 /// something only in `document` (another may become active meanwhile), and the knot index only in
 /// this `revision` of it (an edit meanwhile can shift the anchors).
 pub(crate) struct LiveShapeAsk {
     layer: u64,
     document: u64,
     revision: u64,
+    command: &'static str,
     params: Value,
 }
 
@@ -36,17 +39,30 @@ fn is_live(app: &PhotocraftApp, r: PathRef) -> bool {
 /// already was), so the caller stops; false when the deletion goes ahead: `r` is not a live shape
 /// or "Don't show again" was ticked.
 pub fn ask(app: &mut PhotocraftApp, r: PathRef, params: &Value) -> bool {
+    open(app, r, "Delete Anchor Point", "path.deleteAnchor", params)
+}
+
+/// Ask before the Direct Selection edit `command` runs on `r` with `params` (#13216): the same
+/// question, buttons, box and shared preference as the Delete Anchor Point tool's. True when the
+/// question is open, so the caller stops; false when the edit goes ahead.
+pub fn ask_edit(app: &mut PhotocraftApp, r: PathRef, command: &'static str, params: &Value) -> bool {
+    open(app, r, "Direct Selection", command, params)
+}
+
+/// The one question of the family. `params` are what `app.run` gets when Yes answers: for a
+/// Direct Selection edit the target is merged at answer time, as `edits::command` does.
+fn open(app: &mut PhotocraftApp, r: PathRef, title: &str, command: &'static str, params: &Value) -> bool {
     let PathRef::Layer(layer) = r else { return false };
     let Some((document, revision)) = app.session.active().map(|st| (st.doc.id.0, st.revision)) else { return false };
     if !is_live(app, r) || alerts::dismissed(app, PREF) {
         return false;
     }
     let prompt = StandardPrompt::custom(tl!(QUESTION).to_owned())
-        .title(tl!("Delete Anchor Point").to_owned())
+        .title(tl!(title).to_owned())
         .button(PromptChoice::Proceed, tl!("Yes").to_owned())
         .button(PromptChoice::Cancel, tl!("No").to_owned())
         .dont_show_again()
-        .tag(LiveShapeAsk { layer, document, revision, params: params.clone() });
+        .tag(LiveShapeAsk { layer, document, revision, command, params: params.clone() });
     // An `Err` is a question already open (this one or another family's): the click waits for it.
     let _ = alerts::open_prompt(app, prompt);
     true
@@ -68,12 +84,25 @@ pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut
 }
 
 fn confirm(app: &mut PhotocraftApp, ask: LiveShapeAsk) -> Result<(), String> {
-    if app.session.active().map(|st| (st.doc.id.0, st.revision)) != Some((ask.document, ask.revision)) {
-        return Err(tl!("No anchor to delete").into());
+    let stale = app.session.active().map(|st| (st.doc.id.0, st.revision)) != Some((ask.document, ask.revision));
+    if stale {
+        if ask.command == "path.deleteAnchor" {
+            return Err(tl!("No anchor to delete").into());
+        }
+        // The edit's knot indices belong to the path as it was asked. A path that changed meanwhile
+        // edits nothing: today a gesture whose owner moved on commits nothing either, unheard
+        // (`edits::apply`).
+        return Ok(());
     }
-    app.run("path.deleteAnchor", ask.params)?;
-    // The anchors shift: a Direct Selection on this path would point at the wrong ones.
     let r = PathRef::Layer(ask.layer);
+    if ask.command != "path.deleteAnchor" {
+        // The edit's Yes runs the gesture's own command as the drag's release would have: one
+        // History step, and its anchor selection bound to the revision the answer made.
+        crate::direct_select::edits::command(app, r, ask.command, ask.params);
+        return Ok(());
+    }
+    app.run(ask.command, ask.params)?;
+    // The anchors shift: a Direct Selection on this path would point at the wrong ones.
     if app.ui.direct_selection.target.as_ref() == Some(&r) {
         app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() };
     }
