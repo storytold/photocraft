@@ -19,7 +19,7 @@ fn order(layer: &Layer, sprite: &Sprite, frame: usize) -> (i64, i16) {
 
 /// Build the projected depth-first layer order without exceeding the document nesting cap.
 fn display_order(layers: &[Layer], sprite: &Sprite, frame: usize, depth: usize, out: &mut Vec<LayerId>) -> Result<(), String> {
-    if depth > crate::MAX_GROUP_DEPTH {
+    if !layers.is_empty() && depth > crate::MAX_GROUP_DEPTH {
         return Err("sprite group nesting limit exceeded".into());
     }
     let mut ordered: Vec<_> = layers.iter().collect();
@@ -35,7 +35,7 @@ fn display_order(layers: &[Layer], sprite: &Sprite, frame: usize, depth: usize, 
 
 /// Project one frame into raster layers, retaining source cels behind reference display caches.
 fn project(layers: &mut [Layer], sprite: &Sprite, frame: usize, fmt: PixelFormat, depth: usize) -> Result<(), String> {
-    if depth > crate::MAX_GROUP_DEPTH {
+    if !layers.is_empty() && depth > crate::MAX_GROUP_DEPTH {
         return Err("sprite layer groups exceed the nesting limit".into());
     }
     let frame_data = sprite.frames.get(frame).ok_or("sprite frame is missing")?;

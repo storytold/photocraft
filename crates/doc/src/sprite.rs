@@ -308,10 +308,11 @@ impl Sprite {
     /// Remap every stable layer reference when a native document is opened or duplicated.
     /// A missing target is an error: silently reattaching metadata would corrupt the sprite.
     pub fn remap_layers(&mut self, map: impl Fn(LayerId) -> Option<LayerId>) -> Result<(), String> {
-        for layer in &mut self.layers {
+        let mut remapped = self.clone();
+        for layer in &mut remapped.layers {
             layer.id = map(layer.id).ok_or("sprite refers to a missing layer")?;
         }
-        for frame in &mut self.frames {
+        for frame in &mut remapped.frames {
             let frame = Arc::make_mut(frame);
             frame.cels =
                 frame.cels.iter().map(|(id, cel)| Ok((map(*id).ok_or("sprite cel refers to a missing layer")?, cel.clone()))).collect::<Result<_, String>>()?;
@@ -322,7 +323,9 @@ impl Sprite {
                 }
             }
         }
-        self.validate()
+        remapped.validate()?;
+        *self = remapped;
+        Ok(())
     }
 }
 

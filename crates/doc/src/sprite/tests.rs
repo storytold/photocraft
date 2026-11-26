@@ -109,6 +109,37 @@ fn expanding_an_indexed_cel_fills_unpainted_tiles_with_the_transparent_index() {
 }
 
 #[test]
+fn a_failed_layer_remap_leaves_the_sprite_intact() {
+    let mut sprite = indexed().sprite.unwrap();
+    let id = sprite.layers[0].id;
+    let other = Layer::raster("Second", PixelFormat::RGBA8).id;
+    sprite.layers.push(SpriteLayer { id: other, flags: 3, opacity: 255, uuid: None });
+    Arc::make_mut(&mut sprite.frames[0]).metadata.push(SpriteChunk { kind: 0x2020, target: MetadataTarget::Cel(id), bytes: Arc::new(vec![]) });
+    let before = sprite.clone();
+    let replacement = Layer::raster("Replacement", PixelFormat::RGBA8).id;
+
+    assert!(sprite.remap_layers(|old| (old == id).then_some(replacement)).is_err());
+    assert_eq!(sprite, before);
+    assert!(sprite.remap_layers(|_| Some(replacement)).is_err());
+    assert_eq!(sprite, before);
+    sprite.remap_layers(|old| Some(if old == id { replacement } else { old })).unwrap();
+    assert!(sprite.frames.iter().all(|frame| frame.cels.contains_key(&replacement)));
+    assert_eq!(sprite.frames[0].metadata[0].target, MetadataTarget::Cel(replacement));
+}
+
+#[test]
+fn an_empty_group_at_the_nesting_limit_can_be_projected() {
+    let mut doc = indexed();
+    let mut group = Layer::group("Empty", vec![]);
+    for _ in 0..crate::MAX_GROUP_DEPTH {
+        group = Layer::group("Parent", vec![group]);
+    }
+    doc.layers.push(group);
+    doc.restore_sprite_frame().unwrap();
+    doc.select_sprite_frame(1).unwrap();
+}
+
+#[test]
 fn cyclic_links_are_refused_and_forward_links_are_valid() {
     let mut doc = indexed();
     let sprite = doc.sprite.as_mut().unwrap();
