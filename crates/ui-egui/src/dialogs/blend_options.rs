@@ -4,6 +4,7 @@
 
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamKind};
 use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::runtime::memory::{MemoryStage, SaveKey};
 use photocraft_color::BlendMode;
 use serde_json::{Map, Value, json};
 
@@ -40,6 +41,18 @@ pub(crate) fn blending_rows(app: &PhotocraftApp) -> Vec<Param> {
         Param::new("opacity", tl!("Opacity:"), ParamKind::number(Some(1.0), Some(100.0), 100.0, 1.0, 0)).unit(UnitKind::Percent),
         Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
     ]
+}
+
+/// The opening fields of the dialog `key` (Fill or Stroke) over [`blending_rows`]: Opacity 1 when the remembered
+/// Opacity is below the row's 1% minimum, empty otherwise. The framework drops a remembered value the row can't hold,
+/// so a 0% saved before the row started at 1 would reopen at the 100% default, a full-strength edit (#14649).
+pub(crate) fn opening_fields(ctx: &egui::Context, key: &str) -> DialogFields {
+    let saved: Option<DialogFields> = MemoryStage::peek_saved(ctx, &SaveKey::named(super::params::memory_scope(key)));
+    let mut fields = DialogFields::new();
+    if saved.and_then(|saved| saved.number("opacity")).is_some_and(|opacity| opacity < 1.0) {
+        fields.set("opacity", 1.0);
+    }
+    fields
 }
 
 /// The engine params of [`blending_rows`].

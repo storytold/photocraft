@@ -1,7 +1,11 @@
 //! #14649: the Opacity row that Edit › Fill and Edit › Stroke share takes whole percents from 1 to 100. A typed value
 //! past them is clamped, once the field is left, with the range alert titled after the dialog; letters restore the
-//! previous value without one. A typed fraction (the reference drops the dot) is left to craft-libs.
+//! previous value without one. A typed fraction (the reference drops the dot) is left to craft-libs. A 0% remembered
+//! before the row started at 1 reopens at 1%.
 
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog};
+use craft::ui::runtime::memory::{SaveKey, set_saved_value};
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
@@ -111,4 +115,33 @@ fn fill_opacity_takes_1_to_100_with_the_range_alert() {
 #[test]
 fn stroke_opacity_takes_1_to_100_with_the_range_alert() {
     check(stroke, crate::dialogs::stroke_ui::COMMAND, "Stroke");
+}
+
+/// A dialog's opener.
+type Open = fn(&mut PhotocraftApp) -> DialogId;
+
+/// The Opacity the dialog `open` (saving under `command`) opens at once `saved` is its remembered Opacity, or with no
+/// remembered Opacity for `None`.
+fn reopened(open: Open, command: &str, saved: Option<f64>) -> Option<f64> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
+    if let Some(opacity) = saved {
+        let mut fields = DialogFields::new();
+        fields.set("opacity", opacity);
+        set_saved_value::<Option<DialogFields>>(app.ctx(), &SaveKey::named(crate::dialogs::params::memory_scope(command)), Some(fields));
+    }
+    let id = open(&mut app);
+    app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("the dialog is open").fields().number("opacity")
+}
+
+/// A 0% remembered while the row started at 0 reopens at the new 1% minimum, not at the 100% default. A dialog that
+/// never remembered an Opacity still opens at 100%, and a remembered Opacity in range is kept.
+#[test]
+fn a_remembered_0_percent_reopens_at_1_percent() {
+    let dialogs: [(Open, &str); 2] = [(super::open, super::COMMAND), (crate::dialogs::stroke_ui::open, crate::dialogs::stroke_ui::COMMAND)];
+    for (open, command) in dialogs {
+        assert_eq!(reopened(open, command, Some(0.0)), Some(1.0), "{command}: a remembered 0");
+        assert_eq!(reopened(open, command, None), Some(100.0), "{command}: nothing remembered");
+        assert_eq!(reopened(open, command, Some(50.0)), Some(50.0), "{command}: a remembered 50");
+    }
 }
