@@ -1,5 +1,6 @@
 //! Re-develop completion must follow the replacement document across intervening tab changes.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -33,7 +34,7 @@ impl Control {
     }
 }
 
-fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
+fn identity_app() -> (Box<PhotocraftApp>, RawOpen, Control) {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();

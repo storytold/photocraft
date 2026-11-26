@@ -14,7 +14,7 @@ use crate::state::Tool;
 /// 400 × 300 white with three layers: a red (220,30,30) block at 100,100–300,250 ("Red", active),
 /// a blue (30,30,220) block at 320,100–380,160 above it ("Blue"), and a green (30,160,30) block at
 /// 20,20–80,80 on a 50 % opacity layer ("Green"). The Eyedropper is the tool.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
     let block = |app: &mut PhotocraftApp, name: &str, rect: [i32; 4], color: &str, opacity: f64| {

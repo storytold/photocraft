@@ -25,7 +25,7 @@ impl Backend for Fake {
     fn attach(&mut self, _dispatch: Dispatch) {}
 }
 
-fn app(doc: bool) -> PhotocraftApp {
+fn app(doc: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     if doc {
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
@@ -35,7 +35,7 @@ fn app(doc: bool) -> PhotocraftApp {
 }
 
 /// The whole app on its own context, with a Mac menu over a fake backend.
-fn harness(doc: bool) -> (Harness<'static, PhotocraftApp>, Synced, Events) {
+fn harness(doc: bool) -> (Harness<'static, Box<PhotocraftApp>>, Synced, Events) {
     let (synced, events): (Synced, Events) = Default::default();
     let backend = Fake { synced: synced.clone(), events: events.clone() };
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -53,7 +53,7 @@ fn harness(doc: bool) -> (Harness<'static, PhotocraftApp>, Synced, Events) {
 }
 
 /// A menu click: the event the backend reports, polled before the frame like the app's input hook does.
-fn click(h: &mut Harness<'static, PhotocraftApp>, events: &Events, id: &str) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, events: &Events, id: &str) {
     events.borrow_mut().push(Event::Click(CommandRef::new(id)));
     let ctx = h.ctx.clone();
     poll(h.state_mut(), &ctx);
@@ -211,11 +211,92 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     let ctx = app.ctx().clone();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
-    let closed = state_hash(&app, None);
+    let closed = crate::menus::facts::key(&app);
     crate::gallery_ui::open(&mut app).unwrap();
-    let open = state_hash(&app, None);
+    let open = crate::menus::facts::key(&app);
     assert_ne!(open, closed, "the menus grey out when an agent opens Filter Gallery");
     let id = app.framework.dialogs.stack().top().unwrap();
     app.framework.dialogs.cancel_by_id(&ctx, id);
-    assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
+    assert_eq!(crate::menus::facts::key(&app), closed, "and come back when it is cancelled");
+}
+
+/// The Contextual Task Bar's tick follows the bar when its Hide bar or `ui.set` turns it off without a menu click
+/// (#15489).
+#[test]
+fn the_task_bar_tick_follows_the_bar_hidden_without_a_menu_click() {
+    let (mut h, synced, _) = harness(true);
+    let ticked = |synced: &Synced| {
+        let bar = synced.borrow().last().cloned().expect("menus synced");
+        bar.find(&CommandRef::new("window.panel.contextualTaskBar")).and_then(|it| it.kind.checked())
+    };
+    assert_eq!(ticked(&synced), Some(true));
+    h.state_mut().ui.panels.context_task_bar = false;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(false), "unticked once the bar is hidden");
+    h.state_mut().ui.panels.context_task_bar = true;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(true), "ticked again once it shows");
+}
+
+/// The menus follow the preferences they show, even when they change without input (settings merged from another
+/// instance), and not the tool and colour preferences the app saves on every change.
+#[test]
+fn the_menu_state_follows_the_preferences_the_rows_show() {
+    let mut app = app(false);
+    let shown = crate::menus::facts::key(&app);
+    app.session.edit_prefs(|p| {
+        p.selected_tool = json!("Brush");
+        p.tool_colors = Default::default();
+    });
+    assert_eq!(crate::menus::facts::key(&app), shown, "the saved tool and colours are not in the menus");
+
+    app.session.edit_prefs(|p| p.menus.hidden.push("filter.blur.gaussian".into()));
+    let hidden = crate::menus::facts::key(&app);
+    assert_ne!(hidden, shown, "Edit › Menus hides a row");
+    app.session.edit_prefs(|p| p.export.quick_export_format = photocraft_engine::prefs::QuickExportFormat::Jpg);
+    assert_ne!(crate::menus::facts::key(&app), hidden, "the Quick Export label names the format");
+}
+
+/// The standard Mac items (the app menu's Services, Hide, Hide Others, Show All; the Window menu's Minimize, Zoom, Bring
+/// All to Front) appear once in the Mac model, which the layout builds from the source bar in one pass.
+#[test]
+fn the_mac_model_lists_each_standard_item_once() {
+    fn count(nodes: &[Node], found: &mut Vec<String>) {
+        for node in nodes {
+            match node {
+                Node::Standard { kind, .. } => found.push(format!("{kind:?}")),
+                Node::Item(item) if item.command.id.starts_with("craft-menu.") => found.push(item.command.id.clone()),
+                Node::Submenu { children, .. } => count(children, found),
+                _ => {}
+            }
+        }
+    }
+    let mut a = app(false);
+    craft::ui::testing::windows::set_os(a.ctx(), craft::host::target::Os::Mac);
+    let ctx = a.ctx().clone();
+    let held = (*crate::menus::items::model(&mut a, &ctx).bar).clone();
+    for layout in [laid(&mut a).bar, held] {
+        let mut found = Vec::new();
+        layout.menus.iter().for_each(|menu| count(&menu.children, &mut found));
+        assert!(found.len() >= 6, "the Mac layout adds the system items: {found:?}");
+        let mut unique = found.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), found.len(), "a system item listed twice: {found:?}");
+    }
+}
+
+/// Help search and the command palette list each open document once.
+#[test]
+fn help_search_lists_each_open_document_once() {
+    let mut a = app(true);
+    a.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    a.sync_views();
+    let ctx = a.ctx().clone();
+    let entries = crate::menus::help_entries(&mut a, &ctx);
+    let mut ids: Vec<String> = entries.iter().map(|e| e.command().id.clone()).filter(|id| id.starts_with(crate::menus::DOCUMENT_ITEM)).collect();
+    assert_eq!(ids.len(), 2, "one entry per open document: {ids:?}");
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 2);
 }

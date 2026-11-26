@@ -4,6 +4,7 @@ use craft::host::{Picked, ScriptedFiles};
 use craft::ui::runtime::drag::OsFile;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::Document;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_geom::Size;
 use serde_json::json;
 use std::cell::RefCell;
@@ -17,13 +18,13 @@ type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 /// warning for names containing "warn", and fails for bytes "bad"; the exporter warns for ".png"
 /// and the writer records what it wrote. Its file picks answer with `answers`, in order; a pick past the
 /// last answer is cancelled.
-fn app_with(answers: Vec<Picked>) -> (PhotocraftApp, Written) {
+fn app_with(answers: Vec<Picked>) -> (Box<PhotocraftApp>, Written) {
     app_over(Arc::new(ScriptedFiles::answering(answers)))
 }
 
 /// [`app_with`] over a file service the test keeps, to read the requests it was asked. The framework takes the
 /// service when the app is built.
-fn app_over(files: Arc<ScriptedFiles>) -> (PhotocraftApp, Written) {
+fn app_over(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Written) {
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
@@ -89,7 +90,7 @@ fn open_file_sets_name_path_and_recent() {
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.name, "cat.psd");
     assert_eq!(st.path.as_deref(), Some("/pics/cat.psd"));
-    assert_eq!(app.ui.recent_files, vec!["/pics/cat.psd".to_string()]);
+    assert_eq!(*app.ui.recent_files, vec!["/pics/cat.psd".to_string()]);
     assert!(!app.ui.status_error);
     assert!(app.ui.notices.is_empty());
 }
@@ -151,7 +152,7 @@ fn file_open_dialog_opens_every_selected_path() {
         app.session.documents().iter().map(|doc| doc.path.as_deref()).collect::<Vec<_>>(),
         paths.iter().map(|path| Some(path.as_str())).collect::<Vec<_>>()
     );
-    assert_eq!(app.ui.recent_files, vec![paths[1].clone(), paths[0].clone()]);
+    assert_eq!(*app.ui.recent_files, vec![paths[1].clone(), paths[0].clone()]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -298,7 +299,7 @@ fn save_in_place_skips_files_it_would_write_back_with_less() {
 fn save_in_place_skips_alpha_profiles_and_layer_state_the_file_would_drop() {
     let (mut app, written) = app_with(vec![Picked::Cancelled; 3]);
     let ctx = egui::Context::default();
-    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc));
+    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()));
     // An RGB layer with transparency: DPX keeps its alpha, so it is written back.
     app.open_file("/pics/rgb.dpx", b"x").unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -473,7 +474,7 @@ fn os_open_events_open_files_with_paths() {
     app.drain_os_events(&ctx);
     assert_eq!(app.session.documents().len(), 2);
     assert_eq!(app.session.active().and_then(|s| s.path.clone()).as_deref(), Some(paths[1].as_str()));
-    assert_eq!(app.ui.recent_files, vec![paths[1].clone(), paths[0].clone()]);
+    assert_eq!(*app.ui.recent_files, vec![paths[1].clone(), paths[0].clone()]);
     // Drained: a second poll opens nothing more.
     app.drain_os_events(&ctx);
     assert_eq!(app.session.documents().len(), 2);
@@ -554,7 +555,7 @@ fn dropped_files_open_with_path_and_recent() {
     assert_eq!(app.session.documents()[0].path.as_deref(), Some(abs_s.as_str()));
     assert_eq!(app.session.documents()[0].doc.name, "dropped.psd");
     assert_eq!(app.session.documents()[1].path, None);
-    assert_eq!(app.ui.recent_files, vec![abs_s]);
+    assert_eq!(*app.ui.recent_files, vec![abs_s]);
     assert!(app.ui.status_error);
     assert_eq!(app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).count(), 2);
     let _ = std::fs::remove_dir_all(&dir);
@@ -568,7 +569,7 @@ fn png_bytes(w: u32, h: u32) -> Vec<u8> {
 }
 
 /// An app with one open document whose canvas showed at (100, 50)–(700, 550) last frame.
-fn app_with_canvas() -> PhotocraftApp {
+fn app_with_canvas() -> Box<PhotocraftApp> {
     let (mut app, _) = app_with(Vec::new());
     app.open_bytes("canvas.psd", b"x").unwrap();
     app.drop_canvas_rect = Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)));
@@ -1444,7 +1445,7 @@ fn save_a_copy_is_recorded_and_replayed_as_a_copy() {
     app.run("actions.stop", json!({})).unwrap();
     // PLAN: assumed panels-w29's `ActionStep` is `craft::automation::actions::ActionStep`
     let saved = craft::automation::actions::ActionStep::new("file.saveACopy", json!({"path": "/pics/copy.png"}));
-    assert_eq!(app.session.actions.list.actions()[0].steps.last(), Some(&saved));
+    assert_eq!(app.session.actions().list.actions()[0].steps.last(), Some(&saved));
     assert_eq!(crate::actions::label_of("file.saveACopy"), "Save a Copy");
     written.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
@@ -1493,7 +1494,7 @@ fn export_as_is_recorded_and_replayed() {
     control(&mut app, "ui.dialog.confirm", json!({"dialog": id}));
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 20, 10, Some(70))]);
-    let craft::automation::actions::ActionStep { command: step_id, params: step } = app.session.actions.list.actions()[0].steps.last().cloned().unwrap();
+    let craft::automation::actions::ActionStep { command: step_id, params: step } = app.session.actions().list.actions()[0].steps.last().cloned().unwrap();
     assert_eq!(step_id, "file.export.exportAs");
     // The scale is the dialog's percentage, a number whatever its JSON form (`50` or `50.0`).
     assert_eq!((&step["path"], &step["format"], &step["quality"]), (&json!("/pics/out.jpg"), &json!("jpg"), &json!(70)));
@@ -1519,11 +1520,11 @@ fn saving_a_new_document_lists_it_in_recent_files() {
     assert!(app.ui.recent_files.is_empty());
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
     answer(&mut app);
-    assert_eq!(app.ui.recent_files, ["/pics/new.psd"]);
+    assert_eq!(*app.ui.recent_files, ["/pics/new.psd"]);
     assert_eq!(app.session.prefs().file_handling.recent_files, ["/pics/new.psd"], "kept for the next launch");
     menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
     answer(&mut app);
-    assert_eq!(app.ui.recent_files, ["/pics/new.psd"], "a copy isn't the document's file");
+    assert_eq!(*app.ui.recent_files, ["/pics/new.psd"], "a copy isn't the document's file");
 }
 
 /// #4559: a file whose type uses a font that isn't installed opens with a notice naming it, as

@@ -9,7 +9,7 @@ use egui_kittest::{
 };
 use serde_json::json;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     // The whole app: the button's label and enabled state come from the command state its frame publishes.
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -23,7 +23,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn button<'a>(h: &'a Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'a> {
+fn button<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Select and Mask…")
 }
 

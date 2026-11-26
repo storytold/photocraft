@@ -10,10 +10,11 @@ use craft::keymap::{CommandRef, Mods};
 use craft::ui::contract::{Bind, CommandSet as _};
 use craft::ui::dialog::DialogResult;
 use craft::ui::docking::{WorkspaceAsk, WorkspaceCommands, run_workspace, workspace_states};
-use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace, WorkspaceSwitcher};
+use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::commands::CommandState;
 use craft::ui::value_drag::SliderScale;
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::prefs::Preferences;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -39,9 +40,10 @@ pub struct ShellUi {
 }
 
 /// The workspaces of the app.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, craft::ui::contract::PlainData)]
 pub struct Workspaces {
     /// Built-in and saved workspaces, the current one, the lock.
+    #[plain_data(assume = "craft-behavior workspace data: plain values and strings")]
     pub set: WorkspaceSet<String>,
 }
 
@@ -113,11 +115,11 @@ pub fn load(app: &mut PhotocraftApp) {
             if set.find(&stored.current).is_some() {
                 set.current = stored.current;
             }
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
         }
         None => {
             let moved = migrate(app, &prefs, &mut set);
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
             if moved {
                 store(app);
             }
@@ -139,7 +141,7 @@ fn migrate(app: &mut PhotocraftApp, prefs: &Preferences, set: &mut WorkspaceSet<
         let layout = std::mem::replace(&mut app.ui.docking, live);
         let has = |key: &str| entry.get(key).is_some();
         let keeps = WorkspaceKeeps::new(has("shortcuts"), has("menus"), has("toolbar"));
-        let Ok(id) = set.save(name, layout, WorkspaceChrome::default(), keeps) else { continue };
+        let Ok(id) = set.save(name, std::sync::Arc::unwrap_or_clone(layout), WorkspaceChrome::default(), keeps) else { continue };
         let captured: Map<String, Value> = EXTRAS.iter().filter_map(|key| entry.get(*key).map(|value| ((*key).to_owned(), value.clone()))).collect();
         if !captured.is_empty() {
             extras.insert(id, Value::Object(captured));
@@ -202,7 +204,7 @@ fn restore_extras(app: &mut PhotocraftApp, id: &str) {
 /// Makes workspace `id` current: its layout replaces the live one, its captured extras are restored, the dock's
 /// layout is remembered. The host's chrome flags (menu bar, rail) stay as the host has them.
 pub fn select(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
-    app.workspaces.set.select(id, &mut app.ui.docking).map_err(refused)?;
+    app.workspaces.set.select(id, std::sync::Arc::make_mut(&mut app.ui.docking)).map_err(refused)?;
     restore_extras(app, id);
     crate::dock::persist(app);
     store(app);
@@ -215,7 +217,7 @@ pub fn save(app: &mut PhotocraftApp, name: &str) -> Result<String, String> {
 }
 
 fn save_keeping(app: &mut PhotocraftApp, name: &str, keeps: WorkspaceKeeps) -> Result<String, String> {
-    let live = app.ui.docking.clone();
+    let live = craft::behavior::dock::Workspace::clone(&app.ui.docking);
     let id = app.workspaces.set.save(name, live, WorkspaceChrome::default(), keeps).map_err(refused)?;
     let extras = captured(app.session.prefs(), keeps);
     app.session.prefs.edit(|p| {
@@ -254,7 +256,7 @@ fn delete_id(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
 
 /// Runs a workspace command. New and Delete without a name open their hosted dialog and return its id.
 pub fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, command: WorkspaceCommands) -> Result<Value, String> {
-    let ask = run_workspace(&mut app.workspaces.set, &mut app.ui.docking, command);
+    let ask = run_workspace(&mut app.workspaces.set, std::sync::Arc::make_mut(&mut app.ui.docking), command);
     match ask {
         Some(WorkspaceAsk::Name) => {
             let dialog = HostedNewWorkspace::new(&app.workspaces.set).offered(WorkspaceKeeps::new(true, true, true));
@@ -315,20 +317,14 @@ pub fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     }
 }
 
-/// The workspace switcher of the title bar.
-pub fn switcher(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let out = WorkspaceSwitcher::new(&app.workspaces.set).show(ui);
-    if let Some(id) = out.switched
-        && let Err(message) = select(app, &id)
-    {
-        app.ui.status = message;
-        app.ui.status_error = true;
-    }
-}
-
 /// The state of each workspace command, for the command source.
 pub fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     workspace_states(&app.workspaces.set).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
+}
+
+/// [`states`], derived from the workspaces.
+pub fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.workspaces, || states(app))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -385,7 +381,7 @@ fn open_extras(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 fn open_preview32(app: &mut PhotocraftApp) -> Option<Result<Value, String>> {
     let d = app.session.active()?;
-    let h = app.session.color.hdr.get(&d.doc.id).copied().unwrap_or_default();
+    let h = app.session.color().hdr.get(&d.doc.id).copied().unwrap_or_default();
     let method = if h.highlight_compression { "highlightCompression" } else { "exposureGamma" };
     let fields = DialogFields::from_pairs([
         ("method", FieldValue::Text(method.into())),
@@ -522,7 +518,7 @@ fn extras_options() -> [(&'static str, &'static str); 13] {
 mod tests {
     use super::*;
 
-    fn app() -> (PhotocraftApp, egui::Context) {
+    fn app() -> (Box<PhotocraftApp>, egui::Context) {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = app.ctx().clone();
         (app, ctx)
@@ -629,7 +625,7 @@ mod tests {
         }
         crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
         let d = app.session.active().unwrap().doc.id;
-        assert_eq!((app.session.color.hdr[&d].exposure, app.session.color.hdr[&d].gamma), (1.5, 1.5));
+        assert_eq!((app.session.color().hdr[&d].exposure, app.session.color().hdr[&d].gamma), (1.5, 1.5));
 
         // Highlight Compression disables the two ranges.
         menu(&mut app, PREVIEW32, &json!({})).expect("handled").unwrap();

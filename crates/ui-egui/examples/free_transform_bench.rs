@@ -21,7 +21,7 @@ use egui::{Event, Modifiers, PointerButton, Pos2};
 use photocraft_ui_egui::{PhotocraftApp, Services, canvas, transform_tool};
 use serde_json::json;
 
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -100,7 +100,7 @@ fn main() {
     let mut h: H = egui_kittest::Harness::builder()
         .with_context(ctx.clone())
         .with_size(egui::vec2(1600.0, 1000.0))
-        .build_ui_state(|ui, app: &mut PhotocraftApp| canvas::document_area(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| canvas::document_area(app, ui), app);
     h.input_mut().max_texture_side = Some(MAX_TEXTURE_SIDE);
     for _ in 0..4 {
         h.step();

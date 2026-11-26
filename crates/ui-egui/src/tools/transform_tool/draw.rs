@@ -11,7 +11,8 @@ use craft::imaging::ui::selection::PointMap;
 use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, TransformPreview};
 use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::primitives::PaintSlot;
 use photocraft_doc::DocId;
 use photocraft_geom::warp::WarpStyle;
 
@@ -35,14 +36,20 @@ struct Shown {
     discard: bool,
     /// The warp grid's events and whether it placed a split this pass.
     mesh: Option<(EditEvents<WarpMesh>, bool)>,
+    picked: Option<usize>,
     cylinder: Option<EditEvents<CylinderValues>>,
     /// A warp control has the pointer button down on it.
     busy: bool,
+    /// The preview's shapes, for the canvas's picture slot after the document ([`SessionShown::picture`]).
+    picture: Vec<egui::Shape>,
 }
 
 /// Shows the open Free Transform in the canvas body at `rect`, and applies what its controls
 /// report: the preview (moving pixels, covering layers, path outline), then the box or warp
-/// controls. The canvas calls it after the document display and before the tool overlays.
+/// controls. The canvas calls it with its controls, before it prepares the document's picture, so
+/// the preview's moving pixels come back in [`SessionShown::picture`] for the canvas to add to its
+/// picture slot after the document: added here, the document (which hides the moving layer) would
+/// paint over them (#15546).
 ///
 /// Every control reads the frame's input once for its own pass, so a second pass of a frame
 /// reports no edit again and this applies only what the pass it ran in reported.
@@ -51,11 +58,17 @@ struct Shown {
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
 pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.warp_grid.sync(app.ui.transform.as_ref().and_then(|t| t.session.warp()));
+    }
     let shown = {
         let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
         show_session(app, t, pv, ui, rect)
     };
-    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy } = shown;
+    let Shown { edits, snapped, apply, discard, mesh, picked, cylinder, busy, picture } = shown;
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.warp_grid.picked = picked;
+    }
     let mut need_warp = false;
     if let Some(t) = app.ui.transform.as_mut() {
         for edit in edits.iter().cloned() {
@@ -85,13 +98,16 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
     if let Some(t) = app.ui.transform.as_mut() {
         t.session.settle(now, busy);
     }
-    SessionShown { shown: true, snapped }
+    // A pass that ended the session (Cancel, or a commit that finished at once) hands back no picture: its moving
+    // pixels would paint over the restored document. A commit still running in the background keeps the preview, and
+    // with it the picture.
+    let picture = if app.transform_preview.is_some() { picture } else { Vec::new() };
+    SessionShown { shown: true, snapped, picture }
 }
 
 /// The pass's shows, in paint order.
 fn show_session(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Shown {
-    show_preview(app, t, pv, ui, rect);
-    let mut out = Shown::default();
+    let mut out = Shown { picture: show_preview(app, t, pv, ui, rect), ..Shown::default() };
     if pv.committing.is_some() {
         // The moving pixels stay without the box until the commit job lands.
         return out;
@@ -125,14 +141,19 @@ pub struct SessionShown {
     pub shown: bool,
     /// The snap lines of the box's drag.
     pub snapped: Vec<SnapLine>,
+    /// The preview's shapes (the moving pixels, then the layers above them), which the canvas adds to its picture
+    /// slot after the document's picture.
+    pub picture: Vec<egui::Shape>,
 }
 
 /// The moving pixels as the session maps them (warped, skewed or styled), then the layers above
 /// them, both in the canvas's picture, under the grid, guides and controls. Nothing is shown for the Frame tool's transform.
-fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) {
+fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Vec<egui::Shape> {
     if crate::frame_tool::frame_transform(t) {
-        return;
+        return Vec::new();
     }
+    // Painted in place after this mark, then taken out for the picture slot.
+    let mark = PaintSlot::reserve(ui.painter());
     let display = preview_display(app, ui.ctx());
     let boxed = t.session.phase() == TransformPhase::Box;
     // The layers that get the styled preview stay PhotoCraft's: a visible layer with a style.
@@ -150,8 +171,7 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
         .opacity(pv.opacity)
         .nearest(t.session.interpolation() == Interpolation::NearestNeighbor)
         .clip(canvas)
-        .dragging(t.session.dragging())
-        .picture();
+        .dragging(t.session.dragging());
     if let Some(display) = display.as_ref() {
         preview = preview.display(display);
     }
@@ -162,8 +182,9 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
     if let Some(above) = &pv.above
         && let Some(frame) = above.frame()
     {
-        RasterDisplay::new("", above).mapped(frame, 1).picture().show_at(ui, rect);
+        RasterDisplay::new("", above).mapped(frame, 1).show_at(ui, rect);
     }
+    mark.take_after(ui.ctx())
 }
 
 /// What the box draws for the styled layer at `zoom`, as the framework's styled preview builds it: the composite and its
@@ -211,7 +232,7 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     let preset = one_patch && !matches!(w.warp.style, WarpStyle::None | WarpStyle::Custom);
     // No splits on type (#3004).
     let split = pv.split.filter(|_| !w.on_type);
-    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect());
+    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect()).id_salt((pv.session, pv.warp_grid.generation));
     if preset {
         grid = grid.preset();
     }
@@ -223,6 +244,7 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     }
     let shown = grid.show_at(ui, rect);
     out.busy |= gesture_open(&shown.mesh.events);
+    out.picked = shown.picked;
     out.mesh = Some((shown.mesh.events, matches!(shown.edit, Some(WarpEdit::Split { .. }))));
 }
 

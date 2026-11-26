@@ -2,13 +2,14 @@
 //! run without the dialog), not the document's size; Cancel stores nothing.
 
 use craft::ui::dialog::DialogId;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
 const FIT_IMAGE: &str = "file.automate.fitImage";
 
-fn app(width: u32, height: u32) -> PhotocraftApp {
+fn app(width: u32, height: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": width, "height": height})).unwrap();
     app

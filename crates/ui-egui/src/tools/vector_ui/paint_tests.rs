@@ -11,9 +11,10 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use photocraft_doc::ShapeLayer;
+use photocraft_doc::{Fill, ShapeLayer};
+use photocraft_engine::presets::PresetsExt;
 
-fn app(mode: &str, depth: u32) -> PhotocraftApp {
+fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 120, "height": 100, "mode": mode, "depth": depth})).unwrap();
     app.ui.tool = Tool::Rectangle;
@@ -63,11 +64,11 @@ fn draw(app: &mut PhotocraftApp, tool: Tool, from: [f64; 2], to: [f64; 2]) {
     shapes::finish_drag(app, shapes::kind_of(tool), &geometry(tool, from, to), Mods::default());
 }
 
-fn harness(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>, properties: bool) -> Harness<'static, Box<PhotocraftApp>> {
     // kittest's default step: 0.25 s a frame.
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(0.25).with_context(ctx).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             crate::screen_picker::tick(app, ui.ctx());
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -90,7 +91,7 @@ fn harness(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftA
     h
 }
 
-fn stroke_width(h: &mut Harness<'_, PhotocraftApp>, width: &str) {
+fn stroke_width(h: &mut Harness<'_, Box<PhotocraftApp>>, width: &str) {
     h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("the stroke width").click();
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -100,17 +101,17 @@ fn stroke_width(h: &mut Harness<'_, PhotocraftApp>, width: &str) {
 }
 
 /// The Fill or Stroke chip named `label` (a colour well; the popover's kind switch carries the same name).
-fn chip<'h>(h: &'h Harness<'_, PhotocraftApp>, label: &'h str) -> egui_kittest::Node<'h> {
+fn chip<'h>(h: &'h Harness<'_, Box<PhotocraftApp>>, label: &'h str) -> egui_kittest::Node<'h> {
     h.get_by_role_and_label(egui::accesskit::Role::ColorWell, label)
 }
 
 /// The Stroke style button, which opens the Stroke Options popover.
-fn stroke_style_button<'h>(h: &'h Harness<'_, PhotocraftApp>) -> egui_kittest::Node<'h> {
+fn stroke_style_button<'h>(h: &'h Harness<'_, Box<PhotocraftApp>>) -> egui_kittest::Node<'h> {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Stroke style")
 }
 
 /// Opens the chip `label` and picks its kind button `kind` ("No Color", "Solid", "Gradient").
-fn pick_kind(h: &mut Harness<'_, PhotocraftApp>, label: &str, kind: &str) {
+fn pick_kind(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, kind: &str) {
     chip(h, label).click();
     h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::RadioButton, kind).click();
@@ -119,9 +120,9 @@ fn pick_kind(h: &mut Harness<'_, PhotocraftApp>, label: &str, kind: &str) {
 
 /// Clicks the popover's swatch `name`: a list item labelled "<name>, <hex>" in the Swatches list. The list is the Solid
 /// paint's, and a group's rows show once its header is open (the group named by the swatch's first word).
-fn click_swatch(h: &mut Harness<'_, PhotocraftApp>, name: &str) {
+fn click_swatch(h: &mut Harness<'_, Box<PhotocraftApp>>, name: &str) {
     let prefix = format!("{name}, #");
-    let found = |h: &Harness<'_, PhotocraftApp>| {
+    let found = |h: &Harness<'_, Box<PhotocraftApp>>| {
         h.query_all_by_role(egui::accesskit::Role::ListItem).any(|n| n.accesskit_node().label().as_deref().is_some_and(|l| l.starts_with(&prefix)))
     };
     if !found(h) {
@@ -145,7 +146,7 @@ fn click_swatch(h: &mut Harness<'_, PhotocraftApp>, name: &str) {
 
 /// Opens the chip `label`, its Color Picker… button, sets `color` (the colour it opened with when
 /// `None`) and presses OK.
-fn pick_in_full_picker(h: &mut Harness<'_, PhotocraftApp>, label: &str, color: Option<Srgba>) {
+fn pick_in_full_picker(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, color: Option<Srgba>) {
     chip(h, label).click();
     h.run_steps(3);
     h.get_by_label("Color Picker…").click();
@@ -322,6 +323,34 @@ fn float_paints_match_preview_creation_native_roundtrip_and_document_depth() {
             assert_eq!(shape(&app), &committed);
         }
     }
+}
+
+#[test]
+fn cmyk_shape_keeps_native_fill_and_stroke_inks() {
+    use photocraft_color::{Color, ColorMode};
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_cmyk_at};
+
+    let mut app = app("cmyk", 8);
+    let cyan = [1.0, 0.0, 0.0, 0.0];
+    let magenta = [0.0, 1.0, 0.0, 0.0];
+    app.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.0, 0.6, 0.9, 1.0], "foregroundCmyk": cyan,
+            "background": [0.9, 0.0, 0.5, 1.0], "backgroundCmyk": magenta,
+        }),
+    )
+    .unwrap();
+    app.ui.tool_options.shape_fill = true;
+    app.ui.tool_options.stroke_width = 8.0;
+    draw(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0]);
+
+    let solid = |c| Fill::Solid(Color { mode: ColorMode::Cmyk, c, alpha: 1.0 });
+    let shape = shape(&app);
+    assert_eq!(shape.fill, Some(solid(cyan)));
+    assert_eq!(shape.stroke.as_ref().unwrap().paint, solid(magenta));
+    let state = app.session.active().unwrap();
+    assert_eq!(sample_cmyk_at(&state.doc, state.active_layer, 60.0, 50.0, 1, None, SampleLayers::Current), Some(cyan));
 }
 
 #[test]
@@ -502,7 +531,7 @@ fn tool_gradient_paints_reach_the_preview_and_the_next_shape() {
 fn stroke_swatch_gradient_tab_sets_the_next_shapes_stroke() {
     let mut h = harness(app("rgb", 8), false);
     pick_kind(&mut h, "Stroke", "Gradient");
-    let stroke_gradient = |h: &Harness<'_, PhotocraftApp>| match h.state().ui.tool_options.shape_stroke_gradient.clone() {
+    let stroke_gradient = |h: &Harness<'_, Box<PhotocraftApp>>| match h.state().ui.tool_options.shape_stroke_gradient.clone() {
         Some(photocraft_doc::Fill::Gradient { stops, style, angle, .. }) => (stops, style, angle),
         other => panic!("a stroke gradient, not {other:?}"),
     };
@@ -511,7 +540,7 @@ fn stroke_swatch_gradient_tab_sets_the_next_shapes_stroke() {
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0, "choosing a gradient enables the stroke");
     h.get_by_label("Blue 01").click();
     h.run_steps(2);
-    let presets = h.state().session.presets.gradients.clone();
+    let presets = h.state().session.presets().gradients.clone();
     let blue = presets.iter().flat_map(|g| &g.items).find(|p| p.name == "Blue 01").unwrap();
     let (fg, bg) = (h.state().session.tools.foreground, h.state().session.tools.background);
     let blue_stops = blue.fill_stops(fg, bg).0;
@@ -551,7 +580,7 @@ fn properties_stroke_swatch_gives_the_selected_shape_a_gradient_stroke() {
     assert_eq!(shape(h.state()).stroke.as_ref().unwrap().paint, solid_paint([1.0, 0.0, 0.0, 1.0]));
 }
 
-fn tool_stroke_gradient(h: &Harness<'_, PhotocraftApp>) -> photocraft_doc::Fill {
+fn tool_stroke_gradient(h: &Harness<'_, Box<PhotocraftApp>>) -> photocraft_doc::Fill {
     h.state().ui.tool_options.shape_stroke_gradient.clone().expect("a stroke gradient")
 }
 
@@ -705,4 +734,97 @@ fn path_mode_radius_leaves_the_active_shape_layer_alone() {
     assert_eq!(h.state().ui.tool_options.corner_radius, 20.0, "the next outline's radius");
     assert_eq!(radii(h.state()), [10.0; 4], "the shape layer keeps its radius");
     assert_eq!(history(h.state()), before, "no edit");
+}
+
+#[test]
+fn align_edges_framework_controls_edit_layers_and_preserve_undo() {
+    for properties in [false, true] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect": [20.5,20.5,80.0,60.0], "useAlignedRendering": false})).unwrap();
+        let original = shape(&app).path.clone();
+        // The tool option starts off too, so the click shows where it lands.
+        app.ui.tool_options.align_edges = false;
+        let mut h = harness(app, properties);
+        h.get_by_label("Align Edges").click();
+        h.run_steps(3);
+        assert!(shape(h.state()).use_aligned_rendering);
+        assert_eq!(shape(h.state()).path, original);
+        assert_eq!(h.state().ui.tool_options.align_edges, !properties);
+        if let Ok(dir) = std::env::var("PHOTOCRAFT_ALIGN_EDGES_SNAPSHOT_DIR") {
+            let name = if properties { "align-edges-properties.png" } else { "align-edges-toolbar.png" };
+            h.render().unwrap().save(std::path::Path::new(&dir).join(name)).unwrap();
+        }
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert!(!shape(h.state()).use_aligned_rendering);
+    }
+}
+
+#[test]
+fn align_edges_framework_creation_and_preview_keep_the_option() {
+    for enabled in [false, true] {
+        let mut app = app("rgb", 8);
+        app.ui.tool_options.align_edges = enabled;
+        let geometry = geometry(Tool::Rectangle, [10.0, 10.0], [30.0, 30.0]);
+        let preview = shapes::shape_preview(&app, shapes::kind_of(Tool::Rectangle), &geometry).unwrap();
+        assert_eq!(preview.use_aligned_rendering, enabled);
+        shapes::create_geometry(&mut app, &geometry, shapes::kind_of(Tool::Rectangle), None).unwrap();
+        assert_eq!(shape(&app).use_aligned_rendering, enabled);
+        assert_eq!(shape(&app).path, preview.path);
+    }
+}
+
+#[test]
+fn align_edges_framework_pen_captures_and_edits_draft_option() {
+    let mut app = app("rgb", 8);
+    app.ui.tool = Tool::Pen;
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
+    app.ui.tool_options.align_edges = true;
+    app.ui.pen = Some(PenPath::corners(&[[20.5, 20.5], [80.5, 60.5]], super::capture_pen_owner(&app)));
+    app.ui.tool_options.align_edges = false;
+    assert!(pen_commit(&mut app, false));
+    assert!(shape(&app).use_aligned_rendering, "the captured draft keeps its option");
+}
+
+#[test]
+fn align_edges_framework_tool_presets_use_the_canonical_key() {
+    for tool in [
+        Tool::Rectangle,
+        Tool::EllipseShape,
+        Tool::Triangle,
+        Tool::Polygon,
+        Tool::Star,
+        Tool::Line,
+        Tool::CustomShape,
+        Tool::Pen,
+        Tool::CurvaturePen,
+        Tool::FreeformPen,
+    ] {
+        assert!(crate::tool_reset::option_keys(tool).contains(&"useAlignedRendering"), "{tool:?}");
+    }
+}
+
+#[test]
+fn align_edges_framework_line_preview_matches_committed_pixels() {
+    let mut app = app("rgb", 8);
+    app.ui.tool_options.align_edges = true;
+    let line = ShapeGeometry::Line { from: craft::behavior::kurbo::Point::new(20.0, 20.0), to: craft::behavior::kurbo::Point::new(80.0, 20.0), weight: 3.0 };
+    let preview = shapes::shape_preview(&app, shapes::kind_of(Tool::Line), &line).unwrap();
+    shapes::finish_drag(&mut app, shapes::kind_of(Tool::Line), &line, Mods::default());
+    let doc = &app.session.active().unwrap().doc;
+    assert_eq!(shape(&app).cache.as_ref().unwrap(), &photocraft_vector::render_shape(&preview, doc.pixel_format(), doc.bounds()));
+}
+
+/// The Properties panel's Fill popover eyedropper samples the screen and applies the colour to the layer's fill.
+#[test]
+fn properties_fill_eyedropper_applies_the_sampled_colour() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"rect": [20,20,80,60], "fill": "#2244aa", "stroke": null})).unwrap();
+    app.services.screen_capture = Some(std::sync::Arc::new(|| Box::new(craft::color_ui::ui::StillCapture::color(Srgba::rgb(1.0, 136.0 / 255.0, 0.0)))));
+    let mut h = harness(app, true);
+    chip(&h, "Fill").click();
+    h.run_steps(3);
+    h.get_by_label("Sample color from the screen").click();
+    h.run_steps(6);
+    let [r, g, b, _] = shape(h.state()).fill.as_ref().and_then(color_of).expect("a solid fill");
+    assert!((r - 1.0).abs() < 0.01 && (g - 136.0 / 255.0).abs() < 0.01 && b < 0.01, "the sampled orange is the fill, got {r} {g} {b}");
 }

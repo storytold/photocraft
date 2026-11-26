@@ -8,7 +8,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A 200 × 120 document with a type layer "Hello" active and the Rectangular Marquee chosen.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     app.sync_views();
