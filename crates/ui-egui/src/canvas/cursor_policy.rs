@@ -2,7 +2,7 @@
 //! which let ⌥ sample or load paint, the Pencil's tip shape, and the pointers of the tools whose
 //! cursor is no brush tip.
 
-use craft::behavior::{Cursor, PaintedCursor, PointerGlyph};
+use craft::behavior::{Cursor, CursorBadge, PaintedCursor, PointerGlyph};
 use craft::keymap::Mods;
 use photocraft_engine::prefs::PaintingCursor as PaintingPref;
 
@@ -33,6 +33,14 @@ pub(crate) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
         return option || show_crosshair;
     }
     show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::ColorReplacement | Tool::Remove)
+}
+
+/// The mark at the centre of Quick Selection's ring with `mods` held: a "−" while ⌥ would subtract
+/// from a selection (#16822). ⇧ alone and no selection keep the plain ring, as in the reference;
+/// ⇧⌥, Control+⌥ (the brush-resize drag) and the options bar's mode were not measured and keep it
+/// too. `None` for any other tool.
+pub(crate) fn quick_selection_badge(app: &PhotocraftApp, mods: Mods) -> Option<CursorBadge> {
+    (app.ui.tool == Tool::QuickSelection && mods.alt && !mods.shift && !mods.ctrl && super::tool_feedback::has_selection(app)).then_some(CursorBadge::Subtract)
 }
 
 /// Whether the brush cursor is the reference's fixed sample target (a small circle with a cross
@@ -158,6 +166,10 @@ mod healing_alt_cursor_tests;
 #[cfg(test)]
 #[path = "paint_bucket_cursor_tests.rs"]
 mod paint_bucket_cursor_tests;
+
+#[cfg(test)]
+#[path = "quick_selection_cursor_tests.rs"]
+mod quick_selection_cursor_tests;
 
 #[cfg(test)]
 #[path = "rectangle_alt_eyedropper_tests.rs"]
