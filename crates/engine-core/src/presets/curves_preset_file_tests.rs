@@ -596,6 +596,40 @@ fn a_straight_line_written_with_extra_points_on_it_is_still_no_curve() {
 }
 
 #[test]
+fn a_curve_that_stops_short_of_the_two_ends_is_a_curve_however_straight_it_looks() {
+    let mut s = crate::session();
+    save(&mut s, &json!({"curves": one_curve(), "name": "Chosen"})).expect("a save works");
+    let before = list(&mut s);
+    // Knots on the diagonal, but only from 64 to 192. Outside the points it is given the renderer
+    // holds the first and the last value, so this is not the straight line the neutral adjustment
+    // holds: it darkens what lies below 64 and lightens what lies above 192.
+    let shortened = json!({
+        "points": [[0.0, 0.0], [255.0, 255.0]],
+        "red": [[64.0, 64.0], [192.0, 192.0]],
+    });
+    let data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Short red".into(), curves: shortened }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": data.clone(), "space": "cmyk"})).unwrap_err().to_string();
+    assert!(err.contains("red"), "the shortened channel is a curve of its own mode, and the refusal says so: {err}");
+    assert_eq!(list(&mut s), before, "the refusal runs before the list and the current preset change");
+    let short_composite = json!({
+        "points": [[64.0, 64.0], [192.0, 192.0]],
+        "green": [[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]],
+    });
+    let short_data =
+        photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Short composite".into(), curves: short_composite }).expect("a preset writes"));
+    let err = load(&mut s, &json!({"data": short_data, "space": "rgb", "channel": "green"})).unwrap_err().to_string();
+    assert!(err.contains("composite"), "and so is a composite that stops short of both ends: {err}");
+    // The same knots carried to both ends of the range are the straight line, whatever points a
+    // hand-edited file spells out along the way.
+    let full_span = json!({
+        "points": [[0.0, 0.0], [128.0, 128.0], [255.0, 255.0]],
+        "red": [[0.0, 0.0], [64.0, 64.0], [192.0, 192.0], [255.0, 255.0]],
+    });
+    let span_data = photocraft_paint::tile::b64_encode(&to_bytes(&CurvePreset { name: "Full span".into(), curves: full_span }).expect("a preset writes"));
+    assert!(load(&mut s, &json!({"data": span_data, "space": "cmyk"})).is_ok(), "a full-span line of knots is no curve of the mode it names");
+}
+
+#[test]
 fn the_command_docs_name_the_preset_file_type() {
     assert_eq!(EXT, "pcrv");
     let specs = curves::specs();

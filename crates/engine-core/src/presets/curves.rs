@@ -129,16 +129,26 @@ pub fn to_bytes(preset: &CurvePreset) -> Result<Vec<u8>> {
     serde_json::to_vec_pretty(&file).map_err(|e| EngineError::Other(format!("cannot write the curve preset: {e}")))
 }
 
+/// How far apart two inputs may be and still be the same end of a curve's range. These are numbers
+/// read out of JSON on a 0..255 scale; a file that stops short of an end by more than this stops
+/// short in earnest.
+const INPUT_EPS: f64 = 1e-6;
+
 /// The two numbers of the point at `at` in `points`: `None` when that entry is not a pair of numbers.
 fn point_at(points: &[Value], at: usize) -> Option<(f64, f64)> {
     let pair = points.get(at)?.as_array()?;
     Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?))
 }
 
-/// Whether `here` is the straight line `plain` describes, whatever points along it the file spells
-/// out: every one of its points answers with the line's value at that input. The neutral adjustment
-/// holds the line as two points; a hand-written curve that adds a point on the same line is that
-/// same line, and comparing point lists would read it as a curve of its own.
+/// Whether `here` is the straight line `plain` describes: every one of its points answers with the
+/// line's value at that input, AND the points carry that answer across the whole range the line
+/// covers. The neutral adjustment holds the line as two points; a hand-written curve that adds a
+/// point on the same line is that same line, which is why the points are not compared as lists. A
+/// curve that stops short of the ends is not: the renderer holds the first and last value outside
+/// the points it was given, so knots at `64 -> 64` and `192 -> 192` darken what lies below 64 and
+/// lighten what lies above 192, which is a curve of its own however straight it looks. The range is
+/// taken from the curve's own endpoints rather than by rendering it and comparing the result: the
+/// two answers agree here, and this one is exact.
 fn on_the_line(here: &Value, plain: &Value) -> bool {
     let (Some(points), Some(line)) = (here.as_array(), plain.as_array()) else {
         return here == plain;
@@ -149,13 +159,19 @@ fn on_the_line(here: &Value, plain: &Value) -> bool {
     let (Some((x0, y0)), Some((x1, y1))) = (point_at(line, 0), point_at(line, line.len() - 1)) else {
         return here == plain;
     };
-    points.iter().all(|point| match point.as_array().map(|pair| (pair.first().and_then(Value::as_f64), pair.get(1).and_then(Value::as_f64))) {
-        Some((Some(input), Some(output))) => {
-            let expected = if (x1 - x0).abs() < 1e-9 { y0 } else { y0 + (y1 - y0) * (input - x0) / (x1 - x0) };
-            (output - expected).abs() < 1e-6
-        }
-        _ => false,
-    })
+    let spans = match (point_at(points, 0), point_at(points, points.len().saturating_sub(1))) {
+        (Some((first, _)), Some((last, _))) => (first - x0).abs() <= INPUT_EPS && (last - x1).abs() <= INPUT_EPS,
+        // No points at all is the parser's spelling of no curve, not a shortened one.
+        _ => points.is_empty(),
+    };
+    spans
+        && points.iter().all(|point| match point.as_array().map(|pair| (pair.first().and_then(Value::as_f64), pair.get(1).and_then(Value::as_f64))) {
+            Some((Some(input), Some(output))) => {
+                let expected = if (x1 - x0).abs() < 1e-9 { y0 } else { y0 + (y1 - y0) * (input - x0) / (x1 - x0) };
+                (output - expected).abs() < 1e-6
+            }
+            _ => false,
+        })
 }
 
 /// Whether `curves` moves the composite curve: its `points` differ from the straight line the
