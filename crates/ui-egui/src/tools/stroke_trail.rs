@@ -95,12 +95,50 @@ impl Trail {
     }
 
     /// [`Self::feed_reach`] for a whole new drag into the same mask (the Remove Tool's waiting
-    /// strokes, #6555): the earlier strokes' tint stays under it.
+    /// strokes, #6555): the earlier strokes' tint stays under it. A mask only grows, so this is only
+    /// right while every waiting stroke adds; a set that also subtracts restamps the whole thing
+    /// ([`Self::restamp_waiting`], #16613 review).
     pub fn feed_stroke_reach(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
         self.mask.begin_stroke();
         self.dabs = None;
         self.fed = 0;
         self.feed_reach(points, brush);
+    }
+
+    /// Rebuilds the tint from the whole set of strokes waiting for Enter (#12543): the reach of every
+    /// adding stroke tinted, as [`Self::feed_reach`] shows it, and the reach of every subtracting one
+    /// (the bar's Subtract from brushed area, or an Alt-drag) kept out of it. A [`CoverageMask`] never
+    /// forgets what it was stamped with, and `restamp` keeps the coverage a stroke began with, so a
+    /// Subtract stroke cannot be taken back out of a mask that was fed stroke by stroke: the mask is made
+    /// fresh and the waiting set is written in one pass. That pass is also what the removal cuts, which is
+    /// the point - the tint on the canvas has to be the area OK removes (#16613 review).
+    pub(crate) fn restamp_waiting(&mut self, strokes: &[(Vec<[f64; 3]>, BrushSettings, bool)]) {
+        self.dabs = None;
+        self.fed = 0;
+        let mut held: Vec<(StrokeRenderer, Option<StrokeRenderer>, bool)> = Vec::new();
+        let mut area = photocraft_geom::Rect::EMPTY;
+        for (points, brush, subtract) in strokes {
+            let Some((dabs, tail, reach)) = stroke_reach(brush, points) else { continue };
+            held.push((dabs, tail, *subtract));
+            area = area.union(&reach);
+        }
+        if area.is_empty() {
+            return;
+        }
+        let rect = Rect::new(f64::from(area.x0), f64::from(area.y0), f64::from(area.x1), f64::from(area.y1));
+        let reaches = |h: &(StrokeRenderer, Option<StrokeRenderer>, bool), x: i32, y: i32| {
+            h.0.coverage_at(x, y).max(h.1.as_ref().map_or(0.0, |t| t.coverage_at(x, y))) > 0.0
+        };
+        self.mask.restamp(rect, |p| {
+            let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
+            if held.iter().any(|h| h.2 && reaches(h, x, y)) {
+                0.0
+            } else if held.iter().any(|h| !h.2 && reaches(h, x, y)) {
+                1.0
+            } else {
+                0.0
+            }
+        });
     }
 
     fn feed_dabs_with(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings, reach: bool) {
@@ -140,6 +178,30 @@ impl Trail {
     fn show_as(&mut self, ui: &mut egui::Ui, rect: egui::Rect, label: &'static str, tone: TrailTone) {
         StrokeTrail::new(label, &mut self.mask).tone(tone).show_at(ui, rect);
     }
+}
+
+/// The dabs a finished stroke leaves with `brush` along `points`, and the document area they touch: the
+/// same reach [`Trail::feed_reach`] shows, including what finishing the stroke now would add.
+fn stroke_reach(brush: &BrushSettings, points: &[[f64; 3]]) -> Option<(StrokeRenderer, Option<StrokeRenderer>, photocraft_geom::Rect)> {
+    let fed: Vec<StrokePoint> = points
+        .iter()
+        .filter(|p| p.iter().all(|v| v.is_finite()) && p[0].abs() < 1e7 && p[1].abs() < 1e7)
+        .map(|p| StrokePoint::new(p[0], p[1], p[2] as f32))
+        .collect();
+    if fed.is_empty() {
+        return None;
+    }
+    let mut renderer = StrokeRenderer::new(brush, None, 1.0);
+    renderer.push(&fed);
+    let mut area = renderer.take_dirty_rect();
+    let tail = renderer.tail_preview().map(|mut t| {
+        let r = t.take_dirty_rect();
+        (r, t)
+    });
+    if let Some((r, _)) = &tail {
+        area = area.union(r);
+    }
+    Some((renderer, tail.map(|(_, t)| t), area))
 }
 
 /// How `tool`'s trail shows: the Remove Tool's as what will go, the Spot Healing Brush's dark as

@@ -1,8 +1,8 @@
 //! The Retouch options bar's healing family: Remove, Patch, Content-Aware Move, Spot Healing, Clone Stamp and
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
-use craft::behavior::Value;
-use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::behavior::{IconId, Value};
+use craft::ui::choice::{Checkbox, Radio, RadioGroup, Segmented};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
@@ -78,6 +78,17 @@ fn first(a: Option<RangeAlert>, b: Option<RangeAlert>) -> Option<RangeAlert> {
 pub(super) fn remove(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
     let o = &mut app.ui.tool_options;
+    // Add to / Subtract from brushed area first, right after the tool preset picker, as the
+    // reference's pair of brush icons (#12543). The segment's words are its hover tooltip and its
+    // accessible name; Add is picked by default and after Reset Tool.
+    let modes = [
+        Entry::new(false, tl!("Add to brushed area").to_owned()).icon(IconId::new("plus")),
+        Entry::new(true, tl!("Subtract from brushed area").to_owned()).icon(IconId::new("minus")),
+    ];
+    if let Some(next) = Segmented::new(tl!("Brushed area").to_owned(), Bind::given(o.remove_subtract), &modes).show(ui).value().copied() {
+        o.remove_subtract = next;
+    }
+    Divider::vertical().show(ui);
     // The reference's options bar, in its order and words (#12546).
     check(ui, tl!("Sample all layers"), &mut o.sample_all.remove, true, Some(tl!("Sample content from all visible layers")));
     check(ui, tl!("Remove after each stroke"), &mut o.remove_after_each_stroke, true, Some(tl!("Remove area after a single stroke")));
