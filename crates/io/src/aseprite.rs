@@ -62,6 +62,9 @@ pub fn losses(doc: &Document) -> Vec<String> {
     if !doc.channels.is_empty() {
         out.push("Aseprite cannot retain extra alpha or spot channels; save a .pcraft copy instead".into());
     }
+    if !doc.layer_comps.is_empty() {
+        out.push("Aseprite cannot retain saved Layer Comps. Save a .pcraft copy instead".into());
+    }
     if !doc.paths.is_empty() || !doc.notes.is_empty() {
         out.push("Aseprite cannot retain named paths or notes; save a .pcraft copy instead".into());
     }

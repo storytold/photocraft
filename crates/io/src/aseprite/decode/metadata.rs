@@ -72,9 +72,14 @@ impl Decoder<'_> {
         if kind == 0x2019 {
             let (size, first, last) = (r.u32()? as usize, r.u32()? as usize, r.u32()? as usize);
             r.take(8)?;
-            if size == 0 || size > 256 || first > last || last >= size {
+            if size == 0 || size > sprite::palette_limit(self.indexed) || first > last || last >= size {
                 return Err(invalid("invalid palette size or update range"));
             }
+            self.metadata_bytes = self
+                .metadata_bytes
+                .checked_add(size.saturating_sub(palette.len()) * std::mem::size_of::<PaletteEntry>())
+                .filter(|&bytes| bytes <= sprite::MAX_METADATA)
+                .ok_or_else(|| invalid("sprite palette metadata exceeds 32 MiB"))?;
             palette.resize_with(size, PaletteEntry::default);
             for i in first..=last {
                 let flags = r.u16()?;
@@ -93,8 +98,14 @@ impl Decoder<'_> {
             let packets = usize::from(r.u16()?);
             let mut at = 0usize;
             if palette.len() < 256 {
-                palette.resize_with(256, PaletteEntry::default)
+                self.metadata_bytes = self
+                    .metadata_bytes
+                    .checked_add((256 - palette.len()) * std::mem::size_of::<PaletteEntry>())
+                    .filter(|&bytes| bytes <= sprite::MAX_METADATA)
+                    .ok_or_else(|| invalid("sprite palette metadata exceeds 32 MiB"))?;
+                palette.resize_with(256, PaletteEntry::default);
             }
+            let palette = &mut palette[..256];
             for _ in 0..packets {
                 at = at.checked_add(usize::from(r.u8()?)).ok_or_else(|| invalid("palette offset overflow"))?;
                 let n = usize::from(r.u8()?);

@@ -7,6 +7,11 @@ impl Sprite {
     /// Frame at an elapsed millisecond. `finished` holds the last frame after a finite tag.
     /// A missing tag means the complete sprite, forward and looping forever.
     pub fn playback_frame(&self, elapsed_ms: u64, tag: Option<usize>) -> Result<(usize, bool), String> {
+        self.playback_timing(elapsed_ms, tag).map(|(frame, delay)| (frame, delay.is_none()))
+    }
+
+    /// Frame at an elapsed millisecond and the delay until the next boundary, if still playing.
+    pub fn playback_timing(&self, elapsed_ms: u64, tag: Option<usize>) -> Result<(usize, Option<u64>), String> {
         if self.frames.is_empty() {
             return Err("sprite has no frames".into());
         }
@@ -24,28 +29,28 @@ impl Sprite {
         let reverse: Vec<_> = (from..=to).rev().collect();
         let first = if direction == 1 || direction == 3 { &reverse } else { &forward };
         let duration = |seq: &[usize]| -> u64 { seq.iter().filter_map(|i| self.frames.get(*i)).map(|f| u64::from(f.duration_ms.max(1))).sum() };
-        let locate = |seq: &[usize], mut ms: u64| -> usize {
+        let locate = |seq: &[usize], mut ms: u64| {
             for &i in seq {
                 let d = self.frames.get(i).map_or(1, |f| u64::from(f.duration_ms.max(1)));
                 if ms < d {
-                    return i;
+                    return (i, Some(d - ms));
                 }
                 ms -= d;
             }
-            seq.last().copied().unwrap_or(from)
+            (seq.last().copied().unwrap_or(from), None)
         };
         let first_duration = duration(first);
         if direction < 2 || from == to {
             if repeat != 0 && elapsed_ms >= first_duration.saturating_mul(u64::from(repeat)) {
-                return Ok((first.last().copied().unwrap_or(from), true));
+                return Ok((first.last().copied().unwrap_or(from), None));
             }
-            return Ok((locate(first, elapsed_ms % first_duration.max(1)), false));
+            return Ok(locate(first, elapsed_ms % first_duration.max(1)));
         }
         if elapsed_ms < first_duration {
-            return Ok((locate(first, elapsed_ms), false));
+            return Ok(locate(first, elapsed_ms));
         }
         if repeat == 1 {
-            return Ok((first.last().copied().unwrap_or(from), true));
+            return Ok((first.last().copied().unwrap_or(from), None));
         }
         // Subsequent traversals skip the endpoint just shown by the previous traversal.
         let a = if direction == 2 { &reverse } else { &forward };
@@ -57,11 +62,11 @@ impl Sprite {
             let legs = u64::from(repeat - 1);
             let total = legs.div_ceil(2).saturating_mul(da) + (legs / 2).saturating_mul(db);
             if remaining >= total {
-                return Ok((if legs % 2 == 1 { a } else { b }.last().copied().unwrap_or(from), true));
+                return Ok((if legs % 2 == 1 { a } else { b }.last().copied().unwrap_or(from), None));
             }
         }
         let at = remaining % (da + db).max(1);
-        Ok((if at < da { locate(a, at) } else { locate(b, at - da) }, false))
+        Ok(if at < da { locate(a, at) } else { locate(b, at - da) })
     }
 }
 
@@ -92,10 +97,14 @@ mod tests {
         s.tags[0].repeat = 1;
         assert_eq!(s.playback_frame(129, Some(0)).unwrap(), (2, true));
         s.tags[0].repeat = 2;
+        assert_eq!(s.playback_timing(130, Some(0)).unwrap(), (1, Some(82)));
+        assert_eq!(s.playback_timing(228, Some(0)).unwrap(), (0, Some(1)));
+        assert_eq!(s.playback_timing(229, Some(0)).unwrap(), (0, None));
         assert_eq!(s.playback_frame(229, Some(0)).unwrap(), (0, true));
         s.tags[0].direction = 3;
         s.tags[0].repeat = 0;
         assert_eq!([0, 29, 112, 129, 212].map(|t| s.playback_frame(t, Some(0)).unwrap().0), [2, 1, 0, 1, 2]);
+        assert_eq!(s.playback_timing(31, Some(0)).unwrap(), (1, Some(81)));
         assert!(s.playback_frame(u64::MAX, Some(0)).is_ok());
     }
 }

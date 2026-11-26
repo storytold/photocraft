@@ -18,8 +18,8 @@ fn app_over(files: Option<std::sync::Arc<dyn craft::host::Files>>) -> Box<Photoc
             import: Some(Box::new(|name, bytes, opts| {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
             })),
-            export: Some(Box::new(|doc, path, _| {
-                photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            export: Some(Box::new(|doc, path, settings| {
+                photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
             })),
             write: Some(Box::new(|_, _| Ok(()))),
             automation_write: Some(Box::new(|_, _| Ok(()))),
@@ -40,7 +40,13 @@ fn identity(app: &PhotocraftApp) -> (String, Option<String>, u64, u64) {
 fn layered_tiff_saves_a_copy_of_an_animated_sprite() {
     for ask in [false, true] {
         let mut app = app();
-        app.open_bytes("animation.aseprite", include_bytes!("../../io/tests/fixtures/aseprite/animation.aseprite")).unwrap();
+        app.open_bytes("layers.aseprite", include_bytes!("../../io/tests/fixtures/aseprite/layers.aseprite")).unwrap();
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let written = bytes.clone();
+        app.services.write = Some(Box::new(move |_, data| {
+            *written.borrow_mut() = data.to_vec();
+            Ok(())
+        }));
         app.run("sprite.duplicateFrame", json!({})).unwrap();
         assert!(app.session.active().unwrap().is_dirty());
         let original = identity(&app);
@@ -52,6 +58,11 @@ fn layered_tiff_saves_a_copy_of_an_animated_sprite() {
             crate::dialogs::testing::confirm(&mut app, dialog).unwrap();
         }
         assert_eq!(identity(&app), original);
+        if !ask {
+            let reopened = photocraft_io::import("preview.tiff", &bytes.borrow()).unwrap().document;
+            assert_eq!(reopened.layers.len(), 2, "TIFF retained the original layers");
+            assert_eq!(reopened.layers[1].children().unwrap()[0].name, "Top");
+        }
     }
 }
 

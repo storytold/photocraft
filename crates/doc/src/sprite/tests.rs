@@ -386,3 +386,23 @@ fn checked_sprite_bounds_reject_byte_count_overflow() {
     }
     pixels::checked_rect(rect, 4).unwrap();
 }
+
+#[test]
+fn capture_distinguishes_tileless_opaque_rasters_from_missing_cels() {
+    let mut doc = indexed();
+    let id = doc.layers[0].id;
+    let sprite = doc.sprite.as_mut().unwrap();
+    Arc::make_mut(&mut sprite.frames[1]).cels.clear();
+    doc.select_sprite_frame(1).unwrap();
+    doc.capture_sprite_frame().unwrap();
+    assert!(doc.sprite.as_ref().unwrap().frames[1].cels.is_empty());
+
+    let surface = Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(surface.tile_count(), 0);
+    doc.layers[0].content = LayerContent::Raster(surface);
+    doc.select_sprite_frame(0).unwrap();
+    doc.select_sprite_frame(1).unwrap();
+    let cel = &doc.sprite.as_ref().unwrap().frames[1].cels[&id];
+    assert_eq!(cel.rect, doc.bounds());
+    assert_eq!(doc.layers[0].surface().unwrap().pixel(1, 1), [1.0, 0.0, 0.0, 1.0]);
+}

@@ -19,6 +19,7 @@ pub(super) mod tilemap;
 struct Node {
     layer: Layer,
     parent: Option<usize>,
+    tilemap: bool,
 }
 
 struct Decoder<'a> {
@@ -80,10 +81,10 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     let grid = [r.i16()?, r.i16()?, r.i16()?, r.i16()?];
     r.take(84)?;
     let indexed = mode == ColorMode::Indexed;
-    let palette = Arc::new(if indexed { vec![PaletteEntry::default(); if colors == 0 { 256 } else { colors }] } else { Vec::new() });
-    if palette.len() > 256 {
+    if indexed && colors > sprite::palette_limit(indexed) {
         return Err(invalid("indexed palette exceeds 256 entries"));
     }
+    let palette = Arc::new(if indexed { vec![PaletteEntry::default(); if colors == 0 { 256 } else { colors }] } else { Vec::new() });
     let empty_frame = |palette| SpriteFrame { duration_ms: 0, palette, cels: BTreeMap::new(), metadata: Vec::new() };
     let mut d = Decoder {
         nodes: Vec::new(),
@@ -177,7 +178,6 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         tags: d.tags,
         profile: d.profile_chunk,
     };
-    sequence.validate().map_err(invalid)?;
     let mut doc = Document::new(name, Size::new(u32::from(w), u32::from(h)), mode, SampleType::U8);
     doc.icc_profile = d.profile;
     while let Some(mut node) = d.nodes.pop() {
@@ -242,8 +242,7 @@ impl Decoder<'_> {
 
     /// Reserve decoded pixel/index storage with checked aggregate accounting before allocation.
     fn charge(&mut self, rect: Rect, bpp: usize) -> Result<()> {
-        let n = usize::try_from(rect.tile_count()).ok().and_then(|n| n.checked_mul(256 * 256 * bpp)).ok_or_else(|| invalid("cel tile size overflow"))?;
-        self.budget = self.budget.checked_sub(n).ok_or_else(|| invalid("decoded sprite tiles exceed 256 MiB"))?;
+        self.budget = tilemap::after_display(rect, bpp, self.budget)?;
         Ok(())
     }
 
@@ -290,7 +289,7 @@ impl Decoder<'_> {
         let uuid = if self.flags & 4 != 0 { Some(r.take(16)?.try_into().map_err(|_| invalid("invalid layer UUID"))?) } else { None };
         self.layers.push(SpriteLayer { id: layer.id, flags, opacity: (layer.opacity * 255.0).round() as u8, uuid });
         self.target = MetadataTarget::Layer(layer.id);
-        self.nodes.push(Node { layer, parent });
+        self.nodes.push(Node { layer, parent, tilemap: kind == 2 });
         Ok(())
     }
 
@@ -304,13 +303,7 @@ impl Decoder<'_> {
         if node.layer.is_group() || self.frame.cels.contains_key(&id) {
             return Err(invalid("duplicate cel or cel on a group"));
         }
-        let tile_layer = self
-            .frame
-            .metadata
-            .iter()
-            .chain(self.frames.first().into_iter().flat_map(|f| f.metadata.iter()))
-            .any(|c| c.kind == 0x2004 && c.target == MetadataTarget::Layer(id));
-        if (kind == 3 && !tile_layer) || (tile_layer && !matches!(kind, 1 | 3)) {
+        if (kind == 3 && !node.tilemap) || (node.tilemap && !matches!(kind, 1 | 3)) {
             return Err(invalid("cel type does not match the tilemap layer"));
         }
         let (rect, linked_frame, pixels, indices) = if kind == 1 {

@@ -72,6 +72,7 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         sprite_body(app, ui, now);
         return;
     }
+    app.ui.timeline.sprite_start = None;
     if app.session.active().is_none() {
         app.ui.timeline.clock.stop(now);
         let _ = Notice::new(Tone::Neutral, tl!("Open a document to use the timeline.")).layout(NoticeLayout::Centred).show(ui);
@@ -180,7 +181,8 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Timed Aseprite frames use the engine's traversal, including tag direction and repeat count.
 fn sprite_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, now: f64) {
     if let Some(start) = app.ui.timeline.sprite_start {
-        let elapsed = ((now - start).max(0.0) * 1000.0) as u64;
+        let elapsed_ms = (now - start).max(0.0) * 1000.0;
+        let elapsed = elapsed_ms as u64;
         match app.run("sprite.playback", json!({"elapsedMs": elapsed, "tag": app.ui.timeline.sprite_tag})) {
             Ok(result) => {
                 if let Some(frame) = result["frame"].as_u64()
@@ -190,8 +192,8 @@ fn sprite_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, now: f64) {
                 }
                 if result["finished"] == true {
                     app.ui.timeline.sprite_start = None;
-                } else {
-                    ui.ctx().request_repaint();
+                } else if let Some(delay) = result["nextFrameInMs"].as_u64() {
+                    request_repaint_after(ui.ctx(), (delay as f64 - elapsed_ms.fract()) / 1000.0);
                 }
             }
             Err(_) => app.ui.timeline.sprite_start = None,
@@ -309,6 +311,18 @@ mod tests {
         assert!(!app.ui.timeline.playing());
         assert_eq!(app.session.active().unwrap().doc.sprite.as_ref().unwrap().current, 0);
         assert_eq!(app.session.active().unwrap().history.past_len(), 0);
+    }
+
+    #[test]
+    fn video_timeline_clears_stale_sprite_playback() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        app.run("timeline.create", json!({"duration": 10, "fps": 30.0})).unwrap();
+        app.sync_document_state();
+        app.ui.timeline.sprite_start = Some(0.0);
+        let ctx = app.ctx().clone();
+        crate::testing::run_ui(&ctx, egui::RawInput { time: Some(1.0), ..Default::default() }, |ui| body(&mut app, ui));
+        assert!(!app.ui.timeline.playing());
     }
 
     fn frame(h: &Harness<'static, Box<PhotocraftApp>>) -> u64 {

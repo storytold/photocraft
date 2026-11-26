@@ -10,44 +10,51 @@ use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use super::{MetadataTarget, Sprite, SpriteCel, SpriteLayer, pixels};
 use crate::{ColorTable, Document, Layer, LayerContent, LayerId, Surface};
 
+/// Stable source-layer order and properties, shared by the projection's layer tree.
+type LayerLookup<'a> = BTreeMap<LayerId, (usize, &'a SpriteLayer)>;
+
+fn layer_lookup(sprite: &Sprite) -> LayerLookup<'_> {
+    sprite.layers.iter().enumerate().map(|(rank, layer)| (layer.id, (rank, layer))).collect()
+}
+
 /// Combine stable source-layer order with this frame's signed cel z-order.
-fn order(layer: &Layer, sprite: &Sprite, frame: usize) -> (i64, i16) {
-    let rank = sprite.layers.iter().position(|l| l.id == layer.id).unwrap_or(sprite.layers.len());
-    let z = sprite.frames.get(frame).and_then(|f| f.cels.get(&layer.id)).map_or(0, |c| c.z_index);
+fn order(layer: &Layer, source: &LayerLookup<'_>, frame: &super::SpriteFrame) -> (i64, i16) {
+    let rank = source.get(&layer.id).map_or(source.len(), |(rank, _)| *rank);
+    let z = frame.cels.get(&layer.id).map_or(0, |c| c.z_index);
     (rank as i64 + i64::from(z), z)
 }
 
 /// Build the projected depth-first layer order without exceeding the document nesting cap.
-fn display_order(layers: &[Layer], sprite: &Sprite, frame: usize, depth: usize, out: &mut Vec<LayerId>) -> Result<(), String> {
+fn display_order(layers: &[Layer], source: &LayerLookup<'_>, frame: &super::SpriteFrame, depth: usize, out: &mut Vec<LayerId>) -> Result<(), String> {
     if !layers.is_empty() && depth > crate::MAX_GROUP_DEPTH {
         return Err("sprite group nesting limit exceeded".into());
     }
     let mut ordered: Vec<_> = layers.iter().collect();
-    ordered.sort_by_key(|l| order(l, sprite, frame));
+    ordered.sort_by_key(|l| order(l, source, frame));
     for l in ordered {
         out.push(l.id);
         if let Some(children) = l.children() {
-            display_order(children, sprite, frame, depth + 1, out)?
+            display_order(children, source, frame, depth + 1, out)?
         }
     }
     Ok(())
 }
 
 /// Project one frame into raster layers, retaining source cels behind reference display caches.
-fn project(layers: &mut [Layer], sprite: &Sprite, frame: usize, fmt: PixelFormat, depth: usize) -> Result<(), String> {
+fn project(layers: &mut [Layer], source: &LayerLookup<'_>, frame: &super::SpriteFrame, fmt: PixelFormat, depth: usize) -> Result<(), String> {
     if !layers.is_empty() && depth > crate::MAX_GROUP_DEPTH {
         return Err("sprite layer groups exceed the nesting limit".into());
     }
-    let frame_data = sprite.frames.get(frame).ok_or("sprite frame is missing")?;
-    layers.sort_by_key(|l| order(l, sprite, frame));
+    layers.sort_by_key(|l| order(l, source, frame));
     for layer in layers {
         if let Some(children) = layer.children_mut() {
-            project(children, sprite, frame, fmt, depth + 1)?;
+            project(children, source, frame, fmt, depth + 1)?;
         } else if matches!(layer.content, LayerContent::Raster(_)) {
-            let base = sprite.layers.iter().find(|s| s.id == layer.id).map_or(1.0, |s| f32::from(s.opacity) / 255.0);
-            match frame_data.cels.get(&layer.id) {
+            let info = source.get(&layer.id).map(|(_, info)| *info);
+            let base = info.map_or(1.0, |s| f32::from(s.opacity) / 255.0);
+            match frame.cels.get(&layer.id) {
                 Some(cel) => {
-                    let reference = sprite.layers.iter().find(|l| l.id == layer.id).is_some_and(|l| l.flags & 64 != 0);
+                    let reference = info.is_some_and(|l| l.flags & 64 != 0);
                     layer.content = LayerContent::Raster(if reference { super::reference::projection(cel)? } else { cel.pixels.clone() });
                     layer.opacity = base * f32::from(cel.opacity) / 255.0;
                 }
@@ -89,21 +96,13 @@ impl Document {
 
     /// Stage displayed edits, reconcile links and palettes, then refresh the selected projection.
     fn capture_sprite(&mut self, sprite: &mut Sprite) -> Result<(), String> {
-        sprite.validate()?;
-        let expected_mode = if self.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb };
-        if self.depth != SampleType::U8
-            || sprite.indexed != (self.mode == ColorMode::Indexed)
-            || !matches!(self.mode, ColorMode::Indexed | ColorMode::Rgb | ColorMode::Grayscale)
-            || sprite.frames.iter().any(|f| f.cels.values().any(|c| c.pixels.format().mode != expected_mode))
-        {
-            return Err("convert a separate copy before changing a sprite's bit depth or indexed color mode".into());
-        }
+        sprite.validate_for_document(self.mode, self.depth)?;
         let current = sprite.current;
+        let frame = sprite.frames.get(current).ok_or("sprite frame is missing")?.clone();
         let mut expected_order = Vec::new();
-        display_order(&self.layers, sprite, current, 0, &mut expected_order)?;
+        display_order(&self.layers, &layer_lookup(sprite), &frame, 0, &mut expected_order)?;
         let actual_order: Vec<_> = self.walk().iter().map(|(_, _, l)| l.id).collect();
         let reordered = actual_order != expected_order;
-        let frame = sprite.frames.get(current).ok_or("sprite frame is missing")?.clone();
         let existing: BTreeSet<_> = self.walk().iter().map(|(_, _, l)| l.id).collect();
         sprite.layers.retain(|l| existing.contains(&l.id));
         // Explicit layer deletion removes that object's cels and attached metadata everywhere.
@@ -166,22 +165,36 @@ impl Document {
             }
             let LayerContent::Raster(surface) = &layer.content else { continue };
             let source = frame.cels.get(&layer.id);
-            if tilemap && (source.is_some_and(|c| c.pixels != *surface) || source.is_none() && surface.tile_count() != 0) {
+            let tileless = surface.tile_count() == 0;
+            let fmt = surface.format();
+            let empty = tileless
+                && fmt.alpha
+                && if fmt.sample == SampleType::U8 { surface.default_bytes().last() == Some(&0) } else { surface.default_pixel().last() == Some(&0.0) };
+            if tilemap && (source.is_some_and(|c| c.pixels != *surface) || source.is_none() && !empty) {
                 return Err("rasterize a copy of this tilemap before editing its pixels; tile ids and tilesets were left unchanged".into());
             }
+            if source.is_none() && empty {
+                capture_opacity(layer.opacity, base, None);
+                continue;
+            }
+            let bounds = if source.is_none() && tileless {
+                let bounds = self.bounds();
+                if bounds.is_empty() {
+                    return Err("cannot capture a nontransparent sprite layer without canvas bounds".into());
+                }
+                bounds
+            } else {
+                crate::Rect::EMPTY
+            };
             let mut cel = source.map(|c| c.as_ref().clone()).unwrap_or_else(|| SpriteCel {
-                rect: surface.content_bounds(),
-                pixels: Surface::new(surface.format()),
+                rect: bounds.union(&surface.content_bounds()),
+                pixels: Surface::new(fmt),
                 indices: None,
                 opacity: 255,
                 z_index: 0,
                 linked_frame: None,
                 precise: None,
             });
-            if source.is_none() && surface.tile_count() == 0 {
-                capture_opacity(layer.opacity, base, None);
-                continue;
-            }
             capture_opacity(layer.opacity, base, Some(&mut cel));
             if base.flags & 64 != 0 {
                 // Reference geometry/samples remain original; only the projected opacity changes.
@@ -246,7 +259,7 @@ impl Document {
                 }
             }
         }
-        sprite.validate()?;
+        sprite.validate_for_document(self.mode, self.depth)?;
         self.apply_sprite(sprite, current)
     }
 
@@ -255,7 +268,7 @@ impl Document {
         let frame = sprite.frames.get(index).ok_or("sprite frame is missing")?;
         let fmt = PixelFormat::new(if self.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb }, SampleType::U8, true);
         let mut layers = self.layers.clone();
-        project(&mut layers, sprite, index, fmt, 0)?;
+        project(&mut layers, &layer_lookup(sprite), frame, fmt, 0)?;
         self.layers = layers;
         if sprite.indexed {
             self.color_table = Some(ColorTable {
@@ -293,7 +306,7 @@ impl Document {
     /// stale display cache over authoritative cel data.
     pub fn restore_sprite_frame(&mut self) -> Result<(), String> {
         let Some(sprite) = self.sprite.take() else { return Ok(()) };
-        let result = sprite.validate().and_then(|()| self.apply_sprite(&sprite, sprite.current));
+        let result = sprite.validate_for_document(self.mode, self.depth).and_then(|()| self.apply_sprite(&sprite, sprite.current));
         self.sprite = Some(sprite);
         result
     }

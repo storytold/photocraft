@@ -4,6 +4,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use photocraft_color::{ColorMode, SampleType};
 use serde::{Deserialize, Serialize};
 
 use crate::{LayerId, Rect, Surface};
@@ -23,6 +24,14 @@ pub const MAX_CELS: usize = 65_536;
 pub const MAX_BYTES: usize = 256 << 20;
 /// Maximum retained metadata and palette-name storage, in bytes.
 pub const MAX_METADATA: usize = 32 << 20;
+
+/// Maximum paint-palette size for RGB and grayscale sprites.
+pub const MAX_PAINT_PALETTE: usize = 4096;
+
+/// Maximum palette size for the sprite's color mode.
+pub const fn palette_limit(indexed: bool) -> usize {
+    if indexed { 256 } else { MAX_PAINT_PALETTE }
+}
 
 /// One named RGBA8 entry; equal colors may intentionally have different indices.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
@@ -150,9 +159,26 @@ impl Sprite {
         self.frames.iter().any(|frame| frame.metadata.iter().any(|chunk| chunk.kind == Self::SLICE_CHUNK))
     }
 
-    /// Validate native/command-created state before any projection, editing or export.
-    /// Counts distinct allocated tiles, including boundary tiles and linked image storage.
+    /// Validate sprite data independently of its owning document.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_cels(None)
+    }
+
+    /// Validate sprite data and require cel surfaces to match the owning document.
+    pub(crate) fn validate_for_document(&self, mode: ColorMode, depth: SampleType) -> Result<(), String> {
+        let expected = match mode {
+            ColorMode::Indexed if self.indexed => ColorMode::Rgb,
+            ColorMode::Rgb | ColorMode::Grayscale if !self.indexed => mode,
+            _ => return Err("sprite color mode does not match its document. Convert a separate copy".into()),
+        };
+        if depth != SampleType::U8 {
+            return Err("sprite bit depth does not match its document. Convert a separate copy".into());
+        }
+        self.validate_cels(Some(expected))
+    }
+
+    /// Count distinct allocated tiles, including boundary tiles and linked image storage.
+    fn validate_cels(&self, mut expected_mode: Option<ColorMode>) -> Result<(), String> {
         if self.frames.is_empty() || self.frames.len() > MAX_FRAMES || self.current >= self.frames.len() || self.layers.len() > 4096 {
             return Err("invalid sprite frame/layer count or selected frame".into());
         }
@@ -171,7 +197,7 @@ impl Sprite {
             let mut projected = 0usize;
             count = count.checked_add(frame.cels.len()).ok_or("sprite cel count overflow")?;
             chunk_count = chunk_count.checked_add(frame.metadata.len()).ok_or("sprite chunk count overflow")?;
-            if count > MAX_CELS || chunk_count > MAX_CELS || frame.palette.len() > 256 || (self.indexed && frame.palette.is_empty()) {
+            if count > MAX_CELS || chunk_count > MAX_CELS || frame.palette.len() > palette_limit(self.indexed) || (self.indexed && frame.palette.is_empty()) {
                 return Err("sprite cel/palette limit exceeded".into());
             }
             if palettes.insert(Arc::as_ptr(&frame.palette)) {
@@ -179,7 +205,7 @@ impl Sprite {
                     if entry.name.len() > 65_535 {
                         return Err("sprite palette name is too long".into());
                     }
-                    metadata = metadata.checked_add(entry.name.len()).ok_or("sprite metadata size overflow")?;
+                    metadata = metadata.checked_add(std::mem::size_of::<PaletteEntry>() + entry.name.len()).ok_or("sprite metadata size overflow")?;
                 }
             }
             for chunk in &frame.metadata {
@@ -204,9 +230,12 @@ impl Sprite {
                 }
                 pixels::checked_rect(cel.rect, if self.indexed { 5 } else { cel.pixels.format().bytes_per_pixel() })?;
                 let fmt = cel.pixels.format();
-                if !matches!(fmt.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale)
-                    || self.indexed && fmt.mode != photocraft_color::ColorMode::Rgb
-                    || fmt.sample != photocraft_color::SampleType::U8
+                if fmt.mode != *expected_mode.get_or_insert(fmt.mode) {
+                    return Err("sprite cel color modes must match each other and the document. Convert a separate copy".into());
+                }
+                if !matches!(fmt.mode, ColorMode::Rgb | ColorMode::Grayscale)
+                    || self.indexed && fmt.mode != ColorMode::Rgb
+                    || fmt.sample != SampleType::U8
                     || !fmt.alpha
                 {
                     return Err("invalid sprite pixel surface format".into());

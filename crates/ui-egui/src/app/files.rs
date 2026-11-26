@@ -241,6 +241,7 @@ impl PhotocraftApp {
         // Photoshop's Save does once pixels are deleted (#2223).
         let transparent_jpeg = ext.as_deref().and_then(photocraft_formats::from_extension) == Some(photocraft_formats::Format::Jpeg)
             && plain_raster(&st.doc).is_some_and(|l| !crate::opaque_layer(&st.doc, l));
+        let sprite_short_extension = st.doc.sprite.is_some() && ext.as_deref() == Some("ase");
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (matches!(e.as_str(), "ora" | "aseprite" | "ase") && holds_document)
@@ -248,10 +249,12 @@ impl PhotocraftApp {
         });
         let suggested = match &st.path {
             Some(p) if transparent_jpeg => std::path::Path::new(p).with_extension("png").to_string_lossy().into_owned(),
+            Some(p) if sprite_short_extension => std::path::Path::new(p).with_extension("aseprite").to_string_lossy().into_owned(),
             Some(p) if writable => p.clone(),
             p => {
                 let source = p.as_deref().unwrap_or(&st.doc.name);
                 let ext = match photocraft_engine::file_cmds::extension(source).as_deref() {
+                    Some("ase") if st.doc.sprite.is_some() => "aseprite",
                     Some("pdn") => "pcraft",
                     Some("kra" | "krz") => "ora",
                     _ => "psd",

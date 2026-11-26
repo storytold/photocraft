@@ -570,12 +570,13 @@ pub enum ImportPreflight {
 
 /// Which [`ImportPreflight`] applies to importing `name` and `bytes`.
 ///
-/// The order matches [`import_stages`]; keep the two in step.
+/// Uses the same document-format detection as [`import_stages`].
 pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
-    if aseprite::is_aseprite(bytes) {
+    let (route, format) = detect_import(name, bytes);
+    if route == Route::Aseprite {
         return ImportPreflight::Unbounded;
     }
-    match photocraft_formats::detect(name, bytes) {
+    match format {
         Some(photocraft_formats::Format::Psd) => ImportPreflight::Psd,
         Some(photocraft_formats::Format::Tiff) => ImportPreflight::Tiff,
         Some(
@@ -590,7 +591,6 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
             | photocraft_formats::Format::Svgz
             | photocraft_formats::Format::Pdf,
         ) => ImportPreflight::Unbounded,
-        None if has_extension(name, "aseprite") => ImportPreflight::Unbounded,
         _ => ImportPreflight::Flat,
     }
 }
@@ -997,12 +997,17 @@ pub(crate) enum Route {
 
 /// Which importer takes the file `name` holding `bytes`. The checks run in this order.
 pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
+    detect_import(name, bytes).0
+}
+
+fn detect_import(name: &str, bytes: &[u8]) -> (Route, Option<photocraft_formats::Format>) {
     // The shared registry's .ase format is Adobe Swatch Exchange. Only the cel
     // header identifies an Aseprite document with that short extension.
     if aseprite::is_aseprite(bytes) {
-        return Route::Aseprite;
+        return (Route::Aseprite, None);
     }
-    match photocraft_formats::detect(name, bytes) {
+    let format = photocraft_formats::detect(name, bytes);
+    let route = match format {
         Some(photocraft_formats::Format::Pcraft) => Route::Pcraft,
         Some(photocraft_formats::Format::Psd) if is_psd(bytes) => Route::Psd,
         Some(photocraft_formats::Format::Psd) => Route::NamedPsd,
@@ -1016,7 +1021,8 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
         Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz) => Route::Svg,
         None if has_extension(name, "aseprite") => Route::Aseprite,
         _ => Route::Flat,
-    }
+    };
+    (route, format)
 }
 
 fn route_forced(ext: &str) -> Route {
@@ -1064,20 +1070,14 @@ fn import_stages(
             return pdf_import::import(name, bytes, opts, ctl);
         }
         route_forced(&ext)
-    } else if aseprite::is_aseprite(bytes) {
-        Route::Aseprite
     } else {
-        // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
-        // before PDF).
-        if is_svg_input(name, bytes) {
-            return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
-        }
-        // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
-        // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
-        if photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Pdf) {
+        let (route, format) = detect_import(name, bytes);
+        // PDF also recognizes .ai files by signature. A recognized raster signature takes
+        // precedence over a misleading .pdf suffix.
+        if format == Some(photocraft_formats::Format::Pdf) {
             return pdf_import::import(name, bytes, opts, ctl);
         }
-        route(name, bytes)
+        route
     };
     match selected {
         Route::Pcraft => {

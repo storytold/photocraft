@@ -279,10 +279,14 @@ fn remove_frame(s: &mut Session) -> Result<Value> {
                 let cel = Arc::make_mut(cel);
                 cel.linked_frame = match cel.linked_frame {
                     Some(link) if link == at => {
-                        if let Some(record) = tilemaps.get(&id) {
-                            frame.metadata.push(record.clone().ok_or_else(|| bad("linked tilemap cel has no source record"))?);
+                        if let Some(target) = removed.cels.get(&id).and_then(|cel| cel.linked_frame) {
+                            Some(target - usize::from(target > at))
+                        } else {
+                            if let Some(record) = tilemaps.get(&id) {
+                                frame.metadata.push(record.clone().ok_or_else(|| bad("linked tilemap cel has no source record"))?);
+                            }
+                            None
                         }
-                        None
                     }
                     Some(link) if link > at => Some(link - 1),
                     other => other,
@@ -364,15 +368,15 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sprite Playback",
             menu: &[],
             shortcut: None,
-            params: "{elapsedMs:u64,tag?:index} → {frame,finished}",
+            params: "{elapsedMs:u64,tag?:index} → {frame,finished,nextFrameInMs}",
             enabled,
             journal: false,
             run: |s, p| {
                 let elapsed = integer(p, "elapsedMs", u64::MAX)?;
                 let tag = p.get("tag").filter(|v| !v.is_null()).map(|_| integer(p, "tag", 65535).map(|n| n as usize)).transpose()?;
                 let sprite = s.active().and_then(|d| d.doc.sprite.as_ref()).ok_or_else(|| bad("no cel animation"))?;
-                let (frame, finished) = sprite.playback_frame(elapsed, tag).map_err(EngineError::Other)?;
-                Ok(json!({"frame":frame,"finished":finished}))
+                let (frame, delay) = sprite.playback_timing(elapsed, tag).map_err(EngineError::Other)?;
+                Ok(json!({"frame":frame,"finished":delay.is_none(),"nextFrameInMs":delay}))
             },
         },
         CommandSpec {

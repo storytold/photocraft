@@ -200,6 +200,8 @@ fn aseprite_application_authored_frames_and_tilemaps_match_application_rendered_
             for frame in 0..count {
                 candidate.select_sprite_frame(frame).unwrap();
                 let actual = photocraft_compose::flatten(&candidate);
+                assert_eq!(actual.rect.height(), oracle.rect.height(), "{name} frame {frame}");
+                assert_eq!(actual.px.len(), width * oracle.rect.height() as usize, "{name} frame {frame}");
                 for (i, a) in actual.px.iter().enumerate() {
                     let b = oracle.px[i / width * width * count + frame * width + i % width];
                     for c in 0..4 {
@@ -248,22 +250,29 @@ fn aseprite_tilemaps_keep_ids_tilesets_properties_and_all_transform_pixels_throu
     }
 }
 
-/// Independent fixtures preserve exact indices, timing, links and metadata through both save formats.
+/// Native storage preserves offset links; explicit unlinking lets Aseprite retain the images.
 #[test]
-fn aseprite_independent_animation_writer_fixture_survives_native_and_aseprite_export() {
+fn aseprite_independent_animation_writer_fixture_survives_native_and_explicit_unlink_export() {
     use photocraft_doc::sprite::MetadataTarget;
+    use std::sync::Arc;
     let source = include_bytes!("../fixtures/aseprite/animation.aseprite");
     let doc = photocraft_io::import("animation.aseprite", source).unwrap().document;
     assert_eq!(doc.mode, photocraft_color::ColorMode::Indexed);
     let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
-    let restored = photocraft_format::load_from_bytes(&native).unwrap();
+    let mut restored = photocraft_format::load_from_bytes(&native).unwrap();
+    let id = restored.layers[0].id;
+    assert_eq!(restored.sprite.as_ref().unwrap().frames[1].cels[&id].linked_frame, Some(0));
+    let error = photocraft_io::export(&restored, "aseprite", &Default::default()).unwrap_err().to_string();
+    assert!(error.contains("different positions") && error.contains(".pcraft"), "{error}");
+    let frame = Arc::make_mut(&mut restored.sprite.as_mut().unwrap().frames[1]);
+    Arc::make_mut(frame.cels.get_mut(&id).unwrap()).linked_frame = None;
     let out = photocraft_io::export(&restored, "aseprite", &Default::default()).unwrap();
     let mut back = photocraft_io::import("back.aseprite", &out.bytes).unwrap().document;
     let s = back.sprite.as_ref().unwrap();
     let id = back.layers[0].id;
     assert_eq!(s.frames.iter().map(|f| f.duration_ms).collect::<Vec<_>>(), [17, 83, 29]);
     assert_eq!(s.frames[0].cels[&id].indices.as_ref().unwrap().to_interleaved(photocraft_geom::Rect::from_xywh(-1, 0, 2, 2)), [1, 2, 3, 0]);
-    assert_eq!(s.frames[1].cels[&id].linked_frame, Some(0));
+    assert_eq!(s.frames[1].cels[&id].linked_frame, None);
     assert!(s.frames[2].cels.is_empty());
     assert_eq!(s.frames[0].palette[1].name, "Red A");
     assert_eq!(s.frames[0].palette[2].name, "Red B");
@@ -387,4 +396,44 @@ fn aseprite_import_25mp_release_benchmark() {
     assert_eq!(surface.pixel(0, 0), [32.0 / 255.0, 64.0 / 255.0, 96.0 / 255.0, 1.0]);
     assert_eq!(surface.content_bounds(), r.document.bounds());
     eprintln!("25 MP Aseprite import: {elapsed:?}, {} source bytes", bytes.len());
+}
+
+#[test]
+fn editable_export_refuses_saved_layer_comps() {
+    let mut doc = photocraft_io::import("layers.aseprite", LAYERS).unwrap().document;
+    let export = |doc: &photocraft_doc::Document| photocraft_io::export(doc, "aseprite", &Default::default());
+    assert!(export(&doc).is_ok());
+    doc.layer_comps.push(photocraft_doc::LayerComp {
+        id: 1,
+        name: "Alternate".into(),
+        comment: String::new(),
+        apply_visibility: true,
+        apply_position: false,
+        apply_appearance: false,
+        states: photocraft_doc::comps::capture_states(&doc),
+    });
+    let error = export(&doc).unwrap_err().to_string();
+    assert!(error.contains("Layer Comps") && error.contains(".pcraft"), "{error}");
+}
+
+#[test]
+fn native_load_rejects_sprite_cels_in_a_different_color_mode() {
+    use photocraft_color::ColorMode;
+    use photocraft_format::zip::{ZipReader, ZipWriter};
+
+    let doc = photocraft_io::import("layers.aseprite", LAYERS).unwrap().document;
+    let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+    let zip = ZipReader::new(&bytes).unwrap();
+    let mut changed = ZipWriter::new();
+    for entry in &zip.entries {
+        let mut data = zip.read(entry, usize::MAX).unwrap();
+        if entry.name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            *manifest.pointer_mut("/document/mode").unwrap() = serde_json::to_value(ColorMode::Grayscale).unwrap();
+            data = serde_json::to_vec(&manifest).unwrap();
+        }
+        changed.add(&entry.name, &data).unwrap();
+    }
+    let error = photocraft_format::load_from_bytes(&changed.finish().unwrap()).unwrap_err().to_string();
+    assert!(error.contains("sprite cel color mode"), "{error}");
 }

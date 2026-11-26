@@ -8,7 +8,7 @@ use std::{
 
 use photocraft_doc::{
     LayerId,
-    sprite::{MAX_BYTES, MAX_CELS, MAX_FRAMES, MAX_METADATA, Sprite, SpriteCel, SpriteChunk, SpriteFrame},
+    sprite::{MAX_BYTES, MAX_CELS, MAX_FRAMES, MAX_METADATA, Sprite, SpriteCel, SpriteChunk, SpriteFrame, palette_limit},
 };
 
 use super::{FormatError, Loader, Result, Sink, surface_m};
@@ -71,7 +71,7 @@ impl Loader<'_> {
             || m.current >= m.frames.len()
             || m.layers.len() > 4096
             || m.palettes.len() > MAX_FRAMES
-            || m.palettes.iter().any(|p| p.len() > 256)
+            || m.palettes.iter().any(|p| p.len() > palette_limit(m.indexed))
         {
             return Err(bad("invalid sprite frame/palette/layer count"));
         }

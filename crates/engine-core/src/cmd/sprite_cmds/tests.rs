@@ -354,7 +354,11 @@ fn shrinking_an_indexed_palette_cannot_leave_locked_reference_cels_out_of_range(
     doc.layers[0].locks.all = true;
     let mut s = add_to_session(doc);
     assert_refused_unchanged(&mut s, "image.mode.colorTable", json!({"colors": ["#000000", "#ff0000"], "transparent": 0}));
-    let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+    let mut copy = s.active().unwrap().doc.as_ref().clone();
+    let id = copy.layers[0].id;
+    let frame = Arc::make_mut(&mut copy.sprite.as_mut().unwrap().frames[1]);
+    Arc::make_mut(frame.cels.get_mut(&id).unwrap()).linked_frame = None;
+    let out = photocraft_io::export(&copy, "aseprite", &Default::default()).unwrap();
     photocraft_io::import("reference.aseprite", &out.bytes).unwrap();
 }
 
@@ -717,4 +721,28 @@ fn canvas_turn_refuses_unrepresentable_cel_coordinates_without_panicking() {
     let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
     assert!(error.to_string().contains("coordinate range"), "{error}");
     assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}
+
+#[test]
+fn deleting_a_linked_frame_preserves_links_to_its_surviving_source() {
+    for (surviving_at, deleted_at, child_at) in [(0, 1, 2), (2, 0, 1)] {
+        let mut doc = (*session().active().unwrap().doc).clone();
+        let id = doc.layers[0].id;
+        let sprite = doc.sprite.as_mut().unwrap();
+        let base = sprite.frames[0].clone();
+        sprite.frames = vec![base.clone(); 3];
+        for (frame, target) in [(deleted_at, surviving_at), (child_at, deleted_at)] {
+            let frame = Arc::make_mut(&mut sprite.frames[frame]);
+            Arc::make_mut(frame.cels.get_mut(&id).unwrap()).linked_frame = Some(target);
+        }
+        doc.timeline = Some(photocraft_doc::Timeline::new(3, 10.0));
+        let mut s = add_to_session(doc);
+        s.execute("timeline.setFrame", json!({"frame": deleted_at})).unwrap();
+        s.execute("sprite.deleteFrame", json!({})).unwrap();
+        let remaining = &s.active().unwrap().doc.sprite.as_ref().unwrap().frames;
+        let source = surviving_at - usize::from(surviving_at > deleted_at);
+        let child = child_at - usize::from(child_at > deleted_at);
+        assert_eq!(remaining[child].cels[&id].linked_frame, Some(source));
+        assert_eq!(remaining[child].cels[&id].pixels, remaining[source].cels[&id].pixels);
+    }
 }

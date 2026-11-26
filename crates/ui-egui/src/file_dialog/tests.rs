@@ -670,6 +670,18 @@ fn save_suggestions_preserve_explicit_directories_and_untitled_names() {
 }
 
 #[test]
+fn sprite_save_as_suggests_aseprite_with_document_filters() {
+    for path in [Some("sprite.ASE".into()), None] {
+        let (mut app, files, _) = app();
+        let doc = photocraft_io::import("sprite.ASE", include_bytes!("../../../io/tests/fixtures/aseprite/layers.aseprite")).unwrap().document;
+        app.session.add_document(doc, path);
+        app.save_as(None).unwrap();
+        assert_eq!(asked_save(&files), "sprite.aseprite");
+        assert!(last_request(&files).filters.iter().any(|f| f.extensions.iter().any(|ext| ext == "pcraft")));
+    }
+}
+
+#[test]
 fn the_answer_goes_to_the_document_it_was_asked_for() {
     let (mut app, files, written) = app();
     let ctx = egui::Context::default();

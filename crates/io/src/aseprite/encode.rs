@@ -24,17 +24,20 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
     }
     let mut copy = doc.clone();
     copy.capture_sprite_frame().map_err(invalid)?;
-    let synthesized;
-    let sprite = match &copy.sprite {
-        Some(s) => s,
-        None => {
-            synthesized = from_document(&copy)?;
-            &synthesized
-        }
+    let mut sprite = match copy.sprite.take() {
+        Some(sprite) => sprite,
+        None => from_document(&copy)?,
     };
     sprite.validate().map_err(invalid)?;
-    validate_tilemaps(sprite, copy.mode, ctl)?;
+    validate_tilemaps(&sprite, copy.mode, ctl)?;
+    let sprite = &mut sprite;
     let layers = layers(&copy, sprite)?;
+    for (layer, _) in &layers {
+        if layer.is_group() && sprite.frames.iter().any(|frame| frame.cels.contains_key(&layer.id)) {
+            return Err(invalid("a group layer cannot own a sprite cel"));
+        }
+    }
+    rebase_links(sprite, ctl)?;
     let tilemap_layers: std::collections::BTreeSet<_> = sprite.tilemap_layers().collect();
     if layers.len() > MAX_LAYERS {
         return Err(invalid("layer count exceeds 4096"));
@@ -104,9 +107,6 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
             }
         }
         for (index, (layer, _)) in layers.iter().enumerate() {
-            if layer.is_group() && frame.cels.contains_key(&layer.id) {
-                return Err(invalid("a group layer cannot own a sprite cel"));
-            }
             let Some(cel) = frame.cels.get(&layer.id) else { continue };
             let tilemap = frame.metadata.iter().find(|m| m.kind == 0x2005 && m.target == MetadataTarget::Cel(layer.id)).map(|m| m.bytes.as_slice());
             if tilemap_layers.contains(&layer.id) && cel.linked_frame.is_none() && tilemap.is_none() {
@@ -401,17 +401,97 @@ fn cel_chunk(index: usize, cel: &SpriteCel, indexed: bool, tilemap: Option<&[u8]
         // validate_tilemaps already decoded and checked this record before encoding.
         data.extend(raw.get(16..).ok_or_else(|| invalid("truncated tilemap record"))?);
     } else {
+        if cel.rect.is_empty() {
+            return Err(invalid("Aseprite requires positive image cel dimensions. Save a .pcraft copy instead"));
+        }
         data.extend(u16::try_from(cel.rect.width()).map_err(|_| invalid("cel width overflow"))?.to_le_bytes());
         data.extend(u16::try_from(cel.rect.height()).map_err(|_| invalid("cel height overflow"))?.to_le_bytes());
         let surface = if indexed { cel.indices.as_ref().ok_or_else(|| invalid("indexed cel has no indices"))? } else { &cel.pixels };
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-        for y in cel.rect.y0..if cel.rect.is_empty() { cel.rect.y0 } else { cel.rect.y1 } {
+        for y in cel.rect.y0..cel.rect.y1 {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             z.write_all(&surface.to_interleaved(Rect::from_xywh(cel.rect.x0, y, cel.rect.width(), 1))).map_err(|e| invalid(e.to_string()))?;
         }
         data.extend(z.finish().map_err(|e| invalid(e.to_string()))?);
     }
     chunk(0x2005, data)
+}
+
+/// Keep ordinary backward links intact. A group with forward links can be written with
+/// its first cel as the image source if it shares the same samples and placement.
+fn rebase_links(sprite: &mut Sprite, ctl: &Interrupt<'_>) -> Result<()> {
+    use std::collections::BTreeSet;
+
+    let mut forward = Vec::new();
+    for (frame_index, frame) in sprite.frames.iter().enumerate() {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        for (&id, cel) in &frame.cels {
+            if let Some(link) = cel.linked_frame {
+                let target = &sprite.frames[link].cels[&id];
+                if (cel.rect.x0, cel.rect.y0, cel.opacity) != (target.rect.x0, target.rect.y0, target.opacity) {
+                    return Err(invalid("linked cels have different positions or opacity. Unlink them explicitly or save a .pcraft copy"));
+                }
+                if link > frame_index {
+                    forward.push((frame_index, id));
+                }
+            }
+        }
+    }
+    if forward.is_empty() {
+        return Ok(());
+    }
+
+    // Sprite::validate has already checked that links exist and are acyclic.
+    let mut roots = BTreeMap::new();
+    let mut forward_roots = BTreeSet::new();
+    for (frame_index, frame) in sprite.frames.iter().enumerate() {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        for &id in frame.cels.keys() {
+            let mut at = frame_index;
+            let mut path = Vec::new();
+            let root = loop {
+                if let Some(&root) = roots.get(&(at, id)) {
+                    break root;
+                }
+                path.push(at);
+                match sprite.frames[at].cels[&id].linked_frame {
+                    Some(next) => at = next,
+                    None => break at,
+                }
+            };
+            roots.extend(path.into_iter().map(|at| ((at, id), root)));
+        }
+    }
+    for key @ (_, id) in forward {
+        forward_roots.insert((roots[&key], id));
+    }
+    let tilemap_layers: BTreeSet<_> = sprite.tilemap_layers().collect();
+    let mut first_frames = BTreeMap::new();
+    let mut records = Vec::new();
+    for ((at, id), root) in roots {
+        if !forward_roots.contains(&(root, id)) {
+            continue;
+        }
+        let first = *first_frames.entry((root, id)).or_insert(at);
+        let source = &sprite.frames[root].cels[&id];
+        let cel = &sprite.frames[at].cels[&id];
+        let same_image = cel.rect == source.rect && if sprite.indexed { cel.indices == source.indices } else { cel.pixels == source.pixels };
+        if !same_image {
+            return Err(invalid("a forward-linked cel group cannot share an earlier image. Save a .pcraft copy"));
+        }
+        if at == first && tilemap_layers.contains(&id) {
+            let record = sprite.tilemap_cel_record(root, id).ok_or_else(|| invalid("forward-linked tilemap has no source record. Save a .pcraft copy"))?;
+            records.push((root, first, id, record.clone()));
+        }
+        let frame = Arc::make_mut(&mut sprite.frames[at]);
+        let cel = frame.cels.get_mut(&id).ok_or_else(|| invalid("linked cel is missing"))?;
+        Arc::make_mut(cel).linked_frame = (at != first).then_some(first);
+    }
+    for (root, first, id, record) in records {
+        Arc::make_mut(&mut sprite.frames[root]).metadata.retain(|m| m.kind != 0x2005 || m.target != MetadataTarget::Cel(id));
+        Arc::make_mut(&mut sprite.frames[first]).metadata.push(record);
+    }
+    Ok(())
 }
 
 /// Write named RGBA palette entries without collapsing duplicate colors or index positions.
@@ -534,7 +614,8 @@ fn validate_tilemaps(sprite: &Sprite, mode: ColorMode, ctl: &Interrupt<'_>) -> R
                 let cel = frame.cels.get(&id).ok_or_else(|| invalid("tilemap cel is missing"))?;
                 let map = tilemap::map(&c.bytes)?;
                 let rect = map.rect(set, (cel.rect.x0, cel.rect.y0), if sprite.indexed { 5 } else { fmt.bytes_per_pixel() })?;
-                let tiles = map.inflate(sprite::MAX_BYTES.saturating_sub(bytes), ctl)?;
+                let remaining = tilemap::after_display(rect, fmt.bytes_per_pixel(), sprite::MAX_BYTES - bytes)?;
+                let tiles = map.inflate(remaining, ctl)?;
                 let pixels = tilemap::render(&map, &tiles, set, rect, fmt, sprite.indexed.then_some(sprite.transparent_index), ctl)?;
                 let stored = if sprite.indexed { cel.indices.as_ref().ok_or_else(|| invalid("tilemap index image is missing"))? } else { &cel.pixels };
                 if rect != cel.rect || pixels != *stored {

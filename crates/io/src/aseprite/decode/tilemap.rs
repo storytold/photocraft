@@ -162,6 +162,12 @@ pub(in crate::aseprite) fn map(data: &[u8]) -> Result<Map<'_>> {
     Ok(Map { width, height, masks, compressed })
 }
 
+/// Reserve the surface's full tile footprint before allocating any transient map words.
+pub(in crate::aseprite) fn after_display(rect: Rect, bpp: usize, budget: usize) -> Result<usize> {
+    let bytes = usize::try_from(rect.tile_count()).ok().and_then(|n| n.checked_mul(256 * 256 * bpp)).ok_or_else(|| invalid("cel tile size overflow"))?;
+    budget.checked_sub(bytes).ok_or_else(|| invalid("decoded sprite tiles exceed the remaining memory budget (256 MiB total)"))
+}
+
 /// Render supported tile transformations while refusing invalid IDs and non-square diagonal tiles.
 pub(in crate::aseprite) fn render(
     map: &Map<'_>,
@@ -272,9 +278,11 @@ impl Decoder<'_> {
                 let palette = frame.palette.clone();
                 let bpp = if self.indexed { 5 } else { self.fmt.bytes_per_pixel() };
                 let rect = parsed.rect(set, (cel.rect.x0, cel.rect.y0), bpp)?;
-                self.charge(rect, bpp)?;
-                let tiles = parsed.inflate(self.budget, self.ctl)?;
                 let fmt = if self.indexed { PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false) } else { self.fmt };
+                // Map words are dropped before rendering the RGB cache of an indexed display.
+                let remaining = after_display(rect, fmt.bytes_per_pixel(), self.budget)?;
+                self.charge(rect, bpp)?;
+                let tiles = parsed.inflate(remaining, self.ctl)?;
                 let pixels = render(&parsed, &tiles, set, rect, fmt, self.indexed.then_some(self.transparent), self.ctl)?;
                 drop(tiles);
                 let display = if self.indexed {

@@ -316,8 +316,8 @@ fn animated_indexed_sprite_roundtrips_indices_links_palettes_tags_and_native_edi
     let bytes = frames(
         8,
         &[
-            (17, vec![layer("Ink", 0, 0, 3, 0, 255), palette(&first), cel(0, [2, 1], [-1, 0], 255, &[1, 2], true), chunk(0x2018, &tag)]),
-            (83, vec![palette(&second), linked(0, [0, 1], 0)]),
+            (17, vec![layer("Ink", 0, 0, 3, 0, 255), palette(&first), cel(0, [2, 1], [-1, 0], 128, &[1, 2], true), chunk(0x2018, &tag)]),
+            (83, vec![palette(&second), linked(0, [-1, 0], 0)]),
             (29, vec![]),
         ],
     );
@@ -326,9 +326,9 @@ fn animated_indexed_sprite_roundtrips_indices_links_palettes_tags_and_native_edi
     let id = doc.layers[0].id;
     assert_eq!(doc.sprite.as_ref().unwrap().frames[0].cels[&id].indices.as_ref().unwrap().to_interleaved(Rect::from_xywh(-1, 0, 2, 1)), [1, 2]);
     doc.select_sprite_frame(1).unwrap();
-    assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 1), [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(doc.layers[0].surface().unwrap().pixel(-1, 0), [0.0, 1.0, 0.0, 1.0]);
     let LayerContent::Raster(surface) = &mut doc.layers[0].content else { panic!("raster") };
-    surface.write_pixel(0, 1, &[0.0, 0.0, 1.0, 128.0 / 255.0]);
+    surface.write_pixel(-1, 0, &[0.0, 0.0, 1.0, 128.0 / 255.0]);
     doc.capture_sprite_frame().unwrap();
     let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let back = photocraft_format::load_from_bytes(&native).unwrap();
@@ -340,8 +340,8 @@ fn animated_indexed_sprite_roundtrips_indices_links_palettes_tags_and_native_edi
     assert_eq!(s.tags[0].repeat, 3);
     assert_eq!(s.tags[0].direction, 2);
     let id = back.layers[0].id;
-    for (i, rect) in [(0, Rect::from_xywh(-1, 0, 2, 1)), (1, Rect::from_xywh(0, 1, 2, 1))] {
-        assert_eq!(s.frames[i].cels[&id].indices.as_ref().unwrap().to_interleaved(rect), [3, 2]);
+    for frame in &s.frames[..2] {
+        assert_eq!(frame.cels[&id].indices.as_ref().unwrap().to_interleaved(Rect::from_xywh(-1, 0, 2, 1)), [3, 2]);
     }
     assert_eq!(s.frames[1].cels[&id].linked_frame, Some(0));
     assert!(s.frames[2].cels.is_empty());
@@ -393,7 +393,10 @@ fn export_places_sprite_data_before_layers_and_completes_tileset_user_data_seque
         }
         out
     }
-    let doc = read(include_bytes!("../../tests/fixtures/aseprite/animation.aseprite")).unwrap().document;
+    let mut doc = read(include_bytes!("../../tests/fixtures/aseprite/animation.aseprite")).unwrap().document;
+    let id = doc.layers[0].id;
+    let frame = Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[1]);
+    Arc::make_mut(frame.cels.get_mut(&id).unwrap()).linked_frame = None;
     let out = super::export(&doc, &Interrupt::NONE).unwrap();
     let frame_len = u32::from_le_bytes(out.bytes[128..132].try_into().unwrap()) as usize;
     let order = kinds(&out.bytes[..128 + frame_len]);
@@ -414,24 +417,31 @@ fn empty_documents_roundtrip_without_inventing_layers() {
     assert_eq!(back.size, doc.size);
 }
 
-/// An explicitly empty cel remains distinguishable from a missing cel after export/import.
+/// Native storage preserves zero-size image cels. Aseprite export only accepts positive sizes.
 #[test]
-fn explicit_empty_cels_are_distinct_from_absent_cels_and_survive_roundtrips() {
-    for compressed in [false, true] {
-        let bytes = frames(32, &[(17, vec![layer("L", 0, 0, 3, 0, 255), cel(0, [0, 65535], [-1, 2], 127, &[], compressed)]), (83, vec![])]);
+fn explicit_image_cels_require_positive_dimensions_on_export() {
+    let plain = layer("Ink", 0, 0, 3, 0, 255);
+    for (size, compressed) in [([0, 65535], false), ([0, 65535], true), ([1, 0], false)] {
+        let bytes = frames(32, &[(17, vec![plain.clone(), cel(0, size, [-1, 2], 127, &[], compressed)]), (83, vec![])]);
         let doc = read(&bytes).unwrap().document;
-        let s = doc.sprite.as_ref().unwrap();
-        let c = s.frames[0].cels.values().next().unwrap();
-        assert_eq!(c.rect, Rect::from_xywh(-1, 2, 0, 65535));
-        assert_eq!(c.pixels.tile_count(), 0);
-        assert!(s.frames[1].cels.is_empty());
         let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
-        let back = photocraft_format::load_from_bytes(&native).unwrap();
-        let output = super::export(&back, &Interrupt::NONE).unwrap();
-        let back = read(&output.bytes).unwrap().document;
-        assert_eq!(back.sprite.as_ref().unwrap().frames[0].cels.len(), 1);
-        assert!(back.sprite.as_ref().unwrap().frames[1].cels.is_empty());
+        for stored in [doc, photocraft_format::load_from_bytes(&native).unwrap()] {
+            let sprite = stored.sprite.as_ref().unwrap();
+            let cel = &sprite.frames[0].cels[&stored.layers[0].id];
+            assert_eq!(cel.rect, Rect::from_xywh(-1, 2, size[0].into(), size[1].into()));
+            assert_eq!(cel.pixels.tile_count(), 0);
+            assert!(sprite.frames[1].cels.is_empty());
+            let error = crate::export(&stored, "aseprite", &Default::default()).unwrap_err().to_string();
+            assert!(error.contains("positive image cel dimensions") && error.contains(".pcraft"), "{error}");
+        }
     }
+    let source = frames(32, &[(17, vec![plain, cel(0, [1, 1], [0, 0], 255, &[0; 4], true)]), (29, vec![])]);
+    let doc = read(&source).unwrap().document;
+    let output = crate::export(&doc, "aseprite", &Default::default()).unwrap();
+    let back = read(&output.bytes).unwrap().document;
+    let frames = &back.sprite.as_ref().unwrap().frames;
+    assert_eq!(frames[0].cels[&back.layers[0].id].pixels.pixel(0, 0), [0.0; 4]);
+    assert!(frames[1].cels.is_empty());
 }
 
 /// Indexed tilemaps retain a nonzero empty index and original per-tile sample identity.
@@ -464,6 +474,8 @@ fn indexed_tilemaps_keep_nonzero_empty_index_and_tile_samples() {
     map.extend([0; 10]);
     let ids = [0u32, 1].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
     map.extend(miniz_oxide::deflate::compress_to_vec_zlib(&ids, 6));
+    let ordinary = sprite(32, 3, &[layer("Ink", 0, 0, 3, 0, 255), chunk(0x2005, &map)]);
+    assert!(read(&ordinary).unwrap_err().to_string().contains("cel type does not match"));
     let mut bytes = sprite(
         8,
         3,
@@ -572,11 +584,38 @@ fn export_refuses_16_bit_and_float_samples_without_modifying_the_document() {
 /// All documented blend IDs retain layer/cel opacity across Aseprite and native saves.
 #[test]
 fn every_documented_blend_identifier_survives_aseprite_and_native_roundtrips() {
-    for mode in 0..19u16 {
-        let doc = read(&sprite(32, 3, &[layer("Mode", 0, 0, 3, mode, 128), cel(0, [1, 1], [0, 0], 64, &[32, 64, 96, 255], true)])).unwrap().document;
-        let output = super::export(&doc, &Interrupt::NONE).unwrap();
+    use BlendMode as B;
+    let expected = [
+        B::Normal,
+        B::Multiply,
+        B::Screen,
+        B::Overlay,
+        B::Darken,
+        B::Lighten,
+        B::ColorDodge,
+        B::ColorBurn,
+        B::HardLight,
+        B::SoftLight,
+        B::Difference,
+        B::Exclusion,
+        B::Hue,
+        B::Saturation,
+        B::Color,
+        B::Luminosity,
+        B::LinearDodge,
+        B::Subtract,
+        B::Divide,
+    ];
+    for (mode, expected) in expected.into_iter().enumerate() {
+        let source = sprite(32, 3, &[layer("Mode", 0, 0, 3, mode as u16, 128), cel(0, [1, 1], [0, 0], 64, &[32, 64, 96, 255], true)]);
+        let doc = read(&source).unwrap().document;
+        assert_eq!(doc.layers[0].blend, expected);
+        let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let restored = photocraft_format::load_from_bytes(&native).unwrap();
+        assert_eq!(restored.layers[0].blend, expected);
+        let output = super::export(&restored, &Interrupt::NONE).unwrap();
         let back = read(&output.bytes).unwrap().document;
-        assert_eq!(back.layers[0].blend, blend_mode(mode).unwrap());
+        assert_eq!(back.layers[0].blend, expected);
         assert!((back.layers[0].opacity - doc.layers[0].opacity).abs() < 1e-6);
         assert_eq!(back.sprite.as_ref().unwrap().frames[0].cels.values().next().unwrap().opacity, 64);
         let expected = photocraft_compose::flatten(&doc);
@@ -706,11 +745,12 @@ fn opaque_indexed_export_reserves_transparency_and_keeps_only_the_real_backgroun
 /// An opaque indexed table must not quantize erased or partially transparent samples into opaque pixels.
 #[test]
 fn indexed_export_without_a_transparent_entry_refuses_erased_or_partial_pixels() {
-    for alpha in [0.0, 0.5] {
+    for (alpha, diagnostic) in [(0.0, "no transparent entry"), (0.5, "partial pixel alpha")] {
         let mut doc = opaque_indexed_document();
         doc.layers[0].surface_mut().unwrap().write_pixel(1, 0, &[0.0, 0.0, 1.0, alpha]);
         let before = doc.clone();
-        assert!(crate::export(&doc, "aseprite", &Default::default()).unwrap_err().to_string().contains("no transparent entry"));
+        let error = crate::export(&doc, "aseprite", &Default::default()).unwrap_err().to_string();
+        assert!(error.contains(diagnostic), "{error}");
         assert_eq!(doc, before);
     }
 }
@@ -845,4 +885,94 @@ fn a_retained_transparency_lock_on_a_non_background_layer_is_not_cleared() {
     let back = read(&out.bytes).unwrap().document;
     assert!(!back.layers[0].locks.transparency);
     assert!(back.layers[1].locks.transparency);
+}
+
+#[test]
+fn large_paint_palettes_survive_native_and_aseprite_saves_only_for_nonindexed_sprites() {
+    let colors: Vec<_> = (0..257).map(|i| [i as u8, (i >> 8) as u8, 42, 255]).collect();
+    for depth in [16, 32] {
+        let source = sprite(depth, 1, &[palette(&colors)]);
+        let doc = read(&source).unwrap().document;
+        let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let restored = photocraft_format::load_from_bytes(&native).unwrap();
+        let exported = crate::export(&restored, "palette.aseprite", &Default::default()).unwrap();
+        let back = read(&exported.bytes).unwrap().document;
+        let entries = &back.sprite.as_ref().unwrap().frames[0].palette;
+        assert_eq!(entries.iter().map(|e| e.rgba).collect::<Vec<_>>(), colors);
+    }
+    assert!(read(&sprite(8, 1, &[palette(&colors)])).unwrap_err().to_string().contains("palette size"));
+}
+
+#[test]
+fn linked_cel_export_rebases_forward_groups_and_rejects_incompatible_opacity() {
+    let plain = layer("Ink", 0, 0, 3, 0, 255);
+    let image = cel(0, [1, 1], [0, 0], 128, &[32, 64, 96, 255], true);
+    let source = frames(32, &[(17, vec![plain.clone(), linked(0, [0, 0], 2)]), (29, vec![linked(0, [0, 0], 0)]), (83, vec![image.clone()])]);
+    let doc = read(&source).unwrap().document;
+    let before = doc.clone();
+    let output = crate::export(&doc, "aseprite", &Default::default()).unwrap();
+    let back = read(&output.bytes).unwrap().document;
+    let id = back.layers[0].id;
+    let frames_after = &back.sprite.as_ref().unwrap().frames;
+    assert_eq!(frames_after.iter().map(|frame| frame.cels[&id].linked_frame).collect::<Vec<_>>(), [None, Some(0), Some(0)]);
+    for frame in frames_after {
+        let cel = &frame.cels[&id];
+        assert_eq!(cel.pixels.to_interleaved(cel.rect), [32, 64, 96, 255]);
+    }
+    assert_eq!(doc, before);
+
+    let mut different = linked(0, [0, 0], 0);
+    different[12] = 64;
+    let source = frames(32, &[(17, vec![plain, image]), (29, vec![different])]);
+    let doc = read(&source).unwrap().document;
+    let error = crate::export(&doc, "aseprite", &Default::default()).unwrap_err().to_string();
+    assert!(error.contains("opacity") && error.contains(".pcraft"), "{error}");
+}
+
+#[test]
+fn tilemap_display_and_map_words_must_fit_the_same_budget() {
+    let fixture = include_bytes!("../../tests/fixtures/aseprite/tiles.aseprite");
+    let mut doc = read(fixture).unwrap().document;
+    let frame = Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]);
+    let record = frame.metadata.iter_mut().find(|chunk| chunk.kind == 0x2005).unwrap();
+    let start = fixture.windows(record.bytes.len()).position(|bytes| bytes == record.bytes.as_slice()).unwrap();
+    let payload = Arc::make_mut(&mut record.bytes);
+    // 2x2 RGBA tiles make a 240 MiB display, while the map words take 60 MiB.
+    payload[16..18].copy_from_slice(&4096u16.to_le_bytes());
+    payload[18..20].copy_from_slice(&3840u16.to_le_bytes());
+    let mut oversized = fixture.to_vec();
+    oversized[start..start + payload.len()].copy_from_slice(payload);
+    let decode_error = read(&oversized).unwrap_err().to_string();
+    let encode_error = crate::export(&doc, "aseprite", &Default::default()).unwrap_err().to_string();
+    for error in [decode_error, encode_error] {
+        assert!(error.contains("map words exceed the remaining"), "{error}");
+    }
+}
+
+#[test]
+fn forward_linked_tilemaps_keep_the_editable_map_at_the_new_source() {
+    let bytes = include_bytes!("../../tests/fixtures/aseprite/tiles.aseprite");
+    let mut doc = read(bytes).unwrap().document;
+    let id = doc.layers[0].id;
+    let sprite = doc.sprite.as_mut().unwrap();
+    let mut first = sprite.frames[0].as_ref().clone();
+    let mut source = first.clone();
+    first.metadata.retain(|chunk| chunk.kind != 0x2005);
+    source.metadata.retain(|chunk| chunk.kind == 0x2005);
+    Arc::make_mut(first.cels.get_mut(&id).unwrap()).linked_frame = Some(1);
+    sprite.frames = vec![Arc::new(first), Arc::new(source)];
+    let expected = doc.layers[0].surface().unwrap().to_interleaved(doc.bounds());
+
+    let output = crate::export(&doc, "aseprite", &Default::default()).unwrap();
+    let mut back = read(&output.bytes).unwrap().document;
+    let id = back.layers[0].id;
+    let sprite = back.sprite.as_ref().unwrap();
+    assert!(sprite.tilemap_descriptor(id).is_some());
+    assert_eq!(sprite.frames[0].cels[&id].linked_frame, None);
+    assert_eq!(sprite.frames[1].cels[&id].linked_frame, Some(0));
+    assert!(sprite.frames[0].metadata.iter().any(|chunk| chunk.kind == 0x2005));
+    for frame in [0, 1] {
+        back.select_sprite_frame(frame).unwrap();
+        assert_eq!(back.layers[0].surface().unwrap().to_interleaved(back.bounds()), expected);
+    }
 }
