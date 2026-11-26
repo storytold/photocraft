@@ -5,9 +5,9 @@
 //! Reading only the Normal sheets left a centred paragraph style read as Left, so starting an
 //! edit re-laid the text out half a line to the side.
 
+use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_doc::text::TextAlign;
 use photocraft_geom::Affine;
-use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_text::engine_data::Value as E;
 use photocraft_text::psd::{TySh, text_layer_from_tysh, write_tysh};
 
@@ -78,7 +78,7 @@ fn layer(text: &str, ed: &E) -> photocraft_doc::TextLayer {
         .with("Ornt", D::Enumerated { type_id: Id::new("Ornt"), value: Id::new("Hrzn") })
         .with("TextIndex", D::Integer(0))
         .with("EngineData", D::RawData(photocraft_text::engine_data::write(ed)));
-    let data = write_tysh(&TySh { transform: Affine::translate(450.0, 300.0), text: desc, warp: None, bounds: [0.0; 4] });
+    let data = write_tysh(&TySh { transform: Affine::translate(450.0, 300.0), text: desc, warp: None, bounds: [0.0; 4] }).unwrap();
     let mut t = text_layer_from_tysh(&data, 72.0).expect("parses");
     // Import keeps the block, as for a layer read from a file.
     t.psd_raw = Some(std::sync::Arc::new(data));

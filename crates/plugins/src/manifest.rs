@@ -134,7 +134,10 @@ impl Manifest {
             return Err(Error::Manifest(format!("manifest is {} bytes (limit {MAX_MANIFEST_BYTES})", bytes.len())));
         }
         let text = std::str::from_utf8(bytes).map_err(|_| Error::Manifest("manifest is not UTF-8".into()))?;
-        let man: Manifest = serde_json::from_str(text).map_err(|e| Error::Manifest(format!("manifest: {e}")))?;
+        let mut man: Manifest = serde_json::from_str(text).map_err(|e| Error::Manifest(format!("manifest: {e}")))?;
+        // The name is shown as stored, so the invisible padding at its ends (white space, line breaks,
+        // joiners, fillers) is dropped here.
+        man.name = trim_name(&man.name).to_owned();
         man.validate()?;
         Ok(man)
     }
@@ -143,9 +146,7 @@ impl Manifest {
         if !valid_id(&self.id) {
             return Err(Error::Manifest(format!("invalid id {:?}: use 1-64 characters from A-Z a-z 0-9 . _ -", self.id)));
         }
-        let name = self.name.trim();
-        let printable = name.chars().all(|c| !c.is_control() && !hidden_format(c)) && name.chars().any(visible);
-        if !printable || name.chars().count() > 64 {
+        if !printable_name(&self.name) {
             return Err(Error::Manifest("`name` must be 1-64 printable characters".into()));
         }
         if self.version.len() > 32 || self.description.len() > 1024 || self.author.len() > 128 {
@@ -316,10 +317,16 @@ fn ordered_params<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result
         }
         fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<Self::Value, A::Error> {
             let mut out = Vec::new();
-            while let Some((k, v)) = map.next_entry::<String, ParamSpec>()? {
+            while let Some(k) = map.next_key::<String>()? {
+                // A repeated key would give one value two dialog controls, the last spec winning.
+                // Named before its spec is read or counted, so the error is about the key.
+                if out.iter().any(|(seen, _)| *seen == k) {
+                    return Err(serde::de::Error::custom(format!("parameter {k:?} is declared twice")));
+                }
                 if out.len() >= MAX_PARAMS {
                     return Err(serde::de::Error::custom(format!("too many parameters (limit {MAX_PARAMS})")));
                 }
+                let v = map.next_value::<ParamSpec>()?;
                 out.push((k, v));
             }
             Ok(out)
@@ -368,18 +375,23 @@ const FORMAT: &[(char, char)] = &[
     ('\u{E0020}', '\u{E007F}'),
 ];
 
-/// Default-ignorable characters outside Cf (fillers, variation selectors): allowed in a name, but they
-/// draw nothing on their own.
+/// Default-ignorable characters outside Cf (fillers, variation selectors, unassigned ignorables), and
+/// the blank Braille pattern U+2800: allowed in a name, but they draw nothing on their own.
 const BLANK: &[(char, char)] = &[
     ('\u{34F}', '\u{34F}'),
     ('\u{115F}', '\u{1160}'),
     ('\u{17B4}', '\u{17B5}'),
     ('\u{180B}', '\u{180D}'),
     ('\u{180F}', '\u{180F}'),
+    ('\u{2065}', '\u{2065}'),
+    ('\u{2800}', '\u{2800}'),
     ('\u{3164}', '\u{3164}'),
     ('\u{FE00}', '\u{FE0F}'),
     ('\u{FFA0}', '\u{FFA0}'),
-    ('\u{E0100}', '\u{E01EF}'),
+    ('\u{FFF0}', '\u{FFF8}'),
+    ('\u{E0000}', '\u{E0000}'),
+    ('\u{E0002}', '\u{E001F}'),
+    ('\u{E0080}', '\u{E0FFF}'),
 ];
 
 fn in_ranges(c: char, ranges: &[(char, char)]) -> bool {
@@ -393,13 +405,96 @@ fn hidden_format(c: char) -> bool {
     !matches!(c, '\u{200C}' | '\u{200D}') && in_ranges(c, FORMAT)
 }
 
+/// Whether `name` (already trimmed) can be shown as a label: 1-64 characters, at least one of them
+/// visible, and no control characters, line or paragraph separators, or hidden format characters.
+pub fn printable_name(name: &str) -> bool {
+    name.chars().nth(64).is_none()
+        && name.chars().any(visible)
+        && !name.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') || hidden_format(c))
+}
+
+/// `name` without what pads its ends invisibly: white space, the zero-width (non-)joiners and the
+/// characters that draw nothing on their own (fillers, blank Braille, unassigned ignorables, stray
+/// selectors), so a name that looks like "Tone" is "Tone". What belongs to a character the name
+/// keeps stays: a variation selector after it (the emoji in "Love ❤️"), and a Hangul filler that
+/// is part of a syllable block (U+1160 after a leading consonant, U+115F before a vowel).
+pub fn trim_name(name: &str) -> &str {
+    let pad = |c: char| c.is_whitespace() || matches!(c, '\u{200C}' | '\u{200D}') || in_ranges(c, BLANK);
+    let mut start = name.len();
+    let mut chars = name.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        // The choseong filler opens a syllable before a vowel, and before the jungseong filler U+1160
+        // when a final consonant follows (U+115F U+1160 + a final consonant is how a lone final
+        // consonant is written; U+115F U+1160 alone draws nothing).
+        let opens_syllable = c == '\u{115F}'
+            && chars.peek().is_some_and(|&(j, n)| {
+                vowel_jamo(n) || (n == '\u{1160}' && name.get(j + n.len_utf8()..).and_then(|r| r.chars().next()).is_some_and(trailing_jamo))
+            });
+        if !pad(c) || opens_syllable {
+            start = i;
+            break;
+        }
+    }
+    let s = name.get(start..).unwrap_or_default();
+    let mut end = s.len();
+    for (i, c) in s.char_indices().rev() {
+        if !pad(c) {
+            break;
+        }
+        end = i;
+    }
+    // Take back the mark that belongs to the last character kept: one per character, so a run of
+    // selectors after it is still padding.
+    let mut prev = s.get(..end).and_then(|h| h.chars().next_back());
+    for c in s.get(end..).unwrap_or_default().chars() {
+        let belongs = match prev {
+            Some(p) => attaches(c) || (c == '\u{1160}' && leading_jamo(p)),
+            None => false,
+        };
+        if !belongs {
+            break;
+        }
+        end += c.len_utf8();
+        prev = if attaches(c) { None } else { Some(c) };
+    }
+    s.get(..end).unwrap_or_default()
+}
+
+/// The marks among [`BLANK`] that modify the character before them: the combining grapheme joiner,
+/// the Khmer inherent vowels, the Mongolian free variation selectors and the variation selectors.
+fn attaches(c: char) -> bool {
+    matches!(
+        c,
+        '\u{34F}' | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180D}' | '\u{180F}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'
+    )
+}
+
+/// A conjoining Hangul leading consonant (choseong), not the filler U+115F.
+fn leading_jamo(c: char) -> bool {
+    matches!(c, '\u{1100}'..='\u{115E}' | '\u{A960}'..='\u{A97C}')
+}
+
+/// A conjoining Hangul final consonant (jongseong).
+fn trailing_jamo(c: char) -> bool {
+    matches!(c, '\u{11A8}'..='\u{11FF}' | '\u{D7CB}'..='\u{D7FB}')
+}
+
+/// A conjoining Hangul vowel (jungseong) other than the vowel filler U+1160.
+fn vowel_jamo(c: char) -> bool {
+    matches!(c, '\u{1161}'..='\u{11A7}' | '\u{D7B0}'..='\u{D7C6}')
+}
+
 /// A character that draws something on its own.
 fn visible(c: char) -> bool {
     !c.is_whitespace() && !c.is_control() && !in_ranges(c, FORMAT) && !in_ranges(c, BLANK)
 }
 
+/// Names the host's `plugin.run` command takes for itself: a parameter of the same name would be
+/// read as the command's routing (which layer or channel is filtered), not as the plug-in's.
+const HOST_KEYS: [&str; 4] = ["id", "layer", "target", "channel"];
+
 fn valid_key(k: &str) -> bool {
-    (1..=64).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') && !k.starts_with('_') && k != "id" && k != "layer"
+    (1..=64).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') && !k.starts_with('_') && !HOST_KEYS.contains(&k)
 }
 
 #[cfg(test)]
@@ -471,12 +566,34 @@ mod tests {
             r#"{"id":"a","name":"x","kind":"filter","params":{"r":{"type":"number","min":5,"max":1,"default":1}}}"#,
             r#"{"id":"a","name":"x","kind":"filter","params":{"c":{"type":"choice","options":[]}}}"#,
             r#"{"id":"a","name":"x","kind":"filter","params":{"__x":{"type":"bool"}}}"#,
+            // Names the host command routes by: a plug-in default must not steer the filter.
+            r#"{"id":"a","name":"x","kind":"filter","params":{"target":{"type":"bool","default":false}}}"#,
+            r#"{"id":"a","name":"x","kind":"filter","params":{"channel":{"type":"int","min":0,"max":3,"default":1}}}"#,
             r#"{"id":"a","name":"x","kind":"filter","params":[1]}"#,
         ] {
             assert!(Manifest::parse(bad.as_bytes()).is_err(), "{bad}");
         }
         assert!(Manifest::parse(&[0xff, 0xfe]).is_err());
         assert!(Manifest::parse(&vec![b' '; MAX_MANIFEST_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn rejects_a_parameter_declared_twice() {
+        // Both entries were kept: two dialog controls for one value, and the last spec won.
+        let twice = br#"{"id":"a","name":"x","kind":"filter",
+            "params":{"n":{"type":"bool"},"n":{"type":"number","min":0,"max":1,"default":0}}}"#;
+        assert!(matches!(Manifest::parse(twice), Err(Error::Manifest(_))));
+        // The error names the key, also when the second spec is broken or past the limit.
+        let broken = br#"{"id":"a","name":"x","kind":"filter","params":{"n":{"type":"bool"},"n":{"type":"nope"}}}"#;
+        let many: Vec<String> = (0..MAX_PARAMS).map(|i| format!(r#""p{i}":{{"type":"bool"}}"#)).collect();
+        let past = format!(r#"{{"id":"a","name":"x","kind":"filter","params":{{{},"p0":{{"type":"bool"}}}}}}"#, many.join(","));
+        for (json, key) in [(&broken[..], "n"), (past.as_bytes(), "p0")] {
+            let e = Manifest::parse(json).err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(e.contains(&format!("parameter {key:?} is declared twice")), "{e}");
+        }
+        // Keys differing in case are different parameters.
+        let m = Manifest::parse(br#"{"id":"a","name":"x","kind":"filter","params":{"n":{"type":"bool"},"N":{"type":"bool"}}}"#).unwrap();
+        assert_eq!(m.params_notation(), r#"{"n":bool=false,"N":bool=false}"#);
     }
 
     /// Chromatic Aberration-like: a pixel shift, a pixel int, a signed pixel offset and a unitless
@@ -599,6 +716,14 @@ mod tests {
             "\u{3164}\u{FE0F}",
             " \u{3000} ",
             "Tone\u{7}",
+            "Tone\u{2028}Pro",
+            "Tone\u{2029}Pro",
+            "\u{2800}",
+            " \u{2800}\u{2800} ",
+            "\u{2065}",
+            "\u{FFF0}",
+            "\u{E0000}\u{E0002}",
+            "\u{E0080}\u{E0FFF}",
         ] {
             assert!(with_name(bad).is_err(), "{bad:?}");
         }
@@ -606,6 +731,35 @@ mod tests {
         for good in ["Tone…", "Kontrast ±", "می\u{200C}خواهم", "\u{1F469}\u{200D}\u{1F4BB} Code", "\u{2764}\u{FE0F} Love", "色调"] {
             assert_eq!(with_name(good).map(|m| m.name).ok().as_deref(), Some(good));
         }
+        // White space and line breaks at the ends are dropped from the stored name, so the menu never
+        // shows them, and padding does not count towards the limit.
+        for (padded, stored) in [
+            ("\nTone", "Tone"),
+            ("Tone\r\n", "Tone"),
+            ("\u{2028}Tone ", "Tone"),
+            (" Tone… ", "Tone…"),
+            ("Tone\u{2800}", "Tone"),
+            ("\u{3164}\u{2800}Tone\u{FFA0}", "Tone"),
+            ("\u{2764}\u{FE0F} Love\u{2800}", "\u{2764}\u{FE0F} Love"),
+            ("Tone\u{2065}\u{FFF0}", "Tone"),
+            ("\u{17B4}Tone", "Tone"),
+            // A selector right after the last kept character belongs to it and stays; one cut off by padding goes.
+            ("Love \u{2764}\u{FE0F}\u{2800}", "Love \u{2764}\u{FE0F}"),
+            ("Tone \u{FE0F}", "Tone"),
+            ("\u{FE0F}Tone", "Tone"),
+            ("Love \u{2764}\u{FE0F}\u{FE0F}\u{FE0F}", "Love \u{2764}\u{FE0F}"),
+            // Hangul filler jamo that complete a syllable are part of the name; the two fillers alone draw nothing.
+            ("\u{115F}\u{1160}Tone", "Tone"),
+            ("Tone \u{115F}\u{1160}", "Tone"),
+            ("Tone \u{1100}\u{1160}", "Tone \u{1100}\u{1160}"),
+            ("\u{115F}\u{1161} Tone", "\u{115F}\u{1161} Tone"),
+            ("\u{115F}\u{1160}\u{11A8} Tone", "\u{115F}\u{1160}\u{11A8} Tone"),
+            // Khmer inherent vowels belong to the consonant before them.
+            ("Tone \u{1780}\u{17B5}", "Tone \u{1780}\u{17B5}"),
+        ] {
+            assert_eq!(with_name(padded).map(|m| m.name).ok().as_deref(), Some(stored), "{padded:?}");
+        }
+        assert_eq!(with_name(&format!("{}{}", "x".repeat(64), " ".repeat(1000))).map(|m| m.name.len()).ok(), Some(64));
         // The documented limit counts characters, not bytes.
         assert!(with_name(&"é".repeat(64)).is_ok());
         assert!(with_name(&"é".repeat(65)).is_err());

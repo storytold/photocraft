@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod align_edges;
 pub mod edit;
 pub mod feather;
 pub mod flatten;
@@ -32,7 +33,7 @@ pub mod trace;
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Fill, FillRule, GradientStyle, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, VectorMask};
 use photocraft_geom::{Rect, TILE_SIZE};
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 
 pub use flatten::{Polyline, flatten_path, flatten_subpath};
 pub use raster::Rasterizer;
@@ -44,14 +45,21 @@ pub const DEFAULT_TOLERANCE: f64 = 0.01;
 /// Compiles the fill area of `path`: one component per subpath (filled with the path's rule)
 /// folded with the subpath operations; open subpaths are closed implicitly.
 pub fn fill_rasterizer(path: &Path, tol: f64) -> Rasterizer {
+    fill_rasterizer_with(path, tol, &Interrupt::NONE).unwrap_or_default()
+}
+
+/// [`fill_rasterizer`] with cooperative cancellation while compiling the path.
+fn fill_rasterizer_with(path: &Path, tol: f64, ctl: &Interrupt) -> Option<Rasterizer> {
+    ctl.check().ok()?;
     let mut r = Rasterizer::new(path.inverted);
     // One point budget for the whole path, then one edge sort for all components.
-    let polys: Vec<Vec<(f64, f64)>> = flatten_path(path, tol).into_iter().map(|l| l.pts).collect();
+    let polys: Vec<Vec<(f64, f64)>> = flatten::flatten_path_with(path, tol, ctl)?.into_iter().map(|l| l.pts).collect();
     for c in path.components() {
-        r.push_component(polys.get(c.clone()).unwrap_or_default(), path.effective_op(c.start), path.fill_rule);
+        r.push_component_with(polys.get(c.clone()).unwrap_or_default(), path.effective_op(c.start), path.fill_rule, ctl)?;
     }
     r.sort_edges();
-    r
+    ctl.check().ok()?;
+    Some(r)
 }
 
 /// Compiles the stroke outline of `path` (all subpaths, one non-zero component).
@@ -79,7 +87,13 @@ pub fn stroke_style(s: &ShapeStroke) -> StrokeStyle {
 
 /// Fill coverage of `path` over `rect` (row-major, `0..=1`).
 pub fn path_coverage(path: &Path, rect: Rect) -> Vec<f32> {
-    fill_rasterizer(path, DEFAULT_TOLERANCE).render(rect)
+    path_coverage_with(path, rect, &Interrupt::NONE).unwrap_or_default()
+}
+
+/// [`path_coverage`] with cancellation during geometry preparation and scanline rendering.
+/// Returns no partial coverage when cancelled.
+pub fn path_coverage_with(path: &Path, rect: Rect, ctl: &Interrupt) -> Option<Vec<f32>> {
+    fill_rasterizer_with(path, DEFAULT_TOLERANCE, ctl)?.render_with(rect, ctl)
 }
 
 enum MaskGeometry {
@@ -156,11 +170,14 @@ fn tile_bands(r: Rect) -> Vec<Rect> {
     if r.is_empty() {
         return out;
     }
-    let mut y = r.y0.div_euclid(TILE_SIZE) * TILE_SIZE;
-    while y < r.y1 {
-        let band = Rect::new(r.x0, y.max(r.y0), r.x1, (y + TILE_SIZE).min(r.y1));
+    let step = i64::from(TILE_SIZE);
+    let (y0, y1) = (i64::from(r.y0), i64::from(r.y1));
+    let mut y = y0.div_euclid(step) * step;
+    while y < y1 {
+        let next = (y + step).min(y1);
+        let band = Rect::new(r.x0, y.max(y0) as i32, r.x1, next as i32);
         out.push(band);
-        y += TILE_SIZE;
+        y = next;
     }
     out
 }
@@ -170,9 +187,15 @@ fn tile_bands(r: Rect) -> Vec<Rect> {
 fn band_tiles(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -> bool) -> Vec<(Rect, Vec<f32>)> {
     let w = band.width() as usize;
     let mut out = Vec::new();
-    let mut x = band.x0.div_euclid(TILE_SIZE) * TILE_SIZE;
-    while x < band.x1 {
-        let tr = Rect::new(x.max(band.x0), band.y0, (x + TILE_SIZE).min(band.x1), band.y1);
+    if band.is_empty() {
+        return out;
+    }
+    let step = i64::from(TILE_SIZE);
+    let (x0, x1) = (i64::from(band.x0), i64::from(band.x1));
+    let mut x = x0.div_euclid(step) * step;
+    while x < x1 {
+        let next = (x + step).min(x1);
+        let tr = Rect::new(x.max(x0) as i32, band.y0, next as i32, band.y1);
         let tw = tr.width() as usize;
         let mut buf = Vec::with_capacity(tw * tr.height() as usize * channels);
         let mut any = false;
@@ -187,7 +210,7 @@ fn band_tiles(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -
         if any {
             out.push((tr, buf));
         }
-        x += TILE_SIZE;
+        x = next;
     }
     out
 }
@@ -235,6 +258,8 @@ pub enum Paint {
     None,
     /// Straight RGBA.
     Solid([f32; 4]),
+    /// Straight CMYK and a separate alpha.
+    Cmyk([f32; 4], f32),
     Gradient {
         /// Colour stops sorted by location (straight RGBA).
         stops: Vec<(f32, [f32; 4])>,
@@ -267,6 +292,7 @@ impl Paint {
             [v[0], v[1], v[2], c.alpha]
         };
         match f {
+            Fill::Solid(c) if c.mode == ColorMode::Cmyk => Paint::Cmyk(c.c, c.alpha),
             Fill::Solid(c) => Paint::Solid(rgba(c)),
             // No `..` here on purpose: a new gradient field must fail to compile until the
             // shape renderer honours it (the same sentinel the document/compositor pair uses).
@@ -296,6 +322,10 @@ impl Paint {
         match self {
             Paint::None => [0.0; 4],
             Paint::Solid(c) => *c,
+            Paint::Cmyk(inks, alpha) => {
+                let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(*inks);
+                [r, g, b, *alpha]
+            }
             Paint::Gradient { stops, midpoints, opacity_stops, style, layout, reverse, dither: dith, frame } => {
                 let t = gradient_t(*style, layout.0, layout.1, *reverse, layout.2, *frame, x, y);
                 let mut c = sample_stops(stops, midpoints, opacity_stops, t);
@@ -305,6 +335,14 @@ impl Paint {
                 c
             }
         }
+    }
+    fn cmyka_at(&self, x: f64, y: f64) -> [f32; 5] {
+        if let Self::Cmyk([c, m, y, k], alpha) = *self {
+            return [c, m, y, k, alpha];
+        }
+        let [r, g, b, alpha] = self.at(x, y);
+        let [c, m, y, k] = photocraft_color::convert::rgb_to_cmyk([r, g, b]);
+        [c, m, y, k, alpha]
     }
 }
 
@@ -415,15 +453,13 @@ fn sample_color(stops: &[(f32, [f32; 4])], mids: &[f32], t: f32) -> [f32; 4] {
     if t <= first.0 {
         return first.1;
     }
-    for (i, w) in stops.windows(2).enumerate() {
-        let (a, b) = (&w[0], &w[1]);
-        if t <= b.0 {
-            let u = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
-            let k = midpoint_remap(u, mids.get(i).copied().unwrap_or(0.5));
-            return std::array::from_fn(|ch| a.1[ch] + (b.1[ch] - a.1[ch]) * k);
-        }
-    }
-    last.1
+    // The segment ending at the first stop at or past `t` (bisection: this runs per pixel, and a
+    // gradient can carry any number of stops). Past the last stop, or for a NaN, there is none.
+    let at = stops.partition_point(|s| s.0 < t);
+    let (Some(a), Some(b)) = (at.checked_sub(1).and_then(|k| stops.get(k)), stops.get(at)) else { return last.1 };
+    let u = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
+    let k = midpoint_remap(u, mids.get(at - 1).copied().unwrap_or(0.5));
+    std::array::from_fn(|ch| a.1[ch] + (b.1[ch] - a.1[ch]) * k)
 }
 
 /// Opacity stops at `t` (stops sorted by location; 1.0 when empty).
@@ -432,13 +468,10 @@ fn sample_opacity(stops: &[(f32, f32)], t: f32) -> f32 {
     if t <= first.0 {
         return first.1;
     }
-    for w in stops.windows(2) {
-        if t <= w[1].0 {
-            let u = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 0.0 };
-            return w[0].1 + (w[1].1 - w[0].1) * u;
-        }
-    }
-    last.1
+    let at = stops.partition_point(|s| s.0 < t);
+    let (Some(a), Some(b)) = (at.checked_sub(1).and_then(|k| stops.get(k)), stops.get(at)) else { return last.1 };
+    let u = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
+    a.1 + (b.1 - a.1) * u
 }
 
 /// Colour and alpha at `t`: colour stops with midpoints, alpha times opacity stops. Mirrors
@@ -563,14 +596,27 @@ pub struct CompiledShape {
 
 impl CompiledShape {
     /// Compiles the shape at flattening tolerance `tol`. `canvas` is the frame gradients
-    /// without "Align with layer" are laid out in.
+    /// without "Align with layer" are laid out in, and the area a feather is computed over.
     pub fn new(shape: &ShapeLayer, tol: f64, canvas: Rect) -> Self {
+        Self::with_frames(shape, tol, canvas, canvas)
+    }
+
+    /// [`CompiledShape::new`] with the feather computed over `coverage` while gradients still lay
+    /// out in `gradient_frame`: measuring a shape beyond the canvas it is drawn in.
+    ///
+    /// A shape with Align Edges on (`use_aligned_rendering`) renders [`align_edges::aligned_path`]
+    /// instead of its stored path: every renderer (layer caches, the compositor's fill/stroke
+    /// split, previews, extents) compiles shapes here, so they all agree.
+    pub fn with_frames(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect) -> Self {
+        let aligned = align_edges::aligned_shape(shape, tol);
+        let shape = aligned.as_ref().unwrap_or(shape);
         let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
-        let cb = (f64::from(canvas.x0), f64::from(canvas.y0), f64::from(canvas.x1), f64::from(canvas.y1));
+        let g = gradient_frame;
+        let cb = (f64::from(g.x0), f64::from(g.y0), f64::from(g.x1), f64::from(g.y1));
         let area = fill_rasterizer(&shape.path, tol);
         let mut bounds = None;
         let fill = shape.fill.as_ref().map(|f| {
-            let coverage = FillCoverage::new(shape, &area, canvas);
+            let coverage = FillCoverage::new(shape, &area, coverage);
             bounds = coverage.bounds();
             (coverage, Paint::from_fill(f, pb, cb))
         });
@@ -604,16 +650,21 @@ impl CompiledShape {
 
     /// Straight RGBA for every pixel of `rect`.
     pub fn render_rgba(&self, rect: Rect) -> Vec<[f32; 4]> {
+        self.render_components(rect, Paint::at)
+    }
+
+    fn render_components<const N: usize>(&self, rect: Rect, at: impl Fn(&Paint, f64, f64) -> [f32; N]) -> Vec<[f32; N]> {
         let n = rect.width() as usize * rect.height() as usize;
-        let mut out = vec![[0.0f32; 4]; n];
+        let mut out = vec![[0.0; N]; n];
+        let alpha = N - 1;
         let w = rect.width() as usize;
         if let Some((r, paint)) = &self.fill {
             let cov = r.render(rect);
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c > 0.0 {
                     let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
-                    let mut p = paint.at(x, y);
-                    p[3] *= c;
+                    let mut p = at(paint, x, y);
+                    p[alpha] *= c;
                     *o = p;
                 }
             }
@@ -631,16 +682,16 @@ impl CompiledShape {
                     continue;
                 }
                 let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
-                let s = paint.at(x, y);
-                let sa = s[3] * c * opacity;
-                let da = o[3];
+                let s = at(paint, x, y);
+                let sa = s[alpha] * c * opacity;
+                let da = o[alpha];
                 let a = sa + da * (1.0 - sa);
                 if a > 0.0 {
-                    for k in 0..3 {
+                    for k in 0..alpha {
                         o[k] = (s[k] * sa + o[k] * da * (1.0 - sa)) / a;
                     }
                 }
-                o[3] = a;
+                o[alpha] = a;
             }
         }
         out
@@ -653,7 +704,20 @@ impl CompiledShape {
         let Some(b) = self.bounds else { return s };
         let area = b.intersect(&clip);
         let ch = format.channels();
+        let native_cmyk = format.mode == ColorMode::Cmyk
+            && (self.fill.as_ref().is_some_and(|(_, paint)| matches!(paint, Paint::Cmyk(..)))
+                || self.stroke.as_ref().is_some_and(|(_, paint, _)| matches!(paint, Paint::Cmyk(..))));
         render_bands(&mut s, area, &|band| {
+            if native_cmyk {
+                let mut cmyka = self.render_components(band, Paint::cmyka_at);
+                for pixel in &mut cmyka {
+                    if pixel[4] <= 0.0 {
+                        *pixel = [0.0; 5];
+                    }
+                }
+                let vals: Vec<_> = cmyka.iter().flat_map(|p| p[..ch].iter().copied()).collect();
+                return band_tiles(band, &vals, ch, |px| if format.alpha { px[4] > 0.0 } else { px.iter().any(|v| *v != 0.0) });
+            }
             let rgba = self.render_rgba(band);
             let mut vals = vec![0.0f32; rgba.len() * ch];
             for (p, o) in rgba.iter().zip(vals.chunks_exact_mut(ch)) {

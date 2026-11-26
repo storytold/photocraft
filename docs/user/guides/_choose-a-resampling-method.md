@@ -7,7 +7,10 @@ order: 55
 <!-- Draft until the new resampling methods ship: then drop the leading _ from the file name, list
 it in guides/index.md, link it from step 4 of export-an-image.md ("**Resample** picks how the image
 is resized; see [Choose a resampling method](choose-a-resampling-method.md)."), and set `verified`
-to that release. -->
+to that release. The Image Size and Export As dialogs come from craft-libs' shared form dialogs,
+whose `Resample` list has only Photoshop's methods and Lanczos: the dialogs offer the new methods
+once that list has them, and Export As keeps its seven until then. Until then they are only in the
+`image.imageSize`, `image.crop` and `file.automate.fitImage` commands. -->
 
 When you make an image bigger or smaller, the **Resample** method decides how new pixels are worked out. Pick it in **Image › Image Size…** (it changes the document) or in **File › Export › Export As…** (it changes only the exported copy). For photos, try **Lanczos 3** or **Spline36**; for pixel art, use **Nearest Neighbor**.
 

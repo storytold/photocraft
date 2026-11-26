@@ -8,7 +8,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A 200 × 120 document with a type layer "Hello" active and the Rectangular Marquee chosen.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     app.sync_views();
@@ -42,23 +42,13 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         }
     }
     // The same rows in the marquee's canvas context menu.
-    let menu = crate::canvas_tool_menu::CanvasToolMenu {
-        pos: [10.0, 10.0],
-        tool: Tool::RectMarquee,
-        has_selection: true,
-        has_path: false,
-        path_name: None,
-        transform: false,
-        pasteboard: false,
-        anchor: None,
-        text: false,
-        type_layer: false,
-        guide: false,
-        spelling: None,
-    };
-    assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.freeTransform"));
-    assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.distort"));
-    assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.perspective"));
+    let opened =
+        crate::canvas_tool_menu::open(&mut app, Tool::RectMarquee, crate::canvas_tool_menu::MenuKind::Tool, egui::pos2(10.0, 10.0), [10.0, 10.0], None);
+    assert!(opened, "the marquee's menu opens");
+    let menu = app.ui.canvas_tool_menu.as_ref().expect("the menu is open");
+    assert!(crate::canvas_tool_menu::available(&app, menu, "edit.freeTransform"));
+    assert!(!crate::canvas_tool_menu::available(&app, menu, "edit.transform.distort"));
+    assert!(!crate::canvas_tool_menu::available(&app, menu, "edit.transform.perspective"));
     // Rasterized, the type is pixels and can be distorted.
     app.run("layer.rasterize.type", json!({})).unwrap();
     assert!(crate::menus::is_enabled(&app, "edit.transform.distort") && crate::menus::is_enabled(&app, "edit.transform.perspective"));
@@ -69,10 +59,10 @@ fn free_transform_with_a_selection_frames_and_moves_the_whole_type_layer() {
     let mut app = app();
     let whole = type_bounds(&app);
     select_left_half(&mut app);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
-    let t = app.ui.transform.as_ref().unwrap();
-    assert_eq!(t.rect, [whole.x0 as f64, whole.y0 as f64, whole.x1 as f64, whole.y1 as f64], "the box frames the whole text");
+    let r = app.ui.transform.as_ref().unwrap().session.rect();
+    assert_eq!([r.x0, r.y0, r.x1, r.y1], [whole.x0 as f64, whole.y0 as f64, whole.x1 as f64, whole.y1 as f64], "the box frames the whole text");
     // The preview moves the whole layer (it is hidden under the box), not half of its pixels.
     let pv = app.transform_preview.as_ref().unwrap();
     let id = app.session.active().unwrap().active_layer.unwrap();
@@ -81,7 +71,7 @@ fn free_transform_with_a_selection_frames_and_moves_the_whole_type_layer() {
     assert_eq!(under.surface().unwrap().content_bounds(), whole, "nothing lifted out of the type");
     // Move the box 10 px right: the text moves 10 px, unscaled.
     if let Some(t) = app.ui.transform.as_mut() {
-        t.quad = t.quad.map(|q| [q[0] + 10.0, q[1]]);
+        t.edit_box(|b| b.quad = b.quad.map(|q| (q.x + 10.0, q.y).into()));
     }
     crate::transform_tool::commit(&mut app);
     assert_eq!(app.ui.status, "");
@@ -96,18 +86,19 @@ fn free_transform_with_a_selection_frames_and_moves_the_whole_type_layer() {
 /// of a distorted box the engine then refuses.
 #[test]
 fn distort_and_perspective_corner_drags_scale_editable_type() {
-    use crate::canvas::ToolEvent;
-    let ctx = egui::Context::default();
+    use crate::canvas::{ToolEvent, tool_event};
+    let quad = |app: &PhotocraftApp| app.ui.transform.as_ref().unwrap().session.quad().map(|p| [p.x, p.y]);
     let cmd = egui::Modifiers::COMMAND;
     for mods in [cmd, cmd | egui::Modifiers::ALT | egui::Modifiers::SHIFT] {
         let mut app = app();
+        let ctx = crate::canvas::testing::ctx(&app);
         crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
-        let q0 = app.ui.transform.as_ref().unwrap().quad;
+        let q0 = quad(&app);
         let [x, y] = q0[1];
-        crate::transform_tool::pointer(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
-        crate::transform_tool::pointer(&mut app, ToolEvent::Move { x: x + 15.0, y: y - 10.0, pressure: 1.0 }, mods);
-        crate::transform_tool::pointer(&mut app, ToolEvent::Up { x: x + 15.0, y: y - 10.0 }, mods);
-        let q = app.ui.transform.as_ref().unwrap().quad;
+        tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Move { x: x + 15.0, y: y - 10.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Up { x: x + 15.0, y: y - 10.0 }, mods);
+        let q = quad(&app);
         assert_ne!(q, q0, "the drag scaled the box ({mods:?})");
         let skew = (0..2).map(|k| (q[0][k] + q[2][k] - q[1][k] - q[3][k]).abs()).fold(0.0, f64::max);
         assert!(skew < 1e-6, "the box stays a parallelogram ({mods:?}): {q:?}");

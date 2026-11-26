@@ -1,16 +1,22 @@
 # Color selection and screen sampling
 
-Click the color swatch in the Type options bar or Character panel to open the full Color Picker. It offers the color field, component strip, HSB/RGB/Lab/CMYK and hex fields, and current/new swatches. Selecting characters targets that range; with no character selection, the active text layer is targeted. **OK** applies through `type.setStyle`; **Cancel** leaves the text and history unchanged. The foreground color is independent of this dialog.
+Click the color swatch in the Type options bar or Character panel to open the full Color Picker. It offers the color field, component strip, HSB/RGB/Lab/CMYK and hex fields, and current/new swatches. Selecting characters targets that range; with no character selection, the active text layer is targeted. While the picker is open, the canvas shows the target in the picked colour, as Photoshop does: the preview runs `type.setStyle` on a copy of the document, so the document, its revision and its history are untouched. **OK** applies through `type.setStyle`, exactly the previewed edit, in one history step; **Cancel** leaves the text and history unchanged. The foreground color is independent of this dialog.
+
+The Color Picker for a gradient fill layer's colour stop (double-click a stop in Properties or on the canvas) previews the same way, through `gradient.fill.stop`. The gradient presets editor's stop picker changes presets, not pixels, and has no canvas preview.
+
+## HUD Color Picker
+
+With a painting tool, **Shift+Alt+right-click** on the canvas opens the HUD Color Picker: a saturation/value square with a hue strip to its right, placed so the current color sits under the pointer. While the right button stays down, moving the pointer over the HUD sets the foreground color live; releasing the button keeps it. **Esc** closes the HUD and keeps the color picked so far (Undo takes it back). The whole gesture is one coalesced `tools.setColors` history step. The agents' equivalent is `ui.pointer` with `"button": "right"`, `"shift": true, "alt": true` (the down opens the HUD, the up closes it).
 
 The existing canvas eyedropper continues to sample the document while the Color Picker is open, including canvas zoom and pan. This works without operating-system screen-capture permission.
 
 ## Pick a color outside PhotoCraft
 
-**Pick screen color** is available in full Color Pickers and compact color-selection popups, including fills, shapes, gradients, layer effects, guides and preferences.
+**Pick screen color** is available in compact color-selection popups, including fills, shapes, gradients, layer effects, guides and preferences. The full Color Picker dialog has no screen button, as in the reference application: while it is open, a click on the canvas samples the image into its new colour.
 
 On X11, Windows and macOS, clicking it takes one snapshot of the connected screens and opens a sampling viewport on each monitor. Move the crosshair over a pixel, use the wheel to change the 11 × 11 pixel loupe from 4× to 24×, then click to select. **Esc** cancels. The center pixel has a black/white outline and its sampled hex value is displayed below the loupe.
 
-A full dialog receives the new color for inspection; **OK** is still required to apply it. Compact popups retain their normal immediate-edit behavior. Existing alpha and additive blending are preserved; float RGB widgets retain their linear RGB storage.
+Compact popups retain their normal immediate-edit behavior. Existing alpha and additive blending are preserved; float RGB widgets retain their linear RGB storage.
 
 Screen snapshots are held in memory, are never written or transmitted by the picker, and are released after selection, cancellation, or a change of document, layer or dialog. The combined capture budget is 64 × 1024 × 1024 pixels (about 67 MP) across at most 16 displays, subject to the GPU's texture-size limit. These limits affect screen sampling only, not document dimensions.
 
@@ -22,7 +28,7 @@ Screen snapshots are held in memory, are never written or transmitted by the pic
 - **macOS:** safe CoreGraphics bindings capture the composed screen and use the snapshot's own ICC profile when available. Screen Recording permission may be required. The existing macOS 11 deployment target is preserved. The window-list capture API is deprecated by Apple, so current macOS releases require explicit manual validation; migration to modern native sampling must also preserve older-app compatibility.
 - **Web:** browsers exposing the standard EyeDropper API use the browser's native sampling/magnification UI. Browser support and zoom controls vary. Unsupported browsers retain document sampling and color fields; external screen sampling is unavailable.
 
-The implementation follows publicly documented Photoshop behavior for the full Type Color Picker and outside-image sampling. PhotoCraft uses an explicit screen-pick action and frozen snapshots rather than Photoshop's press-and-drag gesture.
+The implementation follows publicly documented Photoshop behavior for the full Type Color Picker and outside-image sampling. PhotoCraft's popups use an explicit screen-pick action and frozen snapshots rather than the reference application's press-and-drag gesture; dragging from the canvas to outside the document is tracked in #11755.
 
 ## Verification
 

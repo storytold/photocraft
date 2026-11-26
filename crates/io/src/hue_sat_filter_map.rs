@@ -14,9 +14,9 @@
 //! when the smart object does. Anything else (an unknown key, a duplicated or unknown range, a
 //! value Photoshop's dialog can't hold) stays an opaque [`super::UNSUPPORTED_FILTER`].
 
+use craft_psd::descriptor::{Descriptor, UnicodeString, Value};
 use photocraft_doc::SmartFilter;
 use photocraft_doc::adjust::HueRange;
-use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value};
 use serde_json::{Map, Value as J, json};
 
 use super::{blend_options, enumv, is_meta, rgbc};
@@ -173,7 +173,8 @@ pub(super) fn export_item(f: &SmartFilter) -> Result<Descriptor, String> {
         Descriptor::new("Hst2").with("H   ", master.0).with("Strt", master.1).with("Lght", setting(p, "lightness", 0.0, -100.0, 100.0)?),
     )];
     for (i, key) in RANGES.iter().enumerate() {
-        if let Some(o) = p.get(*key) {
+        // A `null` range is an untouched one, like a missing key.
+        if let Some(o) = p.get(*key).filter(|o| !o.is_null()) {
             adjs.extend(range_entry(i, o)?);
         }
     }
@@ -197,8 +198,8 @@ pub(super) fn export_item(f: &SmartFilter) -> Result<Descriptor, String> {
 mod tests {
     use super::*;
     use crate::smart_map::{UNSUPPORTED_FILTER, filter_from_item, item_for_filter};
+    use craft_psd::descriptor::Id;
     use photocraft_color::BlendMode;
-    use photocraft_psd::descriptor::Id;
 
     fn hst2(range: Option<(i32, [i32; 4])>, h: i32, s: i32, l: i32) -> Value {
         let mut d = Descriptor::new("Hst2");
@@ -303,6 +304,7 @@ mod tests {
         assert_eq!(export(json!({"hue": 12.4})), json!({"colorize": false, "hue": 12, "saturation": 0, "lightness": 0}));
         assert_eq!(export(json!({"hue": -400, "lightness": 101, "layer": 3})), json!({"colorize": false, "hue": -180, "saturation": 0, "lightness": 100}));
         assert_eq!(export(J::Null), json!({"colorize": false, "hue": 0, "saturation": 0, "lightness": 0}));
+        assert_eq!(export(json!({"reds": null})), json!({"colorize": false, "hue": 0, "saturation": 0, "lightness": 0}));
         // Colorize starts at 25 % saturation and wraps the hue into 0..360.
         assert_eq!(export(json!({"colorize": true, "hue": -30})), json!({"colorize": true, "hue": 330, "saturation": 25, "lightness": 0}));
         // The full set (`to_params`): neutral ranges at their default extent are left out, reds

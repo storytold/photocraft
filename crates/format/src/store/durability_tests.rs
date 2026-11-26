@@ -1,10 +1,14 @@
 //! Exercise the real directory save, including cached-object reuse and garbage collection.
-use super::*;
-use crate::atomic::{AtomicFs, RealFs};
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Layer, Size};
 use std::cell::{Cell, RefCell};
 use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use photocraft_color::{ColorMode, SampleType};
+use photocraft_doc::{Document, Layer, Size};
+
+use super::{MANIFEST, PcraftWriter, SaveOptions, list_objects};
+use crate::atomic::{AtomicFs, RealFs};
 
 /// The object or manifest directory barrier at which to inject one publication failure.
 #[derive(Clone, Copy, Debug)]
@@ -21,6 +25,8 @@ struct PublicationFault {
     stage: FailAt,
     armed: Cell<bool>,
     synced: RefCell<Vec<PathBuf>>,
+    /// Fail with this raw OS error instead of a generic one (a share refusing the flush, #9440).
+    raw_error: Option<i32>,
 }
 
 impl AtomicFs for PublicationFault {
@@ -49,7 +55,10 @@ impl AtomicFs for PublicationFault {
             FailAt::Manifest => dir == self.root && std::fs::read(dir.join(MANIFEST))? != self.old_manifest,
         };
         if fail && self.armed.replace(false) {
-            return Err(io::Error::other("injected publication flush failure"));
+            return Err(match self.raw_error {
+                Some(code) => io::Error::from_raw_os_error(code),
+                None => io::Error::other("injected publication flush failure"),
+            });
         }
         RealFs.sync_dir(dir)
     }
@@ -85,6 +94,7 @@ fn failed_bundle_publication_retains_old_objects_and_same_writer_retry_is_durabl
             stage,
             armed: Cell::new(true),
             synced: RefCell::new(Vec::new()),
+            raw_error: None,
         };
 
         let error = writer.save_dir_with(&new, &dir, &SaveOptions::default(), &fs).unwrap_err();
@@ -108,6 +118,45 @@ fn failed_bundle_publication_retains_old_objects_and_same_writer_retry_is_durabl
             );
         }
         assert!(old_objects.iter().all(|(p, _)| !dir.join(p).exists()), "cleanup resumes after the durable retry");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// #9440: a network share refuses a directory flush with `ERROR_INVALID_FUNCTION` (1) or
+/// `ERROR_NOT_SUPPORTED` (50). At each barrier (the tiles and blobs folders before the manifest,
+/// and the bundle folder after it) that counts as flushed, so the bundle save succeeds;
+/// `ERROR_ACCESS_DENIED` (5) still fails it.
+#[test]
+fn an_unsupported_directory_flush_still_saves_the_bundle() {
+    let cases = [FailAt::Tiles, FailAt::Blobs, FailAt::Manifest].into_iter().flat_map(|stage| [(stage, 1, true), (stage, 50, true), (stage, 5, false)]);
+    for (stage, code, saves) in cases {
+        let dir = std::env::temp_dir().join(format!("pcraft-smb-flush-{}-{stage:?}-{code}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let mut doc = Document::new("smb", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut layer = Layer::raster("pixels", doc.pixel_format());
+        layer.surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+        doc.layers.push(layer);
+        doc.metadata.exif = Some(Arc::new(vec![1; 100]));
+        let mut writer = PcraftWriter::new();
+        writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+        let mut new = doc.clone();
+        new.name = "smb, saved again".into();
+        let fs = PublicationFault {
+            old_manifest: std::fs::read(dir.join(MANIFEST)).unwrap(),
+            root: dir.clone(),
+            stage,
+            armed: Cell::new(true),
+            synced: RefCell::new(Vec::new()),
+            raw_error: Some(code),
+        };
+        let result = writer.save_dir_with(&new, &dir, &SaveOptions::default(), &fs);
+        assert!(!fs.armed.get(), "{stage:?} with code {code}: the barrier was reached");
+        assert_eq!(result.is_ok(), saves, "{stage:?} with code {code}: {result:?}");
+        if saves {
+            assert_eq!(crate::load_path(&dir).unwrap(), new, "{stage:?} with code {code}: the new manifest is published");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

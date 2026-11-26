@@ -12,7 +12,7 @@ pub mod warp;
 /// Edge length of a raster tile in pixels.
 pub const TILE_SIZE: i32 = 256;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
@@ -31,7 +31,7 @@ impl Size {
 }
 
 /// Integer rectangle, half-open: `[x0, x1) × [y0, y1)`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Rect {
     pub x0: i32,
     pub y0: i32,
@@ -96,6 +96,14 @@ impl Rect {
     pub fn inflate(&self, d: i32) -> Rect {
         Rect::new(self.x0.saturating_sub(d), self.y0.saturating_sub(d), self.x1.saturating_add(d), self.y1.saturating_add(d))
     }
+    /// How many tiles overlap this rect, without visiting them (a rect can span billions).
+    pub fn tile_count(&self) -> u64 {
+        if self.is_empty() {
+            return 0;
+        }
+        let (a, b) = (TileCoord::containing(self.x0, self.y0), TileCoord::containing(self.x1 - 1, self.y1 - 1));
+        ((i64::from(b.tx) - i64::from(a.tx) + 1) as u64) * ((i64::from(b.ty) - i64::from(a.ty) + 1) as u64)
+    }
     /// All tiles overlapping this rect.
     pub fn tiles(&self) -> impl Iterator<Item = TileCoord> + use<> {
         let (a, b) = if self.is_empty() {
@@ -108,7 +116,7 @@ impl Rect {
 }
 
 /// Index of a tile in the infinite tile grid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct TileCoord {
     pub tx: i32,
     pub ty: i32,
@@ -128,7 +136,7 @@ impl TileCoord {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -141,7 +149,7 @@ impl Point {
 }
 
 /// 2D affine transform `[a c e; b d f; 0 0 1]` (column vectors).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Affine {
     pub m: [f64; 6],
 }
@@ -181,14 +189,16 @@ impl Affine {
     pub fn determinant(&self) -> f64 {
         self.m[0] * self.m[3] - self.m[1] * self.m[2]
     }
+    /// Returns `None` for a near-singular matrix or non-finite determinant/inverse coefficients.
     pub fn inverse(&self) -> Option<Affine> {
         let det = self.determinant();
-        if det.abs() < 1e-12 {
+        if !det.is_finite() || det.abs() < 1e-12 {
             return None;
         }
         let [a, b, c, d, e, f] = self.m;
         let inv = 1.0 / det;
-        Some(Affine { m: [d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv] })
+        let inverse = Affine { m: [d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv] };
+        inverse.m.iter().all(|v| v.is_finite()).then_some(inverse)
     }
 }
 
@@ -243,6 +253,34 @@ mod tests {
         let q = inv.apply(t.apply(p));
         assert!((q.x - p.x).abs() < 1e-9 && (q.y - p.y).abs() < 1e-9);
         assert!(Affine::scale(0.0).inverse().is_none());
+    }
+
+    #[test]
+    fn affine_inverse_rejects_non_finite_coefficients() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for index in 0..6 {
+                let mut transform = Affine::IDENTITY;
+                transform.m[index] = value;
+                assert!(transform.inverse().is_none(), "coefficient {index}: {value}");
+            }
+        }
+    }
+
+    #[test]
+    fn affine_inverse_rejects_determinant_overflow() {
+        assert!(Affine::scale(f64::MAX).inverse().is_none());
+    }
+
+    #[test]
+    fn affine_inverse_rejects_translation_overflow() {
+        let transform = Affine { m: [1.0, 0.0, 1.0, 1.0, -f64::MAX, f64::MAX] };
+        assert_eq!(transform.determinant(), 1.0);
+        assert!(transform.inverse().is_none());
+    }
+
+    #[test]
+    fn affine_inverse_keeps_large_finite_translations() {
+        assert_eq!(Affine::translate(f64::MAX, -f64::MAX).inverse(), Some(Affine::translate(-f64::MAX, f64::MAX)));
     }
 
     #[test]

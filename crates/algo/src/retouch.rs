@@ -109,6 +109,98 @@ pub fn sponge(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [f32;
     compress_gamut([l + (c[0] - l) * k, l + (c[1] - l) * k, l + (c[2] - l) * k], l)
 }
 
+/// Compound a reference dab's gain, with closed forms for common spacings.
+#[inline]
+fn sponge_gain(gain: f32, steps: f32) -> f32 {
+    match steps {
+        0.5 => gain.sqrt(),
+        1.0 => gain,
+        2.0 => gain * gain,
+        4.0 => {
+            let squared = gain * gain;
+            squared * squared
+        }
+        _ => gain.powf(steps),
+    }
+}
+
+/// Sum the local affine response over the dab's fractional number of reference steps.
+#[inline]
+fn sponge_affine_scale(change: f32, steps: f32) -> f32 {
+    let gain = 1.0 + change;
+    match steps {
+        0.5 => 1.0 / (gain.sqrt() + 1.0),
+        2.0 => gain + 1.0,
+        4.0 => (gain + 1.0) * (gain * gain + 1.0),
+        // The first terms of ((1 + change)^steps - 1) / change avoid cancellation near zero.
+        _ if change.abs() < 0.001 => {
+            let second = (steps - 1.0) * (steps - 2.0) / 6.0;
+            steps * (1.0 + change * (0.5 * (steps - 1.0) + change * second))
+        }
+        _ => (gain.powf(steps) - 1.0) / change,
+    }
+}
+
+/// Adjust a normalized RGB dab using the measured RGB Sponge response (#12972, #12973).
+/// `coverage` includes Flow and the brush falloff. `spacing` is in brush diameters.
+pub fn sponge_rgb(c: [f32; 3], coverage: f32, spacing: f32, saturate: bool, vibrance: bool) -> [f32; 3] {
+    let [r, g, b] = c;
+    let lo = r.min(g).min(b);
+    let hi = r.max(g).max(b);
+    let chroma = hi - lo;
+    if coverage <= 0.0 || chroma <= f32::EPSILON {
+        return c;
+    }
+
+    let flow = coverage.min(1.0);
+    // The measured dab covers a quarter of a brush diameter along the stroke. Scale its gain
+    // multiplicatively so the same distance gets the same strength from more or fewer dabs.
+    let steps = 4.0 * spacing.clamp(0.01, 1.0);
+    let grey = luma(c);
+    if !vibrance {
+        let reference_gain = if saturate { 1.0 + 0.4 * flow } else { 1.0 - 0.2 * flow };
+        let mut gain = sponge_gain(reference_gain, steps);
+        if saturate {
+            // Limit the gain before applying it to all three channels, using the same luma pivot.
+            let shadow = grey - lo;
+            if gain * shadow > grey {
+                gain = grey / shadow;
+            }
+            let highlight = hi - grey;
+            if gain * highlight > 1.0 - grey {
+                gain = (1.0 - grey) / highlight;
+            }
+        }
+        return c.map(|v| grey + (v - grey) * gain);
+    }
+
+    // Vibrance changes the channel extrema asymmetrically. The shadow response tapers near
+    // black and near grey. The highlight response is limited by headroom in Saturate and by
+    // brightness and chroma in Desaturate. Fit those bounds to the measured single dabs.
+    let mid = r.min(g).max(r.max(g).min(b));
+    let shadow = (((lo - 0.125).max(0.0) / 12.0) + (mid - lo) * 0.025).min(chroma / 6.0).min(lo);
+    let (low, high) = if saturate {
+        let highlight = (0.4 * (1.0 - hi)).min(0.5 * (hi - grey));
+        ((lo - flow * shadow).max(0.0), hi + flow * highlight)
+    } else {
+        let weight = (0.5 * lo / hi).max(0.2);
+        let highlight = (0.06 * hi + 0.03 * lo).min(weight * (hi - grey));
+        (lo + flow * shadow, hi - flow * highlight)
+    };
+    // Compose the measured affine response for this dab's distance, holding its locally
+    // computed coefficients fixed, then cap the endpoints at the RGB gamut.
+    let (low, high) = if steps == 1.0 {
+        (low, high)
+    } else {
+        let change = ((high - hi) - (low - lo)) / chroma;
+        let scale = sponge_affine_scale(change, steps);
+        ((lo + (low - lo) * scale).max(0.0), (hi + (high - hi) * scale).min(1.0))
+    };
+    // One affine map keeps the intermediate channel in the same position within the span.
+    let gain = (high - low).max(0.0) / chroma;
+    c.map(|v| low + (v - lo) * gain)
+}
+
 /// Gaussian blur of the window `[x0, x1) × [y0, y1)` of an interleaved `w × h × ch` buffer, reading
 /// neighbours with edge clamping. With an alpha channel (`alpha = Some(index)`), colour is blurred
 /// premultiplied so transparent pixels don't bleed their (meaningless) colour. Returns the window's
@@ -194,10 +286,22 @@ pub fn local_blur(data: &[f32], w: usize, h: usize, ch: usize, alpha: Option<usi
     out
 }
 
-/// Unsharp-mask sharpen of a window (same layout as [`local_blur`]): `v + amount·(v − blur(v))`.
+/// Gaussian sigma of the Protect Detail sharpen in [`local_sharpen`], in pixels. It reads
+/// `ceil(3·sigma)` pixels around each output pixel.
+pub const PROTECT_DETAIL_SIGMA: f32 = 2.5;
+
+/// Largest change one Protect Detail pass makes to a pixel (6 levels of 255), approached softly.
+const PROTECT_DETAIL_LIMIT: f32 = 6.0 / 255.0;
+
+/// Unsharp-mask sharpen of a window (same layout as [`local_blur`]): `v + amount·d` with
+/// `d = v − blur(v)`, against a Gaussian of sigma 1.
 ///
-/// With `protect_detail`, each result is clamped to the 3×3 neighbourhood's range, which stops
-/// halos and noise from being amplified into new extremes. Alpha is left unchanged.
+/// With `protect_detail` (the Sharpen tool's default) it sharpens gently, as the reference
+/// application does (#12938): the Gaussian is wider ([`PROTECT_DETAIL_SIGMA`]), so an edge gets a
+/// low halo a few pixels wide, and each difference is soft-limited to `L` = 6 levels:
+/// `v + amount·d·L/(L + |d|)`. Fine detail is sharpened about as much as without it, while a
+/// strong edge or a lone bright pixel moves by less than `L` per pass instead of overshooting.
+/// Uniform areas stay exactly as they are. Alpha is left unchanged.
 #[allow(clippy::too_many_arguments)]
 pub fn local_sharpen(
     data: &[f32],
@@ -210,36 +314,51 @@ pub fn local_sharpen(
     protect_detail: bool,
 ) -> Vec<f32> {
     let (x0, y0, x1, y1) = win;
-    let ow = x1 - x0;
-    let blur = local_blur(data, w, h, ch, alpha, win, 1.0);
+    let (ow, oh) = (x1 - x0, y1 - y0);
+    if ow == 0 || oh == 0 || ch == 0 {
+        return Vec::new();
+    }
+    let blur = local_blur(data, w, h, ch, alpha, win, if protect_detail { PROTECT_DETAIL_SIGMA } else { 1.0 });
     let mut out = vec![0.0f32; blur.len()];
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let o = ((y - y0) * ow + (x - x0)) * ch;
-            let i = (y * w + x) * ch;
+    let stride = ow * ch;
+
+    // Rows are independent, so process them in parallel with rayon (#5426).
+    let process_row = |(oy, dst): (usize, &mut [f32])| {
+        let y = y0 + oy;
+        let blur_row = &blur[oy * stride..(oy + 1) * stride];
+        for ox in 0..ow {
+            let o = ox * ch;
+            let i = (y * w + x0 + ox) * ch;
             for c in 0..ch {
                 let v = data[i + c];
                 if Some(c) == alpha {
-                    out[o + c] = v;
+                    dst[o + c] = v;
                     continue;
                 }
-                let mut s = v + amount * (v - blur[o + c]);
-                if protect_detail {
-                    let (mut lo, mut hi) = (v, v);
-                    for (dx, dy) in [(-1i32, -1i32), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
-                        let (nx, ny) = ((x as i32 + dx).clamp(0, w as i32 - 1) as usize, (y as i32 + dy).clamp(0, h as i32 - 1) as usize);
-                        let nv = data[(ny * w + nx) * ch + c];
-                        lo = lo.min(nv);
-                        hi = hi.max(nv);
-                    }
-                    s = s.clamp(lo, hi);
-                }
-                out[o + c] = s;
+                let d = v - blur_row[o + c];
+                // `PROTECT_DETAIL_LIMIT + |d|` is never zero, so this can't divide by zero.
+                let d = if protect_detail { d * PROTECT_DETAIL_LIMIT / (PROTECT_DETAIL_LIMIT + d.abs()) } else { d };
+                dst[o + c] = v + amount * d;
             }
         }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(stride).enumerate().for_each(process_row);
     }
+    #[cfg(target_arch = "wasm32")]
+    {
+        out.chunks_mut(stride).enumerate().for_each(process_row);
+    }
+
     out
 }
+
+#[cfg(test)]
+#[path = "retouch_sharpen_protect_detail_tests.rs"]
+mod sharpen_protect_detail_tests;
 
 #[cfg(test)]
 mod tests {
@@ -307,10 +426,10 @@ mod tests {
         let s = local_sharpen(&smooth, w, h, ch, None, win, 1.0, false);
         let so: Vec<f32> = (4..12).flat_map(|y| (4..12).map(move |x| (x, y))).map(|(x, y)| smooth[y * w + x]).collect();
         assert!(var(&s) > var(&so));
-        // Protect detail never exceeds the local range.
+        // Protect Detail sharpens too, but moves no pixel by more than its limit per unit of amount.
         let sp = local_sharpen(&smooth, w, h, ch, None, win, 4.0, true);
-        let hi = smooth.iter().cloned().fold(0.0, f32::max);
-        assert!(sp.iter().all(|v| *v <= hi + 1e-6));
+        assert!(var(&sp) > var(&so));
+        assert!(sp.iter().zip(&so).all(|(a, b)| (a - b).abs() < 4.0 * PROTECT_DETAIL_LIMIT));
     }
 
     #[test]
@@ -326,3 +445,10 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "retouch_sponge_desaturate_tests.rs"]
+mod sponge_desaturate_tests;
+#[cfg(test)]
+#[path = "retouch_sponge_saturate_tests.rs"]
+mod sponge_saturate_tests;

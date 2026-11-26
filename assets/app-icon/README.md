@@ -17,14 +17,13 @@ Exactly three colours:
 ## Geometry
 
 A 512-unit tile (`viewBox="0 0 512 512"`), rounded square with `rx=112`, no border. The macOS
-renders pad it onto Apple's 824/1024 icon grid; the Windows and Linux renders crop 22 units off
-each side so the figure reads at 16–48 px.
+renders pad it onto Apple's 824/1024 icon grid; the Windows and Linux renders use the whole tile,
+as the other Crafting Apps do.
 
 ## Provenance
 
 The owner's original drawing, made in ArtCraft (2880 px, engraving style, keyed to the palette),
-vectorised with craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source PNG stays in
-craftrules at `assets/app-icons/photocraft/source.png`. License: see `LICENSE.txt`.
+vectorised. License: see `LICENSE.txt`.
 
 ## Files
 
@@ -45,3 +44,15 @@ details and tests the `.ico` sizes and the WiX icon references.
 
 Replace `photocraft.svg` (and `photocraft-small.svg`), then run `packaging/icons.sh`. It needs
 `resvg`, plus `iconutil` on macOS; the `.ico` is packed by `cargo xtask ico`.
+
+## Nightly channel
+
+The nightly derivatives keep the foreground artwork, alpha and Mac padding unchanged. Only the
+background contribution changes from the stable blue to the selected deep background. There is
+no letter badge or crescent; the app and Launcher also identify the channel in text.
+
+`photocraft-nightly.png` and its nine-frame ICO use the existing own256 master. The separate
+`photocraft-nightly-1024.png` and eleven-slot ICNS use the actual padded Mac1024 master, not an
+upscale. Input/output hashes, the palette-fit recipe and container sizes are recorded in
+[`nightly-provenance.json`](nightly-provenance.json). Stable source files are not recoloured.
+The old N-marked private Windows isolation package is separate and is not rebuilt for this art.
