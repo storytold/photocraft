@@ -517,6 +517,28 @@ fn saves_are_off_under_a_pending_transform() {
     }
 }
 
+/// #16953: Layer › Quick Export as PNG and Export As write the layer from the committed document
+/// too, so they are off and refused under a pending box.
+#[test]
+fn layer_exports_are_off_under_a_pending_transform() {
+    for id in ["layer.quickExportAsPng", "layer.exportAs"] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let writes = record_writes(&mut app);
+        let ctx = app.ctx().clone();
+        assert!(crate::menus::is_enabled(&app, id), "{id}: enabled with no box");
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        move_box(&mut app, 16.0, 0.0);
+        assert!(!crate::menus::is_enabled(&app, id), "{id}: off under the box");
+        assert!(crate::menus::invoke(&mut app, &ctx, id, serde_json::Value::Null).is_err(), "{id}: refused under the box");
+        land_jobs(&mut app);
+        assert!(writes.borrow().is_empty(), "{id}: nothing is written");
+        assert!(app.ui.transform.is_some(), "{id}: the box stays open");
+        commit(&mut app);
+        land_jobs(&mut app);
+        assert!(crate::menus::is_enabled(&app, id), "{id}: back after the commit");
+    }
+}
+
 /// #16953: while a commit still runs in the background the document doesn't hold the move yet,
 /// so a save is refused until it lands.
 #[test]

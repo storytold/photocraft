@@ -384,6 +384,8 @@ pub(crate) fn writes_document(id: &str) -> bool {
             | "file.saveACopy"
             | "file.export.quickExportAsPng"
             | "file.export.exportAs"
+            | "layer.quickExportAsPng"
+            | "layer.exportAs"
             | "file.export.artboardsToFiles"
             | "file.export.artboardsToPdf"
             | "file.export.layersToFiles"
