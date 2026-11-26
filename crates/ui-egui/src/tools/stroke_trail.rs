@@ -41,22 +41,28 @@ pub(crate) struct OverlayTint {
 }
 
 impl Default for OverlayTint {
-    /// What a fresh start holds, straight from the tool options' own defaults.
+    /// A fresh start: the theme's colour and the share the tone paints (#12549).
     fn default() -> Self {
-        let o = crate::state::ToolOptions::default();
-        Self { color: o.remove_overlay_color, opacity: o.remove_overlay_opacity }
+        Self::plain()
     }
 }
 
 impl OverlayTint {
-    /// The overlay tint `tool`'s tool options hold: the fresh one for every tool but the Remove tool,
-    /// whose overlay the popup colours (#12549).
-    pub(crate) fn of(app: &PhotocraftApp, tool: Tool) -> Self {
-        if tool != Tool::Remove {
-            return Self::default();
+    /// The tint of a trail painted as `tone`: only the Remove tool's (`Danger`) reads the popup's pair,
+    /// every other tone paints itself. Keyed on the tone the trail was made with, not on the tool now
+    /// in the bar, so a spring-loaded key cannot restyle a stroke already being painted (#12549).
+    pub(crate) fn of(app: &PhotocraftApp, tone: TrailTone) -> Self {
+        if tone != TrailTone::Danger {
+            return Self::plain();
         }
         let o = &app.ui.tool_options;
         Self { color: o.remove_overlay_color, opacity: o.remove_overlay_opacity }
+    }
+
+    /// No colour and the share `Danger` already paints: a trail left to its tone, built without the
+    /// tool options so a canvas pass costs nothing more (#12549).
+    pub(crate) fn plain() -> Self {
+        Self { color: None, opacity: TrailTone::Danger.share() * 100.0 }
     }
 
     /// Whether the tint leaves the trail's tone to paint the footprint: no colour, and the opacity the
@@ -252,16 +258,19 @@ pub(crate) fn feed(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) {
 /// with no trail does nothing. The Remove tool shows the colour and opacity its Overlay options popup
 /// set (#12549); every other tool's trail paints its tone exactly as before.
 pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect) {
-    let live = OverlayTint::of(app, app.ui.tool);
-    let waiting = OverlayTint::of(app, Tool::Remove);
+    // The live stroke's tint comes from the tone its own trail carries, so a spring-loaded tool key
+    // pressed in the middle of a stroke cannot restyle the footprint already being painted (#12549).
+    let live_tone = app.trail.as_ref().map(|trail| trail.tone);
+    let live = live_tone.map_or_else(OverlayTint::plain, |tone| OverlayTint::of(app, tone));
     if let Some(trail) = app.trail.as_mut() {
         let tone = trail.tone;
         trail.show_as(ui, rect, tl!("Stroke footprint"), tone, live);
     }
-    if app.remove_trail.is_some()
-        && crate::retouch_ui::remove_pending_live(app)
-        && let Some(trail) = app.remove_trail.as_mut()
-    {
-        trail.show_as(ui, rect, tl!("Waiting removals"), TrailTone::Danger, waiting);
+    // The waiting strokes are Remove's own, whatever the bar's tool is (#12549): two field reads.
+    if app.remove_trail.is_some() && crate::retouch_ui::remove_pending_live(app) {
+        let waiting = OverlayTint::of(app, TrailTone::Danger);
+        if let Some(trail) = app.remove_trail.as_mut() {
+            trail.show_as(ui, rect, tl!("Waiting removals"), TrailTone::Danger, waiting);
+        }
     }
 }

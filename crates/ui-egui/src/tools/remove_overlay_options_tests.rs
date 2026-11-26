@@ -17,6 +17,7 @@ use crate::app::framework::BuildApp as _;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 use crate::stroke_trail::OverlayTint;
+use craft::ui::canvas_controls::brush::TrailTone;
 
 const GEAR: &str = "Set additional options";
 /// A colour the popup can hold: a quarter, a half and three quarters on.
@@ -123,18 +124,27 @@ fn the_colour_well_opens_the_color_picker_and_ok_keeps_what_it_answers() {
     h.run_steps(4);
     let id = crate::color_picker_ui::top(h.state()).expect("the well opens the Color Picker");
     assert!(h.query_all_by_label("Color Picker").next().is_some(), "the picker is titled \"Color Picker\"");
+    // What the hosted picker does to the popup that opened it, pinned as it really behaves: a popover
+    // loses its rows when the focus leaves it, and the picker takes the focus.
+    let rows_while_picking = h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).count();
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, "color", json!("#336699")).unwrap();
     crate::dialogs::testing::confirm(h.state_mut(), id).unwrap();
     h.run_steps(3);
     assert!(crate::color_picker_ui::top(h.state()).is_none(), "OK closes the picker");
+    let rows_after = h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).count();
+    assert_eq!(
+        (rows_while_picking, rows_after),
+        (0, 0),
+        "the picker closes the popup, and OK does not reopen it: {rows_while_picking} while picking, {rows_after} after"
+    );
     let app = h.state();
     let rgb = app.ui.tool_options.remove_overlay_color.expect("the picked colour is kept in the tool options");
     assert!(close(rgb, [0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0]), "the picked colour: {rgb:?}");
-    let (color, share) = OverlayTint::of(app, Tool::Remove).props();
+    let (color, share) = OverlayTint::of(app, TrailTone::Danger).props();
     assert_eq!(color.map(|c| c.0), Some(egui::Color32::from_rgb(0x33, 0x66, 0x99)), "the trail takes the picked colour");
     assert_eq!(share, None, "an unset opacity leaves the tone's own share in place");
-    assert!(OverlayTint::of(app, Tool::Blur).props() == (None, None), "another tool's overlay is untouched by the choice");
+    assert!(OverlayTint::of(app, TrailTone::Light).props() == (None, None), "another tool's overlay is untouched by the choice");
 }
 
 #[test]
@@ -142,16 +152,16 @@ fn the_tint_holds_the_opacity_as_a_share_and_a_fresh_start_holds_neither() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = Tool::Remove;
-    assert!(OverlayTint::of(&app, Tool::Remove).is_plain(), "a fresh Remove overlay shows the tone's own colour and share");
+    assert!(OverlayTint::of(&app, TrailTone::Danger).is_plain(), "a fresh Remove overlay shows the tone's own colour and share");
     app.ui.tool_options.remove_overlay_color = Some([0x20 as f32 / 255.0, 0x80 as f32 / 255.0, 0x60 as f32 / 255.0]);
     app.ui.tool_options.remove_overlay_opacity = 30.0;
-    let (color, share) = OverlayTint::of(&app, Tool::Remove).props();
+    let (color, share) = OverlayTint::of(&app, TrailTone::Danger).props();
     assert_eq!(color.map(|c| c.0), Some(egui::Color32::from_rgb(0x20, 0x80, 0x60)), "the colour reaches the trail");
     assert_eq!(share, Some(0.3), "30 % is a share of 0.3");
     assert_eq!(OverlayTint::share(150.0), 1.0, "no share shows more than the colour itself");
     assert_eq!(OverlayTint::share(0.0), 0.0, "no share at all shows no footprint");
     app.ui.tool_options.remove_overlay_color = None;
-    assert!(!OverlayTint::of(&app, Tool::Remove).is_plain(), "an opacity alone still tints the overlay");
+    assert!(!OverlayTint::of(&app, TrailTone::Danger).is_plain(), "an opacity alone still tints the overlay");
 }
 
 #[test]
@@ -164,9 +174,21 @@ fn the_two_values_are_kept_with_the_tool_options_and_old_settings_stay_plain() {
     let older: ToolOptions = serde_json::from_value(json!({ "tolerance": 40.0 })).unwrap();
     assert_eq!(older.remove_overlay_color, None, "options saved before this hold no overlay colour");
     assert_eq!(older.remove_overlay_opacity, ToolOptions::default().remove_overlay_opacity, "…nor an opacity of their own");
-    use craft::ui::canvas_controls::brush::TrailTone;
     assert_eq!(ToolOptions::default().remove_overlay_opacity, TrailTone::Danger.share() * 100.0, "the default opacity is the share the tool's own tone paints");
     assert!(OverlayTint::default().is_plain(), "and a fresh start tints nothing");
+}
+
+#[test]
+fn a_remembered_pair_the_field_could_never_hold_comes_back_inside_its_range() {
+    for (saved, want) in [(0.0, 1.0), (150.0, 100.0), (30.0, 30.0)] {
+        let mut o = ToolOptions { remove_overlay_opacity: saved, ..ToolOptions::default() };
+        crate::tool_memory::sanitize(&mut o);
+        assert_eq!(o.remove_overlay_opacity, want, "a remembered {saved} %");
+    }
+    let mut wild = ToolOptions { remove_overlay_opacity: f32::NAN, remove_overlay_color: Some([2.0, f32::NAN, 0.5]), ..ToolOptions::default() };
+    crate::tool_memory::sanitize(&mut wild);
+    assert_eq!(wild.remove_overlay_opacity, ToolOptions::default().remove_overlay_opacity, "an opacity that is not a number takes the fresh start");
+    assert_eq!(wild.remove_overlay_color, None, "a colour with a channel that is not a number is dropped, so the tool's own overlay shows");
 }
 
 #[test]
@@ -195,6 +217,16 @@ fn the_chosen_pair_colours_the_live_and_the_waiting_overlay_at_once() {
     h.run_steps(3);
     let want = chosen_ink(0.2);
     assert_eq!(changed_inks(&h, &plain), vec![want], "the live overlay takes the chosen colour at the chosen opacity");
+    // A spring-loaded tool key puts another tool in the bar while this stroke is still running: the
+    // footprint already painted belongs to the Remove stroke, whose family keeps feeding its own
+    // trail (#12549).
+    h.state_mut().ui.tool = Tool::Blur;
+    let state = h.state_mut();
+    crate::stroke_trail::feed(state, Tool::Remove, &[[30.0, 40.0, 1.0], [60.0, 40.0, 1.0], [80.0, 50.0, 1.0]]);
+    h.run_steps(3);
+    assert!(changed_inks(&h, &plain).contains(&want), "the live overlay stays tinted while another tool is in the bar: {:?}", overlay_inks(&h));
+    h.state_mut().ui.tool = Tool::Remove;
+    h.run_steps(2);
     // The finished stroke waits for Enter, and its overlay carries the same pair.
     let state = h.state_mut();
     tool_event(state, ToolEvent::Up { x: 60.0, y: 40.0 }, m);
@@ -268,5 +300,5 @@ fn reset_tool_gives_the_overlay_its_starting_values_back() {
     let app = h.state();
     assert_eq!(app.ui.tool_options.remove_overlay_opacity, start.remove_overlay_opacity, "Reset Tool restores the opacity a fresh start has");
     assert_eq!(app.ui.tool_options.remove_overlay_color, start.remove_overlay_color, "Reset Tool restores the colour a fresh start has");
-    assert!(OverlayTint::of(app, Tool::Remove).is_plain(), "and the overlay shows the tool's own again");
+    assert!(OverlayTint::of(app, TrailTone::Danger).is_plain(), "and the overlay shows the tool's own again");
 }
