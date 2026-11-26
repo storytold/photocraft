@@ -42,15 +42,13 @@ fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, at: Pos2) {
 #[test]
 fn the_color_picker_moves_by_the_padding_above_and_beside_its_title() {
     let mut h = harness();
-    // The frame's padding: 6 points inside the top edge over the middle, and 6 points inside the left edge at the
-    // title's height.
-    let spots: [(&str, fn(egui::Rect) -> Pos2); 2] = [
-        ("above the title", |rect| Pos2::new(rect.center().x, rect.top() + 6.0)),
-        ("before the title", |rect| Pos2::new(rect.left() + 6.0, rect.top() + 30.0)),
-    ];
+    // The frame's padding, from the picker's top-left corner: 6 points inside the top edge (at the middle), and 6
+    // points inside the left edge at the title's height.
+    let width = picker(&h).width();
+    let spots = [("above the title", vec2(width / 2.0, 6.0)), ("before the title", vec2(6.0, 30.0))];
     for (what, spot) in spots {
         let before = picker(&h);
-        drag(&mut h, spot(before));
+        drag(&mut h, before.min + spot);
         assert_eq!(picker(&h).min - before.min, DRAG, "a drag in the padding {what} moves the Color Picker");
     }
     let before = picker(&h);
