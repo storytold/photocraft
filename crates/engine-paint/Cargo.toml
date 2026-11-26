@@ -27,3 +27,4 @@ serde_json = { workspace = true }
 # Core's allocation failpoints, which the brush and fill tests arm.
 [dev-dependencies]
 photocraft-engine-core = { workspace = true, features = ["failpoints"] }
+photocraft-codecs = { workspace = true }
