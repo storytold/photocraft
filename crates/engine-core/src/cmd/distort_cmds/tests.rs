@@ -727,21 +727,25 @@ fn liquify_cancelled_mid_blend_leaves_the_document_and_history() {
     // ones after the warp, which also follow the blend.
     let unblended = checks(false, stroke(100));
     let after = unblended.saturating_sub(before + tiles + 1);
-    assert!(after < bands / 2, "{after} checks after the warp");
-    // With it, the blend's own: one before its first band, one per band and one per prune batch
-    // (four tiles: one batch).
-    assert_eq!(checks(true, stroke(100)), unblended + 1 + bands + 1, "the blend checks once per band");
-    // So check `unblended + bands / 2` is the blend's check before band `bands / 2 + after + 1`:
-    // cancel there.
+    assert!(after < bands / 2, "after {after} >= bands {bands} / 2 (before {before}, unblended {unblended})");
+    // With it, the selection path's own checks: the blend's (one before its first band, one per
+    // band, one per prune batch), all between the warp and the `after` checks.
+    let selected = checks(true, stroke(100));
+    let span = selected.saturating_sub(unblended);
+    assert!(span > bands, "span {span} <= bands {bands} (selected {selected}, unblended {unblended}, before {before}, after {after})");
+    // The warp ends at check `unblended - after`; halfway through the selection path's checks is
+    // a band's: at least a few bands in, with as many still to come, whether the selection path's
+    // checks besides the bands come before them or after.
+    let trip = unblended - after + span / 2;
     let mut s = tall_selected_session();
     let doc = s.active().unwrap().doc.clone();
     let steps = s.active().unwrap().history.past_len();
     let ctx = crate::jobs::JobCtx::new();
-    let trip = unblended + bands / 2;
     ctx.cancel_at_check(trip);
     let r = run_inline(&mut s, &ctx, LIQUIFY, stroke(100));
     assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
-    assert_eq!(ctx.checks(), trip, "no band after the cancel was read, blended or written");
+    let made = ctx.checks();
+    assert!(made == trip, "made {made} != trip {trip}: no band after the cancel was read, blended or written (span {span}, after {after})");
     assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "the document is unchanged");
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
 }
