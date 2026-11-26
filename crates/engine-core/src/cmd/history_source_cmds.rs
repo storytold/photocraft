@@ -54,12 +54,11 @@ pub fn source(st: &DocState) -> Option<HistorySource> {
     // A state set in the panel is kept by its state id: it stays the source while older states fall
     // off and is gone once it is deleted or discarded (#2966). ops'
     // [`photocraft_ops::History::brush_source`] reads row 0 both for such a set state and for "none
-    // set", so the choice is recorded here in `source_state_id` (#12845).
+    // set", so the choice is recorded here in `source_state_id` (#12845). While a state source is
+    // set, ops keeps the answer: Clear History holds it back until its undo, and an action folding
+    // its steps can rename the row (#3536).
     if let Some(id) = st.source_state_id {
-        // Clear History holds a set source back with the states it took off: until its undo, the
-        // current state is the source, as before (#3536).
-        let row = if st.history.is_cleared() { st.history.brush_source() } else { st.history.row_of(id) };
-        return row.map(HistorySource::State);
+        return st.history.row_of(id).or_else(|| st.history.brush_source()).map(HistorySource::State);
     }
     match st.open_snapshot {
         // The document as opened outlives the states, so a click still restores it (#12618).
