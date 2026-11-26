@@ -68,6 +68,7 @@ fn exporter_with_interrupt<'a>(doc: &Document, ctl: Interrupt<'a>) -> Ex<'a> {
         comps: None,
         smart: SmartOut::new(doc, 0),
         patterns: Vec::new(),
+        pattern_space: photocraft_compose::pattern::PatternSpace::of_pixels(doc),
         background: None,
         stage: None,
     }
