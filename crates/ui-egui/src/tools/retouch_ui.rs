@@ -124,7 +124,10 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
     let o = &app.ui.tool_options;
     Some(match tool {
         Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
-        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
+        Tool::Sharpen => (
+            "paint.sharpen",
+            json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen, "mode": o.sharpen_mode.label()}),
+        ),
         Tool::Smudge => (
             "paint.smudge",
             json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge, "mode": o.smudge_mode.label()}),
