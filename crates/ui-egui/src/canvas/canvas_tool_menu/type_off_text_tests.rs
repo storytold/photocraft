@@ -3,8 +3,9 @@
 //! the Layers panel menu enables through the main menus). With an active selection it opens the
 //! selection menu the Red Eye and Object Selection tools open, inside the selection and outside
 //! it. Over committed type the #7324 type layer menu stays, with or without a selection; while
-//! editing, the type edit menu stays. The Vertical Type and Type Mask tools are not measured:
-//! they keep today's no menu.
+//! editing, the type edit menu stays. The Vertical Type and the Horizontal Type Mask tools are
+//! not measured: they keep today's no menu. The Vertical Type Mask tool's idle right-click is
+//! #12091.
 
 use serde_json::json;
 
@@ -313,9 +314,10 @@ fn with_a_selection_right_click_over_glyphs_still_opens_the_type_layer_menu() {
 
 #[test]
 fn unmeasured_type_tools_keep_opening_nothing() {
-    // Vertical Type and both Type Mask tools: not measured, they open nothing today and still do,
-    // with no selection and with one.
-    for tool in [Tool::VerticalType, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
+    // Vertical Type and the Horizontal Type Mask tool: not measured, they open nothing today and
+    // still do, with no selection and with one. The Vertical Type Mask tool's idle right-click is
+    // #12091, pinned in `vertical_mask_idle_menu_tests`.
+    for tool in [Tool::VerticalType, Tool::HorizontalTypeMask] {
         for with_selection in [false, true] {
             let (mut app, _ctx) = if with_selection { selected_type_app([40, 30, 10, 10]) } else { type_app() };
             app.ui.tool = tool;

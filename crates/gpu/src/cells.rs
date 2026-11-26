@@ -12,12 +12,12 @@ const PATTERN_UPLOAD_BAND_BYTES: u64 = 4 << 20;
 
 fn pattern_upload_bands(
     pat: &Pattern,
-    mode: photocraft_color::ColorMode,
+    space: impl Into<photocraft_compose::pattern::PatternSpace>,
     max_band_bytes: u64,
     mut upload: impl FnMut(u32, u32, &[u8]),
 ) -> Result<(), Unsupported> {
     let mut bytes = Vec::new();
-    photocraft_compose::pattern::pattern_rgba_bands(pat, mode, max_band_bytes, |top, pixels| {
+    photocraft_compose::pattern::pattern_rgba_bands(pat, space, max_band_bytes, |top, pixels| {
         let len = pixels.len().checked_mul(16)?;
         bytes.clear();
         bytes.try_reserve_exact(len).ok()?;
@@ -492,14 +492,14 @@ impl Compositor {
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 
-    /// Premultiplied RGBA32F texture of a pattern as it paints in the document's mode (cached by
-    /// pixel identity and mode).
+    /// Premultiplied RGBA32F texture of a pattern as it paints in the document (cached by
+    /// pixel identity and the document's pattern space).
     pub(crate) fn pattern_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pat: &Pattern) -> Result<wgpu::TextureView, Unsupported> {
         let fp = pat.surface.tiles().fold((pat.width as u64) << 32 | pat.height as u64, |acc, (c, t)| {
             acc.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 20) ^ c.ty as u64
         });
-        let mode = self.pattern_mode;
-        let key = format!("{}\u{0}{}\u{0}{mode:?}", pat.id, pat.name);
+        let space = self.pattern_space;
+        let key = format!("{}\u{0}{}\u{0}{space:?}", pat.id, pat.name);
         let format = pat.surface.format();
         // Unstored tiles read the default pixel, interpreted in the source format.
         let default_bits: Vec<u32> = pat.surface.default_pixel().iter().map(|v| v.to_bits()).collect();
@@ -515,7 +515,7 @@ impl Compositor {
         }
         let (w, h) = (pat.width, pat.height);
         let t = Tex::new(device, "pc_pattern", w, h, wgpu::TextureFormat::Rgba32Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
-        pattern_upload_bands(pat, mode, PATTERN_UPLOAD_BAND_BYTES, |top, rows, bytes| {
+        pattern_upload_bands(pat, space, PATTERN_UPLOAD_BAND_BYTES, |top, rows, bytes| {
             write_pattern_band(queue, &t.texture, w, top, rows, bytes);
         })?;
         let v = t.view.clone();
@@ -559,7 +559,7 @@ mod pattern_upload_tests {
         for y in 0..5 {
             surface.fill_rect(Rect::new(0, y, 3, y + 1), &[y as f32 / 4., 0.25, 0.75, 0.5]);
         }
-        Pattern { id: "upload".into(), name: "upload".into(), width: 3, height: 5, surface }
+        Pattern { id: "upload".into(), name: "upload".into(), width: 3, height: 5, source_mode: None, surface }
     }
 
     #[test]

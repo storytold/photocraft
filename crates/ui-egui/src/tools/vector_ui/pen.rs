@@ -100,14 +100,26 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         // The selected shape layer keeps its fill and stroke; the new component cuts, intersects…
         app.run("shape.create", json!({"kind": "path", "path": path, "addTo": layer, "op": op, "useAlignedRendering": app.ui.tool_options.align_edges}))
     } else if shape_mode {
-        let fill = if closed { fill_param(app) } else { Value::Null };
+        // An open path is filled to its chord and stays open, as in Photoshop (#12839).
+        let fill = fill_param(app);
         let stroke = if closed { stroke_param(app) } else { super::shapes::open_pen_stroke_param(app) };
         app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges, "historyName": freeform.then_some("Freeform Pen")}))
     } else if let Some((name, p)) =
         pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
     {
         // The resumed subpath, carried on, takes its old place: one step, no second subpath.
-        app.run("path.set", json!({"name": name, "path": p, "historyName": freeform.then_some("Freeform Pen")})).inspect(|_| app.ui.selected_path = Some(name))
+        let label = match live_finish(app, pen) {
+            // #12890: a live Work Path draft's clicks are History steps of their own, so ↩ and Esc add none; the finish
+            // records only what the path does not hold yet.
+            Some(LiveFinish::Skip) => {
+                app.ui.selected_path = Some(name);
+                return true;
+            }
+            Some(LiveFinish::Close) => Some("Close Path"),
+            Some(LiveFinish::Rest) => None,
+            None => freeform.then_some("Freeform Pen"),
+        };
+        app.run("path.set", json!({"name": name, "path": p, "historyName": label})).inspect(|_| app.ui.selected_path = Some(name))
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
         let mut p = path_json(&existing);
@@ -466,17 +478,17 @@ pub(super) fn sync_live_layer_from_draft(app: &mut PhotocraftApp) {
     }
 }
 
-/// Does the live draft have anchors its layer has not taken (a refused edit), while the layer is still as the draft
-/// last left it? Undo then takes those back one by one, as anchors of the draft alone (`host::remove_last`).
+/// Does the live draft have anchors its document path has not taken (a refused edit), while that path is still as the
+/// draft last left it? Undo then takes those back one by one, as anchors of the draft alone (`host::remove_last`).
 pub(super) fn live_anchors_pending(app: &PhotocraftApp) -> bool {
-    let (Some(pen), Some(st)) = (app.ui.pen.as_ref().filter(|p| p.live_layer), app.session.active()) else { return false };
+    let (Some(pen), Some(st)) = (app.ui.pen.as_ref().filter(|p| p.live_layer || p.live_path), app.session.active()) else { return false };
     let drawn = pen_path(pen);
     live_subpath(&st.doc, pen)
         .is_some_and(|sub| pen.resumes.as_ref().is_some_and(|r| *sub == r.was) && !drawn.subpaths.first().is_some_and(|d| same_subpath(sub, d)))
 }
 
-/// Edit › Undo while a live shape layer is being drawn, with no anchor pending: undo its last History step, which is
-/// its last anchor (or the layer itself with the first); the draft follows the layer.
+/// Edit › Undo while a live shape layer or Work Path is being drawn, with no anchor pending: undo its last History
+/// step, which is its last anchor (or the layer or Work Path itself with the first); the draft follows the document.
 pub(super) fn undo_live_step(app: &mut PhotocraftApp) -> bool {
     if let Err(e) = run_beside_draft(app, "edit.undo", json!({})) {
         app.ui.status = e;
@@ -487,12 +499,12 @@ pub(super) fn undo_live_step(app: &mut PhotocraftApp) -> bool {
     true
 }
 
-/// A live draft whose document moved on (Undo, Redo, the History panel…) follows its layer: the draft is rebuilt from
-/// the layer's open subpath, or dropped when the layer or the subpath is gone or closed. When that subpath is as the
-/// draft last left it (an edit elsewhere in the document), the draft keeps its anchors, including any the layer
-/// refused, and only follows the new document state. Returns the rebuilt draft, which the Pen must draw from now on.
+/// A live draft whose document moved on (Undo, Redo, the History panel…) follows its layer or path: the draft is rebuilt
+/// from the layer's or path's open subpath, or dropped when it is gone, closed or empty. When that subpath is as the
+/// draft last left it (an edit elsewhere in the document), the draft keeps its anchors, including any it refused, and
+/// only follows the new document state. Returns the rebuilt draft, which the Pen must draw from now on.
 pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) -> Option<EditSubpath> {
-    let pen = app.ui.pen.as_ref().filter(|p| p.live_layer && !p.commit_failed)?;
+    let pen = app.ui.pen.as_ref().filter(|p| (p.live_layer || p.live_path) && !p.commit_failed)?;
     let (owner, r) = (pen.owner.as_ref()?, pen.resumes.as_ref()?);
     let st = app.session.active()?;
     if st.doc.id != owner.document || owner.valid(app) {
@@ -502,19 +514,47 @@ pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) -> Option<Edit
         follow_live_layer(app);
         return None;
     }
-    rebuild_live_draft(app)
+    if pen.live_layer {
+        return rebuild_live_draft(app);
+    }
+    // A live Work Path draft follows its path when the document moved to a state the Pen's own clicks made: back to an
+    // earlier one (Undo, Step Backward, the History panel: a state is waiting to be redone) or forward to one of its
+    // clicks (Redo, Step Forward, the History panel at the tip). What names them is not the step's label: `path.set`
+    // takes a Pen step name from ANY caller (`crates/engine-core/src/cmd/vector_cmds/paths.rs:86-97` only checks it
+    // against the list), so a control-channel, scripted or panel write can put the Work Path under "New Anchor Point"
+    // and the label would claim the Pen made it. The proof is the History state itself - the draft records the id of
+    // every state its own live writes minted (`PenPath::live_steps`, the same id `pen_resume` pins a finish by), and
+    // History mints and never reuses those ids, so no parameter can name one. A command from elsewhere left a newer
+    // state instead: like any other draft that carried a path on (#6593) it is stale, and `cancel_stale_pen` drops it
+    // with the reason rather than quietly going on with the newer path's anchors.
+    let pen_stepped_its_own_path = app.session.active().is_some_and(|st| {
+        let h = &st.history;
+        h.can_redo() || h.row_id(h.past_len()).is_some_and(|id| pen.live_steps.contains(&id))
+    });
+    if pen_stepped_its_own_path { rebuild_live_draft(app) } else { None }
 }
 
-/// Rebuilds the live draft from its layer's open subpath and hands it to the Pen, or drops it when the layer or the
-/// subpath is gone, closed or empty.
+/// Rebuilds a live draft from its layer's or path's open subpath and hands it to the Pen, or drops it when the subpath
+/// is gone, closed or empty.
 fn rebuild_live_draft(app: &mut PhotocraftApp) -> Option<EditSubpath> {
-    let pen = app.ui.pen.as_ref().filter(|p| p.live_layer)?;
-    let (owner, r) = (pen.owner.clone(), pen.resumes.clone()?);
+    let pen = app.ui.pen.as_ref().filter(|p| p.live_layer || p.live_path)?;
+    let (owner, r, live_layer, live_path, kept, live_steps) =
+        (pen.owner.clone(), pen.resumes.clone()?, pen.live_layer, pen.live_path, pen.kept, pen.live_steps.clone());
     let rebuilt = app.session.active().and_then(|st| {
         let sub = resumed_path(&st.doc, &r)?.subpaths.get(r.index).filter(|s| !s.closed && !s.knots.is_empty())?;
-        let mut draft = resumed(r.doc, "layer".into(), r.layer, r.index, sub, false);
-        draft.live_layer = true;
-        draft.kept = 0;
+        let mut draft = resumed(r.doc, r.path.clone(), r.layer, r.index, sub, false);
+        draft.live_layer = live_layer;
+        draft.live_path = live_path;
+        // The states the Pen's own clicks minted belong to the rebuilt draft too: Redo to the tip and the step after
+        // it have to stay recognizable as the Pen's own work (#16686 review).
+        draft.live_steps = live_steps;
+        // A live shape layer's draft owns every anchor of its layer (#12909); a live Work Path draft keeps which of its
+        // anchors the path it picked up brought, so Undo of the pick-up itself still knows it (#12890).
+        if live_layer {
+            draft.kept = 0;
+        } else {
+            draft.kept = kept;
+        }
         draft.owner = owner;
         Some(draft)
     });
@@ -527,6 +567,189 @@ fn rebuild_live_draft(app: &mut PhotocraftApp) -> Option<EditSubpath> {
     follow_live_layer(app);
     super::host::replace_draft(app, &path);
     Some(path)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The live Work Path (#12890): in Path mode the Pen's first anchor makes the Work Path, and the path takes every
+// further click as a History step of its own, so one Undo takes back one click. The step names are the reference
+// application's (its measured rows); the draft keeps carrying that path's subpath, as a live shape layer's does.
+
+/// Is `pen` a fresh Pen draft that draws straight into the Work Path: one anchor, drawn with the Pen (not the Curvature
+/// Pen) in Path mode with a Path Operation that joins, nothing carried on, no vector mask targeted, and the Work Path
+/// as the destination its finish would pick? A selected saved path and the other operations were not measured and keep
+/// today's draft-until-the-finish route.
+fn starts_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
+    pen.draft.knots.len() == 1
+        && pen.resumes.is_none()
+        && !pen.live_layer
+        && !pen.live_path
+        && !pen.curvature
+        && !pen.commit_failed
+        && app.ui.tool == Tool::Pen
+        && app.ui.tool_options.vector_mode == VectorMode::Path
+        && pen_path_op(&app.ui.tool_options) == Some("combine")
+        && targeted_vector_mask(app).is_none()
+        && draft_target(app, pen).as_deref().is_none_or(|n| n == "work")
+}
+
+/// The live write of this draft just made a History state: record the id History minted for it
+/// (`History::row_id` of the current row), which is what `sync_live_draft_from_layer` accepts as the Pen's own
+/// click. History mints these ids and never reuses them, and no command parameter names one, so a `path.set` from
+/// the control channel or a script cannot leave this mark even when it carries a Pen step name (#16686 review).
+fn record_live_step(app: &mut PhotocraftApp) {
+    let (Some(st), Some(pen)) = (app.session.active(), app.ui.pen.as_mut()) else { return };
+    if let Some(id) = st.history.row_id(st.history.past_len()) {
+        pen.live_steps.push(id);
+    }
+}
+
+/// The first anchor makes the Work Path with that one anchor in it; the draft then carries the path's new subpath
+/// (`resumes`, `live_path`), so each further click is a step of its own. With the Work Path selected in the Paths panel
+/// the click joins it, which the reference names "New Path Component"; with nothing selected it replaces it: "New Work
+/// Path". A refused write leaves the draft as it was: the anchors go in at the next click or at the finish.
+pub(super) fn start_live_path(app: &mut PhotocraftApp) {
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| starts_live_path(app, p)) else { return };
+    let append = draft_target(app, pen).is_some();
+    // The subpath the write puts in place: joining a path adds it at the end of what is there, so the count the path
+    // had is its index. A replacing write leaves the drawn path the document's only one (`paths.rs`: `path.set` without
+    // `op`), however many subpaths the replaced path had, so its subpath is the one at index zero.
+    let index = if append { app.session.active().map_or(0, |st| st.doc.work_path.as_ref().map_or(0, |p| p.subpaths.len())) } else { 0 };
+    let mut params = json!({"name": "work", "path": path_json(&pen_path(pen)), "historyName": if append { "New Path Component" } else { "New Work Path" }});
+    if append {
+        params["op"] = json!("combine");
+    }
+    if let Err(e) = run_beside_draft(app, "path.set", params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+        return;
+    }
+    record_live_step(app);
+    let Some(mut pen) = app.ui.pen.take() else { return };
+    let made: Option<(u64, photocraft_doc::vector::Subpath)> =
+        app.session.active().and_then(|st| Some((st.doc.id.0, st.doc.work_path.as_ref()?.subpaths.get(index)?.clone())));
+    if let Some((doc, was)) = made {
+        pen.resumes = Some(Resumed { doc, path: "work".into(), layer: None, index, was });
+        pen.live_path = true;
+        pen.kept = 0;
+    }
+    super::pen_resume::rebind_owner(app, &mut pen);
+    app.ui.pen = Some(pen);
+}
+
+/// Is `pen` a draft carried on from the end point of an open subpath of the Work Path, drawn live like a fresh one
+/// (#12890)? The press that picked it up is the step "Pick-up Path". The Curvature Pen and Freeform Pen, a saved path,
+/// a vector mask and the other Path Operations were not measured and keep today's route. A Work Path that a finish hid
+/// (#12892) is not drawn, so nothing can be carried on from it: `resume_target` refuses it the same way, and minting
+/// from it here would put a live path back beside a hidden one.
+fn carries_on_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
+    !pen.curvature
+        && !pen.live_layer
+        && !pen.live_path
+        && !pen.commit_failed
+        && app.ui.tool == Tool::Pen
+        && app.ui.tool_options.vector_mode == VectorMode::Path
+        && pen_path_op(&app.ui.tool_options) == Some("combine")
+        && targeted_vector_mask(app).is_none()
+        && work_path_shown(app)
+        && pen.resumes.as_ref().is_some_and(|r| r.layer.is_none() && r.path == "work")
+}
+
+/// The press on an open Work Path's end point: the path goes on being drawn live from there, and the press is its own
+/// step "Pick-up Path". The subpath takes the draft's order, as the finish of a carried-on path always did: picked up
+/// at its first anchor, the draft runs it backwards (#6593), and every further click compares with that order.
+pub(super) fn pick_up_live_path(app: &mut PhotocraftApp) {
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| carries_on_live_path(app, p)) else { return };
+    let Some(r) = pen.resumes.as_ref() else { return };
+    let drawn = path_json(&pen_path(pen));
+    let (name, full) = (r.path.clone(), app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &drawn)));
+    let Some(full) = full else { return };
+    match run_beside_draft(app, "path.set", json!({"name": name, "path": full, "historyName": "Pick-up Path"})) {
+        // Only a write that went through makes the draft live: a refused one keeps today's route, with the anchors in
+        // the draft and the finish taking them, and leaves no live path behind (#12890).
+        Ok(_) => {
+            record_live_step(app);
+            if let Some(pen) = app.ui.pen.as_mut() {
+                pen.live_path = true;
+            }
+            follow_live_layer(app);
+        }
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+/// The History name of one click's change to the live Work Path (#12890), from what the path holds and what the draft
+/// has now: its close, a new anchor at its end, a retracted handle (the press on the last smooth anchor, which the
+/// reference names "Pick-up Path") or an anchor the pointer dragged. `None` for a change the issue did not measure —
+/// a handle dragged alone, an anchor removed or one inserted between others: that stays in the draft until the finish
+/// takes it with the command's own name.
+fn live_step_name(path: &photocraft_doc::vector::Subpath, drawing: &photocraft_doc::vector::Subpath) -> Option<&'static str> {
+    if drawing.closed && !path.closed {
+        return Some("Close Path");
+    }
+    if drawing.knots.len() > path.knots.len() && drawing.knots[..path.knots.len()] == path.knots[..] {
+        return Some("New Anchor Point");
+    }
+    if drawing.knots.len() != path.knots.len() || drawing.closed != path.closed {
+        return None;
+    }
+    if drawing.knots.iter().zip(&path.knots).any(|(a, b)| a.anchor != b.anchor) {
+        return Some("Drag Anchor Point");
+    }
+    // ⌥-click on the last smooth anchor: its outgoing handle is gone, and that press is "Pick-up Path" too.
+    let retracted = |k: &photocraft_doc::Knot| !k.smooth && k.out_ctrl == k.anchor;
+    (path.knots.last().is_some_and(|k| !retracted(k)) && drawing.knots.last().is_some_and(retracted)).then_some("Pick-up Path")
+}
+
+/// The live Work Path takes the draft's anchors as one step, when a click changed them and the change has a measured
+/// name (`host::drain`). A refused edit is reported; the anchors stay in the draft for the next click or the finish.
+pub(super) fn sync_live_path_from_draft(app: &mut PhotocraftApp) {
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| p.live_path && !p.commit_failed && !p.draft.knots.is_empty()) else { return };
+    let Some(r) = pen.resumes.as_ref().filter(|r| r.layer.is_none()) else { return };
+    let drawn = pen_path(pen);
+    let Some(st) = app.session.active() else { return };
+    let Some(path) = live_subpath(&st.doc, pen).cloned() else { return };
+    let Some(drawing) = drawn.subpaths.first() else { return };
+    if same_subpath(&path, drawing) {
+        return;
+    }
+    let Some(label) = live_step_name(&path, drawing) else { return };
+    let Some(full) = with_resumed_subpath(&st.doc, r, &path_json(&drawn)) else { return };
+    match run_beside_draft(app, "path.set", json!({"name": r.path.clone(), "path": full, "historyName": label})) {
+        Ok(_) => {
+            record_live_step(app);
+            follow_live_layer(app);
+        }
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+/// What the finish of a live Work Path draft still owes the document (#12890): its clicks were steps of their own, so
+/// ↩ and Esc add none. `Close` is the closing of a path whose anchors are in it, and `Rest` the anchors a write
+/// refused or did not name, which go in under the command's own label.
+enum LiveFinish {
+    Skip,
+    Close,
+    Rest,
+}
+
+/// [`LiveFinish`] for `pen`'s draft, or `None` while it is not a live Work Path draft.
+fn live_finish(app: &PhotocraftApp, pen: &PenPath) -> Option<LiveFinish> {
+    if !pen.live_path {
+        return None;
+    }
+    let st = app.session.active()?;
+    let path = live_subpath(&st.doc, pen)?;
+    let drawing = pen_path(pen).subpaths.first()?.clone();
+    if same_subpath(path, &drawing) {
+        return Some(LiveFinish::Skip);
+    }
+    Some(if path.knots == drawing.knots { LiveFinish::Close } else { LiveFinish::Rest })
 }
 
 /// The Pen's Path Operations (#1397), in Photoshop's menu order: the `pen_path_op` value, its
@@ -815,3 +1038,11 @@ mod freeform_close_tolerance_tests;
 #[cfg(test)]
 #[path = "pen_shape_first_click_tests.rs"]
 mod pen_shape_first_click_tests;
+
+#[cfg(test)]
+#[path = "shape_open_path_fill_tests.rs"]
+mod shape_open_path_fill_tests;
+
+#[cfg(test)]
+#[path = "pen_history_steps_tests.rs"]
+mod pen_history_steps_tests;
