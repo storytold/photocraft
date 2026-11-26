@@ -6,20 +6,16 @@ use photocraft_io::{NativeImportTarget, NativeInitialView};
 fn live_brush_respects_the_saved_editing_target_while_the_imported_mask_is_displayed() {
     for depth in [8, 16, 32] {
         for (target, paints_mask) in [(NativeImportTarget::Composite, false), (NativeImportTarget::LayerMask, true)] {
+            let mut fixture = photocraft_engine::Session::new();
+            fixture.execute("file.new", json!({"width":64,"height":64,"depth":depth,"background":"#ff0000"})).unwrap();
+            fixture.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            fixture.execute("edit.fill", json!({"target":"mask","contents":"color","color":"#808080"})).unwrap();
+            let source = fixture.active().unwrap();
+            let layer = source.active_layer.unwrap();
+            let view = NativeInitialView { selected_layers: vec![layer], active_layer: Some(layer), target, show_layer_mask: true, ..Default::default() };
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-            app.run("file.new", json!({"width":64,"height":64,"depth":depth,"background":"#ff0000"})).unwrap();
-            app.run("layer.layerMask.revealAll", json!({})).unwrap();
-            app.run("edit.fill", json!({"target":"mask","contents":"color","color":"#808080"})).unwrap();
-            let layer = app.session.active().unwrap().active_layer.unwrap();
-            app.session
-                .apply_import_initial_view(Some(NativeInitialView {
-                    selected_layers: vec![layer],
-                    active_layer: Some(layer),
-                    target,
-                    show_layer_mask: true,
-                    ..Default::default()
-                }))
-                .unwrap();
+            let (_, warning) = app.session.admit_import_with_initial_view(source.doc.as_ref().clone(), None, true, Some(view));
+            assert!(warning.is_none());
             app.sync_views();
             let expected = if paints_mask { ChannelTarget::LayerMask } else { ChannelTarget::Composite };
             assert_eq!(app.session.active().unwrap().channel_view.target, expected);

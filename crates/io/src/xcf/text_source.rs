@@ -13,13 +13,13 @@ pub(super) enum TextSource<'a> {
     Missing,
     ModifiedPixels { configuration: Option<(usize, &'a [u8])> },
     Incomplete(records::StopReason),
-    Configuration(TextRecord<'a>),
+    Configuration { record: TextRecord<'a>, keep_layer_name: bool },
 }
 
 impl<'a> TextSource<'a> {
     pub(super) fn configuration_bytes(&self) -> Option<(usize, &'a [u8])> {
         match self {
-            Self::Configuration(record) => Some((record.span.start, record.raw)),
+            Self::Configuration { record, .. } => Some((record.span.start, record.raw)),
             Self::ModifiedPixels { configuration } => *configuration,
             _ => None,
         }
@@ -51,6 +51,7 @@ fn select<'a>(properties: &[Property<'a>], budget: &mut Budget, keep_going: &dyn
         let Ok(bytes) = <[u8; 4]>::try_from(property.payload) else { return Ok(TextSource::Incomplete(records::StopReason::Malformed)) };
         flags = u32::from_be_bytes(bytes);
     }
+    let keep_layer_name = flags & 1 != 0;
     let modified = flags & 2 != 0;
     for property in properties {
         if !keep_going() {
@@ -91,7 +92,7 @@ fn select<'a>(properties: &[Property<'a>], budget: &mut Budget, keep_going: &dyn
     if let Some(diagnostic) = scan.stopped {
         return Ok(TextSource::Incomplete(diagnostic.reason));
     }
-    Ok(scan.records.pop().map_or(TextSource::Incomplete(records::StopReason::Malformed), TextSource::Configuration))
+    Ok(scan.records.pop().map_or(TextSource::Incomplete(records::StopReason::Malformed), |record| TextSource::Configuration { record, keep_layer_name }))
 }
 
 #[cfg(test)]
@@ -120,7 +121,7 @@ mod tests {
         let bytes =
             parasites(&[("gimp-text-layer", br#"(text "old")"#), ("gimp-text-layer", br#"(text "current")"#), ("plug_in_gdyntext/data", b"legacy payload")]);
         let source = select(&[property(&bytes)], &mut Budget::default(), &|| true).unwrap();
-        let TextSource::Configuration(record) = source else { panic!("editable text configuration") };
+        let TextSource::Configuration { record, .. } = source else { panic!("editable text configuration") };
         assert_eq!(record.text().unwrap(), Some("current"));
     }
 

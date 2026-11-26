@@ -392,7 +392,11 @@ pub fn start_save(
     automation: bool,
 ) -> Result<Option<(String, Vec<String>)>, String> {
     let st = app.session.active().ok_or("no document")?;
-    photocraft_engine::file_cmds::check_import_destination(st, &path).map_err(|error| error.to_string())?;
+    if automation {
+        app.check_automation_save_destination(st, &path)?;
+    } else {
+        photocraft_engine::file_cmds::check_import_destination(st, &path).map_err(|error| error.to_string())?;
+    }
     if let Some(j) = app.session.job_on(st.doc.id) {
         // The engine's wording for a command refused while a job runs.
         return Err(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", j.label));

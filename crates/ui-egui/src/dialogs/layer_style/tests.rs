@@ -480,21 +480,15 @@ fn unchanged_global_light_angle_is_not_applied() {
     let mut d = LayerStyleDraft::new(drafted(&s));
     let bevel = d.add_instance(EffectKind::BevelEmboss, &defaults(EffectKind::BevelEmboss));
     assert!(d.style.effect(bevel).is_some());
-    let mut commands = Vec::new();
     // The dialog opened with the angle the draft still holds.
-    apply(&d.style, id, Some(f64::from(d.style.global_light)), |cmd, _| {
-        commands.push(cmd.to_string());
-        Ok(Value::Null)
-    })
-    .unwrap();
-    assert!(!commands.iter().any(|cmd| cmd == "layer.layerStyle.globalLight"), "{commands:?}");
-    commands.clear();
-    apply(&d.style, id, Some(47.5), |cmd, _| {
-        commands.push(cmd.to_string());
-        Ok(Value::Null)
-    })
-    .unwrap();
-    assert!(commands.iter().any(|cmd| cmd == "layer.layerStyle.globalLight"), "a changed angle is applied: {commands:?}");
+    for (opening, expected) in [(f64::from(d.style.global_light), false), (47.5, true)] {
+        apply(&d.style, id, Some(opening), |cmd, params| {
+            assert_eq!(cmd, "layer.layerStyle.replace");
+            assert_eq!(params.get("globalLight").is_some(), expected);
+            Ok(Value::Null)
+        })
+        .unwrap();
+    }
 
     let mut app = app_with_layer(32);
     let light = app.session.active().unwrap().doc.global_light.angle;

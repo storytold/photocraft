@@ -858,6 +858,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.mergeVisible", json!({})),
         ("layer.matting.defringe", json!({"width": 2})),
         ("layer.align.leftEdges", json!({"to": "canvas"})),
+        ("edit.autoAlignLayers", json!({"projection": "collage", "geometricCorrection": true})),
         ("select.inverse", json!({})),
         ("select.modify.feather", json!({"radius": 4})),
         ("select.modify.contract", json!({"radius": 1})),

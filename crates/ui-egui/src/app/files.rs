@@ -824,16 +824,6 @@ impl PhotocraftApp {
                 "pass `path`: a save without one writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file, and to OpenRaster only when it holds everything (adjustment layers, styles and masks don't fit)",
             )?
         };
-        // Shared by synchronous and worker saves, before encoding or writer dispatch.
-        // A relative request names a different file under the write root than
-        // under the process CWD. Read-root locations are not write authority.
-        let state = self.session.active().ok_or("no document")?;
-        let identity = match self.services.automation_write_location.as_ref() {
-            Some(locate) => locate(&target)?,
-            None if state.protected_import_source.is_some() => return Err("automation save destination identity is not configured".into()),
-            None => target.clone(),
-        };
-        photocraft_engine::file_cmds::check_import_destination(state, &identity).map_err(|error| error.to_string())?;
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
         // Only the target is granted: a linked smart object's stored path is document data, so
         // PSD export writes that layer as pixels instead of embedding the file.
@@ -851,6 +841,7 @@ impl PhotocraftApp {
             };
         }
         let state = self.session.active().ok_or("no document")?;
+        self.check_automation_save_destination(state, &target)?;
         ensure_memory_to_save(&state.doc, &target)?;
         let (doc, revision) = (state.doc.id, state.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
@@ -859,6 +850,16 @@ impl PhotocraftApp {
         write(&target, &bytes)?;
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
+    }
+    /// Use the write workspace's identity before an automation save is admitted.
+    /// The original request path is still used by the capability-scoped writer.
+    pub(crate) fn check_automation_save_destination(&self, state: &photocraft_engine::DocState, target: &str) -> Result<(), String> {
+        let identity = match self.services.automation_write_location.as_ref() {
+            Some(locate) => locate(target)?,
+            None if state.protected_import_source.is_some() => return Err("automation save destination identity is not configured".into()),
+            None => return Ok(()),
+        };
+        photocraft_engine::file_cmds::check_import_destination(state, &identity).map_err(|error| error.to_string())
     }
 }
 

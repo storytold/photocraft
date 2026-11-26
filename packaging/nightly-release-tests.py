@@ -73,6 +73,31 @@ def literal_off(condition):
     return depth == 0
 
 
+def job_conditions(jobs):
+    """Each job-level `if:` as (block indicator or None, the whole expression YAML would read).
+
+    A narrow source reader, not a YAML parser: every following line indented deeper than the
+    job keys continues the value, for block scalars and plain multi-line scalars alike, so a
+    continuation line can never hide from the guard checks.
+    """
+    lines = jobs.splitlines()
+    found = []
+    for index, line in enumerate(lines):
+        head = re.fullmatch(r"    if:(?: (.*))?", line)
+        if head is None:
+            continue
+        value = (head[1] or "").strip()
+        continuation = []
+        for follow in lines[index + 1:]:
+            if follow.strip() and len(follow) - len(follow.lstrip(" ")) <= 4:
+                break
+            continuation.append(follow.strip())
+        indicator = value if re.fullmatch(r"[>|][+-]?", value) else None
+        parts = continuation if indicator else [value] + continuation
+        found.append((indicator, " ".join(part for part in parts if part)))
+    return found
+
+
 NIGHTLY_PLATFORMS = ("windows-x86_64", "linux-x86_64", "macos-aarch64")
 # Each platform's one trust field in policy v3, and the public stable identity it must name.
 NIGHTLY_TRUST = {
@@ -215,7 +240,7 @@ class DispatchBoundary(unittest.TestCase):
         self.assertEqual(request.full_url,
                          "https://api.github.com/repos/storytold/photocraft/actions/workflows/nightly-sign.yml/dispatches")
         self.assertEqual(request.get_method(), "POST")
-        self.assertEqual(json.loads(request.data), {"ref": "release", "inputs": {
+        self.assertEqual(json.loads(request.data), {"ref": "refs/heads/nightly-signer", "inputs": {
             "producer_run_id": "71", "producer_run_attempt": "1"}})
         self.assertGreater(opener.return_value.open.call_args.kwargs["timeout"], 0)
 
@@ -308,8 +333,6 @@ class TrustedSourcePreparation(unittest.TestCase):
                     "max_artifact_bytes"):
             with self.subTest(unresolved=key):
                 self.assertIsNone(policy[key], "the example must not invent production authority")
-        path = ROOT / ".github/nightly-signing-policy.json"
-        self.assertFalse(path.exists() or path.is_symlink(), "installing the policy is a separately reviewed activation")
 
     def test_policy_platforms_are_exactly_what_the_producer_builds(self):
         policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
@@ -331,17 +354,17 @@ class TrustedSourcePreparation(unittest.TestCase):
                          "details_url", "issue_types", "accepted_conditions", "required_conditions", "debt"})
         self.assertTrue(all(value is None for value in candidate["sonar"].values()), "real identity/debt is unresolved")
 
-    def test_every_nightly_job_remains_explicitly_off(self):
-        for name in ("nightly.yml", "nightly-dispatch.yml", "nightly-sign.yml"):
+    def test_scheduled_dispatch_transport_remains_explicitly_off(self):
+        for name in ("nightly-dispatch.yml",):
             source = (ROOT / ".github/workflows" / name).read_text()
             jobs = source.split("\njobs:\n", 1)[1]
             headers = re.findall(r"(?m)^  (?![\s#])[^\n]+", jobs)
-            conditions = re.findall(r"(?m)^    if: ([^\n]+)(?:\n((?:      [^\n]*\n)+))?", jobs)
+            conditions = job_conditions(jobs)
             with self.subTest(workflow=name):
                 self.assertTrue(headers)
                 self.assertEqual(len(conditions), len(headers), "every job needs a literal-off condition")
-                for scalar, folded in conditions:
-                    self.assertTrue(literal_off(folded if scalar == ">-" else scalar), "nightly activation requires reviewed test update")
+                for _, expression in conditions:
+                    self.assertTrue(literal_off(expression), "nightly activation requires reviewed test update")
 
     def test_one_producer_and_one_signer_job_carry_every_platform(self):
         for name, job in (("nightly.yml", "unsigned"), ("nightly-sign.yml", "release")):
@@ -370,6 +393,28 @@ class TrustedSourcePreparation(unittest.TestCase):
                 producer_platforms(source.replace(current, new))
         with self.assertRaises(ValueError):
             producer_platforms(source.replace("      " + current + "\n", ""))
+
+    def test_continuation_lines_of_any_scalar_form_reach_the_guard_checks(self):
+        source = (ROOT / ".github/workflows/nightly-dispatch.yml").read_text()
+        guard = re.search(r"(?m)^    if: >-\n(?:      [^\n]*\n)+", source)[0]
+        for replacement in ("    if: false && github.event_name == 'workflow_run'\n      || true\n",
+                            "    if: false && github.event_name == 'workflow_run'\n     || true\n",
+                            "    if: >-\n      false && github.event_name == 'workflow_run'\n        || true\n",
+                            "    if: |\n      false && github.event_name == 'workflow_run'\n      || true\n"):
+            jobs = source.replace(guard, replacement).split("\njobs:\n", 1)[1]
+            with self.subTest(replacement=replacement):
+                (_, expression), = job_conditions(jobs)
+                self.assertTrue(expression.endswith("|| true"))
+                self.assertFalse(literal_off(expression))
+        for name, workflow in (("nightly.yml", "nightly.yml"), ("nightly-sign.yml", "nightly-sign.yml")):
+            source = (ROOT / ".github/workflows" / workflow).read_text()
+            expected = NightlyEnabledCallers.GUARDS[name]
+            guard = re.search(r"(?m)^    if: >-\n(?:      [^\n]*\n)+", source)[0]
+            for replacement in (guard + "     || true\n", "    if: " + expected + "\n      || true\n"):
+                jobs = source.replace(guard, replacement).split("\njobs:\n", 1)[1]
+                with self.subTest(workflow=name, replacement=replacement[-30:]):
+                    (indicator, expression), = job_conditions(jobs)
+                    self.assertFalse(indicator == ">-" and " ".join(expression.split()) == expected)
 
     def test_dormancy_guard_rejects_activation_and_top_level_or(self):
         for condition in ("true", "vars.ENABLE_NIGHTLY", "false || true", "false && true || true",
@@ -476,6 +521,428 @@ class NightlyTrustAnchors(unittest.TestCase):
             pins.update(uses)
         self.assertEqual(len(pins), 1, "producer and signer must pin the same shared commit")
         self.assertRegex(pins.pop(), r"^[0-9a-f]{40}$", "pin a full immutable commit, never a branch or placeholder")
+
+
+class NightlyEnabledCallers(unittest.TestCase):
+    """Producer and signer run only in their exact context, for the reviewed manual actor."""
+
+    GUARDS = {
+        "nightly.yml": "github.repository == 'storytold/photocraft' && github.ref == 'refs/heads/main' && "
+                       "github.ref_type == 'branch' && (github.event_name == 'schedule' || "
+                       "github.event_name == 'workflow_dispatch')",
+        "nightly-sign.yml": "github.repository == 'storytold/photocraft' && github.event_name == 'workflow_dispatch' && "
+                            "github.ref == 'refs/heads/nightly-signer' && github.ref_type == 'branch'",
+    }
+
+    def test_enabled_jobs_keep_exact_context_guards(self):
+        for name, expected in self.GUARDS.items():
+            jobs = (ROOT / ".github/workflows" / name).read_text().split("\njobs:\n", 1)[1]
+            guards = job_conditions(jobs)
+            with self.subTest(workflow=name):
+                self.assertEqual(len(guards), 1)
+                indicator, expression = guards[0]
+                self.assertEqual(indicator, ">-")
+                self.assertEqual(" ".join(expression.split()), expected, "guards may only change with review")
+
+    def test_manual_actors_are_the_release_managers_in_caller_and_policy(self):
+        source = (ROOT / ".github/workflows/nightly.yml").read_text()
+        policy = json.loads(INSTALLED_POLICY.read_text())
+        self.assertEqual(reviewed_manual_actors(source, policy), RELEASE_MANAGERS)
+        self.assertEqual(policy["automatic_signer_actors"], [], "no automatic signer without a schedule")
+
+    def test_an_actor_outside_the_release_managers_is_refused(self):
+        source = (ROOT / ".github/workflows/nightly.yml").read_text()
+        policy = json.loads(INSTALLED_POLICY.read_text())
+        caller = json.dumps(RELEASE_MANAGERS, separators=(",", ":"))
+        widened = sorted(RELEASE_MANAGERS + ["echelon-robot"], key=str.lower)
+        for change in ("caller", "policy", "both", "order", "case"):
+            mutated_source, mutated_policy = source, copy.deepcopy(policy)
+            if change in ("caller", "both"):
+                mutated_source = source.replace(caller, json.dumps(widened, separators=(",", ":")))
+            if change in ("policy", "both"):
+                mutated_policy["manual_actors"] = widened
+            if change == "order":
+                mutated_policy["manual_actors"] = list(reversed(RELEASE_MANAGERS))
+            if change == "case":
+                mutated_policy["manual_actors"] = [login.lower() for login in RELEASE_MANAGERS]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                reviewed_manual_actors(mutated_source, mutated_policy)
+
+
+# Mirrors the storytold release-managers team (id 19837241) minus echelon-robot, which only has
+# read access to photocraft. Update by PR, in the caller and the policy, when the team changes.
+RELEASE_MANAGERS = ["bflatastic", "dylanmtaylor", "echelon", "FredApps", "skylartaylor"]
+
+
+def reviewed_manual_actors(caller_source, policy):
+    """The one reviewed manual-actor list, identical in the producer caller and the policy."""
+    rows = re.findall(r"(?m)^      manual-actors: '(\[[^']*\])'$", caller_source)
+    if len(rows) != 1:
+        raise ValueError("exactly one literal manual-actors list is required")
+    caller = json.loads(rows[0])
+    if caller != policy["manual_actors"]:
+        raise ValueError("caller and policy must grant the same actors in the same order")
+    if caller != RELEASE_MANAGERS:
+        raise ValueError("manual actors must be exactly the reviewed release managers")
+    if caller != sorted(caller, key=str.lower) or len({login.lower() for login in caller}) != len(caller):
+        raise ValueError("manual actors must be distinct and sorted case-insensitively")
+    if set(caller) & {login for login in policy["automatic_signer_actors"]}:
+        raise ValueError("manual and automatic actors overlap")
+    return caller
+
+
+INSTALLED_POLICY = ROOT / ".github/nightly-signing-policy.json"
+
+
+def caller_pin(name):
+    return re.findall(r"(?m)^      tooling-revision: ([0-9a-f]{40})$", (ROOT / ".github/workflows" / name).read_text())[0]
+
+
+class NightlyInstalledPolicy(unittest.TestCase):
+    """The installed v3 policy matches the callers, the repository and its documented sources."""
+
+    def setUp(self):
+        self.assertFalse(INSTALLED_POLICY.is_symlink())
+        self.policy = json.loads(INSTALLED_POLICY.read_text())
+
+    def test_exact_v3_fields_and_repository_identity(self):
+        example = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+        self.assertEqual(set(self.policy), set(example))
+        self.assertEqual(self.policy["schema"], "craft-nightly-release-policy/v3")
+        self.assertEqual(self.policy["repository"], "storytold/photocraft")
+        self.assertEqual(self.policy["release_branch"], SIGNER_BRANCH, "the signer runs on its dedicated branch")
+        # Both read from the GitHub API (the repository and nightly.yml's registration on main).
+        for key in ("repository_id", "producer_workflow_id"):
+            with self.subTest(key=key):
+                self.assertIs(type(self.policy[key]), int)
+                self.assertGreater(self.policy[key], 0)
+        self.assertNotEqual(self.policy["producer_workflow_id"],
+                            self.policy["candidate_policy"]["required_workflows"][0]["workflow_id"],
+                            "the producer is not its own quality workflow")
+
+    def test_paths_and_tooling_match_the_callers(self):
+        pin = caller_pin("nightly.yml")
+        self.assertEqual(caller_pin("nightly-sign.yml"), pin)
+        self.assertEqual(self.policy["producer_workflow_path"], ".github/workflows/nightly.yml")
+        self.assertEqual(self.policy["signer_workflow_path"], ".github/workflows/nightly-sign.yml")
+        self.assertEqual(self.policy["producer_tooling_revision"], pin)
+        self.assertEqual(self.policy["signer_tooling_revision"], pin)
+        self.assertEqual(self.policy["producer_workflow_ref"],
+                         "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@" + pin)
+
+    def test_platforms_equal_the_reviewed_example_and_producer(self):
+        example = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+        self.assertEqual(self.policy["platforms"], example["platforms"])
+        built = producer_platforms((ROOT / ".github/workflows/nightly.yml").read_text())
+        self.assertEqual(set(self.policy["platforms"]), set(built))
+
+    def test_bounds(self):
+        self.assertIs(type(self.policy["max_age_seconds"]), int)
+        self.assertTrue(0 < self.policy["max_age_seconds"] <= 604800)
+        self.assertIs(type(self.policy["max_artifact_bytes"]), int)
+        self.assertTrue(0 < self.policy["max_artifact_bytes"] <= 16 * 1024 ** 3)
+
+    def test_candidate_workflows_run_on_every_main_push(self):
+        candidate = self.policy["candidate_policy"]
+        self.assertEqual(set(candidate), {"schema", "epoch", "repository", "branch", "required_workflows", "sonar"})
+        self.assertEqual(candidate["schema"], "craft-nightly-candidate-policy/v3")
+        self.assertEqual((candidate["repository"], candidate["branch"]), ("storytold/photocraft", "main"))
+        self.assertTrue(isinstance(candidate["epoch"], str) and 0 < len(candidate["epoch"]) <= 128)
+        rows = candidate["required_workflows"]
+        self.assertTrue(rows)
+        for row in rows:
+            with self.subTest(workflow=row["workflow_path"]):
+                self.assertEqual(set(row), {"workflow_id", "workflow_path", "jobs"})
+                self.assertIs(type(row["workflow_id"]), int)
+                self.assertNotEqual(row["workflow_path"], self.policy["producer_workflow_path"])
+                source = (ROOT / row["workflow_path"]).read_text()
+                push = re.search(r"(?m)^  push:\n((?:    .*\n)+)", source)
+                self.assertIsNotNone(push, "a required workflow must run on main pushes")
+                self.assertIn("    branches: [main]\n", push[1])
+                self.assertNotRegex(push[1], r"paths", "a path filter would leave candidates without a run")
+                names = [job["name"] for job in row["jobs"]]
+                self.assertEqual(len(names), len(set(names)))
+                for job in row["jobs"]:
+                    self.assertEqual(set(job), {"name", "app_id", "applicability"})
+                    self.assertEqual((job["app_id"], job["applicability"]), (15368, "required"))
+
+    def test_sonar_identity_and_reviewed_scope(self):
+        sonar = self.policy["candidate_policy"]["sonar"]
+        properties = dict(line.split("=", 1) for line in (ROOT / "sonar-project.properties").read_text().splitlines()
+                          if line and not line.startswith("#"))
+        self.assertEqual(sonar["organization"], properties["sonar.organization"])
+        self.assertEqual(sonar["project"], properties["sonar.projectKey"])
+        self.assertEqual((sonar["app_id"], sonar["check_name"]), (12526, "SonarCloud Code Analysis"))
+        self.assertEqual(sonar["details_url"], "https://sonarcloud.io/dashboard?id=" + sonar["project"] + "&branch=main")
+        accepted = {"bugs": "BUG", "vulnerabilities": "VULNERABILITY", "code_smells": "CODE_SMELL",
+                    "security_rating": "VULNERABILITY", "new_security_rating": "VULNERABILITY"}
+        self.assertEqual({accepted[c["metric"]] for c in sonar["accepted_conditions"]}, set(sonar["issue_types"]))
+        metrics = [c["metric"] for c in sonar["accepted_conditions"] + sonar["required_conditions"]]
+        self.assertEqual(len(metrics), len(set(metrics)))
+        keys = [item["key"] for item in sonar["debt"]]
+        self.assertEqual(len(keys), len(set(keys)))
+        for item in sonar["debt"]:
+            with self.subTest(issue=item["key"]):
+                self.assertEqual(set(item), {"key", "rule", "component", "type", "severity", "hash"})
+                self.assertTrue(item["component"].startswith(sonar["project"] + ":"))
+                self.assertIn(item["type"], sonar["issue_types"])
+                self.assertRegex(item["hash"], r"^[0-9a-f]{32}$")
+
+
+SIGNER_BRANCH = "nightly-signer"
+SHARED = "storytold/craft-common-actions/.github/workflows/"
+# App workflows reviewed to call the shared stable release.yml. That callee must carry the
+# stable-only environment guard (dry runs and non-release refs bind no environment); the
+# nightly-signer settings scan checks the resolved callee before creating or advancing the branch.
+REVIEWED_STABLE_RELEASE_CALLERS = {"release.yml"}
+
+
+def app_workflows():
+    return {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.y*ml"))}
+
+
+WORKFLOW_KEY = re.compile(r'''("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s'"#{}\[\],:&*!|>%@`?-][^:#,{}]*?|-[^\s:#][^:#,{}]*?)\s*:(?:\s+(.*))?$''')
+
+
+def _workflow_key(text):
+    if text.startswith('"'):
+        return None if "\\" in text else text[1:-1]
+    if text.startswith("'"):
+        return text[1:-1].replace("''", "'")
+    return text
+
+
+def _workflow_value(text):
+    """A one-line scalar value without its comment and quotes; None when escaped or unterminated."""
+    text = text.strip()
+    if text.startswith('"'):
+        quoted = re.match(r'"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$', text)
+        return None if quoted is None or "\\" in quoted.group(1) else quoted.group(1)
+    if text.startswith("'"):
+        quoted = re.match(r"'((?:[^']|'')*)'\s*(?:#.*)?$", text)
+        return None if quoted is None else quoted.group(1).replace("''", "'")
+    return re.split(r"\s+#", text, maxsplit=1)[0].strip()
+
+
+def _strip_comment(text):
+    """(text without its comment, unterminated) using a quote-aware scan.
+
+    As in YAML, a quote opens a quoted scalar only where a scalar starts (line start or after
+    `:`, `-`, `,`, `{` or `[`), and a `#` starts a comment only outside quotes, at the start or
+    after whitespace.
+    """
+    quote, index = None, 0
+    while index < len(text):
+        char = text[index]
+        if quote == '"':
+            if char == "\\":
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if text[index + 1:index + 2] == "'":
+                    index += 2
+                    continue
+                quote = None
+        elif char in "\"'" and text[:index].rstrip()[-1:] in ("", ":", "-", ",", "{", "["):
+            quote = char
+        elif char == "#" and (index == 0 or text[index - 1] in " \t"):
+            return text[:index].rstrip(), False
+        index += 1
+    return text.rstrip(), quote is not None
+
+
+FLOW_QUOTED = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'")
+FLOW_FORBIDDEN_KEYS = {"environment", "uses"}
+
+
+def workflow_entries(source):
+    """Every mapping entry in a workflow, plus the YAML forms this reader refuses.
+
+    A narrow reader, not a YAML parser (none ships with the runner's Python). Each entry is
+    (line, key, value, multiline): plain, single- and double-quoted keys and one-line values in
+    block and simple one-line flow mappings. Block scalar bodies are skipped, and an entry whose
+    value is a block scalar or continues on the next lines is marked multiline. It refuses whatever
+    could hide a key from it: escaped double-quoted keys, explicit `?` keys, merge keys, anchors,
+    aliases, tags, tab indentation and nested or multi-line flow.
+    """
+    lines = source.splitlines()
+    entries, refused, block = [], [], None
+
+    def continues(index, indent):
+        for follow in lines[index + 1:]:
+            stripped = follow.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            deeper = len(follow) - len(follow.lstrip(" ")) > indent
+            return deeper and not stripped.startswith("- ") and WORKFLOW_KEY.match(stripped) is None
+        return False
+
+    for index, raw in enumerate(lines):
+        number = index + 1
+        stripped = raw.strip()
+        indent = len(raw) - len(raw.lstrip(" "))
+        if block is not None:
+            if not stripped or indent > block:
+                continue
+            block = None
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "\t" in raw[:indent + 1]:
+            refused.append(f"line {number}: tab indentation"); continue
+        body, unterminated = _strip_comment(stripped)
+        if unterminated:
+            refused.append(f"line {number}: unterminated or multi-line quoted scalar"); continue
+        if not body:
+            continue
+        while body.startswith("- "):
+            body = body[2:].lstrip()
+        if body == "?" or body.startswith("? "):
+            refused.append(f"line {number}: explicit key"); continue
+        match = WORKFLOW_KEY.match(body)
+        value = body
+        if match is not None:
+            key, value = _workflow_key(match.group(1)), match.group(2) or ""
+            if key is None:
+                refused.append(f"line {number}: escaped double-quoted key"); continue
+            if key == "<<":
+                refused.append(f"line {number}: merge key"); continue
+        plain = re.sub(r"\$\{\{.*?\}\}", "", value).strip()
+        bare = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", "''", plain)
+        if re.match(r"[&*!]", plain):
+            refused.append(f"line {number}: anchor, alias or tag")
+        is_block = re.fullmatch(r"[|>][0-9+-]*", plain) is not None
+        if match is not None:
+            entries.append((number, key, _workflow_value(value),
+                            is_block or ((value == "" or not is_block) and continues(index, indent))))
+        if "{" in bare and bare != "{}":
+            flow = re.fullmatch(r"\{([^{}\[\]]*)\}", FLOW_QUOTED.sub("''", value.strip()))
+            if any(set(scalar[1:-1]) & set("#{}[],") for scalar in FLOW_QUOTED.findall(value)):
+                refused.append(f"line {number}: flow mapping quoted scalar with # or flow punctuation")
+            elif flow is None:
+                refused.append(f"line {number}: nested or multi-line flow mapping")
+            elif not re.fullmatch(r"\{([^{}\[\]]*)\}", value.strip()):
+                refused.append(f"line {number}: nested or multi-line flow mapping")
+            else:
+                for item in flow.group(1).split(","):
+                    entry = WORKFLOW_KEY.match(item.strip())
+                    key = _workflow_key(entry.group(1)) if entry else None
+                    if key is None:
+                        refused.append(f"line {number}: unreadable flow mapping entry")
+                    elif key in FLOW_FORBIDDEN_KEYS:
+                        refused.append(f"line {number}: {key} in a flow mapping (must be block style)")
+                    else:
+                        entries.append((number, key, _workflow_value(entry.group(2) or ""), False))
+        if match is not None and is_block:
+            block = indent
+    return entries, refused
+
+
+def workflow_keys(source):
+    """(line, key) for every mapping entry, plus the refused YAML forms."""
+    entries, refused = workflow_entries(source)
+    return [(number, key) for number, key, _, _ in entries], refused
+
+
+SHARED_CALLEE = re.compile(r"storytold/craft-common-actions/\.github/workflows/([\w.-]+\.ya?ml)@(\S+)", re.IGNORECASE)
+INSPECTED_KEYS = {"environment", "uses"}
+
+
+def trust_closure_problems(workflows):
+    """The nightly-signer trust-closure scan over app workflow sources; empty when the tree is safe.
+
+    Every key it inspects comes from workflow_entries(), never a regex over the raw text.
+    """
+    problems, stable_callers, signer_calls = [], set(), 0
+    for name, source in workflows.items():
+        entries, refused = workflow_entries(source)
+        problems.extend(name + " uses YAML the scan cannot read (" + reason + ")" for reason in refused)
+        for number, key, value, multiline in entries:
+            if key not in INSPECTED_KEYS:
+                continue
+            if key == "environment":
+                problems.append(f"{name} binds an environment directly (line {number})")
+                continue
+            if value is None or multiline:
+                problems.append(f"{name} has a uses value the scan cannot read (line {number})")
+                continue
+            callee = SHARED_CALLEE.fullmatch(value)
+            if callee is None:
+                if re.search(r"craft-common-actions", value, re.IGNORECASE) and re.search(r"workflows/(nightly-)?release\.ya?ml", value, re.IGNORECASE):
+                    problems.append(f"{name} has an unrecognised shared release caller (line {number})")
+                continue
+            workflow, ref = callee.group(1), callee.group(2)
+            if workflow.lower() in ("nightly-release.yml", "nightly-release.yaml"):
+                if name == "nightly-sign.yml":
+                    signer_calls += 1
+                if name != "nightly-sign.yml" or not re.fullmatch(r"[0-9a-f]{40}", ref):
+                    problems.append(name + " calls nightly-release.yml@" + ref)
+            if workflow.lower() in ("release.yml", "release.yaml"):
+                stable_callers.add(name)
+                if ref != "main" and not re.fullmatch(r"[0-9a-f]{40}", ref):
+                    problems.append(name + " calls release.yml@" + ref + "; use @main or a reviewed full SHA")
+    if stable_callers != REVIEWED_STABLE_RELEASE_CALLERS:
+        problems.append("shared release.yml callers are " + ", ".join(sorted(stable_callers)))
+    if signer_calls != 1:
+        problems.append("nightly-sign.yml must call nightly-release.yml exactly once")
+    return problems
+
+
+class NightlySignerBranchTrustClosure(unittest.TestCase):
+    """On refs/heads/nightly-signer, only the pinned signer caller may reach an environment."""
+
+    def test_trust_closure_scan_passes_on_this_tree(self):
+        self.assertEqual(trust_closure_problems(app_workflows()), [])
+
+    def test_trust_closure_scan_refuses_each_route_into_an_environment(self):
+        tree = app_workflows()
+        bad = {
+            "a workflow binds an environment": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    environment: release\n"},
+            "a double-quoted environment key": {**tree, "extra.yml": 'jobs:\n  x:\n    runs-on: ubuntu-latest\n    "environment": release\n'},
+            "a single-quoted environment key": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    'environment' : release\n"},
+            "an environment mapping": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    environment:\n      name: release\n"},
+            "an environment in a flow mapping": {**tree, "extra.yml": "jobs:\n  x: {runs-on: ubuntu-latest, environment: release}\n"},
+            "an escaped key": {**tree, "extra.yml": 'jobs:\n  x:\n    runs-on: ubuntu-latest\n    "environ\\u006dent": release\n'},
+            "a merge key": {**tree, "extra.yml": "base: &b\n  runs-on: ubuntu-latest\njobs:\n  x:\n    <<: *b\n"},
+            "an explicit key": {**tree, "extra.yml": "jobs:\n  x:\n    ? environment\n    : release\n"},
+            "a nested flow mapping": {**tree, "extra.yml": "jobs:\n  x: {steps: [{run: a}]}\n"},
+            "a double-quoted uses key copying the signer": {**tree, "extra.yml": 'jobs:\n  x:\n    "uses": ' + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a single-quoted uses key": {**tree, "extra.yml": "jobs:\n  x:\n    'uses': " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a quoted uses value": {**tree, "extra.yml": 'jobs:\n  x:\n    uses: "' + SHARED + "nightly-release.yml@" + "a" * 40 + '"\n'},
+            "uses in a flow mapping": {**tree, "extra.yml": "jobs:\n  x: {uses: " + SHARED + "nightly-release.yml@" + "a" * 40 + "}\n"},
+            "a differently cased owner": {**tree, "extra.yml": "jobs:\n  x:\n    uses: Storytold/Craft-Common-Actions/.github/workflows/nightly-release.yml@" + "a" * 40 + "\n"},
+            "a folded uses value": {**tree, "extra.yml": "jobs:\n  x:\n    uses: >-\n      " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a continued uses value": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "\n      nightly-release.yml@" + "a" * 40 + "\n"},
+            "a quoted second signer call": {**tree, "nightly-sign.yml": tree["nightly-sign.yml"] + "  again:\n    \"uses\": " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a hash inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "a} # b", runs-on: ubuntu-latest, environment: release, steps: []}\n'},
+            "a single-quoted hash in a flow scalar": {**tree, "extra.yml": "jobs:\n  x: {name: 'a # b', runs-on: ubuntu-latest}\n"},
+            "a comma inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "a, environment: release", runs-on: ubuntu-latest}\n'},
+            "a bracket inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "[a]", runs-on: ubuntu-latest}\n'},
+            "an unterminated quote": {**tree, "extra.yml": 'jobs:\n  x:\n    name: "a\n      b"\n    runs-on: ubuntu-latest\n'},
+            "environment in any flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    with: {environment: release}\n"},
+            "uses in any flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    steps:\n      - {uses: actions/checkout@v4}\n"},
+            "another caller of the signer": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a mutable signer pin": {**tree, "nightly-sign.yml": re.sub(r"nightly-release\.yml@[0-9a-f]{40}", "nightly-release.yml@main", tree["nightly-sign.yml"])},
+            "a new stable release caller": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "release.yml@main\n"},
+            "a stable caller on a branch or tag ref": {**tree, "release.yml": tree["release.yml"].replace(SHARED + "release.yml@main", SHARED + "release.yml@v1")},
+        }
+        for label, workflows in bad.items():
+            with self.subTest(case=label):
+                self.assertTrue(trust_closure_problems(workflows))
+
+    def test_signer_dispatch_guard_and_policy_name_the_same_branch(self):
+        sign = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        (_, guard), = job_conditions(sign.split("\njobs:\n", 1)[1])
+        self.assertIn("github.ref == 'refs/heads/" + SIGNER_BRANCH + "'", guard)
+        self.assertNotIn("refs/heads/release", sign, "the signer no longer runs on the stable branch")
+        self.assertEqual(re.findall(r"(?m)^      app-name: (\S+)$", sign), ["photocraft"], "the shared signer needs the reviewed registry app")
+        dispatch = inline_scripts(DISPATCHER)[0]
+        self.assertEqual(re.findall(r"'ref': '([^']+)'", dispatch), ["refs/heads/" + SIGNER_BRANCH])
+        self.assertEqual(json.loads(INSTALLED_POLICY.read_text())["release_branch"], SIGNER_BRANCH)
+        self.assertEqual(json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())["release_branch"],
+                         SIGNER_BRANCH)
 
 
 if __name__ == "__main__":

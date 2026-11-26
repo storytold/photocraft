@@ -223,33 +223,33 @@ fn sparse_budget_source(width: u32, height: u32, selected: bool) -> Session {
     s
 }
 
+// Areas over MAX_DEFINED_TIP disable both commands, so the budget tests below reach the
+// guard through the handler directly.
 #[test]
 fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
     const WIDTH: u32 = 32768;
-    for command in COMMANDS {
-        for selected in [false, true] {
-            // Density plus optional mask fit exactly; the simultaneously live RGBA band
-            // must also count, even though the document itself is sparse.
-            let bytes = if selected { 8 } else { 4 };
-            let height = (crate::allocation::MAX_DENSE_BYTES / (bytes * u64::from(WIDTH))) as u32;
-            let mut s = sparse_budget_source(WIDTH, height, selected);
-            let doc = s.active().unwrap().doc.clone();
-            let brush = (*s.tools.brush).clone();
-            let presets = (*s.tools.presets).clone();
-            let current = s.tools.current_preset.clone();
-            let history = s.active().unwrap().history.past_len();
-            crate::allocation::fail_next_for_test();
-            let result = s.execute(command, json!({"name": "Composite over budget"}));
-            let unspent = crate::allocation::capacity::<u8>(0, "consume composite budget failpoint");
-            let err = result.unwrap_err();
-            assert!(err.to_string().contains("working memory"), "{err}");
-            assert!(unspent.is_err(), "budget refusal must precede the first allocation");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(*s.tools.brush, brush);
-            assert_eq!(*s.tools.presets, presets);
-            assert_eq!(s.tools.current_preset, current);
-        }
+    for selected in [false, true] {
+        // Density plus optional mask fit exactly; the simultaneously live RGBA band
+        // must also count, even though the document itself is sparse.
+        let bytes = if selected { 8 } else { 4 };
+        let height = (crate::allocation::MAX_DENSE_BYTES / (bytes * u64::from(WIDTH))) as u32;
+        let mut s = sparse_budget_source(WIDTH, height, selected);
+        let doc = s.active().unwrap().doc.clone();
+        let brush = (*s.tools.brush).clone();
+        let presets = (*s.tools.presets).clone();
+        let current = s.tools.current_preset.clone();
+        let history = s.active().unwrap().history.past_len();
+        crate::allocation::fail_next_for_test();
+        let result = define_from_selection(&mut s, &json!({"name": "Composite over budget"}));
+        let unspent = crate::allocation::capacity::<u8>(0, "consume composite budget failpoint");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("working memory"), "{err}");
+        assert!(unspent.is_err(), "budget refusal must precede the first allocation");
+        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+        assert_eq!(*s.tools.brush, brush);
+        assert_eq!(*s.tools.presets, presets);
+        assert_eq!(s.tools.current_preset, current);
     }
 }
 
@@ -285,28 +285,26 @@ fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas()
     const WIDTH: u32 = 32768;
     let band_rows = photocraft_compose::band_rows_for(WIDTH, 0) as u64;
     let band_bytes = u64::from(WIDTH) * band_rows * 16;
-    for command in COMMANDS {
-        for selected in [false, true] {
-            let sample_bytes = if selected { 8 } else { 4 };
-            let height = ((crate::allocation::MAX_DENSE_BYTES - band_bytes) / (sample_bytes * u64::from(WIDTH))) as u32;
-            let pixels = u64::from(WIDTH) * u64::from(height);
-            assert!(pixels * sample_bytes + band_bytes <= crate::allocation::MAX_DENSE_BYTES);
-            assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
-            let mut s = sparse_budget_source(WIDTH, height, selected);
-            let doc = s.active().unwrap().doc.clone();
-            let brush = (*s.tools.brush).clone();
-            let presets = (*s.tools.presets).clone();
-            // Refuse the first real allocation, after verifying that the budget allowed it.
-            crate::allocation::fail_next_for_test();
-            let result = s.execute(command, json!({"name": "Fits with bands"}));
-            let unspent = crate::allocation::capacity::<u8>(0, "consume band acceptance failpoint");
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
-            assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(*s.tools.brush, brush);
-            assert_eq!(*s.tools.presets, presets);
-        }
+    for selected in [false, true] {
+        let sample_bytes = if selected { 8 } else { 4 };
+        let height = ((crate::allocation::MAX_DENSE_BYTES - band_bytes) / (sample_bytes * u64::from(WIDTH))) as u32;
+        let pixels = u64::from(WIDTH) * u64::from(height);
+        assert!(pixels * sample_bytes + band_bytes <= crate::allocation::MAX_DENSE_BYTES);
+        assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
+        let mut s = sparse_budget_source(WIDTH, height, selected);
+        let doc = s.active().unwrap().doc.clone();
+        let brush = (*s.tools.brush).clone();
+        let presets = (*s.tools.presets).clone();
+        // Refuse the first real allocation, after verifying that the budget allowed it.
+        crate::allocation::fail_next_for_test();
+        let result = define_from_selection(&mut s, &json!({"name": "Fits with bands"}));
+        let unspent = crate::allocation::capacity::<u8>(0, "consume band acceptance failpoint");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
+        assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
+        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(*s.tools.brush, brush);
+        assert_eq!(*s.tools.presets, presets);
     }
 }
 

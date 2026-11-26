@@ -10,11 +10,11 @@ use std::sync::Arc;
 use craft::color_ui::ui::{ColorPickerDialog, PickedColor};
 use craft::theme::Srgba;
 use craft::ui::dialog::DialogId;
-use photocraft_color::Color;
+use photocraft_color::{Color, ColorMode};
 use photocraft_doc::{DocId, Document, Fill, LayerContent, LayerId};
 use serde_json::{Value, json};
 
-use crate::color_picker_ui::{PickTarget, hex, rgb_hex};
+use crate::color_picker_ui::{PickTarget, hex, inks_model, inks_of, rgb_hex, same_inks};
 use crate::{PhotocraftApp, color_picker_ui};
 
 const COMMAND: &str = "shape.edit";
@@ -97,7 +97,8 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Option<DialogId> {
     let target =
         ShapeTarget { which: Paint::Fill, layer: Some(layer), document: Some(st.doc.id), tool: false, thumbnail: true, alpha: color.alpha, solid: true };
     let start = Srgba::from_rgb_array(color.to_rgb());
-    Some(color_picker_ui::open_for(app, "Color Picker (Solid Color)", start, None, PickTarget::Shape(target)))
+    let kept = (color.mode == ColorMode::Cmyk).then(|| inks_model(color.c));
+    Some(color_picker_ui::open_for(app, "Color Picker (Solid Color)", start, kept, PickTarget::Shape(target)))
 }
 
 /// Opens the picker from a Fill or Stroke popover on `which` paint of shape `layer` (the
@@ -124,13 +125,26 @@ pub(crate) fn open_paint(app: &mut PhotocraftApp, which: Paint, layer: Option<La
         Paint::Fill => "Color Picker (Fill Color)",
         Paint::Stroke => "Color Picker (Stroke Color)",
     };
-    Some(color_picker_ui::open_for(app, label, Srgba::from_rgb_array(start.to_rgb()), None, PickTarget::Shape(target)))
+    let kept = if start.mode == ColorMode::Cmyk {
+        Some(inks_model(start.c))
+    } else if layer.is_none() {
+        app.session.tools.picked_role_cmyk(usize::from(which == Paint::Stroke)).map(inks_model)
+    } else {
+        None
+    };
+    Some(color_picker_ui::open_for(app, label, Srgba::from_rgb_array(start.to_rgb()), kept, PickTarget::Shape(target)))
 }
 
-/// The picker's colour as `shape.edit` stores it: RGB with the original paint's alpha.
-fn picked(t: &ShapeTarget, p: &PickedColor) -> Color {
+/// Keep explicit inks in CMYK documents and retain the original paint's alpha.
+fn picked(t: &ShapeTarget, p: &PickedColor, mode: ColorMode) -> Color {
+    let alpha = clamp_alpha(t.alpha);
+    if mode == ColorMode::Cmyk
+        && let Some(c) = inks_of(p)
+    {
+        return Color { mode, c, alpha };
+    }
     let [r, g, b] = p.color.to_rgb_array();
-    Color::rgba(r, g, b, clamp_alpha(t.alpha))
+    Color::rgba(r, g, b, alpha)
 }
 
 /// The target layer, unless the dialog has none or is stale (another document is active, or the
@@ -156,8 +170,10 @@ fn target(app: &PhotocraftApp, t: &ShapeTarget, idx: Option<usize>) -> Result<Op
 /// the options bar. A refused edit (a locked layer, a job running on the document) changes neither.
 pub(crate) fn confirm(app: &mut PhotocraftApp, t: &ShapeTarget, picker: &PickedColor) -> Result<Value, String> {
     let layer = target(app, t, app.session.active_index())?;
-    let color = picked(t, picker);
-    let rgba = [color.c[0], color.c[1], color.c[2], color.alpha];
+    let mode = app.session.active().map_or(ColorMode::Rgb, |st| st.doc.mode);
+    let color = picked(t, picker, mode);
+    let [r, g, b] = picker.color.to_rgb_array();
+    let rgba = [r, g, b, color.alpha];
     // A locked shape refuses the edit: check first, so the next shape's colour isn't changed either.
     if let Some(layer) = layer
         && app.session.active().is_some_and(|st| {
@@ -169,27 +185,32 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, t: &ShapeTarget, picker: &PickedC
     }
     let result = match layer {
         None => json!({"color": rgba}),
-        Some(layer) => edit_paint(app, t, layer, rgba)?,
+        Some(layer) => edit_paint(app, t, layer, color)?,
     };
     // Only once the shape took the colour (or there is none): a refused edit changes nothing.
     if t.tool {
-        crate::shape_options::set_tool_paint(app, t.which == Paint::Stroke, crate::shape_paint_ui::PaintChange::Color(rgba))?;
+        crate::shape_options::set_tool_paint_with_inks(app, t.which == Paint::Stroke, crate::shape_paint_ui::PaintChange::Color(rgba), inks_of(picker))?;
     }
     Ok(result)
 }
 
-/// The `shape.edit` that gives `layer`'s paint the colour `rgba`; an unchanged solid colour keeps the
-/// stored one as it is.
-fn edit_paint(app: &mut PhotocraftApp, t: &ShapeTarget, layer: LayerId, rgba: [f32; 4]) -> Result<Value, String> {
+/// Commit one paint edit, preserving an unchanged solid colour at its original precision.
+fn edit_paint(app: &mut PhotocraftApp, t: &ShapeTarget, layer: LayerId, color: Color) -> Result<Value, String> {
     let which = t.which;
-    let rgb_now = hex([rgba[0], rgba[1], rgba[2]]);
-    let same =
-        app.session.active().and_then(|st| paint_of(&st.doc, layer, which)).is_some_and(|p| matches!(p, Some(Fill::Solid(c)) if hex(c.to_rgb()) == rgb_now));
+    let same = app.session.active().and_then(|st| paint_of(&st.doc, layer, which)).is_some_and(|paint| {
+        let Some(Fill::Solid(original)) = paint else { return false };
+        if color.mode == ColorMode::Cmyk {
+            original.mode == ColorMode::Cmyk && same_inks(original.c, color.c)
+        } else {
+            hex(original.to_rgb()) == hex(color.to_rgb())
+        }
+    });
     if t.solid && same {
         return Ok(json!({"layer": layer.0, "unchanged": true}));
     }
+    let color = if color.mode == ColorMode::Cmyk { json!(color) } else { json!([color.c[0], color.c[1], color.c[2], color.alpha]) };
     let paint = match which {
-        Paint::Fill => json!(rgba),
+        Paint::Fill => color,
         Paint::Stroke => {
             let width = app
                 .session
@@ -200,7 +221,7 @@ fn edit_paint(app: &mut PhotocraftApp, t: &ShapeTarget, layer: LayerId, rgba: [f
                     _ => None,
                 })
                 .unwrap_or(0.0);
-            json!({"color": rgba, "width": crate::vector_ui::enabled_stroke_width(width)})
+            json!({"color": color, "width": crate::vector_ui::enabled_stroke_width(width)})
         }
     };
     let mut p = json!({"layer": layer.0});
@@ -221,13 +242,13 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     };
     // OK on the opening colour changes a paint that isn't solid yet (No Color, a gradient), so
     // that one previews too.
-    if t.solid && opening.is_some_and(|o| rgb_hex(o.color) == rgb_hex(current.color)) {
+    if t.solid && opening.is_some_and(|o| rgb_hex(o.color) == rgb_hex(current.color) && inks_of(&o) == inks_of(&current)) {
         return None;
     }
     let layer = target(app, &t, Some(idx)).ok()??;
-    let color = picked(&t, &current);
     let which = t.which;
     let st = app.session.documents().get(idx)?;
+    let color = picked(&t, &current, st.doc.mode);
     if let Some(p) = &app.shape_fill_preview
         && p.document == st.doc.id
         && p.revision == st.revision
@@ -253,6 +274,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     (st.doc.id.0, st.revision, dialog, layer.0, which.key()).hash(&mut hash);
+    (color.mode == ColorMode::Cmyk).hash(&mut hash);
     for component in color.c.into_iter().chain([color.alpha]) {
         component.to_bits().hash(&mut hash);
     }

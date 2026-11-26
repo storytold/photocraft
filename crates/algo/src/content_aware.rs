@@ -722,11 +722,14 @@ fn thin_band(w: usize, h: usize, hole: &[bool]) -> f32 {
     if 4.0 * thickness <= extent { thickness.max(1.5) } else { 1.5 }
 }
 
-/// The Patch Tool's and the Content-Aware Move Tool's Color option (0–10) as the colour adaptation
-/// of the copied content. Measured on Photoshop 25.4 with content brighter than its new place: 0
-/// keeps it as it is; 3 moves it about 0.12 (32 of 42 levels, and 31 of 102: a limit, not a
-/// fraction), 6 about 80 % of 42 levels, 10 most of the way (35 of 42, 95 of 102). So the shift is
-/// limited to about `0.04 · color`, the contrast change likewise widening.
+/// Colour adaptation of the copies for a Color option of 0–10: the Content-Aware Move Tool's
+/// edge band (`content_aware_move`) and the Patch Tool's Content-Aware fill (`patch`). Measured
+/// on Photoshop 25.4 with content brighter than its new place: 0 keeps it as it is; 3 moves it
+/// about 0.12 (32 of 42 levels, and 31 of 102: a limit, not a fraction), 6 about 80 % of 42
+/// levels, 10 most of the way (35 of 42, 95 of 102). So the shift is limited to about
+/// `0.04 · color`, the contrast change likewise widening. Those were measurements of fitted,
+/// pasted content; Content-Aware Move's kept middle follows its own rule (above Color 5 it
+/// closes a brightness difference the whole way at 10) rather than this limit.
 pub fn color_amount(color: u8) -> Adapt {
     if color == 0 {
         return Adapt::NONE;
@@ -737,7 +740,9 @@ pub fn color_amount(color: u8) -> Adapt {
 
 /// Gain and bias per channel taking the samples `from` to the level and contrast of the samples
 /// `to` (both interleaved, `ch` per sample), within `a`: how copied content is fitted to its new
-/// surroundings.
+/// surroundings. Since #12118 no engine command calls it (the Patch Tool fills content-aware
+/// instead of pasting content to fit, and Content-Aware Move fits its middle through its own
+/// rule); it is kept as the measured fit, still covered by its tests.
 pub fn level_transform(ch: usize, from: &[f32], to: &[f32], a: Adapt) -> Vec<(f32, f32)> {
     let moments = |v: &[f32], c: usize| {
         let (mut s, mut s2, mut n) = (0.0f64, 0.0f64, 0.0f64);
