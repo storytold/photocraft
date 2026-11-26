@@ -70,7 +70,7 @@ fn lock_transparent_pixels_and_lock_position_still_work() {
 
 #[test]
 fn the_other_retouch_tools_keep_the_status_bar() {
-    let mut app = app(Tool::SpotHealing);
+    let mut app = app(Tool::CloneStamp);
     let id = active(&app);
     app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
     stroke(&mut app);
