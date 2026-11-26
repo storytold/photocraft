@@ -278,8 +278,11 @@ fn a_dialog_open_when_the_host_dies_is_dropped() {
     let start = Instant::now();
     loop {
         assert!(start.elapsed() < Duration::from_secs(20));
-        if let Some(Event::Dialog(_)) = job.poll(Duration::from_millis(20)) {
-            break;
+        match job.poll(Duration::from_millis(20)) {
+            Some(Event::Dialog(_)) => break,
+            // A run that ends before its dialog says why, rather than timing out here.
+            Some(Event::Finished(r)) => panic!("the run ended before its dialog: {r:?}"),
+            _ => {}
         }
     }
     kill_host(&job);
@@ -813,6 +816,25 @@ fn the_host_exits_when_the_app_dies() {
 fn a_request_still_queued_when_the_host_is_done_is_dropped() {
     let command = frame(&json!({"type": "execute", "id": "document.activate", "params": {"document": 0}}));
     let finished = frame(&json!({"type": "finished", "error": null}));
+    // Control: from a host still running, the same request reaches the interface, so the cases
+    // below see it dropped, not never queued.
+    let dir = std::env::temp_dir().canonicalize().unwrap().join(format!("script-host-live-host-{}", std::process::id()));
+    fixture(&dir, &command);
+    let mut opts = options("live-host");
+    opts.helper = sh("cat \"$1\"; sleep 30", &[dir.as_path()]);
+    let mut job = IsolatedJob::spawn("1".into(), opts).unwrap();
+    let start = Instant::now();
+    let delivered = loop {
+        assert!(start.elapsed() < Duration::from_secs(20), "the live host's request never arrived");
+        match job.poll(Duration::from_millis(20)) {
+            Some(Event::Execute { id, .. }) => break id,
+            Some(e) => panic!("the live host's request arrives first: {e:?}"),
+            None => {}
+        }
+    };
+    assert_eq!(delivered, "document.activate");
+    job.cancel();
+    let _ = std::fs::remove_file(&dir);
     for (name, frames, then) in [
         // Its output ended while the process lingers on: only the end of its output makes
         // the request void, not the process ending.
@@ -912,7 +934,9 @@ fn time_the_app_takes_to_answer_does_not_count_against_the_limit() {
 fn an_unanswered_command_or_dialog_ends_the_run() {
     for (src, dialog) in [("app.documents.length;", false), ("alert('nobody answers');", true)] {
         let mut opts = options("no reply");
-        opts.reply_limits = (Duration::from_millis(300), Duration::from_millis(300));
+        // Long enough that the request reaches this loop's poll before it expires, even on a
+        // machine that pauses the test thread; short enough that the test ends soon after.
+        opts.reply_limits = (Duration::from_secs(2), Duration::from_secs(2));
         let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
         let start = Instant::now();
         let mut asked = 0;
