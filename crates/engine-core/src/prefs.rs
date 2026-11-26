@@ -59,6 +59,10 @@ choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } def
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
 choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
+choice!(
+    /// The interface density the Craft suite shares (Preferences › Interface › Size).
+    UiDensity { Compact = "compact", Comfortable = "comfortable" } default Compact
+);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P105 = "105", P110 = "110", P115 = "115", P120 = "120", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
@@ -348,6 +352,8 @@ pub struct Interface {
     /// Theme ids starred in Preferences › Interface; #13581 decides where they show.
     #[serde(deserialize_with = "theme_ids::themes")]
     pub favorite_themes: Vec<String>,
+    /// Compact or Comfortable controls, shared with the other Craft apps like the mode and themes (#17096).
+    pub density: UiDensity,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
@@ -435,6 +441,7 @@ impl Default for Interface {
             dark_theme: "craft.artcraft".into(),
             light_theme: "craft.pro".into(),
             favorite_themes: Vec::new(),
+            density: UiDensity::Compact,
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             show_canvas_dots: true,
