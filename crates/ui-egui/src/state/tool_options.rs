@@ -305,6 +305,15 @@ pub struct ToolOptions {
     /// Magnetic Lasso: detection width, edge contrast, frequency and Stylus Pressure.
     #[serde(default)]
     pub magnetic: MagneticSettings,
+    /// Freeform Pen › Magnetic: the pen's own detection settings (the framework's
+    /// `MagneticSettings`, the same rules the Magnetic Lasso's row edits), kept apart from the
+    /// lasso's so Reset Tool on one tool leaves the other's alone.
+    #[serde(default)]
+    pub freeform_magnetic: MagneticSettings,
+    /// Freeform Pen › Magnetic: the checkbox. Off to start, and Reset Tool leaves it (the mode is
+    /// the user's, the four settings are the ones Reset Tool restores).
+    #[serde(default)]
+    pub freeform_magnetic_on: bool,
     /// Red Eye: pupil search size (1–100) and how far corrected pixels darken (0–100).
     #[serde(default = "fifty")]
     pub red_eye_pupil_size: f32,
@@ -566,6 +575,8 @@ impl Default for ToolOptions {
             erase_to_history: false,
             mixer_combination: 0,
             magnetic: MagneticSettings::default(),
+            freeform_magnetic: MagneticSettings::default(),
+            freeform_magnetic_on: false,
             red_eye_pupil_size: 50.0,
             red_eye_darken: 50.0,
             eyedropper: EyedropperOptions::default(),

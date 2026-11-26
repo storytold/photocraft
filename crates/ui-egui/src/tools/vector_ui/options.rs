@@ -4,10 +4,11 @@ use craft::behavior::kurbo::Rect;
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
 use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePanel, StrokeCells, VectorMode, VectorModeSelect};
+use craft::imaging::ui::select::MagneticSettings;
 use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked};
 use craft::ui::display::{Divider, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
@@ -227,6 +228,12 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
     let o = &mut app.ui.tool_options;
+    if tool == Tool::FreeformPen {
+        Divider::vertical().show(ui);
+        // Magnetic, where the Pen bar has Auto Add/Delete: the trace follows image edges the way the
+        // Magnetic Lasso's border does. Off to start, and Reset Tool leaves the user's choice.
+        Checkbox::new(Bind::bound(&mut o.freeform_magnetic_on)).label(label(tl!("Magnetic"))).show(ui);
+    }
     if tool == Tool::Pen {
         Divider::vertical().show(ui);
         // The gear's popover replaces the Rubber Band item (tools-03 D3).
@@ -249,6 +256,7 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             if let Some(Some(v)) = picked {
                 o.curve_fit = v as f32;
             }
+            magnetic_cells(app, ui);
             let alt = crate::shortcuts::pretty("Alt");
             hint(ui, &crate::i18n::fmt(tl!("Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close"), &[("alt", &alt)]));
         }
@@ -300,6 +308,95 @@ fn freeform_trace_size(draft: &OutlineDraft) -> Option<(f64, f64)> {
     let first = *draft.points().first()?;
     let box_ = draft.points().iter().fold(Rect::from_points(first, first), |box_, &at| box_.union_pt(at));
     Some((box_.width(), box_.height()))
+}
+
+/// The Freeform Pen's Magnetic detection cells (#12693): Width, Contrast, Frequency and Pen Pressure
+/// over the tool's own framework `MagneticSettings` — the same settings, ranges and wordings the
+/// Magnetic Lasso's row edits (`panels/options_bar/selection.rs`), held per tool so Reset Tool and a
+/// tool preset touch one bar's values and not the other's. Greyed with empty fields while Magnetic is
+/// off; a value typed past a range goes to the closest one with the range alert.
+fn magnetic_cells(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let (on, width, contrast, frequency, pressure) = {
+        let o = &app.ui.tool_options;
+        (
+            o.freeform_magnetic_on,
+            f64::from(o.freeform_magnetic.width),
+            f64::from(o.freeform_magnetic.contrast),
+            f64::from(o.freeform_magnetic.frequency),
+            o.freeform_magnetic.pressure_width,
+        )
+    };
+    let (width, width_alert) = detection_cell(
+        ui,
+        "freeform-magnetic-width",
+        label(tl!("Width")),
+        on.then_some(width),
+        f64::from(MagneticSettings::WIDTH_RANGE.0)..=f64::from(MagneticSettings::WIDTH_RANGE.1),
+        Some(UnitKind::Pixels),
+        label(tl!("Follows only edges this close to the pointer")),
+    );
+    let (contrast, contrast_alert) = detection_cell(
+        ui,
+        "freeform-magnetic-contrast",
+        label(tl!("Contrast")),
+        on.then_some(contrast),
+        1.0..=100.0,
+        Some(UnitKind::Percent),
+        label(tl!("Higher values follow only edges that contrast sharply with their surroundings")),
+    );
+    let (frequency, frequency_alert) = detection_cell(
+        ui,
+        "freeform-magnetic-frequency",
+        label(tl!("Frequency")),
+        on.then_some(frequency),
+        0.0..=100.0,
+        None,
+        label(tl!("How often the trace fastens to an edge by itself")),
+    );
+    let pressure = Checkbox::new(Bind::given(pressure)).label(label(tl!("Pen Pressure"))).enabled(on).show(ui).value().copied();
+    let o = &mut app.ui.tool_options.freeform_magnetic;
+    if let Some(v) = width {
+        o.width = v as f32;
+    }
+    if let Some(v) = contrast {
+        o.contrast = v as f32;
+    }
+    if let Some(v) = frequency {
+        o.frequency = v as f32;
+    }
+    if let Some(on) = pressure {
+        o.pressure_width = on;
+    }
+    for alert in [width_alert, contrast_alert, frequency_alert].into_iter().flatten() {
+        crate::option_cells::range_alert(app, ui, &alert);
+    }
+}
+
+/// One detection cell: a whole-number field over `shown`, greyed and empty while that is `None`, held
+/// to `range`. What the user committed, and the alert of a typed value that was outside `range`.
+fn detection_cell(
+    ui: &mut egui::Ui,
+    key: &str,
+    caption: Label,
+    shown: Option<f64>,
+    range: std::ops::RangeInclusive<f64>,
+    unit: Option<UnitKind>,
+    tip: Label,
+) -> (Option<f64>, Option<craft::ui::text::RangeAlert>) {
+    let editing = shown.is_some();
+    let mut out = (None, None);
+    Field::new(caption.clone()).enabled(editing).side(SideLabel::new().scrub(editing)).id_salt(key).sizing(Sizing::Content).show(ui, |ui, _| {
+        let mut field = NumberField::new(caption.clone(), Bind::given(shown)).range(range.clone()).commit_decimals(0).tooltip(tip.clone());
+        if editing {
+            field = field.scrub_by_label();
+        }
+        if let Some(kind) = unit {
+            field = field.unit_kind(kind);
+        }
+        let shown = field.show(ui);
+        out = (shown.value().copied().flatten(), shown.out_of_range);
+    });
+    out
 }
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection…, Mask and Shape, from the
