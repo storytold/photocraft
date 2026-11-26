@@ -93,5 +93,6 @@ Conventions and paths:
 - Contributor credits: `docs/contributors.md`.
 - Dev log: `log/devlog.md` (local, gitignored). `plan/` is an optional local notebook.
 - Screenshots of a PR's change go in the PR description. `docs/images/` holds only images a doc shows.
+- Before pushing a change to `apps/photocraft-cli` or its launch flags, run the command-line scan CI runs (RFC-0018 section 3): with a checkout of storytold/craft-common-actions next to this repository, `ast-grep scan --config ../craft-common-actions/actions/ast-grep/shared/rfc-0018/sgconfig.yml <paths>` and the same with `rfc-0018-string-error`, where `<paths>` are the `paths` in `.github/workflows/ast-grep.yml`.
 
 Docs: `docs/contributing.md` (repository guide, document list, picking work, adding a command), `docs/development.md`, `docs/architecture.md`.
