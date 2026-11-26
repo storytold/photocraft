@@ -4,7 +4,7 @@
 //! written before Apply or OK.
 
 use craft::theme::variant::Tone;
-use craft::theme::{ModeChoice, ThemeId};
+use craft::theme::{ModeChoice, Size, ThemeId};
 use craft::theme_store::ui::AppearancePage;
 use craft::theme_store::{SelectionChange, SuiteView};
 use craft::ui::buttons::Button;
@@ -36,6 +36,7 @@ const APPEARANCE_MODE: &str = "interface.appearanceMode";
 const LIGHT_THEME: &str = "interface.lightTheme";
 const DARK_THEME: &str = "interface.darkTheme";
 const FAVORITE_THEMES: &str = "interface.favoriteThemes";
+const DENSITY: &str = "interface.density";
 /// The page agents' settings live on, drawn whole by [`craft::automation::ui::agents::AgentsPage`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const AGENTS_PAGE: &str = "integrations";
@@ -263,7 +264,12 @@ impl PrefsCustom {
             Some("dark") => ModeChoice::Dark,
             _ => ModeChoice::System,
         };
-        let shown = SelectionChange { mode: Some(mode), theme_light: theme(LIGHT_THEME), theme_dark: theme(DARK_THEME), ..Default::default() };
+        let size = match draft.get::<String>(DENSITY).as_deref() {
+            Some("comfortable") => Size::Comfortable,
+            _ => Size::Compact,
+        };
+        let shown =
+            SelectionChange { mode: Some(mode), theme_light: theme(LIGHT_THEME), theme_dark: theme(DARK_THEME), size: Some(size), ..Default::default() };
         let mut change = shown.clone();
         let favorites: Vec<ThemeId> = draft.get::<Vec<String>>(FAVORITE_THEMES).unwrap_or_default().iter().filter_map(|s| ThemeId::parse(s).ok()).collect();
         // Unknown OS answer previews light, which is what Auto resolves to then.
@@ -287,6 +293,11 @@ impl PrefsCustom {
                 && let Some(id) = &change.theme_dark
             {
                 draft.set(DARK_THEME, &id.as_str());
+            }
+            if change.size != shown.size
+                && let Some(size) = change.size
+            {
+                draft.set(DENSITY, &if size == Size::Comfortable { "comfortable" } else { "compact" });
             }
         }
         if let Some(id) = out.favorite_toggled {

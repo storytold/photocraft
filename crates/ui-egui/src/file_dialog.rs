@@ -312,29 +312,39 @@ impl PhotocraftApp {
         extensions: &[&str],
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
-        let mut request = open_filters(PickRequest::open("file"), extensions);
-        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
-            request = request.directory(dir);
-        }
+        let request = self.open_file_request(PickKind::Open, None, extensions);
         self.ask_file(request, move |app, picked| {
             let (name, bytes) = read_picked(picked)?;
             then(app, name, bytes)
         })
     }
 
-    /// [`Self::pick_file_bytes`] letting the user choose several files (File › Place Embedded):
-    /// `then` gets every chosen file, in the order the dialog returns them. A desktop file is
-    /// handed over by path and read only when [`PickedFile::read`] is called, so files waiting
-    /// their turn hold no contents; the web hands over each file's contents.
-    pub(crate) fn pick_files_bytes(&mut self, then: impl FnOnce(&mut Self, Vec<PickedFile>) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        let mut request = open_filters(PickRequest::open_many("file"), &[]);
-        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
-            request = request.directory(dir);
-        }
+    /// [`Self::pick_file_bytes`] letting the user choose several files (File › Place Embedded,
+    /// optionally titled as in #14110 instead of the system's default title): `then` gets every
+    /// chosen file, in the order the dialog returns them. A desktop file is handed over by path and
+    /// read only when [`PickedFile::read`] is called, so files waiting their turn hold no contents;
+    /// the web hands over each file's contents.
+    pub(crate) fn pick_files_bytes(
+        &mut self,
+        title: Option<String>,
+        then: impl FnOnce(&mut Self, Vec<PickedFile>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let request = self.open_file_request(PickKind::OpenMany, title, &[]);
         self.ask_file(request, move |app, picked| {
             let files = picked_files(picked)?;
             then(app, files)
         })
+    }
+
+    fn open_file_request(&self, kind: PickKind, title: Option<String>, extensions: &[&str]) -> PickRequest {
+        let mut request = open_filters(PickRequest::new(kind, "file"), extensions);
+        if let Some(title) = title {
+            request = request.title(title);
+        }
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        request
     }
 
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
@@ -584,3 +594,7 @@ fn picked_files(picked: Picked) -> Result<Vec<PickedFile>, String> {
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_dialog/place_title_tests.rs"]
+mod place_title_tests;

@@ -146,14 +146,15 @@ fn paint_edit(stroke: bool, change: &PaintChange, width: f32) -> Value {
 /// and `ShapeBar` reports an edit only in the pass that read the input, so a second pass in the
 /// same frame sees the stored result and writes nothing.
 /// The bar's number fields: the next shape's, or the selected rectangle's own radius when the bar edits it.
-fn tool_settings(o: &crate::state::ToolOptions, live: Option<&photocraft_doc::LiveShape>, rect_target: bool) -> ShapeToolSettings {
+fn tool_settings(o: &crate::state::ToolOptions, kind: ShapeKind, live: Option<&photocraft_doc::LiveShape>, rect_target: bool) -> ShapeToolSettings {
     let mut settings = ShapeToolSettings::default();
     settings.fill_on = o.shape_fill;
     settings.corner_radius = match live {
         Some(photocraft_doc::LiveShape::Rect { radii, .. }) if rect_target => radii[0],
         _ => f64::from(o.corner_radius),
     };
-    settings.sides = o.polygon_sides;
+    // The Star tool's points are its own, apart from the Polygon tool's sides (#16867).
+    settings.sides = if kind == ShapeKind::Star { o.star_points } else { o.polygon_sides };
     settings.line_weight = f64::from(o.line_weight);
     settings.stroke_width = f64::from(o.stroke_width);
     settings
@@ -171,6 +172,55 @@ fn tool_extras(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
+}
+
+/// The points a Star tool's star may have: whole numbers 3 to 20, as the reference's options bar (#16867).
+const STAR_POINTS: std::ops::RangeInclusive<f64> = 3.0..=20.0;
+
+/// The star points a Sides change of `n` sets (`None`: keep them), and whether it was a value past 20 the user is
+/// told about (the reference's "An integer between 3 and 20 is required" alert). The framework's Sides cell holds
+/// 3 to 100 and reports values past that itself; this covers 21 to 100 until its Star cell holds 3 to 20.
+/// - A proposal past 20 while the gesture runs (`committed` false) keeps the points: a clamped value here would end
+///   the field's gesture before it commits.
+/// - The committed value is clamped. `shown` is the value the field showed: a committed 21 from 20 is an arrow step
+///   past the end, which stops there without an alert, as the field's own ends do.
+fn star_points(n: u32, shown: u32, committed: bool) -> (Option<u32>, bool) {
+    let (low, high) = (*STAR_POINTS.start() as u32, *STAR_POINTS.end() as u32);
+    if n <= high {
+        return (Some(n.max(low)), false);
+    }
+    if !committed {
+        return (None, false);
+    }
+    let stepped_past_end = n == high + 1 && shown == high;
+    (Some(high), !stepped_past_end)
+}
+
+/// Stores the Star tool's points from a Sides change of `n` ([`star_points`]); true when it was a value past 20 the
+/// user is told about.
+fn set_star_points(app: &mut PhotocraftApp, n: u32, shown: u32, committed: bool) -> bool {
+    let (points, alert) = star_points(n, shown, committed);
+    if let Some(points) = points {
+        app.ui.tool_options.star_points = points;
+    }
+    alert
+}
+
+/// The range alert of the bar's cell, with a star's count past the shared Sides range (3 to 100) naming the star's own.
+fn star_range(kind: ShapeKind, mut range: craft::ui::text::RangeAlert) -> craft::ui::text::RangeAlert {
+    if kind == ShapeKind::Star {
+        range.range = STAR_POINTS;
+        range.kept = range.kept.clamp(*STAR_POINTS.start(), *STAR_POINTS.end());
+    }
+    range
+}
+
+/// The alert of a star points value typed past 20: the text fields' whole-number range sentence over 3 to 20.
+fn star_points_range_alert(title: String, env: &Env) -> Alert<'static> {
+    let words = env.words::<craft::ui::text::TextWords>();
+    let units = env.units();
+    let (low, high) = (units.number(*STAR_POINTS.start(), 0..=0), units.number(*STAR_POINTS.end(), 0..=0));
+    Alert::new(title, words.range_integer.fill(&[("low", low.as_str()), ("high", high.as_str())]))
 }
 
 /// The title of the alert for a number typed outside its range.
@@ -213,7 +263,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     // selection tools, whose Radius is its own.
     let rect_target = matches!(tool, Tool::PathSelection | Tool::DirectSelection)
         && matches!(target.as_ref().and_then(|s| s.live.as_ref()), Some(photocraft_doc::LiveShape::Rect { .. }));
-    let settings = tool_settings(o, target.as_ref().and_then(|s| s.live.as_ref()), rect_target);
+    let settings = tool_settings(o, kind, target.as_ref().and_then(|s| s.live.as_ref()), rect_target);
     let style = stroke.as_ref().map_or_else(|| o.shape_stroke.clone(), StrokeOptions::from);
     let locked = target.as_ref().is_some_and(|s| {
         app.session.active().is_some_and(|st| {
@@ -245,6 +295,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
 
     let mut recent: Option<[f32; 3]> = None;
     let mut remembered: Vec<Fill> = Vec::new();
+    let mut star_points_alert = false;
     for event in &out.events {
         let Some(change) = proposal(event) else { continue };
         if matches!(event, EditEvent::Cancel { .. }) && already_shown(change, &appearance, &settings) {
@@ -313,6 +364,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                     edit = Some(json!({"radii": r}));
                 }
             }
+            ShapeChange::Sides(n) if kind == ShapeKind::Star => star_points_alert |= set_star_points(app, *n, settings.sides, committed),
             ShapeChange::Sides(n) => app.ui.tool_options.polygon_sides = *n,
             ShapeChange::Weight(w) => app.ui.tool_options.line_weight = *w as f32,
             _ => {}
@@ -350,8 +402,11 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let Some((which, gesture)) = out.screen_pick {
         crate::screen_picker::hold(app, ui.ctx(), ("shape-bar", which), gesture);
     }
-    if let Some(range) = out.out_of_range {
-        let alert = Alert::range(range_title(kind), &range, &Env::of(ui));
+    let alert = match out.out_of_range {
+        Some(range) => Some(Alert::range(range_title(kind), &star_range(kind, range), &Env::of(ui))),
+        None => star_points_alert.then(|| star_points_range_alert(range_title(kind), &Env::of(ui))),
+    };
+    if let Some(alert) = alert {
         // An `Err` is the alert that was not opened because one is already up.
         let _ = app.framework.dialogs.open_unless_open(HostedAlert::new(alert));
     }
@@ -492,6 +547,10 @@ mod rectangle_radius_target_tests;
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
 mod polygon_sides_alert_tests;
+
+#[cfg(test)]
+#[path = "star_points_field_tests.rs"]
+mod star_points_field_tests;
 
 #[cfg(test)]
 #[path = "polygon_corner_radius_field_tests.rs"]

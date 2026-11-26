@@ -77,14 +77,22 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
 /// Freeform Pen (#12829), Line (#13244), Triangle (#13354), and Ellipse (#13223).
 const TOOL_HISTORY_NAMES: [&str; 4] = ["Freeform Pen", "Line Tool", "Triangle Tool", "Ellipse Tool"];
 
+/// The names the Pen's per-click path edits record themselves under (#12890): the Work Path is written anchor by
+/// anchor, and each click is the step the reference application names. They belong to the Pen's drawing, like the
+/// tool names above; any other `path.set` keeps the normal Work Path or Save Path label.
+pub const PEN_STEP_NAMES: [&str; 6] = ["New Work Path", "New Anchor Point", "Close Path", "New Path Component", "Pick-up Path", "Drag Anchor Point"];
+
 /// Validate before editing so malformed automation input cannot change the document.
 pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {
     match p.get("historyName") {
         None | Some(Value::Null) => Ok(default),
-        Some(v) => TOOL_HISTORY_NAMES
-            .into_iter()
-            .find(|&n| v.as_str() == Some(n))
-            .ok_or_else(|| bad(cmd, "`historyName` must be \"Freeform Pen\", \"Line Tool\", \"Triangle Tool\" or \"Ellipse Tool\"")),
+        Some(v) => TOOL_HISTORY_NAMES.into_iter().chain(PEN_STEP_NAMES).find(|&n| v.as_str() == Some(n)).ok_or_else(|| {
+            bad(
+                cmd,
+                "`historyName` must be \"Freeform Pen\", \"Line Tool\", \"Triangle Tool\", \"Ellipse Tool\" or a Pen step name: \
+                     \"New Work Path\", \"New Anchor Point\", \"Close Path\", \"New Path Component\", \"Pick-up Path\", \"Drag Anchor Point\"",
+            )
+        }),
     }
 }
 

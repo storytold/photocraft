@@ -653,6 +653,15 @@ pub fn open_smart_edit(app: &mut PhotocraftApp, command: &str, recorded: &Map<St
     let base = fields(app, command, &params);
     let reset = reset_values(&params, &base);
     let mut opening = base;
+    // A Color Lookup filter recorded without interpolation or dither renders with the engine's defaults, not the
+    // dialog's (#14419); OK replaces the params, so it opens on what it renders with.
+    let lookup;
+    let recorded = if command == "image.adjustments.colorLookup" {
+        lookup = photocraft_engine::adjust_cmds::lookup_filter_params(recorded);
+        &lookup
+    } else {
+        recorded
+    };
     overlay(&params, recorded, &mut opening);
     let build = builder(app, command, dialog_title(command, spec.label), params, reset, previews(command));
     // PLAN: assumed `open_param_unsaved`, as in `open_with_spec`.

@@ -111,6 +111,7 @@ pub(crate) mod params {
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
+        crate::swatches_ui::SWATCH_NAME_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
         crate::actions::dialogs::NEW_SET_FAMILY,
         crate::actions::dialogs::INSERT_STOP_FAMILY,
@@ -713,6 +714,9 @@ pub mod blend_options;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
 pub mod caf_ui;
+#[cfg(test)]
+mod calculations_preview_tests;
+pub(crate) mod calculations_ui;
 pub(super) mod camera_raw_detail_ui;
 pub(super) mod camera_raw_gpu;
 pub(super) mod camera_raw_scope_ui;
@@ -721,6 +725,8 @@ pub(crate) mod canvas_input;
 pub mod channel_options_ui;
 #[cfg(test)]
 mod color_lookup_no_remember_tests;
+#[cfg(test)]
+mod color_lookup_smart_edit_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
