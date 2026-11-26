@@ -1659,7 +1659,7 @@ dependencies = [
 [[package]]
 name = "craft-doc"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=5c5e0d52c387c0a4ae2908a07e476d7584f60362#5c5e0d52c387c0a4ae2908a07e476d7584f60362"
+source = "git+https://github.com/storytold/craft-libs?rev=5c30761a86c2bb1814098139439be7c5b0a9e31c#5c30761a86c2bb1814098139439be7c5b0a9e31c"
 dependencies = [
  "craft-ecproj-format",
  "craft-pcraft-format",
@@ -1700,7 +1700,7 @@ dependencies = [
 [[package]]
 name = "craft-ecproj-format"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=5c5e0d52c387c0a4ae2908a07e476d7584f60362#5c5e0d52c387c0a4ae2908a07e476d7584f60362"
+source = "git+https://github.com/storytold/craft-libs?rev=5c30761a86c2bb1814098139439be7c5b0a9e31c#5c30761a86c2bb1814098139439be7c5b0a9e31c"
 dependencies = [
  "serde",
  "serde_json",
@@ -2560,7 +2560,7 @@ dependencies = [
 [[package]]
 name = "craft-vectorcraft-format"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=5c5e0d52c387c0a4ae2908a07e476d7584f60362#5c5e0d52c387c0a4ae2908a07e476d7584f60362"
+source = "git+https://github.com/storytold/craft-libs?rev=5c30761a86c2bb1814098139439be7c5b0a9e31c#5c30761a86c2bb1814098139439be7c5b0a9e31c"
 dependencies = [
  "flate2",
  "serde",
