@@ -58,3 +58,29 @@ fn without_a_path_the_slices_keep_the_document_name() {
     assert_eq!(files, ["footer.png", "template_01.png"], "{r}");
     assert_eq!(html, "template.html");
 }
+
+#[test]
+fn a_generated_name_never_takes_a_name_the_user_gave() {
+    // The unnamed slice comes first, and the base makes its name `audi_en_01`, the name the user
+    // gave the slice below it. The named slice keeps its file; the generated one moves aside.
+    let dir = tmp("reserved");
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "template.psd"})).unwrap();
+    s.execute("slice.new", json!({"rect": [0, 0, 64, 16]})).unwrap();
+    s.execute("slice.new", json!({"rect": [0, 16, 64, 32], "name": "audi_en_01"})).unwrap();
+    let p = json!({"path": format!("{dir}/audi_en.png"), "dir": dir, "slices": "all", "format": "png24", "html": true});
+    let r = s.execute("file.export.saveForWebLegacy", p).unwrap();
+    let (files, _) = names(&r);
+    assert_eq!(files.len(), 2, "{r}");
+    // A PNG's height sits at bytes 20..24 of its header.
+    let height = |name: &str| {
+        let bytes = std::fs::read(format!("{dir}/images/{name}")).unwrap();
+        u32::from_be_bytes(bytes[20..24].try_into().unwrap())
+    };
+    let generated = files.iter().find(|f| f.as_str() != "audi_en_01.png").expect("the generated slice's file");
+    assert_eq!(height("audi_en_01.png"), 32, "the named slice keeps its name: {files:?}");
+    assert_eq!(height(generated), 16, "{files:?}");
+    let page = std::fs::read_to_string(r["html"].as_str().unwrap()).unwrap();
+    assert!(page.contains("src=\"images/audi_en_01.png\" width=\"64\" height=\"32\""), "{page}");
+    assert!(page.contains(&format!("src=\"images/{generated}\" width=\"64\" height=\"16\"")), "{page}");
+}
