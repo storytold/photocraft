@@ -127,6 +127,9 @@ fn move_controls_only_offer_rotation_near_the_frame() {
     assert!(rotation_cursor_is_showing(&h));
     move_pointer(&mut h, false, "down", near);
     move_pointer(&mut h, false, "move", [42.0, 53.0]);
-    move_pointer(&mut h, false, "up", [42.0, 53.0]);
-    assert!(h.state().ui.transform.is_some(), "the rotation cursor has a matching press action");
+    move_pointer(&mut h, false, "move", [32.0, 61.0]);
+    move_pointer(&mut h, false, "up", [32.0, 61.0]);
+    let transform = h.state().ui.transform.as_ref().expect("the rotation cursor has a matching press action");
+    let [top_left, top_right, ..] = transform.quad_array();
+    assert!((top_right[1] - top_left[1]).abs() > 1.0, "the drag rotates the upper edge");
 }
