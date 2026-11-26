@@ -238,6 +238,26 @@ fn render_shape_formats_and_paint() {
 }
 
 #[test]
+fn native_cmyk_shape_drops_invisible_ink_in_alpha_free_output() {
+    let ink = [1.0, 0.0, 0.0, 0.0];
+    let canvas = Rect::new(0, 0, 20, 20);
+    let format = PixelFormat::new(ColorMode::Cmyk, SampleType::U8, false);
+    let mut shape = ShapeLayer {
+        path: shapes::rect(2.0, 2.0, 10.0, 10.0),
+        fill: Some(Fill::Solid(Color { mode: ColorMode::Cmyk, c: ink, alpha: 0.0 })),
+        ..Default::default()
+    };
+
+    let transparent = render_shape(&shape, format, canvas);
+    assert_eq!(transparent.pixel(7, 7), vec![0.0; 4]);
+    assert!(transparent.content_bounds().is_empty());
+
+    shape.fill = Some(Fill::Solid(Color { mode: ColorMode::Cmyk, c: ink, alpha: 1.0 }));
+    let opaque = render_shape(&shape, format, canvas);
+    assert_eq!(opaque.pixel(7, 7), ink);
+}
+
+#[test]
 fn gradient_fill_spans_bounds() {
     let sh = ShapeLayer {
         path: shapes::rect(0.0, 0.0, 100.0, 10.0),
