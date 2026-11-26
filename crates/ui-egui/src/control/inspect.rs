@@ -167,6 +167,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             "rect": task_bar_rect,
             "pinned": app.ui.panels.task_bar.pinned,
             "at": app.ui.panels.task_bar.at,
+            "offset": app.ui.panels.task_bar.offset,
         }),
         "dockTabs": legacy.get("dockTabs").cloned().unwrap_or(Value::Null),
         "docking": app.ui.docking,

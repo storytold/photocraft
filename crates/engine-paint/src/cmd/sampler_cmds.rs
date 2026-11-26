@@ -46,10 +46,25 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
 /// zoom never changes it. Bitmap and Multichannel documents were not measured, so they keep the
 /// Point Sample reading at every size.
 pub fn readout(doc: &Document, pos: [f64; 2], size: u32) -> ([i32; 3], [i32; 4]) {
-    let size = if matches!(doc.mode, photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Multichannel) { 1 } else { size };
-    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], size, crate::sample_cmds::SampleLayers::All);
+    use crate::sample_cmds::{SampleLayers, sample_cmyk_at, sample_color};
+    use photocraft_color::ColorMode;
+
+    let size = if matches!(doc.mode, ColorMode::Bitmap | ColorMode::Multichannel) { 1 } else { size };
+
+    let rgba = sample_color(doc, None, pos[0], pos[1], size, SampleLayers::All);
+
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]));
+
+    let cmyk = if doc.mode == ColorMode::Cmyk {
+        sample_cmyk_at(doc, None, pos[0], pos[1], size, None, SampleLayers::All)
+            .map(|inks| inks.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32))
+            .unwrap_or_else(|| {
+                photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]))
+            })
+    } else {
+        photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]))
+    };
+
     ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk)
 }
 

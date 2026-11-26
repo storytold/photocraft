@@ -81,8 +81,9 @@ impl PrefsCustom {
     }
 }
 
+// Every custom row and page writes the draft only: none has state of its own to report changed.
 impl CustomSettings<PrefPages> for PrefsCustom {
-    fn row(&mut self, ui: &mut egui::Ui, key: &str, draft: &mut SettingsDraft) {
+    fn row(&mut self, ui: &mut egui::Ui, key: &str, draft: &mut SettingsDraft) -> bool {
         match key {
             MEMORY_PERCENT => memory_percent_row(ui, draft),
             MEMORY_MB => self.memory_mb_row(ui, draft),
@@ -95,13 +96,15 @@ impl CustomSettings<PrefPages> for PrefsCustom {
             APPEARANCE_MODE => self.appearance_row(ui, draft),
             _ => {}
         }
+        false
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn page(&mut self, ui: &mut egui::Ui, page: &str, draft: &mut SettingsDraft) {
+    fn page(&mut self, ui: &mut egui::Ui, page: &str, draft: &mut SettingsDraft) -> bool {
         if page == AGENTS_PAGE {
             craft::automation::ui::agents::AgentsPage::new(AGENTS_PAGE, draft, &self.agent_status).mcp_flag(self.mcp_flag).show(ui);
         }
+        false
     }
 
     fn nested_open(&self) -> bool {

@@ -392,7 +392,8 @@ pub struct UiSetParams {
     /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
     /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
-    /// `shape.edit` names and units; colour comes from `tools.setColors`. frameShape (rectangle,
+    /// `shape.edit` names and units; colour comes from `tools.setColors`. useAlignedRendering
+    /// (boolean, the shape and Pen tools' Align Edges preference). frameShape (rectangle,
     /// ellipse, triangle, polygon or custom: the Frame tool's shape), frameSides (3..100, the
     /// polygon's sides), frameTarget (frame, content or both: what the selected frame's handles
     /// edit). camTransformOnDrop (bool,
@@ -1580,14 +1581,29 @@ mod tests {
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
         let session = session.clone();
+        // A call holds clones of the session until it returns. A waited start holds exactly three
+        // once its blocking closure is queued on `spawn_blocking` (from where it can only wait for
+        // the lock): `step`'s, `headless_wait`'s target, and `headless_op`'s, taken last, right
+        // before the closure is queued. The wait below matches that count exactly, so a call path
+        // that takes one more clone times out here instead of letting the test go on with only
+        // one start queued.
+        let idle = Arc::strong_count(&session);
+        let held = session.clone();
         let (locked, acquired) = std::sync::mpsc::channel();
         let (release, released) = std::sync::mpsc::channel();
         let holder = std::thread::spawn(move || {
-            let _held = session.lock().unwrap();
+            let _held = held.lock().unwrap();
             locked.send(()).unwrap();
             released.recv().unwrap();
         });
         acquired.recv().unwrap();
+        async fn until(what: &str, done: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !done() {
+                assert!(std::time::Instant::now() < deadline, "timed out waiting until {what}");
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
 
         let (mut input, server_in) = tokio::io::duplex(65536);
         let (server_out, output) = tokio::io::duplex(65536);
@@ -1606,7 +1622,8 @@ mod tests {
             )
             .await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The holder's clone, and three for each start.
+        until("both starts are queued", || Arc::strong_count(&session) == idle + 1 + 2 * 3).await;
         for id in [2, 3] {
             send(&mut input, json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}})).await;
         }
@@ -1619,8 +1636,9 @@ mod tests {
         }
         release.send(()).unwrap();
         holder.join().unwrap();
-        // Let both blocked starts acquire the mutex before inspecting their effects.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Both blocked starts took the lock and returned (their replies are dropped, as cancelled)
+        // before their effects are inspected.
+        until("both starts returned", || Arc::strong_count(&session) == idle).await;
         let (after, jobs) = mcp.headless_op(|h| Ok((h.inspect(None)?, h.session.jobs_with_recent()))).await.unwrap().unwrap();
         assert_eq!(after, before);
         assert!(jobs.is_empty(), "cancelled queued job started: {jobs:?}");

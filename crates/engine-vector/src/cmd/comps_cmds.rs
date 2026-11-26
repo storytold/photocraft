@@ -461,11 +461,20 @@ fn list(s: &mut Session) -> Result<Value> {
 }
 
 /// File › Export › Layer Comps to Files: one file per comp, named
-/// `<prefix>_<index>_<comp name>.<format>`.
+/// `<prefix>_<index>_<comp name>[_<comp comment>].<ext>`, as the reference application names them (#13940). The
+/// comment is added only when it is not blank. Spaces in the comp name and comment become `-` for PNG and stay for the
+/// other formats; both go through [`sanitize`]. TIFF is written as `.tif` and JPEG as `.jpg`.
 fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layerCompsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    let ext = match format.as_str() {
+        "tiff" => "tif",
+        "jpeg" => "jpg",
+        other => other,
+    };
+    // PNG file names use dashes for spaces (measured); the other formats keep them.
+    let part = |text: &str| if ext == "png" { sanitize(text).replace(' ', "-") } else { sanitize(text) };
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
@@ -484,7 +493,8 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         let mut one = (*doc).clone();
         apply_comp(&mut one, c, false);
         one.last_applied_comp = Some(c.id);
-        let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&c.name)));
+        let comment = if c.comment.trim().is_empty() { String::new() } else { part(&c.comment) };
+        let path = join(&dir, &comp_file_name(&sanitize(&prefix), i, &part(&c.name), &comment, ext));
         save_doc(&one, &path, save)?;
         files.push(path);
     }
@@ -495,6 +505,37 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         apply(s, id, "Apply Layer Comp")?;
     }
     Ok(json!({"files": files}))
+}
+
+/// The longest file name most file systems take: 255 bytes (and a name of at most 255 UTF-8 bytes
+/// is at most 255 UTF-16 units, Windows' limit).
+const MAX_FILE_NAME_BYTES: usize = 255;
+
+/// `<prefix>_<index>_<name>[_<comment>].<ext>`, at most [`MAX_FILE_NAME_BYTES`] long. A name that
+/// doesn't fit loses the end of its comment first (the whole comment, with its `_`, when none of it
+/// fits), then of the comp name, then of the prefix, and a part that is cut leaves out the parts
+/// after it; the index and extension always stay. Each cut falls between characters.
+fn comp_file_name(prefix: &str, index: usize, name: &str, comment: &str, ext: &str) -> String {
+    let index = format!("_{index:04}_");
+    let room = MAX_FILE_NAME_BYTES.saturating_sub(index.len() + 1 + ext.len());
+    // Once a part is cut, the parts after it are left out, even where a few bytes are still free.
+    let kept_prefix = clip_bytes(prefix, room);
+    let room = if kept_prefix.len() < prefix.len() { 0 } else { room - kept_prefix.len() };
+    let kept_name = clip_bytes(name, room);
+    let room = if kept_name.len() < name.len() { 0 } else { room - kept_name.len() };
+    let (prefix, name, comment) = (kept_prefix, kept_name, clip_bytes(comment, room.saturating_sub(1)));
+    let comment = if comment.is_empty() { String::new() } else { format!("_{comment}") };
+    format!("{prefix}{index}{name}{comment}.{ext}")
+}
+
+/// `text` when it fits in `max` bytes, else its longest start that does without splitting a
+/// character, with any spaces the cut leaves at its end trimmed.
+fn clip_bytes(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let end = text.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|&end| end <= max).last().unwrap_or(0);
+    text.get(..end).unwrap_or_default().trim_end()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -567,7 +608,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.layerCompsToFiles",
             "Layer Comps to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"selectedOnly":bool=false (only the last applied comp),"comps":[id]?,"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"selectedOnly":bool=false (only the last applied comp),"comps":[id]?,"quality":0..12?} → {files} (one "<prefix>_<index>_<comp name>[_<comment>].<ext>" per comp, the index 4 digits from 0000 in panel order and the comment only when not blank: spaces in the name and comment become "-" in PNG and stay in other formats, characters a file name can't hold become "_", and TIFF and JPEG are written as .tif and .jpg; a name past 255 bytes is cut from the end of the comment first, then of the comp name, then of the prefix, keeping the index and extension)"##,
             export_comps,
             comps_to_files
         ),
@@ -581,3 +622,7 @@ mod tests;
 #[cfg(test)]
 #[path = "comps_cmds/layer_comps_to_files_history_tests.rs"]
 mod layer_comps_to_files_history_tests;
+
+#[cfg(test)]
+#[path = "comps_cmds/layer_comps_to_files_names_tests.rs"]
+mod layer_comps_to_files_names_tests;
