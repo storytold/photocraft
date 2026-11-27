@@ -33,6 +33,7 @@ pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;
 pub mod file_dialog;
+mod file_info_ui;
 pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
@@ -1115,3 +1116,6 @@ mod clone_stamp_indexed_bar_tests;
 
 #[cfg(test)]
 mod place_visible_centre_tests;
+
+#[cfg(test)]
+mod file_info_categories_tests;

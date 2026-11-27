@@ -449,6 +449,7 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     discard_ui::take,
     open_prompt::take,
     credits::take,
+    crate::file_info_ui::take,
     adjust_dialog::take,
     layer_style::take,
     color_picker_ui::take,
@@ -600,6 +601,9 @@ pub(crate) fn cancel_for_closed(app: &mut PhotocraftApp, ctx: &egui::Context, cl
 /// Slice options and Divide, the adjustment editor for `image.adjustments.*`, the schema dialog for filters, otherwise a
 /// bare command form. The error is an opener's refusal text.
 pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> Result<DialogId, String> {
+    if command == crate::file_info_ui::COMMAND {
+        return crate::file_info_ui::open(app);
+    }
     if command == "view.newGuideLayout" {
         return guide_layout_ui::open(app).ok_or_else(|| "no document".to_string());
     }

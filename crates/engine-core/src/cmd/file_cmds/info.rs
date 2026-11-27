@@ -193,7 +193,7 @@ pub fn read_file_info(xmp: Option<&str>) -> Value {
 }
 
 /// File Info's read-only Camera Data, as (result key, English label) in display order.
-pub const CAMERA_FIELDS: [(&str, &str); 9] = [
+pub const CAMERA_FIELDS: [(&str, &str); 14] = [
     ("make", "Make"),
     ("model", "Model"),
     ("dateTaken", "Date Taken"),
@@ -203,6 +203,11 @@ pub const CAMERA_FIELDS: [(&str, &str); 9] = [
     ("focalLength", "Focal Length"),
     ("focalLength35mm", "Focal Length (35 mm)"),
     ("lens", "Lens"),
+    ("owner", "Owner"),
+    ("imageSize", "Image Size"),
+    ("orientation", "Orientation"),
+    ("resolution", "Resolution"),
+    ("flash", "Flash"),
 ];
 
 /// `v` with at most `decimals` decimals and no trailing zeros (33.10 → "33.1", 8.0 → "8").
@@ -307,6 +312,37 @@ pub fn camera_data(exif: Option<&[u8]>, xmp: Option<&str>) -> Value {
         // Hostile files can carry megabytes of "lens name"; the dialog shows a line.
         if let Some(v) = v.map(|v| v.chars().take(200).collect::<String>()).filter(|v| !v.is_empty()) {
             m.insert(key.into(), json!(v));
+        }
+    }
+    // Reuse the shared tag reader for the five fields the nine-field compatibility facade lacks.
+    let rows = exif.map(|bytes| photocraft_algo::exif::file_tag_rows(bytes.strip_prefix(b"Exif\0\0").unwrap_or(bytes))).unwrap_or_default();
+    let tag = |tags: &[(&str, u16)]| {
+        tags.iter().find_map(|(group, tag)| {
+            rows.iter().find(|row| row.group == *group && row.tag == *tag).map(|row| row.value.trim().to_string()).filter(|value| !value.is_empty())
+        })
+    };
+    let extra = |tags: &[(&str, u16)], properties: &[&str]| tag(tags).or_else(|| properties.iter().find_map(|property| xmp_value(x, property)));
+    let owner = extra(&[("EXIF", 0xa430)], &["exifEX:CameraOwnerName", "aux:OwnerName"]);
+    let width = extra(&[("EXIF", 0xa002), ("TIFF", 0x0100)], &["exif:PixelXDimension", "tiff:ImageWidth"]);
+    let height = extra(&[("EXIF", 0xa003), ("TIFF", 0x0101)], &["exif:PixelYDimension", "tiff:ImageLength"]);
+    let image_size = width.zip(height).map(|(width, height)| format!("{width} x {height}"));
+    let orientation = extra(&[("TIFF", 0x0112)], &["tiff:Orientation"]);
+    let x_resolution = extra(&[("TIFF", 0x011a)], &["tiff:XResolution"]);
+    let y_resolution = extra(&[("TIFF", 0x011b)], &["tiff:YResolution"]);
+    let unit = extra(&[("TIFF", 0x0128)], &["tiff:ResolutionUnit"]);
+    let resolution = match (x_resolution, y_resolution) {
+        (Some(x), Some(y)) => Some(format!("{x} x {y}")),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+    .map(|value| match unit {
+        Some(unit) => format!("{value} / {unit}"),
+        None => value,
+    });
+    let flash = extra(&[("EXIF", 0x9209)], &["exif:Flash", "exif:Fired"]);
+    for (key, value) in [("owner", owner), ("imageSize", image_size), ("orientation", orientation), ("resolution", resolution), ("flash", flash)] {
+        if let Some(value) = value.map(|value| value.chars().take(200).collect::<String>()).filter(|value| !value.is_empty()) {
+            m.insert(key.into(), json!(value));
         }
     }
     Value::Object(m)

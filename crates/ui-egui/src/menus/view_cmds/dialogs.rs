@@ -19,10 +19,9 @@ pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
 /// The command ids whose dialog is a hosted parameter form built by [`params_for`] (Open EXR Parts included).
 /// The dialogs area's `PARAM_FAMILIES` row owns exactly these.
-const FORM_COMMANDS: [&str; 21] = [
+const FORM_COMMANDS: [&str; 20] = [
     "file.openExrParts",
     "layer.videoLayers.interpretFootage",
-    "file.fileInfo",
     "file.automate.fitImage",
     "file.automate.conditionalModeChange",
     "file.export.layersToFiles",
@@ -281,7 +280,6 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             let fps = st.doc.layer(layer).and_then(|l| l.video.as_ref()).map_or(30.0, |v| f64::from(v.fps));
             plain(vec![Param::new("fps", tl!("Frame Rate"), ParamKind::number(Some(0.01), Some(1000.0), fps, 1.0, 2))])
         }
-        "file.fileInfo" => file_info_form(app),
         "file.automate.fitImage" => {
             let (w, h, _) = doc?;
             // The values Fit Image last ran with, else the document's size (#13853). A stored value that isn't a
@@ -507,50 +505,6 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
     }
 }
 
-/// File › File Info…: the document's metadata in Photoshop's order and labels, then its read-only Camera Data.
-fn file_info_form(app: &mut PhotocraftApp) -> Option<(Vec<Param>, DialogFields)> {
-    let info = app.session.execute("file.fileInfo", json!({})).ok()?;
-    let text = |key: &str| info[key].as_str().unwrap_or_default().to_owned();
-    let keywords = info["keywords"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default();
-    let mut rows = vec![
-        Param::new("title", tl!("Document Title"), ParamKind::text("")),
-        Param::new("author", tl!("Author"), ParamKind::text("")),
-        Param::new("authorTitle", tl!("Author Title"), ParamKind::text("")),
-        Param::new("description", tl!("Description"), ParamKind::text("")).multiline(3),
-        Param::new("keywords", tl!("Keywords"), ParamKind::text("")).multiline(3),
-        choice(
-            "copyrightStatus",
-            tl!("Copyright Status"),
-            opts(&[("unknown", tl!("Unknown")), ("copyrighted", tl!("Copyrighted")), ("publicDomain", tl!("Public Domain"))]),
-            "unknown",
-        ),
-        Param::new("copyright", tl!("Copyright Notice"), ParamKind::text("")).multiline(3),
-        Param::new("copyrightUrl", tl!("Copyright Info URL"), ParamKind::text("")),
-    ];
-    let camera: Vec<(&'static str, String)> = photocraft_engine::file_cmds::CAMERA_FIELDS
-        .iter()
-        .filter_map(|(key, label)| info["camera"].get(*key).and_then(Value::as_str).map(|v| (*label, v.to_owned())))
-        .collect();
-    if !camera.is_empty() {
-        rows.push(Param::section(tl!("Camera Data")));
-        let lang = crate::i18n::current();
-        for (label, value) in camera {
-            rows.push(Param::read_only_text(format!("camera/{label}"), crate::i18n::tr_ctx(lang, "cameraData", label), value));
-        }
-    }
-    let status = info["copyrightStatus"].as_str().unwrap_or("unknown").to_owned();
-    let fields = DialogFields::from_pairs([
-        ("title", text("title")),
-        ("author", text("author")),
-        ("authorTitle", text("authorTitle")),
-        ("description", text("description")),
-        ("keywords", keywords),
-        ("copyrightStatus", status),
-        ("copyright", text("copyright")),
-        ("copyrightUrl", text("copyrightUrl")),
-    ]);
-    Some((rows, fields))
-}
 
 /// File › Automate › Batch…: the selected action and its set, and where the files come from and go.
 fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogFields)> {
@@ -826,6 +780,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     }
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
     match id {
+        "file.fileInfo" => Some(crate::file_info_ui::open(app).map(opened)),
         "file.openAs" => Some(app.open_dialog_file()),
         "file.openAsSmartObject" => Some(app.open_dialog_as_smart_object()),
         "file.saveACopy" => Some(save_a_copy(app)),
