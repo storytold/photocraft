@@ -125,5 +125,5 @@ winresource = "0.1"
 
 [dev-dependencies]
 # Opt-in native save-back acceptance transports embedded sources through engine JSON.
-base64 = "=0.22.1"
+base64 = "=0.23.1"
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
