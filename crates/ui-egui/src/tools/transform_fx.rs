@@ -22,6 +22,8 @@ use photocraft_compose::effects::{self, TextureCtx};
 use photocraft_doc::{Document, Effect, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::PhotocraftApp;
 
@@ -64,6 +66,8 @@ pub struct LayerStyleSource<'a> {
     doc: &'a Document,
     /// The preview document, with the moving layer hidden and the covering layers removed.
     preview: &'a Document,
+    backdrop_cache: Option<Arc<Mutex<BackdropCache>>>,
+    preview_revision: u64,
     /// The moving layer as it is now: its style, opacity, fill and Advanced Blending, so edits
     /// made while the box is open show.
     layer: &'a Layer,
@@ -82,7 +86,14 @@ impl<'a> LayerStyleSource<'a> {
             .doc
             .layer(LayerId(t.layer))
             .filter(|l| l.visible && (effects::has_effects(l) || !matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough)))?;
-        Some(Self { doc: &st.doc, preview: &pv.doc, layer, revision: revision_of(st.revision, layer) })
+        Some(Self {
+            doc: &st.doc,
+            preview: &pv.doc,
+            backdrop_cache: Some(Arc::clone(&pv.backdrop_cache)),
+            preview_revision: st.revision,
+            layer,
+            revision: revision_of(st.revision, layer),
+        })
     }
 }
 
@@ -109,7 +120,7 @@ impl StyledSource for LayerStyleSource<'_> {
 
     fn compose(&self, plan: &StylePlan, content: &StyledContent) -> Option<ColorImage> {
         let work = work_layer(self.layer, plan.scale);
-        compose(self.preview, self.doc, &work, plan, content).map(|buf| image(&buf))
+        compose(self.preview, self.doc, &work, plan, content, self.backdrop_cache.as_ref(), self.preview_revision).map(|buf| image(&buf))
     }
 }
 
@@ -121,7 +132,15 @@ fn rect(r: PixelRect) -> Rect {
 /// Composite the resampled `content` with `work`'s style and blend mode over `plan.shown`.
 /// `preview` supplies the layers below the moving layer; `doc` gives global light and patterns.
 /// `None` when `content` does not fill its rectangle.
-fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, content: &StyledContent) -> Option<Buffer> {
+fn compose(
+    preview: &Document,
+    doc: &Document,
+    work: &Layer,
+    plan: &StylePlan,
+    content: &StyledContent,
+    backdrop_cache: Option<&Arc<Mutex<BackdropCache>>>,
+    preview_revision: u64,
+) -> Option<Buffer> {
     let content_rect = rect(content.rect);
     if content.texels.len() != content_rect.width() as usize * content_rect.height() as usize {
         return None;
@@ -140,7 +159,8 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
         let blended = !matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough);
-        let mut over = if !blended { Buffer::transparent(band) } else { scaled_backdrop(preview, band, plan.scale) };
+        let mut over =
+            if !blended { Buffer::transparent(band) } else { scaled_backdrop_with_cache(preview, band, plan.scale, backdrop_cache, preview_revision) };
         let backdrop = blended.then(|| over.clone());
         effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns);
         if let Some(backdrop) = backdrop.as_ref() {
@@ -159,7 +179,17 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
 /// Render the stationary document in document coordinates, then map it into the work-pixel
 /// coordinates used by the styled preview. Rendering `shown` directly would sample the wrong
 /// document pixels whenever the style budget lowers `plan.scale` below one.
-fn scaled_backdrop(doc: &Document, shown: Rect, scale: f64) -> Buffer {
+/// A small LRU-like tile cache shared by one open transform. It is deliberately bounded: moving
+/// the box can visit many tiles, but retaining a handful is enough to avoid re-rendering the
+/// stationary backdrop on every geometry update without growing with document size.
+#[derive(Default)]
+pub(crate) struct BackdropCache {
+    revision: u64,
+    scale: u64,
+    tiles: HashMap<Rect, Buffer>,
+}
+
+fn scaled_backdrop_with_cache(doc: &Document, shown: Rect, scale: f64, cache: Option<&Arc<Mutex<BackdropCache>>>, revision: u64) -> Buffer {
     const TILE_WIDTH: i32 = 128;
     const TILE_HEIGHT: i32 = 64;
     let mut out = Buffer::transparent(shown);
@@ -169,7 +199,29 @@ fn scaled_backdrop(doc: &Document, shown: Rect, scale: f64) -> Buffer {
         let mut x = shown.x0;
         while x < shown.x1 {
             let tile = Rect::new(x, y, x.saturating_add(TILE_WIDTH).min(shown.x1), y1);
-            let part = scaled_backdrop_tile(doc, tile, scale);
+            let part = if let Some(cache) = cache {
+                let mut cache = cache.lock().expect("backdrop cache lock");
+                let scale_key = scale.to_bits();
+                if cache.revision != revision || cache.scale != scale_key {
+                    cache.revision = revision;
+                    cache.scale = scale_key;
+                    cache.tiles.clear();
+                }
+                if let Some(part) = cache.tiles.get(&tile) {
+                    part.clone()
+                } else {
+                    let part = scaled_backdrop_tile(doc, tile, scale);
+                    if cache.tiles.len() >= 32 {
+                        if let Some(key) = cache.tiles.keys().next().copied() {
+                            cache.tiles.remove(&key);
+                        }
+                    }
+                    cache.tiles.insert(tile, part.clone());
+                    part
+                }
+            } else {
+                scaled_backdrop_tile(doc, tile, scale)
+            };
             copy_into(&mut out, &part);
             x = tile.x1;
         }
@@ -402,7 +454,7 @@ mod tests {
     fn composite(layer: &Layer, w: usize, h: usize, quad: [Point; 4], zoom: f32) -> (ColorImage, StylePlan) {
         let texels = ColorImage::new([w, h], vec![BLUE; w * h]);
         let doc = doc();
-        let source = LayerStyleSource { doc: &doc, preview: &doc, layer, revision: 0 };
+        let source = LayerStyleSource { doc: &doc, preview: &doc, backdrop_cache: None, preview_revision: 0, layer, revision: 0 };
         let (plan, content) = planned(&source, &texels, quad, zoom);
         (source.compose(&plan, &content).expect("composited"), plan)
     }
@@ -432,7 +484,7 @@ mod tests {
         );
         let mut layer = Layer::raster("screen", PixelFormat::RGBA8);
         layer.blend = BlendMode::Screen;
-        let source = LayerStyleSource { doc: &doc, preview: &doc, layer: &layer, revision: 0 };
+        let source = LayerStyleSource { doc: &doc, preview: &doc, backdrop_cache: None, preview_revision: 0, layer: &layer, revision: 0 };
         let texels = ColorImage::new([20, 20], vec![Color32::BLACK; 400]);
         let (plan, content) = planned(&source, &texels, rect_quad([60.0, 60.0, 140.0, 140.0]), 1.0);
         let out = source.compose(&plan, &content).expect("composited");
@@ -448,7 +500,7 @@ mod tests {
         backdrop.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 100, 200), &photocraft_raster::from_rgba(&PixelFormat::RGBA8, [1.0, 0.0, 0.0, 1.0]));
         backdrop.surface_mut().unwrap().fill_rect(Rect::new(100, 0, 200, 200), &photocraft_raster::from_rgba(&PixelFormat::RGBA8, [0.0, 0.0, 1.0, 1.0]));
         doc.layers.push(backdrop);
-        let out = scaled_backdrop(&doc, Rect::new(0, 0, 100, 100), 0.5);
+        let out = scaled_backdrop_with_cache(&doc, Rect::new(0, 0, 100, 100), 0.5, None, 0);
         assert!(is(
             Color32::from_rgba_premultiplied(
                 (out.px[25 * 100 + 25][0] * 255.0) as u8,
@@ -506,7 +558,7 @@ mod tests {
         let quad = [Point::new(40.0, 20.0), Point::new(150.0, 40.0), Point::new(130.0, 180.0), Point::new(20.0, 150.0)];
         let texels = ColorImage::new([30, 40], (0..1200).map(|i| if i % 7 == 0 { Color32::TRANSPARENT } else { BLUE }).collect());
         let doc = doc();
-        let source = LayerStyleSource { doc: &doc, preview: &doc, layer: &l, revision: 0 };
+        let source = LayerStyleSource { doc: &doc, preview: &doc, backdrop_cache: None, preview_revision: 0, layer: &l, revision: 0 };
         let (plan, content) = planned(&source, &texels, quad, 1.0);
         assert!(plan.shown.height() as usize > 2 * BAND_ROWS, "{:?}", plan.shown);
         let banded = source.compose(&plan, &content).expect("composited");
