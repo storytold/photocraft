@@ -1,8 +1,9 @@
 //! #12537: when the Paint Bucket can't fill (a hidden target layer, Lock All or Lock Image Pixels,
 //! a group active), a click opens the reference application's alert with OK and fills nothing: no
 //! History step, the target layer stays selected. Lock transparent pixels and Lock position still
-//! fill; a pixel layer inside a group fills normally; a group's targeted layer mask stays
-//! unrefused as today. The Brush's alerts (Lock all only) and the other tools stay as they are.
+//! fill; a pixel layer inside a group fills normally; a group's targeted layer mask is not refused
+//! and takes today's step-without-fill. The Brush's alerts (Lock all only) and the other tools
+//! stay as they are.
 
 use egui::Modifiers;
 use serde_json::json;
@@ -22,6 +23,12 @@ fn click(app: &mut PhotocraftApp) {
 fn pixel(app: &PhotocraftApp) -> Option<[f32; 4]> {
     let st = app.session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap())?.surface().map(|s| s.rgba(30, 30))
+}
+
+/// A named layer's pixel at the click point - the byte check when the active layer is a group.
+fn child_rgba(app: &PhotocraftApp, id: photocraft_doc::LayerId) -> [f32; 4] {
+    let st = app.session.active().unwrap();
+    st.doc.layer(id).and_then(|l| l.surface()).map(|s| s.rgba(30, 30)).unwrap_or([0.0; 4])
 }
 
 /// The click opens one alert with `want` and changes nothing: the same pixels, no History step, the
@@ -63,24 +70,39 @@ fn lock_all_and_lock_image_pixels() {
 
 #[test]
 fn a_group_is_active() {
+    // The group holds the painted child layer, so its pixels are the byte check: a group has no
+    // surface of its own and the group's own check would be vacuous.
     let mut app = app(Tool::PaintBucket);
-    app.run("layer.new.group", json!({})).unwrap();
+    let child = app.session.active().unwrap().active_layer.unwrap();
+    let red = child_rgba(&app, child);
+    assert!(red[0] > 0.8 && red[3] > 0.99, "the child starts painted red: {red:?}");
+    app.run("layer.groupLayers", json!({})).unwrap();
     // Once, with the measured wording: `press_refused` answers before `refuse_group` can add its
     // own alert.
     refused(&mut app, "Could not use the paint bucket because the pixels in a group cannot be edited without merging the group.");
+    assert_eq!(child_rgba(&app, child), red, "the child layer's pixels inside the group stay as they were");
 }
 
 #[test]
 fn a_group_inside_a_group_is_refused_once() {
-    // Neighbour (pattern 3): a group holding another group has no pixels of its own either. The
-    // active inner group still gets exactly one alert, in the measured words, and nothing changes.
+    // Neighbour (pattern 3): the active inner group sits inside the outer group, which holds a
+    // painted child; neither group has pixels of its own at the click, so the byte check is the
+    // child's.
     let mut app = app(Tool::PaintBucket);
     app.run("layer.new.group", json!({})).unwrap();
     app.run("layer.new.group", json!({})).unwrap();
+    let inner = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let child = app.session.active().unwrap().active_layer.unwrap();
+    app.run("edit.fill", json!({"color": "#dc1e1e"})).unwrap();
+    app.run("layer.select", json!({"layer": inner.0})).unwrap();
     let st = app.session.active().unwrap();
     let path = st.doc.path_of(st.active_layer.unwrap()).unwrap();
-    assert_eq!(path.len(), 2, "the active group sits inside the first group: {path:?}");
+    assert_eq!(path.len(), 2, "the active group sits inside the outer group: {path:?}");
+    let red = child_rgba(&app, child);
+    assert!(red[0] > 0.8 && red[3] > 0.99, "the child inside the groups starts painted red: {red:?}");
     refused(&mut app, "Could not use the paint bucket because the pixels in a group cannot be edited without merging the group.");
+    assert_eq!(child_rgba(&app, child), red, "the child layer's pixels inside the groups stay as they were");
 }
 
 #[test]
@@ -162,10 +184,12 @@ fn a_pixel_layer_inside_a_group_fills_normally() {
 }
 
 #[test]
-fn a_group_s_targeted_mask_is_not_refused() {
+fn a_group_s_targeted_mask_takes_a_step_that_fills_nothing() {
     // Not measured: keeps today's behaviour as a whole. Measured on `main` before and after this
     // change: the click opens no alert (the alert path only speaks for pixel targets), the engine
-    // adds its one "Paint Bucket" state, and the mask's own samples stay as they are.
+    // adds one "Paint Bucket" state, and its command answers `filled: true` while leaving the
+    // all-white mask's samples as they are - all pinned here, so the name says exactly what today
+    // is: a step, and no fill.
     let mut app = app(Tool::PaintBucket);
     app.run("layer.new.group", json!({})).unwrap();
     app.run("layer.layerMask.revealAll", json!({})).unwrap();
@@ -176,9 +200,14 @@ fn a_group_s_targeted_mask_is_not_refused() {
     click(&mut app);
     assert!(alerts(&app).is_empty(), "no refusal alert on a mask target: {:?}", alerts(&app));
     assert_eq!(steps(&app), before + 1, "the engine's own step lands as today");
+    let labels = app.run("document.inspect", json!({})).unwrap()["history"].as_array().cloned().unwrap_or_default();
+    assert_eq!(labels.last(), Some(&json!("Paint Bucket")), "the step the click added carries the engine's own label");
+    // The command's own answer, pinned once through the engine: it claims a fill and writes nothing.
+    let reply = app.run("paint.bucket", json!({"x": 30, "y": 30, "target": "mask"})).unwrap();
+    assert_eq!(reply["filled"], json!(true), "the engine reports filled: true, as on main");
+    assert_eq!(steps(&app), before + 2, "and that call adds its step too");
     let st = app.session.active().unwrap();
-    let group = st.doc.layer(st.active_layer.unwrap()).unwrap();
-    let mask = group.mask.as_ref().unwrap();
+    let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
     for (x, y) in [(30, 30), (2, 2), (61, 61)] {
         assert_eq!(mask.surface.sample_channel(x, y, 0), 1.0, "the mask samples stay white at ({x}, {y}) as on main");
     }
