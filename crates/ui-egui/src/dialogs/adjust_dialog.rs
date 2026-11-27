@@ -878,7 +878,7 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
         if let Ok(mut shared) = open.setup.lock() {
             *shared = setup;
         }
-        (open.mode, open.target, open.unresolved, open.picker_base, open.picked) = (seeded.mode, seeded.target, false, None, None);
+        (open.mode, open.target, open.unresolved, open.picker_base, open.picked, open.curve_drag) = (seeded.mode, seeded.target, false, None, None, None);
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id) {
             dialog.seed(DialogValue { value: seeded.value, cx: seeded.cx });
         }
@@ -899,7 +899,7 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
         shown.cx = value_cx(smart_mode, target.channel.clone(), shown.cx.base.clone());
         dialog.seed(shown);
     }
-    (open.mode, open.target, open.picker_base, open.picked) = (smart_mode, target, None, None);
+    (open.mode, open.target, open.picker_base, open.picked, open.curve_drag) = (smart_mode, target, None, None, None);
 }
 
 /// What OK on the open dialog runs, `(command, its params, the dialog's params)`: the adjustment command on the dialog's

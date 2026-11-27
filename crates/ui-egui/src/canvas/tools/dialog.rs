@@ -151,6 +151,9 @@ impl CanvasTool for DialogTool<'_> {
             if let Some(drag) = state.phase.take() {
                 pattern_fill_ui::release(app, drag, at);
             }
+            if let (DialogPick::CurvesPoint, Some(start)) = (pick, state.press) {
+                canvas_input::drag_curve_point(app, [at[0] - start[0], at[1] - start[1]]);
+            }
             canvas_input::release(app, pick);
         });
         self.state.press = None;
