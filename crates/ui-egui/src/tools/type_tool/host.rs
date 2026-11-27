@@ -15,12 +15,22 @@ use super::{Affine, Arc, PhotocraftApp, TextLayout, byte_of, insertion_style, te
 pub(crate) struct LayerHost<'a> {
     app: &'a mut PhotocraftApp,
     layer: LayerId,
+    /// Whether `selection_quads` gives the selection's highlight (false: none, the selection stays).
+    highlight: bool,
 }
 
 impl<'a> LayerHost<'a> {
     /// The host of `layer` in the active document.
     pub(crate) fn new(app: &'a mut PhotocraftApp, layer: LayerId) -> Self {
-        Self { app, layer }
+        Self { app, layer, highlight: true }
+    }
+
+    /// The host the canvas editor draws `layer` through. While the text Color Picker is open on the layer, the
+    /// selection has no highlight, so the colour it previews shows on the selected characters against the image; OK
+    /// or Cancel brings the highlight back (#16649).
+    pub(crate) fn for_editor(app: &'a mut PhotocraftApp, layer: LayerId) -> Self {
+        let highlight = !crate::color_picker_preview::recolouring_text(app, layer);
+        Self { app, layer, highlight }
     }
 
     fn laid_out(&mut self) -> Option<Laid> {
@@ -89,6 +99,9 @@ impl TextEditorHost for LayerHost<'_> {
     }
 
     fn selection_quads(&mut self, range: Range<usize>) -> Vec<[Point; 4]> {
+        if !self.highlight {
+            return Vec::new();
+        }
         let Some(g) = self.laid_out() else { return Vec::new() };
         let (a, b) = (byte_of(&g.text, range.start), byte_of(&g.text, range.end));
         let mut out = Vec::new();

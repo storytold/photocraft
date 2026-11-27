@@ -202,8 +202,12 @@ fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &craft::behavior::Ca
         (prefs.smart_quotes, prefs.use_esc_to_commit)
     };
     let mask = app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask);
+    // Under a dialog the canvas takes only the view navigation and the dialog's own gestures, such as the Color
+    // Picker's click that samples the image: such a press is the dialog's, not a press off the text that ends the
+    // edit (#16649).
+    let under_dialog = app.dialog_open();
     let out = {
-        let mut host = LayerHost::new(app, id);
+        let mut host = LayerHost::for_editor(app, id);
         let mut editor = TextEditor::new(Label::from(&*tl!("Type editor")), &mut host, Bind::bound(&mut selection))
             // A Type Mask commits on Escape whatever "Use ESC to commit" says; the options bar's Cancel still throws it away (#12070).
             .esc_commits(mask || esc_commits)
@@ -237,6 +241,7 @@ fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &craft::behavior::Ca
     // ends on Escape too. Every other end of the gesture (the frame drag's `cancel_all`, an undo, a removed editor)
     // leaves the text.
     match out.ended {
+        Some(EditorEnd::Commit) if under_dialog && background_press => {}
         // A Type Mask replaces the selection with ⇧ or ⌥ on the press that commits (#12073).
         Some(EditorEnd::Commit) => {
             if background_press {

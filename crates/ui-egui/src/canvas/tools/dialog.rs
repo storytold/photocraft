@@ -7,7 +7,7 @@
 use craft::behavior::cursor::{Cursor, PaintedCursor};
 use craft::behavior::value::CancelReason;
 use craft::keymap::Mods;
-use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer, ToolRegion};
 use craft::ui::primitives::Draw;
 
 use super::{FamilyTool, ToolScope};
@@ -155,6 +155,15 @@ impl CanvasTool for DialogTool<'_> {
 
     fn view_only(&self) -> bool {
         false
+    }
+
+    /// The canvas as its last pass showed it, over every canvas control: under the dialog each press on the image is its
+    /// pick's, also on an open type edit's text or move reach, which would otherwise take the click that samples
+    /// (#16649). It ends at the canvas's edges, so it never reaches over the windows beside it.
+    fn regions(&self) -> Vec<ToolRegion> {
+        let Some(view) = self.scope.with_app(|app| crate::canvas::document_display::active_view(app)) else { return Vec::new() };
+        let r = view.rect;
+        vec![ToolRegion::polygon([r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| view.to_doc(p)).to_vec())]
     }
 
     /// The drags that move content (the pattern's phase, a shadow's offset, a gradient's offset) follow every move from
