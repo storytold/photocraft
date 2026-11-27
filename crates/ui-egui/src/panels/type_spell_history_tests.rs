@@ -8,6 +8,7 @@ use craft::ui::dialog::StackDialog as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId};
+use photocraft_engine::actions_cmds::ActionsExt as _;
 use serde_json::json;
 
 use super::*;
@@ -162,7 +163,7 @@ fn recording_a_run_records_one_step_and_one_spell_check_state() {
     press(&mut h, "Done");
     let app = h.state_mut();
     app.run("actions.stop", json!({})).unwrap();
-    let action = app.session.actions.list.action(0).unwrap();
+    let action = app.session.actions().list.action(0).unwrap();
     assert_eq!(action.steps, vec![ActionStep::new("edit.checkSpelling", json!({"allLayers": true}))], "no coalesce key in the step");
     assert_eq!(action.dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     assert_eq!(rows(app)[before..], ["Spell Check"]);
