@@ -304,7 +304,7 @@ use tools::type_transform;
 pub use tools::vector_ui;
 
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
-type InfoSampleKey = (i32, i32, u64, u32, u32);
+type InfoSampleKey = (DocId, i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -613,6 +613,7 @@ pub struct PhotocraftApp {
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
+    info_cmyk_sample: Option<(InfoSampleKey, Option<[f32; 4]>)>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
     /// Pen paths finished, which Undo back to their finish gives back to the Pen
@@ -730,21 +731,31 @@ struct InputTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod artboards_to_files_background_tests;
+#[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod burn_bar_angle_pressure_tests;
+#[cfg(test)]
 mod cam_no_pixels_alert_tests;
+#[cfg(test)]
+mod dodge_bar_angle_pressure_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;
+#[cfg(test)]
+mod patch_rasterize_prompt_tests;
 #[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod paths_scroll_tests;
 #[cfg(test)]
 mod pencil_pressure_toggles_tests;
+#[cfg(test)]
+mod smudge_alt_finger_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
@@ -828,6 +839,8 @@ pub(crate) mod testing {
 mod navigator_gpu_tests;
 
 #[cfg(test)]
+mod color_picker_drag_tests;
+#[cfg(test)]
 mod color_swatch_tests;
 #[cfg(test)]
 mod dialog_title_ellipsis_tests;
@@ -889,6 +902,8 @@ mod layer_props_ui_tests;
 #[cfg(test)]
 mod notice_text_tests;
 #[cfg(test)]
+mod transform_rotate90_bounds_tests;
+#[cfg(test)]
 mod transform_switch_tests;
 #[cfg(test)]
 mod transform_task_bar_tests;
@@ -903,6 +918,9 @@ mod star_tool_tests;
 
 #[cfg(test)]
 mod new_doc_bitmap_mode_tests;
+
+#[cfg(test)]
+mod new_doc_recent_items_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
@@ -921,6 +939,8 @@ mod move_shift_click_tests;
 #[cfg(test)]
 mod move_target_default_tests;
 
+#[cfg(test)]
+mod paint_bucket_pasteboard_color_tests;
 #[cfg(test)]
 mod wand_press_inside_selection_tests;
 

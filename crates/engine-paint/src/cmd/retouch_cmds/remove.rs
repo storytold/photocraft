@@ -12,7 +12,9 @@
 //! off, where the strokes collect and are applied together, so the fill sees every hole at once
 //! instead of sampling from an area the next stroke is about to remove. With `newLayer` the fill
 //! lands on a new layer above the target, only where the hole is, and the target stays as it was
-//! (Photoshop's *Create a new layer*; with Sample All Layers it fills from the composite).
+//! (Photoshop's *Create a new layer*; with Sample All Layers it fills from the composite). A Smart
+//! Object layer is never painted into: its fill goes to a new layer above it, with the option on or
+//! off, and the smart object keeps its content (#12555).
 
 use super::content_aware_move::{Target, replace};
 use super::patch::coverage;
@@ -20,7 +22,7 @@ use super::{
     Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleLayers, Session, Stroke, Surface, Value, alpha_index, bad, clamp_samples,
     composite_region, damage_json, flag, json, parse_brush, reject_huge_stroke, targets_pixels,
 };
-use photocraft_doc::Layer;
+use photocraft_doc::{Layer, LayerContent};
 
 const CMD: &str = "paint.remove";
 
@@ -60,6 +62,25 @@ struct Plan {
     all_layers: bool,
     /// The fill goes to a new layer above the target instead of into it.
     new_layer: bool,
+    /// The target is a Smart Object with pixels to sample: its own content is only read, so
+    /// `new_layer` is on whatever the options bar says (#12555).
+    smart: bool,
+}
+
+/// The layer the stroke addresses, when it is a Smart Object whose rendered pixels can be sampled.
+/// A Smart Object has no writable surface, so this is also what lets the command past the shared
+/// "needs a pixel layer" precondition (#12555).
+fn smart_object(doc: &Document, id: Option<LayerId>) -> bool {
+    id.and_then(|id| doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Smart(_)) && l.surface().is_some())
+}
+
+/// `paint.remove` runs where a stroke can go: the shared pixel-layer check, plus a Smart Object
+/// layer, whose fill lands on a new layer above it (#12555).
+pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
+    match s.active() {
+        Some(d) if smart_object(&d.doc, d.active_layer) => Ok(()),
+        _ => super::has_pixel_layer(s),
+    }
 }
 
 /// The stroke's bounding box (points ± the brush radius), before any coverage is rendered.
@@ -132,9 +153,11 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
     let window = area.inflate(sampling_margin(area).min(MAX_MARGIN)).intersect(&canvas);
     let close_loops = flag(p, "closeLoops", true);
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
-    // A mask or channel has no "above": the fill goes where the stroke went.
-    let new_layer = flag(p, "newLayer", false) && targets_pixels(p);
-    Ok(Plan { id, strokes, window, close_loops, all_layers, new_layer })
+    // A mask or channel has no "above": the fill goes where the stroke went. A Smart Object is never
+    // painted into, so its fill goes to a new layer above it whatever the option says (#12555).
+    let smart = targets_pixels(p) && smart_object(&d.doc, id);
+    let new_layer = (flag(p, "newLayer", false) || smart) && targets_pixels(p);
+    Ok(Plan { id, strokes, window, close_loops, all_layers, new_layer, smart })
 }
 
 /// The hole over the plan's window: the strokes' footprints, their enclosed areas and a margin,
@@ -181,7 +204,18 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
     ctx.check()?;
     let win = plan.window;
     let (img, fmt) = {
-        let (surf, _) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
+        // The sample comes from the layer the stroke addresses. A Smart Object has no writable
+        // surface, so its rendered pixels are read instead; the locks that keep a stroke off a
+        // Smart Object are the ones that keep it off a pixel layer (#12555).
+        let surf = if plan.smart {
+            if let Some(id) = plan.id {
+                crate::commands::check_pixels_unlocked(doc, id)?;
+            }
+            crate::channel_cmds::read_target_surface(doc, plan.id, p)?
+        } else {
+            let (surf, _) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
+            surf
+        };
         let fmt = surf.format();
         let img = if plan.all_layers { composite_region(doc, None, SampleLayers::All, win, fmt) } else { Region::read(surf, win) };
         (img, fmt)
@@ -243,6 +277,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let p = p.clone();
     let id = plan.id;
     let new_layer = plan.new_layer;
+    let smart = plan.smart;
     crate::jobs::run(
         s,
         label,
@@ -264,7 +299,15 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(r)
                 })?;
                 s.hint_damage(damage);
-                return Ok(json!({ "damage": damage_json(damage), "layer": nid.0 }));
+                // The caller runs this as a job, so the result is the only place the interface can
+                // learn what landed: `smartObject` says the new layer holds a Smart Object's edits
+                // and the smart object itself was left alone (#12555).
+                let edits = if smart {
+                    json!({ "damage": damage_json(damage), "layer": nid.0, "smartObject": true })
+                } else {
+                    json!({ "damage": damage_json(damage), "layer": nid.0 })
+                };
+                return Ok(edits);
             }
             let damage = s.edit(HISTORY, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
             s.hint_damage(damage);
@@ -276,3 +319,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "remove_new_layer_name_tests.rs"]
 mod remove_new_layer_name_tests;
+
+#[cfg(test)]
+#[path = "remove_smart_object_tests.rs"]
+mod remove_smart_object_tests;
