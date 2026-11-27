@@ -65,9 +65,9 @@ sys-locale = "=0.3.2"
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`) and the user's decimal
 # symbol (`i18n::decimal_separator`, a registry read): the safe binding the desktop app already
-# uses, pinned to the same version.
+# uses, pinned to the same version. `user`: whether Shift and Alt are down (`preset_panels::shift_alt_down`).
 [target.'cfg(target_os = "windows")'.dependencies]
-winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "advapi"] }
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "advapi", "user"] }
 
 [dev-dependencies]
 photocraft-io = { workspace = true, features = ["testgen"] }

@@ -108,7 +108,10 @@ pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Contex
         }
         let egui::Event::Key { key, pressed, modifiers: m, .. } = event else { return true };
         typed_by_used_key = false;
-        let mods = craft::keymap::Mods { cmd: m.mac_cmd, ctrl: m.ctrl, alt: m.alt, shift: m.shift };
+        let mut mods = craft::keymap::Mods { cmd: m.mac_cmd, ctrl: m.ctrl, alt: m.alt, shift: m.shift };
+        if !(mods.shift && mods.alt) && shift_alt_down() {
+            (mods.shift, mods.alt) = (true, true);
+        }
         if let Some(change) = TransformKey::of(*key) {
             // Ctrl (⌘ on the Mac) makes the step fine.
             if !(mods.shift && mods.alt) {
@@ -135,6 +138,22 @@ pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Contex
         }
         !clone_overlay_key(app, direction, mods)
     });
+}
+
+/// Whether Shift and Alt are both down as the platform's keyboard state has them. On Windows a ⇧⌥ < / > press (a
+/// system key, Alt without Ctrl) can leave the window's modifiers reading neither, though both are still held: the
+/// whole source image Shift+Alt shows went away after the key, and the next press no longer turned the source.
+/// Elsewhere the window's modifiers are the only record: false.
+pub(crate) fn shift_alt_down() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use winsafe::co::VK;
+        winsafe::GetKeyState(VK::SHIFT).0 && winsafe::GetKeyState(VK::MENU).0
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
 }
 
 /// What ⇧⌥ with < / > and [ / ] does to the clone source.

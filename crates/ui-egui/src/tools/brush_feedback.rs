@@ -56,7 +56,8 @@ fn show_clone_overlay(ui: &mut egui::Ui, app: &mut PhotocraftApp, at: Option<Poi
         return;
     }
     let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
-    let held = mods.alt && mods.shift;
+    // The keyboard's own state too: on Windows the window can lose them after a ⇧⌥ < / > press while both are held.
+    let held = (mods.alt && mods.shift) || crate::preset_panels::shift_alt_down();
     if app.brush_resize.active() || (mods.alt && !held) {
         return;
     }
