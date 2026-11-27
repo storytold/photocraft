@@ -1,5 +1,5 @@
 use super::planes::color_count;
-use super::{AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, Serialize, Session};
+use super::{ColorMode, DocState, Document, Serialize, Session};
 
 // ---------------------------------------------------------------------------------------------
 // View state
