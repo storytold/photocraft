@@ -357,3 +357,31 @@ fn a_psd_package_embeds_the_link_copies() {
         assert!(!warnings.iter().any(|w| w.contains("can't be read") || w.contains("not opened")), "{format} overwrite {overwrite}: {warnings:?}");
     }
 }
+
+#[test]
+fn repackaging_an_opened_package_whose_links_differ_only_in_case_is_refused_and_keeps_the_old_package() {
+    // The open package links to `Links/link-red.png` and `Links/Link-Red.png`: two files on a
+    // case-sensitive file system, two spellings of one file on a case-insensitive one. The new
+    // package can't give both their names (its names are unique ignoring case), so it is refused
+    // and the old folder, which the open document reads, stays as it was.
+    let (dir, dest, mut s) = packaged_once("case");
+    let folder = format!("{dest}/pkg-test");
+    let packaged = format!("{folder}/pkg-test.pcraft");
+    let bytes = std::fs::read(&packaged).unwrap();
+    crate::file_cmds::open_bytes_as(&mut s, "pkg-test.pcraft", &bytes, None, Some(packaged.clone())).unwrap();
+    let variant = format!("{folder}/Links/Link-Red.png");
+    if !std::path::Path::new(&variant).exists() {
+        let mut l = crate::session();
+        l.execute("file.new", json!({"width": 64, "height": 48, "background": "#00ff00"})).unwrap();
+        crate::file_cmds::save_doc(&l.active().unwrap().doc, &variant, None).unwrap();
+    }
+    s.execute("file.placeLinked", json!({"path": variant})).unwrap();
+    let before = listing(&dest);
+    let links = linked_bytes(&s);
+    assert_eq!(links.len(), 3, "{links:?}");
+    let err = s.execute("file.package", json!({"dir": dest, "overwrite": true})).unwrap_err().to_string();
+    assert!(err.contains("Link-Red.png") && err.contains("link-red.png") && err.contains("case"), "{err}");
+    assert_eq!(listing(&dest), before, "the old package is kept and nothing is left behind");
+    assert_eq!(linked_bytes(&s), links);
+    let _ = dir;
+}

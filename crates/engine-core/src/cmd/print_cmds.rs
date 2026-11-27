@@ -1655,6 +1655,16 @@ fn build_package(mut doc: Document, document: Option<&str>, name: &str, ext: &st
         .filter(|file| file.parent() == Some(links_path))
         .filter_map(|file| Some((file.file_name()?.to_string_lossy().to_lowercase(), file)))
         .collect();
+    // Two of them whose names differ only in case (two files on a case-sensitive file system, two
+    // spellings of one on a case-insensitive one) can't both keep their names: the new package's
+    // names are unique ignoring case. Refused before the old folder, which they read, is replaced.
+    if let Some((a, b)) = own.iter().enumerate().find_map(|(i, (name, a))| own.iter().skip(i + 1).find(|(n, b)| n == name && b != a).map(|(_, b)| (a, b))) {
+        return Err(other(format!(
+            "cannot package into {folder}: the document links to {} and {}, whose names differ only in case; relink one of them first",
+            a.display(),
+            b.display()
+        )));
+    }
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
         let SmartSource::Linked { path } = &so.source else { continue };
