@@ -1,5 +1,5 @@
 use super::planes::color_count;
-use super::{ColorMode, DocState, Document, Serialize};
+use super::{ColorMode, DocState, Document, Serialize, Session};
 
 // ---------------------------------------------------------------------------------------------
 // View state
@@ -154,4 +154,35 @@ pub fn composite_name(mode: ColorMode) -> &'static str {
         ColorMode::Grayscale => "Gray",
         _ => "RGB",
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Undo of a step that targets the channel it creates
+
+/// Before New Channel or Calculations (Result: New Channel), which target the channel they make:
+/// the history state the step starts from and the channel view then.
+pub(super) fn view_before_step(s: &Session) -> Option<(u64, ChannelView)> {
+    let st = s.active()?;
+    Some((st.history.row_id(st.history.past_len())?, st.channel_view.clone()))
+}
+
+/// After that step: undoing it (leaving the state it made for the one it started from) brings
+/// `before`'s view back (#14683). Kept for the step, so undo after redo brings it back again. The
+/// views of steps history no longer holds are dropped.
+pub(super) fn keep_view_for_undo(s: &mut Session, before: Option<(u64, ChannelView)>) {
+    let (Some(st), Some((from, view))) = (s.active_mut(), before) else { return };
+    let Some(to) = st.history.row_id(st.history.past_len()) else { return };
+    let history = &st.history;
+    st.undo_channel_views.retain(|(kept_from, kept_to, _)| *kept_to != to && history.row_of(*kept_from).is_some() && history.row_of(*kept_to).is_some());
+    st.undo_channel_views.push((from, to, view));
+}
+
+/// Undo just left the state `left` for the current one: when that undid a step with a kept view,
+/// target and show the channels it did.
+pub(crate) fn restore_view_after_undo(st: &mut DocState, left: Option<u64>) {
+    let Some(left) = left else { return };
+    let Some(id) = st.history.row_id(st.history.past_len()) else { return };
+    let Some((_, _, view)) = st.undo_channel_views.iter().find(|(from, to, _)| *from == id && *to == left) else { return };
+    st.channel_view = view.clone();
+    fix_view(st);
 }

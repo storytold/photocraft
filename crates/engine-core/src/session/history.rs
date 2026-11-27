@@ -25,6 +25,7 @@ impl Session {
         st.coalesce = None;
         // The step being undone: the layers whose visibility it changed get it back.
         let changed = st.history.current_visibility().to_vec();
+        let left = st.history.row_id(st.history.past_len());
         let doc = st.doc.clone();
         match st.history.undo(doc) {
             // Undo Clear History: the list comes back, the document is the same one. Not an
@@ -55,6 +56,7 @@ impl Session {
                 let before = std::mem::replace(st.doc_mut(), d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
+                channel_cmds::restore_view_after_undo(st, left);
                 st.bump_revision(keep_clean);
                 st.last_damage = damage;
                 st.record_damage();
