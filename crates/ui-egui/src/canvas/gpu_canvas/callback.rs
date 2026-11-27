@@ -57,17 +57,25 @@ pub(super) fn tile_screen_aabb(origin: [f32; 2], scale: f32, center: [f32; 2], c
 impl CanvasCallback {
     /// Screen-pixel origin of document (0, 0) (snapped to whole pixels) and device px per doc px.
     fn placement(&self, ppp: f32) -> ([f32; 2], f32) {
+        let ([ox, oy], scale) = self.exact_placement(ppp);
+        ([ox.round(), oy.round()], scale)
+    }
+
+    /// The origin before snapping: where the canvas draws the checkerboard under the picture and the edge around it.
+    fn exact_placement(&self, ppp: f32) -> ([f32; 2], f32) {
         let p = &self.params;
         let scale = p.zoom * ppp;
         let c = self.rect.center();
-        let ox = (c.x * ppp - p.center[0] * scale).round();
-        let oy = (c.y * ppp - p.center[1] * scale).round();
-        ([ox, oy], scale)
+        ([c.x * ppp - p.center[0] * scale, c.y * ppp - p.center[1] * scale], scale)
     }
 
     fn uniforms(&self, screen: [u32; 2], ppp: f32, out_linear: bool, style: &CanvasStyle) -> [f32; VIEW_FLOATS] {
         let p = &self.params;
         let (origin, scale) = self.placement(ppp);
+        // How far the exact place is from the snapped texels, at most half a pixel each way: the picture's outer edge
+        // goes there, so it covers just the pixels the checkerboard does (#17099).
+        let (exact, _) = self.exact_placement(ppp);
+        let shift = [exact[0] - origin[0], exact[1] - origin[1]].map(|v| if v.is_finite() { v.clamp(-0.5, 0.5) } else { 0.0 });
         let (mode, lod) = filter_mode(scale);
         let g = style.gamut_color;
         // 32-bit preview: linear-light gain 2^exposure (0 = off) and 1 / gamma.
@@ -86,8 +94,8 @@ impl CanvasCallback {
             p.doc_size[1] as f32,
             mode,
             lod,
-            0.0,
-            0.0,
+            shift[0],
+            shift[1],
             0.0,
             0.0,
             p.display as f32,

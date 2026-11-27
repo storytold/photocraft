@@ -1,4 +1,5 @@
 //! The remaining panel commands compose with the same definitions, journal and ATN boundary.
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionColor, ActionList, ActionStep},
@@ -11,7 +12,7 @@ use serde_json::json;
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":40,"height":30})).unwrap();
-    s.actions.list.push(Action::new("A", vec![])).unwrap();
+    s.actions_mut().list.push(Action::new("A", vec![])).unwrap();
     s
 }
 
@@ -27,17 +28,17 @@ fn tool_recording_is_opt_in_and_toggles_do_not_reclassify_pending_steps() {
     s.execute("actions.record", json!({"action":"A"})).unwrap();
     stroke(&mut s, "#ff0000");
     s.execute("select.all", json!({})).unwrap();
-    let original = s.actions.clone();
+    let original = (s.actions().clone(), s.recording.clone());
     assert!(s.execute("actions.allowToolRecording", json!({"enabled":"yes"})).is_err());
-    assert_eq!(s.actions, original, "invalid mode must not flush pending work");
+    assert_eq!((s.actions().clone(), s.recording.clone()), original, "invalid mode must not flush pending work");
     s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
     stroke(&mut s, "#00ff00");
     s.execute("actions.allowToolRecording", json!({"enabled":false})).unwrap();
     stroke(&mut s, "#0000ff");
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
-    assert_eq!(s.actions.list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["select.all", "paint.stroke", "select.deselect"]);
-    assert_eq!(s.actions.list.actions()[0].steps[1].params["color"], "#00ff00");
+    assert_eq!(s.actions().list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["select.all", "paint.stroke", "select.deselect"]);
+    assert_eq!(s.actions().list.actions()[0].steps[1].params["color"], "#00ff00");
     assert_eq!(s.journal.iter().filter(|s| s.0 == "paint.stroke").count(), 3, "all actual painting remains journaled");
     assert_eq!(s.execute("actions.list", json!({})).unwrap()["toolRecording"], false);
 }
@@ -54,7 +55,7 @@ fn background_stroke_ownership_does_not_suppress_ordinary_filter_jobs() {
         let changed = s.execute("actions.allowToolRecording", json!({"enabled":true}));
         if command == "paint.remove" {
             assert!(changed.is_err(), "the in-flight stroke retains the mode it started under");
-            assert!(!s.actions.record_tools);
+            assert!(!s.recording.record_tools);
         } else {
             changed.unwrap();
         }
@@ -63,7 +64,7 @@ fn background_stroke_ownership_does_not_suppress_ordinary_filter_jobs() {
             s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
         }
         s.execute("actions.stop", json!({})).unwrap();
-        let ids = s.actions.list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>();
+        let ids = s.actions().list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>();
         if command == "paint.remove" {
             assert!(ids.is_empty());
         } else {
@@ -93,7 +94,7 @@ fn background_strokes_from_outside_the_current_take_do_not_block_the_toggle() {
         assert_eq!(s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap()["enabled"], true);
         s.wait_job(job).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        assert!(s.actions.list.actions()[0].steps.is_empty());
+        assert!(s.actions().list.actions()[0].steps.is_empty());
         assert_eq!(s.journal.iter().filter(|step| step.0 == "paint.remove").count(), 1);
     }
 }
@@ -102,24 +103,25 @@ fn background_strokes_from_outside_the_current_take_do_not_block_the_toggle() {
 #[test]
 fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     let mut s = session();
-    s.actions.list = ActionList::new();
+    s.actions_mut().list = ActionList::new();
     for (name, set) in [("A", "S"), ("Other", "T"), ("B", "S")] {
         let mut a = Action::new(name, vec![ActionStep::new("actions.play", json!({"action":2}))]);
         a.set = Some(set.into());
         a.color = ActionColor::from_name("red");
         a.disabled.insert(0);
         a.dialogs.insert(0);
-        s.actions.list.push(a).unwrap();
+        s.actions_mut().list.push(a).unwrap();
     }
     s.prefs.edit(|p| {
         p.shortcuts.insert("actions.play:A".into(), "F5".into());
     });
     let result = s.execute("actions.duplicate", json!({"set":"S"})).unwrap();
     assert_eq!(result["set"], "S copy");
-    assert_eq!(actions_edit_cmds::set_names(&s), ["S", "T", "S copy"]);
+    // The copy goes right after its source set, like the reference application.
+    assert_eq!(actions_edit_cmds::set_names(&s), ["S", "S copy", "T"]);
     // The copies go after the set's last action, so a call to an action before that point keeps its target.
-    assert_eq!(s.actions.list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["A", "Other", "B", "A copy", "B copy"]);
-    for a in s.actions.list.actions() {
+    assert_eq!(s.actions().list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["A", "Other", "B", "A copy", "B copy"]);
+    for a in s.actions().list.actions() {
         assert_eq!(a.steps[0].params["action"], 2);
         assert_eq!(a.color, ActionColor::from_name("red"));
         assert!(a.disabled.contains(&0));
@@ -132,23 +134,24 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     }
     empty.execute("actions.duplicate", json!({"set":"E"})).unwrap();
     assert_eq!(actions_edit_cmds::set_names(&empty), ["E", "E copy", "F"]);
-    let original = empty.actions.clone();
+    let original = (empty.actions().clone(), empty.recording.clone());
     for params in [json!({"set":"Missing"}), json!({"set":"E","action":0}), json!({"set":false})] {
         assert!(empty.execute("actions.duplicate", params).is_err());
-        assert_eq!(empty.actions, original);
+        assert_eq!((empty.actions().clone(), empty.recording.clone()), original);
     }
 }
 
 /// Menu insertion keeps descriptor absence and kind; empty descriptors and ambiguous commands differ.
 #[test]
 fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() {
+    photocraft_engine::install().unwrap();
     assert!(!atn_cmds::menu_item_needs_settings("filter.noise.despeckle"));
     assert!(atn_cmds::menu_item_needs_settings("filter.blur.gaussianBlur"));
     for id in ["image.imageSize", "filter.blur.gaussianBlur", "filter.noise.despeckle"] {
         for kind in ["name", "code"] {
             let mut s = session();
             s.execute("actions.insertMenuItem", json!({"action":"A","id":id,"eventKind":kind})).unwrap();
-            let bytes = atn_cmds::export("S", &[&s.actions.list.actions()[0]], &[], false).unwrap().0;
+            let bytes = atn_cmds::export("S", &[&s.actions().list.actions()[0]], &[], false).unwrap().0;
             let raw = craft_psd::atn::parse(&bytes).unwrap();
             assert!(raw.actions[0].items[0].descriptor.is_none());
             let imported = atn_cmds::import(&bytes).unwrap();
@@ -165,12 +168,12 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
         }
     }
     let mut s = session();
-    let original = s.actions.clone();
+    let original = (s.actions().clone(), s.recording.clone());
     for params in
         [json!({"action":"A","id":"layer.setProps"}), json!({"action":"A","id":"file.open"}), json!({"action":"A","id":"image.imageSize","params":{"width":4}})]
     {
         assert!(s.execute("actions.insertMenuItem", params).is_err());
-        assert_eq!(s.actions, original);
+        assert_eq!((s.actions().clone(), s.recording.clone()), original);
     }
     let mut raw = craft_psd::atn::AtnFile::default();
     raw.actions.push(craft_psd::atn::AtnAction {
@@ -203,7 +206,7 @@ fn set_bytes(set: &str, action: &str) -> Vec<u8> {
 
 /// The action names in the list.
 fn names(s: &Session) -> Vec<String> {
-    s.actions.list.actions().iter().map(|a| a.name.clone()).collect()
+    s.actions().list.actions().iter().map(|a| a.name.clone()).collect()
 }
 
 /// Load Actions waits for the recording or playback that holds the library, as the reference
@@ -219,7 +222,7 @@ fn load_actions_waits_for_a_running_recording_or_playback() {
     assert_eq!(names(&s), ["A", "Rec"], "the refused load changes nothing");
     s.execute("actions.stop", json!({})).unwrap();
     // A running playback holds it the same way: the step fails instead of editing mid-play.
-    s.actions.list.push(Action::new("Loader", vec![ActionStep::new("actions.load", json!({"data":during}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Loader", vec![ActionStep::new("actions.load", json!({"data":during}))])).unwrap();
     let played = s.execute("actions.play", json!({"action":"Loader"})).unwrap();
     assert!(played["failed"]["error"].as_str().unwrap().contains("playing"), "{played}");
     assert!(!names(&s).iter().any(|name| name == "MidLoaded"), "nothing loaded during the playback");
@@ -238,13 +241,13 @@ fn insert_path_captures_cubic_geometry_without_editing_the_document() {
     let expected = s.execute("path.info", json!({"name":"Curve"})).unwrap()["path"].clone();
     let revision = s.active().unwrap().revision;
     assert!(s.execute("actions.insertPath", json!({"action":"A","name":"work"})).is_err());
-    assert!(s.actions.list.actions()[0].steps.is_empty());
+    assert!(s.actions().list.actions()[0].steps.is_empty());
     s.execute("actions.insertPath", json!({"action":"A","name":"Curve"})).unwrap();
     assert_eq!(s.active().unwrap().revision, revision);
-    assert_eq!(s.actions.list.actions()[0].steps[0].params["path"], expected);
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["path"], expected);
     s.execute("path.set", json!({"name":"Curve","path":{"subpaths":[]}})).unwrap();
     let played = s.execute("actions.play", json!({"action":"A"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     assert_eq!(s.execute("path.info", json!({"name":"work"})).unwrap()["path"], expected);
-    assert!(atn_cmds::export("S", &[&s.actions.list.actions()[0]], &[], false).is_err(), "the measured ATN descriptor cannot represent inversion");
+    assert!(atn_cmds::export("S", &[&s.actions().list.actions()[0]], &[], false).is_err(), "the measured ATN descriptor cannot represent inversion");
 }

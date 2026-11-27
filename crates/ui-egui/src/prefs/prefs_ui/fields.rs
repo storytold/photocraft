@@ -79,9 +79,17 @@ impl PrefPages {
     }
 }
 
+/// A missing optional script font must not prevent opening Preferences. Keep that locale selectable
+/// by its code; native names are used when egui's active font stack can draw them.
+fn language_label(ctx: &egui::Context, native: &str, code: &str) -> String {
+    // Automation can open Preferences before egui's first pass, when fonts_mut() panics.
+    let can_draw = native.is_ascii() || (ctx.cumulative_pass_nr() > 0 && ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(12.0), native)));
+    if can_draw { native.to_string() } else { code.to_string() }
+}
+
 /// The rules of every setting from the engine's schema: choices, ranges, colours, hidden settings, the ones read
 /// at launch, and the labels and groups the window shows.
-pub(super) fn rules() -> Vec<SettingRule> {
+pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
     let defaults = prefs::Preferences::default().to_json();
     let mut rules: BTreeMap<String, SettingRule> = BTreeMap::new();
     for (section, _) in SECTIONS {
@@ -91,9 +99,12 @@ pub(super) fn rules() -> Vec<SettingRule> {
             if let Some(label) = label_override(key) {
                 tweak(&mut rules, &path, |r| r.label(label));
             }
+            if section == "interface" {
+                tweak(&mut rules, &path, |r| r.group(interface_group(key)));
+            }
             if path == "interface.language" {
                 let mut pairs: Vec<(String, String)> = vec![("auto".into(), "Auto".into())];
-                pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name().to_string())));
+                pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), language_label(ctx, l.name(), l.code()))));
                 let refs: Vec<(&str, &str)> = pairs.iter().map(|(id, label)| (id.as_str(), label.as_str())).collect();
                 tweak(&mut rules, &path, |r| r.choices(&refs));
             } else if let Some(options) = prefs::choices(&path) {
@@ -121,21 +132,14 @@ pub(super) fn rules() -> Vec<SettingRule> {
         }
     }
 
-    // Interface groups, in Photoshop's order.
-    for key in ["canvasColor", "canvasCustomColor", "canvasBorder"] {
-        tweak(&mut rules, &format!("interface.{key}"), |r| r.group("Appearance"));
-    }
-    for key in ["language", "uiFontSize", "uiScale"] {
-        tweak(&mut rules, &format!("interface.{key}"), |r| r.group("Presentation"));
-    }
-
-    // Drawn elsewhere or not at all: the theme keys follow the Appearance row, View › Rulers sets showRulers, and the
+    // Drawn elsewhere or not at all: the theme and size keys follow the Appearance row, View › Rulers sets showRulers, and the
     // GPU row draws the adapter, backend and GPU switch together.
     for path in [
         "interface.theme",
         "interface.lightTheme",
         "interface.darkTheme",
         "interface.favoriteThemes",
+        "interface.density",
         "unitsAndRulers.showRulers",
         "performance.useGpu",
         "performance.gpuBackend",
@@ -153,9 +157,9 @@ pub(super) fn rules() -> Vec<SettingRule> {
     if cfg!(target_arch = "wasm32") {
         tweak(&mut rules, "performance.lowLatencyDrawing", |r| r.hidden());
     }
-    // WinTab is a Windows-only opt-in, drawn with its note.
+    // WinTab is a Windows-only opt-in, drawn with its note; the row labels itself.
     if cfg!(target_os = "windows") {
-        tweak(&mut rules, "tools.tabletInput", |r| r.custom());
+        tweak(&mut rules, "tools.tabletInput", |r| r.custom_rows());
     } else {
         tweak(&mut rules, "tools.tabletInput", |r| r.hidden());
     }
@@ -163,16 +167,18 @@ pub(super) fn rules() -> Vec<SettingRule> {
     // Rows the app draws itself (`PrefsCustom`).
     for path in [
         "performance.memoryUsagePercent",
-        "performance.memoryUsageMb",
-        "performance.renderingMode",
         "performance.gpuAdapter",
         "tools.pressureCurve",
         "scratchDisks.disks",
         "fileHandling.recentFiles",
         "type.favoriteFonts",
-        "interface.appearanceMode",
     ] {
         tweak(&mut rules, path, |r| r.custom());
+    }
+    // Rows that draw their own label or heading, so the window adds none: the Appearance page (Appearance Mode, the
+    // themes), Rendering Mode's select and the Memory Usage block.
+    for path in ["interface.appearanceMode", "performance.renderingMode", "performance.memoryUsageMb"] {
+        tweak(&mut rules, path, |r| r.custom_rows());
     }
     // The favourite fonts are the user's library, not a Type setting.
     tweak(&mut rules, "type.favoriteFonts", |r| r.keep_on_reset());
@@ -187,6 +193,17 @@ pub(super) fn rules() -> Vec<SettingRule> {
     tweak(&mut rules, "tools.nudgeBundlePauseMs", |r| r.shown_when("tools.bundleNudges", "true"));
 
     rules.into_values().collect()
+}
+
+/// The Interface group of `key`: Appearance (the mode, its themes and the canvas), Presentation (language, font size,
+/// scale) and Options for the rest, as in Photoshop. Groups show in the order of their first row, so
+/// `prefs::Interface` lists its fields in this order.
+fn interface_group(key: &str) -> &'static str {
+    match key {
+        "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "density" | "canvasColor" | "canvasCustomColor" | "canvasBorder" => "Appearance",
+        "language" | "uiFontSize" | "uiScale" => "Presentation",
+        _ => "Options",
+    }
 }
 
 /// Changes the rule of `key`, starting one when it has none.
@@ -276,5 +293,19 @@ pub(super) fn read_at_launch(path: &str) -> bool {
         // The WinTab context is opened once, when the window starts.
         "tools.tabletInput" => cfg!(target_os = "windows"),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod language_label_tests {
+    use super::{language_label, rules};
+
+    #[test]
+    fn preferences_language_choices_are_safe_before_the_first_pass() {
+        let ctx = egui::Context::default();
+        assert_eq!(ctx.cumulative_pass_nr(), 0);
+        assert_eq!(language_label(&ctx, "தமிழ்", "ta"), "ta");
+        assert_eq!(language_label(&ctx, "English", "en"), "English");
+        assert!(!rules(&ctx).is_empty());
     }
 }

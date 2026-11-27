@@ -4,7 +4,7 @@
 //! written before Apply or OK.
 
 use craft::theme::variant::Tone;
-use craft::theme::{ModeChoice, ThemeId};
+use craft::theme::{ModeChoice, Size, ThemeId};
 use craft::theme_store::ui::AppearancePage;
 use craft::theme_store::{SelectionChange, SuiteView};
 use craft::ui::buttons::Button;
@@ -12,9 +12,11 @@ use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Text;
 use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
 use craft::ui::patterns::preferences::PathSetting;
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::system_appearance;
+use craft::ui::sections::Section;
 use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
 use serde_json::{Value, json};
@@ -34,6 +36,7 @@ const APPEARANCE_MODE: &str = "interface.appearanceMode";
 const LIGHT_THEME: &str = "interface.lightTheme";
 const DARK_THEME: &str = "interface.darkTheme";
 const FAVORITE_THEMES: &str = "interface.favoriteThemes";
+const DENSITY: &str = "interface.density";
 /// The page agents' settings live on, drawn whole by [`craft::automation::ui::agents::AgentsPage`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const AGENTS_PAGE: &str = "integrations";
@@ -79,8 +82,9 @@ impl PrefsCustom {
     }
 }
 
+// Every custom row and page writes the draft only: none has state of its own to report changed.
 impl CustomSettings<PrefPages> for PrefsCustom {
-    fn row(&mut self, ui: &mut egui::Ui, key: &str, draft: &mut SettingsDraft) {
+    fn row(&mut self, ui: &mut egui::Ui, key: &str, draft: &mut SettingsDraft) -> bool {
         match key {
             MEMORY_PERCENT => memory_percent_row(ui, draft),
             MEMORY_MB => self.memory_mb_row(ui, draft),
@@ -93,13 +97,15 @@ impl CustomSettings<PrefPages> for PrefsCustom {
             APPEARANCE_MODE => self.appearance_row(ui, draft),
             _ => {}
         }
+        false
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn page(&mut self, ui: &mut egui::Ui, page: &str, draft: &mut SettingsDraft) {
+    fn page(&mut self, ui: &mut egui::Ui, page: &str, draft: &mut SettingsDraft) -> bool {
         if page == AGENTS_PAGE {
             craft::automation::ui::agents::AgentsPage::new(AGENTS_PAGE, draft, &self.agent_status).mcp_flag(self.mcp_flag).show(ui);
         }
+        false
     }
 
     fn nested_open(&self) -> bool {
@@ -153,7 +159,7 @@ fn memory_percent_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
     let mut on = stored.is_some();
     let mut percent = Some(f64::from(stored.unwrap_or(70)));
     let (was_on, was) = (on, percent);
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         Checkbox::new(Bind::bound(&mut on)).label(tl!("Memory Usage Percent")).show(ui);
         NumberField::new(tl!("Memory Usage Percent"), Bind::bound(&mut percent)).range(1.0..=95.0).unit("%").enabled(on).show(ui);
     });
@@ -207,7 +213,7 @@ impl PrefsCustom {
             Text::new(line.clone()).show(ui);
         }
         help(ui, tl!("Applies at next launch."));
-        egui::CollapsingHeader::new(tl!("Advanced")).show(ui, |ui| {
+        Section::new(tl!("Advanced")).initially_open(false).show(ui, |ui, _| {
             let backend: String = draft.get(GPU_BACKEND).unwrap_or_else(|| "auto".into());
             if let Some(next) = choose(ui, tl!("GPU Backend"), "graphics-backend", backend, &choices_of(GPU_BACKEND)) {
                 draft.set(GPU_BACKEND, &next);
@@ -258,7 +264,12 @@ impl PrefsCustom {
             Some("dark") => ModeChoice::Dark,
             _ => ModeChoice::System,
         };
-        let shown = SelectionChange { mode: Some(mode), theme_light: theme(LIGHT_THEME), theme_dark: theme(DARK_THEME), ..Default::default() };
+        let size = match draft.get::<String>(DENSITY).as_deref() {
+            Some("comfortable") => Size::Comfortable,
+            _ => Size::Compact,
+        };
+        let shown =
+            SelectionChange { mode: Some(mode), theme_light: theme(LIGHT_THEME), theme_dark: theme(DARK_THEME), size: Some(size), ..Default::default() };
         let mut change = shown.clone();
         let favorites: Vec<ThemeId> = draft.get::<Vec<String>>(FAVORITE_THEMES).unwrap_or_default().iter().filter_map(|s| ThemeId::parse(s).ok()).collect();
         // Unknown OS answer previews light, which is what Auto resolves to then.
@@ -282,6 +293,11 @@ impl PrefsCustom {
                 && let Some(id) = &change.theme_dark
             {
                 draft.set(DARK_THEME, &id.as_str());
+            }
+            if change.size != shown.size
+                && let Some(size) = change.size
+            {
+                draft.set(DENSITY, &if size == Size::Comfortable { "comfortable" } else { "compact" });
             }
         }
         if let Some(id) = out.favorite_toggled {
@@ -328,7 +344,7 @@ fn scratch_disks_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
         let on = disk.get("enabled").and_then(Value::as_bool).unwrap_or(false);
         let path = disk.get("path").and_then(Value::as_str).unwrap_or("").to_string();
         let path_key = format!("{SCRATCH_DISKS}[{i}].path");
-        ui.horizontal(|ui| {
+        Row::new().show(ui, |ui, _| {
             let mut next = on;
             Checkbox::new(Bind::bound(&mut next)).label(tl!("Enabled")).id_salt(("disk-enabled", i)).show(ui);
             if next != on {
