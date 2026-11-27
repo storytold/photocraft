@@ -2,9 +2,10 @@
 //! monitor profile, on the GPU canvas (matrix/shaper or display 3D LUT) and the CPU canvas
 //! (an 8-bit transform of the composite).
 //!
-//! * The composite is in [`composite_profile`] (the document profile for RGB, its gray curve as
+//! * The composite is in `composite_profile` (the document profile for RGB, its gray curve as
 //!   RGB for gray documents, sRGB for CMYK — read through the document's CMYK profile, see
-//!   `photocraft_color::convert::CmykSpace` — and Lab).
+//!   `photocraft_color::convert::CmykSpace` — and Lab). An untagged document has no profile of
+//!   its own, and an untagged RGB or gray one is taken in Color Settings' working space (#14224).
 //! * Linear composites (EXR/HDR, linear profiles) are stored in the 8-bit canvas texture
 //!   sRGB-encoded ([`CanvasDisplay::encode_srgb`]) so shadows keep their precision; the display
 //!   source profile is then the same primaries with the sRGB curve.
@@ -14,19 +15,21 @@
 //! * When the source and the monitor match (sRGB documents on an sRGB display, the common
 //!   case) the transform is the identity and nothing is applied on either path.
 //!
-//! Results are cached per (document profile, mode, monitor profile); the rendering intent is
-//! relative colorimetric with black point compensation, as for Photoshop's monitor display.
+//! Results are cached per (document profile, mode, monitor profile) — plus the working space while
+//! the document is untagged, so a Color Settings change re-keys it (#14224); the rendering intent
+//! is relative colorimetric with black point compensation, as for Photoshop's monitor display.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use craft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
+use photocraft_color::ColorMode;
 use photocraft_compose::Buffer;
 use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
 
-use crate::color_cmds::{ColorState, composite_profile, mode_space, profile_from_bytes, resolve_profile};
+use crate::color_cmds::{ColorState, mode_space, profile_from_bytes, resolve_profile};
 use crate::{EngineError, Result};
 
 /// Display intent and black point compensation of the monitor transform.
@@ -261,11 +264,15 @@ struct MonitorEntry {
     status: MonitorStatus,
 }
 
+/// The canvas display cache key: colour space, document profile, monitor profile, and while the
+/// document is untagged the Color Settings working space it is shown in (#14224).
+type CanvasKey = (ColorSpace, u64, u64, Option<u64>);
+
 /// Caches of [`ColorState`] for the display (monitor profiles per display, per-document displays).
 #[derive(Default)]
 pub struct DisplayCaches {
     monitor: Mutex<HashMap<Option<u32>, MonitorEntry>>,
-    canvas: Mutex<HashMap<(ColorSpace, u64, u64), Arc<CanvasDisplay>>>,
+    canvas: Mutex<HashMap<CanvasKey, Arc<CanvasDisplay>>>,
 }
 
 impl ColorState {
@@ -407,16 +414,30 @@ impl ColorState {
     }
 
     /// How the canvas shows `doc` on `display` (cached per document profile, mode and monitor
-    /// profile).
+    /// profile; for an untagged document also per Color Settings' working space, which is the
+    /// profile it is shown in).
     pub fn canvas_display_for(&self, doc: &Document, display: Option<u32>) -> Result<Arc<CanvasDisplay>> {
         let space = mode_space(doc.mode);
-        let doc_hash = doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == space).map_or(0, |p| p.content_hash());
+        let embedded = crate::color_cmds::embedded_profile(doc);
+        // An untagged RGB or Grayscale document is displayed in Color Settings' working space
+        // (#14224), so the setting joins its key: the profile hash 0 that an untagged document
+        // used before did not move when the working space did, and an open document kept the
+        // display it was first shown with. The setting is hashed rather than the profile it
+        // resolves to, because this runs on every frame and `working` would clone the profile's
+        // tables (or read its `.icc` file) each time. Every other mode keeps the built-in default
+        // and stays keyed 0.
+        let working = if embedded.is_none() && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale) {
+            Some(hash_of((self.working_space_spec(doc.mode), self.settings.intent().id())))
+        } else {
+            None
+        };
+        let doc_hash = embedded.map_or(0, |p| p.content_hash());
         let monitor = self.monitor_for(display);
-        let key = (space, doc_hash, monitor.content_hash());
+        let key: CanvasKey = (space, doc_hash, monitor.content_hash(), working);
         if let Some(d) = self.display.canvas.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(d.clone());
         }
-        let composite = composite_profile(doc);
+        let composite = self.composite_profile(doc);
         let encode_srgb = is_linear_rgb(&composite);
         let source = if encode_srgb { Arc::new(srgb_curve_twin(&composite)) } else { composite };
         let transform = if source.content_hash() == monitor.content_hash() {

@@ -7,8 +7,8 @@ use photocraft_raster::Tile;
 use rayon::prelude::*;
 
 use super::{
-    ColorMode, Document, EngineError, Intent, PixelFormat, Profile, Result, SampleType, Surface, Transform, cms_err, convert_color, convert_document,
-    convert_layer_colors, convert_style_colors, convert_surface, document_profile, space_mode,
+    ColorMode, Document, EngineError, Intent, PixelFormat, Profile, Result, SampleType, Surface, Transform, cms_err, convert_color, convert_document_from,
+    convert_layer_colors, convert_style_colors, convert_surface, embedded_profile, space_mode,
 };
 
 const TILE_PIXELS: u128 = (TILE_SIZE * TILE_SIZE) as u128;
@@ -149,14 +149,17 @@ fn dither_tile(s: &Surface, out: &Surface, t: &Transform, bounds: Rect, c: TileC
 }
 
 /// Preserve ordinary conversion outside opt-in U8, admitting the whole dither edit first.
-pub(super) fn convert(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
-    let src = document_profile(doc);
+/// `untagged` is the profile an untagged document is taken in: Color Settings' working space,
+/// which only the session knows (#14224); a tagged document still converts from its embedded one.
+pub(super) fn convert(doc: &mut Document, untagged: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
+    let embedded = embedded_profile(doc);
+    let src: &Profile = embedded.as_deref().unwrap_or(untagged);
     if doc.depth != SampleType::U8 || src.to_bytes() == dst.to_bytes() || doc.mode == ColorMode::Duotone {
-        return convert_document(doc, dst, intent, bpc);
+        return convert_document_from(doc, untagged, dst, intent, bpc);
     }
     let to_mode = space_mode(dst.color_space).ok_or_else(|| EngineError::Other(format!("cannot convert to a {:?} profile", dst.color_space)))?;
     let from = doc.pixel_format().mode;
-    let t = Transform::new(&src, dst, intent, bpc).map_err(cms_err)?;
+    let t = Transform::new(src, dst, intent, bpc).map_err(cms_err)?;
     let format = PixelFormat::new(to_mode, doc.depth, true);
     let bounds = doc.bounds();
     if doc.size.width > i32::MAX as u32 || doc.size.height > i32::MAX as u32 {

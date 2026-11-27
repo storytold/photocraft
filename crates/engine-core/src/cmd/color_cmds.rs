@@ -3,8 +3,10 @@
 //! Colors / Gamut Warning) and the display transform the canvas applies.
 //!
 //! Document space: `Document::icc_profile` holds the document's ICC bytes (kept byte-exact
-//! from PSD resource 1039 / PNG iCCP / JPEG APP2 / TIFF). `None` means untagged: the working
-//! profile of the mode is assumed (sRGB, sGray, the built-in coated CMYK, Lab D50).
+//! from PSD resource 1039 / PNG iCCP / JPEG APP2 / TIFF). `None` means untagged: RGB and gray
+//! documents are then taken in the working space of Color Settings ([`ColorState::working`],
+//! sRGB and the default working gray unless the settings say otherwise, #14224), the other modes
+//! in the mode's built-in default (the built-in coated CMYK, Lab D50).
 //!
 //! Compositing stays in document space for RGB and gray documents. CMYK and Lab documents are
 //! composited in sRGB after a per-layer conversion with the built-in profiles (see
@@ -111,7 +113,8 @@ impl Policy {
 
 /// Edit › Color Settings: working spaces, colour management policies and conversion options.
 /// Honoured when files are opened ([`ColorExt::open_document`](crate::color_cmds::ColorExt::open_document)), by Image › Mode conversions
-/// and by "working" profile specs (Convert to Profile, Proof Setup).
+/// and by "working" profile specs (Convert to Profile, Proof Setup). An untagged RGB or Grayscale
+/// document is taken in the working space as well, on screen and in conversions (#14224).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase", remote = "Self")]
 pub struct ColorSettings {
@@ -468,6 +471,45 @@ impl ColorState {
         }
     }
 
+    /// The profile an untagged document is taken in: Color Settings' working space for the two
+    /// modes #14224 measures, otherwise the mode's built-in default, as [`working_profile`] gives.
+    pub fn untagged_profile(&self, doc: &Document) -> Arc<Profile> {
+        match doc.mode {
+            ColorMode::Rgb | ColorMode::Grayscale => self.working(doc.mode),
+            _ => working_profile(doc.mode),
+        }
+    }
+
+    /// The document's profile as this session sees it: [`document_profile`], except that an
+    /// untagged RGB or Grayscale document falls back to Color Settings' working space instead of
+    /// the mode's built-in default (#14224). A tagged document, and every other mode, resolve
+    /// exactly as the free function does.
+    pub fn document_profile(&self, doc: &Document) -> Arc<Profile> {
+        embedded_profile(doc).unwrap_or_else(|| self.untagged_profile(doc))
+    }
+
+    /// [`composite_profile`] as this session sees it: an untagged document's composite is
+    /// described by the working space it is shown in (#14224).
+    pub fn composite_profile(&self, doc: &Document) -> Arc<Profile> {
+        match mode_space(doc.mode) {
+            ColorSpace::Rgb => self.document_profile(doc),
+            ColorSpace::Gray => {
+                let p = self.document_profile(doc);
+                // sGray is a TRC profile, so its RGB view always exists; sRGB is the last resort.
+                p.gray_as_rgb().or_else(|| Builtin::SGray.profile().gray_as_rgb()).map(Arc::new).unwrap_or_else(|| Arc::new(Builtin::Srgb.profile().clone()))
+            }
+            _ => Arc::new(Builtin::Srgb.profile().clone()),
+        }
+    }
+
+    /// The working-space spec Color Settings holds for `mode`, with the intent that spec is
+    /// validated against: the cheap stand-in for [`Self::working`] in the display cache key,
+    /// which runs on every frame and would otherwise clone the profile's tables (or read its
+    /// `.icc` file) each time (#14224).
+    pub fn working_space_spec(&self, mode: ColorMode) -> Option<&str> {
+        self.settings.working_spec(mode_space(mode))
+    }
+
     /// Apply the colour management policy to a document being opened. Returns what happened
     /// (`action`: kept|converted|discarded|assigned|untagged) and whether to ask the user.
     ///
@@ -776,6 +818,11 @@ pub fn profile_from_bytes(bytes: &Arc<Vec<u8>>) -> std::result::Result<Arc<Profi
     Ok(p)
 }
 
+/// The document's embedded profile, when it parses and fits its mode.
+pub(crate) fn embedded_profile(doc: &Document) -> Option<Arc<Profile>> {
+    doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == mode_space(doc.mode))
+}
+
 /// The document's profile: its embedded profile when it parses and matches the mode,
 /// otherwise the mode's working profile.
 pub fn document_profile(doc: &Document) -> Arc<Profile> {
@@ -1059,13 +1106,23 @@ fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
 /// converted. A Duotone document going to a colour space starts from its ink colours
 /// ([`ink_duotone`]). The document is tagged with `dst`.
 pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
+    let untagged = working_profile(doc.mode);
+    convert_document_from(doc, &untagged, dst, intent, bpc)
+}
+
+/// [`convert_document`] with the profile an untagged document is taken in given explicitly: for a
+/// session that is Color Settings' working space, which the free function cannot know (#14224).
+/// Only that fallback changes: a document with a usable embedded profile converts from it, read
+/// after [`ink_duotone`] has turned a Duotone one into sRGB, exactly as [`convert_document`] does.
+pub fn convert_document_from(doc: &mut Document, untagged: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
     let to_mode = space_mode(dst.color_space).ok_or_else(|| EngineError::Other(format!("cannot convert to a {:?} profile", dst.color_space)))?;
     if to_mode != ColorMode::Grayscale {
         ink_duotone(doc);
     }
-    let src = document_profile(doc);
+    let embedded = embedded_profile(doc);
+    let src: &Profile = embedded.as_deref().unwrap_or(untagged);
     let from_mode = doc.pixel_format().mode;
-    let t = Transform::new(&src, dst, intent, bpc).map_err(cms_err)?;
+    let t = Transform::new(src, dst, intent, bpc).map_err(cms_err)?;
     let fmt = PixelFormat::new(to_mode, doc.depth, true);
     crate::image_cmds::for_each_surface(&mut doc.layers, false, &mut |surf, _| {
         let f = PixelFormat { alpha: surf.format().alpha, ..fmt };
@@ -1192,6 +1249,9 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     }
     let intent = intent_or(p, s.color().settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color().settings.bpc);
+    // An untagged document starts in Color Settings' working space, the space the canvas shows it
+    // in, not in the mode's built-in default (#14224).
+    let untagged = s.color().untagged_profile(doc);
     if preserve_indexed_rgb {
         s.edit("Mode Change", |doc, _| {
             doc.mode = ColorMode::Rgb;
@@ -1200,7 +1260,7 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
             Ok(())
         })?;
     } else {
-        s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+        s.edit("Mode Change", |doc, _| convert_document_from(doc, &untagged, &dst, intent, bpc))?;
     }
     Ok(json!({ "profile": dst.description, "intent": intent.id(), "bpc": bpc }))
 }
@@ -1372,8 +1432,11 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     // or doesn't fit the mode is still replaced.
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let measured = matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Grayscale | ColorMode::Lab);
-    let embedded = doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == mode_space(doc.mode));
+    let embedded = embedded_profile(doc);
     let same = measured && embedded.is_some_and(|p| p.same_colors(&dst));
+    // The fallback for an untagged document is Color Settings' working space, the space it is
+    // shown in (#14224); a tagged document keeps the embedded profile, as `document_profile` picks.
+    let untagged = s.color().untagged_profile(doc);
     if same && !flatten && !rasterize {
         return Ok(json!({ "profile": dst.description, "mode": format!("{:?}", doc.mode), "intent": intent.id(), "bpc": bpc, "converted": false }));
     }
@@ -1391,9 +1454,9 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
             doc.icc_profile = Some(dst.to_bytes());
             Ok(())
         } else if dither {
-            profile_dither::convert(doc, &dst, intent, bpc)
+            profile_dither::convert(doc, &untagged, &dst, intent, bpc)
         } else {
-            convert_document(doc, &dst, intent, bpc)
+            convert_document_from(doc, &untagged, &dst, intent, bpc)
         }
     })?;
     let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -1410,7 +1473,7 @@ fn profile_info(s: &mut Session, p: &Value) -> Result<Value> {
             Some(profile_json(&prof))
         }
         None => doc.as_deref().map(|d| {
-            let mut j = profile_json(&document_profile(d));
+            let mut j = profile_json(&s.color().document_profile(d));
             j["embedded"] = json!(d.icc_profile.is_some());
             j
         }),
@@ -1603,7 +1666,10 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
         "convert" | "convertToWorking" => {
             let dst = s.color().working(mode);
             let (intent, bpc) = (s.color().settings.intent(), s.color().settings.bpc);
-            s.edit("Convert to Working RGB", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+            // An untagged document answers this dialog in its working space, not in the built-in
+            // default (#14224); a tagged one keeps its embedded profile.
+            let untagged = s.color().untagged_profile(&s.active().ok_or(EngineError::NoDocument)?.doc);
+            s.edit("Convert to Working RGB", |doc, _| convert_document_from(doc, &untagged, &dst, intent, bpc))?;
             Ok(json!({"action": "converted", "profile": dst.description}))
         }
         "discard" | "off" => {
@@ -1995,6 +2061,10 @@ mod assign_profile_enabled_modes_tests;
 #[cfg(test)]
 #[path = "../color_settings_presets_tests.rs"]
 mod color_settings_presets_tests;
+
+#[cfg(test)]
+#[path = "../color_settings_untagged_display_tests.rs"]
+mod color_settings_untagged_display_tests;
 
 #[cfg(test)]
 mod settings_tests {
