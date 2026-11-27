@@ -131,6 +131,12 @@ pub enum Role {
     Mask,
     /// A stroked shape's stroke alone (its fill uses `Content`).
     Stroke,
+    /// A layer operator's output, bound in place of the layer's `Content` (`operator.rs`).
+    Operator,
+    /// The window of a layer's pixels an operator runs over.
+    OperatorSource,
+    /// The selection an operator mixes its result by.
+    OperatorMask,
 }
 
 /// A surface the pass needs on the GPU.

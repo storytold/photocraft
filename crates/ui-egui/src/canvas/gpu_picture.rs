@@ -7,7 +7,7 @@ use craft::behavior::CanvasView;
 use craft::ui::canvas::AppPaint;
 
 use super::display::{LiveProposal, hdr_preview, sync_display_lut};
-use super::filter_preview::{ensure_adjust_proxy, ensure_filter_preview, ensure_proxy_preview, filter_preview_display_doc};
+use super::filter_preview::{ensure_adjust_proxy, ensure_filter_preview, ensure_proxy_preview, filter_preview_display_doc, upload_filter_preview_view};
 use super::textures::{ensure_gpu, preview_bounds, redraw_focus};
 use super::{Document, PhotocraftApp, viewport_pages};
 use crate::gpu_canvas::ViewParams;
@@ -88,6 +88,19 @@ pub(crate) fn gpu_picture(app: &mut PhotocraftApp, req: &GpuRequest<'_>) -> Opti
         app.navigator_gpu.remove(&doc.id);
         let k = k.max(1);
         let reduced = [doc.size.width.div_ceil(k), doc.size.height.div_ceil(k)];
+        if key == doc.id.0 ^ (1u64 << 61) {
+            // A filter preview: at 100 % only what the views show is uploaded (#5772). A size-changing preview grows
+            // around the old image centre, as drawn below (a pixel more each way covers its half-pixel shift). A
+            // reduced preview is uploaded whole.
+            let visible = if k == 1 {
+                let half = |p: u32, o: u32| i32::try_from((i64::from(p) - i64::from(o)).div_euclid(2)).unwrap_or(0);
+                let shift = (half(preview_size[0], reduced[0]), half(preview_size[1], reduced[1]));
+                redraw_focus(req.target, req.view).translate(shift.0, shift.1).inflate(1)
+            } else {
+                DRect::EMPTY
+            };
+            upload_filter_preview_view(app, key, visible);
+        }
         let shown = filter_preview_display_doc(app, doc, key);
         let display = sync_display_lut(app, &shown, key, output);
         let view_key = egui::Id::unique(("pc-canvas-proxy", ctx.viewport_id(), idx)).value();

@@ -31,7 +31,13 @@ fn filter_dialog_with_preview(background: bool) -> (Box<PhotocraftApp>, DialogId
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
         scratch: crate::scratch_reads::generation(),
     };
-    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), committing: false });
+    app.filter_preview = Some(crate::filter_dialog::FilterPreview {
+        key,
+        result: result.map(std::sync::Arc::new),
+        flat: None,
+        uploaded: photocraft_geom::Rect::EMPTY,
+        committing: false,
+    });
     (app, id)
 }
 
