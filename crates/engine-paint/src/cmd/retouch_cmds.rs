@@ -408,7 +408,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sharpen",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","strength":1..100=50,"protectDetail":bool=true,"sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","strength":1..100=50,"protectDetail":bool=true,"sampleAllLayers":bool=false,"mode":"normal|darken|lighten|hue|saturation|color|luminosity"="normal" (how the sharpened value replaces the pixel; 8-bit RGB, else Normal)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.sharpen"),
             journal: true,

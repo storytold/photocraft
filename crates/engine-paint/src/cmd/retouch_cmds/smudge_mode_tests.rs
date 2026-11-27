@@ -221,12 +221,11 @@ fn a_transparent_pixel_takes_the_smudged_colour() {
 }
 
 #[test]
-fn blur_and_sharpen_keep_ignoring_a_mode() {
-    for cmd in ["paint.blur", "paint.sharpen"] {
-        let mut plain = two_tone(8, "rgb", RED, BLUE);
-        plain.execute(cmd, stroke(None)).unwrap();
-        let mut with = two_tone(8, "rgb", RED, BLUE);
-        with.execute(cmd, stroke(Some("darken"))).unwrap();
-        assert_eq!(image(&with), image(&plain), "{cmd}");
-    }
+fn blur_keeps_ignoring_a_mode() {
+    // #12642 owns the Blur tool's Mode; the Sharpen tool got its own in #12943.
+    let mut plain = two_tone(8, "rgb", RED, BLUE);
+    plain.execute("paint.blur", stroke(None)).unwrap();
+    let mut with = two_tone(8, "rgb", RED, BLUE);
+    with.execute("paint.blur", stroke(Some("darken"))).unwrap();
+    assert_eq!(image(&with), image(&plain), "paint.blur");
 }

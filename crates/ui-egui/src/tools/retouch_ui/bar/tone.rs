@@ -16,8 +16,9 @@ use crate::PhotocraftApp;
 use crate::option_cells::number;
 use crate::state::Tool;
 
-/// The Smudge tool's Painting Modes in the reference application's order (#12959), a separator between its groups.
-fn smudge_modes() -> Vec<Entry<BlendMode>> {
+/// The Painting Modes the Smudge and Sharpen bars offer, in the reference application's order
+/// (#12959, #12943), a separator between their groups.
+fn painting_modes() -> Vec<Entry<BlendMode>> {
     let mode = |m: BlendMode| Entry::new(m, m.label());
     vec![
         mode(BlendMode::Normal),
@@ -130,8 +131,12 @@ fn smudge_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert
 /// The options of Blur, Sharpen and Smudge.
 pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> Option<RangeAlert> {
     let o = &mut app.ui.tool_options;
-    if tool == Tool::Smudge {
-        choose(ui, tl!("Mode"), &mut o.smudge_mode, &smudge_modes(), true, Some(tl!("Painting Mode")));
+    // Sharpen's own Mode (#12943) and Smudge's (#12959): each tool keeps its own value, and Blur
+    // has none yet (#12642).
+    match tool {
+        Tool::Smudge => choose(ui, tl!("Mode"), &mut o.smudge_mode, &painting_modes(), true, Some(tl!("Painting Mode"))),
+        Tool::Sharpen => choose(ui, tl!("Mode"), &mut o.sharpen_mode, &painting_modes(), true, Some(tl!("Painting Mode"))),
+        _ => {}
     }
     // The cell writes only on a commit, so a shared fraction is not rounded (#12650).
     let strength = number(tl!("Strength"), &mut o.strength, 1.0..=100.0).whole().unit("%").show(ui).out_of_range;
@@ -200,3 +205,7 @@ pub(super) fn color_replacement(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> O
 #[cfg(test)]
 #[path = "../../../sharpen_bar_angle_tests.rs"]
 mod sharpen_bar_angle_tests;
+
+#[cfg(test)]
+#[path = "../../../sharpen_mode_bar_tests.rs"]
+mod sharpen_mode_bar_tests;

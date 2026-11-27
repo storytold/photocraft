@@ -200,12 +200,13 @@ fn tone_range(p: &Value, cmd: &str) -> Result<ToneRange> {
 pub(super) enum DabTool {
     Tone { burn: bool, range: ToneRange, exposure: f32, protect: bool },
     Sponge { saturate: bool, vibrance: bool },
-    Focus { sharpen: bool, strength: f32, protect: bool, sigma: f32 },
+    Focus { sharpen: bool, strength: f32, protect: bool, sigma: f32, mode: BlendMode },
     Smudge { strength: f32, finger: Option<[f32; 4]>, max_size: f32, mode: BlendMode },
 }
 
-/// `paint.smudge`'s `mode` (#12959): the options bar's seven Painting Modes, Normal when absent.
-fn smudge_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
+/// A sequential-dab tool's `mode` param (#12959, #12943): the options bar's seven Painting Modes,
+/// Normal when absent. Blur takes no mode yet (#12642).
+fn painting_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
     use BlendMode::{Color, Darken, Hue, Lighten, Luminosity, Normal, Saturation};
     let Some(v) = p.get("mode") else { return Ok(Normal) };
     let named = v.as_str().and_then(parse_blend).filter(|m| matches!(m, Normal | Darken | Lighten | Hue | Saturation | Color | Luminosity));
@@ -273,18 +274,22 @@ impl DabTool {
             }
             "paint.blur" | "paint.sharpen" => {
                 let sharpen = cmd == "paint.sharpen";
+                // The Sharpen tool's Mode (#12943); Blur's is its own item (#12642), so Blur takes
+                // no mode and keeps today's stroke.
+                let mode = if sharpen { painting_mode(p, cmd)? } else { BlendMode::Normal };
                 let tool = Self::Focus {
                     sharpen,
                     strength: num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0,
                     protect: flag(p, "protectDetail", true),
                     sigma: (stroke.brush.size * 0.03).clamp(1.0, 4.0),
+                    mode,
                 };
                 (tool, if sharpen { "Sharpen Tool" } else { "Blur Tool" })
             }
             "paint.smudge" => {
                 let finger = flag(p, "fingerPainting", false).then_some(s.tools.foreground);
                 let strength = num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0;
-                (Self::Smudge { strength, finger, max_size: stroke.brush.size, mode: smudge_mode(p, cmd)? }, "Smudge Tool")
+                (Self::Smudge { strength, finger, max_size: stroke.brush.size, mode: painting_mode(p, cmd)? }, "Smudge Tool")
             }
             o => return Err(bad(o, "not a sequential-dab tool")),
         })
@@ -314,8 +319,12 @@ impl DabTool {
             Self::Sponge { saturate, vibrance } => {
                 Box::new(move |work, fp| color_dab(&fmt, work, fp, |k| per_dab(k * 0.5, sp), |c, k| sponge(c, k, saturate, vibrance)))
             }
-            Self::Focus { sharpen, strength, protect, sigma } => {
+            Self::Focus { sharpen, strength, protect, sigma, mode } => {
                 let a = alpha_index(&fmt);
+                // The Mode was measured in 8-bit RGB (#12943); other colour models and depths
+                // sharpen as Normal, as the Smudge tool's Mode does (#12959).
+                let measured = fmt.mode == ColorMode::Rgb && fmt.sample == SampleType::U8;
+                let mode = if measured { mode } else { BlendMode::Normal };
                 let mut shares = ProtectDetailShares::default();
                 Box::new(move |work, fp| {
                     let r = fp.rect.intersect(&work.rect);
@@ -347,8 +356,27 @@ impl DabTool {
                             let o = ((y - r.y0) as usize * rw + (x - r.x0) as usize) * n;
                             let i = (x - wx0) as usize * n;
                             let px = &mut line[i..i + n];
+                            if mode == BlendMode::Normal {
+                                for c in 0..n {
+                                    px[c] += (out[o + c] - px[c]) * k;
+                                }
+                                continue;
+                            }
+                            // The Mode combines the sharpened value with the pixel the way a paint
+                            // colour is combined, and the result is laid down through the same
+                            // coverage `k`; alpha keeps the Normal mix. Reachable only in 8-bit RGB
+                            // (the Mode is forced to Normal for every other format above), so the
+                            // native pixel is at most R, G, B, A: the same 8-slot buffer `color_dab`
+                            // uses.
+                            let mut src = [0.0f32; 8];
+                            src[..n].copy_from_slice(&out[o..o + n]);
+                            let (d, s) = (to_rgba(&fmt, px), to_rgba(&fmt, &src[..n]));
+                            let blended = photocraft_color::blend::blend_rgb(mode, [d[0], d[1], d[2]], [s[0], s[1], s[2]]);
+                            let mut enc = [0.0f32; 8];
+                            from_rgba_into(&fmt, [blended[0], blended[1], blended[2], d[3]], &mut enc);
                             for c in 0..n {
-                                px[c] += (out[o + c] - px[c]) * k;
+                                let want = if Some(c) == a { out[o + c] } else { enc[c] };
+                                px[c] += (want - px[c]) * k;
                             }
                         }
                     });
@@ -828,3 +856,7 @@ mod smudge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
 mod smudge_mode_tests;
+
+#[cfg(test)]
+#[path = "sharpen_mode_tests.rs"]
+mod sharpen_mode_tests;
