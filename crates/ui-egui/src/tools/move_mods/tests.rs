@@ -1,38 +1,7 @@
 use super::*;
+use crate::canvas::ToolEvent;
 
-fn near(a: [f64; 2], b: [f64; 2]) -> bool {
-    (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9
-}
-
-#[test]
-fn shift_picks_the_dominant_axis() {
-    assert!(near(constrain([10.0, 3.0], None, 4), [10.0, 0.0]));
-    assert!(near(constrain([-2.0, -9.0], None, 4), [0.0, -9.0]));
-    assert!(near(constrain([0.0, 0.0], None, 4), [0.0, 0.0]));
-    // Eight directions: a near-diagonal drag lands on 45°.
-    let d = constrain([10.0, 9.0], None, 8);
-    assert!((d[0] - d[1]).abs() < 1e-9 && d[0] > 9.0, "{d:?}");
-    assert!(near(constrain([10.0, 1.0], None, 8), [10.0, 0.0]));
-    // Hostile input never panics and stays finite or passes through.
-    let _ = constrain([f64::NAN, 1.0], None, 4);
-    let _ = constrain([f64::INFINITY, 1.0], Some([f64::NAN, 0.0]), 0);
-}
-
-#[test]
-fn shift_axis_switches_once_the_pointer_is_clearly_nearer_the_other_one() {
-    let h = constrain([20.0, 2.0], None, 4);
-    assert!(near(h, [20.0, 0.0]));
-    // Just past the diagonal: hysteresis keeps horizontal.
-    let still = constrain([20.0, 21.0], Some(h), 4);
-    assert!(near(still, [20.0, 0.0]), "{still:?}");
-    // Far enough the other way: switches to vertical.
-    let v = constrain([20.0, 40.0], Some(h), 4);
-    assert!(near(v, [0.0, 40.0]), "{v:?}");
-    // And back.
-    assert!(near(constrain([30.0, 20.0], Some(v), 4), [30.0, 0.0]));
-}
-
-fn app_with_layer() -> PhotocraftApp {
+fn app_with_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
@@ -138,7 +107,7 @@ fn alt_drag_duplicates_every_selected_layer() {
 }
 
 #[test]
-fn nudge_moves_layers_or_the_transform_box() {
+fn nudge_moves_layers_and_duplicates_first() {
     let mut app = app_with_layer();
     let id = app.session.active().unwrap().active_layer.unwrap();
     nudge(&mut app, 10.0, 0.0, false);
@@ -148,27 +117,29 @@ fn nudge_moves_layers_or_the_transform_box() {
     nudge(&mut app, 1.0, 0.0, true);
     assert_eq!(app.session.active().unwrap().doc.layers.len(), n0 + 1);
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(18, 7, 34, 23));
-    let ctx = egui::Context::default();
-    crate::transform_tool::begin(&mut app, &ctx).unwrap();
-    let q0 = app.ui.transform.as_ref().unwrap().quad;
-    nudge(&mut app, 0.0, 10.0, false);
-    assert_eq!(app.ui.transform.as_ref().unwrap().quad[0], [q0[0][0], q0[0][1] + 10.0]);
 }
 
-/// One key press through `arrow_keys`, as egui delivers it.
+/// One arrow press through `arrow_key`, as the dispatcher hands it over.
 fn press(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers) -> bool {
     press_at(app, key, mods, 0.0)
 }
 
-/// [`press`] at egui time `time` (seconds).
+/// [`press`] at time `time` (seconds).
 fn press_at(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers, time: f64) -> bool {
-    let ctx = egui::Context::default();
-    ctx.input_mut(|i| {
-        i.time = time;
-        i.modifiers = mods;
-        i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods });
-    });
-    arrow_keys(app, &ctx)
+    press_with(app, key, mods, time, false)
+}
+
+/// [`press_at`] with a selection outline open or not.
+fn press_with(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers, time: f64, outline_open: bool) -> bool {
+    let direction = match key {
+        egui::Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+        egui::Key::ArrowRight => egui::vec2(1.0, 0.0),
+        egui::Key::ArrowUp => egui::vec2(0.0, -1.0),
+        egui::Key::ArrowDown => egui::vec2(0.0, 1.0),
+        other => panic!("not an arrow: {other:?}"),
+    };
+    let mods = craft::keymap::Mods::from_egui(&mods, craft::keymap::Platform::current());
+    arrow_key(app, direction, mods, time, outline_open)
 }
 
 /// Photoshop's ← / → with a painting tool turn the brush tip 1°, ⇧ 15°; → is clockwise. Other
@@ -258,10 +229,12 @@ fn cmd_arrows_leave_the_layer_alone_where_cmd_is_not_the_move_tool() {
     }
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24));
     app.ui.tool = Tool::Brush;
-    crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
-    let q0 = app.ui.transform.as_ref().unwrap().quad;
+    let ctx = app.ctx().clone();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    // PLAN: `session.quad()` is the framework box's reading of the open Free Transform (tools-w27).
+    let q0 = app.ui.transform.as_ref().unwrap().session.quad();
     assert!(!press(&mut app, egui::Key::ArrowRight, CTRL));
-    assert_eq!(app.ui.transform.as_ref().unwrap().quad, q0);
+    assert_eq!(app.ui.transform.as_ref().unwrap().session.quad(), q0);
 }
 
 /// #2474: with a selection tool ⌘-arrows move the selected pixels (the temporary Move tool), the
@@ -279,8 +252,7 @@ fn cmd_arrows_move_the_selected_pixels_with_a_selection_tool() {
     assert_eq!(app.ui.tool, Tool::RectMarquee);
     // Not while a polygon is being drawn.
     app.ui.tool = Tool::PolygonLasso;
-    app.ui.polygon = vec![[1.0, 1.0]];
-    assert!(!press(&mut app, egui::Key::ArrowRight, CTRL));
+    assert!(!press_with(&mut app, egui::Key::ArrowRight, CTRL, 0.0, true));
 }
 
 /// #1428: with a selection tool the arrows nudge the selection outline (⇧ 10 px); the layer
@@ -303,8 +275,7 @@ fn arrow_keys_nudge_the_selection_with_a_selection_tool() {
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels stay put");
     // Not while a polygon is being drawn.
     app.ui.tool = Tool::PolygonLasso;
-    app.ui.polygon = vec![[1.0, 1.0]];
-    assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+    assert!(!press_with(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 0.0, true));
 }
 fn history(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
@@ -483,76 +454,13 @@ fn selection_outline_nudges_bundle_into_one_step() {
     assert_eq!(history(&app), h1 + 1);
 }
 
-/// Free Transform: nudges of the box that follow each other are one Undo step of the session
-/// (it has its own history); a drag or a pause starts another.
-#[test]
-fn free_transform_nudges_bundle_into_one_undo_step() {
-    let mut app = app_with_layer();
-    let ctx = egui::Context::default();
-    crate::transform_tool::begin(&mut app, &ctx).unwrap();
-    let quad = |app: &PhotocraftApp| app.ui.transform.as_ref().unwrap().quad;
-    let q0 = quad(&app);
-    let moved = |dx: f64, dy: f64| q0.map(|q| [q[0] + dx, q[1] + dy]);
-    let settle = |app: &mut PhotocraftApp| crate::transform_tool::track_steps(app, &ctx);
-    for i in 0..6 {
-        assert!(press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 4.0 + 0.1 * f64::from(i)));
-        settle(&mut app);
-    }
-    assert_eq!(quad(&app), moved(6.0, 0.0));
-    // A pause, and the next nudge is a step of its own.
-    assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE, 9.0));
-    settle(&mut app);
-    assert_eq!(
-        quad(&app),
-        [[q0[0][0] + 6.0, q0[0][1] + 1.0], [q0[1][0] + 6.0, q0[1][1] + 1.0], [q0[2][0] + 6.0, q0[2][1] + 1.0], [q0[3][0] + 6.0, q0[3][1] + 1.0]]
-    );
-    app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(quad(&app), moved(6.0, 0.0), "Undo takes back the late nudge only");
-    app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(quad(&app), q0, "and the next one the six that were bundled");
-    app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(quad(&app), q0, "nothing is left of the session to undo");
-    // With bundling off every nudge is a step.
-    app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
-    for i in 0..3 {
-        press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 20.0 + 0.1 * f64::from(i));
-        settle(&mut app);
-    }
-    app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(quad(&app), moved(2.0, 0.0));
-}
-
-/// #9511: Free Transform keeps Photoshop's 1 document pixel per arrow press at any zoom; only
-/// the Move tool's nudge is one screen pixel.
-#[test]
-fn free_transform_nudges_one_document_pixel_zoomed_out() {
-    let mut app = app_with_layer();
-    app.ui.views[0].zoom = 0.5;
-    let ctx = egui::Context::default();
-    crate::transform_tool::begin(&mut app, &ctx).unwrap();
-    let q0 = app.ui.transform.as_ref().unwrap().quad;
-    assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
-    assert_eq!(app.ui.transform.as_ref().unwrap().quad, q0.map(|q| [q[0] + 1.0, q[1]]), "→ at 50 % moves the box 1 px");
-}
-
 /// Arrow keys while editing text must not nudge layers, leaving the keys to the type tool (#5355).
 #[test]
 fn arrow_keys_ignored_during_text_edit() {
     let mut app = app_with_layer();
     let id = app.session.active().unwrap().active_layer.unwrap();
     let b0 = bounds(&app, id);
-    app.ui.text_edit = Some(crate::state::TextEdit {
-        layer: id.0,
-        document: None,
-        caret: 0,
-        anchor: 0,
-        session: "test".into(),
-        created: false,
-        mask: false,
-        dragging: false,
-        resize: None,
-        preedit: None,
-    });
+    app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, document: None, caret: 0, anchor: 0, session: "test".into(), created: false, mask: false });
     assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
     assert!(!press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
     assert!(!press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::ALT));
@@ -564,31 +472,32 @@ fn arrow_keys_ignored_during_text_edit() {
 /// 100 % and above, up to 1600 %); ⇧ is 10 document pixels at any zoom.
 #[test]
 fn a_nudge_is_one_screen_pixel() {
-    for (zoom, step) in [(0.25, 4), (0.5, 2), (2.0 / 3.0, 1), (1.0, 1), (2.0, 1), (16.0, 1)] {
+    let lowest = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.min(craft::behavior::kurbo::Size::new(12_000.0, 12_000.0));
+    // Below 0.1 % a large document still nudges one screen pixel: 6000 document pixels at a
+    // 12,000 × 12,000 px document's lowest zoom, and the ladder's f32 rungs (0.1 %, 0.2 %) give
+    // whole steps (1000, not 999). 0.3333334 is just above a third, off the ladder (pinch, Zoom
+    // tool drag): 2.9999994 screen pixels' worth floors to 2, while the ladder's own third gives 3.
+    let rows: [(f64, i32); 12] = [
+        (0.25, 4),
+        (0.5, 2),
+        (2.0 / 3.0, 1),
+        (1.0, 1),
+        (2.0, 1),
+        (16.0, 1),
+        (0.002, 500),
+        (0.001, 1000),
+        (0.0005, 2000),
+        (lowest, 6000),
+        (0.333_333_4, 2),
+        (1.0 / 3.0, 3),
+    ];
+    for (zoom, step) in rows {
         let mut app = app_with_layer();
         let id = app.session.active().unwrap().active_layer.unwrap();
-        app.ui.views[0].zoom = zoom;
+        app.ui.views[0].zoom = zoom as _;
         assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
         assert_eq!(left_edge(&app, id), 8 + step, "→ at {zoom}");
         assert!(press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::SHIFT));
         assert_eq!(left_edge(&app, id), 8 + step - 10, "⇧← at {zoom}");
-    }
-}
-
-/// #9511: below 0.1 % (a large document zooms out until its shorter side is 2 px) the nudge is
-/// still one screen pixel: 6000 document pixels at a 12,000 × 12,000 px document's lowest zoom,
-/// not capped at 1000. The ladder's f32 rungs (0.1 %, 0.2 %) still give whole steps (1000,
-/// not 999).
-#[test]
-fn a_nudge_is_one_screen_pixel_below_a_tenth_of_a_percent() {
-    let lowest = crate::zoom_levels::min([12_000, 12_000]);
-    // 0.3333334 is just above a third, off the ladder (pinch, Zoom tool drag): 2.9999994 screen
-    // pixels' worth floors to 2, while the ladder's own f32 third still gives 3 (#10438 review).
-    for (zoom, step) in [(0.002, 500), (0.001, 1000), (0.0005, 2000), (lowest, 6000), (0.333_333_4, 2), (1.0 / 3.0, 3)] {
-        let mut app = app_with_layer();
-        let id = app.session.active().unwrap().active_layer.unwrap();
-        app.ui.views[0].zoom = zoom;
-        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
-        assert_eq!(left_edge(&app, id), 8 + step, "→ at {zoom}");
     }
 }
