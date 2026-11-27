@@ -483,3 +483,7 @@ fn resume(app: &mut PhotocraftApp, key: u64, knot: KnotRef) {
     // On the Work Path that press is the step "Pick-up Path", and the path goes on being drawn live (#12890).
     pen::pick_up_live_path(app);
 }
+
+#[cfg(test)]
+#[path = "star_alt_eyedropper_tests.rs"]
+mod star_alt_eyedropper_tests;
