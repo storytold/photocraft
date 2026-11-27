@@ -194,6 +194,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wait(&device)?;
         let c = ms(t);
         frames.push(ms(frame));
+        if let Some(rest) = pace.checked_sub(frame.elapsed()) {
+            std::thread::sleep(rest);
+        }
         t_push += a;
         t_render += b;
         t_wait += c;
