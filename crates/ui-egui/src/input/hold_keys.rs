@@ -17,35 +17,35 @@ use crate::state::Tool;
 
 /// Tools on which ⌘-arrows nudge as the Move tool's arrows do: the tools whose ⌘ press the Move
 /// stand-in takes. Photoshop excepts the Hand, Rotate View, Zoom, Slice, Path and Direct
-/// Selection, shape, Pen and Type tools (⌘ means something else to each), the Crop tools and the
+/// Selection, shape and Pen tools (⌘ means something else to each), the Crop tools and the
 /// marquees, lassos and Magic Wand (those are added back by [`cmd_nudges`] as selection tools).
+/// The Type tools are among them once the text is committed: an open type box keeps ⌘, which
+/// [`cmd_nudges`] checks (`text_edit`), so ⌘↵ commits and ⌘-arrows then move the text layer.
 fn nudges_with_cmd(t: Tool) -> bool {
-    !t.is_type()
-        && !matches!(
-            t,
-            Tool::Move
-                | Tool::Hand
-                | Tool::RotateView
-                | Tool::Zoom
-                | Tool::Crop
-                | Tool::PerspectiveCrop
-                | Tool::Slice
-                | Tool::SliceSelect
-                | Tool::PathSelection
-                | Tool::DirectSelection
-                | Tool::Pen
-                | Tool::FreeformPen
-                | Tool::CurvaturePen
-                | Tool::AddAnchorPoint
-                | Tool::DeleteAnchorPoint
-                | Tool::ConvertPoint
-                | Tool::RectMarquee
-                | Tool::EllipseMarquee
-                | Tool::Lasso
-                | Tool::PolygonLasso
-                | Tool::MagicWand
-        )
-        && !crate::vector_ui::is_shape_tool(t)
+    !matches!(
+        t,
+        Tool::Move
+            | Tool::Hand
+            | Tool::RotateView
+            | Tool::Zoom
+            | Tool::Crop
+            | Tool::PerspectiveCrop
+            | Tool::Slice
+            | Tool::SliceSelect
+            | Tool::PathSelection
+            | Tool::DirectSelection
+            | Tool::Pen
+            | Tool::FreeformPen
+            | Tool::CurvaturePen
+            | Tool::AddAnchorPoint
+            | Tool::DeleteAnchorPoint
+            | Tool::ConvertPoint
+            | Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::Lasso
+            | Tool::PolygonLasso
+            | Tool::MagicWand
+    ) && !crate::vector_ui::is_shape_tool(t)
 }
 
 /// Do ⌘-arrows (Ctrl off the Mac) nudge as the Move tool's arrows do (#2474)? With the tools

@@ -176,9 +176,13 @@ fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
 
 /// A press at document `(x, y)`: edits the type under it, or answers `Claimed` for a press that makes new text on
 /// release. With a session open the press is not the tool's (the editor, the frame or the move zone had it first).
+/// With no session open a ⌘ press is the Move stand-in's (`Ignored`): ⌘ is the Move tool once the text is committed.
 fn press_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64, mods: Mods) -> ToolAction {
     if app.ui.text_edit.is_some() {
         return ToolAction::Done;
+    }
+    if mods.cmd {
+        return ToolAction::Ignored;
     }
     app.ui.type_insertion_style = None;
     // A ⇧-click starts new text over old, as in Photoshop. A Type Mask click on a text layer's

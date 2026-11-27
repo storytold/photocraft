@@ -347,9 +347,10 @@ const MAC_CMD_ALT: Modifiers = Modifiers { alt: true, ctrl: false, shift: false,
 const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
 
 /// A ⌘-drag moves the layer through the Move stand-in with the tools that do not take ⌘ (painting,
-/// retouching, eraser, gradient, eyedropper) and with the selection tools (⌘ outside the
-/// selection moves the layer, #896): one "Move" step, nothing painted, the tool still selected.
-/// The tools that keep ⌘ for themselves leave the layer alone.
+/// retouching, eraser, gradient, eyedropper, and the Type tools with no type box open, #9994) and
+/// with the selection tools (⌘ outside the selection moves the layer, #896): one "Move" step,
+/// nothing painted, no text started, the tool still selected. The tools that keep ⌘ for themselves
+/// leave the layer alone.
 #[test]
 fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     // The Eraser is left out: it is in the Brush's family (`canvas::tools::family`), which refuses a ⌘ press the same
@@ -357,7 +358,7 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     // another shape (`selection.rs`, `MarqueeKind`).
     // One app per group, with the tool switched between cases and a fresh layer for each: starting
     // the whole app dominates the cost of a case.
-    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso];
+    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso, Tool::Type, Tool::VerticalType];
     let mut h = harness(moves[0]);
     for tool in moves {
         h.state_mut().ui.tool = tool;
@@ -370,14 +371,14 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
         assert_eq!(st.history.undo_label(), Some("Move"), "{tool:?}");
         assert_eq!(st.history.past_len(), steps + 1, "{tool:?}: one step, nothing painted");
         assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool is back");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: no text was started");
     }
     // The Crop and Rotate View tools go last, in an app of their own: they leave a pending crop and
     // a turned view behind.
-    // One tool per decision the refusal comes from: the Hand, Zoom and Rotate-View families, the vector family's
-    // shared line (the Pen stands for the shapes and both path tools), and the Type tools' `is_type` line (the
-    // vertical type tool takes the same branch). Every tool's own decision is asserted in
+    // One tool per decision the refusal comes from: the Hand, Zoom and Rotate-View families and the vector family's
+    // shared line (the Pen stands for the shapes and both path tools). Every tool's own decision is asserted in
     // `the_command_stand_in_rule_is_the_table`, without a drag.
-    let keeps = [vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Type], vec![Tool::Crop, Tool::RotateView]];
+    let keeps = [vec![Tool::Hand, Tool::Zoom, Tool::Pen], vec![Tool::Crop, Tool::RotateView]];
     for group in keeps {
         let mut h = harness(group[0]);
         for tool in group {
@@ -420,6 +421,10 @@ fn the_command_stand_in_rule_is_the_table() {
         Tool::MagicEraser,
         Tool::Gradient,
         Tool::PaintBucket,
+        Tool::Type,
+        Tool::VerticalType,
+        Tool::HorizontalTypeMask,
+        Tool::VerticalTypeMask,
         Tool::SpotHealing,
         Tool::Remove,
         Tool::Healing,
@@ -514,6 +519,167 @@ fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
     let st = h.state().session.active().unwrap();
     assert_eq!(st.active_layer, Some(red));
     assert_eq!(rgba(&h, 130, 130), [1.0, 0.0, 0.0, 1.0], "nothing painted");
+}
+
+/// The text layer's translation.
+fn text_offset(h: &Harness<'static, Box<PhotocraftApp>>, id: photocraft_doc::LayerId) -> (f64, f64) {
+    match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
+        photocraft_doc::LayerContent::Text(t) => (t.transform.m[4], t.transform.m[5]),
+        _ => panic!("not a text layer"),
+    }
+}
+
+/// The layer count of the active document.
+fn layer_count(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
+    h.state().session.active().unwrap().doc.layers.len()
+}
+
+/// Whether ⌘ is the Move tool as the app stands: the Move stand-in takes a ⌘ press and a ⌘ press on a guide takes it.
+fn cmd_is_move(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
+    let app = h.state();
+    let stand_in = crate::canvas::tools::command_stand_in_now(app);
+    assert_eq!(crate::canvas::rulers::moves_with_command(app, app.ui.tool), stand_in, "the guides follow the stand-in");
+    stand_in
+}
+
+/// #9994: with a Type tool, ⌘ is the Move tool once the text is committed: ⌘↵ ends the edit and ⌘
+/// still held then nudges the text layer 1 px with the arrows, 10 px with ⇧, and ⌥ duplicates it
+/// first, from the arrows or a drag. While the text is edited ⌘ stays the type box's.
+#[test]
+fn cmd_after_committing_type_moves_and_duplicates_the_text_layer() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        let mut h = harness(tool);
+        h.state_mut().ui.tool_options.move_auto_select = false;
+        h.state_mut().ui.extras.snap = false;
+        h.state_mut().ui.view.show.smart_guides = false;
+        let id = photocraft_doc::LayerId(
+            h.state_mut().run("type.create", json!({"text": "HO", "size": 60, "x": 100, "y": 150})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        h.run_steps(2);
+        click(&mut h, 115.0, 130.0, Modifiers::NONE);
+        assert!(h.state().ui.text_edit.is_some(), "{tool:?}: editing");
+        hold_mods(&mut h, Modifiers::COMMAND);
+        assert!(!cmd_is_move(&h), "{tool:?}: ⌘ is the type box's while editing");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert_eq!(h.state().ui.tool, tool);
+        assert!(cmd_is_move(&h), "{tool:?}: committed, ⌘ is the Move tool");
+        let (x0, y0) = text_offset(&h, id);
+        key(&mut h, Key::ArrowRight, true, Modifiers::COMMAND);
+        key(&mut h, Key::ArrowRight, false, Modifiers::COMMAND);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0), "{tool:?}: ⌘→ nudges 1 px");
+        key(&mut h, Key::ArrowDown, true, Modifiers::COMMAND | Modifiers::SHIFT);
+        key(&mut h, Key::ArrowDown, false, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0 + 10.0), "{tool:?}: ⌘⇧↓ nudges 10 px");
+        let n0 = layer_count(&h);
+        key(&mut h, Key::ArrowLeft, true, Modifiers::COMMAND | Modifiers::ALT);
+        key(&mut h, Key::ArrowLeft, false, Modifiers::COMMAND | Modifiers::ALT);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n0 + 1, "{tool:?}: ⌘⌥← duplicates");
+        let copy = st.active_layer.unwrap();
+        assert_ne!(copy, id);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0 + 10.0), "{tool:?}: the original stays");
+        assert_eq!(text_offset(&h, copy), (x0, y0 + 10.0), "{tool:?}: the copy moved");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: no new text was started");
+        // ⌘⌥-drag on the copy: another copy, moved by the drag.
+        let (cx, cy) = text_offset(&h, copy);
+        let n1 = layer_count(&h);
+        drag_raw(&mut h, if cfg!(target_os = "macos") { MAC_CMD_ALT } else { CTRL_ALT }, cx as f32 + 10.0, cy as f32 - 20.0, cx as f32 + 50.0, cy as f32);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n1 + 1, "{tool:?}: ⌘⌥-drag duplicates");
+        let copy2 = st.active_layer.unwrap();
+        assert_eq!(text_offset(&h, copy), (cx, cy), "{tool:?}: the dragged-from copy stays");
+        assert_eq!(text_offset(&h, copy2), (cx + 40.0, cy + 20.0), "{tool:?}: the new copy moved");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}");
+        assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool stays");
+    }
+}
+
+/// An open type box counts as editing whatever is in it, as in Photoshop: ⌘ held is not the Move
+/// tool, ⌘-arrows and ⌘⌥-arrows leave the text layer where it is (no nudge, no copy), a ⌘ press
+/// on a guide does not take it, and the box stays open on `layer`.
+fn assert_cmd_is_the_type_boxs(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool, layer: photocraft_doc::LayerId, why: &str) {
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(layer.0), "{tool:?} {why}: the box is open");
+    let (x0, y0) = text_offset(h, layer);
+    let n0 = layer_count(h);
+    hold_mods(h, Modifiers::COMMAND);
+    assert!(!cmd_is_move(h), "{tool:?} {why}: ⌘ is not the Move tool, and takes no guide");
+    for m in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::ALT] {
+        key(h, Key::ArrowRight, true, m);
+        key(h, Key::ArrowRight, false, m);
+        assert_eq!(text_offset(h, layer), (x0, y0), "{tool:?} {why}: {m:?}-→ does not nudge the layer");
+        assert_eq!(layer_count(h), n0, "{tool:?} {why}: {m:?}-→ does not duplicate");
+    }
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(layer.0), "{tool:?} {why}: still editing");
+    hold_mods(h, Modifiers::NONE);
+}
+
+/// The two in-between cases for #9994's ⌘. (1) A new, empty type box (a click with the Type tool,
+/// no placeholder text) is being edited: ⌘ keeps its editing meaning. Committing it with ⌘↵
+/// removes the empty layer, and only then is ⌘ the Move tool.
+#[test]
+fn cmd_in_an_open_empty_type_box_stays_the_type_boxs() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        let mut h = harness(tool);
+        h.state_mut().session.edit_prefs(|p| p.type_.fill_new_type_layers_with_placeholder = false);
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+        let n0 = layer_count(&h);
+        click(&mut h, 120.0, 150.0, Modifiers::NONE);
+        let edit = h.state().ui.text_edit.clone().expect("a click opens a type box");
+        assert!(edit.created, "{tool:?}: a new layer");
+        let id = photocraft_doc::LayerId(edit.layer);
+        match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => assert!(t.text.is_empty(), "{tool:?}: the box is empty"),
+            _ => panic!("not a text layer"),
+        }
+        assert_cmd_is_the_type_boxs(&mut h, tool, id, "empty box");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert_eq!(layer_count(&h), n0, "{tool:?}: the empty layer is gone");
+        assert!(cmd_is_move(&h), "{tool:?}: committed, ⌘ is the Move tool");
+        hold_mods(&mut h, Modifiers::NONE);
+    }
+}
+
+/// (2) Clicking into existing text, or a new box still showing its selected placeholder, without
+/// typing anything is editing too: ⌘ stays the type box's until the text is committed.
+#[test]
+fn cmd_after_clicking_into_type_without_typing_stays_the_type_boxs() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        // Existing text, clicked into.
+        let mut h = harness(tool);
+        h.state_mut().ui.tool_options.move_auto_select = false;
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+        let id = photocraft_doc::LayerId(
+            h.state_mut().run("type.create", json!({"text": "HO", "size": 60, "x": 100, "y": 150})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        h.run_steps(2);
+        let before = h.state().session.active().unwrap().doc.layer(id).unwrap().content.clone();
+        click(&mut h, 115.0, 130.0, Modifiers::NONE);
+        assert!(!h.state().ui.text_edit.as_ref().unwrap().created, "{tool:?}: editing the existing layer");
+        assert_cmd_is_the_type_boxs(&mut h, tool, id, "clicked into");
+        let after = &h.state().session.active().unwrap().doc.layer(id).unwrap().content;
+        let text = |c: &photocraft_doc::LayerContent| match c {
+            photocraft_doc::LayerContent::Text(t) => t.text.clone(),
+            _ => panic!("not a text layer"),
+        };
+        assert_eq!(text(after), text(&before), "{tool:?}: nothing typed");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert!(cmd_is_move(&h), "{tool:?}: committed, ⌘ is the Move tool");
+        hold_mods(&mut h, Modifiers::NONE);
+
+        // A new box with its placeholder selected, nothing typed over it.
+        let mut h = harness(tool);
+        h.state_mut().session.edit_prefs(|p| p.type_.fill_new_type_layers_with_placeholder = true);
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+        click(&mut h, 120.0, 150.0, Modifiers::NONE);
+        let id = photocraft_doc::LayerId(h.state().ui.text_edit.as_ref().unwrap().layer);
+        assert_cmd_is_the_type_boxs(&mut h, tool, id, "placeholder");
+    }
 }
 
 /// Free Transform keeps ⌘ (its distort handles) while the Hand is selected: a ⌘-click is not the

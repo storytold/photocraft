@@ -85,7 +85,7 @@ fn guides_of(list: &photocraft_doc::Guides, color: [u8; 3], line: GuideLine, loc
 /// Whether `tool` takes guides with the platform command key held: the selection tools and every tool on which ⌘ is
 /// the Move tool (`tools::takes_command_stand_in`), not while a lasso outline is open, Free Transform runs or type
 /// is being edited. A tool's own drag holds the pointer, so the guides get no press during one.
-fn moves_with_command(app: &PhotocraftApp, tool: Tool) -> bool {
+pub(crate) fn moves_with_command(app: &PhotocraftApp, tool: Tool) -> bool {
     let takes = crate::canvas::tools::takes_command_stand_in(tool) || crate::canvas::tools::family(tool) == Family::Selection;
     let idle = !app.canvas_tools.selection.outline_open() && app.ui.transform.is_none() && app.ui.text_edit.is_none();
     takes && idle

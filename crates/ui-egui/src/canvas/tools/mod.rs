@@ -229,13 +229,20 @@ pub(crate) fn family(tool: Tool) -> Family {
 }
 
 /// Whether holding ⌘ (Ctrl off the Mac) over `tool` makes the Move tool take the press: every tool but the ones ⌘ means
-/// something else to (Hand, Rotate View, Zoom, the crops, Slice, the path and shape tools, the Type tools). The
-/// selection tools read ⌘ per press themselves and hand the press to the stand-in (`Ignored`) where ⌘ moves the layer.
-/// `run` installs the Command stand-in by it and the snap targets of the moving set follow it.
+/// something else to (Hand, Rotate View, Zoom, the crops, Slice, the path and shape tools). The
+/// selection tools read ⌘ per press themselves and hand the press to the stand-in (`Ignored`) where ⌘ moves the layer,
+/// and so do the Type tools once the text is committed; while type is being edited ⌘ is the type box's
+/// ([`command_stand_in_now`]). `run` installs the Command stand-in by it and the snap targets of the moving set follow it.
 pub(crate) fn takes_command_stand_in(tool: Tool) -> bool {
-    !tool.is_type()
-        && !matches!(family(tool), Family::Move | Family::Hand | Family::Zoom | Family::RotateView | Family::Crop | Family::PerspectiveCrop | Family::Slice)
+    !matches!(family(tool), Family::Move | Family::Hand | Family::Zoom | Family::RotateView | Family::Crop | Family::PerspectiveCrop | Family::Slice)
         && family(tool) != Family::Vector
+}
+
+/// [`takes_command_stand_in`] for the selected tool as the app stands: a Type tool keeps ⌘ while its type box is open.
+/// As in Photoshop an open box is being edited whatever is in it (a new, empty box, or one clicked into with nothing
+/// typed yet), so ⌘↵ commits and ⌘ still held then moves the text layer (#9994).
+pub(crate) fn command_stand_in_now(app: &PhotocraftApp) -> bool {
+    takes_command_stand_in(app.ui.tool) && !(app.ui.tool.is_type() && app.ui.text_edit.is_some())
 }
 
 /// The app for one tool method at a time. A tool in the pass holds the scope instead of `&mut PhotocraftApp`, so the
@@ -532,7 +539,7 @@ fn with_rig<R>(
         (Some(tool), Some(run)) => Some(crop::pass(tool, run, ctx, crop_shown)),
         _ => None,
     };
-    let command_wanted = stand_ins && !transform_open && takes_command_stand_in(tool);
+    let command_wanted = stand_ins && !transform_open && command_stand_in_now(app);
     let alt_wanted = stand_ins && !transform_open && super::cursor_policy::alt_eyedropper(tool);
     let source_wanted = stand_ins && matches!(tool, Tool::CloneStamp | Tool::Healing);
 
