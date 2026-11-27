@@ -68,10 +68,7 @@ fn a_bounded_soft_stroke_warns_when_spacing_leaves_the_path_past_its_reach() {
     // #8389: the first dab's reach, not the nominal radius, decides whether the path was covered.
     let mut s = session(200, 80);
     let r = s
-        .execute(
-            "paint.stroke",
-            json!({"points": [[40, 40], [70, 40]], "size": 80, "hardness": 0, "spacing": 1, "tipBoundary": 0.55, "color": "#000000"}),
-        )
+        .execute("paint.stroke", json!({"points": [[40, 40], [70, 40]], "size": 80, "hardness": 0, "spacing": 1, "tipBoundary": 0.55, "color": "#000000"}))
         .unwrap();
     assert_eq!(r["pitch"].as_f64(), Some(80.0), "{r}");
     let warnings = stroke_warnings(&r);
