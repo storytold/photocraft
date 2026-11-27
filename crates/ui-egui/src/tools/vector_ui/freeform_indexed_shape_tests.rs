@@ -3,15 +3,14 @@
 //! and leaves the document unchanged. The Pen and other colour modes weren't measured and keep
 //! today's behaviour.
 
-use egui::Modifiers;
 use egui::accesskit::Role;
+use egui::{Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{ColorMode, LayerContent};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
 use crate::options_bar_mode_wheel_tests::harness;
 use crate::state::Tool;
 use craft::draw::ui::VectorMode;
@@ -50,18 +49,24 @@ fn make_shape(h: &mut H) {
     h.run_steps(4);
 }
 
-/// A freehand wave with the Freeform Pen through the canvas.
+/// A freehand wave with the Freeform Pen, as pointer events through the harness's frames: after a
+/// stroke delivered outside them (`canvas::tool_event`) the memoized options bar (#16118) took no
+/// click on Make: Shape.
 fn stroke(h: &mut H) {
-    let app = h.state_mut();
-    let none = Modifiers::NONE;
-    let at = |k: u32| (10.0 + 1.5 * f64::from(k), 24.0 - 15.0 * (std::f64::consts::PI * f64::from(k) / 15.0).sin());
-    tool_event(app, ToolEvent::Down { x: 10.0, y: 24.0, pressure: 1.0 }, none);
+    let at = |h: &mut H, k: u32| {
+        let doc = [10.0 + 1.5 * f64::from(k), 24.0 - 15.0 * (std::f64::consts::PI * f64::from(k) / 15.0).sin()];
+        crate::canvas::testing::to_screen(h.state_mut(), doc)
+    };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let p = at(h, 0);
+    h.event(egui::Event::PointerMoved(p));
+    h.event(button(p, true));
     for k in 1..=30 {
-        let (x, y) = at(k);
-        tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, none);
+        let q = at(h, k);
+        h.event(egui::Event::PointerMoved(q));
     }
-    let (x, y) = at(30);
-    tool_event(app, ToolEvent::Up { x, y }, none);
+    let q = at(h, 30);
+    h.event(button(q, false));
     h.run_steps(4);
 }
 
