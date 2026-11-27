@@ -464,6 +464,29 @@ fn layer_mask_hides_effects() {
     }
 }
 
+/// Where a mask hides a layer's effects completely the backdrop stays as it was, so HDR values do
+/// not depend on whether a render tile reaches the layer (tiles beyond its effects skip it).
+#[test]
+fn fully_hiding_mask_keeps_hdr_backdrop_in_every_tile() {
+    let mut d = Document::new("t", Size::new(600, 64), ColorMode::Rgb, SampleType::F32);
+    let mut hdr = Layer::raster("hdr", d.pixel_format());
+    let px: Vec<f32> = (0..600 * 64).flat_map(|_| [2.0, 1.5, 1.25, 1.0]).collect();
+    hdr.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 600, 64), &px);
+    d.layers.push(hdr);
+    let mut l = solid(&d, "fx", Rect::new(100, 16, 140, 48), BLUE);
+    l.effects.items.push(Effect::default_drop_shadow());
+    l.mask = Some(LayerMask::hide_all());
+    l.advanced.layer_mask_hides_effects = true;
+    d.layers.push(l);
+    let a = render_tiled(&d, d.bounds(), 256);
+    let b = render_tiled(&d, d.bounds(), 64);
+    assert!(a.px == b.px, "tile size changes the result");
+    for (x, y, what) in [(560, 30, "far from the layer"), (120, 30, "under the hidden layer")] {
+        let got = a.px[y * 600 + x];
+        assert!(got[..3].iter().all(|&v| v > 1.0), "{what}: HDR value clamped, got {got:?}");
+    }
+}
+
 #[test]
 fn vector_mask_hides_effects() {
     use photocraft_doc::{Path, Subpath, VectorMask};

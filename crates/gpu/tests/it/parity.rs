@@ -14,10 +14,10 @@ const TOL: f32 = 1.0 / 255.0 + 4.0 * f32::EPSILON;
 
 use crate::GPU_LOCK;
 
-struct Gpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    comp: Compositor,
+pub(crate) struct Gpu {
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) comp: Compositor,
     /// The same device with a simulated texture limit of [`PAGED_LIMIT`]: every check also runs
     /// through layer pages and per-cell effect maps.
     paged: Compositor,
@@ -98,7 +98,7 @@ fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
 /// `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=fxc` tests D3D12 with FXC, the app's default on Windows,
 /// where the default adapter may be Vulkan. A backend asked for that can't run the tests fails
 /// them rather than skipping.
-fn gpu() -> Option<Gpu> {
+pub(crate) fn gpu() -> Option<Gpu> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let required = std::env::var_os("WGPU_BACKEND").is_some();
     let instance = crate::instance();
@@ -141,6 +141,21 @@ fn gpu() -> Option<Gpu> {
     Some(Gpu { device, queue, comp, paged, _lock: lock })
 }
 
+/// A compositor with half-float accumulation on `g`'s device, as on adapters that can't render
+/// `Rgba32Float`.
+pub(crate) fn half_float_compositor(g: &Gpu) -> Compositor {
+    Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba16Float).expect("half-float compositor")
+}
+
+/// `comp`'s render of `doc`, within `tolerance` of the CPU's (premultiplied).
+pub(crate) fn check_with(g: &Gpu, comp: &mut Compositor, doc: &Document, tolerance: f32, what: &str) -> Vec<[f32; 4]> {
+    let cpu = photocraft_compose::render(doc, doc.bounds());
+    let out = render_to_vec(comp, &g.device, &g.queue, doc, doc.bounds()).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let worst = worst_diff(&cpu.px, &out);
+    assert!(worst.0 <= tolerance, "{what}: max diff {:.2}/255 at pixel {}: cpu {:?} gpu {:?}", worst.0 * 255.0, worst.1, cpu.px[worst.1], out[worst.1]);
+    out
+}
+
 /// Any adapter and device, for the fallback-path tests (which don't need 32-bit float targets).
 /// The returned guard holds [`GPU_LOCK`] until the device is dropped.
 fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {
@@ -159,7 +174,7 @@ fn rnd(seed: u32, i: u32) -> f32 {
     (h & 0xffff) as f32 / 65535.0
 }
 
-fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f32) -> Layer {
+pub(crate) fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f32) -> Layer {
     let mut l = Layer::raster(name, fmt);
     let n = rect.width() as usize * rect.height() as usize;
     let ch = fmt.channels();
@@ -175,7 +190,7 @@ fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f
     l
 }
 
-fn mask(rect: Rect, seed: u32, default: f32) -> LayerMask {
+pub(crate) fn mask(rect: Rect, seed: u32, default: f32) -> LayerMask {
     let mut m = LayerMask::reveal_all();
     m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
     let data: Vec<f32> = (0..rect.width() * rect.height()).map(|i| rnd(seed, i)).collect();
@@ -192,7 +207,7 @@ fn alone(mut l: Layer) -> Layer {
     l
 }
 
-fn base_doc(w: u32, h: u32) -> Document {
+pub(crate) fn base_doc(w: u32, h: u32) -> Document {
     let mut d = Document::new("t", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
     d.layers.push(noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, w, h), 1, 0.3));
     d
@@ -251,11 +266,11 @@ fn diff_rect_full(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result
 
 /// GPU vs CPU over `rect`: Err with the worst pixel if over the tolerance, else the stats of
 /// the unpaged render.
-fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+pub(crate) fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
     diff_rect_full(g, doc, rect, what).map(|pass| pass.whole_stats)
 }
 
-fn check(g: &mut Gpu, doc: &Document, what: &str) {
+pub(crate) fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
 }
 
@@ -596,7 +611,15 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     check(&mut g, &doc, "bounded admission");
     assert!(g.comp.composite_cache_bytes() <= 1 << 20);
     assert!(diff_rect(&mut g, &doc, doc.bounds(), "bounded cache keeps its hits").unwrap().prefix_hits > 0);
-    doc.layers[0].advanced.knockout = photocraft_doc::Knockout::Deep;
+    // Stroke Emboss still composites on the CPU (Advanced Blending options no longer do).
+    doc.layers[2].effects.items.push(Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        size: 3.0,
+        position: StrokePosition::Outside,
+        paint: FxPaint::Color(Color::rgb(0.1, 0.7, 0.3)),
+        overprint: false,
+    }));
+    doc.layers[2].effects.items.push(Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss, true, 6.0, 0.0)));
     assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
     assert_eq!(g.comp.composite_cache_bytes(), 0);
 }
@@ -1697,7 +1720,7 @@ fn stroke(size: f32, position: StrokePosition, paint: FxPaint) -> StrokeFx {
     StrokeFx { common: FxCommon::new(BlendMode::Normal, 0.9), size, position, paint, overprint: false }
 }
 
-fn checker_pattern() -> Pattern {
+pub(crate) fn checker_pattern() -> Pattern {
     let mut s = photocraft_raster::Surface::new(PixelFormat::RGBA8);
     s.fill_rect(Rect::new(0, 0, 6, 5), &[0.9, 0.2, 0.1, 1.0]);
     s.fill_rect(Rect::new(0, 0, 3, 3), &[0.1, 0.3, 0.9, 0.6]);
@@ -3466,10 +3489,10 @@ fn dissolve_adjustments_and_effects_match_cpu_in_offset_regions() {
 }
 
 /// Transparency Shapes Layer off changes the special eight's blend (the layer's alpha blends as
-/// Fill, #5692); the GPU has no pass for it and leaves such documents to the CPU. Other modes look
-/// the same either way and stay on the GPU.
+/// Fill, #5692) and the shape effects take; the GPU runs both for a layer that isn't clipped to a
+/// base. Clipped with either, the layer still composites on the CPU.
 #[test]
-fn transparency_shapes_off_special_blend_falls_back_to_the_cpu() {
+fn transparency_shapes_off_runs_on_the_gpu_unless_clipped() {
     let Some(mut g) = gpu() else { return };
     let mut d = base_doc(64, 48);
     let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
@@ -3477,11 +3500,17 @@ fn transparency_shapes_off_special_blend_falls_back_to_the_cpu() {
     l.opacity = 0.53;
     l.advanced.transparency_shapes = false;
     d.layers.push(l);
-    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "Color Dodge with Transparency Shapes Layer off");
+    check(&mut g, &d, "Color Dodge with Transparency Shapes Layer off");
     if let Some(l) = d.layers.last_mut() {
         l.blend = BlendMode::Multiply;
     }
     check(&mut g, &d, "Multiply with Transparency Shapes Layer off");
+    let mut c = noise_layer("clipped", PixelFormat::RGBA8, Rect::new(8, 8, 50, 40), 3, 0.2);
+    c.clipped = true;
+    c.blend = BlendMode::ColorDodge;
+    c.advanced.transparency_shapes = false;
+    d.layers.push(c);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "a clipped Color Dodge layer with Transparency Shapes Layer off");
 }
 
 /// #5846: a shape's Density and Feather soften its fill (its own rendered pixels), with and

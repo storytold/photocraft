@@ -163,6 +163,13 @@ pub fn shadow_see_through(layer: &Layer) -> f32 {
     if matches!(layer.blend, BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough) { 1.0 - layer.fill_opacity.clamp(0.0, 1.0) } else { 1.0 }
 }
 
+/// Blend Interior Effects as Group with Fill below 100 %: the interior effects are combined with
+/// the layer's content first, and Fill applies to that combination (`paint_interior`). Shared by
+/// the CPU path and the GPU planner.
+pub fn groups_interior(layer: &Layer) -> bool {
+    layer.advanced.blend_interior && layer.fill_opacity < 1.0
+}
+
 /// Blend Interior Effects as Group off (Photoshop's default): the layer's mode applies to its
 /// own pixels only, and the interior effects paint over the blended result. The layer is merged
 /// into the backdrop before they paint, so an Overlay colour overlay on a black Color-mode layer
@@ -449,7 +456,7 @@ impl<'a> EffectPass<'a> {
     /// Blend Interior Effects as Group: the interior effects (overlays, satin, inner glow) are
     /// combined with the content first, and fill opacity applies to the combination.
     fn interior_group(&self) -> bool {
-        self.layer.advanced.blend_interior && self.layer.fill_opacity < 1.0
+        groups_interior(self.layer)
     }
 
     /// The layer's own pixels at fill opacity, with their alpha made relative to `shape`.

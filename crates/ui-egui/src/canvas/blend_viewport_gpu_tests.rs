@@ -86,7 +86,8 @@ fn blend_hover_during_background_redraw_restores_committed_pixels() {
     app.run("file.new", json!({"width":2600,"height":1700,"background":"#336699"})).unwrap();
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     app.run("edit.fill", json!({"color":"#cc8844"})).unwrap();
-    app.run("layer.layerStyle.blendingOptions", json!({"knockout":"shallow"})).unwrap();
+    app.run("layer.layerStyle.stroke", json!({"size": 2, "color": "#ff0000", "position": "inside"})).unwrap();
+    app.run("layer.layerStyle.bevelEmboss", json!({"style": "stroke", "size": 6, "depth": 200})).unwrap();
     let ctx = app.ctx().clone();
     let visible = DRect::new(256, 256, 512, 512);
     assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
@@ -146,7 +147,8 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     app.run("edit.fill", json!({"color":"#cc8844"})).unwrap();
     if cpu_fallback {
-        app.run("layer.layerStyle.blendingOptions", json!({"knockout":"shallow"})).unwrap();
+        app.run("layer.layerStyle.stroke", json!({"size": 2, "color": "#ff0000", "position": "inside"})).unwrap();
+        app.run("layer.layerStyle.bevelEmboss", json!({"style": "stroke", "size": 6, "depth": 200})).unwrap();
     }
     let mut layers = vec![photocraft_doc::LayerId(layer)];
     if multiple_layers {

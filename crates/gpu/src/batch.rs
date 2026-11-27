@@ -93,7 +93,7 @@ pub(crate) const BATCH: usize = 4;
 /// For each pass, how many passes from it on the executor draws as one `fs_layerbatch` pass
 /// (1: the pass alone). A run starts at a `LayerBlend` pass over the whole chunk (no clip) that
 /// isn't a gradient (whose parameters use the words the extra layers go in), and continues while
-/// the next pass is a `LayerBlend` of an unmasked plain layer (no text gamma, no Dissolve) onto
+/// the next pass is a `LayerBlend` of an unmasked plain layer (no text gamma, no Dissolve, no `F_SHAPELESS`) onto
 /// exactly what the previous pass wrote, a slot nothing else reads before it is written again.
 /// A run never ends in the slot it reads from.
 ///
@@ -125,7 +125,10 @@ pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
         })
         .collect();
     let lead = |p: &plan::Pass<'_>| p.kernel == Kernel::LayerBlend && p.clip.is_none() && !p.gradient;
-    let extra = |p: &plan::Pass<'_>| lead(p) && p.mask.is_none() && p.flags & plan::F_TEXT_GAMMA == 0 && p.mode != photocraft_color::BlendMode::Dissolve;
+    // A `F_SHAPELESS` layer splits its mask from its alpha, which an extra layer's record can't.
+    let extra = |p: &plan::Pass<'_>| {
+        lead(p) && p.mask.is_none() && p.flags & (plan::F_TEXT_GAMMA | plan::F_SHAPELESS) == 0 && p.mode != photocraft_color::BlendMode::Dissolve
+    };
     (0..n)
         .map(|i| {
             let Some(first) = passes.get(i).filter(|p| lead(p)) else { return 1 };

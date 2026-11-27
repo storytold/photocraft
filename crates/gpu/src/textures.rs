@@ -66,12 +66,12 @@ pub(crate) enum TexKind {
 impl TexKind {
     pub(crate) fn for_surface(role: Role, f: PixelFormat) -> Self {
         match role {
-            Role::Content | Role::Stroke if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
-            Role::Content | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
-            Role::Content | Role::Stroke => TexKind::Rgba16F,
-            Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
-            Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
-            Role::Mask => TexKind::R16F,
+            Role::Content | Role::Fill | Role::Stroke if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
+            Role::Content | Role::Fill | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
+            Role::Content | Role::Fill | Role::Stroke => TexKind::Rgba16F,
+            Role::Mask | Role::VisibleMask | Role::HidingMask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
+            Role::Mask | Role::VisibleMask | Role::HidingMask if f.sample == SampleType::F32 => TexKind::R32F,
+            Role::Mask | Role::VisibleMask | Role::HidingMask => TexKind::R16F,
         }
     }
     pub(crate) fn format(self) -> wgpu::TextureFormat {
