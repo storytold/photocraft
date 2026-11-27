@@ -107,7 +107,7 @@ pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 #[cfg(test)]
 pub(crate) use strokes::strokes_live;
-pub(crate) use strokes::{CommittedStroke, LiveStroke, unsmoothed_line};
+pub(crate) use strokes::{CommittedStroke, LiveStroke, PendingStroke, frame_input_reaches_document, settle_pending_stroke, unsmoothed_line};
 #[cfg(test)]
 use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]

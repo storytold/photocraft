@@ -22,8 +22,8 @@ use super::document_display::CanvasHost;
 use super::PhotocraftApp;
 use super::paint_mouse::{SecondaryUse, clears, secondary_takes, sync_tool_brush};
 use super::strokes::{
-    HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, live_stroke, live_stroke_busy, paint_target, snap_aliased_tip, stroke_params, stroke_wants_time,
-    strokes_live, tap_at_peak_pressure,
+    HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, live_stroke, live_stroke_busy, paint_target, settle_pending_stroke, snap_aliased_tip, stroke_params,
+    stroke_wants_time, strokes_live, tap_at_peak_pressure,
 };
 use super::tools::{FamilyTool, ToolScope};
 use crate::state::Tool;
@@ -294,6 +294,8 @@ fn begin(app: &mut PhotocraftApp, state: &mut PaintState, pointer: &ToolPointer,
     if from.is_some() {
         app.stylus.record_point();
     }
+    // The new stroke starts from the committed document.
+    settle_pending_stroke(app, true);
     app.live_stroke = if strokes_live(tool) { begin_live_stroke(app, &stroke) } else { None };
     if tool == Tool::MixerBrush && app.live_stroke.is_none() {
         use photocraft_engine::brush_cmds::mixer_live::LiveMixer;

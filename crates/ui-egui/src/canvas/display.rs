@@ -1,4 +1,4 @@
-use super::strokes::live_stroke;
+use super::strokes::{live_stroke, pending_stroke};
 use super::{Document, PhotocraftApp};
 use photocraft_doc::LayerContent;
 use photocraft_engine::color_cmds::ColorExt;
@@ -178,6 +178,10 @@ pub(crate) fn display_doc_live(app: &mut PhotocraftApp, idx: usize, live: LivePr
     let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.doc().clone(), l.display_key());
+    }
+    // A released stroke whose commit isn't done: the canvas keeps showing its last step.
+    if let Some(p) = pending_stroke(app, idx) {
+        return (p.doc().clone(), p.display_key());
     }
     if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
         && app.session.active_index() == Some(idx)

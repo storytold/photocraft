@@ -31,6 +31,8 @@ impl PhotocraftApp {
         self.finish_captures(&mut channel, finished);
         let settle = settle_ms(ctx.global_style().animation_time);
         while let Some(req) = channel.next_request() {
+            // Reads and screenshots see the committed stroke.
+            crate::canvas::settle_pending_stroke(self, true);
             let reply = crate::control::handle(self, ctx, &req);
             channel.settle(req, reply, self.document_identity(), settle);
             // `ui.set` may have changed the edit target: the next request sees its colours.

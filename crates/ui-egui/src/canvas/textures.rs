@@ -3,7 +3,7 @@ use craft::behavior::CanvasView;
 use super::display::{GPU_OUTPUT, LiveProposal, canvas_display, display_doc_live, texture_key};
 use super::filter_preview::filter_channel_preview;
 use super::navigator::navigator_waits_for_drag;
-use super::strokes::live_stroke;
+use super::strokes::{live_stroke, pending_stroke};
 use super::{Document, PhotocraftApp};
 use photocraft_doc::LayerContent;
 use photocraft_geom::Rect as DRect;
@@ -220,9 +220,13 @@ pub(crate) fn damage_since(
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
-    let l = live_stroke(app, idx).filter(|l| seen.0 == now.0 && l.display_key() == now.1)?;
-    let r = l.since(seen.1 ^ display_key)?;
-    Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.doc().layers)) })
+    if let Some(l) = live_stroke(app, idx).filter(|l| seen.0 == now.0 && l.display_key() == now.1) {
+        let r = l.since(seen.1 ^ display_key)?;
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.doc().layers)) });
+    }
+    let p = pending_stroke(app, idx).filter(|p| seen.0 == now.0 && p.display_key() == now.1)?;
+    let r = p.since(seen.1 ^ display_key)?;
+    Some(if r.is_empty() { r } else { r.inflate(effect_reach(&p.doc().layers)) })
 }
 
 /// Document `doc`'s canvas caches showed a preview that the edit just committed reproduces

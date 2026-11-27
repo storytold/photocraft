@@ -340,6 +340,11 @@ pub struct PhotocraftApp {
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
     /// refresh only what it drew after the step they showed (`canvas::damage_since`).
     committed_stroke: Option<canvas::CommittedStroke>,
+    /// A released stroke whose commit is still being made on its thread; it lands in a later
+    /// frame, or before anything reads or changes the document (`canvas::settle_pending_stroke`).
+    pending_stroke: Option<canvas::PendingStroke>,
+    /// How long a release waits for that commit before the canvas goes on without it.
+    stroke_commit_wait: std::time::Duration,
     /// Whether the last retouching stroke's commit took the pixels its live stroke drew
     /// (`"fromLive"`) instead of rendering the stroke again (`retouch_ui::finish_stroke`).
     pub(crate) retouch_from_live: bool,

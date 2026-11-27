@@ -409,6 +409,7 @@ fn safe_to_apply(app: &PhotocraftApp) -> bool {
         && app.shape_fill_preview.is_none()
         && app.solid_fill_preview.is_none()
         && app.live_stroke.is_none()
+        && app.pending_stroke.is_none()
         && !crate::canvas::tools::in_gesture(app)
 }
 

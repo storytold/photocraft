@@ -1,5 +1,5 @@
 use super::display::{canvas_display, display_doc, display_image};
-use super::strokes::live_stroke;
+use super::strokes::{live_stroke, pending_stroke};
 use super::textures::effect_reach;
 use super::{Document, PhotocraftApp, Rect};
 use egui::TextureOptions;
@@ -17,7 +17,11 @@ const NAVIGATOR_SETTLE_MS: f64 = 200.0;
 /// of document `idx` and catches up on release: each step of the drag is a new preview, and a
 /// thumbnail composite of the whole document per step makes painting lag on large images.
 pub(super) fn navigator_waits_for_drag(app: &PhotocraftApp, idx: usize) -> bool {
-    crate::move_ui::showing(app) || crate::patch_preview::showing(app) || crate::cam_preview::showing(app) || live_stroke(app, idx).is_some()
+    crate::move_ui::showing(app)
+        || crate::patch_preview::showing(app)
+        || crate::cam_preview::showing(app)
+        || live_stroke(app, idx).is_some()
+        || pending_stroke(app, idx).is_some()
 }
 
 /// The Navigator panel's image of document `idx`. With the CPU canvas that is the canvas texture

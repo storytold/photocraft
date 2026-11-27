@@ -10,7 +10,7 @@ use egui::{Color32, ColorImage};
 
 use super::PhotocraftApp;
 use super::display::{canvas_display, display_image};
-use super::paint_thread::{PaintThread, Step};
+use super::paint_thread::{Finishing, PaintThread, Step, Wait};
 use super::paint_tool::PaintStroke;
 use super::textures::shown_as_document;
 use crate::state::Tool;
@@ -386,6 +386,116 @@ impl CommittedStroke {
     }
 }
 
+/// What a stroke's thread made of it at pen-up (`PaintThread::finish_with`).
+pub(super) struct Settled {
+    /// The damage of the steps painted after the last one the canvas took; `None` when one failed
+    /// or the thread stopped mid-step: the commit then renders the stroke itself.
+    damage: Option<Vec<DRect>>,
+    /// The Brush's commit, to offer the command; `None` for any other stroke.
+    commit: Option<photocraft_engine::Result<photocraft_engine::brush_cmds::LiveCommit>>,
+    /// What an overlay stroke showed without the commit's dither (`LiveStroke::overlay_bounds`).
+    undithered: DRect,
+}
+
+impl Settled {
+    /// Runs on the stroke's thread: the whole-stroke composite of the commit is the slow part.
+    fn of(steps: Vec<Step>, stroke: Option<EngineStroke>) -> Self {
+        let damage = steps.into_iter().map(Result::ok).collect::<Option<Vec<_>>>();
+        let (Some(damage), Some(stroke)) = (damage, stroke) else { return Self { damage: None, commit: None, undithered: DRect::EMPTY } };
+        match stroke {
+            EngineStroke::Brush(stroke) => {
+                let undithered = stroke.overlay_bounds().unwrap_or(DRect::EMPTY);
+                Self { damage: Some(damage), commit: Some(stroke.into_commit()), undithered }
+            }
+            _ => Self { damage: Some(damage), commit: None, undithered: DRect::EMPTY },
+        }
+    }
+}
+
+/// A released stroke whose commit is still being made on its thread: the canvas keeps showing the
+/// live stroke's last step meanwhile, and the commit lands once the thread is done
+/// (`settle_pending_stroke`). Nothing may read or change the document before that.
+pub(crate) struct PendingStroke {
+    finishing: Finishing<Settled>,
+    /// The document as the stroke last showed it.
+    shown: Arc<photocraft_doc::Document>,
+    doc: photocraft_doc::DocId,
+    revision: u64,
+    /// Preview key of the stroke (`LiveStroke::key`).
+    key: u64,
+    /// Damage of each step the canvas took (step 0 = the document before the stroke).
+    damage: Vec<DRect>,
+    cmd: &'static str,
+    params: serde_json::Value,
+}
+
+impl PendingStroke {
+    pub(super) fn doc(&self) -> &Arc<photocraft_doc::Document> {
+        &self.shown
+    }
+
+    pub(super) fn display_key(&self) -> u64 {
+        self.key + self.damage.len() as u64
+    }
+
+    /// See `LiveStroke::since`.
+    pub(super) fn since(&self, key: u64) -> Option<DRect> {
+        let seen = if key == 0 { 0 } else { usize::try_from(key.checked_sub(self.key)?).ok()? };
+        Some(self.damage.get(seen..)?.iter().fold(DRect::EMPTY, |a, r| a.union(r)))
+    }
+}
+
+/// The pending stroke on document `idx`, while it is current.
+pub(crate) fn pending_stroke(app: &PhotocraftApp, idx: usize) -> Option<&PendingStroke> {
+    let st = app.session.documents().get(idx)?;
+    app.pending_stroke.as_ref().filter(|p| p.doc == st.doc.id && p.revision == st.revision)
+}
+
+/// Land the pending stroke, if there is one: with `wait`, once its thread is done; without, only if
+/// it already is (the canvas calls it each frame). Whatever could read or change the document calls
+/// it with `wait` first, so a stroke never lands out of order.
+pub(crate) fn settle_pending_stroke(app: &mut PhotocraftApp, wait: bool) {
+    // Taken first: the commands it runs find nothing pending.
+    let Some(mut pending) = app.pending_stroke.take() else { return };
+    let outcome = if wait { pending.finishing.wait_forever().map_or(Wait::Lost, Wait::Ready) } else { pending.finishing.poll() };
+    resolve_pending(app, pending, outcome);
+}
+
+fn resolve_pending(app: &mut PhotocraftApp, pending: PendingStroke, outcome: Wait<Settled>) {
+    match outcome {
+        Wait::Ready(settled) => land_pending_stroke(app, pending, settled),
+        Wait::Pending => app.pending_stroke = Some(pending),
+        // The thread stopped without a result: the commit renders the stroke itself.
+        Wait::Lost => {
+            let _ = app.run(pending.cmd, pending.params);
+            app.session.clear_live_stroke();
+        }
+    }
+}
+
+/// Does `event` come from something that can read or change the document (a key, a click, text, a
+/// drop), as pointer motion, scrolling, zooming and focus changes do not?
+pub(crate) fn event_reaches_document(event: &egui::Event) -> bool {
+    !matches!(
+        event,
+        egui::Event::PointerMoved(_)
+            | egui::Event::MouseMoved(_)
+            | egui::Event::MouseWheel { .. }
+            | egui::Event::Zoom(_)
+            | egui::Event::WindowFocused(_)
+            | egui::Event::PointerGone
+    )
+}
+
+/// Does this frame's input hold an event that [`event_reaches_document`]?
+pub(crate) fn frame_input_reaches_document(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.events.iter().any(event_reaches_document))
+}
+
+/// How long a release waits for the stroke's commit before the canvas goes on without it. Tests
+/// wait for it, so they see the commit land; they set a shorter wait to see it pending.
+pub(crate) const STROKE_COMMIT_WAIT: std::time::Duration = if cfg!(test) { std::time::Duration::MAX } else { std::time::Duration::from_millis(6) };
+
 /// The live stroke on document `idx`, while it is current. The paint tool drops `app.live_stroke`
 /// with its stroke, so a live stroke that exists belongs to a running gesture.
 pub(crate) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
@@ -663,6 +773,7 @@ pub(super) fn tap_at_peak_pressure(app: &mut PhotocraftApp, stroke: &mut PaintSt
     let refresh_mixer = stroke.tool == Tool::MixerBrush && peak > p[2];
     p[2] = p[2].max(peak);
     if refresh_mixer {
+        settle_pending_stroke(app, true);
         app.live_stroke = begin_live_stroke(app, stroke);
     }
 }
@@ -765,6 +876,8 @@ fn finish_mixer(app: &mut PhotocraftApp, d: &PaintStroke) {
 /// offered to the commit (`Session::offer_live_stroke`), so release costs no second render, and
 /// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
 pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
+    // A stroke still pending lands first (a new press settles it already).
+    settle_pending_stroke(app, true);
     let live = app.live_stroke.take();
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
     if let Some(seed) = live.as_ref().and_then(|l| l.seed) {
@@ -786,32 +899,46 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
             Some(sp)
         })
         .collect();
-    // What the live stroke's thread was still painting, then those points.
-    let LiveStroke { paint, doc, key, mut damage, .. } = l;
-    let (steps, stroke) = paint.finish();
-    let painted = stroke.and_then(|mut stroke| {
-        for step in steps.into_iter().chain((!rest.is_empty()).then(|| stroke.push(&rest))) {
-            damage.push(step.ok()?);
-        }
-        Some(stroke)
-    });
+    // The stroke's thread paints what it was still painting, then those points, and makes the
+    // commit; the canvas waits a little for it, then goes on with the stroke shown.
+    let LiveStroke { paint, doc, revision, key, damage, .. } = l;
+    let shown = paint.shown().doc.clone();
+    let cmd = stroke_command(app, d.tool);
+    let wake = {
+        let ctx = app.ctx().clone();
+        move || ctx.request_repaint()
+    };
+    let finishing = paint.finish_with(rest, Settled::of, wake);
+    let mut pending = PendingStroke { finishing, shown, doc, revision, key, damage, cmd, params: p };
+    // A click or key in the release's frame acts on the document next: land the stroke first.
+    let release = |e: &egui::Event| matches!(e, egui::Event::PointerButton { pressed: false, .. });
+    let after = app.ctx().input(|i| i.events.iter().any(|e| event_reaches_document(e) && !release(e)));
+    let outcome = pending.finishing.wait(if after { std::time::Duration::MAX } else { app.stroke_commit_wait });
+    resolve_pending(app, pending, outcome);
+}
+
+/// The old tail of the commit: the stroke's pixels are offered to the command, which takes them
+/// (`"fromLive"`), and the canvas refreshes only what it hadn't shown yet (`CommittedStroke`).
+fn land_pending_stroke(app: &mut PhotocraftApp, pending: PendingStroke, settled: Settled) {
+    let PendingStroke { doc, key, mut damage, cmd, params, .. } = pending;
     // The live stroke can't show these points: the commit renders the stroke itself.
-    let Some(stroke) = painted else {
-        let _ = app.run(stroke_command(app, d.tool), p);
+    let Some(steps) = settled.damage else {
+        let _ = app.run(cmd, params);
         return;
     };
+    damage.extend(steps);
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     // An overlay stroke showed a masked colour layer, without the 8-bit dither the commit adds:
     // the canvas redraws its bounds from the committed document.
-    let mut undithered = DRect::EMPTY;
-    if let EngineStroke::Brush(stroke) = stroke {
-        undithered = stroke.overlay_bounds().unwrap_or(DRect::EMPTY);
-        if app.session.offer_live_stroke(*stroke).is_err() {
-            app.session.clear_live_stroke();
+    let undithered = settled.undithered;
+    if let Some(commit) = settled.commit {
+        match commit {
+            Ok(commit) => app.session.offer_live_commit(commit),
+            Err(_) => app.session.clear_live_stroke(),
         }
     }
     let started = crate::gpu_canvas::now_ms();
-    let result = app.run(stroke_command(app, d.tool), p);
+    let result = app.run(cmd, params);
     app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
     app.session.clear_live_stroke();
     let Ok(r) = result else { return };

@@ -6,6 +6,8 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A released stroke still being committed lands before anything else touches the document.
+        canvas::settle_pending_stroke(self, true);
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         let library_change = matches!(id, "actions.clearAll" | "actions.reset" | "actions.replace" | "actions.undoLibrary");
         if library_change && let Err(error) = actions::library::idle(self, id) {

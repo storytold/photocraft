@@ -63,6 +63,8 @@ impl PhotocraftApp {
             canvas_tools: Default::default(),
             live_stroke: None,
             committed_stroke: None,
+            pending_stroke: None,
+            stroke_commit_wait: canvas::strokes::STROKE_COMMIT_WAIT,
             retouch_from_live: false,
             trail: None,
             remove_pending: Vec::new(),

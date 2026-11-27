@@ -14,7 +14,7 @@ impl PhotocraftApp {
     /// record across all its passes.
     pub(crate) fn finish_frame(&mut self, ctx: &egui::Context, ui_ms: f64) {
         self.perf.stage.ui_ms += ui_ms;
-        self.perf.stage.stroking |= self.live_stroke.is_some();
+        self.perf.stage.stroking |= self.live_stroke.is_some() || self.pending_stroke.is_some();
         if ctx.will_discard() {
             return;
         }
@@ -54,6 +54,13 @@ impl PhotocraftApp {
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
+        // A released stroke still being committed lands before this frame's input can act on the
+        // document; pointer motion, scrolling and the like go on without waiting for it.
+        crate::canvas::settle_pending_stroke(self, crate::canvas::frame_input_reaches_document(ctx));
+        if self.pending_stroke.is_some() {
+            // The thread asks for a frame when it is done; this notices one that stopped.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         // Shortcuts run in this phase: a pass whose input carries an injected step acts for the
         // automation client here too.
         self.automation_input = WindowHost::of(ctx).injected_pass();
