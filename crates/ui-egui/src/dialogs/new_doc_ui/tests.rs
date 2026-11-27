@@ -1,6 +1,9 @@
 use super::*;
 use crate::new_doc_remember_tests::{app, fields, harness, open, press_create};
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::presets::PresetsExt;
 
 /// The default settings with `edit` applied.
 fn options(edit: impl FnOnce(&mut DocumentOptions)) -> DocumentOptions {
@@ -17,7 +20,7 @@ fn color_profile_menu_lists_the_profiles_of_the_modes_space() {
     let lists = profiles(&app);
     let of = |mode: DialogMode| lists.iter().find(|p| p.mode == mode).unwrap_or_else(|| panic!("{mode:?} has a list"));
     let rgb = of(DialogMode::Rgb);
-    assert_eq!(rgb.working, app.session.color.working(photocraft_color::ColorMode::Rgb).description);
+    assert_eq!(rgb.working, app.session.color().working(photocraft_color::ColorMode::Rgb).description);
     assert!(rgb.others.contains(&Builtin::AdobeRgbCompat.id().to_string()));
     assert!(!rgb.others.contains(&Builtin::CoatedCmyk.id().to_string()));
     let cmyk = of(DialogMode::Cmyk);
@@ -141,7 +144,7 @@ fn save_restart_select_create_and_delete_through_the_dialog() {
     h.run_steps(1);
     h.get_by_label("Save Preset").click();
     h.run_steps(3);
-    let stored = h.state().session.presets.documents.clone();
+    let stored = h.state().session.presets().documents.clone();
     assert_eq!(stored.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Wide"]);
     let size = (stored[0].settings.width, stored[0].settings.height);
     assert_eq!(size, (1920, 1080), "the dialog's settings are stored");
@@ -170,7 +173,7 @@ fn save_restart_select_create_and_delete_through_the_dialog() {
     assert_eq!(fields(h.state(), id)["tab"], "saved", "a saved preset opens the Saved tab");
     h.get_by_label("Delete").click();
     h.run_steps(3);
-    assert!(h.state().session.presets.documents.is_empty());
+    assert!(h.state().session.presets().documents.is_empty());
 }
 
 /// Opens New Document, applies `edit` to the settings it shows and presses Create.
@@ -195,7 +198,7 @@ fn create_makes_a_bitmap_document() {
     let doc = &h.state().session.active().expect("a document was created").doc;
     assert_eq!((doc.size.width, doc.size.height), (32, 24));
     assert_eq!(doc.mode, ColorMode::Bitmap, "not a silent RGB document");
-    let recent = &h.state().session.presets.recent_documents;
+    let recent = &h.state().session.presets().recent_documents;
     assert_eq!((recent[0].mode.as_str(), recent[0].depth, recent[0].background.as_str()), ("bitmap", 1, "black"));
     assert_eq!(to_options(&recent[0]).color_mode, DialogMode::Bitmap, "the Recent card opens on Bitmap again");
 }

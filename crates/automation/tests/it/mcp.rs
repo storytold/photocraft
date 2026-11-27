@@ -546,16 +546,21 @@ async fn headless_doc_save_takes_maximize_compatibility() {
 async fn headless_doc_export_layers_takes_maximize_compatibility() {
     let dir = tmp("export-layers-maximize-compat");
     let client = connect(headless_in(&dir)).await;
-    call(&client, "doc_new", json!({"width": 16, "height": 16, "background": "white", "name": "card"})).await;
+    json_of(&call(&client, "doc_new", json!({"width": 16, "height": 16, "background": "white", "name": "card"})).await);
+    json_of(&call(&client, "command_run", json!({"id": "layer.new.layer", "params": {"name": "Ink"}})).await);
     for (sub, params, real) in
         [("on", json!({"dir": "on", "format": "psd"}), true), ("off", json!({"dir": "off", "format": "psd", "maximizeCompatibility": false}), false)]
     {
         let result = json_of(&call(&client, "doc_export_layers", params.clone()).await);
-        assert_eq!(result["count"], 1, "{params}: {result}");
-        let file = result["files"][0].as_str().unwrap();
-        assert!(file.starts_with(sub), "{file}");
-        let bytes = std::fs::read(dir.join(file)).unwrap();
-        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(result["count"], 2, "{params}: {result}");
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2, "{params}: {result}");
+        for file in files {
+            let file = file.as_str().unwrap();
+            assert!(file.starts_with(sub), "{file}");
+            let bytes = std::fs::read(dir.join(file)).unwrap();
+            assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}: {file}");
+        }
     }
     let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
@@ -924,10 +929,18 @@ async fn doc_exports_and_data_set_import_are_capability_scoped() {
         .await,
     );
 
-    let layers = call(&client, "doc_export_layers", json!({"dir": "layers", "prefix": "card"})).await;
+    let params = json!({"dir": "layers", "prefix": "card"});
+    let refused = call(&client, "doc_export_layers", params.clone()).await;
+    assert_eq!(refused.is_error, Some(true), "{}", text(&refused));
+    assert!(text(&refused).contains("Layers to Files needs a document with multiple layers."), "{}", text(&refused));
+    let layers_dir = root.join("layers");
+    assert!(!layers_dir.exists() || std::fs::read_dir(&layers_dir).unwrap().next().is_none());
+
+    json_of(&call(&client, "command_run", json!({"id": "layer.new.layer", "params": {"name": "Ink"}})).await);
+    let layers = call(&client, "doc_export_layers", params).await;
     assert_ne!(layers.is_error, Some(true), "{}", text(&layers));
-    assert_eq!(json_of(&layers)["count"], 1, "{}", text(&layers));
-    assert_eq!(std::fs::read_dir(root.join("layers")).unwrap().count(), 1);
+    assert_eq!(json_of(&layers)["count"], 2, "{}", text(&layers));
+    assert_eq!(std::fs::read_dir(layers_dir).unwrap().count(), 2);
     let sets = call(&client, "doc_export_data_sets", json!({"dir": "sets", "format": "png"})).await;
     assert_ne!(sets.is_error, Some(true), "{}", text(&sets));
     assert_eq!(json_of(&sets)["count"], 2, "{}", text(&sets));
