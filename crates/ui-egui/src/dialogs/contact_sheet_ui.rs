@@ -241,8 +241,17 @@ fn load(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, name: &str, 
 }
 
 /// Sets the values `read` (the settings file's shape) on dialog `id`. A value its row cannot show keeps the current
-/// one. Width and Height come in the file's units, so they are not converted.
-fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, read: Map<String, Value>) {
+/// one. Width and Height come in the file's units, so they are not converted: the units go first and are taken as
+/// shown, as each write below runs [`follow_units`].
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, mut read: Map<String, Value>) {
+    if let Some(units) = read.remove("units") {
+        let _ = app.framework.dialogs.set_json_field(ctx, id, "units", units);
+        if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+            && let Some(units) = d.fields().text("units").map(str::to_owned)
+        {
+            d.set_field(UNITS_SHOWN, FieldValue::Text(units));
+        }
+    }
     for (key, value) in read {
         let (key, value) = match key.as_str() {
             "depth" => ("depth".to_owned(), json!(value.as_u64().map(|d| d.to_string()))),
@@ -254,11 +263,6 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, read: Map<S
             _ => (key, value),
         };
         let _ = app.framework.dialogs.set_json_field(ctx, id, &key, value);
-    }
-    if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
-        && let Some(units) = d.fields().text("units").map(str::to_owned)
-    {
-        d.set_field(UNITS_SHOWN, FieldValue::Text(units));
     }
 }
 
