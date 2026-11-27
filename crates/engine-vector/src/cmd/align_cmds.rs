@@ -117,14 +117,33 @@ fn blend_layers(s: &Session) -> (Vec<LayerId>, Option<LayerId>) {
 
 /// The group whose pixels join the blend and the layer it lends, or `None` when no selected group
 /// does. The measured case of #14206: the selection holds exactly one group, that group sits at the
-/// top level of the stack, and it holds exactly one pixel layer. A group holding several layers or
-/// none that is a pixel layer, a group inside another group and a second selected group were not
-/// measured and lend nothing, as they do today.
+/// top level of the stack, it holds exactly one pixel layer, and it is a plain group - shown, with
+/// no mask of its own, and not an artboard or a frame.
+///
+/// The refusals keep today's behaviour for the shapes the issue did not measure. A group holding
+/// several layers or none that is a pixel layer, a group inside another group and a second selected
+/// group lend nothing. A hidden group is not drawn, so blending its pixels would leave its part of
+/// the overlap uncovered. A masked group multiplies Auto-Blend's mask, which lands on the layer
+/// inside it, with its own, so the two sides would no longer cover the seam once. An artboard clips
+/// its children to its rect and a frame draws over them, so a mask inside either one gives a result
+/// the reference application was never measured against. Group opacity, Fill and a non-Pass-Through
+/// blend mode are not measured either and are left alone: such a group still lends its layer.
 fn blend_donor(doc: &Document, selected: &[LayerId]) -> Option<(LayerId, LayerId)> {
     let groups: Vec<LayerId> = selected.iter().copied().filter(|id| doc.layer(*id).is_some_and(Layer::is_group)).collect();
     let [g] = groups.as_slice() else { return None };
-    let [child] = doc.layer(*g)?.children()? else { return None };
-    if doc.layers.index().depth(*g) != Some(0) || !matches!(child.content, LayerContent::Raster(_)) {
+    if doc.layers.index().depth(*g) != Some(0) {
+        return None;
+    }
+    let l = doc.layer(*g)?;
+    if !l.visible || l.frame.is_some() || l.mask.is_some() || l.vector_mask.is_some() {
+        return None;
+    }
+    let LayerContent::Group(group) = &l.content else { return None };
+    if group.artboard.is_some() {
+        return None;
+    }
+    let [child] = group.children.as_slice() else { return None };
+    if !matches!(child.content, LayerContent::Raster(_)) {
         return None;
     }
     Some((*g, child.id))
