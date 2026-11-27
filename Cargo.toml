@@ -375,3 +375,8 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f3048
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
+# TODO(wgpu-hal > 30.0.1): remove after an upstream release supports non-stretch
+# DX12 HWND presentation, and PhotoCraft verifies it (gfx-rs/wgpu#10196).
+# Temporary fork pin until storytold/craft-libs#473 lands; then use its upstream rev.
+wgpu-hal = { git = "https://github.com/YarilaFox/craft-libs", rev = "9d699255838fb9e66e8cb1191db1227418cbad28" }
