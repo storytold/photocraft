@@ -234,6 +234,13 @@ impl TipProfile {
     pub(crate) fn contains_pixel(self, distance_squared: f32) -> bool {
         !self.bounded || distance_squared < self.reach * self.reach
     }
+
+    #[inline]
+    pub(crate) fn cap_supersampled_coverage(self, distance: f32, average: f32) -> f32 {
+        // Inward samples can still be inside the tip as the pixel centre reaches the boundary.
+        // The centre's falloff keeps their average from leaving a visible jump at the cutoff.
+        if self.bounded { average.min(self.falloff(distance)) } else { average }
+    }
 }
 
 /// `exp(-u)` as `(1 − u/64)⁶⁴` by six squarings: within 1/255 of `exp` where it matters, exact

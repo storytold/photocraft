@@ -1650,7 +1650,9 @@ impl GeneralTip<'_> {
                             sum += profile.falloff(sd);
                         }
                     }
-                    (sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32, d2.sqrt() / rm)
+                    let distance = d2.sqrt();
+                    let average = sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32;
+                    (profile.cap_supersampled_coverage(distance, average), distance / rm)
                 }
                 None => {
                     let d2 = (u * ro).powi(2) + v * v;
