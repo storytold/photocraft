@@ -221,6 +221,13 @@ fn dialog(app: &PhotocraftApp) -> Option<&crate::adjust_dialog::OpenAdjust> {
     crate::adjust_dialog::open_value(app).filter(|open| open.kind == "levels" && open.smart_filter.is_none())
 }
 
+/// What the canvas shows of an open Levels dialog's clipping display, for the document area's version
+/// (`region_versions::canvas`): the dialog and its fields, which change with no command.
+pub(crate) fn canvas_key(app: &PhotocraftApp) -> Option<(craft::ui::dialog::DialogId, String)> {
+    let open = dialog(app)?;
+    Some((open.id, crate::adjust_dialog::open_params(app).map(|params| params.to_string()).unwrap_or_default()))
+}
+
 /// The display the open Levels dialog asks for on document `idx`. None when no Levels dialog
 /// shows clipping, `idx` isn't the active document, or the document can't show it: CMYK and Lab,
 /// a channel, mask or Quick Mask target, or a target that isn't a pixel layer.

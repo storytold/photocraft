@@ -23,7 +23,7 @@ pub fn persist(app: &mut PhotocraftApp) {
     }
     let now = snapshot(app);
     if app.session.prefs().panel_layout != now {
-        app.session.prefs.edit(|prefs| prefs.panel_layout = now);
+        app.session.prefs.remember(|prefs| prefs.panel_layout = now);
     }
 }
 

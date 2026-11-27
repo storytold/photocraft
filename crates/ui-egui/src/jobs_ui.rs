@@ -883,16 +883,25 @@ pub(crate) fn status_job(app: &PhotocraftApp) -> Option<(JobId, crate::panels::s
     Some((j.id, crate::panels::status_bar::Progress { label, fraction: shown_fraction(&j), cancel: Some(tl!("Cancel (Esc)").to_owned()), refused }))
 }
 
-/// Show the folder Batch worker's immutable current document in the canvas area. The worker
-/// publishes snapshots rather than adding them to `Session`, so no edit or Save can target one.
-pub(crate) fn batch_preview(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
-    let current = app
-        .session
+/// The running Batch job whose worker has published its current input, with that snapshot.
+fn shown_batch_preview(app: &PhotocraftApp) -> Option<(JobId, photocraft_engine::jobs::BatchPreview)> {
+    app.session
         .jobs()
         .into_iter()
         .filter(|job| job.command == "file.automate.batch")
-        .find_map(|job| app.session.batch_preview(job.id).map(|preview| (job.id, preview)));
-    let Some((id, preview)) = current else { return false };
+        .find_map(|job| app.session.batch_preview(job.id).map(|preview| (job.id, preview)))
+}
+
+/// What [`batch_preview`] shows, for the document area's version: the job and the snapshot's generation. The worker
+/// publishes a new input with no command or input reaching the area.
+pub(crate) fn batch_preview_key(app: &PhotocraftApp) -> Option<(JobId, u64)> {
+    shown_batch_preview(app).map(|(id, preview)| (id, preview.generation))
+}
+
+/// Show the folder Batch worker's immutable current document in the canvas area. The worker
+/// publishes snapshots rather than adding them to `Session`, so no edit or Save can target one.
+pub(crate) fn batch_preview(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
+    let Some((id, preview)) = shown_batch_preview(app) else { return false };
     let name = std::path::Path::new(&preview.path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| preview.path.clone());
     Row::new().show(ui, |ui, _| {
         Text::new(name.clone()).role(TypeRole::BodyStrong).show(ui);

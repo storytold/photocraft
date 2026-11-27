@@ -42,7 +42,7 @@ pub(crate) struct SnapCache {
 /// tool that hands its press to the Move stand-in. Read before the press so the targets do not
 /// change at it.
 fn moves_as_move_tool(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Move || (crate::canvas::tools::takes_command_stand_in(app.ui.tool) && craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd)
+    app.ui.tool == Tool::Move || (crate::canvas::tools::takes_command_stand_in(app.ui.tool) && craft::ui::runtime::pointer::mods(app.ctx()).cmd)
 }
 
 /// The selected pixels move with the drag, so the selection is not a place to snap to (#6290).

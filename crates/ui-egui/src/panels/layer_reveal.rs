@@ -6,7 +6,7 @@
 //!
 //! The command dispatch takes a [`mark`] before a command and calls [`file`] after it; when the
 //! active layer moved, the reveal waits in `PhotocraftApp::pending_reveal` until the panel next
-//! draws and [`take`]s it, so a hidden panel reveals the layer when it is shown again.
+//! draws and applies it, so a hidden panel reveals the layer when it is shown again.
 //!
 //! Only a change of the active layer reveals: closing the group that holds it, or scrolling
 //! away, is left alone until the next change.
@@ -50,9 +50,9 @@ pub(crate) fn file(app: &mut PhotocraftApp, before: Mark) {
     app.pending_reveal = Some((id, groups));
 }
 
-/// The pending reveal, for the Layers panel's draw: the layer and what its closed parent groups
-/// do. The first pass of a frame takes it, so a second pass in the same frame reveals nothing
-/// again.
+/// The pending reveal: the layer and what its closed parent groups do. The Layers panel takes it
+/// once its real run applied it (`LayersOutput::requests_taken`), so a measuring run or a later
+/// pass of the same frame reveals nothing again.
 pub(crate) fn take(app: &mut PhotocraftApp) -> Option<(LayerId, Groups)> {
     app.pending_reveal.take()
 }

@@ -351,13 +351,13 @@ mod panel_defaults {
         assert_eq!(c.variations.len(), 2);
         let saved = serde_json::to_value(&app.ui.tool_options).unwrap();
         let restored: ToolOptions = serde_json::from_value(saved.clone()).unwrap();
-        assert_eq!(restored, app.ui.tool_options);
+        assert_eq!(restored, *app.ui.tool_options);
         crate::tool_memory::persist(&mut app, &ctx);
         let remembered = app.session.prefs().tool_options.clone();
         let mut restarted = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         restarted.session.prefs.edit(|p| p.tool_options = remembered);
         crate::tool_memory::restore(&mut restarted);
-        assert_eq!(restarted.ui.tool_options, restored, "the real preference restore path retains panel defaults");
+        assert_eq!(*restarted.ui.tool_options, restored, "the real preference restore path retains panel defaults");
         let mut legacy = saved;
         legacy.as_object_mut().unwrap().remove("type_style_defaults");
         let legacy: ToolOptions = serde_json::from_value(legacy).unwrap();
@@ -452,7 +452,7 @@ fn make_harness_with(builder: egui_kittest::HarnessBuilder<Box<PhotocraftApp>>, 
     let builder = builder.allow_missing_glyphs().with_context(app.ctx().clone()).with_size(vec2(1200.0, 800.0)).with_pixels_per_point(ppp);
     let mut h = builder.build_app(
         |ui, app: &mut PhotocraftApp| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );
@@ -921,7 +921,7 @@ fn command_mods() -> Mods {
 
 /// The modifiers held in the harness's last pass: the real keys plus the shell's latch (tp.T15).
 fn held(h: &Harness<'static, Box<PhotocraftApp>>) -> Mods {
-    craft::ui::runtime::pointer::frame(&h.ctx).mods
+    craft::ui::runtime::pointer::mods(&h.ctx)
 }
 
 fn hold(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: Modifiers) {

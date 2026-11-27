@@ -39,7 +39,7 @@ pub fn select(app: &mut PhotocraftApp, name: &str) {
             }
         }
         if let Ok(opts) = serde_json::from_value(cur) {
-            app.ui.tool_options = opts;
+            *app.ui.tool_options = opts;
         }
     }
     // As the options bar does: a crop preset's ratio (or W x H) fits the frame at once.
@@ -132,7 +132,7 @@ mod tests {
         let mut flipped = serde_json::to_value(&app.ui.tool_options).unwrap();
         flip_bools(&mut flipped);
         flipped["feather"] = json!(0.0);
-        app.ui.tool_options = serde_json::from_value(flipped.clone()).unwrap();
+        *app.ui.tool_options = serde_json::from_value(flipped.clone()).unwrap();
         select(&mut app, &name);
         let after = serde_json::to_value(&app.ui.tool_options).unwrap();
         assert_eq!(after["feather"], json!(5.0));

@@ -484,7 +484,7 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, command: &
         }
         return true;
     }
-    let mods = craft::ui::runtime::pointer::frame(ctx).mods;
+    let mods = craft::ui::runtime::pointer::mods(ctx);
     if let Some(event) = command.event(&rows(app), mods) {
         apply(app, ctx, event);
     }

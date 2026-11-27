@@ -8,6 +8,7 @@ use super::{Deserialize, Map, Preferences, Serialize, Value};
 pub struct PrefsStore {
     values: Preferences,
     rev: u64,
+    settings_rev: u64,
     catalog_rev: u64,
     section_revs: std::collections::BTreeMap<String, u64>,
 }
@@ -16,8 +17,15 @@ impl PrefsStore {
     pub fn get(&self) -> &Preferences {
         &self.values
     }
-    /// Change preferences; bumps the revision.
+    /// Change preferences; bumps the revision and the settings revision.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
+        self.settings_rev += 1;
+        self.remember(f)
+    }
+    /// Store what the app remembers of its own state between launches (the selected tool, its options, the colours):
+    /// bumps the revision, so frontends persist, but not the settings revision, because no view reads these back from
+    /// the preferences; they show the state itself.
+    pub fn remember<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
         let before = (&self.values.shortcuts, &self.values.alternate_shortcuts, &self.values.toolbar);
         let before = (before.0.clone(), before.1.clone(), before.2.clone());
         let sections = self.values.sections.clone();
@@ -44,6 +52,10 @@ impl PrefsStore {
     }
     pub fn rev(&self) -> u64 {
         self.rev
+    }
+    /// Revision of the preferences views read: every [`edit`](Self::edit), not what the app [`remember`](Self::remember)s.
+    pub fn settings_rev(&self) -> u64 {
+        self.settings_rev
     }
 }
 
