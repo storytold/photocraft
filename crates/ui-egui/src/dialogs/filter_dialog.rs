@@ -318,6 +318,12 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
                 let kind = if command == "layer.layerStyle.globalLight" { ParamKind::angle_in(min, max, default, 0) } else { ParamKind::angle(default) };
                 p = Param::new(p.key, p.label, kind);
             }
+            // Artboard from Layers' Width and Height take 4 to 32000 px; a value typed outside is
+            // clamped when the field is left (#14577).
+            if command == "layer.new.artboardFromLayers" && matches!(p.key.as_str(), "width" | "height") {
+                use photocraft_engine::artboard_cmds::{FROM_LAYERS_MAX, FROM_LAYERS_MIN};
+                p = Param::new(p.key, p.label, ParamKind::int(Some(FROM_LAYERS_MIN), Some(FROM_LAYERS_MAX), 0));
+            }
             if command == SCALE_EFFECTS && p.key == "scale" {
                 return scale_effects_row(p);
             }
@@ -458,12 +464,13 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
         map.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
     }
     // The reference application's Artboard from Layers opens at the next Artboard N and the
-    // selected layers' size every time, never a remembered size; past the field's 30000 px
+    // selected layers' size every time, never a remembered size; past the field's 32000 px
     // range, 0 keeps the bounds.
     if command == "layer.new.artboardFromLayers"
         && let Some((name, [w, h])) = photocraft_engine::artboard_cmds::from_layers_defaults(&app.session)
     {
-        let fits = w <= 30_000 && h <= 30_000;
+        let max = photocraft_engine::artboard_cmds::FROM_LAYERS_MAX;
+        let fits = w <= max && h <= max;
         map.insert("name".into(), json!(name));
         map.insert("width".into(), json!(if fits { w } else { 0 }));
         map.insert("height".into(), json!(if fits { h } else { 0 }));
@@ -1419,6 +1426,8 @@ pub struct FilterPreviewKey {
     pub scratch: u64,
 }
 
+#[cfg(test)]
+mod artboard_from_layers_size_range_tests;
 #[cfg(test)]
 mod global_light_angle_range_tests;
 #[cfg(test)]

@@ -1,5 +1,6 @@
 //! #12576: a Red Eye press outside the selection does nothing and adds no History state; a press
 //! inside it is clipped to the selection as before, and with no selection nothing changes.
+//! #13096: the outside press is silent, an `Ok` that says so, not the miss error.
 
 use serde_json::{Value, json};
 
@@ -23,7 +24,7 @@ fn eyes() -> Session {
 
 /// The left half of eye B: x 450–499.
 fn select_left_half_of_eye_b(s: &mut Session) {
-    s.execute("select.rect", json!({"x": 450, "y": 0, "width": 50, "height": 600})).unwrap();
+    s.execute("select.rect", json!({"x": 450, "y": 0, "width": 50, "height": 1000})).unwrap();
 }
 
 /// History length, and the Background's pixels as one value per channel.
@@ -53,8 +54,44 @@ fn a_press_outside_the_selection_changes_nothing_and_adds_no_state() {
         let (states, cols, r) = press(&mut s, params.clone());
         assert_eq!(cols, None, "{params}: pixels changed");
         assert_eq!(states, 0, "{params}: a history state was added");
-        assert_eq!(r, Err(MISS.to_string()), "{params}");
+        let r = r.unwrap_or_else(|e| panic!("{params}: an outside press is not an error: {e}"));
+        assert_eq!(r, json!({"damage": [0, 0, 0, 0], "pixels": 0, "outsideSelection": true}), "{params}");
     }
+}
+
+#[test]
+fn an_outside_press_is_silent_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 64, "height": 64, "mode": "rgb", "depth": depth})).unwrap();
+        s.execute("edit.fill", json!({"color": "#d22828"})).unwrap();
+        s.execute("select.rect", json!({"x": 40, "y": 40, "width": 10, "height": 10})).unwrap();
+        let n = s.active().unwrap().history.past_len();
+        let r = s.execute("paint.redEye", json!({"x": 8, "y": 8})).unwrap_or_else(|e| panic!("{depth} bit: {e}"));
+        assert_eq!(r["pixels"], 0, "{depth} bit");
+        assert_eq!(r["outsideSelection"], true, "{depth} bit");
+        assert_eq!(s.active().unwrap().history.past_len(), n, "{depth} bit: no state");
+    }
+}
+
+#[test]
+fn a_miss_inside_the_selection_keeps_its_result() {
+    // On a dark blue patch inside the selection: the tool runs and leaves one unchanged state, as before.
+    let mut s = eyes();
+    s.execute("select.rect", json!({"x": 450, "y": 0, "width": 50, "height": 100})).unwrap();
+    s.execute("edit.fill", json!({"color": "#283c78"})).unwrap();
+    select_left_half_of_eye_b(&mut s);
+    let (states, cols, r) = press(&mut s, json!({"x": 475, "y": 40, "pupilSize": 1}));
+    let r = r.unwrap();
+    assert_eq!((r["pixels"].as_u64(), r.get("outsideSelection")), (Some(0), None), "{r}");
+    assert_eq!((states, cols), (1, None));
+    // On a clear pixel under Lock transparent pixels inside the selection: still the miss error.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
+    let n = s.active().unwrap().history.past_len();
+    let r = s.execute("paint.redEye", json!({"x": 475, "y": 40, "pupilSize": 1})).map_err(|e| e.to_string());
+    assert_eq!(r, Err(MISS.to_string()));
+    assert_eq!(s.active().unwrap().history.past_len(), n);
 }
 
 #[test]
