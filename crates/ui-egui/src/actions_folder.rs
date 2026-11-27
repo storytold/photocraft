@@ -58,11 +58,11 @@ pub(crate) fn files(app: &PhotocraftApp) -> &[String] {
 
 /// Asks the next frame to open `folder` with the system file opener.
 pub(crate) fn request_open(ctx: &egui::Context, folder: &str) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new(OPEN_LOCATION), folder.to_string()));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(OPEN_LOCATION), folder.to_string()));
 }
 
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if let Some(folder) = ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new(OPEN_LOCATION))) {
+    if let Some(folder) = ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::unique(OPEN_LOCATION))) {
         open_location(app, &folder);
     }
     let folder = configured(app).to_string();

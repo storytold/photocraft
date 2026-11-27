@@ -176,7 +176,11 @@ fn actions_folder_rows_grey_while_a_recording_or_playback_holds_the_library() {
     assert_eq!(folder(&app), CommandState::new().enabled(false).title("Set.atn"), "a folder load would replace the set being recorded");
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
-    app.session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     app.run("actions.setPlayback", json!({"performance": "step", "seconds": 1, "singleState": true})).unwrap();
     play(&mut app, &json!({"action": "A"})).unwrap();
     assert!(playback::pending(&app));
