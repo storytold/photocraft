@@ -772,10 +772,22 @@ pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
     };
     let step = failed.get("step").and_then(Value::as_u64).unwrap_or(0);
     let id = failed.get("id").and_then(Value::as_str).unwrap_or("");
-    let error = failed.get("error").and_then(Value::as_str).unwrap_or("");
+    let error = step_error(failed.get("error").and_then(Value::as_str).unwrap_or(""));
     let template = "Step {step} ({id}) failed: {error}";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("step", &(step + 1).to_string()), ("id", id), ("error", error)]);
     app.ui.status_error = true;
+}
+
+/// A failed step's `error` in the UI language when the engine's message is one the shell spells out, otherwise as the
+/// engine gave it. Automation clients keep the engine's English.
+fn step_error(error: &str) -> &str {
+    if error.ends_with(photocraft_engine::atn_cmds::CAF_CUSTOM_AREA_NOT_REMEMBERED) {
+        // The engine's text, as a literal the translation coverage report collects (#14254).
+        return tl!(
+            "This step plays with the remembered Content-Aware Fill settings, and their Custom sampling area isn't remembered. Fill once with Auto or Rectangular sampling in Content-Aware Fill, then play it again."
+        );
+    }
+    error
 }
 
 /// Resume the recording a paused call suspended and journal that call, once.

@@ -212,6 +212,11 @@ pub(super) fn clone_result(dmg: Rect, off: (i32, i32), aligned: bool, p: &Value,
 pub(super) fn blend_param(p: &Value, cmd: &str) -> Result<BlendMode> {
     match p.get("mode").and_then(Value::as_str) {
         None => Ok(BlendMode::Normal),
+        // The Healing Brush's Replace row (#12101) is not a blend mode: the stroke copies the
+        // source, which `healing_brush` reads from the params itself. Here it only opens the live
+        // preview, whose texture the Replace stroke draws as it stands, through Normal. Every other
+        // command keeps refusing the word.
+        Some("replace") if cmd == "paint.healingBrush" => Ok(BlendMode::Normal),
         Some(m) => parse_blend(m).ok_or_else(|| bad(cmd, format!("unknown blend mode `{m}`"))),
     }
 }

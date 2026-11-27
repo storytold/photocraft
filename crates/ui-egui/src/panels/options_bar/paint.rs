@@ -28,6 +28,9 @@ pub(crate) enum PaintMode {
     Behind,
     /// Paint transparency.
     Clear,
+    /// The Healing Brush's Replace (#12101): copy the source without healing. A tool option, not a
+    /// brush value; only the Healing Brush's Mode list offers it.
+    HealingReplace,
 }
 
 impl PaintMode {
@@ -37,6 +40,7 @@ impl PaintMode {
             PaintMode::Blend(m) => m.label(),
             PaintMode::Behind => "Behind",
             PaintMode::Clear => "Clear",
+            PaintMode::HealingReplace => "Replace",
         }
     }
 }
@@ -209,6 +213,9 @@ fn apply_values(app: &mut PhotocraftApp, tool: Tool, brush: &mut BrushSettings, 
                 brush.mode = BlendMode::Normal;
             }
             PaintMode::Clear => brush.behind = false,
+            // Replace is the Healing Brush's row; a paint-bar tool's list never shows it, so
+            // `after.mode` is never this here.
+            PaintMode::HealingReplace => {}
         }
     }
 }

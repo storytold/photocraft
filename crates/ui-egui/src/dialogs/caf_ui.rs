@@ -37,7 +37,7 @@ mod lifecycle;
 mod preview;
 
 pub use lifecycle::open;
-pub(crate) use lifecycle::{describe, take};
+pub(crate) use lifecycle::{describe, on_job_event, recorded_from_workspace, recorded_to_workspace, take};
 use preview::{Base, compute_preview, plan_params};
 
 /// Longest side of the document proxy shown in the view (px).
