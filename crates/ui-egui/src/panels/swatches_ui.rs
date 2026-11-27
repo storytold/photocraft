@@ -615,7 +615,10 @@ mod tests {
 
     #[test]
     fn successful_aco_and_ase_saves_keep_their_bytes_and_clean_status() {
-        use craft::color_ui::palette::{count_swatches, read_swatches};
+        use craft::color_ui::palette::{SwatchGroup, read_swatches};
+        fn color_count(groups: &[SwatchGroup]) -> usize {
+            groups.iter().flat_map(|group| &group.entries).filter(|entry| entry.color().is_some()).count()
+        }
         for (command, file) in [(SwatchesCommand::Export, "Saved.aco"), (SwatchesCommand::ExportExchange, "Saved.ase")] {
             let (mut app, written) = export_fixture(vec![craft::host::Picked::Paths(vec![file.into()])], false, false);
             let library = app.session.presets().swatches.clone();
@@ -629,7 +632,7 @@ mod tests {
             assert_eq!(written.len(), 1);
             assert_eq!(written[0].0, file);
             let (back, _) = read_swatches(&written[0].1, file).unwrap();
-            assert_eq!(count_swatches(&back), count_swatches(&library));
+            assert_eq!(color_count(&back), color_count(&library));
             assert_eq!(app.ui.status, crate::i18n::fmt(tl!("Exported to {file}"), &[("file", file)]));
             assert!(!app.ui.status_error);
             assert_eq!(app.ui.swatches, panel);
