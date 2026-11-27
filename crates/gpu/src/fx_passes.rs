@@ -20,7 +20,7 @@ impl Compositor {
         region: Rect,
         stats: &mut Stats,
     ) -> Result<(), Unsupported> {
-        let layer = f.layer;
+        let layer = &*f.layer;
         let canvas = doc.bounds();
         let is_group = matches!(layer.content, LayerContent::Group(_));
         let shape_key = if is_group { fx::group_key(layer, &doc.global_light, &mut |_| {}) } else { fx::shape_key(layer, canvas) };

@@ -4,7 +4,7 @@ use super::kit::{Kit, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::pipelines::{NO_EFFECT_MAPS, Pipelines};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
+use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
 
 /// Classification of a synchronous compositor pipeline build failure.
 ///
@@ -298,7 +298,7 @@ impl Compositor {
         let mut seen = std::collections::HashSet::new();
         let mut total = 0u64;
         for p in &plan.passes {
-            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
+            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, m.role, m.surface.get()))];
             for (layer, role, s) in sources.into_iter().flatten() {
                 if seen.insert((layer, role)) {
                     let a = s.tile_bounds().intersect(&grid).intersect(&cells);
@@ -346,7 +346,20 @@ impl Compositor {
     /// larger than the limit are built per page cell.
     pub fn supports(&self, doc: &Document) -> Result<(), Unsupported> {
         let p = plan(doc)?;
+        self.check_accumulation(&p)?;
         self.check_fx(doc, &p)
+    }
+
+    /// Half-float accumulation keeps Hard Mix with Transparency Shapes Layer off on the CPU: below
+    /// full Fill its formula divides by `1 − fill`, which the content's alpha is part of, so the
+    /// precision the slots lose shows. A layer with effects takes its alpha through the effect passes
+    /// instead, which this does not refuse.
+    pub(crate) fn check_accumulation(&self, p: &Plan<'_>) -> Result<(), Unsupported> {
+        let hard_mix = |pass: &plan::Pass<'_>| pass.flags & plan::F_SHAPELESS != 0 && pass.mode == photocraft_color::BlendMode::HardMix;
+        if self.acc_format == wgpu::TextureFormat::Rgba16Float && p.passes.iter().any(hard_mix) {
+            return Err(Unsupported("Hard Mix with Transparency Shapes Layer off on half-float accumulation (composited on the CPU)".into()));
+        }
+        Ok(())
     }
 
     /// Whether the maps of an effect region are built per page cell (it exceeds the limit).
@@ -356,7 +369,7 @@ impl Compositor {
 
     /// How far beyond a page cell the effect maps of `f` must be computed to be exact in it.
     pub(crate) fn fx_apron(doc: &Document, f: &plan::FxLayer<'_>) -> i32 {
-        let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(f.layer).is_none();
+        let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(&f.layer).is_none();
         let progs: Vec<fx::MapProgram> = f
             .layer
             .effects

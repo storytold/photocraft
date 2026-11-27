@@ -129,7 +129,13 @@ impl Kernel {
 pub enum Role {
     Content,
     Mask,
-    /// A stroked shape's stroke alone (its fill uses `Content`).
+    /// The layer's masks that still shape it, under Layer / Vector Mask Hides Effects.
+    VisibleMask,
+    /// The layer's masks that hide its effects, under Layer / Vector Mask Hides Effects.
+    HidingMask,
+    /// A stroked shape's fill alone; its full content uses `Content`.
+    Fill,
+    /// A stroked shape's stroke alone.
     Stroke,
 }
 
@@ -208,6 +214,8 @@ impl SurfaceRef<'_> {
 #[derive(Clone, Debug)]
 pub struct MaskUse<'a> {
     pub layer: LayerId,
+    /// `Mask`, `VisibleMask` or `HidingMask`: which of the layer's masks this surface combines.
+    pub role: Role,
     pub surface: SurfaceRef<'a>,
     pub density: f32,
     pub default: f32,
@@ -254,9 +262,11 @@ impl std::fmt::Display for Unsupported {
 impl std::error::Error for Unsupported {}
 
 /// A layer whose effects the plan renders: its maps are built (or reused) before the chunks run.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct FxLayer<'a> {
-    pub layer: &'a Layer,
+    /// The layer the maps are built from: the plan's layer, or (when a mask hides its effects) a
+    /// copy without that mask (`compose::advanced::effects_source`).
+    pub layer: std::borrow::Cow<'a, Layer>,
     /// Region the maps cover (`compose::effect_maps`).
     pub region: Rect,
     /// Layer bounds (gradients and linked patterns are laid out in them).

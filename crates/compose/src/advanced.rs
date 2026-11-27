@@ -42,7 +42,7 @@ use crate::{Buffer, BufferAlloc, Ctx, effects, mask_vals};
 /// knockout-shallow-nested), while pass-through groups let it reach the Background
 /// (knockout-deep-nested-pt renders like knockout-deep-normal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Scope {
+pub struct Scope {
     /// The document's top-level stack: a shallow knockout there reaches the Background.
     pub root: bool,
     /// Inside an isolated group: deep knockouts stop at its (transparent) bottom.
@@ -50,11 +50,13 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
+    /// The document's top-level stack.
     pub const ROOT: Scope = Scope { root: true, isolated: false };
     /// An isolated group's own stack (it starts from a transparent buffer).
     pub const ISOLATED: Scope = Scope { root: false, isolated: true };
 
     /// The stack of a pass-through group inside this one.
+    #[must_use]
     pub fn pass_through(self) -> Scope {
         Scope { root: false, isolated: self.isolated }
     }
@@ -72,7 +74,14 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 }
 
 /// Whether any Advanced Blending option changes how `layer` (with its clipping group `clipped`)
-/// composites. The GPU compositor sends such documents to this CPU path.
+/// composites. This is the full set the CPU path implements. The GPU compositor runs knockout,
+/// clipped layers blended individually, Transparency Shapes Layer off and masks hiding effects
+/// itself and sends the rest (Blend Interior Effects as Group with effects) to the CPU path, as it
+/// does Transparency Shapes Layer off with effects or a special-eight blend on a layer drawn atop
+/// its clipping base (Blend Clipped Layers as Group on), Hard Mix with it off in a 16/32-bit
+/// document (or, on a layer without effects, on half-float accumulation), and individually blended
+/// clipped layers on a 32-bit base that takes several passes; its own gates are `plan::lower::advanced_on_cpu`,
+/// `plan::lower::clipped_on_cpu` and the planner and compositor checks.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
     let a = &layer.advanced;
     if a.is_default() {
@@ -130,7 +139,7 @@ pub(crate) fn knockout_target_with<'b, A: BufferAlloc>(
 
 /// Whether `layers` holds a visible unclipped shallow knockout (its stack then keeps a copy of
 /// its starting backdrop).
-pub(crate) fn needs_floor(layers: &[Layer]) -> bool {
+pub fn needs_floor(layers: &[Layer]) -> bool {
     layers.iter().any(|l| l.visible && !l.clipped && l.advanced.knockout == Knockout::Shallow)
 }
 
@@ -222,7 +231,7 @@ pub(crate) fn composite_clipped_with<A: BufferAlloc>(clipped: &[Layer], base: &m
 
 /// Whether `layer`'s clipped layers blend one by one (Blend Clipped Layers as Group off).
 /// Adjustment layers keep the grouped path (they have no pixels of their own to clip to).
-pub(crate) fn clips_individually(layer: &Layer, clipped: &[Layer]) -> bool {
+pub fn clips_individually(layer: &Layer, clipped: &[Layer]) -> bool {
     !layer.advanced.blend_clipped && !matches!(layer.content, LayerContent::Adjustment(_)) && clipped.iter().any(|c| c.visible)
 }
 
@@ -271,7 +280,7 @@ pub(crate) fn composite_clipped_individually_with<A: BufferAlloc>(
 
 /// Whether a mask of `layer` hides its effects instead of shaping them (Layer / Vector Mask
 /// Hides Effects on an enabled mask of a layer with effects).
-pub(crate) fn hides_effects(layer: &Layer) -> bool {
+pub fn hides_effects(layer: &Layer) -> bool {
     let a = &layer.advanced;
     effects::has_effects(layer)
         && ((a.layer_mask_hides_effects && layer.mask.as_ref().is_some_and(|m| m.enabled))
@@ -281,7 +290,7 @@ pub(crate) fn hides_effects(layer: &Layer) -> bool {
 /// The layer whose content and effect maps are composited: `layer` itself, or (when a mask hides
 /// its effects) a copy without that mask. Pixels are shared copy-on-write, so the copy costs a
 /// tile table, and its effect maps cache under their own key.
-pub(crate) fn effects_source(layer: &Layer) -> Cow<'_, Layer> {
+pub fn effects_source(layer: &Layer) -> Cow<'_, Layer> {
     if !hides_effects(layer) {
         return Cow::Borrowed(layer);
     }
@@ -309,10 +318,15 @@ pub(crate) fn hiding_mask(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32
 }
 
 /// Mix `out` back towards `before` where `mask` hides the layer: `out ← mix(before, out, mask)`.
+/// Where the mask is fully hiding (≤ 0) `before` is copied as it was and where it lets everything
+/// through (≥ 1) `out` stays, so HDR values survive both whether or not a tile skips the layer
+/// (`content::empty_in`); only the partial mix clamps.
 pub(crate) fn apply_hiding_mask(out: &mut Buffer, before: &Buffer, mask: &[f32]) {
     for ((p, b), k) in out.px.iter_mut().zip(&before.px).zip(mask) {
-        if *k < 1.0 {
-            *p = mix(*b, *p, k.max(0.0));
+        if *k <= 0.0 {
+            *p = *b;
+        } else if *k < 1.0 {
+            *p = mix(*b, *p, *k);
         }
     }
 }

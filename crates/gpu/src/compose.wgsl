@@ -57,11 +57,14 @@ const F_CHANNELS: u32 = 4096u;   // lerp: per-channel weights in p0 (channel res
 const F_LAB: u32 = 65536u;      // Lab document: Normal mixes in CIELAB
 const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposure retain values above 1
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
-const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
+const F_ADD_DIFF: u32 = 16384u;  // lerp: A + opacity * (B - C) premultiplied (clips on pass-through groups, knockout); p0.x: gate on the shape in layer_tex (knockout)
+const F_MIX_C: u32 = 4194304u;   // lerp: A mixed towards B by C's alpha * opacity (knockout); p0.y: keep A's alpha at most; p0.z: individually blended clipped layers and masks hiding effects (B where C >= 1, else the clamped mix even at 0; with p0.x, C is an F_COVER record; with p0.w, A untouched where C covers nothing: masks hiding effects)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
+const F_SHAPELESS: u32 = 8388608u;   // blend / layer blend: Transparency Shapes Layer off, special eight (content alpha joins Fill; coverage = opacity × mask)
+const F_COVER: u32 = 16777216u;      // content: coverage record (r: alpha × mask >= 1, g: <= 0, b: 0, a: alpha × mask)
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
 @group(0) @binding(1) var<uniform> op: Op;
@@ -859,6 +862,10 @@ fn fs_content(in: VOut) -> @location(0) vec4<f32> {
     let d = doc_px(local(in.pos));
     var c = layer_texel(d);
     c.a = c.a * mask_value(d);
+    if ((op.flags & F_COVER) != 0u) {
+        // Full and no coverage are tested here: a half-float target rounds a near-opaque alpha to 1.
+        return vec4(select(0.0, 1.0, c.a >= 1.0), select(0.0, 1.0, c.a <= 0.0), 0.0, c.a);
+    }
     return c;
 }
 
@@ -874,12 +881,22 @@ fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
 // blend_into(backdrop = b, src = s, mode, opacity) at chunk pixel p, including Dissolve.
 fn blend_px(p: vec2<i32>, b: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
     var s = src;
+    var fill = op.fill;
+    if ((op.flags & F_SHAPELESS) != 0u) {
+        // compose::blend_layer_into: `src` carries alpha × mask; split them again. Coverage is
+        // opacity × mask, and the content's own alpha joins Fill inside the blend. An opaque
+        // texel gives exactly 1, as the CPU's m / m does (a shader's division may not).
+        let m = mask_value(doc_px(p));
+        if (s.a <= 0.0 || m <= 0.0) { return b; }
+        fill = op.fill * select(clamp(s.a / m, 0.0, 1.0), 1.0, s.a >= m);
+        s = vec4(s.rgb, m);
+    }
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
         s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
-    return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
+    return composite_fill(op.mode, b, s, op.opacity, fill, (op.flags & F_TEXT_GAMMA) != 0u);
 }
 
 // blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
@@ -1027,12 +1044,47 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         return a + (b - a) * op.p0;
     }
     if ((op.flags & F_ADD_DIFF) != 0u) {
-        // compose: pass-through group + (with clipped − without), premultiplied.
+        // Knockout passes its shape in layer_tex (p0.x); outside it the drawn pixel stays as drawn,
+        // unclamped (compose::advanced::knockout_with skips zero coverage).
+        if (op.p0.x > 0.5 && textureLoad(layer_tex, p, 0).a <= 0.0) { return a; }
+        // compose: pass-through group + (with clipped − without), premultiplied; knockout scales the
+        // difference by `opacity` (1 − layer opacity, compose::advanced::knockout_with).
         let c = textureLoad(tex_c, p, 0);
-        var pm = vec4(a.rgb * a.a, a.a) + vec4(b.rgb * b.a, b.a) - vec4(c.rgb * c.a, c.a);
+        var pm = vec4(a.rgb * a.a, a.a) + op.opacity * (vec4(b.rgb * b.a, b.a) - vec4(c.rgb * c.a, c.a));
         let al = clamp(pm.a, 0.0, 1.0);
         if (al <= 0.0) { return vec4(0.0); }
         return vec4(clamp(pm.rgb / al, vec3(0.0), vec3(1.0)), al);
+    }
+    if ((op.flags & F_MIX_C) != 0u) {
+        // compose::advanced::knockout_with: where the shape C is present the backdrop A is mixed
+        // towards the knockout target B (premultiplied, as `advanced::mix`); `p0.y` keeps the
+        // alpha from growing (clipped layers stay inside their base).
+        let c = textureLoad(tex_c, p, 0);
+        var k = min(c.a * op.opacity, 1.0);
+        if (op.p0.z > 0.5) {
+            // compose::advanced::composite_clipped_individually_with and apply_hiding_mask: B
+            // untouched where the base (or the hiding mask) is fully covered, so HDR values
+            // survive; elsewhere the clamped mix, also at 0 (which clamps A). With p0.x, C is an
+            // F_COVER record, whose r says the coverage is full and g that there is none.
+            var full = k >= 1.0;
+            var empty = k <= 0.0;
+            if (op.p0.x > 0.5) {
+                full = c.r > 0.5 && op.opacity >= 1.0;
+                empty = c.g > 0.5 || op.opacity <= 0.0;
+            }
+            if (full) { return b; }
+            // A fully hiding mask leaves the backdrop as it was, whatever tile the CPU renders.
+            if (op.p0.w > 0.5 && empty) { return a; }
+            k = max(k, 0.0);
+        } else if (k <= 0.0) {
+            return a;
+        }
+        let alpha = a.a + (b.a - a.a) * k;
+        if (alpha <= 0.0) { return vec4(0.0); }
+        let rgb = clamp((a.rgb * a.a + (b.rgb * b.a - a.rgb * a.a) * k) / alpha, vec3(0.0), vec3(1.0));
+        var out_a = min(alpha, 1.0);
+        if (op.p0.y > 0.5) { out_a = min(out_a, a.a); }
+        return vec4(rgb, out_a);
     }
     if ((op.flags & F_BLEND_IF) != 0u) {
         // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks, or an

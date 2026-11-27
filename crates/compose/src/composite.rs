@@ -115,7 +115,8 @@ pub(crate) fn dissolve_noise(x: i32, y: i32) -> f32 {
 /// If, whose fill is opaque everywhere (a solid colour, or a gradient whose colour and opacity
 /// stops are all opaque). Normal blending at alpha 1 returns the layer's colour exactly, so the
 /// layers below can be skipped (the live Gradient tool's preview recomposites the whole canvas on
-/// every pointer move).
+/// every pointer move). The caller must still rule out clipped layers that blend individually
+/// (`advanced::clips_individually`): a clipped shallow knockout may reveal what is beneath the fill.
 pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool {
     let LayerContent::Fill(f) = &layer.content else { return false };
     let opaque = match f {
