@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -58,6 +59,132 @@ fn os_clipboard_honours_export_clipboard_preference() {
 
 type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
+const CLIP_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><path d="M1 1 C2 0 6 0 7 1 L7 5 L1 5 Z" fill="#e03020"/></svg>"##;
+
+#[test]
+fn svg_clipboard_paste_as_keeps_source_and_creates_the_requested_content() {
+    for mode in ["pixels", "path", "shape"] {
+        let services = Services { clipboard_get_svg: Some(Box::new(|| Ok(Some(CLIP_SVG.as_bytes().to_vec())))), ..Default::default() };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+        let (layers, paths) = {
+            let doc = &app.session.active().unwrap().doc;
+            (doc.layers.len(), doc.paths.len())
+        };
+        app.run("edit.paste", json!({"as": mode})).unwrap();
+        let state = app.session.active().unwrap();
+        if mode == "path" {
+            assert_eq!(state.doc.paths.len(), paths + 1);
+            assert_eq!(state.doc.layers.len(), layers);
+        } else {
+            let content = &state.doc.layer(state.active_layer.unwrap()).unwrap().content;
+            assert!(match mode {
+                "pixels" => matches!(content, photocraft_doc::LayerContent::Raster(_)),
+                _ => matches!(content, photocraft_doc::LayerContent::Shape(_)),
+            });
+        }
+        let source = app.session.clipboard.as_ref().unwrap().svg.clone().unwrap();
+        assert_eq!(source.as_slice(), CLIP_SVG.as_bytes());
+        app.run("edit.undo", json!({})).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        assert_eq!((doc.layers.len(), doc.paths.len()), (layers, paths));
+        app.run("edit.redo", json!({})).unwrap();
+        assert!(Arc::ptr_eq(&source, app.session.clipboard.as_ref().unwrap().svg.as_ref().unwrap()));
+    }
+}
+
+#[test]
+fn svg_clipboard_errors_preserve_the_copy_and_empty_reads_invalidate_external_source() {
+    let response = Arc::new(Mutex::new(Ok(Some(CLIP_SVG.as_bytes().to_vec()))));
+    let read = response.clone();
+    let services = Services { clipboard_get_svg: Some(Box::new(move || read.lock().unwrap().clone())), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+    app.run("edit.paste", json!({"as": "path"})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let source = app.session.clipboard.as_ref().unwrap().svg.clone().unwrap();
+    for failure in [Err("clipboard is busy".into()), Ok(Some(b"<svg invalid".to_vec()))] {
+        *response.lock().unwrap() = failure;
+        assert!(app.run("edit.paste", json!({"as": "path"})).is_err());
+        assert!(app.ui.status_error);
+        assert_eq!(app.session.active().unwrap().doc, before);
+        assert!(Arc::ptr_eq(&source, app.session.clipboard.as_ref().unwrap().svg.as_ref().unwrap()));
+    }
+    let changed = CLIP_SVG.replace("<path", "<!-- new copy --><path");
+    *response.lock().unwrap() = Ok(Some(changed.as_bytes().to_vec()));
+    app.run("edit.paste", json!({"as": "path"})).unwrap();
+    assert_eq!(app.session.clipboard.as_ref().unwrap().svg.as_ref().unwrap().as_slice(), changed.as_bytes());
+    let before = app.session.active().unwrap().doc.clone();
+    *response.lock().unwrap() = Ok(None);
+    assert!(app.run("edit.paste", json!({"as": "path"})).is_err(), "missing vectors must not become a successful no-op");
+    assert_eq!(app.session.active().unwrap().doc, before);
+    assert!(app.session.clipboard.is_none());
+}
+
+#[test]
+fn explicit_pixel_paste_still_reads_raster_clipboards() {
+    let services = Services {
+        clipboard_get_svg: Some(Box::new(|| Ok(None))),
+        clipboard_get_image: Some(Box::new(|| Ok(Some((2, 1, vec![255; 8]))))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+    app.run("edit.paste", json!({"as": "pixels"})).unwrap();
+    let state = app.session.active().unwrap();
+    assert!(matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Raster(_)));
+    assert!(app.session.clipboard.as_ref().unwrap().svg.is_none());
+}
+
+#[test]
+fn newer_internal_copies_survive_an_unchanged_external_svg() {
+    const SOURCE: &str =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#335577" opacity="0.5"/></svg>"##;
+    for params in [json!({}), json!({"as":"pixels"})] {
+        let image = OsClip::default();
+        let read = image.clone();
+        let services = Services {
+            clipboard_get_svg: Some(Box::new(|| Ok(Some(SOURCE.as_bytes().to_vec())))),
+            clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.run("file.new", json!({"width":64,"height":64})).unwrap();
+        app.import_os_svg_clipboard().unwrap();
+        let clip = app.session.clipboard.as_ref().unwrap();
+        let b = clip.bounds;
+        let mut pixels = vec![[0; 4]; b.size().area() as usize];
+        clip.surface.read_rgba8_into(b, &mut pixels);
+        let bytes: Vec<_> = pixels.into_iter().flatten().collect();
+        let signature = bytes.iter().step_by(997).fold((u64::from(b.width()) << 32) | u64::from(b.height()), |sig, byte| sig.rotate_left(5) ^ u64::from(*byte));
+        assert_eq!(app.os_clip_sig, Some(signature), "match the image signature across all four RGBA components");
+        *image.lock().unwrap() = Some((b.width(), b.height(), bytes));
+        app.session.edit_prefs(|prefs| prefs.general.export_clipboard = false);
+        app.run("file.new", json!({"width":8,"height":6})).unwrap();
+        app.run("edit.fill", json!({"color":"#0000ff"})).unwrap();
+        app.run("edit.copy", json!({})).unwrap();
+        app.run("edit.paste", params).unwrap();
+        assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+        assert!(!app.clip_external, "the unchanged older SVG must not replace the newer internal copy");
+    }
+}
+
+#[test]
+fn action_vector_paste_reads_the_current_svg_source() {
+    let services = Services { clipboard_get_svg: Some(Box::new(|| Ok(Some(CLIP_SVG.as_bytes().to_vec())))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new("SVG", vec![photocraft_engine::actions_cmds::ActionStep::new("edit.paste", json!({"as": "shape"}))]))
+        .unwrap();
+    let result = app.run("actions.play", json!({"action": "SVG"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    let state = app.session.active().unwrap();
+    assert!(matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Shape(_)));
+}
+
 #[test]
 fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,7 +211,8 @@ fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
         assert!(signature.is_some());
         let before = app.session.active().unwrap().doc.walk().len();
         busy.store(true, Ordering::SeqCst);
-        let result = crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({}));
+        let app_ctx = app.ctx().clone();
+        let result = crate::menus::invoke(&mut app, &app_ctx, id, serde_json::json!({}));
         assert_eq!(result.unwrap_err(), "clipboard is busy", "{id}");
         assert!(app.ui.status_error);
         assert_eq!(app.session.documents().len(), 2);
@@ -92,7 +220,8 @@ fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
         assert_eq!(app.os_clip_sig, signature);
         assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
         // The New dialog also reads the clipboard; a failed preset probe must preserve it.
-        app.new_document_fields();
+        // PLAN: `new_doc_ui::open` is the hosted New dialog's opener (sheet, panels-w30); the dialog's owner set writes it.
+        crate::new_doc_ui::open(&mut app);
         assert_eq!(app.os_clip_sig, signature);
         assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
         // An automation error must not leave script events disabled by the dispatch guard.
@@ -132,8 +261,11 @@ fn internal_only_clipboard_remains_usable_when_native_access_fails() {
             app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
             assert!(app.os_clip_sig.is_none() && !app.clip_external);
             let bounds = app.session.clipboard.as_ref().unwrap().bounds;
-            assert_eq!(app.new_document_fields()["__preset"], "Clipboard");
-            crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({})).unwrap();
+            let dialog = crate::new_doc_ui::open(&mut app);
+            let hosted = app.framework.dialogs.get_by_id::<craft::ui::patterns::form_dialogs::HostedNewDocument>(dialog).unwrap();
+            assert_eq!((hosted.options().size.width, hosted.options().size.height), (bounds.width(), bounds.height()), "the dialog offers the clipboard size");
+            let app_ctx = app.ctx().clone();
+            crate::menus::invoke(&mut app, &app_ctx, id, serde_json::json!({})).unwrap();
             assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
             assert!(!app.ui.status_error);
             if id == "file.newFromClipboard" {
@@ -199,7 +331,7 @@ fn newer_unexported_copies_do_not_track_an_older_os_signature() {
                 write_fails.store(true, Ordering::SeqCst);
                 app.session.edit_prefs(|prefs| prefs.general.export_clipboard = !disable_export);
                 app.run(copy_id, serde_json::json!({})).unwrap();
-                let copied = app.session.clipboard.clone().unwrap();
+                let copied = app.session.clipboard.as_ref().cloned().unwrap();
                 assert!(app.clip_unmirrored && !app.clip_external);
                 assert_eq!(app.os_clip_sig, old_signature);
                 assert_eq!(copied.surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
@@ -249,7 +381,8 @@ fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
         let before = app.session.active().unwrap().doc.walk().len();
         unavailable.store(true, Ordering::SeqCst);
         for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace", "file.newFromClipboard"] {
-            let result = crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({}));
+            let app_ctx = app.ctx().clone();
+            let result = crate::menus::invoke(&mut app, &app_ctx, id, serde_json::json!({}));
             assert_eq!(result.unwrap_err(), "clipboard unavailable", "{id}");
             assert!(app.ui.status_error);
             assert_eq!(app.session.documents().len(), 1);
@@ -262,7 +395,7 @@ fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
 }
 
 /// An app whose OS clipboard is `os`, counting every read in `reads`.
-fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> PhotocraftApp {
+fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> Box<PhotocraftApp> {
     let (b, n) = (os.clone(), reads.clone());
     let get = move || {
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -287,7 +420,8 @@ fn external_clipboard_enables_and_centres_paste() {
     assert!(crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"));
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "enablement never reads the clipboard");
     app.ui.views[0].center = [40.0, 20.0];
-    let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    let r = crate::menus::invoke(&mut app, &app_ctx, "edit.paste", serde_json::json!({})).unwrap();
     assert_eq!(r["offset"], serde_json::json!([38, 18]), "external image is centred in the view: {r}");
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "one read per explicit paste");
     // Without a clipboard service Paste greys until something is copied in the app.
@@ -307,11 +441,11 @@ fn os_clipboard_image_becomes_a_new_document() {
         Ok(b.lock().unwrap().clone())
     };
     let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     // Listed right after File › New…, enabled without reading the clipboard.
-    let items = crate::menus::menu_items(&app);
-    let at = items.iter().position(|i| i.id == "file.new").unwrap();
-    assert_eq!(items[at + 1].id, "file.newFromClipboard");
+    let items = crate::menus::menu_rows(&app);
+    let at = items.iter().position(|i| i.command.id == "file.new").unwrap();
+    assert_eq!(items[at + 1].command.id, "file.newFromClipboard");
     assert!(items[at + 1].enabled && crate::menus::is_enabled(&app, "edit.paste"));
     assert!(!crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"), "Paste in Place needs a document");
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -338,7 +472,8 @@ fn pasting_an_empty_or_non_image_os_clipboard_is_a_quiet_no_op() {
     let (os, reads) = (OsClip::default(), Arc::default());
     let mut app = app_with_os_clipboard(&os, &reads);
     let layers = app.session.active().unwrap().doc.layers.len();
-    let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    let r = crate::menus::invoke(&mut app, &app_ctx, "edit.paste", serde_json::json!({})).unwrap();
     assert_eq!(r["pasted"], serde_json::json!(false));
     assert_eq!(app.run("edit.pasteSpecial.pasteInPlace", serde_json::json!({})).unwrap()["pasted"], serde_json::json!(false));
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
@@ -356,7 +491,8 @@ fn idle_frames_never_read_the_os_clipboard() {
             n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(b.lock().unwrap().clone())
         };
-        let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
+        let mut app =
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
         app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
         app
     });
@@ -382,8 +518,9 @@ fn copy_with_the_mask_targeted_copies_the_mask_not_the_pixels() {
     app.run("edit.fill", serde_json::json!({"color": "#ffffff", "target": "mask"})).unwrap();
     app.run("select.deselect", serde_json::json!({})).unwrap();
     app.ui.mask_target = true;
-    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.copy", serde_json::json!({})).unwrap();
-    let clip = app.session.clipboard.clone().expect("the mask was copied");
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, "edit.copy", serde_json::json!({})).unwrap();
+    let clip = app.session.clipboard.as_ref().cloned().expect("the mask was copied");
     let st = app.session.active().unwrap();
     let (w, h) = (st.doc.size.width as i32, st.doc.size.height as i32);
     assert_eq!(
@@ -408,7 +545,8 @@ fn paste_with_the_mask_targeted_goes_into_the_mask() {
     app.ui.views[0].center = [32.0, 32.0];
     *os.lock().unwrap() = Some((4, 4, [128u8, 128, 128, 255].repeat(16)));
     let layers = app.session.active().unwrap().doc.layer_count();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, "edit.paste", serde_json::json!({})).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer_count(), layers, "no new layer");
     let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
@@ -457,4 +595,90 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
     assert_eq!(pair(&app), (WHITE, BLACK));
     app.run("layer.layerMask.delete", json!({})).unwrap();
     assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
+}
+
+type SvgClip = Arc<Mutex<Result<Option<Vec<u8>>, String>>>;
+
+/// An app whose OS clipboard holds the SVG `svg` and the bitmap `image`, exporting nothing
+/// (so an internal copy stays newer than what the OS clipboard holds).
+fn app_with_svg_and_image(svg: &SvgClip, image: &OsClip) -> Box<PhotocraftApp> {
+    let (s, i) = (svg.clone(), image.clone());
+    let services = Services {
+        clipboard_get_svg: Some(Box::new(move || s.lock().unwrap().clone())),
+        clipboard_get_image: Some(Box::new(move || Ok(i.lock().unwrap().clone()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.session.edit_prefs(|prefs| prefs.general.export_clipboard = false);
+    app
+}
+
+fn copy_blue(app: &mut PhotocraftApp) {
+    app.run("file.new", json!({"width":8,"height":6})).unwrap();
+    app.run("edit.fill", json!({"color":"#0000ff"})).unwrap();
+    app.run("edit.copy", json!({})).unwrap();
+}
+
+/// An ordinary paste takes the bitmap a vector app put next to its SVG; a later internal copy
+/// is newer than that SVG, so Paste As Pixels keeps it while the SVG is unchanged
+/// (CodeRabbit on #10776).
+#[test]
+fn an_internal_copy_after_an_ordinary_paste_survives_an_unchanged_svg() {
+    let svg: SvgClip = Arc::new(Mutex::new(Ok(Some(CLIP_SVG.as_bytes().to_vec()))));
+    let image: OsClip = Arc::new(Mutex::new(Some((2, 1, vec![200; 8]))));
+    let mut app = app_with_svg_and_image(&svg, &image);
+    app.run("file.new", json!({"width":24,"height":20})).unwrap();
+    app.run("edit.paste", json!({})).unwrap();
+    assert!(app.clip_external);
+    copy_blue(&mut app);
+    app.run("edit.paste", json!({"as":"pixels"})).unwrap();
+    assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+    assert!(!app.clip_external);
+    // Right after the ordinary paste (no internal copy), Paste As still reaches the vectors.
+    let mut app = app_with_svg_and_image(&svg, &image);
+    app.run("file.new", json!({"width":24,"height":20})).unwrap();
+    app.run("edit.paste", json!({})).unwrap();
+    app.run("edit.paste", json!({"as":"path"})).unwrap();
+    assert!(app.session.clipboard.as_ref().unwrap().svg.is_some());
+}
+
+/// Once the OS clipboard no longer holds the SVG, the same SVG copied again in another app is
+/// new; while an SVG-only clipboard still holds it, the newer internal copy stays
+/// (CodeRabbit on #10776).
+#[test]
+fn a_remembered_svg_is_forgotten_once_the_clipboard_no_longer_holds_it() {
+    let svg: SvgClip = Arc::new(Mutex::new(Ok(Some(CLIP_SVG.as_bytes().to_vec()))));
+    let image: OsClip = Arc::new(Mutex::new(None));
+    let mut app = app_with_svg_and_image(&svg, &image);
+    app.run("file.new", json!({"width":24,"height":20})).unwrap();
+    app.run("edit.paste", json!({"as":"pixels"})).unwrap();
+    copy_blue(&mut app);
+    // SVG only, unchanged: the internal copy stays.
+    app.run("edit.paste", json!({})).unwrap();
+    app.run("edit.paste", json!({"as":"pixels"})).unwrap();
+    assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+    // Text copied elsewhere, then the same SVG again: it is imported.
+    *svg.lock().unwrap() = Ok(None);
+    app.run("edit.paste", json!({})).unwrap();
+    assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+    *svg.lock().unwrap() = Ok(Some(CLIP_SVG.as_bytes().to_vec()));
+    app.run("edit.paste", json!({"as":"pixels"})).unwrap();
+    assert!(app.session.clipboard.as_ref().unwrap().svg.is_some(), "the SVG copied again must be imported");
+}
+
+/// Paste As Pixels falls back to the bitmap when the SVG can't be read, and only fails when
+/// neither can be (CodeRabbit on #10776).
+#[test]
+fn pixel_paste_reads_the_bitmap_when_the_svg_read_fails() {
+    let svg: SvgClip = Arc::new(Mutex::new(Err("clipboard is busy".into())));
+    let image: OsClip = Arc::new(Mutex::new(Some((2, 1, vec![255; 8]))));
+    let mut app = app_with_svg_and_image(&svg, &image);
+    app.run("file.new", json!({"width":24,"height":20})).unwrap();
+    app.run("edit.paste", json!({"as":"pixels"})).unwrap();
+    let state = app.session.active().unwrap();
+    assert!(matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Raster(_)));
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let mut app = app_with_svg_and_image(&svg, &Arc::new(Mutex::new(None)));
+    app.run("file.new", json!({"width":24,"height":20})).unwrap();
+    assert!(app.run("edit.paste", json!({"as":"pixels"})).is_err());
 }

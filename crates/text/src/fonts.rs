@@ -1,7 +1,7 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
 //! fonts of every script ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional
-//! system fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
-//! user-registered font data, and PostScript-name lookup for PSD import.
+//! installed fonts read from the craft font Catalog ([`catalog`]), user-registered font data, and
+//! PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
@@ -9,9 +9,9 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
+use craft::font_catalog::{Catalog, FontEnv, Limits, Os, Source};
+use craft::font_manager::axes::{FontAxis, NamedInstance, read_axes, read_named_instances};
 use parley::FontContext;
-#[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
-use parley::fontique::SourceKind;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
 use skrifa::raw::{FileRef, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
@@ -78,6 +78,9 @@ pub const LAO_FAMILIES: &[&str] = &["Lao Sangam MN", "Lao MN", "Lao UI", "Noto S
 /// Myanmar/Burmese-capable families: macOS (Myanmar Sangam MN, Myanmar MN), Windows (Myanmar Text)
 /// and Linux (Noto).
 pub const MYANMAR_FAMILIES: &[&str] = &["Myanmar Sangam MN", "Myanmar MN", "Myanmar Text", "Noto Sans Myanmar"];
+/// Georgian-capable families: craft-fonts and Linux (Noto), Windows (Sylfaen), macOS (".SF Georgian",
+/// a hidden system face). Georgian in a font without Mkhedruli glyphs falls back to these.
+pub const GEORGIAN_FAMILIES: &[&str] = &["Noto Sans Georgian", "Noto Serif Georgian", "Sylfaen", ".SF Georgian"];
 /// Indic-script families for document text. Windows has `Nirmala UI` for all nine scripts (from
 /// Windows 8); macOS has the Kohinoor and Sangam MN families; Linux has Noto Sans. Indic text in a
 /// font without these glyphs had no candidate to fall back to and drew .notdef boxes (#218).
@@ -110,17 +113,25 @@ pub const INDIC_FAMILIES: &[&[&str]] = &[
     MALAYALAM_FAMILIES,
     SINHALA_FAMILIES,
 ];
+/// Symbol and math families for signs no text face has, such as ⌖ (U+2316) and ⤒ (U+2912):
+/// Windows (Segoe UI Symbol), macOS (Apple Symbols) and Linux (Noto, under the name fontconfig
+/// gives, "Noto Sans Symbols 2", and the "Noto Sans Symbols2" some packages use). They come after
+/// every other candidate, the emoji fonts included, so they only draw what those lack and an emoji
+/// keeps its colour face (#8689, as storytold/figcraft#1163).
+pub const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols", "Noto Sans Symbols 2", "Noto Sans Symbols2", "Noto Sans Math"];
 /// Broad-coverage and emoji fonts, tried after the CJK script fonts so shared Han characters get
 /// the locale's forms instead of Arial Unicode's.
 const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"];
 
-/// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]).
+/// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]),
+/// with the [`SYMBOL_FAMILIES`] last.
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
     v.extend_from_slice(THAI_FAMILIES);
     v.extend_from_slice(KHMER_FAMILIES);
     v.extend_from_slice(LAO_FAMILIES);
     v.extend_from_slice(MYANMAR_FAMILIES);
+    v.extend_from_slice(GEORGIAN_FAMILIES);
     for fams in INDIC_FAMILIES {
         for f in *fams {
             // Nirmala UI covers all nine scripts and is listed by each; probe it once.
@@ -138,6 +149,7 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
         v.extend_from_slice(crate::cjk::families(*s));
     }
     v.extend_from_slice(FALLBACK_LAST);
+    v.extend_from_slice(SYMBOL_FAMILIES);
     v
 }
 
@@ -174,6 +186,10 @@ pub struct FaceInfo {
     pub italic: bool,
     /// Variation axes: (tag, min, default, max).
     pub axes: Vec<(String, f32, f32, f32)>,
+    /// The same axes as the Character controls take them (tag, name, range, hidden); empty for a static face.
+    pub font_axes: Vec<FontAxis>,
+    /// The named instances of a variable face, in font order.
+    pub instances: Vec<NamedInstance>,
 }
 
 /// Result of a PostScript-name lookup.
@@ -202,6 +218,26 @@ pub struct FontDb {
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
+    /// The installed font files registered, by canonical path.
+    #[cfg(not(target_arch = "wasm32"))]
+    installed: HashSet<std::path::PathBuf>,
+    /// The [`Catalog::generation`] the installed fonts were last read at.
+    #[cfg(not(target_arch = "wasm32"))]
+    catalog_seen: u64,
+}
+
+/// Installed fonts the [`catalog`] lists that a [`FontDb`] hasn't registered yet
+/// ([`FontDb::installed_update`]), for [`FontDb::apply_installed`].
+#[cfg(not(target_arch = "wasm32"))]
+pub struct InstalledUpdate {
+    generation: u64,
+    /// (canonical path, path) of each new file.
+    files: Vec<(std::path::PathBuf, std::path::PathBuf)>,
+    /// New faces without a file (a suitcase font).
+    unfiled: Vec<craft::font_catalog::FaceInfo>,
+    /// The families text lays out differently with once the update is applied: those of the new
+    /// faces (legacy names too, as PSD files give them) and those removed.
+    pub families: Vec<String>,
 }
 
 impl Default for FontDb {
@@ -224,6 +260,10 @@ impl FontDb {
             traits_cache: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            installed: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            catalog_seen: 0,
         };
         for (_, bytes) in BUNDLED {
             db.register_static_font(bytes.as_slice());
@@ -252,8 +292,8 @@ impl FontDb {
         db
     }
 
-    /// Scans the platform font directories once, plus Fontconfig's file list on Linux. Font files
-    /// are memory-mapped lazily by fontique when a face is first used.
+    /// Registers the installed fonts of the [`installed_catalog`] (its first scan finishes here).
+    /// Font files are memory-mapped lazily by fontique when a face is first used.
     pub fn load_system_fonts(&mut self) {
         if self.system_loaded {
             return;
@@ -261,38 +301,143 @@ impl FontDb {
         self.system_loaded = true;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // One call per file: fontique's directory scan is much slower on large folders.
-            let mut files = Vec::new();
-            for d in system_font_dirs() {
-                collect_font_files(&d, 0, &mut files);
+            // PingFang (the macOS Chinese UI font) lives outside the font folders: the Catalog
+            // lists it only once added, so the picker shows it too.
+            if cfg!(target_os = "macos")
+                && let Some(path) = crate::cjk::mac_pingfang()
+            {
+                let _ = installed_catalog().add_file(&path, Source::App, &Limits::default());
             }
-            #[cfg(target_os = "linux")]
-            files.extend(fontconfig_font_paths());
-            // Core Text knows every font macOS offers, also those activated from outside the
-            // font folders (#6683).
-            #[cfg(target_os = "macos")]
-            files.extend(coretext_font_paths());
-            // PingFang (the macOS Chinese UI font) lives outside the font folders.
-            if cfg!(target_os = "macos") {
-                files.extend(crate::cjk::mac_pingfang());
+            self.load_installed(installed_catalog());
+        }
+    }
+
+    /// Registers the installed fonts of `catalog` (waits for its first scan).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_installed(&mut self, catalog: &Catalog) {
+        // After the first scan, so the faces read below are of this generation or newer.
+        let _ = catalog.faces();
+        self.catalog_seen = catalog.generation();
+        let faces = catalog.faces();
+        // One call per file: fontique's directory scan is much slower on large folders.
+        for path in new_font_files(faces.iter().filter(|f| is_installed_face(f)), &mut self.installed) {
+            self.fcx.collection.load_fonts_from_paths([path]);
+        }
+        // Faces without a file (a suitcase font, added bytes) load from the Catalog. The
+        // Catalog is the source, so they register without the mirror back into it.
+        self.register_unfiled(catalog, faces.iter().filter(|f| is_installed_face(f) && f.path.is_none()));
+        self.ps_cache.clear();
+        self.face_cache.clear();
+        self.traits_cache.clear();
+        self.refresh_generics();
+    }
+
+    /// Registers `faces` (faces without a file) from the bytes `catalog` loads, each blob once.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn register_unfiled<'a>(&mut self, catalog: &Catalog, faces: impl Iterator<Item = &'a craft::font_catalog::FaceInfo>) {
+        let mut loaded = Vec::new();
+        let mut seen = HashSet::new();
+        for face in faces {
+            let Ok(data) = catalog.load(face) else { continue };
+            if seen.insert(Arc::as_ptr(&data.bytes).cast::<u8>() as usize) {
+                self.register_bytes(Blob::new(Arc::new(data.bytes.to_vec())), None);
             }
-            let mut seen = HashSet::new();
-            for path in files {
-                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if seen.insert(key) {
-                    self.fcx.collection.load_fonts_from_paths([path]);
+            // Kept until the loop ends so a freed buffer's address cannot repeat.
+            loaded.push(data);
+        }
+    }
+
+    /// The installed fonts the [`installed_catalog`] gained since this database read them (a family the
+    /// launcher installed while the app runs), or `None` when it has none or never read them.
+    /// Fonts removed from the system stay registered until the next start; their families are in
+    /// [`InstalledUpdate::families`] all the same.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn installed_update(&self) -> Option<InstalledUpdate> {
+        self.installed_update_in(installed_catalog())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn installed_update_in(&self, catalog: &Catalog) -> Option<InstalledUpdate> {
+        if !self.system_loaded || catalog.generation() == self.catalog_seen {
+            return None;
+        }
+        let changes = catalog.changes_since(self.catalog_seen);
+        // `full`: the catalog no longer knows what changed, so every installed face is checked.
+        let wanted: Option<HashSet<String>> = (!changes.full).then(|| changes.added.iter().chain(&changes.changed).map(|f| f.to_lowercase()).collect());
+        let added: HashSet<String> = changes.added.iter().map(|f| f.to_lowercase()).collect();
+        let mut update = InstalledUpdate { generation: changes.generation, files: Vec::new(), unfiled: Vec::new(), families: changes.removed };
+        let mut new_keys = HashSet::new();
+        for face in catalog.faces().iter().filter(|f| is_installed_face(f)) {
+            let family = face.family.to_lowercase();
+            if wanted.as_ref().is_some_and(|w| !w.contains(&family)) {
+                continue;
+            }
+            let new = match &face.path {
+                Some(path) if is_private_font_path(path) => false,
+                Some(path) => {
+                    let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let new = !self.installed.contains(&key);
+                    if new && new_keys.insert(key.clone()) {
+                        update.files.push((key, path.clone()));
+                    }
+                    new
+                }
+                // Only a family new to the catalog: a changed one has its unfiled faces registered.
+                None => {
+                    let new = added.contains(&family);
+                    if new {
+                        update.unfiled.push(face.clone());
+                    }
+                    new
+                }
+            };
+            if new {
+                for name in std::iter::once(&face.family).chain(&face.legacy_family) {
+                    if !update.families.contains(name) {
+                        update.families.push(name.clone());
+                    }
                 }
             }
-            self.ps_cache.clear();
-            self.face_cache.clear();
-            self.traits_cache.clear();
-            self.refresh_generics();
+        }
+        Some(update)
+    }
+
+    /// Registers what [`Self::installed_update`] found.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_installed(&mut self, update: InstalledUpdate) {
+        self.apply_installed_in(installed_catalog(), update);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_installed_in(&mut self, catalog: &Catalog, update: InstalledUpdate) {
+        self.catalog_seen = self.catalog_seen.max(update.generation);
+        if update.files.is_empty() && update.unfiled.is_empty() {
+            return;
+        }
+        for (key, path) in update.files {
+            self.fcx.collection.load_fonts_from_paths([path]);
+            self.installed.insert(key);
+        }
+        self.register_unfiled(catalog, update.unfiled.iter());
+        self.ps_cache.clear();
+        self.face_cache.clear();
+        self.traits_cache.clear();
+        self.refresh_generics();
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+        if self.shared {
+            SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
         self.register_blob(Blob::new(Arc::new(bytes)), None)
+    }
+
+    /// [`Self::register_font_data`] with the family name overridden, so an embedded subset can be
+    /// registered under a name that cannot shadow an installed full family. Returns the names added.
+    pub fn register_font_data_as(&mut self, bytes: Vec<u8>, family: &str) -> Vec<String> {
+        self.register_blob(Blob::new(Arc::new(bytes)), Some(family))
     }
 
     /// Registers embedded font data without copying it.
@@ -303,6 +448,20 @@ impl FontDb {
     /// Registers every face in `blob`, under `family` when given, else under the family each
     /// face's `name` table gives.
     fn register_blob(&mut self, blob: Blob<u8>, family: Option<&str>) -> Vec<String> {
+        // The shared database is the one the picker lists: what it registers (served fonts, a
+        // document's embedded fonts) joins the Catalog too.
+        let mirrored = self.shared.then(|| blob.clone());
+        let names = self.register_bytes(blob, family);
+        if let Some(blob) = mirrored
+            && !names.is_empty()
+        {
+            let _ = catalog().add_bytes(blob.as_ref().to_vec(), Source::User, &Limits::default());
+        }
+        names
+    }
+
+    /// [`Self::register_blob`] without the Catalog mirror: for faces read from the Catalog.
+    fn register_bytes(&mut self, blob: Blob<u8>, family: Option<&str>) -> Vec<String> {
         let Some(blob) = sanitize_font_blob(blob) else {
             return Vec::new();
         };
@@ -334,6 +493,15 @@ impl FontDb {
     /// [`shared_generation`], since its fonts replace whatever caches saw before.
     pub(crate) fn mark_shared(&mut self) {
         self.shared = true;
+        // The bundled and craft fonts were registered before the database was shared, so they
+        // reach the Catalog here, once.
+        let limits = Limits::default();
+        for (_, bytes) in BUNDLED {
+            let _ = catalog().add_bytes(bytes.to_vec(), Source::Bundled, &limits);
+        }
+        for f in crate::craft_fonts::CRAFT_FONTS {
+            let _ = catalog().add_bytes(f.bytes.to_vec(), Source::Bundled, &limits);
+        }
         SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -474,6 +642,8 @@ impl FontDb {
                     weight: f.weight().value(),
                     italic,
                     axes: f.axes().iter().map(|a| (a.tag.to_string(), a.min, a.default, a.max)).collect(),
+                    font_axes: blob.as_ref().map_or_else(Vec::new, |b| read_axes(b.as_ref(), f.index())),
+                    instances: blob.as_ref().map_or_else(Vec::new, |b| read_named_instances(b.as_ref(), f.index())),
                 }
             })
             .collect();
@@ -855,147 +1025,85 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if depth < 8 {
-                collect_font_files(&p, depth + 1, out);
-            }
-        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc")) {
-            out.push(p);
+/// The process's font Catalog: the fonts added at run time, the bundled ones and, where
+/// [`shared`](crate::shared) scans them (`uses_system_fonts`), the installed ones. The engine,
+/// the font picker and the Glyphs panel all read this one, so in tests they offer the same fixed
+/// set whatever the machine has installed.
+pub fn catalog() -> &'static Arc<Catalog> {
+    static OFFERED: std::sync::OnceLock<Arc<Catalog>> = std::sync::OnceLock::new();
+    OFFERED.get_or_init(|| {
+        if crate::uses_system_fonts() {
+            Arc::clone(Catalog::global())
+        } else {
+            Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false))
         }
-    }
-}
-
-/// Fontconfig knows about configured font directories that are not in our portable path list.
-/// Keep this optional and shell-free: directory scans remain the fallback when `fc-list` is not
-/// installed or Fontconfig cannot enumerate fonts.
-#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
-fn fontconfig_font_paths() -> Vec<std::path::PathBuf> {
-    let Ok(output) = std::process::Command::new("fc-list").arg("--format=%{file}\\n").output() else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    fontconfig_paths_from_output(&output.stdout).into_iter().filter(|path| path.is_file()).collect()
-}
-
-#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
-fn fontconfig_paths_from_output(output: &[u8]) -> Vec<std::path::PathBuf> {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-
-    let mut seen = HashSet::new();
-    output
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| std::path::PathBuf::from(OsString::from_vec(line.to_vec())))
-        .filter(|path| {
-            path.is_absolute()
-                && path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"))
-        })
-        .map(|path| path.canonicalize().unwrap_or(path))
-        .filter(|path| seen.insert(path.clone()))
-        .collect()
-}
-
-#[cfg(all(test, target_os = "linux", not(target_arch = "wasm32")))]
-mod fontconfig_tests {
-    use super::fontconfig_paths_from_output;
-    use std::path::PathBuf;
-
-    #[test]
-    fn parses_unique_absolute_font_paths_from_fontconfig() {
-        let paths = fontconfig_paths_from_output(
-            b"/usr/share/fonts/example.ttf\nrelative.otf\n/usr/share/fonts/README.txt\n/usr/local/fonts/collection.OTC\n/usr/share/fonts/example.ttf\n\n",
-        );
-
-        assert_eq!(paths, vec![PathBuf::from("/usr/share/fonts/example.ttf"), PathBuf::from("/usr/local/fonts/collection.OTC")]);
-    }
-}
-
-/// The font files Core Text offers: the installed fonts and those activated from any other folder
-/// (a font manager, Adobe Fonts, Office, Apple's on-demand downloads). A scratch collection with
-/// fontique's Core Text backend lists them; its fonts are not used, only their files, so our own
-/// collection registers them like any scanned file.
-#[cfg(target_os = "macos")]
-fn coretext_font_paths() -> Vec<std::path::PathBuf> {
-    // Reading arbitrary fonts must not take the scan down: no files is the folder scan's result.
-    std::panic::catch_unwind(|| {
-        let mut system = Collection::new(CollectionOptions { shared: false, system_fonts: true });
-        let mut files = font_files_of(&mut system);
-        files.retain(|f| !f.starts_with(MACOS_PRIVATE_FONTS));
-        files
     })
-    .unwrap_or_default()
+}
+
+/// The Catalog of the machine's installed fonts, for code that asks for them by name
+/// ([`FontDb::load_system_fonts`]). The same Catalog as [`catalog`] where the shared engine scans
+/// the installed fonts.
+pub fn installed_catalog() -> &'static Arc<Catalog> {
+    Catalog::global()
+}
+
+/// Starts the [`catalog`] for the desktop app, before its first window: the first scan on a
+/// background thread, and a poll of the suite's font store, so a family the launcher installs
+/// shows while the app runs. `wake` runs on a worker thread after a family was added, removed or
+/// changed; the app then finds the update with [`FontDb::installed_update`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_catalog(wake: impl Fn() + Send + Sync + 'static) {
+    use craft::font_catalog::app::{self, AppFonts};
+    app::start(AppFonts { on_change: Some(Arc::new(move |_: &Catalog| wake())), ..AppFonts::default() });
+}
+
+/// For a window's activation once [`start_catalog`] ran: checks the font folders for changes on
+/// a worker thread, without blocking.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn catalog_activated() {
+    craft::font_catalog::app::on_activated();
 }
 
 /// Fonts reserved for the system UI (PingFangUI.ttc among them). Core Text offers them, but
 /// fontique can't draw their outlines (it works around PingFangUI for the same reason), so they
-/// are not listed.
-#[cfg(target_os = "macos")]
+/// are not registered.
 const MACOS_PRIVATE_FONTS: &str = "/System/Library/PrivateFrameworks";
 
-/// The files `collection`'s fonts are read from, each once and in a fixed order. Fonts
-/// registered from memory have no file.
-#[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
-fn font_files_of(collection: &mut Collection) -> Vec<std::path::PathBuf> {
-    let names: Vec<String> = collection.family_names().map(str::to_string).collect();
-    let mut files = HashSet::new();
-    for name in names {
-        let Some(family) = collection.family_by_name(&name) else {
-            continue;
-        };
-        for font in family.fonts() {
-            if let SourceKind::Path(path) = font.source().kind() {
-                files.insert(path.to_path_buf());
-            }
-        }
-    }
-    let mut files: Vec<_> = files.into_iter().collect();
-    files.sort();
-    files
+/// Whether `path` is a macOS private UI font file, which no engine can draw.
+fn is_private_font_path(path: &std::path::Path) -> bool {
+    cfg!(target_os = "macos") && path.starts_with(MACOS_PRIVATE_FONTS)
 }
 
+/// Whether `face` comes from the machine's own fonts (not a served, embedded or bundled one).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
-    use std::path::PathBuf;
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut v = Vec::new();
-    if cfg!(target_os = "macos") {
-        v.push(PathBuf::from("/System/Library/Fonts"));
-        v.push(PathBuf::from("/Library/Fonts"));
-        if let Some(h) = &home {
-            v.push(h.join("Library/Fonts"));
+fn is_installed_face(face: &craft::font_catalog::FaceInfo) -> bool {
+    matches!(face.source, Source::System | Source::Store | Source::App)
+}
+
+/// The installed font files of the [`installed_catalog`] (waits for its first scan), each once by canonical
+/// path, in the Catalog's order, without the macOS private UI fonts. The one selection every
+/// consumer of the installed fonts (the shaper, the script fallbacks, the SVG renderer) uses.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn installed_font_files() -> Vec<std::path::PathBuf> {
+    new_font_files(installed_catalog().faces().iter().filter(|f| is_installed_face(f)), &mut HashSet::new())
+}
+
+/// The files of `faces` whose canonical path isn't in `seen` yet (each added to it), in order,
+/// without the macOS private UI fonts.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_font_files<'a>(faces: impl Iterator<Item = &'a craft::font_catalog::FaceInfo>, seen: &mut HashSet<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for face in faces {
+        let Some(path) = &face.path else { continue };
+        if is_private_font_path(path) {
+            continue;
         }
-    } else if cfg!(target_os = "windows") {
-        let windir = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from);
-        v.push(windir.join("Fonts"));
-        if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-            v.push(PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
-        }
-    } else {
-        v.push(PathBuf::from("/usr/share/fonts"));
-        v.push(PathBuf::from("/usr/local/share/fonts"));
-        // Inside a Flatpak sandbox the host's system and per-user fonts are mounted here
-        // (`/usr/share/fonts` is the runtime's own small set). Missing dirs are skipped.
-        v.push(PathBuf::from("/run/host/fonts"));
-        v.push(PathBuf::from("/run/host/user-fonts"));
-        if let Some(d) = std::env::var_os("XDG_DATA_HOME") {
-            v.push(PathBuf::from(d).join("fonts"));
-        }
-        if let Some(h) = &home {
-            v.push(h.join(".local/share/fonts"));
-            v.push(h.join(".fonts"));
+        let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen.insert(key) {
+            files.push(path.clone());
         }
     }
-    v
+    files
 }
 
 /// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
@@ -1021,6 +1129,45 @@ pub fn is_hidden_family(name: &str) -> bool {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    /// A family the launcher installs into the font store while the app runs reaches the database
+    /// once the catalog's generation moves, and no file registers twice.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_family_installed_into_the_store_reaches_the_database() {
+        use craft::font_catalog::{FontEnv, Os};
+        let family = "Zetbrains Test";
+        let dir = std::env::temp_dir().join(format!("photocraft-store-test-{}", std::process::id()));
+        let store = dir.join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        let catalog = super::Catalog::new(FontEnv { os: Os::None, font_store: Some(store.clone()), ..FontEnv::default() }).with_font_service(false);
+        let mut db = super::FontDb::new();
+        db.system_loaded = true;
+        db.load_installed(&catalog);
+        assert!(db.installed_update_in(&catalog).is_none(), "nothing new yet");
+        assert!(!db.has_family(family));
+
+        // JetBrains Mono renamed in its name table (ASCII and UTF-16BE records; same length).
+        let mut bytes = super::JETBRAINS_MONO_REGULAR.clone();
+        let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+        for (from, to) in [(b"JetBrains Mono".to_vec(), family.as_bytes().to_vec()), (utf16("JetBrains Mono"), utf16(family))] {
+            let mut i = 0;
+            while let Some(at) = bytes[i..].windows(from.len()).position(|w| w == from) {
+                bytes[i + at..i + at + to.len()].copy_from_slice(&to);
+                i += at + to.len();
+            }
+        }
+        std::fs::create_dir_all(store.join(family)).unwrap();
+        std::fs::write(store.join(family).join("ZetbrainsTest-Regular.ttf"), &bytes).unwrap();
+        catalog.rescan();
+
+        let update = db.installed_update_in(&catalog).expect("the catalog changed");
+        assert!(update.families.iter().any(|f| f == family), "{:?}", update.families);
+        db.apply_installed_in(&catalog, update);
+        assert!(db.has_family(family));
+        assert!(db.installed_update_in(&catalog).is_none(), "applied");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn hidden_families_sort_last_and_are_not_listed() {
         assert!(super::is_hidden_family(".Hiragino Kaku Gothic Interface"));
@@ -1028,14 +1175,6 @@ mod tests {
         let mut v = [".Hiragino Kaku Gothic Interface".to_string(), "Hiragino Kaku Gothic ProN".to_string()];
         v.sort_by_key(|n| (super::is_hidden_family(n), n.to_lowercase()));
         assert_eq!(v[0], "Hiragino Kaku Gothic ProN");
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn scans_flatpak_host_fonts() {
-        let dirs = super::system_font_dirs();
-        assert!(dirs.iter().any(|d| d.ends_with("run/host/fonts")));
-        assert!(dirs.iter().any(|d| d.ends_with("run/host/user-fonts")));
     }
 
     /// The bundled UI fonts cover Czech (the `cs` UI language) on their own: every letter with a
@@ -1105,68 +1244,27 @@ mod tests {
         assert_eq!(super::localized_name("X", &[]), None);
     }
 
-    /// The files a collection's fonts come from (what Core Text's fonts are loaded from, #6683):
-    /// each once, none for fonts held in memory.
+    /// The engine lists every family the Catalog lists from a readable, drawable file, so the
+    /// font picker and the engine offer the same fonts (#6683).
     #[test]
-    fn font_files_of_lists_each_font_file_once() {
-        use super::{Blob, Collection, CollectionOptions};
-        let dir = std::env::temp_dir().join(format!("photocraft-font-files-{}", std::process::id()));
-        let activated = dir.join("activated");
-        std::fs::create_dir_all(&activated).unwrap();
-        let (inter, mono) = (dir.join("inter.ttf"), activated.join("mono.ttf"));
-        std::fs::write(&inter, super::INTER_REGULAR.as_slice()).unwrap();
-        std::fs::write(&mono, super::JETBRAINS_MONO_REGULAR.as_slice()).unwrap();
-        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
-        collection.load_fonts_from_paths([&dir]);
-        // The same file again and a font from memory add no files.
-        collection.load_fonts_from_paths([&inter]);
-        collection.register_fonts(Blob::new(std::sync::Arc::new(super::INTER_MEDIUM.clone())), None);
-        let files = super::font_files_of(&mut collection);
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut expected = vec![inter, mono];
-        expected.sort();
-        assert_eq!(files, expected);
-    }
-
-    /// Core Text lists the system's font files, all readable, none of the reserved UI fonts.
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn coretext_lists_the_system_font_files() {
-        let files = super::coretext_font_paths();
-        assert!(files.iter().any(|f| f.starts_with("/System/Library/Fonts")), "{} files", files.len());
-        assert!(files.iter().all(|f| f.is_file() && !f.starts_with("/System/Library/PrivateFrameworks")));
-    }
-
-    /// Every family macOS offers is in the font list, not only those in the font folders (#6683).
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn every_family_coretext_offers_is_listed() {
-        use super::{Collection, CollectionOptions, SourceKind};
-        let mut system = Collection::new(CollectionOptions { shared: false, system_fonts: true });
-        // Its names include localized aliases of a family ("Systemschrift"); the family has one name.
-        let aliases: Vec<String> = system.family_names().map(str::to_string).collect();
-        let mut offered = Vec::new();
-        for family in aliases.iter().filter_map(|n| system.family_by_name(n)) {
-            // A family only the reserved UI fonts provide (PingFang before its download) is not listed.
-            let listed_file =
-                |font: &parley::fontique::FontInfo| matches!(font.source().kind(), SourceKind::Path(p) if !p.starts_with(super::MACOS_PRIVATE_FONTS));
-            if !super::is_hidden_family(family.name()) && family.fonts().iter().any(listed_file) {
-                offered.push(family.name().to_string());
-            }
-        }
+    fn every_catalog_family_is_listed() {
+        let mut offered: Vec<String> = super::installed_catalog()
+            .faces()
+            .iter()
+            .filter(|f| matches!(f.source, super::Source::System | super::Source::Store | super::Source::App))
+            .filter(|f| !super::is_hidden_family(&f.family))
+            .filter(|f| f.path.as_deref().is_some_and(|p| p.is_file() && !super::is_private_font_path(p)))
+            .map(|f| f.family.clone())
+            .collect();
         offered.sort();
         offered.dedup();
-        assert!(!offered.is_empty());
+        if offered.is_empty() {
+            eprintln!("skipped: no installed font files");
+            return;
+        }
         let listed = super::FontDb::with_system_fonts().families();
         let missing: Vec<&String> = offered.iter().filter(|n| !listed.contains(n)).collect();
-        assert!(missing.is_empty(), "macOS offers these families, the font list lacks them: {missing:?}");
-    }
-
-    #[test]
-    fn missing_font_dirs_are_skipped() {
-        let mut files = Vec::new();
-        super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
-        assert!(files.is_empty());
+        assert!(missing.is_empty(), "the Catalog lists these families, the font list lacks them: {missing:?}");
     }
 }
 
