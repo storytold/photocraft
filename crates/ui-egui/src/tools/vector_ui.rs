@@ -245,6 +245,9 @@ mod triangle_align_edges_tests;
 mod triangle_shift_equilateral_tests;
 
 #[cfg(test)]
+mod triangle_press_path_ops_tests;
+
+#[cfg(test)]
 mod rectangle_gear_tests;
 
 #[cfg(test)]

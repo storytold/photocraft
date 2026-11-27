@@ -157,7 +157,8 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
         match event {
             ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => {
                 let mods = craft::ui::runtime::pointer::frame(app.ctx()).mods;
-                super::shapes::finish_drag(app, state.shapes.kind(), &after, mods);
+                // The modifiers held at the press are the framework drag's; they choose the path operation (#13366).
+                super::shapes::finish_drag_with_press(app, state.shapes.kind(), &after, mods, state.shapes.press_mods());
             }
             ShapeDragEvent::Click { at, kind, .. } => {
                 super::shapes::click(app, kind, [at.x, at.y]);
