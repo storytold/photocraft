@@ -190,7 +190,15 @@ fn profile_summary(st: &photocraft_engine::display_color::MonitorStatus) -> Stri
     };
     let source = tl!(st.source);
     match &st.reason {
-        Some(reason) => format!("{name} ({source}: {reason})"),
+        Some(reason) => {
+            let translated = match reason.as_str() {
+                "this platform doesn't report display profiles" => tl!("this platform doesn't report display profiles"),
+                "the display profile hasn't been read yet" => tl!("the display profile hasn't been read yet"),
+                "the display profile reader stopped without an answer" => tl!("the display profile reader stopped without an answer"),
+                _ => reason.as_str(),
+            };
+            format!("{name} ({source}: {translated})")
+        }
         None => format!("{name} ({source})"),
     }
 }
