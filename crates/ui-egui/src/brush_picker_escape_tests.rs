@@ -22,7 +22,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
                 return;
             }
             // The canvas shows the picker itself (`canvas_tool_menu::run`); a second `show_at` would show it twice.
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );
