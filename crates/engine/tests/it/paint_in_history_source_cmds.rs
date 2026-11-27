@@ -59,7 +59,7 @@ fn the_history_brush_and_fill_paint_from_the_set_source() {
 /// A new step discards the other later states but keeps that source state, last in the list, and it
 /// stays the source, so the next stroke paints from it again (#12844).
 #[test]
-fn a_redo_state_can_be_the_source_until_a_new_step_discards_it() {
+fn a_redo_state_can_be_the_source_and_a_new_step_keeps_it() {
     let mut s = session();
     assert!(s.undo());
     s.execute("history.setSource", json!({"state": 2})).unwrap();

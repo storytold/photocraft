@@ -16,7 +16,10 @@
 //!
 //! Rows: `state` is a History panel row everywhere here (this command, `paint.historyBrush`, Fill
 //! › History and `historySource` in `doc_inspect`): the states (0 = oldest), the current one, then
-//! the greyed redo states, the next redo first.
+//! the greyed redo states, the next redo first. A source state a step kept (#12844) is the last of
+//! those greyed rows and takes an explicit `state` here like any other row, while `edit.redo` and
+//! the panel's Step Forward refuse it: the list can show a later row the document cannot step
+//! forward to.
 
 use std::sync::Arc;
 

@@ -124,6 +124,9 @@ struct Cleared {
     redo: Vec<HistoryState>,
     brush_source: Option<u64>,
     brush_source_snapshot: Option<u64>,
+    /// The state kept as the source (#12844) travels with the rows the Clear took off the list, so
+    /// its undo puts back exactly what was there: the row kept, and not a state to step forward to.
+    kept_source: Option<u64>,
 }
 
 /// The undo label of the step [`History::clear_states`] adds (Edit › Undo Clear History).
@@ -330,9 +333,14 @@ impl History {
         let map = |source: Option<u64>| source.map(|id| if id == prior_current { current } else { id });
         self.brush_source = map(later.brush_source);
         self.brush_source_snapshot = later.brush_source_snapshot;
+        // The fold replaces rows, so the state kept as the source is re-derived from the list that
+        // survives it: still kept while it is a held later state under its (possibly mapped) id,
+        // otherwise not (#12844).
+        self.kept_source = map(self.kept_source).filter(|id| self.redo.iter().any(|state| state.id == *id));
         if let (Some(dst), Some(src)) = (&mut self.cleared, &later.cleared) {
             dst.brush_source = map(src.brush_source);
             dst.brush_source_snapshot = src.brush_source_snapshot;
+            dst.kept_source = map(src.kept_source);
         }
         source
     }
@@ -347,6 +355,8 @@ impl History {
         self.changed();
         self.brush_source = None;
         self.brush_source_snapshot = Some(snapshot);
+        // No state source is left, so nothing is kept past its time (#12844).
+        self.drop_kept_source();
     }
 
     /// Keep a folded source inactive until Undo Clear History restores its source context.
@@ -355,6 +365,10 @@ impl History {
         if let Some(cleared) = &mut self.cleared {
             cleared.brush_source = None;
             cleared.brush_source_snapshot = Some(snapshot);
+            // Same rule while the Clear is pending: the state kept as a source goes with it (#12844).
+            if let Some(kept) = cleared.kept_source.take() {
+                cleared.redo.retain(|state| state.id != kept);
+            }
         }
     }
 
@@ -364,11 +378,12 @@ impl History {
         self.changed();
         // Undo Clear History: the cleared states come back; the document doesn't change.
         if let Some(cleared) = self.cleared.take() {
-            let Cleared { undo, redo, brush_source, brush_source_snapshot } = *cleared;
+            let Cleared { undo, redo, brush_source, brush_source_snapshot, kept_source } = *cleared;
             self.undo = undo;
             self.redo = redo;
             self.brush_source = brush_source;
             self.brush_source_snapshot = brush_source_snapshot;
+            self.kept_source = kept_source;
             self.tiles = None;
             return Some((current, self.current_layers.clone()));
         }
@@ -544,6 +559,11 @@ impl History {
         }
         let Some(state) = self.undo.remove(i) else { return false };
         self.last_record = None;
+        // A state never stops being the kept source one by being deleted (#12844): the field only
+        // ever names the farthest later state, and this is the list's guard for that.
+        if self.kept_source == Some(state.id) {
+            self.kept_source = None;
+        }
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&state.doc);
         }
@@ -563,6 +583,11 @@ impl History {
         let Some(k) = self.redo.len().checked_sub(j.saturating_add(1)) else { return false };
         let state = self.redo.remove(k);
         self.last_record = None;
+        // Deleting the state that was kept as the source ends the keeping; the source then names no
+        // row, as for any deleted source (#12844).
+        if self.kept_source == Some(state.id) {
+            self.kept_source = None;
+        }
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&state.doc);
         }
@@ -729,7 +754,8 @@ impl History {
         let redo = std::mem::take(&mut self.redo);
         let brush_source = self.brush_source.take();
         let brush_source_snapshot = self.brush_source_snapshot.take();
-        self.cleared = Some(Box::new(Cleared { undo, redo, brush_source, brush_source_snapshot }));
+        let kept_source = self.kept_source.take();
+        self.cleared = Some(Box::new(Cleared { undo, redo, brush_source, brush_source_snapshot, kept_source }));
         self.last_record = None;
         self.tiles = None;
     }

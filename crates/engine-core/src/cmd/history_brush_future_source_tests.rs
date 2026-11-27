@@ -154,7 +154,9 @@ fn a_snapshot_source_lets_the_kept_state_go() {
     assert_eq!(st.history.redo_labels().count(), 0);
 }
 
-/// Edit › Purge › Histories still resets a state source to the default (#3536), kept state included.
+/// Edit › Purge › Histories still resets a state source (#3536), kept state included. Which source
+/// the default is after the purge is read from the same run without a set source, so this pins only
+/// what #12844 owns: the kept row is gone and no later row is left.
 #[test]
 fn purging_histories_still_resets_a_state_source() {
     let mut s = stepped_back();
@@ -162,9 +164,59 @@ fn purging_histories_still_resets_a_state_source() {
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("edit.purge.histories", json!({})).unwrap();
     let st = s.active().unwrap();
-    assert_eq!(st.history.redo_labels().count(), 0, "the purge leaves no later state");
-    assert_eq!(st.history.row_of(id), None, "the kept state went with them");
-    assert_eq!(source(&s)["state"], json!(0), "the source is the default again");
+    assert_eq!(st.history.row_of(id), None, "the kept state went with the purge - a row leaking back would still name it here");
+    assert_eq!(st.history.redo_labels().count(), 0, "and no later row is left at all");
+    assert_eq!(source(&s), default_source_after_purge(), "and the source is the default this branch has, whatever that is");
+}
+
+/// The source the same commands leave when no state source was ever set: read, not hard-coded, so
+/// the test does not decide what the default is.
+fn default_source_after_purge() -> Value {
+    let mut s = stepped_back();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.purge.histories", json!({})).unwrap();
+    source(&s)
+}
+
+/// With History Options › Allow Non-Linear History the panel's Delete works on a dimmed row, the
+/// kept source row included: that row goes and the source goes with it, as for any deleted state.
+#[test]
+fn deleting_the_kept_row_in_non_linear_history_leaves_no_source() {
+    let mut s = stepped_back();
+    let (id, _) = set_later_source(&mut s);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("history.options", json!({"allowNonLinearHistory": true})).unwrap();
+    let last = last_row(s.active().unwrap());
+    s.execute("history.deleteState", json!({"state": last})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.history.row_of(id), None, "the deleted row is gone");
+    assert_eq!(st.history.redo_labels().count(), 0, "and it was the only later row");
+    assert_eq!(st.history.brush_source(), None, "and the source went with it");
+    assert!(!st.history.can_redo(), "and no step-forward state was left behind");
+}
+
+/// Clear History keeps its undo honest: the state kept as the source is carried through the Clear
+/// and its Undo, so after the undo the row is still there, last, still the source and still not a
+/// state the document can step forward to - also when another source was chosen while the Clear was
+/// pending (#12844).
+#[test]
+fn clear_history_and_its_undo_keep_the_kept_source_state() {
+    let mut s = stepped_back();
+    let (id, _) = set_later_source(&mut s);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("history.clear", json!({})).unwrap();
+    s.execute("history.setSource", json!({"state": 0})).unwrap();
+    assert_eq!(s.active().unwrap().history.redo_labels().count(), 0, "the Clear lists no later row");
+    s.execute("edit.undo", json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.history.row_of(id), Some(last_row(st)), "the kept row is back, still the last row");
+    assert_eq!(
+        st.history.brush_source(),
+        Some(last_row(st)),
+        "and ops still names it as the source (read at the history, not through the report, whose default the other open pull request changes)"
+    );
+    assert!(!st.history.can_redo(), "and it is still not a state the document can step forward to");
+    assert!(s.execute("edit.redo", json!({})).is_err(), "so Redo refuses it");
 }
 
 /// History panel › Delete still takes the state it names and everything after it, the kept source
@@ -179,7 +231,11 @@ fn deleting_a_state_still_takes_everything_after_it() {
     let st = s.active().unwrap();
     assert_eq!(st.history.row_of(id), None, "the deleted rows are gone, kept source included");
     assert_eq!(st.history.redo_labels().count(), 0, "nothing after them is left to redo");
-    assert!(source(&s).is_null(), "a source the delete removed leaves no source");
+    assert_eq!(
+        st.history.brush_source(),
+        None,
+        "the history itself no longer names a source row (read at the history: what the report falls back to is the other open pull request's choice)"
+    );
 }
 
 /// The issue does not measure what clicking the kept row does, so it behaves like a click on any
