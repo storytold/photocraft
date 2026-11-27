@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::strokes::{feed_live_stroke_waiting, live_stroke_busy, stroke_command};
-use super::{PhotocraftApp, Tool, ToolEvent, testing, tool_event};
+use super::{PhotocraftApp, Tool, ToolEvent, settle_pending_stroke, testing, tool_event};
 
 const M: egui::Modifiers = egui::Modifiers::NONE;
 
@@ -55,7 +55,7 @@ fn assert_commit_replays(app: &mut PhotocraftApp, cmd: &str, what: &str) {
     assert_eq!(*app.session.active().unwrap().doc, *doc, "{what}: the committed stroke");
 }
 
-fn wait_until(what: &str, done: impl Fn() -> bool) {
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let start = Instant::now();
     while !done() {
         assert!(start.elapsed() < Duration::from_secs(10), "{what}");
@@ -153,4 +153,126 @@ fn a_step_that_panics_on_the_thread_leaves_the_document_and_the_release_paints_t
         assert_commit_replays(&mut app, cmd, &what);
         wait_until("the thread ended", || !alive());
     }
+}
+
+/// Alpha of the active layer's pixel.
+fn layer_alpha(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
+    let st = app.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)[3]
+}
+
+/// A Brush stroke released while its thread holds the commit, with the canvas not waiting for it:
+/// the stroke is pending. Returns what lets the thread go.
+fn release_with_commit_pending(app: &mut PhotocraftApp) -> impl FnOnce() + Send + 'static {
+    tool_event(app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, M);
+    move_along(app);
+    let release = app.live_stroke.as_ref().unwrap().paint.hold();
+    app.stroke_commit_wait = Duration::ZERO;
+    tool_event(app, ToolEvent::Up { x: 120.0, y: 30.0 }, M);
+    assert!(app.pending_stroke.is_some(), "the commit is still being made");
+    release
+}
+
+/// Let go of the held commit after a moment, from another thread, as a slow composite finishing.
+fn release_soon(release: impl FnOnce() + Send + 'static) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        release();
+    })
+}
+
+/// While the commit is pending the document is untouched and the canvas shows the stroke; the next
+/// frame after the thread is done lands the commit with the live stroke's pixels.
+#[test]
+fn a_pending_commit_leaves_the_document_alone_and_lands_in_a_later_frame() {
+    let mut app = app_for(Tool::Brush);
+    let before = app.session.active().unwrap().doc.clone();
+    let steps = app.session.active().unwrap().history.past_len();
+    let release = release_with_commit_pending(&mut app);
+    assert!(app.live_stroke.is_none());
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "the document is unchanged");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    let (shown, key) = super::display_doc(&mut app, 0);
+    assert!(!Arc::ptr_eq(&shown, &before) && key != 0, "the canvas shows the stroke, not the document");
+    let flat = photocraft_compose::flatten(&shown);
+    assert!(flat.get(60, 30)[0] > 0.5 && flat.get(60, 30)[1] < 0.5, "the stroke's red over the green");
+
+    // Not done yet: a frame's poll lands nothing.
+    settle_pending_stroke(&mut app, false);
+    assert!(app.pending_stroke.is_some());
+    release();
+    wait_until("the commit lands", || {
+        settle_pending_stroke(&mut app, false);
+        app.pending_stroke.is_none()
+    });
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one edit");
+    assert!(app.committed_stroke.is_some(), "the commit took the live stroke's pixels");
+    assert!(layer_alpha(&app, 60, 30) > 0.5);
+    assert_eq!(super::display_doc(&mut app, 0).1, 0, "the canvas shows the document again");
+    assert_commit_replays(&mut app, "paint.stroke", "pending commit");
+}
+
+/// A command that runs while the commit is pending waits for it and runs after it: undo undoes the
+/// stroke, not what came before it.
+#[test]
+fn a_command_waits_for_the_pending_commit_and_acts_on_the_stroke() {
+    let mut app = app_for(Tool::Brush);
+    let before = app.session.active().unwrap().doc.clone();
+    let steps = app.session.active().unwrap().history.past_len();
+    let release = release_with_commit_pending(&mut app);
+    let slow = release_soon(release);
+    app.run("edit.undo", json!({})).unwrap();
+    slow.join().unwrap();
+    assert!(app.pending_stroke.is_none());
+    assert_eq!(*app.session.active().unwrap().doc, *before, "the stroke was undone");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    app.run("edit.redo", json!({})).unwrap();
+    assert!(layer_alpha(&app, 60, 30) > 0.5, "what was undone was the stroke");
+}
+
+/// A stroke that starts while the first one's commit is pending lands after it: the Eraser's column
+/// through the first stroke takes it out where they cross, which only holds if it came second.
+#[test]
+fn a_stroke_started_while_another_is_pending_lands_after_it() {
+    let mut app = app_for(Tool::Brush);
+    let steps = app.session.active().unwrap().history.past_len();
+    let release = release_with_commit_pending(&mut app);
+    let slow = release_soon(release);
+    app.ui.tool = Tool::Eraser;
+    for (i, y) in [10.0, 30.0, 50.0].into_iter().enumerate() {
+        let ev = if i == 0 { ToolEvent::Down { x: 60.0, y, pressure: 1.0 } } else { ToolEvent::Move { x: 60.0, y, pressure: 1.0 } };
+        tool_event(&mut app, ev, M);
+    }
+    tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 50.0 }, M);
+    slow.join().unwrap();
+    settle_pending_stroke(&mut app, true);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 2, "both strokes are in the history");
+    assert!(layer_alpha(&app, 100, 30) > 0.5, "the first stroke is there");
+    assert!(layer_alpha(&app, 60, 30) < 0.1, "the second stroke's erasing is on top of it");
+}
+
+/// The thread panics while it makes the commit: the canvas notices, renders the stroke itself, and
+/// nothing hangs.
+#[test]
+fn a_panic_while_the_commit_is_made_falls_back_to_rendering_the_stroke() {
+    let mut app = app_for(Tool::Brush);
+    let steps = app.session.active().unwrap().history.past_len();
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, M);
+    move_along(&mut app);
+    let paint = &app.live_stroke.as_ref().unwrap().paint;
+    let (release, alive) = (paint.hold(), paint.thread_alive());
+    paint.panic_next_step();
+    app.stroke_commit_wait = Duration::ZERO;
+    tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 30.0 }, M);
+    assert!(app.pending_stroke.is_some());
+    release();
+    wait_until("the thread ended", || !alive());
+    wait_until("the stroke lands", || {
+        settle_pending_stroke(&mut app, false);
+        app.pending_stroke.is_none()
+    });
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one edit");
+    assert!(app.committed_stroke.is_none(), "rendered again, not taken from the lost thread");
+    assert_commit_replays(&mut app, "paint.stroke", "panicked commit");
 }

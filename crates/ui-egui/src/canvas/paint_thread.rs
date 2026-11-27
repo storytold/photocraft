@@ -353,7 +353,7 @@ impl PaintThread {
     /// Tests: from now on the thread holds the next step it takes, as a slow brush would, until
     /// the returned function lets it go (from any thread).
     #[cfg(test)]
-    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static {
+    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static + use<> {
         self.shared.lock().held = true;
         let shared = self.shared.clone();
         move || {
@@ -484,5 +484,44 @@ mod tests {
         assert!(matches!(steps.as_slice(), [Err(_)]), "only the failed step");
         assert!(Arc::ptr_eq(&thread.shown().doc, &good), "the last good step stays shown");
         assert!(!thread.busy());
+    }
+
+    #[test]
+    fn finishing_on_the_thread_gives_the_commit_of_finishing_here() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 300, "height": 100, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "paint"})).unwrap();
+        let begin = || {
+            let p = json!({"points": [[20, 50, 1.0]], "brush": {"size": 24, "hardness": 0.4}, "seed": 5});
+            EngineStroke::Brush(Box::new(LiveStroke::begin(&s, &p).unwrap()))
+        };
+        let pts: Vec<StrokePoint> = (1..=40).map(|i| StrokePoint::new(20.0 + 6.0 * f64::from(i), 50.0 + 15.0 * (f64::from(i) / 7.0).sin(), 1.0)).collect();
+        let (head, rest) = pts.split_at(30);
+
+        let mut here = PaintThread::start(begin());
+        here.push(pts.clone());
+        let Some(EngineStroke::Brush(painted)) = here.finish().1 else { panic!("the stroke comes back") };
+        let expected = painted.into_commit().unwrap();
+
+        let woken = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = woken.clone();
+        let mut thread = PaintThread::start(begin());
+        thread.push(head.to_vec());
+        let mut finishing = thread.finish_with(
+            rest.to_vec(),
+            |steps, stroke| match stroke {
+                Some(EngineStroke::Brush(b)) => Some((steps.len(), b.into_commit().unwrap())),
+                _ => None,
+            },
+            move || flag.store(true, std::sync::atomic::Ordering::SeqCst),
+        );
+        let (steps, got) = finishing.wait_forever().flatten().expect("the thread's result");
+        assert!(steps >= 1, "the release's points are a step of their own");
+        assert!(woken.load(std::sync::atomic::Ordering::SeqCst), "the canvas is woken once the result is there");
+        assert_eq!(got.bounds, expected.bounds);
+        let r = expected.bounds;
+        let differ =
+            (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| (x, y))).filter(|&(x, y)| got.surface.rgba(x, y) != expected.surface.rgba(x, y)).count();
+        assert_eq!(differ, 0, "pixels differ from the commit made here");
     }
 }
