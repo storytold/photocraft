@@ -6820,6 +6820,7 @@ dependencies = [
  "craft-xcf",
  "craft-xml",
  "crc32fast",
+ "fax",
  "flate2",
  "kurbo 0.13.1",
  "lopdf",

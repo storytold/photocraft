@@ -16,7 +16,7 @@ use clap::error::ErrorKind;
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use photocraft_automation::args::{AutomationArgs, ControlArgs, blank_env_is_unset, conflict, control_port, name_env_vars};
-use photocraft_codecs::{JpegFormat, TiffCompression};
+use photocraft_codecs::JpegFormat;
 use photocraft_io::{DdsCompression, DpxBits, TgaBits, XmpEmbed};
 use serde_json::Value;
 
@@ -53,9 +53,9 @@ pub(crate) struct ExportArgs {
     /// Keep the layers in TIFF output (Photoshop layer data); TIFF output is flat without it
     #[arg(long)]
     pub(crate) tiff_layers: bool,
-    /// Compress TIFF output: none (the default), lzw or zip
-    #[arg(long, value_name = "none|lzw|zip", value_parser = tiff_compression)]
-    pub(crate) tiff_compression: Option<TiffCompression>,
+    /// Compress TIFF output: none (the default), lzw, zip or g4
+    #[arg(long, value_name = "none|lzw|zip|g4", value_parser = tiff_compression)]
+    pub(crate) tiff_compression: Option<CliTiffCompression>,
     /// TIFF Save Transparency: on keeps the transparency (ahead of any alpha or spot channels),
     /// off composites the image over white. Without it: kept unless the document has alpha or
     /// spot channels
@@ -336,7 +336,7 @@ enum ValueError {
     DpxBits,
     #[error("expected none, bc1, bc2 or bc3")]
     DdsCompression,
-    #[error("expected none, lzw or zip")]
+    #[error("expected none, lzw, zip or g4")]
     TiffCompression,
     #[error("expected baseline, optimized or progressive")]
     JpegFormat,
@@ -405,11 +405,20 @@ fn dds_compression(s: &str) -> Result<DdsCompression, ValueError> {
     DdsCompression::from_name(s).ok_or(ValueError::DdsCompression)
 }
 
-fn tiff_compression(s: &str) -> Result<TiffCompression, ValueError> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CliTiffCompression {
+    None,
+    Lzw,
+    Zip,
+    G4,
+}
+
+fn tiff_compression(s: &str) -> Result<CliTiffCompression, ValueError> {
     match s {
-        "none" => Ok(TiffCompression::None),
-        "lzw" => Ok(TiffCompression::Lzw),
-        "zip" => Ok(TiffCompression::Deflate),
+        "none" => Ok(CliTiffCompression::None),
+        "lzw" => Ok(CliTiffCompression::Lzw),
+        "zip" => Ok(CliTiffCompression::Zip),
+        "g4" | "ccitt" | "ccitt_g4" => Ok(CliTiffCompression::G4),
         _ => Err(ValueError::TiffCompression),
     }
 }

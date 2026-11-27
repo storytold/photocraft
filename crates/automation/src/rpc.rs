@@ -192,6 +192,11 @@ impl Headless {
                 if let Some(c) = photocraft_engine::file_cmds::tiff_compression_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
                     opts.encode.tiff_compression = c;
                 }
+                if matches!(p.get("tiffCompression").and_then(serde_json::Value::as_str), Some("g4" | "ccitt" | "ccitt_g4"))
+                    || p.get("tiffCcittG4").and_then(serde_json::Value::as_bool).unwrap_or(false)
+                {
+                    opts.tiff_ccitt_g4 = true;
+                }
                 let tiff_bool = |key| photocraft_engine::file_cmds::tiff_bool_param(&p, key, "doc.save").map_err(|e| bad(e.to_string()));
                 opts.tiff_transparency = tiff_bool("tiffTransparency")?;
                 opts.encode.tiff_pyramid = tiff_bool("tiffPyramid")?.unwrap_or(false);

@@ -2011,7 +2011,7 @@ fn tiff_options_choose_compression_transparency_and_pyramid() {
         assert!(info.pages.iter().all(|p| p.compression == compression), "{flags:?}: {:?}", info.pages);
         assert_eq!(photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha(), alpha, "{flags:?}");
     }
-    for (flag, bad, expected) in [("--tiff-transparency", "maybe", "expected on or off"), ("--tiff-compression", "jpeg", "expected none, lzw or zip")] {
+    for (flag, bad, expected) in [("--tiff-transparency", "maybe", "expected on or off"), ("--tiff-compression", "jpeg", "expected none, lzw, zip or g4")] {
         let out = d.join("bad.tif");
         let o = bin().arg("convert").arg(&a).arg(&out).args([flag, bad]).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);

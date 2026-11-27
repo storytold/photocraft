@@ -4000,6 +4000,77 @@ fn save_a_copy_writes_the_tiff_compression_asked_for() {
     }
 }
 
+/// #15995: `tiffCompression`: "g4" writes CCITT Group 4 (tag 4) for bilevel Bitmap documents,
+/// and is refused for non-Bitmap documents.
+#[test]
+fn save_a_copy_writes_tiff_g4_for_bitmap_and_refuses_non_bitmap() {
+    let dir = tmp("tiff-g4");
+    // Non-bitmap document: refuses G4
+    let mut s = session(8, 8, 8);
+    let out = join(&dir, "non_bitmap.tif");
+    let err = s.execute("file.saveACopy", json!({"path": out, "tiffCompression": "g4"})).unwrap_err();
+    assert!(err.to_string().contains("Bitmap"), "{err}");
+
+    // Bitmap document: writes tag 4
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 16, "mode": "grayscale", "background": "white"})).unwrap();
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    let out_g4 = join(&dir, "bitmap_g4.tif");
+    s.execute("file.saveACopy", json!({"path": out_g4, "tiffCompression": "g4"})).unwrap();
+    let bytes = std::fs::read(&out_g4).unwrap();
+    assert_eq!(tiff_compression_tag(&bytes), Some(4));
+    let reopened = photocraft_io::import("bitmap_g4.tif", &bytes).unwrap().document;
+    assert_eq!(reopened.mode, photocraft_color::ColorMode::Bitmap);
+    assert_eq!(reopened.size, photocraft_geom::Size::new(24, 16));
+}
+
+/// #15995: Batch Save and Close with `tiffCompression: "g4"` refuses to overwrite a TIFF when
+/// flattening would drop layer data (including a Bitmap document with unlocked/extra layer data),
+/// even with default `tiffLayers: true`, while allowing a single locked Background Bitmap TIFF.
+#[test]
+fn batch_save_and_close_refuses_g4_when_dropping_tiff_layers() {
+    let dir = tmp("batch-save-close-g4-layers");
+    let mut s = crate::session();
+
+    // 1. Bitmap TIFF where an action turns Background into a normal layer (so `would_write_layers` is true):
+    // without the G4 layer-loss guard, Save and Close would silently flatten and overwrite the file.
+    let mut bmp = Session::new();
+    bmp.execute("file.new", json!({"width": 16, "height": 8, "mode": "grayscale", "background": "white"})).unwrap();
+    bmp.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    let bmp_path = join(&dir, "bitmap.tif");
+    save_doc(doc(&bmp), &bmp_path, super::save::SaveOpts::default()).unwrap();
+    let before_bmp = std::fs::read(&bmp_path).unwrap();
+
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({"input": [bmp_path], "destination": "saveAndClose", "tiffCompression": "g4", "steps": [["layer.new.layerFromBackground", {}]]}),
+        )
+        .unwrap();
+    assert!(result["files"].as_array().unwrap().is_empty(), "{result}");
+    assert!(result["errors"][0]["error"].as_str().unwrap().contains("TIFF layer data"), "{result}");
+    assert_eq!(std::fs::read(&bmp_path).unwrap(), before_bmp);
+
+    // 2. Layered TIFF: Save and Close with G4 fails before writing with the layer-data error.
+    let layered_path = join(&dir, "layered.tif");
+    let mut source = session(8, 8, 8);
+    source.execute("layer.new.layer", json!({"name": "Overlay"})).unwrap();
+    save_doc(doc(&source), &layered_path, super::save::SaveOpts { tiff_layers: true, ..Default::default() }).unwrap();
+    let before_layered = std::fs::read(&layered_path).unwrap();
+
+    let result =
+        s.execute("file.automate.batch", json!({"input": [layered_path], "destination": "saveAndClose", "tiffCompression": "g4", "steps": []})).unwrap();
+    assert!(result["files"].as_array().unwrap().is_empty(), "{result}");
+    assert!(result["errors"][0]["error"].as_str().unwrap().contains("TIFF layer data"), "{result}");
+    assert_eq!(std::fs::read(&layered_path).unwrap(), before_layered);
+
+    // 3. Single locked Background Bitmap TIFF: Save and Close with G4 succeeds and writes tag 4.
+    let result = s.execute("file.automate.batch", json!({"input": [bmp_path], "destination": "saveAndClose", "tiffCompression": "g4", "steps": []})).unwrap();
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+    assert_eq!(result["files"], json!([bmp_path]));
+    assert_eq!(tiff_compression_tag(&std::fs::read(&bmp_path).unwrap()), Some(4));
+}
+
 /// #8827: `tiffPyramid` writes reduced-resolution levels after the image and `tiffTransparency`
 /// false composites a transparent document over white. Bad values are refused before anything is
 /// written.
