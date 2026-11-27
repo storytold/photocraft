@@ -2,7 +2,7 @@ use craft::behavior::EditEvent;
 use craft::behavior::kurbo::Point;
 use craft::draw::ui::transform::{TransformEdit, TransformRequest};
 
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
+use super::begin::{fold_made, moves_group, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
 use super::{
     Arc, DocId, FreeTransform, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, OpenPreview, PhotocraftApp, SessionWarp, Several, json,
     preset_for_command, swap_mode_texels,
@@ -414,14 +414,14 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         SAVE_FOR_WEB | COPY_CSS => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if preset_for_command(id).is_some() => Some(t.session.warp().is_none()),
-        // One box over several layers doesn't warp (#6501).
+        // One box over several layers doesn't warp (#6501), nor one over a group (#16731).
         "edit.transform.warp"
         | "layer.smartObjects.warp"
         | "edit.transform.splitWarpCrosswise"
         | "edit.transform.splitWarpHorizontally"
         | "edit.transform.splitWarpVertically"
         | "edit.transform.removeWarpSplit"
-            if !t.layers.is_empty() =>
+            if !t.layers.is_empty() || moves_group(app, t) =>
         {
             Some(false)
         }
