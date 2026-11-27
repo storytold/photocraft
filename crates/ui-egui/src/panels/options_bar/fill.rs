@@ -1,6 +1,6 @@
 //! The Paint Bucket's members of the options bar, and the Mode list of the Paint Bucket and the stamp tools.
 
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::contract::{Bind, Entry, Show as _, bind_tracked};
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::pickers::Select;
 use photocraft_doc::BlendMode;
@@ -67,25 +67,34 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let entries = mode_entries(Tool::PaintBucket, true, false);
     let sources = [Entry::new(false, tl!("Foreground").to_owned()), Entry::new(true, tl!("Pattern").to_owned())];
-    let o = &mut app.ui.tool_options;
-    labelled(ui, tl!("Fill"), |ui| Select::new(tl!("Source").to_owned(), Bind::bound(&mut o.bucket_fill_pattern), &sources).show(ui));
-    let mut mode = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
+    {
+        let mut pattern = Some(bind_tracked!(app.ui.tool_options => bucket_fill_pattern));
+        labelled(ui, tl!("Fill"), |ui| pattern.take().map(|pattern| Select::new(tl!("Source").to_owned(), pattern, &sources).show(ui)));
+    }
+    let o = &app.ui.tool_options;
+    let shown = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
+    let mut mode = shown;
     labelled(ui, tl!("Mode"), |ui| mode_select(Bind::bound(&mut mode), &entries).show(ui));
-    match mode {
-        PaintMode::Clear => o.bucket_clear = true,
-        PaintMode::Blend(blend) => {
-            o.bucket_clear = false;
-            o.bucket_blend_mode = blend;
+    let (opacity, tolerance) = (o.fill_opacity, o.tolerance);
+    if mode != shown {
+        let o = &mut app.ui.tool_options;
+        match mode {
+            PaintMode::Clear => o.bucket_clear = true,
+            PaintMode::Blend(blend) => {
+                o.bucket_clear = false;
+                o.bucket_blend_mode = blend;
+            }
+            PaintMode::Behind => {}
         }
-        PaintMode::Behind => {}
     }
-    if let Some(opacity) = number_field(ui, tl!("Opacity"), o.fill_opacity, 1.0..=100.0, "%").landed() {
-        o.fill_opacity = *opacity;
+    if let Some(opacity) = number_field(ui, tl!("Opacity"), opacity, 1.0..=100.0, "%").landed() {
+        app.ui.tool_options.fill_opacity = *opacity;
     }
-    if let Some(tolerance) = number_field(ui, tl!("Tolerance"), o.tolerance, 0.0..=255.0, "").landed() {
-        o.tolerance = *tolerance;
+    if let Some(tolerance) = number_field(ui, tl!("Tolerance"), tolerance, 0.0..=255.0, "").landed() {
+        app.ui.tool_options.tolerance = *tolerance;
     }
-    check(ui, tl!("Anti-alias"), &mut o.anti_alias);
-    check(ui, tl!("Contiguous"), &mut o.contiguous);
-    check(ui, tl!("All Layers"), &mut o.sample_all.paint_bucket);
+    let (anti_alias, contiguous, all_layers) = bind_tracked!(app.ui.tool_options => anti_alias, contiguous, sample_all.paint_bucket);
+    check(ui, tl!("Anti-alias"), anti_alias);
+    check(ui, tl!("Contiguous"), contiguous);
+    check(ui, tl!("All Layers"), all_layers);
 }

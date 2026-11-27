@@ -233,7 +233,7 @@ impl TypeSnapshot {
     /// Read from the app as it stands at this moment: today's live reading, what the plain drag and
     /// the click create with.
     pub(crate) fn live(app: &PhotocraftApp) -> Self {
-        Self { tool: app.ui.tool, options: app.ui.tool_options.clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
+        Self { tool: app.ui.tool, options: (*app.ui.tool_options).clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
     }
 }
 

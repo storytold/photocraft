@@ -287,7 +287,7 @@ fn dab_tools_send_their_bar_values() {
             let mut app = app();
             stripes(&mut app, 4, "pixels");
             app.run("layer.new.layer", json!({})).unwrap();
-            *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
+            *app.ui.tool_options.sample_all.slot_mut(tool).unwrap() = all;
             drag(&mut app, tool);
             let a = active(&app).surface().unwrap().rgba(30, 30)[3];
             assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
@@ -301,7 +301,7 @@ fn dab_tools_send_their_bar_values() {
         for t in
             [Tool::MagicWand, Tool::QuickSelection, Tool::ObjectSelection, Tool::PaintBucket, Tool::MagicEraser, Tool::SpotHealing, Tool::Patch, Tool::Remove]
         {
-            *others.slot(t).unwrap() = true;
+            *others.slot_mut(t).unwrap() = true;
         }
         app.ui.tool_options.sample_all = others;
         assert!(!app.ui.tool_options.sample_all.get(tool));

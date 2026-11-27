@@ -351,13 +351,13 @@ mod panel_defaults {
         assert_eq!(c.variations.len(), 2);
         let saved = serde_json::to_value(&app.ui.tool_options).unwrap();
         let restored: ToolOptions = serde_json::from_value(saved.clone()).unwrap();
-        assert_eq!(restored, app.ui.tool_options);
+        assert_eq!(restored, *app.ui.tool_options);
         crate::tool_memory::persist(&mut app, &ctx);
         let remembered = app.session.prefs().tool_options.clone();
         let mut restarted = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         restarted.session.prefs.edit(|p| p.tool_options = remembered);
         crate::tool_memory::restore(&mut restarted);
-        assert_eq!(restarted.ui.tool_options, restored, "the real preference restore path retains panel defaults");
+        assert_eq!(*restarted.ui.tool_options, restored, "the real preference restore path retains panel defaults");
         let mut legacy = saved;
         legacy.as_object_mut().unwrap().remove("type_style_defaults");
         let legacy: ToolOptions = serde_json::from_value(legacy).unwrap();

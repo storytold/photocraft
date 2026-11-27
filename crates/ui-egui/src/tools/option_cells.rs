@@ -18,7 +18,7 @@ use crate::PhotocraftApp;
 /// commits, so showing a bar never rounds a fraction another tool shares.
 pub(crate) struct NumberCell<'a> {
     caption: Label,
-    value: &'a mut f32,
+    value: Bind<'a, f32>,
     range: RangeInclusive<f64>,
     unit: Option<Label>,
     whole: bool,
@@ -29,7 +29,7 @@ pub(crate) struct NumberCell<'a> {
 }
 
 /// A number cell named `caption` over `value`, held to `range`.
-pub(crate) fn number<'a>(caption: impl Into<Label>, value: &'a mut f32, range: RangeInclusive<f64>) -> NumberCell<'a> {
+pub(crate) fn number<'a>(caption: impl Into<Label>, value: Bind<'a, f32>, range: RangeInclusive<f64>) -> NumberCell<'a> {
     NumberCell { caption: caption.into(), value, range, unit: None, whole: false, popup_slider: false, tooltip: None, enabled: true, icon: None }
 }
 
@@ -79,14 +79,14 @@ impl<'a> NumberCell<'a> {
     /// Shows the cell. Returns the pass's edit events, which a caller keys its history step by
     /// (`history_keys::coalesce`), and the alert of a typed value that was clamped to the range.
     pub(crate) fn show(self, ui: &mut egui::Ui) -> NumberCellOutput {
-        let Self { caption, value, range, unit, whole, popup_slider, tooltip, enabled, icon } = self;
+        let Self { caption, mut value, range, unit, whole, popup_slider, tooltip, enabled, icon } = self;
         let mut side = SideLabel::new().scrub(true);
         if let Some(icon) = icon {
             side = side.icon(icon).layout(FieldLayout::Inside);
         }
         let mut out = NumberCellOutput { events: EditEvents::default(), out_of_range: None };
         Field::new(caption.clone()).enabled(enabled).side(side).sizing(Sizing::Content).show(ui, |ui, _| {
-            let mut field = NumberField::named(caption.clone(), Bind::bound(&mut *value)).range(range.clone()).scrub_by_label();
+            let mut field = NumberField::named(caption.clone(), value.reborrowed()).range(range.clone()).scrub_by_label();
             if whole {
                 let codec = NumberCodec::new(Env::of(ui).units().reader(None), 0);
                 field = field.step(1.0).commit_decimals(0).codec(codec);
