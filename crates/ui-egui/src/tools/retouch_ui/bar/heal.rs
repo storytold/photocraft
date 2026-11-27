@@ -146,8 +146,10 @@ pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeA
     let source_unset = app.session.presets().clone.active().source.is_none();
     let clone_stamp = app.ui.tool == Tool::CloneStamp;
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
+    let tool = app.ui.tool;
     let o = &mut app.ui.tool_options;
-    check(ui, tl!("Aligned"), &mut o.clone_aligned, true, clone_stamp.then(|| tl!("Keep the same source offset between strokes")));
+    let aligned = if tool == Tool::Healing { &mut o.healing_aligned } else { &mut o.clone_aligned };
+    check(ui, tl!("Aligned"), aligned, true, clone_stamp.then(|| tl!("Keep the same source offset between strokes")));
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
