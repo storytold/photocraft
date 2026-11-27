@@ -1,5 +1,13 @@
-use super::open::{Coverage, Target};
-use super::{CameraRaw, CameraRawDialog, LayerId, MAX_SAMPLERS, PROXY_SIDE, PhotocraftApp, Rect, RgbHistogram, Value, json};
+use photocraft_engine::color_cmds::ColorExt;
+use std::sync::Arc;
+
+use craft::behavior::PixelSize;
+use craft::imaging::ui::raw_develop::{RawDevelopOpen, RawDevelopSource, RawDevelopWorkspace, RawFilmItem, RawTarget};
+use craft::ui::dialog::HostedWorkspace;
+
+use super::open::{Coverage, RawOpen, Target};
+use super::{CameraRaw, LayerId, PROXY_SIDE, PcRawSource, PhotocraftApp, RawSession, Rect, SourceInit, hosted_mut, to_framework};
+use serde_json::json;
 
 /// Camera Raw Defaults › Sharpen For: output sharpening, folded into the Camera Raw step `rest`
 /// as the workflow's Sharpen For is. Returns what it applied.
@@ -48,6 +56,37 @@ pub(super) fn apply_raw_conversions(app: &mut PhotocraftApp, index: usize, d: &p
     Ok(())
 }
 
+/// `area` of `surf` averaged over `k`×`k` blocks, row-major (`ceil(w/k)` × `ceil(h/k)`). A block
+/// past the last row repeats that row, as a clamped edge; each source row is still read once,
+/// weighted by the block rows it stands for (a one-row domain read the same row `k` times, which
+/// is quadratic in its width).
+fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+    let mut proxy = vec![[0.0f32; 4]; pw * ph];
+    let mut row = vec![[0.0f32; 4]; w];
+    for py in 0..ph {
+        // f64: a weighted f32 sample near f32::MAX would overflow to infinity.
+        let mut acc = vec![[0.0f64; 5]; pw];
+        for sy in py * k..((py + 1) * k).min(h) {
+            let weight = if sy == h - 1 { ((py + 1) * k - sy) as f64 } else { 1.0 };
+            let y = area.y0 + sy as i32;
+            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
+            for (x, q) in row.iter().enumerate() {
+                let a = &mut acc[x / k];
+                for c in 0..4 {
+                    a[c] += f64::from(q[c]) * weight;
+                }
+                a[4] += weight;
+            }
+        }
+        for (x, a) in acc.iter().enumerate() {
+            proxy[py * pw + x] = [0, 1, 2, 3].map(|c| (a[c] / a[4]) as f32);
+        }
+    }
+    proxy
+}
+
 /// What the preview develops, and its size: the engine filter domain, including pixels outside the
 /// canvas, since spatial Camera Raw stages (vignette, grain, local contrast) must agree with the
 /// committed result.
@@ -56,11 +95,11 @@ pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> R
     let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
     let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
     let (Some(w), Some(h)) = (width, height) else {
-        return Err("Camera Raw preview bounds are too large".into());
+        return Err("RAW Develop preview bounds are too large".into());
     };
     let (w, h) = (w as usize, h as usize);
     if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
-        return Err("Camera Raw preview bounds are too large".into());
+        return Err("RAW Develop preview bounds are too large".into());
     }
     Ok((area, w, h))
 }
@@ -70,29 +109,39 @@ pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> R
 pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize, usize) {
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
     let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let mut proxy = vec![[0.0f32; 4]; pw * ph];
-    let mut row = vec![[0.0f32; 4]; w];
-    for py in 0..ph {
-        // Box-average k×k blocks.
-        let mut acc = vec![[0.0f32; 5]; pw];
-        for dy in 0..k {
-            let y = area.y0 + (py * k + dy).min(h - 1) as i32;
-            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-            for (x, q) in row.iter().enumerate() {
-                let a = &mut acc[x / k];
-                for c in 0..4 {
-                    a[c] += q[c];
-                }
-                a[4] += 1.0;
-            }
-        }
-        for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
-        }
-    }
+    let proxy = box_average(surf, area, k);
     (proxy, pw, ph, k)
 }
 
+/// A raw being opened: what the open-time dialog starts from.
+pub(super) struct RawStart {
+    pub(super) raw: RawOpen,
+    /// The settings Reset restores when they differ from the ones shown (a filmstrip raw shown again).
+    pub(super) original: Option<CameraRaw>,
+    /// Camera Raw Defaults › Apply auto tone: the shown settings start from Auto.
+    pub(super) auto_tone: bool,
+}
+
+/// The camera tone curve a raw was developed with: Shadows / Highlights act on the raw data in linear light before it, and
+/// the full-size preview retones the whole frame with it, as Open will.
+fn tone_curve(raw: &RawOpen) -> Option<Arc<Vec<[f32; 2]>>> {
+    raw.decoded.as_ref().map(|d| Arc::new(d.tone_curve().to_vec()))
+}
+
+/// The filmstrip tiles of the open-time dialog (one per queued raw) and the one shown.
+fn film_items(app: &PhotocraftApp, raw: &RawOpen) -> (Vec<RawFilmItem>, usize) {
+    let mut items: Vec<RawFilmItem> = app.raw_shelf.iter().map(|h| RawFilmItem::new(h.raw.name.clone())).collect();
+    let current = match app.raw_shelf.iter().position(|h| h.raw.document == raw.document) {
+        Some(i) => i,
+        None => {
+            items.push(RawFilmItem::new(raw.name.clone()));
+            items.len() - 1
+        }
+    };
+    (items, current)
+}
+
+/// Opens RAW Develop as a filter (`target` is [`Target::NewFilter`] or [`Target::SmartFilter`]) on `surf`.
 pub(super) fn open_pixels(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
@@ -102,13 +151,42 @@ pub(super) fn open_pixels(
     coverage: Coverage,
     target: Target,
 ) -> Result<(), String> {
+    open_session(app, ctx, layer, surf, params, coverage, target, None)
+}
+
+/// Opens, or on a filmstrip pick shows in the open workspace, the open-time dialog of `start.raw` on `surf`.
+pub(super) fn open_raw_pixels(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    layer: LayerId,
+    surf: photocraft_raster::Surface,
+    params: CameraRaw,
+    start: RawStart,
+) -> Result<(), String> {
+    open_session(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw, Some(start))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_session(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    layer: LayerId,
+    surf: photocraft_raster::Surface,
+    params: CameraRaw,
+    coverage: Coverage,
+    target: Target,
+    raw: Option<RawStart>,
+) -> Result<(), String> {
+    // One RAW Develop at a time; the open-time dialog shows another of its raws in place.
+    let showing_another = raw.is_some() && app.raw.as_ref().is_some_and(|s| s.target == Target::OpenRaw) && hosted_mut(app).is_some();
+    if hosted_mut(app).is_some() && !showing_another {
+        return Err(tl!("RAW Develop is already open").to_string());
+    }
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    let mut params = params;
-    if params.encoding_gamma == 0.0 {
-        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
-    }
+    // The engine derives the same value for the command (`lens_cmds::camera_raw_cmd`).
+    let encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
     let (area, w, h) = preview_area(canvas, &surf)?;
     let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
     // Coverage at the centre of each proxy block.
@@ -124,82 +202,153 @@ pub(super) fn open_pixels(
         Coverage::None => None,
     };
     let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
-    let display = app.session.color.canvas_display(&st.doc).map_err(|e| e.to_string())?;
-    let lab_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
-    let scope_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::Srgb.profile(), Default::default()).map_err(|e| e.to_string())?;
-    if let Some(saved) = app.session.prefs().dialogs.get("filter.cameraRaw.scope")
-        && saved.get("samplers").and_then(Value::as_array).is_none_or(|a| a.len() <= MAX_SAMPLERS)
-        && let Ok(view) = serde_json::from_value(saved.clone())
-    {
-        app.ui.camera_raw_scope = view;
-    }
-    app.ui.camera_raw_preview = Default::default();
-    app.ui.camera_raw_scope.samplers.clear();
-    // Keep Camera Raw compact on open; vectorscope is an opt-in context-menu view.
-    app.ui.camera_raw_scope.vectorscope = false;
-    if selection.is_none() {
-        app.ui.camera_raw_scope.selected_region = false;
-    }
+    let display = app.session.color().canvas_display(&st.doc).map_err(|e| e.to_string())?;
+    let lab_transform = craft::cms::cached(&source, craft::cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
+    let scope_transform = craft::cms::cached(&source, craft::cms::Builtin::Srgb.profile(), Default::default()).map_err(|e| e.to_string())?;
     let float = surf.format().sample == photocraft_color::SampleType::F32;
     // Builds the GPU pass the first time any Camera Raw dialog opens.
     let gpu = crate::camera_raw_gpu::for_app(app);
-    let mut d = CameraRawDialog {
-        layer,
-        layer_name: name,
-        original: params.clone(),
-        params,
-        target,
-        before_histogram: RgbHistogram::from_rgba(&proxy),
-        processed: Vec::new(),
+    let detail = crate::dialogs::camera_raw_detail_ui::DetailPreview::new(
+        surf,
+        area,
+        match coverage {
+            Coverage::Selection => st
+                .doc
+                .selection
+                .clone()
+                .map(crate::dialogs::camera_raw_detail_ui::Coverage::Selection)
+                .unwrap_or(crate::dialogs::camera_raw_detail_ui::Coverage::None),
+            Coverage::Mask(mask) => crate::dialogs::camera_raw_detail_ui::Coverage::Mask(mask),
+            Coverage::None => crate::dialogs::camera_raw_detail_ui::Coverage::None,
+        },
+    );
+    let navigation = crate::canvas::document_display::navigation(app);
+    let checkerboard = crate::canvas::document_display::checkerboard(app);
+    let source = Arc::new(PcRawSource::new(SourceInit {
+        proxy,
+        selection,
+        proxy_size: (pw, ph),
+        full_size: (w, h),
+        block: k,
+        float,
+        display,
+        gpu: gpu.clone(),
+        encoding_gamma,
         lab_transform,
         scope_transform,
-        scope: Default::default(),
-        after_histogram: RgbHistogram::default(),
-        preview_revision: 0,
-        histogram_ms: 0.0,
-        proxy: std::sync::Arc::new(proxy),
-        selection: selection.map(std::sync::Arc::new),
-        pw,
-        ph,
-        full_w: w,
-        full_h: h,
-        preview_ppp: ctx.pixels_per_point(),
-        detail: crate::camera_raw_detail_ui::DetailPreview::new(
-            surf,
-            area,
-            match coverage {
-                Coverage::Selection => {
-                    st.doc.selection.clone().map(crate::camera_raw_detail_ui::Coverage::Selection).unwrap_or(crate::camera_raw_detail_ui::Coverage::None)
-                }
-                Coverage::Mask(mask) => crate::camera_raw_detail_ui::Coverage::Mask(mask),
-                Coverage::None => crate::camera_raw_detail_ui::Coverage::None,
-            },
-        ),
-        display,
-        viewport: None,
-        float,
-        tex: None,
-        before_tex: None,
-        before_display_key: None,
-        dirty: true,
-        show_before: false,
-        mixer_tab: 1,
-        curve_state: Default::default(),
-        curve_rect: None,
-        render_ms: 0.0,
-        raw_open: None,
-        raw_curve: None,
-        pending: None,
-        preview_error: None,
-        gpu,
-        source_key: crate::camera_raw_gpu::source_key(),
-        develop_ms: 0.0,
-        develop_backend: "cpu",
-        undo: Vec::new(),
-        redo: Vec::new(),
-        edit_origin: None,
+        detail,
+        ctx: ctx.clone(),
+    }));
+    let original = raw.as_ref().and_then(|r| r.original.clone()).unwrap_or_else(|| params.clone());
+    let mut settings = params;
+    let mut raw_open = None;
+    let mut subject = name.clone();
+    let mut demosaic = None;
+    let mut film = None;
+    if let Some(start) = raw {
+        if start.auto_tone {
+            photocraft_algo::camera_raw::auto_tone(&source.proxy, &mut settings);
+        }
+        source.set_raw_curve(tone_curve(&start.raw));
+        subject = start.raw.name.clone();
+        demosaic = Some(to_framework(start.raw.demosaic));
+        film = Some(film_items(app, &start.raw));
+        raw_open = Some(start.raw);
+    }
+    let raw_target = match target {
+        Target::NewFilter => RawTarget::Filter,
+        Target::SmartFilter(_) => RawTarget::SmartFilter,
+        Target::OpenRaw => RawTarget::OpenRaw,
     };
-    d.render(ctx);
-    app.camera_raw = Some(d);
+    let dyn_source: Arc<dyn RawDevelopSource> = source.clone();
+    if showing_another {
+        let (_, current) = film.unwrap_or_default();
+        if let Some(hosted) = hosted_mut(app) {
+            hosted.set_source(dyn_source);
+            hosted.workspace_mut().show_item(current, settings, original.clone(), demosaic);
+        }
+    } else {
+        let mut open = RawDevelopOpen::new(subject, PixelSize::new(w as u32, h as u32), raw_target, settings).original(original.clone()).navigation(navigation);
+        if let Some(checker) = checkerboard {
+            open = open.checkerboard(checker);
+        }
+        if let Some(demosaic) = demosaic {
+            open = open.demosaic(demosaic);
+        }
+        if let Some((items, current)) = film {
+            open = open.filmstrip(items, current);
+        }
+        // OK is held: a failed filter command keeps the workspace open with its settings.
+        app.framework.dialogs.open(HostedWorkspace::new(RawDevelopWorkspace::new(open), dyn_source).held_ok());
+    }
+    app.raw = Some(RawSession {
+        layer,
+        target,
+        raw_open,
+        original,
+        source,
+        #[cfg(test)]
+        gpu,
+    });
+    if target == Target::OpenRaw {
+        super::filmstrip::sync_pictures(app, ctx);
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod box_average_tests {
+    use super::{Rect, box_average};
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::Surface;
+
+    /// The clamped reference: every block row read, past the last row the last row again.
+    fn reference(surf: &Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+        let mut out = Vec::new();
+        let mut row = vec![[0.0f32; 4]; w];
+        for py in 0..ph {
+            let mut acc = vec![[0.0f32; 5]; pw];
+            for dy in 0..k {
+                let y = area.y0 + (py * k + dy).min(h - 1) as i32;
+                surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
+                for (x, q) in row.iter().enumerate() {
+                    for c in 0..4 {
+                        acc[x / k][c] += q[c];
+                    }
+                    acc[x / k][4] += 1.0;
+                }
+            }
+            out.extend(acc.iter().map(|a| [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]]));
+        }
+        out
+    }
+
+    #[test]
+    fn blocks_past_the_last_row_match_the_clamped_average() {
+        let mut surf = Surface::new(PixelFormat::RGBA32F);
+        for x in 0..37 {
+            for y in 0..5 {
+                surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[x as f32 / 37.0, y as f32 / 5.0, 0.5, 1.0]);
+            }
+        }
+        for (area, k) in [(Rect::new(0, 0, 37, 5), 2), (Rect::new(0, 0, 37, 5), 4), (Rect::new(0, 2, 37, 3), 16), (Rect::new(3, 0, 37, 5), 7)] {
+            let (got, want) = (box_average(&surf, area, k), reference(&surf, area, k));
+            assert_eq!(got.len(), want.len());
+            for (g, w) in got.iter().zip(&want) {
+                assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-5), "{area:?} k={k}: {g:?} vs {w:?}");
+            }
+        }
+    }
+
+    /// Samples near f32::MAX stay finite: the weighted sums are held in f64.
+    #[test]
+    fn huge_samples_do_not_overflow() {
+        let mut surf = Surface::new(PixelFormat::RGBA32F);
+        let big = f32::MAX / 2.0;
+        surf.fill_rect(Rect::new(0, 0, 2, 1), &[big, -big, big, 1.0]);
+        let got = box_average(&surf, Rect::new(0, 0, 2, 1), 4);
+        assert!(got.iter().flatten().all(|v| v.is_finite()), "{got:?}");
+    }
 }

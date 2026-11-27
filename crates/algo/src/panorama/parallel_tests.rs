@@ -361,18 +361,27 @@ fn multiband_matches_the_serial_code() {
     assert_eq!(multiband(9, 7, &[], &[], 3).unwrap().0.len(), ref_multiband(9, 7, &[], &[], 3).0.len());
 }
 
-/// Batching the bands (#7758) changes when they are built, not the result. Budgets from none
-/// (one image per batch) up to everything in steps of a fifth pass through every split of the
-/// three images.
+/// Batching the bands (#7758) changes when they are built, not the result. The batching adds the
+/// next image while the batch's band cost stays within the budget, so its split changes only where
+/// the budget crosses the cost of a run of consecutive images: each such sum and one below it, plus
+/// none and everything, pass through every split the images can have (#15652; it swept 47 budgets).
 #[test]
 fn multiband_batches_match_the_serial_code() {
-    let budgets: Vec<usize> =
-        std::iter::successors(Some(1024.0f64), |b| Some(b * 1.2)).take_while(|b| *b < 4e6).map(|b| b as usize).chain([0, usize::MAX]).collect();
-    for (n, &(w, h)) in [(40usize, 30usize), (97, 61), (201, 129)].iter().enumerate() {
+    for (n, &(w, h)) in [(40usize, 30usize), (97, 61)].iter().enumerate() {
         for ch in [1usize, 3] {
             let (imgs, wts) = rois(w, h, ch, n as u64 * 17 + ch as u64);
             for levels in [1usize, 3, 5] {
                 let want = ref_multiband(w, h, &imgs, &wts, levels);
+                let costs: Vec<usize> = imgs.iter().map(|im| blend::band_cost(im, w, h, ch, levels)).collect();
+                let mut budgets = vec![0, usize::MAX];
+                for start in 0..costs.len() {
+                    for end in start + 1..=costs.len() {
+                        let run: usize = costs[start..end].iter().sum();
+                        budgets.extend([run.saturating_sub(1), run]);
+                    }
+                }
+                budgets.sort_unstable();
+                budgets.dedup();
                 for &budget in &budgets {
                     let got = try_multiband_batched(w, h, &imgs, &wts, levels, budget, None).unwrap();
                     assert_eq!(bits(&got.0), bits(&want.0), "colours {w}x{h}x{ch} levels {levels} budget {budget}");

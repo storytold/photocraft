@@ -1,16 +1,82 @@
-use super::display::{canvas_display, display_image};
-use super::drag::Drag;
-use super::textures::{canvas_texture_options, shown_as_document};
-use super::view_xform::ViewXform;
-use super::{Color32, DRect, PhotocraftApp, Pos2, Stroke, Tool, json, pos2};
+use photocraft_engine::brush_cmds::LiveStrokeExt;
+use photocraft_engine::presets::PresetsExt;
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
+use std::sync::Arc;
 
+use craft::behavior::PixelSize;
+use craft::ui::canvas::{PixelRect, RasterSource};
+use craft::ui::primitives::Revision;
+use egui::{Color32, ColorImage};
+
+use super::PhotocraftApp;
+use super::display::{canvas_display, display_image};
+use super::paint_thread::{PaintThread, Step};
+use super::paint_tool::PaintStroke;
+use super::textures::shown_as_document;
+use crate::state::Tool;
+use photocraft_geom::Rect as DRect;
+use serde_json::json;
+
+/// The clone overlay's pixels for the last hover point, kept because the dab coverage and
+/// `clone_preview_periodic` are the expensive part and the key includes the hover point.
 pub(crate) struct ClonePreviewCache {
     pub(super) key: String,
+    // Reopening a file can retain its document id and revision; distinguish its new snapshot.
+    // A weak reference detects that replacement without keeping a closed image's pixels alive.
+    source_document: Option<std::sync::Weak<photocraft_doc::Document>>,
     /// The brush a clipped overlay took its coverage from: a hardness or tip change redraws it.
     pub(super) brush: Option<photocraft_paint::BrushSettings>,
-    /// The document area the texture covers.
+    /// The document area the pixels cover.
     pub(super) rect: DRect,
-    pub(super) texture: egui::TextureHandle,
+    /// The overlay as it shows: opacity, invert, blend and the coverage clip are in the pixels.
+    pub(super) pixels: Arc<ColorImage>,
+    /// Counts the rebuilds, so the source's revision changes with the pixels.
+    pub(super) revision: u64,
+}
+
+/// The clone overlay as a raster source: the source image under the brush, with its place in the
+/// document. The display that shows it maps its pixels onto `corners`.
+pub(crate) struct CloneSource {
+    /// The document-space corners of the dab rect, in the order of the unit square's: top left,
+    /// top right, bottom right, bottom left.
+    pub(crate) corners: [[f64; 2]; 4],
+    pixels: Arc<ColorImage>,
+    revision: Revision,
+}
+
+impl RasterSource for CloneSource {
+    fn size(&self) -> PixelSize {
+        let [w, h] = self.pixels.size;
+        PixelSize::new(u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX))
+    }
+
+    fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    /// The overlay is rebuilt whole when it changes, so a display always reads everything.
+    fn damage(&self, _since: Revision) -> Option<PixelRect> {
+        None
+    }
+
+    fn read(&self, region: PixelRect, factor: u32, out: &mut ColorImage) {
+        let factor = usize::try_from(factor.max(1)).unwrap_or(1);
+        let [w, h] = self.pixels.size;
+        let [out_w, out_h] = out.size;
+        for oy in 0..out_h {
+            for ox in 0..out_w {
+                let sx = i64::from(region.x0) + (ox * factor) as i64;
+                let sy = i64::from(region.y0) + (oy * factor) as i64;
+                let px = match (usize::try_from(sx), usize::try_from(sy)) {
+                    (Ok(x), Ok(y)) if x < w && y < h => self.pixels.pixels.get(y * w + x).copied().unwrap_or(Color32::TRANSPARENT),
+                    _ => Color32::TRANSPARENT,
+                };
+                if let Some(dst) = out.pixels.get_mut(oy * out_w + ox) {
+                    *dst = px;
+                }
+            }
+        }
+    }
 }
 
 /// The most document pixels one dab's coverage is rendered over for the overlay: a 1000 px brush,
@@ -19,10 +85,10 @@ const CLONE_PREVIEW_MAX_PIXELS: u64 = 1800 * 1800;
 
 /// The largest side `retouch_cmds::clone_preview_periodic` samples, for the overlay's area and for
 /// the source area it reads (`Mapping::source_rect`: the overlay's, mapped, with a 2 px apron).
-const CLONE_PREVIEW_MAX_SIDE: u32 = 1024;
+pub(super) const CLONE_PREVIEW_MAX_SIDE: u32 = 1024;
 
-/// The coverage of one dab of `brush` at `at`, as the brush engine paints it with opacity and flow
-/// at full: its tip, angle, roundness and hardness (a soft tip reaches past its radius). The area
+/// The coverage of one dab of `brush` at `at`, including flow, tip, angle, roundness and
+/// hardness (a soft tip reaches past its radius). Stroke opacity is applied when drawing. The area
 /// it covers and its `width × height` coverage values in 0..1. A very large soft tip, or a source
 /// the Clone Source panel scales down (which reads a larger area than it covers), is cropped
 /// around `at` to the sampling budget, keeping the middle of the dab.
@@ -30,8 +96,9 @@ fn clone_dab_coverage(
     brush: &photocraft_paint::BrushSettings,
     at: [f64; 2],
     map: &photocraft_engine::presets::clone_source::Mapping,
+    flow: f32,
 ) -> Option<(DRect, Vec<f32>)> {
-    let brush = photocraft_paint::BrushSettings { opacity: 1.0, flow: 1.0, erase: false, ..brush.clone() };
+    let brush = photocraft_paint::BrushSettings { opacity: 1.0, flow, erase: false, ..brush.clone() };
     let stroke = photocraft_paint::Stroke { brush, points: vec![photocraft_paint::StrokePoint::new(at[0], at[1], 1.0)] };
     let (rect, cov) = photocraft_paint::retouch::stroke_coverage_within(&stroke, CLONE_PREVIEW_MAX_PIXELS)?;
     let fits = |r: DRect| r.width() <= CLONE_PREVIEW_MAX_SIDE && r.height() <= CLONE_PREVIEW_MAX_SIDE;
@@ -66,50 +133,76 @@ fn clone_dab_coverage(
     Some((window, cropped))
 }
 
-/// A transient source image beneath the brush outline; never part of the document render. The
-/// Clone Source panel drives the Clone Stamp and the Healing Brush alike, so both show it.
-pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, at: [f64; 2], output: Option<u32>) {
-    use photocraft_engine::presets::clone_source::{Mapping, overlay_blend, transform_matrix};
-    let overlay = app.session.presets.clone.overlay.clone();
+/// The transient source image beneath the brush outline at document point `at`; never part of the
+/// document render. The Clone Source panel drives the Clone Stamp and the Healing Brush alike, so
+/// both show it. `None` when the overlay is off, hidden by Auto Hide during a stroke, or there is
+/// nothing to show; the pixels are rebuilt only when the key (document, revision, hover point,
+/// source mapping and document, overlay settings) changes.
+///
+/// PLAN: the contract's `(app, at)` has no display argument, so the overlay is drawn for the main
+/// display's colour management; a second window on another monitor shows it through the main one's.
+pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<CloneSource> {
+    use photocraft_engine::presets::clone_source::overlay_blend;
+    let overlay = app.session.presets().clone.overlay.clone();
     let tool = app.ui.tool;
-    if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && app.drag.is_some()) {
-        return;
+    if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && super::paint_tool::stroking(app).is_some()) {
+        return None;
     }
-    let slot = app.session.presets.clone.active().clone();
-    let Some(source) = slot.source else { return };
+    let slot = app.session.presets().clone.active().clone();
+    let map = crate::preset_panels::clone_mapping_at(app, Some(at))?;
     let radius = f64::from(app.session.tools.brush.size) / 2.0;
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
-        return;
+        return None;
     }
-    // View › Pattern Preview repeats the source for the Clone Stamp only (`paint.cloneStamp`'s
-    // `wrap`); the Healing Brush samples it as it is.
-    let wrap = tool == Tool::CloneStamp && app.ui.view.pattern_preview;
-    let stroke_start = app.drag.as_ref().map(|d| d.start);
-    let anchor = if app.ui.tool_options.clone_aligned { slot.anchor.or(stroke_start) } else { stroke_start }.unwrap_or(at);
-    let map =
-        Mapping { source: (source[0], source[1]), anchor: (anchor[0], anchor[1]), m: transform_matrix(slot.scale, slot.rotation, slot.flip_h, slot.flip_v) };
-    let Some(st) = app.session.active() else { return };
-    let (display, display_key) = canvas_display(app, &st.doc, output);
+    // Both tools repeat source reads in Pattern Preview; this also refreshes a stationary hover.
+    let wrap = app.ui.view.pattern_preview;
+    let st = app.session.active()?;
+    let target = paint_target(app);
+    if slot.document.is_some_and(|id| id != st.doc.id) && photocraft_engine::channel_cmds::gray_target(&json!({"target": target})).is_some() {
+        // Strokes reject these cross-document targets, including a mask selected only in the UI.
+        return None;
+    }
+    let source_revision =
+        slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| (st.doc.id, st.revision, st.active_layer));
+    let source_document = slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| Arc::downgrade(&st.doc));
+    let (display, display_key) = canvas_display(app, &st.doc, None);
+    // Clone Stamp sends its opacity/flow with every stroke; Healing Brush uses full strength.
+    let brush_alpha = if tool == Tool::CloneStamp {
+        app.session.tools.brush.opacity.clamp(0.0, 1.0) * if overlay.clipped { 1.0 } else { app.session.tools.brush.flow.clamp(0.0, 1.0) }
+    } else {
+        1.0
+    };
     let key = format!(
-        "{:?}:{}:{:?}:{:?}:{map:?}:{}:{}:{}:{}:{wrap}:{}:{}",
+        "{tool:?}:{source_revision:?}:{:?}:{}:{:?}:{:?}:{map:?}:{:?}:{}:{}:{}:{}:{wrap}:{}:{}:{}:{}",
         st.doc.id,
         st.revision,
         st.active_layer,
         at.map(f64::to_bits),
+        slot.layer,
         app.ui.tool_options.clone_sample,
         display_key,
         overlay.invert,
         overlay.blend,
         overlay.clipped,
-        radius.to_bits()
+        overlay.opacity.to_bits(),
+        radius.to_bits(),
+        brush_alpha.to_bits()
     );
-    let brush = overlay.clipped.then_some(&app.session.tools.brush);
-    if app.clone_preview.as_ref().is_none_or(|c| c.key != key || c.brush.as_ref() != brush) {
+    let brush = overlay.clipped.then_some(&*app.session.tools.brush);
+    if app.clone_preview.as_ref().is_none_or(|c| {
+        let same_source = match (&c.source_document, &source_document) {
+            (Some(a), Some(b)) => std::sync::Weak::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        c.key != key || c.brush.as_ref() != brush || !same_source
+    }) {
         // Clipped (Photoshop's default): the dab the tool paints here, so a soft brush previews
         // soft and a shaped tip keeps its outline. Unclipped: the brush's whole square.
         let (rect, coverage) = match brush {
             Some(b) => {
-                let Some((rect, coverage)) = clone_dab_coverage(b, at, &map) else { return };
+                let flow = if tool == Tool::CloneStamp { b.flow } else { 1.0 };
+                let (rect, coverage) = clone_dab_coverage(b, at, &map, flow)?;
                 (rect, Some(coverage))
             }
             None => (
@@ -117,9 +210,12 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
                 None,
             ),
         };
-        let Ok(mut buf) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap) else {
-            return;
-        };
+        let mut buf = if tool == Tool::Healing {
+            photocraft_engine::retouch_cmds::healing_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
+        } else {
+            photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
+        }
+        .ok()?;
         if overlay.invert {
             for px in &mut buf.px {
                 for c in px.iter_mut().take(3) {
@@ -130,10 +226,7 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
         // Darken, Lighten and Difference mix the source with the image under the brush (the
         // composite, whatever Sample reads), so Difference turns black where they line up.
         if overlay.blend != "normal" {
-            let here = Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
-            let Ok(under) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &here, "all", wrap) else {
-                return;
-            };
+            let under = photocraft_engine::retouch_cmds::clone_destination_preview(&app.session, rect, wrap).ok()?;
             for (px, d) in buf.px.iter_mut().zip(&under.px) {
                 *px = overlay_blend(&overlay.blend, *px, *d);
             }
@@ -143,32 +236,21 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
                 px[3] *= c.clamp(0.0, 1.0);
             }
         }
-        let image = display_image(display.as_deref(), &buf);
-        let brush = brush.cloned();
-        match app.clone_preview.as_mut() {
-            Some(cache) => {
-                cache.texture.set(image, canvas_texture_options(1));
-                cache.key = key;
-                cache.brush = brush;
-                cache.rect = rect;
-            }
-            None => {
-                let texture = painter.ctx().load_texture("clone-preview", image, canvas_texture_options(1));
-                app.clone_preview = Some(ClonePreviewCache { key, brush, rect, texture });
-            }
+        let mut image = display_image(display.as_deref(), &buf);
+        // The overlay's opacity and the Clone Stamp's strength, in the pixels: the display that
+        // shows them applies none.
+        let alpha = f32::from((overlay.opacity.clamp(0.0, 100.0) * brush_alpha * 2.55).round() as u8) / 255.0;
+        for px in &mut image.pixels {
+            *px = px.gamma_multiply(alpha);
         }
+        let brush = brush.cloned();
+        let revision = app.clone_preview.as_ref().map_or(0, |c| c.revision + 1);
+        app.clone_preview = Some(ClonePreviewCache { key, source_document, brush, rect, pixels: Arc::new(image), revision });
     }
-    let Some(cache) = &app.clone_preview else { return };
-    let rect = cache.rect;
-    let tint = Color32::from_white_alpha((overlay.opacity.clamp(0.0, 100.0) * 2.55).round() as u8);
-    // A textured quad over the covered area: its texels carry the clip, in mirrored and rotated
-    // canvas views too.
-    let mut mesh = egui::Mesh::with_texture(cache.texture.id());
-    for (x, y, u, v) in [(rect.x0, rect.y0, 0.0, 0.0), (rect.x1, rect.y0, 1.0, 0.0), (rect.x1, rect.y1, 1.0, 1.0), (rect.x0, rect.y1, 0.0, 1.0)] {
-        mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u, v), color: tint });
-    }
-    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-    painter.add(egui::Shape::mesh(mesh));
+    let cache = app.clone_preview.as_ref()?;
+    let r = cache.rect;
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    Some(CloneSource { corners: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], pixels: Arc::clone(&cache.pixels), revision: Revision::of(&cache.revision) })
 }
 
 /// The engine's live stroke of a tool: the Brush, Pencil and Eraser paint dabs; the Clone Stamp,
@@ -207,7 +289,7 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
-    fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
+    pub(super) fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
             Self::Retouch(s) => s.push(pts),
@@ -227,10 +309,13 @@ impl EngineStroke {
 }
 
 /// A stroke shown while it is drawn: the engine renders the real result onto a copy of the
-/// document, and the canvas redraws only what each step changed.
+/// document, on a thread of its own (`PaintThread`), and the canvas redraws only what each step
+/// changed.
 pub(crate) struct LiveStroke {
     pub(super) preview_failed: bool,
-    pub(super) stroke: EngineStroke,
+    pub(super) paint: PaintThread,
+    /// The jitter seed the commit must reuse (`EngineStroke::seed`).
+    pub(super) seed: Option<u64>,
     pub(super) doc: photocraft_doc::DocId,
     revision: u64,
     /// Preview key of the stroke; step `n` displays as `key + n`.
@@ -242,6 +327,21 @@ pub(crate) struct LiveStroke {
 }
 
 impl LiveStroke {
+    /// The document as the stroke last painted it.
+    pub(super) fn doc(&self) -> &std::sync::Arc<photocraft_doc::Document> {
+        &self.paint.shown().doc
+    }
+
+    /// See `EngineStroke::wants_time`.
+    pub(super) fn wants_time(&self) -> bool {
+        self.paint.shown().wants_time
+    }
+
+    /// See `photocraft_engine::brush_cmds::LiveStroke::smoothing_string`.
+    pub(crate) fn smoothing_string(&self) -> Option<([f64; 2], [f64; 2])> {
+        self.paint.shown().smoothing_string
+    }
+
     pub(super) fn display_key(&self) -> u64 {
         self.key + self.damage.len() as u64
     }
@@ -286,17 +386,20 @@ impl CommittedStroke {
     }
 }
 
-/// The live stroke on document `idx`, while it is current.
-pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
+/// The live stroke on document `idx`, while it is current. The paint tool drops `app.live_stroke`
+/// with its stroke, so a live stroke that exists belongs to a running gesture.
+pub(crate) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
     let st = app.session.documents().get(idx)?;
-    app.live_stroke.as_ref().filter(|l| app.drag.is_some() && l.doc == st.doc.id && l.revision == st.revision)
+    app.live_stroke.as_ref().filter(|l| l.doc == st.doc.id && l.revision == st.revision)
 }
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
-/// stroke smoothing is the session brush's (the options bar's Smoothing %).
-pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
+/// stroke smoothing is the session brush's (the options bar's Smoothing %), except on a ⇧-click
+/// line, which isn't smoothed (#11887).
+pub(super) fn stroke_params(app: &PhotocraftApp, d: &PaintStroke, points: &[Vec<f64>]) -> serde_json::Value {
     let tool = d.tool;
     let mut p = json!({ "points": points, "erase": d.erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+    unsmoothed_line(&mut p, d.line);
     if d.clear {
         p["mode"] = json!("clear");
     }
@@ -308,6 +411,15 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) 
         p["block"] = json!(true);
     }
     p
+}
+
+/// A ⇧-click line isn't smoothed, so it ends at the click whatever Catch-up on Stroke End is set
+/// to (#11887). Applied to the params of every painting tool's live preview and commit alike, so
+/// a retouching stroke's commit still takes the pixels its preview drew.
+pub(crate) fn unsmoothed_line(p: &mut serde_json::Value, line: bool) {
+    if line && let Some(o) = p.as_object_mut() {
+        o.insert("smoothing".into(), json!(0.0));
+    }
 }
 
 /// Tools whose strokes the engine renders while they are drawn (`LiveStroke`).
@@ -327,10 +439,6 @@ pub(crate) fn strokes_live(tool: Tool) -> bool {
             | Tool::Sponge
     ) || live_retouch_command(tool).is_some()
 }
-
-/// The Spot Healing Brush's stroke while dragging: Photoshop shows the area it will heal as a
-/// semi-opaque dark overlay (an image overlay, the same in every UI theme) and heals on release.
-pub(crate) const SPOT_HEALING_TRAIL: Color32 = Color32::from_black_alpha(128);
 
 /// The retouching tools drawn live (`LiveRetouch`; the Background Eraser's and an Impressionist
 /// Pattern Stamp's dabs are laid one by one, `LiveDab`), by the command their live stroke
@@ -352,10 +460,11 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
-pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
+/// Starts the live preview of `d`, from the params its tool commits. `None` without an active
+/// document, or when the tool's preview can't begin.
+pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
-    let d = app.drag.as_ref()?;
     let stroke = if d.tool == Tool::MixerBrush {
         let points = app.stylus.stroke_points(&d.points);
         let p = stroke_params(app, d, points.get(..1)?);
@@ -364,17 +473,21 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
         p["points"] = json!(d.points);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?))
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
+        crate::retouch_ui::alt_finger_painting(d.tool, d.modifiers.alt, &mut p);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?))
     } else if d.tool == Tool::PatternStamp {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::pattern_stamp_params(app, &d.points);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
+        unsmoothed_line(&mut p, d.line);
         if app.ui.tool_options.pattern_stamp_impressionist {
             EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?))
         } else {
@@ -382,13 +495,19 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         }
     } else if d.tool == Tool::BackgroundEraser {
         // The params `eraser_ui::finish_stroke` commits (layer pixels only).
-        let p = crate::eraser_ui::background_eraser_params(app, &d.points);
+        let mut p = crate::eraser_ui::background_eraser_params(app, &d.points);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?))
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
-        let mut p = if d.tool == Tool::HistoryBrush { crate::retouch_ui::history_brush_params(app) } else { crate::retouch_ui::clone_params(app)? };
+        let mut p = if d.tool == Tool::HistoryBrush {
+            d.history_params.clone().unwrap_or_else(|| crate::retouch_ui::history_brush_params(app))
+        } else {
+            crate::retouch_ui::clone_params(app)?
+        };
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
@@ -397,7 +516,8 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
     Some(LiveStroke {
-        stroke,
+        seed: stroke.seed(),
+        paint: PaintThread::start(stroke),
         doc: st.doc.id,
         revision: st.revision,
         key: (1 << 44) | (n << 20),
@@ -407,39 +527,27 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     })
 }
 
-/// Cancel uncommitted mixer paint when its document, tool or input context goes away.
-pub(crate) fn cancel_mixer_on_context_change(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    if !app.drag.as_ref().is_some_and(|drag| drag.tool == Tool::MixerBrush) {
-        return false;
-    }
-    let changed = app.ui.tool != Tool::MixerBrush
-        || app.live_stroke.as_ref().is_some_and(|live| !app.session.active().is_some_and(|st| st.doc.id == live.doc && st.revision == live.revision));
-    if changed || ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        app.drag = None;
-        app.live_stroke = None;
-        return true;
-    }
-    false
+/// Render the points of `stroke` the live stroke hasn't seen yet, with the pen pressure, tilt and
+/// rotation the commit's `paint.stroke` gets for them. The paint tool calls it once per pass, after
+/// the pass's moves, and again at the release; a second call in a pass with no new points feeds
+/// nothing.
+pub(super) fn feed_live_stroke(app: &mut PhotocraftApp, stroke: &PaintStroke) {
+    feed_live_stroke_waiting(app, stroke, LIVE_STROKE_WAIT);
 }
 
-/// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
-/// rotation the commit's `paint.stroke` gets for them.
-pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
-    // A batched move replays several samples in one frame and calls this once at the end, so the
-    // per-sample calls from `tool_event` are skipped (see `canvas_view`).
-    if app.defer_live_stroke {
-        return;
-    }
-    let (Some(l), Some(d)) = (app.live_stroke.as_mut(), app.drag.as_ref()) else { return };
+/// [`feed_live_stroke`], waiting at most `wait` for the stroke to paint (tests: not at all, to
+/// hand points to a stroke that is busy).
+pub(super) fn feed_live_stroke_waiting(app: &mut PhotocraftApp, stroke: &PaintStroke, wait: std::time::Duration) {
+    let Some(l) = app.live_stroke.as_mut() else { return };
     if l.preview_failed {
         return;
     }
     let pose = &app.stylus.stroke;
     // The same times `stroke_points` gives the commit (from the drag's first point).
     let t0 = app.stylus.point_ms(0);
-    let pts: Vec<_> = (l.fed..d.points.len())
+    let pts: Vec<_> = (l.fed..stroke.points.len())
         .filter_map(|i| {
-            let p = d.points.get(i)?;
+            let p = stroke.points.get(i)?;
             let t = pose.get(i).or(pose.last()).copied().unwrap_or_default();
             let mut sp = photocraft_engine::paint::StrokePoint::new(p[0], p[1], p[2] as f32);
             (sp.tilt_x, sp.tilt_y, sp.rotation) = (t[0], t[1], t[2]);
@@ -447,81 +555,115 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
             Some(sp)
         })
         .collect();
-    if pts.is_empty() {
-        return;
-    }
-    l.fed = d.points.len();
+    l.fed = stroke.points.len();
     let started = crate::gpu_canvas::now_ms();
-    match l.stroke.push(&pts) {
-        Ok(r) => l.damage.push(r),
-        Err(e) => {
-            if d.tool == Tool::MixerBrush {
-                // Keep the last valid preview and its document/revision guard. All input
-                // stays in the drag; release replays it without the preview tile budget.
-                l.preview_failed = true;
-                app.ui.status = e.to_string();
-                app.ui.status_error = true;
-            } else {
-                app.live_stroke = None;
+    l.paint.push(pts);
+    let steps = l.paint.catch_up(wait);
+    take_steps(app, stroke.tool, steps);
+    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
+}
+
+/// How long a frame waits for the live stroke to paint the points it was just given. A light
+/// brush is done well within it and shows them in the same frame, as when it painted on the UI
+/// thread; a heavy one shows them in a later frame instead of holding this one up. Tests wait for
+/// every step, so they see each one.
+const LIVE_STROKE_WAIT: std::time::Duration = if cfg!(test) { std::time::Duration::MAX } else { std::time::Duration::from_millis(LIVE_STROKE_WAIT_MS) };
+const LIVE_STROKE_WAIT_MS: u64 = 6;
+
+/// Record painted steps on the live stroke. A failed one drops the live stroke (the commit then
+/// renders the stroke itself), except the Mixer Brush's, which keeps its last valid preview.
+fn take_steps(app: &mut PhotocraftApp, tool: Tool, steps: Vec<Step>) {
+    let Some(l) = app.live_stroke.as_mut() else { return };
+    for step in steps {
+        match step {
+            Ok(r) => l.damage.push(r),
+            Err(e) => {
+                if tool == Tool::MixerBrush {
+                    // Keep the last valid preview and its document/revision guard. All input
+                    // stays in the drag; release replays it without the preview tile budget.
+                    l.preview_failed = true;
+                    app.ui.status = e.to_string();
+                    app.ui.status_error = true;
+                } else {
+                    app.live_stroke = None;
+                }
+                return;
             }
         }
     }
-    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
+}
+
+/// Is the live stroke still painting points it was given?
+pub(super) fn live_stroke_busy(app: &PhotocraftApp) -> bool {
+    app.live_stroke.as_ref().is_some_and(|l| l.paint.busy())
+}
+
+impl PhotocraftApp {
+    /// Is the live stroke still painting, or holding steps the canvas hasn't shown yet? Lets a
+    /// test read the canvas only once what it shows is the whole stroke so far (#13477).
+    pub fn live_stroke_busy(&self) -> bool {
+        live_stroke_busy(self)
+    }
 }
 
 /// The points the live retouching stroke has rendered.
 #[cfg(test)]
 pub(crate) fn live_retouch_points(app: &PhotocraftApp) -> Option<Vec<photocraft_engine::paint::StrokePoint>> {
-    match &app.live_stroke.as_ref()?.stroke {
+    app.live_stroke.as_ref()?.paint.peek(|stroke| match stroke {
         EngineStroke::Retouch(l) => Some(l.points().to_vec()),
         _ => None,
-    }
+    })?
 }
 
 /// Offer the Clone Stamp's or History Brush's live stroke, or a Dodge, Burn, Sponge, Blur, Sharpen
 /// or Smudge one, with the drag points it hasn't rendered yet, to the command
 /// `retouch_ui::finish_stroke` commits, which then takes its pixels instead of rendering the
 /// stroke again.
-pub(super) fn offer_live_retouch(app: &mut PhotocraftApp, d: &Drag) {
+pub(super) fn offer_live_retouch(app: &mut PhotocraftApp, d: &PaintStroke) {
     let dab = crate::retouch_ui::dab_params(app, d.tool).is_some();
     if !dab && !matches!(d.tool, Tool::CloneStamp | Tool::HistoryBrush) {
         return;
     }
-    let Some(LiveStroke { stroke, fed, .. }) = app.live_stroke.take() else { return };
+    let Some(LiveStroke { paint, fed, .. }) = app.live_stroke.take() else { return };
+    let (steps, Some(stroke)) = paint.finish() else { return };
+    if steps.iter().any(Result::is_err) {
+        return;
+    }
     let rest: Vec<_> = d.points.get(fed..).unwrap_or_default().iter().map(|q| photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
     // A refused offer (the brush changed mid-stroke, say) leaves the commit to render the stroke.
     match stroke {
-        EngineStroke::Retouch(mut live) if !dab => {
-            if rest.is_empty() || live.push(&rest).is_ok() {
-                let _ = app.session.offer_live_retouch(*live);
-            }
-        }
-        EngineStroke::Dab(mut live) if dab => {
-            if rest.is_empty() || live.push(&rest).is_ok() {
-                let _ = app.session.offer_live_dab(*live);
-            }
-        }
+        EngineStroke::Retouch(live) if !dab => offer_retouch(app, live, &rest),
+        EngineStroke::Dab(live) if dab => offer_dab(app, live, &rest),
         _ => {}
+    }
+}
+
+fn offer_retouch(app: &mut PhotocraftApp, mut live: Box<photocraft_engine::retouch_cmds::LiveRetouch>, rest: &[photocraft_engine::paint::StrokePoint]) {
+    if rest.is_empty() || live.push(rest).is_ok() {
+        let _ = app.session.offer_live_retouch(*live);
+    }
+}
+
+fn offer_dab(app: &mut PhotocraftApp, mut live: Box<photocraft_engine::retouch_cmds::LiveDab>, rest: &[photocraft_engine::paint::StrokePoint]) {
+    if rest.is_empty() || live.push(rest).is_ok() {
+        let _ = app.session.offer_live_dab(*live);
     }
 }
 
 /// A pen tap (a drag still at its one press point when released) paints its dab at the highest
 /// pressure the pen reached during the contact, not just the first sample's (#1798). A mouse is
 /// unchanged at full pressure.
-pub(super) fn tap_at_peak_pressure(app: &mut PhotocraftApp) {
-    if app.stylus.sample().is_none() {
+// PLAN: the contract says `&PaintStroke`; the tap raises the stroke's one point, so this takes `&mut`.
+pub(super) fn tap_at_peak_pressure(app: &mut PhotocraftApp, stroke: &mut PaintStroke) {
+    if app.stylus.sample().is_none() || stroke.points.len() != 1 {
         return;
     }
     let peak = f64::from(app.stylus.tap_pressure());
-    let mut refresh_mixer = false;
-    if let Some(d) = app.drag.as_mut().filter(|d| d.points.len() == 1)
-        && let Some(p) = d.points.first_mut()
-    {
-        refresh_mixer = d.tool == Tool::MixerBrush && peak > p[2];
-        p[2] = p[2].max(peak);
-    }
+    let Some(p) = stroke.points.first_mut() else { return };
+    let refresh_mixer = stroke.tool == Tool::MixerBrush && peak > p[2];
+    p[2] = p[2].max(peak);
     if refresh_mixer {
-        app.live_stroke = begin_live_stroke(app);
+        app.live_stroke = begin_live_stroke(app, stroke);
     }
 }
 
@@ -532,103 +674,103 @@ pub(super) const HOLD_REPEAT_MS: f64 = 16.0;
 /// Is the live stroke one that changes while the pointer is held still (airbrush Build-up, or
 /// smoothing catching up)? Only then does a held pointer repeat its point and keep repainting.
 pub(super) fn stroke_wants_time(app: &PhotocraftApp) -> bool {
-    app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time())
+    app.live_stroke.as_ref().is_some_and(LiveStroke::wants_time)
 }
 
-/// Time of sample `k` of the `n` samples a frame delivered, spread evenly after `base` (the
-/// previous point) up to `now` (this frame): egui's pointer events carry no timestamps.
-pub(crate) fn spread_ms(base: f64, now: f64, k: usize, n: usize) -> f64 {
-    // Not after `base` (or not comparable, NaN): every sample takes the frame time.
-    if n == 0 || now.partial_cmp(&base) != Some(std::cmp::Ordering::Greater) {
-        return now;
-    }
-    base + (now - base) * (k + 1) as f64 / n as f64
-}
-
-/// Tools whose gesture follows a freehand path (a polyline of the input points), so every pointer
-/// sample the OS delivered improves the result. Other tools are driven by the pointer's latest
-/// position (endpoints, anchors, guides), so feeding them a whole frame's moves only repeats work.
-pub(crate) fn freehand_tool(tool: Tool) -> bool {
-    matches!(
-        tool,
-        Tool::Brush
-            | Tool::Pencil
-            | Tool::MixerBrush
-            | Tool::ColorReplacement
-            | Tool::Eraser
-            | Tool::BackgroundEraser
-            | Tool::HistoryBrush
-            | Tool::Remove
-            | Tool::ArtHistoryBrush
-            | Tool::SpotHealing
-            | Tool::Healing
-            | Tool::CloneStamp
-            | Tool::PatternStamp
-            | Tool::Blur
-            | Tool::Sharpen
-            | Tool::Smudge
-            | Tool::Dodge
-            | Tool::Burn
-            | Tool::Sponge
-            | Tool::Lasso
-            | Tool::MagneticLasso
-            | Tool::Patch
-            | Tool::ContentAwareMove
-            | Tool::QuickSelection
-            | Tool::FreeformPen
-    )
-}
-
-/// The pointer moves this frame delivered while `button` was held, in order. `down_at_start` is
-/// whether the button was already down when the frame began. A move before a press or after a
-/// release in the same frame is dropped, so a gesture never picks up input from outside its own
-/// press..release interval.
-pub(super) fn pointer_moves(events: &[egui::Event], button: egui::PointerButton, down_at_start: bool) -> Vec<Pos2> {
-    let mut down = down_at_start;
-    let mut out = Vec::new();
-    for e in events {
-        match e {
-            egui::Event::PointerButton { button: b, pressed, .. } if *b == button => down = *pressed,
-            egui::Event::PointerMoved(p) if down => out.push(*p),
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Modifiers attached to the pointer event itself. Some input sources provide these without a
-/// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
-/// frame-wide modifier state.
-pub(super) fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton) -> Option<egui::Modifiers> {
-    events.iter().rev().find_map(|e| match e {
-        egui::Event::PointerButton { button: b, modifiers, .. } if *b == button => Some(*modifiers),
-        _ => None,
-    })
-}
-
-/// The line from the brush to the pointer while stroke smoothing lags (Pulled String Mode and
-/// Stroke Catch-up, #3479): a dark underlay and a light line stay visible on any pixels, and a dot
-/// marks the brush end.
-pub(super) fn draw_smoothing_string(painter: &egui::Painter, xf: &ViewXform, (brush, pointer): ([f64; 2], [f64; 2])) {
-    let (a, b) = (xf.to_screen(brush[0] as f32, brush[1] as f32), xf.to_screen(pointer[0] as f32, pointer[1] as f32));
-    if a.distance(b) < 2.0 {
+/// Ends a painting gesture at its release: the painting part of the old gesture finish. A click
+/// with no drag leaves the one press point (already snapped at the press), so it commits that
+/// one dab and moves nothing.
+pub(crate) fn finish(app: &mut PhotocraftApp, stroke: PaintStroke) {
+    let d = stroke;
+    // Control can select a different tool and release before the next frame cancels the gesture.
+    // Cancel before even recording a Shift-stroke anchor, including the preview fallback paths.
+    if d.tool == Tool::MixerBrush && app.ui.tool != Tool::MixerBrush {
+        app.live_stroke = None;
         return;
     }
-    painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(110)));
-    painter.line_segment([a, b], Stroke::new(1.0, Color32::WHITE));
-    painter.circle_filled(a, 2.5, Color32::WHITE);
+    let mut end = d.points.last().copied().unwrap_or([d.start[0], d.start[1], 1.0]);
+    let (sx, sy) = snap_aliased_tip(app, d.tool, end[0], end[1]);
+    end[0] = sx;
+    end[1] = sy;
+    // Where the next ⇧-click line starts.
+    if crate::stroke_constraint::connects(d.tool)
+        && let Some(st) = app.session.active()
+    {
+        app.last_stroke_end = Some((st.doc.id, end));
+    }
+    if d.tool == Tool::MixerBrush {
+        finish_mixer(app, &d);
+        return;
+    }
+    // A live retouching preview ends here; the commit below replaces it (the Clone Stamp's,
+    // History Brush's and sequential-dab tools' with the pixels it already drew).
+    offer_live_retouch(app, &d);
+    if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
+        app.live_stroke = None;
+    }
+    let finished = crate::adjustment_brush::finish_stroke(app, d.tool, &d.points, d.line)
+        || crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
+        || crate::retouch_ui::finish_stroke_with(app, d.tool, &d.points, d.modifiers, d.line, d.history_params.clone());
+    app.session.clear_live_stroke();
+    if finished {
+        return;
+    }
+    if matches!(d.tool, Tool::Brush | Tool::Pencil | Tool::Eraser) {
+        commit_brush_stroke(app, &d);
+    }
+}
+
+/// The Mixer Brush's release: its live stroke's pixels are committed when the preview held, else
+/// the whole stroke is rendered by the command.
+fn finish_mixer(app: &mut PhotocraftApp, d: &PaintStroke) {
+    // The release can carry a new endpoint. Feed those samples before offering the
+    // already-rendered document for commit.
+    feed_live_stroke(app, d);
+    let Some(l) = app.live_stroke.take() else {
+        // No preview (a tip above its size): render the whole stroke now.
+        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        let _ = app.run("paint.mixerBrush", p);
+        return;
+    };
+    // What the stroke's thread was still painting.
+    let (painted, engine) = l.paint.finish();
+    let failed = l.preview_failed || painted.iter().any(Result::is_err);
+    let steps = (l.damage.len() + painted.len()) as u64;
+    let (doc, key, seed) = (l.doc, l.key, l.seed);
+    match engine {
+        Some(EngineStroke::Mixer(mixer)) if !failed => match mixer.prepare_commit(&mut app.session) {
+            Ok(p) => {
+                if app.run("paint.mixerBrush", p).is_ok() {
+                    shown_as_document(app, doc, |k| k == 0 || (key..=key + steps).contains(&k));
+                }
+            }
+            Err(e) => {
+                app.ui.status = e.to_string();
+                app.ui.status_error = true;
+            }
+        },
+        // A step failed, or the thread stopped mid-step: render the whole stroke.
+        other => {
+            drop(other);
+            let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+            if let Some(seed) = seed {
+                p["seed"] = json!(seed);
+            }
+            let _ = app.run("paint.mixerBrush", p);
+        }
+    }
 }
 
 /// Commit a Brush, Pencil or Eraser drag. The live stroke already rendered it: its pixels are
 /// offered to the commit (`Session::offer_live_stroke`), so release costs no second render, and
 /// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
-pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
+pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
     let live = app.live_stroke.take();
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-    if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
+    if let Some(seed) = live.as_ref().and_then(|l| l.seed) {
         p["seed"] = json!(seed);
     }
-    let Some(mut l) = live else {
+    let Some(l) = live else {
         let _ = app.run(stroke_command(app, d.tool), p);
         return;
     };
@@ -644,17 +786,20 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
             Some(sp)
         })
         .collect();
-    if !rest.is_empty() {
-        match l.stroke.push(&rest) {
-            Ok(r) => l.damage.push(r),
-            // The live stroke can't show these points: the commit renders the stroke itself.
-            Err(_) => {
-                let _ = app.run(stroke_command(app, d.tool), p);
-                return;
-            }
+    // What the live stroke's thread was still painting, then those points.
+    let LiveStroke { paint, doc, key, mut damage, .. } = l;
+    let (steps, stroke) = paint.finish();
+    let painted = stroke.and_then(|mut stroke| {
+        for step in steps.into_iter().chain((!rest.is_empty()).then(|| stroke.push(&rest))) {
+            damage.push(step.ok()?);
         }
-    }
-    let LiveStroke { stroke, doc, key, damage, .. } = l;
+        Some(stroke)
+    });
+    // The live stroke can't show these points: the commit renders the stroke itself.
+    let Some(stroke) = painted else {
+        let _ = app.run(stroke_command(app, d.tool), p);
+        return;
+    };
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     if let EngineStroke::Brush(stroke) = stroke
         && app.session.offer_live_stroke(*stroke).is_err()

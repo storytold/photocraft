@@ -1,7 +1,18 @@
 use super::*;
+use craft::host::{Files, Picked, ScriptedFiles};
+use craft::ui::dialog::DialogId;
+// The five format test modules below reach `Key` through this glob.
+use egui::Key;
+use std::sync::Arc;
 
-fn app_with_docs(n: usize) -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+fn app_with_docs(n: usize) -> Box<PhotocraftApp> {
+    app_with_docs_over(n, None)
+}
+
+/// `n` new documents in an app whose host serves `files`: the host takes them when the app is made, so a
+/// later `services.files` assignment would not reach the pickers.
+fn app_with_docs_over(n: usize, files: Option<Arc<dyn Files>>) -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files, ..Default::default() });
     for _ in 0..n {
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     }
@@ -22,7 +33,7 @@ fn doc_id(app: &PhotocraftApp, i: usize) -> DocId {
 fn a_save_document_script_that_edits_the_document_keeps_the_prompt_up() {
     use photocraft_engine::automate_cmds::ScriptBinding;
     let mut app = app_with_docs(1);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     make_dirty(&mut app, 0);
     app.session.active_mut().unwrap().path = Some("/pics/kept.psd".into());
     app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
@@ -47,7 +58,7 @@ fn a_save_document_script_that_edits_the_document_keeps_the_prompt_up() {
 #[test]
 fn clean_documents_close_without_asking() {
     let mut app = app_with_docs(2);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     assert!(app.discard.is_none());
     assert_eq!(app.session.documents().len(), 1);
@@ -56,7 +67,7 @@ fn clean_documents_close_without_asking() {
 #[test]
 fn closing_a_dirty_document_waits_for_an_answer() {
     let mut app = app_with_docs(2);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     make_dirty(&mut app, 1);
     crate::menus::invoke(&mut app, &ctx, "file.close", json!({"document": 1})).unwrap();
     assert_eq!(app.session.documents().len(), 2, "nothing closes before the user answers");
@@ -81,7 +92,7 @@ fn only_documents_that_would_be_discarded_are_asked_about() {
 #[test]
 fn close_all_asks_per_dirty_document_then_runs() {
     let mut app = app_with_docs(3);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     make_dirty(&mut app, 0);
     make_dirty(&mut app, 2);
     crate::menus::invoke(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
@@ -96,7 +107,7 @@ fn close_all_asks_per_dirty_document_then_runs() {
 fn a_document_dirtied_during_the_prompt_is_asked_about_before_the_final_close() {
     for command in ["file.closeAll", EXIT] {
         let mut app = app_with_docs(2);
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         make_dirty(&mut app, 0);
         let late = doc_id(&app, 1);
         crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
@@ -110,7 +121,7 @@ fn a_document_dirtied_during_the_prompt_is_asked_about_before_the_final_close() 
     }
     // Close Others asks about the others too, but still not about the document it keeps.
     let mut app = app_with_docs(3);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     make_dirty(&mut app, 0);
     let (late, kept) = (doc_id(&app, 1), doc_id(&app, 2));
     crate::menus::invoke(&mut app, &ctx, "file.closeOthers", json!({"document": 2})).unwrap();
@@ -126,7 +137,7 @@ fn a_document_dirtied_during_the_prompt_is_asked_about_before_the_final_close() 
 #[test]
 fn close_others_closes_each_answered_document_and_keeps_its_target() {
     let mut app = app_with_docs(3);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     (0..3).for_each(|i| make_dirty(&mut app, i));
     let kept = doc_id(&app, 1);
     crate::menus::invoke(&mut app, &ctx, "file.closeOthers", json!({"document": 1})).unwrap();
@@ -142,7 +153,7 @@ fn close_others_closes_each_answered_document_and_keeps_its_target() {
 #[test]
 fn the_parked_close_still_hits_its_document_after_tabs_move() {
     let mut app = app_with_docs(3);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     make_dirty(&mut app, 2);
     let doomed = doc_id(&app, 2);
     crate::menus::invoke(&mut app, &ctx, "file.close", json!({"document": 2})).unwrap();
@@ -173,7 +184,7 @@ fn quitting_replaces_a_pending_close_but_other_requests_are_refused() {
 #[test]
 fn exit_is_held_back_until_confirmed() {
     let mut app = app_with_docs(1);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     make_dirty(&mut app, 0);
     assert!(intercept(&mut app, EXIT, &Value::Null));
     assert!(!app.allow_close);
@@ -181,127 +192,217 @@ fn exit_is_held_back_until_confirmed() {
     assert!(app.allow_close);
 }
 
-#[test]
-fn mnemonic_labels_bracket_the_key() {
-    assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "(D)on't Save");
-    assert_eq!(button_label(false, "Guardar", Some(Key::S)), "Guardar (S)");
-    assert_eq!(button_label(false, "保存", Some(Key::S)), "保存 (S)");
-}
-
-/// Fixed ASCII access keys do not mistake a dotted Azerbaijani i for dotless I.
-#[test]
-fn azerbaijani_dialog_button_mnemonics_use_locale_casing() {
-    let az = crate::i18n::Lang::from_code("az").unwrap();
-    crate::i18n::with_language(az, || {
-        assert_eq!(button_label(false, "i", Some(Key::I)), "i (I)");
-        assert_eq!(button_label(false, "ı", Some(Key::I)), "(ı)");
-        assert_eq!(button_label(false, "İ", Some(Key::I)), "İ (I)");
-    });
-}
-
-type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
+type Prompted = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The unsaved-changes prompt for `command` over `app`'s dirty documents, as `os` draws it (with
-/// the file dialogs shown and answered at the end of each frame, as the app does).
-fn prompt_for(app: PhotocraftApp, command: &str, os: egui::os::OperatingSystem) -> Prompted {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+/// the file dialogs answered at the end of each frame, as the app does).
+fn prompt_for(app: Box<PhotocraftApp>, command: &str, os: craft::host::target::Os) -> Prompted {
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(800.0, 600.0)).build_ui_state(
         |ui, app| {
-            show(app, ui.ctx());
-            app.poll_file_dialog(ui.ctx(), None);
+            // As `ui_frame` starts: a pass carrying injected input acts for the automation client.
+            app.automation_input = craft::ui::runtime::windows::WindowHost::of(ui.ctx()).injected_pass();
+            crate::dialogs::run(app, ui);
+            app.poll_file_dialog();
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.ctx.set_os(os);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    craft::ui::testing::windows::set_os(&h.ctx, os);
     assert!(intercept(h.state_mut(), command, &Value::Null));
-    h.run_steps(2);
+    // The first pass opens the question, the second draws it, the third shows it to the access tree.
+    h.run_steps(3);
     h
 }
 
 /// The unsaved-changes prompt for Close All over two dirty documents, as `os` draws it.
-fn prompt_on(os: egui::os::OperatingSystem) -> Prompted {
+fn prompt_on(os: craft::host::target::Os) -> Prompted {
     let mut app = app_with_docs(2);
     make_dirty(&mut app, 0);
     make_dirty(&mut app, 1);
     prompt_for(app, "file.closeAll", os)
 }
 
-/// The buttons named `labels`, sorted by where they are drawn, left to right.
-fn drawn_order<'a>(h: &Prompted, labels: [&'a str; 3]) -> Vec<&'a str> {
-    use egui_kittest::kittest::Queryable;
-    let mut v = labels.map(|l| (h.get_by_label(l).rect().left(), l)).to_vec();
-    v.sort_by(|a, b| a.0.total_cmp(&b.0));
-    v.into_iter().map(|(_, l)| l).collect()
-}
-
-/// Tab walks `labels` left to right from the focused default answer, `labels[default]`, and
-/// wraps; Shift+Tab steps back.
-fn tab_walks(h: &mut Prompted, labels: [&str; 3], default: usize) {
-    assert_eq!(focused(h, &labels), Some(labels[default]));
-    for step in 1..=3 {
-        h.key_press(Key::Tab);
-        h.run_steps(2);
-        assert_eq!(focused(h, &labels), Some(labels[(default + step) % 3]));
-    }
-    h.key_press_modifiers(egui::Modifiers::SHIFT, Key::Tab);
-    h.run_steps(2);
-    assert_eq!(focused(h, &labels), Some(labels[(default + 2) % 3]));
-}
-
 fn docs_left(h: &Prompted) -> Option<usize> {
     h.state().discard.as_ref().map(|p| p.docs.len())
 }
 
-/// Which of `labels` has keyboard focus.
-fn focused<'a>(h: &Prompted, labels: &[&'a str]) -> Option<&'a str> {
-    use egui_kittest::kittest::Queryable;
-    labels.iter().copied().find(|l| h.get_by_label(l).is_focused())
+/// Whether the question is on the dialog host.
+fn question_open(h: &Prompted) -> bool {
+    h.state().framework.dialogs.is_open::<UnsavedChangesDialog>()
 }
 
-/// The default answer has keyboard focus as each question comes up, so the arrow keys move
-/// between the answers and Enter presses the one they reached, as in Photoshop (#6441).
-#[test]
-fn each_question_comes_up_with_the_default_answer_focused() {
-    let mut h = prompt_on(egui::os::OperatingSystem::Windows);
-    let labels = ["(Y)es", "(N)o", "(C)ancel"];
-    assert_eq!(focused(&h, &labels), Some("(Y)es"));
-    h.key_press(Key::ArrowRight);
-    h.run_steps(2);
-    assert_eq!(focused(&h, &labels), Some("(N)o"));
-    h.key_press(Key::Enter);
-    h.run_steps(2);
-    assert_eq!(docs_left(&h), Some(1), "Enter pressed No");
-    assert_eq!(focused(&h, &labels), Some("(Y)es"), "the next question starts on the default again");
-
-    let mut h = prompt_on(egui::os::OperatingSystem::Mac);
-    let labels = ["Don't Save", "Cancel", "Save"];
-    assert_eq!(focused(&h, &labels), Some("Save"));
-    h.key_press(Key::ArrowLeft);
-    h.run_steps(2);
-    assert_eq!(focused(&h, &labels), Some("Cancel"));
+/// The open question's host id.
+fn question_id(h: &Prompted) -> DialogId {
+    h.state().framework.dialogs.open_dialogs().last().expect("the question is open").id
 }
 
-#[test]
-fn windows_and_linux_ask_yes_no_cancel_with_the_default_first() {
-    for os in [egui::os::OperatingSystem::Windows, egui::os::OperatingSystem::Nix] {
-        let mut h = prompt_on(os);
-        let labels = ["(Y)es", "(N)o", "(C)ancel"];
-        assert_eq!(drawn_order(&h, labels), labels, "{os:?}");
-        tab_walks(&mut h, labels, 0);
-        h.key_press(Key::N);
-        h.run_steps(2);
-        assert_eq!(docs_left(&h), Some(1), "N answered the first document");
-        h.key_press(Key::C);
-        h.run_steps(2);
-        assert!(h.state().discard.is_none());
-        assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
+/// The open question's fields, as `ui.inspect` lists them.
+fn question_fields(h: &Prompted) -> Value {
+    h.state().framework.dialogs.open_dialogs().last().and_then(|d| d.fields.clone()).unwrap_or_default()
+}
+
+/// Answers the open question as its button would (`choice`: `save`, `dontSave` or `cancel`, with
+/// the Apply to All box ticked when `all`), then runs the passes that take the answer.
+fn answer(h: &mut Prompted, choice: &str, all: bool) {
+    let (ctx, id) = (h.ctx.clone(), question_id(h));
+    let host = &mut h.state_mut().framework.dialogs;
+    host.set_json_field(&ctx, id, "choice", json!(choice)).unwrap();
+    if all {
+        host.set_json_field(&ctx, id, "applyToAll", json!(true)).unwrap();
+    }
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).expect("the question takes the answer");
+    h.run_steps(2);
+}
+
+/// A control request on `h`'s app, answered at once.
+fn control(h: &mut Prompted, method: &str, params: Value) -> Value {
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new(method, params);
+    match crate::control::handle(h.state_mut(), &ctx, &req) {
+        crate::control::Reply::Done(v) => v,
+        _ => panic!("{method}: expected an immediate reply"),
     }
 }
 
-/// Whether the prompt is asking about the document called `name`.
-fn asks_about(h: &Prompted, name: &str) -> bool {
-    use egui_kittest::kittest::Queryable;
-    h.query_by_label_contains(&format!("“{name}”")).is_some()
+/// The id `ui.inspect` lists the open question under.
+fn listed_id(h: &mut Prompted) -> Value {
+    let listed = control(h, "ui.inspect", json!({}))["result"]["dialogs"].clone();
+    listed.as_array().and_then(|dialogs| dialogs.last()).map(|d| d["id"].clone()).expect("ui.inspect lists the question")
+}
+
+/// "Apply to All" (a checkbox, as in Photoshop) gives the answer to every document still to ask about.
+#[test]
+fn apply_to_all_discards_the_rest_without_asking_again() {
+    let mut h = prompt_on(craft::host::target::Os::Windows);
+    answer(&mut h, "dontSave", true);
+    h.run_steps(8);
+    assert!(h.state().discard.is_none());
+    assert!(h.state().session.documents().is_empty(), "No was applied to both unsaved documents");
+}
+
+#[test]
+fn apply_to_all_is_only_offered_while_several_documents_are_left() {
+    let mut one_dirty = app_with_docs(2);
+    make_dirty(&mut one_dirty, 0);
+    let h = prompt_for(one_dirty, "file.closeAll", craft::host::target::Os::Windows);
+    assert!(question_fields(&h).get("applyToAll").is_none(), "only one document is unsaved");
+    let h = prompt_on(craft::host::target::Os::Windows);
+    assert!(question_fields(&h).get("applyToAll").is_some());
+    let mut app = app_with_docs(2);
+    make_dirty(&mut app, 0);
+    make_dirty(&mut app, 1);
+    let h = prompt_for(app, "file.revert", craft::host::target::Os::Windows);
+    assert!(question_fields(&h).get("applyToAll").is_none(), "a revert never offers it");
+}
+
+/// A save that was cancelled or failed brings its document back: asking again beats retrying forever.
+#[test]
+fn a_document_that_comes_back_after_apply_to_all_is_asked_about_again() {
+    let mut h = prompt_on(craft::host::target::Os::Windows);
+    let first = doc_id(h.state(), 0);
+    if let Some(p) = h.state_mut().discard.as_mut() {
+        (p.auto, p.auto_answered) = (Some(Answer::Save), Some(first));
+    }
+    h.run_steps(3);
+    let prompt = h.state().discard.as_ref().unwrap();
+    assert!(prompt.auto.is_none());
+    assert_eq!(docs_left(&h), Some(2), "both documents are still waiting for an answer");
+    assert!(question_open(&h), "the question is up again");
+}
+
+/// Apply to All answers for the documents the prompt opened with, not for ones dirtied since.
+#[test]
+fn a_document_dirtied_after_apply_to_all_is_asked_about() {
+    let mut app = app_with_docs(3);
+    make_dirty(&mut app, 0);
+    make_dirty(&mut app, 1);
+    let mut h = prompt_for(app, "file.closeAll", craft::host::target::Os::Windows);
+    let late = doc_id(h.state(), 2);
+    make_dirty(h.state_mut(), 2);
+    if let Some(p) = h.state_mut().discard.as_mut() {
+        p.auto = Some(Answer::Discard);
+    }
+    h.run_steps(8);
+    let prompt = h.state().discard.as_ref().unwrap();
+    assert_eq!(prompt.docs, vec![late], "the two unsaved documents were discarded, the late one is asked about");
+    assert!(prompt.auto.is_none());
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert!(question_open(&h), "the late document gets its question");
+}
+
+/// A pass applies only the result stored for it: a second pass in the same frame finds none, so an
+/// answer closes one document, not two.
+#[test]
+fn a_second_pass_in_one_frame_applies_an_answer_once() {
+    let mut app = app_with_docs(2);
+    make_dirty(&mut app, 0);
+    make_dirty(&mut app, 1);
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+        |ui, app| {
+            crate::dialogs::run(app, ui);
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    assert!(intercept(h.state_mut(), "file.closeAll", &Value::Null));
+    h.run_steps(2);
+    answer(&mut h, "dontSave", false);
+    assert_eq!(docs_left(&h), Some(1), "the answer was applied once");
+    assert_eq!(h.state().session.documents().len(), 1);
+}
+
+#[test]
+fn control_clients_can_answer_for_all() {
+    let mut app = app_with_docs(3);
+    for i in 0..3 {
+        make_dirty(&mut app, i);
+    }
+    let mut h = prompt_for(app, "file.closeAll", craft::host::target::Os::Windows);
+    let id = listed_id(&mut h);
+    let reply = control(&mut h, "ui.dialog.confirm", json!({"dialog": id, "choice": "dontSaveAll"}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    h.run_steps(8);
+    assert!(h.state().discard.is_none());
+    assert!(h.state().session.documents().is_empty());
+}
+
+/// A client answering one document isn't overruled by an Apply to All whose save just failed.
+#[test]
+fn a_control_answer_clears_a_stale_apply_to_all() {
+    let mut app = app_with_docs(3);
+    for i in 0..3 {
+        make_dirty(&mut app, i);
+    }
+    let mut h = prompt_for(app, "file.closeAll", craft::host::target::Os::Windows);
+    let (first, last) = (doc_id(h.state(), 0), doc_id(h.state(), 2));
+    if let Some(p) = h.state_mut().discard.as_mut() {
+        (p.auto, p.auto_answered) = (Some(Answer::Discard), Some(first));
+    }
+    let id = listed_id(&mut h);
+    let reply = control(&mut h, "ui.dialog.confirm", json!({"dialog": id, "choice": "dontSave"}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    h.run_steps(8);
+    let prompt = h.state().discard.as_ref().unwrap();
+    assert_eq!(prompt.docs.len(), 2, "only the answered document was closed");
+    assert!(prompt.docs.contains(&last) && prompt.auto.is_none());
+}
+
+#[test]
+fn the_all_answers_need_more_than_one_document_left() {
+    let mut app = app_with_docs(1);
+    make_dirty(&mut app, 0);
+    let mut h = prompt_for(app, "file.close", craft::host::target::Os::Windows);
+    let id = listed_id(&mut h);
+    let reply = control(&mut h, "ui.dialog.confirm", json!({"dialog": id, "choice": "saveAll"}));
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(h.state().discard.is_some(), "a refused answer leaves the prompt up");
+    assert!(question_open(&h));
+}
+
+/// Whether the open question is about the document `id`.
+fn asks_about(h: &Prompted, id: DocId) -> bool {
+    question_open(h) && h.state().discard.as_ref().and_then(|p| p.asked) == Some(id)
 }
 
 /// No on one of several documents closes it and asks about the next one (#2547).
@@ -311,22 +412,19 @@ fn answering_no_closes_that_document_and_asks_about_the_next() {
         let mut app = app_with_docs(2);
         make_dirty(&mut app, 0);
         make_dirty(&mut app, 1);
-        let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
         let second = doc_id(&app, 1);
         let first = doc_id(&app, 0);
         assert_eq!(app.session.active_index(), Some(1), "the last new document is active");
-        let mut h = prompt_for(app, command, egui::os::OperatingSystem::Windows);
-        assert!(asks_about(&h, &names[0]), "{command}");
+        let mut h = prompt_for(app, command, craft::host::target::Os::Windows);
+        assert!(asks_about(&h, first), "{command}");
         assert_eq!(h.state().session.active().map(|d| d.doc.id), Some(first), "{command}: the first tab asked about is shown");
-        h.key_press(Key::N);
-        h.run_steps(2);
+        answer(&mut h, "dontSave", false);
         assert_eq!(h.state().session.documents().len(), 1, "{command}: No closed the first document");
         assert_eq!(doc_id(h.state(), 0), second);
         assert_eq!(h.state().session.active_index(), Some(0), "{command}: the tab asked about is shown");
-        assert!(asks_about(&h, &names[1]), "{command}: then about the second");
+        assert!(asks_about(&h, second), "{command}: then about the second");
         assert!(!h.state().allow_close);
-        h.key_press(Key::N);
-        h.run_steps(2);
+        answer(&mut h, "dontSave", false);
         assert!(h.state().discard.is_none());
         if command == EXIT {
             assert!(h.state().allow_close, "answering the last document lets the app quit");
@@ -342,175 +440,93 @@ fn cancel_after_no_keeps_the_unanswered_documents_and_the_app_open() {
     make_dirty(&mut app, 0);
     make_dirty(&mut app, 1);
     let second = doc_id(&app, 1);
-    let mut h = prompt_for(app, EXIT, egui::os::OperatingSystem::Windows);
-    h.key_press(Key::N);
-    h.run_steps(2);
-    h.key_press(Key::Escape);
-    h.run_steps(2);
+    let mut h = prompt_for(app, EXIT, craft::host::target::Os::Windows);
+    answer(&mut h, "dontSave", false);
+    answer(&mut h, "cancel", false);
     assert!(h.state().discard.is_none());
+    assert!(!question_open(&h), "Cancel closes the question");
     assert!(!h.state().allow_close, "Cancel aborts the quit");
     assert_eq!(h.state().session.documents().len(), 1);
     assert_eq!(doc_id(h.state(), 0), second);
     assert!(h.state().session.documents()[0].is_dirty(), "the unanswered document keeps its changes");
 }
 
+/// Quitting over a pending close replaces the question: the old one closes and the new one asks in
+/// the quit wording, so one answer never reaches the wrong prompt.
 #[test]
-fn macos_hides_mnemonics_but_other_platforms_keep_them() {
-    assert_eq!(button_label(true, "Don't Save", Some(Key::D)), tl!("Don't Save"));
-    assert_eq!(button_label(true, "Cancel", Some(Key::C)), tl!("Cancel"));
-    assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "(D)on't Save");
-    assert_eq!(button_label(false, "Cancel", Some(Key::C)), "(C)ancel");
-}
-
-/// German "Ja" doesn't start with Y, so every button appends its key rather than mixing
-/// "Ja (Y)" with "(N)ein" (#5564).
-#[test]
-fn one_dialog_shows_every_key_in_the_same_style() {
-    let buttons = [("Yes", Some(Key::Y)), ("No", Some(Key::N)), ("Cancel", Some(Key::C))];
-    assert_eq!(button_labels(false, &buttons), ["(Y)es", "(N)o", "(C)ancel"]);
-    let german = crate::i18n::Lang::from_code("de").unwrap();
-    crate::i18n::with_language(german, || {
-        let shown: Vec<&str> = buttons.iter().map(|(label, _)| crate::i18n::tr(german, label)).collect();
-        assert_eq!(button_labels(true, &buttons), shown);
-        let labels = button_labels(false, &buttons);
-        let appended: Vec<String> = shown.iter().zip(&buttons).map(|(text, (_, key))| format!("{text} ({})", key.map_or("", |k| k.name()))).collect();
-        assert!(labels.iter().all(|label| label.starts_with('(')) || labels == appended, "{labels:?}");
-    });
-}
-
-#[test]
-fn macos_asks_dont_save_cancel_save_with_the_default_last() {
-    let mut h = prompt_on(egui::os::OperatingSystem::Mac);
-    let labels = ["Don't Save", "Cancel", "Save"];
-    assert_eq!(drawn_order(&h, labels), labels);
-    tab_walks(&mut h, labels, 2);
-    h.key_press(Key::D);
-    h.run_steps(2);
-    assert_eq!(docs_left(&h), Some(1), "D answered the first document");
-    h.key_press(Key::C);
-    h.run_steps(2);
-    assert!(h.state().discard.is_none());
-    assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
-}
-
-#[test]
-fn macos_plain_labels_keep_save_and_escape_shortcuts() {
-    for key in [Key::S, Key::Enter] {
-        let mut h = prompt_on(egui::os::OperatingSystem::Mac);
-        let (show, asked) = crate::file_dialog::fake(vec![None]);
-        h.state_mut().services.file_dialog = Some(show);
-        h.key_press(key);
-        h.run_steps(2);
-        assert_eq!(asked.borrow().len(), 1, "{key:?} opens the save dialog");
-        assert_eq!(docs_left(&h), Some(2), "cancelling the save dialog keeps the prompt");
-        h.key_press(Key::Escape);
-        h.run_steps(2);
-        assert!(h.state().discard.is_none());
-        assert_eq!(h.state().session.documents().len(), 2, "Escape closed nothing");
-    }
-}
-
-#[test]
-fn enter_takes_the_default_answer_or_the_focused_button() {
-    let mut h = prompt_on(egui::os::OperatingSystem::Windows);
-    // Backing out of the save dialog keeps the prompt.
-    let (show, asked) = crate::file_dialog::fake(vec![None]);
-    h.state_mut().services.file_dialog = Some(show);
-    h.key_press(Key::Enter);
-    h.run_steps(2);
-    assert_eq!(asked.borrow().len(), 1, "Enter answered Yes, which saves");
+fn quitting_over_a_pending_close_replaces_the_open_question() {
+    let mut app = app_with_docs(2);
+    make_dirty(&mut app, 0);
+    make_dirty(&mut app, 1);
+    let mut h = prompt_for(app, "file.close", craft::host::target::Os::Windows);
+    assert!(question_open(&h));
+    assert!(intercept(h.state_mut(), EXIT, &Value::Null));
+    h.run_steps(3);
+    assert!(question_open(&h));
+    assert_eq!(h.state().discard.as_ref().map(|p| p.id.as_str()), Some(EXIT));
     assert_eq!(docs_left(&h), Some(2));
-    // Tab from the focused Yes to No: Enter now presses it.
-    h.key_press(Key::Tab);
+    assert!(question_fields(&h).get("applyToAll").is_some(), "the new question counts both documents");
+}
+
+/// Beneath the prompt the shortcuts hold their keys, so ⌘D with a selection on the document
+/// answers Don't Save rather than running Select › Deselect (or refusing it in the status bar).
+#[test]
+fn command_d_answers_the_prompt_rather_than_deselecting() {
+    let mut app = app_with_docs(2);
+    make_dirty(&mut app, 0);
+    make_dirty(&mut app, 1);
+    app.run("select.all", json!({})).unwrap();
+    let selected = app.session.active().map(|st| st.doc.id).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+        |ui, app| {
+            crate::shortcuts::handle(app, ui.ctx());
+            crate::dialogs::run(app, ui);
+            app.poll_file_dialog();
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    craft::ui::testing::windows::set_os(&h.ctx, craft::host::target::Os::Mac);
+    assert!(intercept(h.state_mut(), "file.close", &json!({"document": 0})));
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
     h.run_steps(2);
-    h.key_press(Key::Enter);
-    h.run_steps(2);
-    assert_eq!(asked.borrow().len(), 1, "no second dialog");
-    assert_eq!(docs_left(&h), Some(1), "Enter pressed the focused No");
+    assert!(h.state().discard.is_none(), "⌘D answered the prompt");
+    assert_eq!(h.state().session.documents().len(), 1, "the asked-about document closed unsaved");
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let kept = h.state().session.documents().iter().find(|d| d.doc.id == selected);
+    assert!(kept.is_some_and(|d| d.doc.selection.is_some()), "the selection on the other document is still there");
 }
 
 #[test]
 fn saving_from_the_prompt_waits_for_the_save_dialog_then_closes() {
-    use crate::{FileDialogAnswer, FileDialogReply};
-    use egui_kittest::kittest::Queryable;
     use std::{cell::RefCell, rc::Rc};
     let written: Rc<RefCell<Vec<String>>> = Rc::default();
-    let (w, waiting): (_, Rc<RefCell<Option<FileDialogReply>>>) = (written.clone(), Rc::default());
-    let held = waiting.clone();
-    let mut app = app_with_docs(1);
+    let w = written.clone();
+    let files = Arc::new(ScriptedFiles::held());
+    let mut app = app_with_docs_over(1, Some(files.clone()));
     make_dirty(&mut app, 0);
     app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
     app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
         w.borrow_mut().push(p.to_string());
         Ok(())
     }));
-    // A dialog the user takes their time with.
-    app.services.file_dialog = Some(Box::new(move |_, _, reply| *held.borrow_mut() = Some(reply)));
-    let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
-    let answer = |h: &mut Prompted, a: Option<FileDialogAnswer>| {
-        waiting.borrow_mut().take().expect("the save dialog is open").send(a);
-        h.run_steps(2);
-    };
-    // Cancelling the save dialog brings the prompt back.
-    h.key_press(Key::Y);
+    let mut h = prompt_for(app, "file.close", craft::host::target::Os::Windows);
+    // Cancelling the save dialog brings the question back.
+    answer(&mut h, "save", false);
     h.run_steps(3);
     assert!(h.state().file_dialog_open());
-    assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the dialog");
-    answer(&mut h, None);
+    assert!(!question_open(&h), "the question waits behind the dialog");
+    files.answer(Picked::Cancelled);
+    h.run_steps(3);
     assert_eq!(docs_left(&h), Some(1));
-    assert_eq!(focused(&h, &["(Y)es", "(N)o", "(C)ancel"]), Some("(Y)es"), "the prompt comes back with Yes focused");
+    assert!(question_open(&h), "the question comes back");
     // Saving closes the document.
-    h.key_press(Key::Y);
+    answer(&mut h, "save", false);
     h.run_steps(3);
     assert_eq!(h.state().session.documents().len(), 1, "still open while the dialog is");
-    answer(&mut h, Some(FileDialogAnswer::SaveTo("/pics/kept.psd".into())));
-    assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
-    assert!(h.state().discard.is_none());
-    assert!(h.state().session.documents().is_empty());
-}
-
-/// Save on closing an untitled document, answered with `kept` while `kept.psd` exists: the
-/// prompt waits for the question whether to replace it. Cancel brings the prompt back with
-/// nothing written; Replace saves and closes the document.
-#[test]
-fn saving_from_the_prompt_waits_for_the_question_whether_to_replace() {
-    use crate::{FileDialogAnswer, FileDialogReply};
-    use egui_kittest::kittest::Queryable;
-    use std::{cell::RefCell, rc::Rc};
-    let written: Rc<RefCell<Vec<String>>> = Rc::default();
-    let (w, waiting): (_, Rc<RefCell<Option<FileDialogReply>>>) = (written.clone(), Rc::default());
-    let held = waiting.clone();
-    let mut app = app_with_docs(1);
-    make_dirty(&mut app, 0);
-    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
-    app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
-        w.borrow_mut().push(p.to_string());
-        Ok(())
-    }));
-    app.services.file_stamp = Some(Box::new(|p: &str| (p == "/pics/kept.psd").then_some(crate::FileStamp { len: 1, modified: None })));
-    app.services.file_dialog = Some(Box::new(move |_, _, reply| *held.borrow_mut() = Some(reply)));
-    let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
-    let save = |h: &mut Prompted| {
-        h.key_press(Key::Y);
-        h.run_steps(3);
-        waiting.borrow_mut().take().expect("the save dialog is open").send(Some(FileDialogAnswer::SaveTo("/pics/kept".into())));
-        h.run_steps(2);
-        h.state().ui.dialogs.iter().find(|d| crate::replace_prompt::owns(&d.fields)).map(|d| d.id).expect("the save asks first")
-    };
-    let id = save(&mut h);
-    assert!(h.state().file_dialog_open());
-    assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the question");
-    assert!(written.borrow().is_empty());
-
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
-    h.run_steps(2);
-    assert!(written.borrow().is_empty(), "Cancel writes nothing");
-    assert_eq!(docs_left(&h), Some(1));
-    assert_eq!(focused(&h, &["(Y)es", "(N)o", "(C)ancel"]), Some("(Y)es"), "the prompt comes back");
-
-    let id = save(&mut h);
-    crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    h.run_steps(2);
+    files.answer(Picked::Paths(vec!["/pics/kept.psd".into()]));
+    h.run_steps(3);
     assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
     assert!(h.state().discard.is_none());
     assert!(h.state().session.documents().is_empty());
@@ -518,7 +534,6 @@ fn saving_from_the_prompt_waits_for_the_question_whether_to_replace() {
 
 #[test]
 fn saving_from_the_prompt_waits_for_a_background_save_then_closes() {
-    use egui_kittest::kittest::Queryable;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     let (gate, written) = (Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::<String>::new())));
@@ -535,21 +550,21 @@ fn saving_from_the_prompt_waits_for_a_background_save_then_closes() {
         w.lock().unwrap().push(path.to_string());
         Ok(Vec::new())
     }));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(800.0, 600.0)).build_ui_state(
         |ui, app| {
             crate::jobs_ui::tick(app, ui.ctx());
-            show(app, ui.ctx());
+            crate::dialogs::run(app, ui);
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    craft::ui::testing::windows::set_os(&h.ctx, craft::host::target::Os::Windows);
     assert!(intercept(h.state_mut(), "file.close", &Value::Null));
     h.run_steps(2);
-    h.key_press(Key::Y);
+    answer(&mut h, "save", false);
     h.run_steps(3);
     assert!(h.state().saving());
-    assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits for the save");
+    assert!(!question_open(&h), "the question waits for the save");
     assert_eq!(h.state().session.documents().len(), 1, "still open while saving");
     gate.store(true, Ordering::Relaxed);
     let t = std::time::Instant::now();
@@ -578,12 +593,45 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
         w.borrow_mut().push(p.to_string());
         Ok(())
     }));
-    let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
-    h.key_press(Key::Y);
+    let mut h = prompt_for(app, "file.close", craft::host::target::Os::Windows);
+    answer(&mut h, "save", false);
     h.run_steps(3);
     assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
     assert!(h.state().discard.is_none());
     assert!(h.state().session.documents().is_empty(), "closed after one write");
+}
+
+/// Synthetic input pressing the prompt's Save key (Y) reaches the hosted question and is judged
+/// as `file.save`: a policy that refuses it writes nothing, keeps the prompt and the document,
+/// and reports the refusal in the status bar.
+#[test]
+fn a_synthetic_save_press_on_the_hosted_prompt_is_refused_and_reported() {
+    use std::{cell::RefCell, rc::Rc};
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let w = written.clone();
+    let mut app = app_with_docs(1);
+    make_dirty(&mut app, 0);
+    app.session.active_mut().unwrap().path = Some("/pics/kept.psd".into());
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+        w.borrow_mut().push(p.to_string());
+        Ok(())
+    }));
+    app.services.automation_command =
+        Some(Box::new(|id: &str, _: &Value| if id == "file.save" { Err(format!("automation command `{id}` is disabled")) } else { Ok(()) }));
+    let mut h = prompt_for(app, "file.close", craft::host::target::Os::Windows);
+    // Y as synthetic input: the window host injects it, and the passes carrying it act for the
+    // automation client.
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new("ui.key", serde_json::json!({"key": "Y"}));
+    assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Reply::AfterInput));
+    h.run_steps(4);
+    assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+    assert_eq!(docs_left(&h), Some(1), "the prompt stays up");
+    assert!(question_open(&h), "the question comes back");
+    assert_eq!(h.state().session.documents().len(), 1, "the document stays open");
+    assert!(h.state().ui.status.contains("file.save"), "status: {:?}", h.state().ui.status);
+    assert!(h.state().ui.status_error, "the refusal is shown as an error");
 }
 
 #[path = "tests/tiff_tests.rs"]
@@ -601,13 +649,13 @@ mod dds_tests;
 #[path = "tests/jpeg_tests.rs"]
 mod jpeg_tests;
 
-/// One frame with the window's close button pressed; the commands the guard sent.
+/// One frame with the window's close button pressed; the commands the close path sent.
 fn window_close_commands(app: &mut PhotocraftApp) -> Vec<egui::ViewportCommand> {
     let mut info = egui::ViewportInfo::default();
     info.events.push(egui::ViewportEvent::Close);
     let mut input = egui::RawInput::default();
     input.viewports.insert(egui::ViewportId::ROOT, info);
-    let mut out = egui::Context::default().run_ui(input, |ui| guard_window_close(app, ui.ctx()));
+    let mut out = crate::app::framework::close_path_frame(app, input);
     out.textures_delta.clear();
     out.viewport_output.remove(&egui::ViewportId::ROOT).map(|o| o.commands).unwrap_or_default()
 }
@@ -646,7 +694,8 @@ fn window_close_goes_through_once_the_window_device_is_lost() {
 #[test]
 fn file_exit_quits_without_a_prompt_once_the_window_device_is_lost() {
     let exit = |app: &mut PhotocraftApp| {
-        let mut out = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+        let ctx = app.ctx().clone();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let _ = crate::menus::invoke(app, ui.ctx(), EXIT, json!({}));
         });
         out.textures_delta.clear();
@@ -681,33 +730,4 @@ fn window_close_goes_through_when_nothing_is_unsaved_or_it_was_confirmed() {
     app.allow_close = true;
     assert!(!press_window_close(&mut app));
     assert!(app.discard.is_none());
-}
-
-/// With a platform quit (macOS), leaving runs it and keeps the window open for it to close;
-/// unsaved work still asks first.
-#[test]
-fn leaving_runs_the_platform_quit_instead_of_closing_the_window() {
-    use std::{cell::Cell, rc::Rc};
-    let quits = Rc::new(Cell::new(0));
-    let mut app = app_with_docs(1);
-    let counted = quits.clone();
-    app.services.quit = Some(Box::new(move || counted.set(counted.get() + 1)));
-    // The close is cancelled for the quit to do it, with no prompt brought forward.
-    let cancels_only = |c: &[egui::ViewportCommand]| {
-        c.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)) && !c.iter().any(|c| matches!(c, egui::ViewportCommand::Focus))
-    };
-
-    assert!(cancels_only(&window_close_commands(&mut app)), "the window stays for the quit to close");
-    assert_eq!(quits.get(), 1);
-
-    make_dirty(&mut app, 0);
-    assert!(press_window_close(&mut app), "unsaved work asks first");
-    assert_eq!(quits.get(), 1, "no quit while the prompt is up");
-    assert!(app.discard.is_some());
-
-    // Don't Save: the prompt confirms, and the close it sends quits.
-    app.discard = None;
-    app.allow_close = true;
-    assert!(cancels_only(&window_close_commands(&mut app)));
-    assert_eq!(quits.get(), 2);
 }
