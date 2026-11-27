@@ -974,6 +974,12 @@ impl LiveStroke {
         self.renderer.feed_coverage(key, values, as_of);
     }
 
+    /// Whether the stroke's coverage is a GPU's ([`begin_gpu`](Self::begin_gpu)): it makes dabs
+    /// ([`push_dabs`](Self::push_dabs)) instead of rasterising them ([`push`](Self::push)).
+    pub fn is_gpu(&self) -> bool {
+        self.gpu
+    }
+
     /// Whether the doc shows the stroke as a masked colour layer ([`begin_overlay`](Self::begin_overlay))
     /// rather than blended into the target's pixels: the target's pixels do not change until the
     /// commit, and the committed pixels differ from what the doc shows by the 8-bit dither.

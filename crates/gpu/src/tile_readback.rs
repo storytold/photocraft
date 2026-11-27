@@ -6,8 +6,9 @@
 //! 256-byte copy alignment: an R32F row of 64 is exactly that, an R16F row takes 128 of 256
 //! bytes) and starts mapping it; [`MaskReadback::poll`] returns the tiles of the buffers that
 //! finished, in the order they were requested, converting R16F to `f32`. Buffers are pooled and
-//! at most [`MAX_IN_FLIGHT`] are out at once, so a stroke's read-back memory stays bounded. The
-//! handle is shared (`Clone`): one thread may request while another polls.
+//! at most [`MAX_IN_FLIGHT`] are out at once, so a stroke's read-back memory stays bounded (the end
+//! of a stroke asks for all it has left with [`MaskReadback::request_all`]). The handle is shared
+//! (`Clone`): one thread may request while another polls.
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -78,8 +79,23 @@ impl MaskReadback {
     /// while fewer than [`MAX_IN_FLIGHT`] are out, and returns how many that is (the caller asks
     /// for the rest later). A tile with no texture behind it reads as zeros.
     pub fn request(&self, comp: &Compositor, device: &wgpu::Device, queue: &wgpu::Queue, layer: LayerId, keys: &[(i32, i32)], tag: u64) -> usize {
+        self.request_limited((comp, device, queue), layer, keys, tag, true)
+    }
+
+    /// [`request`](Self::request) for every key, whatever is in flight: the end of a stroke needs
+    /// all its tiles and has nothing else to wait on. Staging buffers beyond [`MAX_IN_FLIGHT`] are
+    /// allocated for it (at most [`MAX_TILES_PER_BUFFER`] tiles each), so the memory this takes is
+    /// bounded by the tiles asked for, 16 KiB each.
+    pub fn request_all(&self, comp: &Compositor, device: &wgpu::Device, queue: &wgpu::Queue, layer: LayerId, keys: &[(i32, i32)], tag: u64) {
+        for chunk in keys.chunks(MAX_TILES_PER_BUFFER) {
+            self.request_limited((comp, device, queue), layer, chunk, tag, false);
+        }
+    }
+
+    fn request_limited(&self, gpu: (&Compositor, &wgpu::Device, &wgpu::Queue), layer: LayerId, keys: &[(i32, i32)], tag: u64, capped: bool) -> usize {
+        let (comp, device, queue) = gpu;
         let mut state = self.state();
-        if state.flights.len() >= MAX_IN_FLIGHT {
+        if capped && state.flights.len() >= MAX_IN_FLIGHT {
             return 0;
         }
         let take = keys.len().min(MAX_TILES_PER_BUFFER);
