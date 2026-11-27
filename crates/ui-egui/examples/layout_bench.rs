@@ -22,17 +22,17 @@
 #[path = "../tests/support/layout_doc.rs"]
 mod layout_doc;
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId};
-use photocraft_ui_egui::canvas::ViewXform;
 use photocraft_ui_egui::state::Tool;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::{Value, json};
 
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -82,11 +82,8 @@ fn settle(h: &mut H, n: usize) -> f64 {
 
 /// Screen position of document point (x, y) in the main canvas.
 fn screen(h: &H, x: f64, y: f64) -> Pos2 {
-    let app = h.state();
-    let idx = app.session.active_index().unwrap_or(0);
-    let v = &app.ui.views[idx];
-    let rect = photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal, rotation: v.rotation, aspect: 1.0 }.to_screen(x as f32, y as f32)
+    let view = photocraft_ui_egui::canvas::active_view(h.state()).expect("an active document view");
+    view.to_screen(craft::behavior::kurbo::Point::new(x, y))
 }
 
 fn select(h: &mut H, id: LayerId) {
@@ -213,14 +210,14 @@ fn main() {
     let builder = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_pixels_per_point(ppp);
     let mut h: H = builder.wgpu_setup(photocraft_ui_egui::gpu_canvas::wgpu_setup()).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             rs.device.set_device_lost_callback(|r, m| eprintln!("GPU device lost ({r:?}): {m}"));
             app.set_wgpu(rs.clone());
         }
         app.session.open_document(doc, Some("layout.psd".into()));
         app.sync_views();
-        app.ui.panels.navigator = navigator;
+        photocraft_ui_egui::menus::invoke(&mut app, &cc.egui_ctx, "window.panel.navigator", json!({"show": navigator})).expect("the navigator shows");
         app
     });
     settle(&mut h, 4);
@@ -397,9 +394,9 @@ fn shots(h: &mut H, dir: &str, ppp: f32, [group, headline]: [LayerId; 2]) {
                 if view == "100" {
                     v.zoom = 1.0;
                     v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
-                    v.fit_pending = false;
+                    v.clear_pending();
                 } else {
-                    v.fit_pending = true;
+                    v.place(craft::ui::canvas::ViewCommands::FitOnScreen);
                 }
             }
             settle(h, 6);

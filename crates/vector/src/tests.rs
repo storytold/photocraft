@@ -238,6 +238,26 @@ fn render_shape_formats_and_paint() {
 }
 
 #[test]
+fn native_cmyk_shape_drops_invisible_ink_in_alpha_free_output() {
+    let ink = [1.0, 0.0, 0.0, 0.0];
+    let canvas = Rect::new(0, 0, 20, 20);
+    let format = PixelFormat::new(ColorMode::Cmyk, SampleType::U8, false);
+    let mut shape = ShapeLayer {
+        path: shapes::rect(2.0, 2.0, 10.0, 10.0),
+        fill: Some(Fill::Solid(Color { mode: ColorMode::Cmyk, c: ink, alpha: 0.0 })),
+        ..Default::default()
+    };
+
+    let transparent = render_shape(&shape, format, canvas);
+    assert_eq!(transparent.pixel(7, 7), vec![0.0; 4]);
+    assert!(transparent.content_bounds().is_empty());
+
+    shape.fill = Some(Fill::Solid(Color { mode: ColorMode::Cmyk, c: ink, alpha: 1.0 }));
+    let opaque = render_shape(&shape, format, canvas);
+    assert_eq!(opaque.pixel(7, 7), ink);
+}
+
+#[test]
 fn gradient_fill_spans_bounds() {
     let sh = ShapeLayer {
         path: shapes::rect(0.0, 0.0, 100.0, 10.0),
@@ -613,4 +633,68 @@ fn gradient_stops_are_found_by_bisection_and_agree_with_a_scan() {
         sample_color(&many, &[], 0.9 + i as f32 * 1e-7);
     }
     assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+}
+
+/// Cancellable coverage preserves curved boolean geometry, and discards partial scanlines.
+#[test]
+fn coverage_interrupt_preserves_geometry_and_stops_during_render() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut path = shapes::ellipse(2.3, 3.7, 41.5, 39.2);
+    let mut hole = shapes::rect(12.2, 13.1, 8.4, 9.6);
+    hole.subpaths[0].op = PathOp::Subtract;
+    path.subpaths.extend(hole.subpaths);
+    let rect = Rect::new(0, 0, 64, 64);
+    for rule in [FillRule::NonZero, FillRule::EvenOdd] {
+        path.fill_rule = rule;
+        let expected = path_coverage(&path, rect);
+        let analytic = std::f64::consts::PI * 20.75 * 19.6 - 8.4 * 9.6;
+        assert!((area(&expected) - analytic).abs() / analytic < 0.002);
+        assert_eq!(expected[16 * 64 + 16], 0.0, "the subtracted hole remains empty");
+        assert_eq!(path_coverage_with(&path, rect, &Interrupt::NONE), Some(expected));
+    }
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::Relaxed);
+    let progress = |p: f32| {
+        if p >= 0.25 {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    };
+    assert!(path_coverage_with(&path, rect, &Interrupt::new(&cancel, &progress)).is_none());
+    assert!(cancelled.load(Ordering::Relaxed), "cancellation happened during scanline rendering");
+    assert!(path_coverage_with(&path, rect, &Interrupt::cancel_only(&|| true)).is_none());
+}
+
+/// Native targets render a large rect in parallel strips; cancellation inside one strip stops
+/// them all and discards the partial coverage.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn coverage_interrupt_stops_parallel_strips() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let path = shapes::ellipse(10.0, 10.0, 280.0, 280.0);
+    // 300 x 300 is past the parallel threshold (more than 32 rows and 64k pixels).
+    let rect = Rect::new(0, 0, 300, 300);
+    assert!(path_coverage_with(&path, rect, &Interrupt::NONE).is_some());
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::Relaxed);
+    let progress = |p: f32| {
+        if p >= 0.25 {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    };
+    assert!(path_coverage_with(&path, rect, &Interrupt::new(&cancel, &progress)).is_none());
+    assert!(cancelled.load(Ordering::Relaxed), "cancellation happened during parallel rendering");
+}
+
+/// Curve budgeting and tessellation also honor cancellation before rasterization starts.
+#[test]
+fn flatten_interrupt_stops_during_preparation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let path = shapes::ellipse(0.0, 0.0, 500.0, 500.0);
+    let polls = AtomicUsize::new(0);
+    // Budgeting polls once for the subpath and once per segment (5 for an ellipse's 4 curves);
+    // the 6th poll is tessellation's first, so this cancels inside `flatten_scaled`.
+    let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 5;
+    assert!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::cancel_only(&cancel)).is_none());
+    assert_eq!(polls.load(Ordering::Relaxed), 6);
+    assert_eq!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::NONE), Some(flatten_path(&path, DEFAULT_TOLERANCE)));
 }
