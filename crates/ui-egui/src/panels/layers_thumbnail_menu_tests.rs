@@ -267,6 +267,18 @@ fn frames_artboards_and_the_name_area_keep_the_full_layer_menu() {
     }
 }
 
+/// The menu is built from the clicked row: a thumbnail press on a layer the panel has not made
+/// active yet still lists that layer's thumbnail menu (its kind decides the list, not the active
+/// layer's; the engine enablement behind two greyed flags is read from the session as in today's
+/// row menus).
+#[test]
+fn the_menu_of_a_row_that_is_not_active_still_lists_the_clicked_layer() {
+    let (mut app, k) = kinds();
+    activate(&mut app, k.pixel);
+    let got: Vec<String> = thumb_menu(&app, k.adjust).into_iter().filter_map(|e| e.value().cloned()).collect();
+    assert_eq!(got, plan().into_iter().flatten().collect::<Vec<String>>(), "the adjustment's own list, not the active pixel layer's");
+}
+
 /// The size and clip rows still follow the panel's current settings: only the current size is
 /// checked, and the clip row matching the preference.
 #[test]
