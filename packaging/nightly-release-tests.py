@@ -271,10 +271,6 @@ class NightlyCallerSecrets(unittest.TestCase):
                 assert_nightly_caller_secrets(source + extra, signer=False)
 
 
-def has_plain_environment_key(source):
-    return re.search(r"(?im)^[ \t]*environment[ \t]*:", source) is not None
-
-
 class Response:
     status = 204
 
@@ -560,16 +556,29 @@ class TrustedSourcePreparation(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                self.assertFalse(has_plain_environment_key(executable), "app callers must not bind an environment")
+                self.assertEqual(workflow_environment_problems(source), [], "app callers must not bind an environment")
                 if name != "nightly-sign.yml":
                     self.assertNotRegex(executable, r"(?im)^\s*secrets:")
                     self.assertNotIn("secrets.", executable)
 
+    def test_generic_closure_recognizes_environment_keys_in_each_caller(self):
+        for name in ("nightly.yml", "nightly-sign.yml", "nightly-dispatch.yml"):
+            source = (ROOT / ".github/workflows" / name).read_text()
+            job_field = "    if: >-\n"
+            self.assertEqual(workflow_environment_problems(source), [], name)
+            for key in ("environment:", "environment :"):
+                with self.subTest(workflow=name, key=key):
+                    with_binding = source.replace(job_field, f"    {key} release\n" + job_field, 1)
+                    self.assertNotEqual(source, with_binding)
+                    self.assertRegex("\n".join(workflow_environment_problems(with_binding)),
+                                     r"(?m)^line \d+: direct environment key$")
 
-    def test_generic_closure_recognizes_a_space_before_the_environment_colon(self):
-        source = "jobs:\n  synthetic:\n    runs-on: ubuntu-latest\n    environment : release\n"
-        self.assertTrue(has_plain_environment_key(source))
-        self.assertFalse(has_plain_environment_key(source.replace("environment :", "name:")))
+    def test_generic_closure_ignores_environment_text_in_dispatch_script(self):
+        source = DISPATCHER.read_text()
+        with_annotation = source.replace("          import json\n",
+                                         '          environment : str = "release"\n          import json\n', 1)
+        self.assertNotEqual(source, with_annotation)
+        self.assertEqual(workflow_environment_problems(with_annotation), [])
 
 
 class NightlyTrustAnchors(unittest.TestCase):
@@ -945,6 +954,11 @@ def workflow_keys(source):
     """(line, key) for every mapping entry, plus the refused YAML forms."""
     entries, refused = workflow_entries(source)
     return [(number, key) for number, key, _, _ in entries], refused
+
+
+def workflow_environment_problems(source):
+    keys, refused = workflow_keys(source)
+    return refused + [f"line {line}: direct environment key" for line, key in keys if key.casefold() == "environment"]
 
 
 SHARED_CALLEE = re.compile(r"storytold/craft-common-actions/\.github/workflows/([\w.-]+\.ya?ml)@(\S+)", re.IGNORECASE)
