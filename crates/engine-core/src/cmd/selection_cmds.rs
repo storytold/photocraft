@@ -170,10 +170,12 @@ fn parse_color(p: &Value) -> [f32; 3] {
     }
 }
 
-/// Composite RGB (the compositor's output profile for the document) → CIE Lab D50.
+/// Composite RGB (the profile the session shows the document's composite in) → CIE Lab D50.
 fn lab_transform(s: &Session) -> Result<std::sync::Arc<craft_cms::Transform>> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let src = crate::color_cmds::composite_profile(&d.doc);
+    // An untagged document's composite is the working space (#14224), so the hue rows and the
+    // sampled colours select what the canvas actually shows.
+    let src = s.color().composite_profile(&d.doc);
     craft_cms::cached(&src, craft_cms::Builtin::LabD50.profile(), craft_cms::TransformOptions::default())
         .map_err(|e| EngineError::Other(format!("colour management: {e}")))
 }

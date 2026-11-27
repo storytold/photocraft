@@ -398,6 +398,27 @@ fn an_untagged_indexed_document_follows_the_mode_default_until_it_becomes_rgb() 
 }
 
 #[test]
+fn colour_range_judges_sampled_colours_in_the_space_the_canvas_shows() {
+    let mut s = crate::session();
+    // A box spanned by two sampled colours and a ramp of columns across it. Membership is decided in
+    // Lab, through the profile the composite is read in, so once the working space moves the box has
+    // to move with the picture: with the ramp below one column drops out going from sRGB to
+    // ProPhoto, and none of this changes at the default setting.
+    let columns: Vec<[f32; 3]> = (0..8).map(|i| [0.55 + 0.03 * i as f32, 0.45 - 0.03 * i as f32, 0.45 - 0.02 * i as f32]).collect();
+    s.open_document(untagged_rgb(&columns, SampleType::U8), None);
+    let marked = |s: &mut Session| -> Vec<usize> {
+        s.execute("select.colorRange", json!({"select": "sampledColors", "colors": ["#cc4d4d", "#996666"], "fuzziness": 40})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let selection = doc.selection.clone().expect("a selection was set");
+        (0..columns.len()).filter(|i| selection.pixel(*i as i32 * 4 + 2, 2)[0] > 0.5).collect()
+    };
+    let as_built_in = marked(&mut s);
+    s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    let as_working = marked(&mut s);
+    assert_ne!(as_built_in, as_working, "the sampled colour box marked the same columns whatever the working space: {as_built_in:?} vs {as_working:?}");
+}
+
+#[test]
 fn the_profile_commands_answer_the_same_for_a_tagged_document() {
     let mut replies = Vec::new();
     for working in ["srgb", "prophoto-compat"] {
