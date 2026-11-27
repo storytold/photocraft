@@ -8,6 +8,7 @@ use craft::ui::buttons::{Button, ToggleButton};
 use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowContainer};
 use craft::ui::display::Text;
 use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{LengthUnits, UnitKind};
 use craft::ui::sections::Section;
@@ -117,7 +118,7 @@ fn canvas_section(ui: &mut egui::Ui, run: &mut Vec<(String, Value)>, f: &Facts, 
     }
     let portrait = f.height > f.width;
     let square = f.width == f.height;
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         let to_portrait = ToggleButton::new(tl!("Portrait"), Bind::given(portrait)).show(ui);
         if to_portrait.events.committed() == Some(&true) && !portrait && !square {
             run.push(canvas_size(extent[1], extent[0]));
@@ -168,7 +169,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut run: Vec<(String, Value)> = Vec::new();
     Section::new(tl!("Canvas")).show(ui, |ui, _| canvas_section(ui, &mut run, &facts, kind));
     Section::new(tl!("Rulers & Grids")).show(ui, |ui, _| {
-        ui.horizontal(|ui| {
+        Row::new().show(ui, |ui, _| {
             for id in ["view.rulers", "view.show.grid", "view.show.pixelGrid"] {
                 ToggleButton::command(CommandRef::new(id)).show(ui);
             }
@@ -180,7 +181,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     Section::new(tl!("Guides")).show(ui, |ui, _| {
-        ui.horizontal(|ui| {
+        Row::new().show(ui, |ui, _| {
             for id in ["view.show.guides", "view.lockGuides"] {
                 ToggleButton::command(CommandRef::new(id)).show(ui);
             }

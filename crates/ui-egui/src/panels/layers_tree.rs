@@ -2,6 +2,7 @@
 //! `LayerTree` over the active document), `PhotoThumbs` (its thumbnails), the settings and filter
 //! conversions, and the row menus as entries.
 
+use photocraft_engine::link_watch::LinkWatchExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use craft::ui::list::ThumbSize;
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::primitives::textures::{Revision, ThumbRender, ThumbRequest, ThumbSource, thumb_image};
 use craft::ui::runtime::env::Label;
-use photocraft_color::BlendMode;
+use photocraft_color::{BlendMode, ColorMode};
 use photocraft_doc::{Document, Effect, Fill, LabelColor, Layer, LayerContent, LayerId};
 use photocraft_engine::DocState;
 use serde_json::{Value, json};
@@ -322,7 +323,10 @@ impl LayerTree for PhotoLayers {
                 LayerContent::Smart(_) => LayerKind::SmartObject,
             }
         };
-        let mut info = LayerInfo::new(l.name.clone(), kind);
+        // An Indexed Color document's Background row reads "Index" in italics; the stored name stays (#16763).
+        let index_row = doc.mode == ColorMode::Indexed && doc.is_background(l.id);
+        let mut info = LayerInfo::new(if index_row { tl!("Index").to_string() } else { l.name.clone() }, kind);
+        info.italic = index_row;
         info.visible = l.visible;
         let index = doc.layers.index();
         info.dimmed = !l.visible || std::iter::successors(index.parent(*id), |p| index.parent(*p)).any(|p| self.layer(&p).is_some_and(|g| !g.visible));
@@ -744,7 +748,10 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
             },
             _ => 0,
         };
-        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height))
+        // A tile that fails to read shows zeros, and its pixels again once it reads, without moving its surface's
+        // generation: the scratch read-error generation moves with both (#16252).
+        let scratch = crate::scratch_reads::generation();
+        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height, scratch))
     }
 
     fn render(&self, key: &LayerThumb<LayerId>, request: &ThumbRequest) -> ThumbRender {
@@ -802,3 +809,7 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
 pub(crate) fn select_pixels(layer: LayerId) -> Value {
     json!({"channel": "transparency", "layer": layer.0, "operation": "new"})
 }
+
+#[cfg(test)]
+#[path = "indexed_background_name_tests.rs"]
+mod indexed_background_name_tests;

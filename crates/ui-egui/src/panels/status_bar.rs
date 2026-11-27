@@ -3,6 +3,7 @@ use craft::behavior::kurbo::Size;
 use craft::theme::variant::Tone;
 use craft::ui::bars::{Bar, BarKind, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, ShowContainer as _};
+use craft::ui::layout_components::Row;
 use craft::ui::runtime::commands::CommandRef;
 use craft::ui::text::InvalidZoom;
 
@@ -119,8 +120,16 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     chrome_ui::zoom_alert(app, invalid_zoom);
 }
 
-/// The status bar's trailing group.
+/// The status bar's trailing group, in a row of its own centred down the bar's height, so its members stand on the
+/// body's line: the bar's end region lays its children out from its top, and a memoized view's content is a layout
+/// room the bar's row does not reach into (#16352).
 fn trailing_view(props: &mut TrailingProps<'_>, ui: &mut egui::Ui) {
+    let centred = ui.layout().with_cross_align(egui::Align::Center);
+    ui.with_layout(centred, |ui| Row::new().show(ui, |ui, _| trailing_members(props, ui)));
+}
+
+/// The members of the status bar's trailing group: the render-path note, the background redraw and the job.
+fn trailing_members(props: &mut TrailingProps<'_>, ui: &mut egui::Ui) {
     if let Some(shown) = &props.render_path {
         shown.show(ui);
     }
@@ -134,8 +143,14 @@ fn trailing_view(props: &mut TrailingProps<'_>, ui: &mut egui::Ui) {
     }
 }
 
-/// The status bar's body.
+/// The status bar's body, in a row of its own: a memoized view's content is a layout room the bar's row does not reach
+/// into, so without it the message would sit at the top of the bar instead of on the readout's line (#16352).
 fn body_view(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
+    Row::new().show(ui, |ui, _| body_members(props, ui));
+}
+
+/// The members of the status bar's body: the readout, or "No document", and the status message.
+fn body_members(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
     match (props.document, props.view) {
         (Some(size), Some(view)) => {
             let out = StatusReadout::new(Bind::given(view), size, props.item, &props.values).show(ui);
@@ -158,4 +173,28 @@ fn body_view(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
     if let Some(shown) = &props.message {
         shown.show(ui);
     }
+}
+
+/// The status bar of a floating document window: the readout of its own document `doc` (the zoom field, then the item
+/// picked in the main status bar's menu, which picking here changes too), as the reference application's floating
+/// document windows have along their bottom (#16415). `view` is the window's canvas as its last pass showed it; a window
+/// not shown yet has an empty bar. Returns a view the zoom field set.
+pub(crate) fn document_window_status(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: usize, view: Option<CanvasView>) -> Option<CanvasView> {
+    let values = chrome_ui::status_values_of(app, doc);
+    let item = chrome_ui::status_item(&app.ui.chrome);
+    let size = app.session.documents().get(doc).map(|st| Size::new(st.doc.size.width as f64, st.doc.size.height as f64));
+    let (mut picked, mut edited, mut invalid_zoom) = (None, None, None);
+    Bar::new("", BarKind::Status).show(ui, |ui, _| {
+        if let (Some(size), Some(view)) = (size, view) {
+            let out = StatusReadout::new(Bind::given(view), size, item, &values).show(ui);
+            picked = out.item;
+            edited = out.view.value().copied();
+            invalid_zoom = out.invalid_zoom;
+        }
+    });
+    if let Some(picked) = picked {
+        chrome_ui::set_status_item(&mut app.ui.chrome, picked);
+    }
+    chrome_ui::zoom_alert(app, invalid_zoom);
+    edited
 }

@@ -54,7 +54,15 @@ fn enter_deselects_the_work_path_and_the_next_path_replaces_it() {
     assert_eq!(h.state().ui.selected_path, None, "but not selected");
     assert!(!work_path_shown(h.state()), "the Work Path is hidden");
     assert_eq!(overlaid(&h), 0, "no outline on the canvas");
-    assert_eq!(make_buttons_enabled(&h), [false, false], "the Make buttons are greyed");
+    assert_eq!(
+        make_buttons_enabled(&h),
+        [false, false],
+        "the Make buttons are greyed: shown {}, selected {:?}, hidden {}, pen {:?}",
+        work_path_shown(h.state()),
+        h.state().ui.selected_path,
+        h.state().ui.hidden_work_path.is_some(),
+        h.state().ui.pen.as_ref().map(|p| p.draft.knots.len())
+    );
 
     draw_path(&mut h, [[30.0, 60.0], [150.0, 80.0]], Key::Enter);
     assert_eq!(work_anchors(&h), [[[30.0, 60.0], [150.0, 80.0]]], "the new path replaced the old one");

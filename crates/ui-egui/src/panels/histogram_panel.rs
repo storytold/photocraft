@@ -351,7 +351,9 @@ fn committed_key(app: &PhotocraftApp) -> Option<(HistKey, ToneSpace, HistSource)
         Some((d, r, k)) if d == doc && r == revision => k,
         _ => tone::selection_key(&st.doc),
     };
-    let source_tag = tone::tag(source, space, HistScope::Selection, sel);
+    // A tile that fails to read counts as zeros, and as its pixels again once it reads, without a new revision: the
+    // key follows the scratch read-error generation too (`crate::scratch_reads`).
+    let source_tag = crate::scratch_reads::with(tone::tag(source, space, HistScope::Selection, sel));
     Some((HistKey { doc, revision, source: source_tag, preview: 0, max_level }, space, source))
 }
 

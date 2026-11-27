@@ -2,6 +2,8 @@
 
 mod analysis;
 mod autosave;
+mod camera_raw_roundtrip;
+mod channel_mixer_cmyk;
 mod common;
 mod corruption;
 mod directory_symlinks;
