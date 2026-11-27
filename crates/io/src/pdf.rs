@@ -176,6 +176,18 @@ pub fn export(doc: &Document, spot_plates: bool, ctl: &photocraft_raster::Interr
 /// PDF writer;
 /// without plates it is written as it is, and nothing when there is none.
 pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
+    export_with_icc(doc, spot_plates, doc_xmp, true, ctl)
+}
+
+/// [`export_with`] with control over embedding the document profile in the page images.
+/// The document's profile remains available to the compositor even when it is not embedded.
+pub(crate) fn export_with_icc(
+    doc: &Document,
+    spot_plates: bool,
+    doc_xmp: Option<&str>,
+    embed_icc: bool,
+    ctl: &photocraft_raster::Interrupt,
+) -> std::result::Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
     if w == 0 || h == 0 {
@@ -203,7 +215,7 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let paper = if doc.mode == ColorMode::Cmyk { 0.0 } else { 1.0 };
     let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let icc = doc.icc_profile.as_ref().map(|p| p.to_vec());
+    let icc = doc.icc_profile.as_ref().filter(|_| embed_icc).map(|p| p.to_vec());
     let plate_count = if spot_plates { plate_channels(doc).count() } else { 0 };
     // Straight alpha, composited here over paper: white in RGB/Gray (1 = full light), zero ink
     // in CMYK (0 = paper).

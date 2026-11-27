@@ -1240,7 +1240,7 @@ fn export_stages_with_renderer(
     }
     if ext == "pdf" {
         let xmp = if opts.xmp == XmpEmbed::All { doc.metadata.xmp.as_deref() } else { None };
-        let mut res = pdf::export_with(doc, opts.pdf_spot_plates, xmp, ctl)?;
+        let mut res = pdf::export_with_icc(doc, opts.pdf_spot_plates, xmp, opts.encode.embed_icc, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());
