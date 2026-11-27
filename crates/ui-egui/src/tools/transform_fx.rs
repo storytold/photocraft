@@ -10,8 +10,8 @@
 //! the style is laid over the resampled texels by the CPU compositor's `composite_with_effects`
 //! (the code that draws the layer once the transform is applied).
 //!
-//! The composite is drawn over transparency with Normal blending, like the mesh it replaces: a
-//! layer's or an effect's blend mode shows against the layers under it only after the commit.
+//! The composite is drawn over the preview document's backdrop, so a layer's blend mode and
+//! effects show the same result while the box is open as they do after the commit.
 
 use craft::imaging::ui::transform_preview::{StylePlan, StyledContent, StyledSource};
 use craft::ui::canvas::PixelRect;
@@ -53,7 +53,6 @@ pub fn work_layer(layer: &Layer, scale: f64) -> Layer {
     l.mask = None;
     l.vector_mask = None;
     l.fill_cache = None;
-    l.blend = BlendMode::Normal;
     photocraft_engine::image_cmds::scale_effects_preview(&mut l.effects, scale as f32);
     l.effects.reference = l.effects.reference.map(|(x, y)| (x * scale, y * scale));
     l
@@ -63,6 +62,8 @@ pub fn work_layer(layer: &Layer, scale: f64) -> Layer {
 pub struct LayerStyleSource<'a> {
     /// The document: its global light and patterns.
     doc: &'a Document,
+    /// The preview document, with the moving layer hidden and the covering layers removed.
+    preview: &'a Document,
     /// The moving layer as it is now: its style, opacity, fill and Advanced Blending, so edits
     /// made while the box is open show.
     layer: &'a Layer,
@@ -77,8 +78,11 @@ impl<'a> LayerStyleSource<'a> {
     pub fn new(app: &'a PhotocraftApp) -> Option<Self> {
         let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
         let st = app.session.active().filter(|st| st.doc.id == pv.doc.id)?;
-        let layer = st.doc.layer(LayerId(t.layer)).filter(|l| l.visible && effects::has_effects(l))?;
-        Some(Self { doc: &st.doc, layer, revision: revision_of(st.revision, layer) })
+        let layer = st
+            .doc
+            .layer(LayerId(t.layer))
+            .filter(|l| l.visible && (effects::has_effects(l) || !matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough)))?;
+        Some(Self { doc: &st.doc, preview: &pv.doc, layer, revision: revision_of(st.revision, layer) })
     }
 }
 
@@ -86,7 +90,7 @@ impl<'a> LayerStyleSource<'a> {
 fn revision_of(revision: u64, layer: &Layer) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (revision, layer.id.0, layer.opacity.to_bits(), layer.fill_opacity.to_bits()).hash(&mut hasher);
+    (revision, layer.id.0, layer.opacity.to_bits(), layer.fill_opacity.to_bits(), layer.blend).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -105,7 +109,7 @@ impl StyledSource for LayerStyleSource<'_> {
 
     fn compose(&self, plan: &StylePlan, content: &StyledContent) -> Option<ColorImage> {
         let work = work_layer(self.layer, plan.scale);
-        compose(self.doc, &work, plan, content).map(|buf| image(&buf))
+        compose(self.preview, self.doc, &work, plan, content).map(|buf| image(&buf))
     }
 }
 
@@ -114,10 +118,10 @@ fn rect(r: PixelRect) -> Rect {
     Rect::new(r.x0, r.y0, r.x1, r.y1)
 }
 
-/// Composite the resampled `content` with `work`'s style over `plan.shown`, on transparency.
-/// `work` is [`work_layer`] at `plan.scale`; `doc` gives the global light and the patterns. `None`
-/// when `content` does not fill its rectangle.
-fn compose(doc: &Document, work: &Layer, plan: &StylePlan, content: &StyledContent) -> Option<Buffer> {
+/// Composite the resampled `content` with `work`'s style and blend mode over `plan.shown`.
+/// `preview` supplies the layers below the moving layer; `doc` gives global light and patterns.
+/// `None` when `content` does not fill its rectangle.
+fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, content: &StyledContent) -> Option<Buffer> {
     let content_rect = rect(content.rect);
     if content.texels.len() != content_rect.width() as usize * content_rect.height() as usize {
         return None;
@@ -132,10 +136,12 @@ fn compose(doc: &Document, work: &Layer, plan: &StylePlan, content: &StyledConte
     let shown = rect(plan.shown);
     let width = shown.width() as usize;
     let mut out = Buffer::transparent(shown);
+    let backdrop =
+        if matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough) { Buffer::transparent(shown) } else { photocraft_compose::render(preview, shown) };
     bands(&mut out.px, width * BAND_ROWS, |i, px| {
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
-        let mut over = Buffer::transparent(band);
+        let mut over = crop(&backdrop, band);
         effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns);
         // Copied, not moved out, so `over` hands its band back to the scratch pool on drop.
         for (o, p) in px.iter_mut().zip(over.px.iter().copied()) {
@@ -281,7 +287,7 @@ mod tests {
     fn composite(layer: &Layer, w: usize, h: usize, quad: [Point; 4], zoom: f32) -> (ColorImage, StylePlan) {
         let texels = ColorImage::new([w, h], vec![BLUE; w * h]);
         let doc = doc();
-        let source = LayerStyleSource { doc: &doc, layer, revision: 0 };
+        let source = LayerStyleSource { doc: &doc, preview: &doc, layer, revision: 0 };
         let (plan, content) = planned(&source, &texels, quad, zoom);
         (source.compose(&plan, &content).expect("composited"), plan)
     }
@@ -298,6 +304,24 @@ mod tests {
 
     fn is(p: Color32, rgb: [u8; 3]) -> bool {
         p.a() == 255 && p.to_array().iter().zip(rgb).all(|(a, b)| a.abs_diff(b) <= 5)
+    }
+
+    #[test]
+    fn a_non_normal_layer_blends_with_the_preview_backdrop() {
+        let doc = Document::with_background(
+            "t",
+            photocraft_geom::Size::new(200, 200),
+            photocraft_color::ColorMode::Rgb,
+            photocraft_color::SampleType::U8,
+            Color::WHITE,
+        );
+        let mut layer = Layer::raster("screen", PixelFormat::RGBA8);
+        layer.blend = BlendMode::Screen;
+        let source = LayerStyleSource { doc: &doc, preview: &doc, layer: &layer, revision: 0 };
+        let texels = ColorImage::new([20, 20], vec![Color32::BLACK; 400]);
+        let (plan, content) = planned(&source, &texels, rect_quad([60.0, 60.0, 140.0, 140.0]), 1.0);
+        let out = source.compose(&plan, &content).expect("composited");
+        assert!(is(at(&out, &plan, 100.0, 100.0), [255, 255, 255]));
     }
 
     const RED: [u8; 3] = [255, 0, 0];
@@ -337,7 +361,7 @@ mod tests {
         let quad = [Point::new(40.0, 20.0), Point::new(150.0, 40.0), Point::new(130.0, 180.0), Point::new(20.0, 150.0)];
         let texels = ColorImage::new([30, 40], (0..1200).map(|i| if i % 7 == 0 { Color32::TRANSPARENT } else { BLUE }).collect());
         let doc = doc();
-        let source = LayerStyleSource { doc: &doc, layer: &l, revision: 0 };
+        let source = LayerStyleSource { doc: &doc, preview: &doc, layer: &l, revision: 0 };
         let (plan, content) = planned(&source, &texels, quad, 1.0);
         assert!(plan.shown.height() as usize > 2 * BAND_ROWS, "{:?}", plan.shown);
         let banded = source.compose(&plan, &content).expect("composited");
