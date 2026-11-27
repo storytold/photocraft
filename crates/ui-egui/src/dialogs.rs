@@ -773,6 +773,8 @@ pub mod delete_layer_prompt;
 pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
+#[cfg(test)]
+mod duplicate_layer_other_document_name_tests;
 pub mod duplicate_layer_ui;
 pub mod equalize_ui;
 pub mod export_dialog;
