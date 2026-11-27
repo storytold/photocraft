@@ -52,12 +52,22 @@ struct State {
     failed: bool,
     /// The canvas let go of the stroke: the thread ends.
     closed: bool,
+    /// The canvas wants the stroke finished and taken (`PaintThread::finish_with`): once what is
+    /// handed over is painted, the thread runs it and ends.
+    finish: Option<Finish>,
     /// Tests: the thread holds a step it took until this is cleared (see `PaintThread::hold`).
     #[cfg(test)]
     held: bool,
     /// Tests: the next step panics (see `PaintThread::panic_next_step`).
     #[cfg(test)]
     panic_next: bool,
+}
+
+/// What the thread does once it has painted everything: the points that came with the release, then
+/// the canvas's function on the steps and the stroke.
+struct Finish {
+    rest: Vec<StrokePoint>,
+    job: Box<dyn FnOnce(Vec<Step>, Option<EngineStroke>) + Send>,
 }
 
 impl State {
@@ -115,11 +125,40 @@ impl Shared {
         assert!(!panic, "a step panicked on the live stroke's thread (test)");
     }
 
+    /// Paint the release's points as one more step, take the stroke and the steps the canvas hasn't
+    /// taken, and run the finishing job on them. `false` if there is nothing to finish yet.
+    fn run_finish(&self) -> bool {
+        let finish = {
+            let mut st = self.lock();
+            if !st.idle() {
+                return false;
+            }
+            match st.finish.take() {
+                Some(f) => f,
+                None => return false,
+            }
+        };
+        #[cfg(test)]
+        self.test_hooks();
+        let (mut steps, stroke, failed) = {
+            let mut st = self.lock();
+            (std::mem::take(&mut st.steps), st.stroke.take(), st.failed)
+        };
+        let stroke = stroke.map(|mut stroke| {
+            if !failed && !finish.rest.is_empty() {
+                steps.push(stroke.push(&finish.rest));
+            }
+            stroke
+        });
+        (finish.job)(steps, stroke);
+        true
+    }
+
     fn run(&self) {
         loop {
             {
                 let mut st = self.lock();
-                while st.pending.is_empty() && !st.closed {
+                while st.pending.is_empty() && st.finish.is_none() && !st.closed {
                     st = self.changed.wait(st).unwrap_or_else(PoisonError::into_inner);
                 }
                 if st.closed {
@@ -127,6 +166,9 @@ impl Shared {
                 }
             }
             self.paint_pending();
+            if self.run_finish() {
+                return;
+            }
         }
     }
 }
@@ -137,6 +179,67 @@ pub(super) struct PaintThread {
     /// `None`: painting inline, in `push`.
     thread: Option<JoinHandle<()>>,
     shown: Shown,
+    /// `finish_with` handed the stroke on: dropping this leaves the thread to finish it.
+    finishing: bool,
+}
+
+/// What a [`Finishing`] has to give.
+pub(super) enum Wait<R> {
+    Ready(R),
+    /// Not done yet.
+    Pending,
+    /// The thread stopped without a result (a panic), or the result was already taken.
+    Lost,
+}
+
+struct Slot<R> {
+    value: Mutex<Option<R>>,
+    ready: Condvar,
+}
+
+/// A stroke finishing on its thread (`PaintThread::finish_with`). Dropping it doesn't wait.
+pub(super) struct Finishing<R> {
+    slot: Arc<Slot<R>>,
+    /// `None`: finished inline.
+    thread: Option<JoinHandle<()>>,
+}
+
+impl<R> Finishing<R> {
+    /// The result if it is there, without waiting.
+    pub(super) fn poll(&mut self) -> Wait<R> {
+        self.wait(Duration::ZERO)
+    }
+
+    /// Wait up to `budget` for the result.
+    pub(super) fn wait(&mut self, budget: Duration) -> Wait<R> {
+        let deadline = Instant::now().checked_add(budget);
+        let mut value = self.slot.value.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            // The thread stores the result before it ends: look at whether it ended first.
+            let ended = self.thread.as_ref().is_none_or(JoinHandle::is_finished);
+            if let Some(r) = value.take() {
+                return Wait::Ready(r);
+            }
+            if ended {
+                return Wait::Lost;
+            }
+            let left = deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(Instant::now()));
+            if left.is_zero() {
+                return Wait::Pending;
+            }
+            // Wake now and then to notice a thread that stopped without a word.
+            let (guard, _) = self.slot.ready.wait_timeout(value, left.min(Duration::from_millis(50))).unwrap_or_else(PoisonError::into_inner);
+            value = guard;
+        }
+    }
+
+    /// Wait for the result; `None` if the thread stopped without one.
+    pub(super) fn wait_forever(&mut self) -> Option<R> {
+        match self.wait(Duration::MAX) {
+            Wait::Ready(r) => Some(r),
+            Wait::Pending | Wait::Lost => None,
+        }
+    }
 }
 
 impl PaintThread {
@@ -149,6 +252,7 @@ impl PaintThread {
             shown: shown.clone(),
             failed: false,
             closed: false,
+            finish: None,
             #[cfg(test)]
             held: false,
             #[cfg(test)]
@@ -162,7 +266,7 @@ impl PaintThread {
             // Without a thread (the system refused one) the stroke paints inline, as it used to.
             std::thread::Builder::new().name("live stroke".into()).spawn(move || worker.run()).ok()
         };
-        Self { shared, thread, shown }
+        Self { shared, thread, shown, finishing: false }
     }
 
     /// Hand points over to be painted (none after a failed step).
@@ -212,6 +316,38 @@ impl PaintThread {
         let steps = self.catch_up(Duration::MAX);
         let stroke = self.shared.lock().stroke.take();
         (steps, stroke)
+    }
+
+    /// Hand the stroke over to finish on its thread, without waiting: it paints what it was given,
+    /// then `rest` as one more step (nothing after a failed step), and runs `f` on the steps the
+    /// canvas hasn't taken and the stroke (`None` if the thread stopped mid-step). `wake` is called
+    /// once the result is there. Inline (no thread) it all happens before this returns.
+    pub(super) fn finish_with<R: Send + 'static>(
+        mut self,
+        rest: Vec<StrokePoint>,
+        f: impl FnOnce(Vec<Step>, Option<EngineStroke>) -> R + Send + 'static,
+        wake: impl Fn() + Send + 'static,
+    ) -> Finishing<R> {
+        let slot = Arc::new(Slot { value: Mutex::new(None), ready: Condvar::new() });
+        let job = {
+            let slot = slot.clone();
+            Box::new(move |steps, stroke| {
+                let r = f(steps, stroke);
+                *slot.value.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+                slot.ready.notify_all();
+                wake();
+            })
+        };
+        self.shared.lock().finish = Some(Finish { rest, job });
+        self.finishing = true;
+        let thread = self.thread.take();
+        if thread.is_some() {
+            self.shared.changed.notify_all();
+        } else {
+            self.shared.paint_pending();
+            self.shared.run_finish();
+        }
+        Finishing { slot, thread }
     }
 
     /// Tests: from now on the thread holds the next step it takes, as a slow brush would, until
@@ -264,7 +400,11 @@ impl PaintThread {
 
 impl Drop for PaintThread {
     fn drop(&mut self) {
-        // The thread finishes the step it is on, if any, and ends; nothing waits for it.
+        // The thread finishes the step it is on, if any, and ends; nothing waits for it. One handed
+        // over to finish (`finish_with`) is left to do that.
+        if self.finishing {
+            return;
+        }
         self.shared.lock().closed = true;
         self.shared.changed.notify_all();
     }

@@ -582,12 +582,20 @@ pub trait LiveStrokeExt {
     /// then says `"fromLive": true`); any other command drops the offer. The command still runs
     /// through the normal dispatch, so authorization, the journal and history are unchanged.
     fn offer_live_stroke(&mut self, live: LiveStroke) -> Result<()>;
+
+    /// Offer a commit already made from a live stroke (`LiveStroke::into_commit`, which can run on
+    /// another thread); see [`offer_live_stroke`](Self::offer_live_stroke).
+    fn offer_live_commit(&mut self, commit: LiveCommit);
 }
 
 impl LiveStrokeExt for Session {
     fn offer_live_stroke(&mut self, live: LiveStroke) -> Result<()> {
-        self.live_commit = Some(live.into_commit()?);
+        self.offer_live_commit(live.into_commit()?);
         Ok(())
+    }
+
+    fn offer_live_commit(&mut self, commit: LiveCommit) {
+        self.live_commit = Some(commit);
     }
 }
 
