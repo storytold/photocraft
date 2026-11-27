@@ -1,7 +1,11 @@
 //! Known live-preview residual of merged #5340: committed damage already includes relayout.
 //! These CPU comparisons cover the public live producer, not GPU paging or a native window.
 use photocraft_compose::{Buffer, effects_frame, render, render_reduced_damage};
-use photocraft_engine::{Session, brush_cmds::{LiveStroke, LiveStrokeExt}, paint::StrokePoint};
+use photocraft_engine::{
+    Session,
+    brush_cmds::{LiveStroke, LiveStrokeExt},
+    paint::StrokePoint,
+};
 use photocraft_geom::Rect;
 use serde_json::json;
 

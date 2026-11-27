@@ -63,8 +63,7 @@ use content::render_content;
 #[cfg(test)]
 use content::render_fill;
 pub use content::{
-    RENDER_TILE, channel_weights, fill_frame, gradient_stroke_layout, layer_shape, render_fill_content, render_fill_content_in, stroke_frame,
-    surface_to_buffer,
+    RENDER_TILE, channel_weights, fill_frame, gradient_stroke_layout, layer_shape, render_fill_content, render_fill_content_in, stroke_frame, surface_to_buffer,
 };
 use ctx::{Ctx, prepare_effects};
 #[cfg(test)]
