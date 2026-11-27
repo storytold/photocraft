@@ -299,6 +299,35 @@ impl Region {
     }
 }
 
+/// The Magic Wand's tolerance as whole channel steps (the `+ 1e-3` keeps a tolerance of 32.0 from
+/// rounding down to 31 after a float round trip). A NaN or negative tolerance is 0.
+pub(crate) fn tolerance_steps(tolerance: f32) -> i32 {
+    (tolerance + 1e-3).floor().max(0.0) as i32
+}
+
+/// Whether `p` is similar to the seed colour `target` within `tol` steps ([`tolerance_steps`]) by
+/// the Magic Wand's rule: the colour is within `tol` by `distance` and alpha is that close. Copying
+/// a selection can leave RGB under zero alpha, and those invisible colours must not split a
+/// transparent region into pieces, so two fully transparent pixels always match when the seed is
+/// transparent. Only the tests call it; the code goes through [`similar_by_rule`].
+#[cfg(test)]
+pub(crate) fn similar_to_seed(target: [u8; 4], tol: i32, p: [u8; 4], distance: ColorDistance) -> bool {
+    similar_by_rule(MatchRule::Wand, target, tol, p, distance)
+}
+
+/// Whether `p` is similar to the seed colour `target` by `rule`. Shared by the Magic Wand, the Paint
+/// Bucket and the bucket's soft edge so they cannot disagree on what "similar" means.
+pub(crate) fn similar_by_rule(rule: MatchRule, target: [u8; 4], tol: i32, p: [u8; 4], distance: ColorDistance) -> bool {
+    match rule {
+        MatchRule::Wand => (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (i32::from(p[3]) - i32::from(target[3])).abs() <= tol),
+        MatchRule::Bucket => match target[3] {
+            0 => p[3] == 0,
+            255 => distance.rgb(p, target) <= tol && (i32::from(p[3]) - 255).abs() <= tol,
+            _ => p[3] != 0 && distance.rgb(p, target) <= tol && (p[..3] == target[..3] || (i32::from(p[3]) - i32::from(target[3])).abs() <= tol),
+        },
+    }
+}
+
 /// How a wand-style fill measures how far an 8-bit colour is from the clicked one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorDistance {
@@ -360,7 +389,7 @@ pub fn wand_region_by(
 
 /// Which pixels count as "similar" to the clicked one.
 #[derive(Clone, Copy)]
-enum MatchRule {
+pub(crate) enum MatchRule {
     /// The Magic Wand / Magic Eraser rule: colour and alpha each within Tolerance, except that
     /// two fully transparent pixels always match.
     Wand,
@@ -413,17 +442,8 @@ fn region_by_rule(
         return None;
     }
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
-    // split a transparent region into pieces, as if the copied source were still visible.
-    let similar = |p: [u8; 4]| match rule {
-        MatchRule::Wand => (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (p[3] as i32 - target[3] as i32).abs() <= tol),
-        MatchRule::Bucket => match target[3] {
-            0 => p[3] == 0,
-            255 => distance.rgb(p, target) <= tol && (p[3] as i32 - 255).abs() <= tol,
-            _ => p[3] != 0 && distance.rgb(p, target) <= tol && (p[..3] == target[..3] || (p[3] as i32 - target[3] as i32).abs() <= tol),
-        },
-    };
+    let tol = tolerance_steps(tolerance);
+    let similar = |p: [u8; 4]| similar_by_rule(rule, target, tol, p, distance);
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {

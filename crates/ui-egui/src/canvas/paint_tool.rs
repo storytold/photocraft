@@ -200,6 +200,7 @@ fn click_tool(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
                 "tolerance": o.tolerance,
                 "contiguous": o.contiguous,
                 "antiAlias": o.anti_alias,
+                "softEdge": o.bucket_soft_edge,
                 "sampleAllLayers": o.sample_all.paint_bucket,
                 "opacity": o.fill_opacity,
                 "contents": contents,
