@@ -19,13 +19,10 @@
 //! overlay stroke's bounds; `stroke_incl_pen_up_ms` is the frame total plus the pen-up.
 use photocraft_engine::Session;
 use photocraft_engine::brush_cmds::{LiveStroke, LiveStrokeExt};
-use photocraft_engine::paint::dynamics::DabGenerator;
 use photocraft_engine::paint::{BrushContext, BrushSettings, StrokePoint, StrokeRenderer};
 use photocraft_geom::Rect;
-use photocraft_gpu::{Compositor, GpuDab, GpuTimer, MaskPrecision};
+use photocraft_gpu::{Compositor, GpuDab, GpuTimer, MaskPrecision, MaskReadback};
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
 use std::time::Instant;
 
 const W: i32 = 4928;
@@ -294,12 +291,6 @@ struct Frames<'a> {
     display: &'a mut Display,
 }
 
-/// The points handed to the paint thread, and how many dabs they make.
-struct Handover {
-    pts: Vec<StrokePoint>,
-    dabs: usize,
-}
-
 /// A dab as the stamping shader takes it.
 fn gpu_dab(g: &photocraft_engine::paint::TipGeometry) -> GpuDab {
     GpuDab {
@@ -322,87 +313,67 @@ fn gpu_dab(g: &photocraft_engine::paint::TipGeometry) -> GpuDab {
     }
 }
 
-/// The dabs `pts` make (the stroke's own generator, as `StrokeRenderer::push` feeds it), as the
-/// stamping shader takes them, and how many dabs that is.
-fn next_dabs(generator: &mut DabGenerator, context: &BrushContext, pts: &[StrokePoint]) -> (Vec<GpuDab>, usize) {
-    let (mut dabs, mut dual) = (Vec::new(), Vec::new());
-    generator.push(pts, &mut dabs, &mut dual);
-    (dabs.iter().filter_map(|d| context.tip_geometry(d)).map(|g| gpu_dab(&g)).collect(), dabs.len())
-}
-
-/// The CPU coverage the commit needs, built from the points as they are handed over. Returns the stroke and when it finished its last hand-over.
-fn paint_thread(mut live: LiveStroke, rx: mpsc::Receiver<Handover>, done_dabs: std::sync::Arc<AtomicUsize>) -> (LiveStroke, Instant) {
-    let mut last_done = Instant::now();
-    let push = |live: &mut LiveStroke, m: Handover| {
-        let _ = live.push(&m.pts);
-        done_dabs.fetch_add(m.dabs, Ordering::Release);
-        Instant::now()
-    };
-    while let Ok(m) = rx.recv() {
-        last_done = push(&mut live, m);
+/// Stamp `dabs` into the layer's external mask in an encoder of their own and submit it, timed by
+/// `timer` when there is one. Returns the quads drawn.
+fn stamp(
+    g: &mut Frames<'_>,
+    timer: &mut Option<GpuTimer>,
+    layer: photocraft_doc::LayerId,
+    dabs: &[GpuDab],
+    px: u64,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let (device, queue) = (g.gpu.device, g.gpu.queue);
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_stamp") });
+    if let Some(t) = timer.as_mut() {
+        t.start(&mut enc, px);
     }
-    (live, last_done)
+    let st = g.comp.stamp_dabs(device, queue, &mut enc, layer, dabs)?;
+    if let Some(t) = timer.as_mut() {
+        t.finish(&mut enc);
+    }
+    queue.submit([enc.finish()]);
+    if let Some(t) = timer.as_mut() {
+        t.submitted();
+    }
+    Ok(st.quads)
 }
 
+/// The `gpu` mode: the stroke generates its dabs and the GPU draws the coverage. Per frame: the
+/// dabs, their stamping, the render over their bounds and the wait. At pen-up the coverage of
+/// every tile the dabs touched is read back (blocking), fed into the stroke and composited by the
+/// commit, which here runs where the bench runs it (the app runs it on the paint thread).
 fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_json::Value, pts: &[[f64; 3]]) -> Result<(), Box<dyn std::error::Error>> {
     let (device, queue) = (g.gpu.device, g.gpu.queue);
-    let live = LiveStroke::begin_overlay(s, "paint.stroke", &params)?;
+    let (mut live, first) = LiveStroke::begin_gpu(s, "paint.stroke", &params)?;
     let preview = live.gpu_preview().map_err(|why| format!("the gpu mode cannot show this stroke: {why}"))?;
     let canvas = preview.doc.bounds();
     let precision = g.comp.begin_external_mask(device, preview.doc.id, preview.layer, canvas, run.precision);
     println!("mask_precision={precision:?}");
-    let context = BrushContext::new(&preview.brush);
-    let mut generator = DabGenerator::new(&preview.brush, 1.0);
     let mut stamp_timer = GpuTimer::new(device, queue);
     let seed = live.seed;
-
-    let (tx, rx) = mpsc::channel::<Handover>();
-    let done_dabs = std::sync::Arc::new(AtomicUsize::new(0));
-    let painter = {
-        let done = done_dabs.clone();
-        std::thread::spawn(move || paint_thread(live, rx, done))
-    };
+    let layer = preview.layer;
+    let target = s.active().and_then(|st| st.active_layer).ok_or("no active layer")?;
+    let pre = s.active().and_then(|st| st.doc.layer(target).and_then(|l| l.surface().cloned())).ok_or("no layer surface")?;
 
     let (mut t_gen, mut t_stamp, mut t_render, mut t_wait) = (0.0, 0.0, 0.0, 0.0);
     let mut frames = Vec::new();
     let (mut stamp_gpu_ms, mut stamp_gpu_n) = (0.0, 0usize);
     let (mut gpu_ms, mut gpu_n) = (0.0, 0usize);
-    let (mut tiles, mut passes, mut quads) = (0usize, 0usize, 0usize);
-    let (mut sent_dabs, mut stamped_dabs) = (0usize, 0usize);
+    let (mut tiles, mut passes, mut quads, mut stamped) = (0usize, 0usize, 0usize, 0usize);
     let mut bounds = Rect::EMPTY;
-    let mut behind = 0usize;
-    let mut last_sent = Instant::now();
-    // The stroke's first point went to the CPU when it began: its dabs are the CPU's already.
-    let first = [StrokePoint::new(pts[0][0], pts[0][1], pts[0][2] as f32)];
-    let (mut pending, _) = next_dabs(&mut generator, &context, &first);
+    let mut pending: Vec<GpuDab> = first.iter().map(gpu_dab).collect();
     for chunk in pts[1..].chunks(run.per_frame) {
         let frame = Instant::now();
         let t = Instant::now();
         let step: Vec<StrokePoint> = chunk.iter().map(|p| StrokePoint::new(p[0], p[1], p[2] as f32)).collect();
-        let (made_dabs, made) = next_dabs(&mut generator, &context, &step);
-        sent_dabs += made;
-        tx.send(Handover { pts: step, dabs: made })?;
-        last_sent = Instant::now();
-        pending.extend(made_dabs);
+        pending.extend(live.push_dabs(&step)?.iter().map(gpu_dab));
         let gpu_dabs = std::mem::take(&mut pending);
         let damage = gpu_dabs.iter().fold(Rect::EMPTY, |r, d| r.union(&d.rect)).intersect(&canvas);
         let a = ms(t);
         let t = Instant::now();
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_stamp") });
-        if let Some(timer) = stamp_timer.as_mut() {
-            timer.start(&mut enc, u64::from(damage.width()) * u64::from(damage.height()));
-        }
-        let st = g.comp.stamp_dabs(device, queue, &mut enc, preview.layer, &gpu_dabs)?;
-        if let Some(timer) = stamp_timer.as_mut() {
-            timer.finish(&mut enc);
-        }
-        queue.submit([enc.finish()]);
-        if let Some(timer) = stamp_timer.as_mut() {
-            timer.submitted();
-        }
+        quads += stamp(g, &mut stamp_timer, layer, &gpu_dabs, u64::from(damage.width()) * u64::from(damage.height()))?;
+        stamped += gpu_dabs.len();
         let b = ms(t);
-        stamped_dabs += gpu_dabs.len();
-        quads += st.quads;
         let t = Instant::now();
         let stats = g.comp.render(device, queue, &preview.doc, damage, |e, o| g.display.sink(device, e, o))?;
         let c = ms(t);
@@ -430,28 +401,53 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
         tiles += stats.tiles_uploaded;
         passes += stats.passes;
         bounds = bounds.union(&damage);
-        behind = sent_dabs.saturating_sub(done_dabs.load(Ordering::Acquire));
     }
     let live_pixels = if run.sanity { Some(photocraft_gpu::render_to_vec(g.comp, device, queue, &preview.doc, canvas)?) } else { None };
 
-    // Pen-up: wait for the CPU coverage, commit, then the canvas shows the committed doc.
+    // Pen-up: end the dabs and stamp them, read back every touched tile, feed them, commit.
     let t = Instant::now();
-    drop(tx);
-    let (live, last_done) = painter.join().map_err(|_| "the paint thread panicked")?;
-    let cpu_wait = ms(t);
-    let lag_ms = last_done.saturating_duration_since(last_sent).as_secs_f64() * 1e3;
+    let last: Vec<GpuDab> = live.finish_dabs().iter().map(gpu_dab).collect();
+    let last_damage = last.iter().fold(Rect::EMPTY, |r, d| r.union(&d.rect)).intersect(&canvas);
+    if !last.is_empty() {
+        quads += stamp(g, &mut stamp_timer, layer, &last, u64::from(last_damage.width()) * u64::from(last_damage.height()))?;
+        bounds = bounds.union(&last_damage);
+    }
+    let finish_stamp = ms(t);
+    let t = Instant::now();
+    let readback = MaskReadback::new();
+    let keys = live.touched_keys();
+    let mut pending_keys = keys.clone();
+    let mut arrived = Vec::with_capacity(keys.len());
+    while arrived.len() < keys.len() {
+        let taken = readback.request(&*g.comp, device, queue, layer, &pending_keys);
+        pending_keys.drain(..taken);
+        arrived.extend(readback.poll(device, true));
+    }
+    let wait_readback = ms(t);
+    let t = Instant::now();
+    for (key, values) in &arrived {
+        live.feed_coverage(*key, values);
+    }
+    let feed = ms(t);
     params["points"] = json!(pts);
     params["seed"] = json!(seed);
+    // What the canvas redraws at release, as the other modes: where laying effects out again moved
+    // a frame, and the overlay stroke's bounds, which showed no dither.
+    let overlay_bounds = live.overlay_bounds();
+    let before = s.active().ok_or("no document")?.doc.clone();
     let t = Instant::now();
     s.offer_live_stroke(live)?;
-    let result = s.execute("paint.stroke", params)?;
+    let offer = ms(t);
+    let t = Instant::now();
+    let result = s.execute("paint.stroke", params.clone())?;
     let commit = ms(t);
     let doc = s.active().ok_or("no document")?.doc.clone();
+    let damage_up = photocraft_compose::relayout_damage(&before, &doc).union(&overlay_bounds.unwrap_or(Rect::EMPTY));
     let t = Instant::now();
-    let stats = g.comp.render(device, queue, &doc, bounds, |e, o| g.display.sink(device, e, o))?;
+    let stats = g.comp.render(device, queue, &doc, damage_up, |e, o| g.display.sink(device, e, o))?;
     wait(device)?;
     let render_up = ms(t);
-    let pen_up = cpu_wait + commit + render_up;
+    let pen_up = finish_stamp + wait_readback + feed + offer + commit + render_up;
     assert!(result.get("fromLive").is_some(), "the commit did not take the live pixels");
 
     let n = frames.len();
@@ -460,12 +456,12 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
     let mut sorted = frames.clone();
     sorted.sort_by(f64::total_cmp);
     println!(
-        "mode=gpu size={} hardness={} dabs={} per_frame={} frames={n} stamped_dabs={stamped_dabs} cpu_dabs={sent_dabs} quads={quads}\n\
+        "mode=gpu size={} hardness={} dabs={} per_frame={} frames={n} stamped_dabs={stamped} quads={quads}\n\
          totals_ms gen={t_gen:.1} stamp_encode_submit={t_stamp:.1} render={t_render:.1} gpu_wait={t_wait:.1} frame_total={total:.1}\n\
          frame_ms mean={mean:.3} p95={:.3} max={:.3}\n\
          stamp_gpu_ms={stamp_gpu_ms:.2} over {stamp_gpu_n} of {n} frames (timing on={})\n\
-         cpu_lag_at_last_frame dabs={behind} ms={lag_ms:.1}\n\
-         pen_up_ms total={pen_up:.1} (cpu_wait={cpu_wait:.1}, offer+commit={commit:.1}, render+wait={render_up:.1}; render uploads {} tiles {:.1} MB)\n\
+         readback_mb={:.1} tiles={}\n\
+         pen_up_ms total={pen_up:.1} (finish+stamp={finish_stamp:.1}, readback={wait_readback:.1}, feed={feed:.1}, offer(composite)={offer:.1}, commit={commit:.1}, render+wait={render_up:.1}; render uploads {} tiles {:.1} MB)\n\
          stroke_incl_pen_up_ms={:.1}\n\
          gpu_side_ms={gpu_ms:.1} over {gpu_n} of {n} frames (timing on={})\n\
          upload tiles={tiles} passes={passes}",
@@ -476,20 +472,50 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
         pct(&sorted, 0.95),
         sorted[n - 1],
         stamp_timer.is_some(),
+        readback.bytes_requested() as f64 / 1e6,
+        arrived.len(),
         stats.tiles_uploaded,
         stats.bytes_uploaded as f64 / 1e6,
         total + pen_up,
         run.measured,
     );
-    g.comp.clear_external_mask(preview.layer);
-    if let Some(live_pixels) = live_pixels {
-        let committed = photocraft_gpu::render_to_vec(g.comp, device, queue, &doc, doc.bounds())?;
-        let worst = live_pixels
-            .iter()
-            .zip(&committed)
-            .map(|(p, q)| (0..3).map(|c| (p[c] * p[3] - q[c] * q[3]).abs()).chain([(p[3] - q[3]).abs()]).fold(0.0f32, f32::max))
-            .fold(0.0f32, f32::max);
-        println!("sanity worst premultiplied difference live vs committed = {:.3}/255", worst * 255.0);
+    g.comp.clear_external_mask(layer);
+    if run.sanity {
+        let committed = doc.layer(target).and_then(|l| l.surface().cloned()).ok_or("no committed surface")?;
+        if let Some(live_pixels) = live_pixels {
+            let shown = photocraft_gpu::render_to_vec(g.comp, device, queue, &doc, doc.bounds())?;
+            let worst = live_pixels
+                .iter()
+                .zip(&shown)
+                .map(|(p, q)| (0..3).map(|c| (p[c] * p[3] - q[c] * q[3]).abs()).chain([(p[3] - q[3]).abs()]).fold(0.0f32, f32::max))
+                .fold(0.0f32, f32::max);
+            println!("sanity worst premultiplied difference live vs committed = {:.3}/255", worst * 255.0);
+        }
+        // The same stroke committed by `paint.stroke` on the CPU, from the undone state.
+        s.execute("edit.undo", json!({}))?;
+        s.execute("paint.stroke", params)?;
+        let cpu = s.active().and_then(|st| st.doc.layer(target).and_then(|l| l.surface().cloned())).ok_or("no CPU surface")?;
+        let n = committed.format().channels();
+        let (mut differing, mut painted, mut worst) = (0usize, 0usize, 0.0f32);
+        for y in bounds.y0..bounds.y1 {
+            let row = Rect::new(bounds.x0, y, bounds.x1, y + 1);
+            let (a, b, p) = (committed.read_region(row), cpu.read_region(row), pre.read_region(row));
+            for ((a, b), p) in a.chunks_exact(n).zip(b.chunks_exact(n)).zip(p.chunks_exact(n)) {
+                if b != p {
+                    painted += 1;
+                }
+                let d = a.iter().zip(b).map(|(u, v)| (u - v).abs()).fold(0.0f32, f32::max);
+                if d > 0.0 {
+                    differing += 1;
+                }
+                worst = worst.max(d);
+            }
+        }
+        println!(
+            "commit vs paint.stroke: differing_pixels={differing} stroke_pixels={painted} share={:.4}% worst={:.3}/255",
+            100.0 * differing as f64 / painted.max(1) as f64,
+            worst * 255.0
+        );
     }
     Ok(())
 }
