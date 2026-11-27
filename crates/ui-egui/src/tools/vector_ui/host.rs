@@ -153,6 +153,14 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
         pen::sync_live_path_from_draft(app);
     }
     end_for_other_tool(app);
+    // A Magnetic trace keeps laying points while the pointer moves with the button up, so it must not
+    // wait out a tool switch and go on drawing when the pen comes back. The tool host cancels only a
+    // gesture in progress, and an open trace between its clicks is none, so the app drops it here — the
+    // shape of rule [`end_for_other_tool`] applies to the Pen's path. The freeform tool's own trace
+    // between ⌥-clicks is left exactly as it was: it takes points only on a press.
+    if app.ui.tool != Tool::FreeformPen && state.freeform.magnetic_trace_open() {
+        state.freeform.discard_trace();
+    }
     for event in state.shapes.take_events() {
         match event {
             ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => {

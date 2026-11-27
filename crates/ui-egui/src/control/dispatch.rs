@@ -415,6 +415,8 @@ struct ToolSet {
     eyedropper_ring: Option<bool>,
     cam_transform_on_drop: Option<bool>,
     move_show_transform: Option<bool>,
+    /// The Freeform Pen's Magnetic checkbox (#12693).
+    freeform_magnetic: Option<bool>,
     tile_grid: Option<bool>,
     layer_filter: Option<craft::layers::ui::filter::LayerFilter>,
     pen_mode: Option<craft::draw::ui::shape::VectorMode>,
@@ -444,6 +446,8 @@ impl ToolSet {
             // Content-Aware Move's Transform On Drop checkbox.
             cam_transform_on_drop: bool_field(p, "camTransformOnDrop")?,
             move_show_transform: bool_field(p, "moveShowTransform")?,
+            // The Freeform Pen's Magnetic checkbox (#12693).
+            freeform_magnetic: bool_field(p, "freeformMagnetic")?,
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui.layer_filter, v)).transpose()?,
@@ -507,6 +511,9 @@ impl ToolSet {
         }
         if let Some(on) = self.move_show_transform {
             app.ui.tool_options.move_show_transform = on;
+        }
+        if let Some(on) = self.freeform_magnetic {
+            app.ui.tool_options.freeform_magnetic_on = on;
         }
         if let Some(on) = self.tile_grid {
             app.ui.view.tile_grid = on;

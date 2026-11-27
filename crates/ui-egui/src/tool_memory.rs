@@ -662,6 +662,11 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     fit(&mut o.magnetic.width, width_min, width_max, d.magnetic.width);
     fit(&mut o.magnetic.contrast, 1.0, 100.0, d.magnetic.contrast);
     fit(&mut o.magnetic.frequency, 0.0, 100.0, d.magnetic.frequency);
+    // The Freeform Pen's Magnetic row edits its own copy of the same framework settings (#12693),
+    // so their remembered values land in the same bands its fields allow.
+    fit(&mut o.freeform_magnetic.width, width_min, width_max, d.freeform_magnetic.width);
+    fit(&mut o.freeform_magnetic.contrast, 1.0, 100.0, d.freeform_magnetic.contrast);
+    fit(&mut o.freeform_magnetic.frequency, 0.0, 100.0, d.freeform_magnetic.frequency);
     fit(&mut o.red_eye_pupil_size, 1.0, 100.0, d.red_eye_pupil_size);
     fit(&mut o.red_eye_darken, 0.0, 100.0, d.red_eye_darken);
     o.polygon_sides = o.polygon_sides.clamp(3, 100);

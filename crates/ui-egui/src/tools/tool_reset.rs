@@ -129,6 +129,9 @@ fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
         Tool::Zoom => &["zoom_in"],
         Tool::Patch => &["patch_structure", "patch_color"],
         Tool::ContentAwareMove => &["cam_mode"],
+        // The Freeform Pen's Magnetic checkbox is the user's mode, not a detection value (#12693):
+        // Reset Tool leaves it, and restores the four settings beside it.
+        Tool::FreeformPen => &["freeform_magnetic_on"],
         _ => &[],
     }
 }
@@ -248,7 +251,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
         Tool::Pen => reset!(vector_mode, align_edges, pen_path_op, pen_auto_add_delete, path_options),
         Tool::CurvaturePen => reset!(vector_mode, align_edges, pen_path_op),
-        Tool::FreeformPen => reset!(vector_mode, align_edges, pen_path_op, curve_fit),
+        Tool::FreeformPen => reset!(vector_mode, align_edges, pen_path_op, curve_fit, freeform_magnetic, freeform_magnetic_on),
         Tool::Line => reset!(
             shape_mode,
             shape_path_op,

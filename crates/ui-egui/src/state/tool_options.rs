@@ -305,6 +305,19 @@ pub struct ToolOptions {
     /// Magnetic Lasso: detection width, edge contrast, frequency and Stylus Pressure.
     #[serde(default)]
     pub magnetic: MagneticSettings,
+    /// Freeform Pen › Magnetic: the pen's own detection settings (the framework's
+    /// `MagneticSettings`, the same rules the Magnetic Lasso's row edits), kept apart from the
+    /// lasso's so Reset Tool on one tool leaves the other's alone. Pen Pressure starts on here, as
+    /// the reference's Magnetic Pen has it (#12693); the lasso keeps the framework's own default.
+    /// A saved row that names only some of its fields takes the framework's default for the rest,
+    /// which is how the framework's type reads a partial object; a file that never names the row
+    /// keeps these defaults.
+    #[serde(default = "magnetic_with_pressure")]
+    pub freeform_magnetic: MagneticSettings,
+    /// Freeform Pen › Magnetic: the checkbox. Off to start, and Reset Tool leaves it (the mode is
+    /// the user's, the four settings are the ones Reset Tool restores).
+    #[serde(default)]
+    pub freeform_magnetic_on: bool,
     /// Red Eye: pupil search size (1–100) and how far corrected pixels darken (0–100).
     #[serde(default = "fifty")]
     pub red_eye_pupil_size: f32,
@@ -366,6 +379,15 @@ fn one() -> f32 {
 
 fn fifty() -> f32 {
     50.0
+}
+
+/// The Freeform Pen's Magnetic settings as the tool starts them: the framework's own values for edge
+/// finding, with Pen Pressure on as the reference's Magnetic Pen has it (#12693). The framework's
+/// type is `#[non_exhaustive]`, so the one field is set after `default()` rather than in a literal.
+fn magnetic_with_pressure() -> MagneticSettings {
+    let mut settings = MagneticSettings::default();
+    settings.pressure_width = true;
+    settings
 }
 
 /// The session brush starts out as the Brush's (the tool the app opens with).
@@ -566,6 +588,8 @@ impl Default for ToolOptions {
             erase_to_history: false,
             mixer_combination: 0,
             magnetic: MagneticSettings::default(),
+            freeform_magnetic: magnetic_with_pressure(),
+            freeform_magnetic_on: false,
             red_eye_pupil_size: 50.0,
             red_eye_darken: 50.0,
             eyedropper: EyedropperOptions::default(),
