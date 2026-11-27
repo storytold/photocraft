@@ -393,7 +393,7 @@ impl StackDialog for VariablesDialog {
                 .shown(page)
                 .show_items(ui, &Pages, &mut |key, _| Tab::new(label(if *key == 0 { tl!("Define") } else { tl!("Data Sets") })));
             for event in strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     page = key.min(1);

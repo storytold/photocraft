@@ -584,7 +584,9 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
     // Artboard, Slice and panel commands) change what a settled region shows without going through `invoke`. A key's
     // repeats change only what has a revision or a tool option (brush size, a nudge, a mode step), so a held key
     // doesn't run every region at the repeat rate.
-    if fired.iter().any(|f| f.target.is_none() && f.phase != FirePhase::Repeat) {
+    // A view command (the canvas runs it) changes only what the view's regions hold in their versions.
+    let counts = |f: &&Fired| bridge_of(&f.command).is_none_or(|(id, _)| !crate::panels::region_versions::changes_only_the_view(app, id));
+    if fired.iter().filter(|f| f.target.is_none() && f.phase != FirePhase::Repeat).any(|f| counts(&f)) {
         app.commands_run += 1;
         ctx.request_repaint();
     }

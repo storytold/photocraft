@@ -1,7 +1,8 @@
 name: PhotoCraft release-ref nightly signer
 
-# Dormant source registration. Main/release contents must match after reviewed promotion.
-# A reusable callee does not change context; this must be a real top-level release dispatch.
+# Enabled for supervised manual dispatch on the dedicated nightly-signer branch, which only ever
+# fast-forwards to reviewed main commits (never the stable release branch).
+# A reusable callee does not change context; this must be a real top-level signer-branch dispatch.
 on:
   workflow_dispatch:
     inputs:
@@ -23,21 +24,23 @@ concurrency:
 
 jobs:
   release:
-    # Literal off until independent qualification. Actual context guards stay after activation.
+    # Actual context guards: official repository, manual dispatch, real nightly-signer branch.
     if: >-
-      false && github.repository == 'storytold/photocraft' &&
+      github.repository == 'storytold/photocraft' &&
       github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/release' && github.ref_type == 'branch'
+      github.ref == 'refs/heads/nightly-signer' && github.ref_type == 'branch'
     permissions:
       contents: write
       actions: read
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@a4f6fd51e854773de8b24b4f92e1ad7e770c08d7
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@8389cad8b849ea6bdb5e15fbce16772c3457565a
     with:
-      tooling-revision: a4f6fd51e854773de8b24b4f92e1ad7e770c08d7
+      tooling-revision: 8389cad8b849ea6bdb5e15fbce16772c3457565a
+      app-name: photocraft
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
     # No secrets: inherit or raw platform values in this caller. Only the isolated native
-    # callee job may bind the existing release environment and export keys in its signing step.
+    # callee job may bind the existing release environment (which trusts release and
+    # nightly-signer) and export keys in its signing step.

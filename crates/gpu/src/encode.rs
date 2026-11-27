@@ -134,7 +134,7 @@ impl Compositor {
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
         self.check_fx(doc, &plan)?;
-        self.pattern_mode = doc.pixel_format().mode;
+        self.pattern_space = photocraft_compose::pattern::PatternSpace::of(doc);
         self.pattern_doc = doc.id;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
         if region.is_empty() {

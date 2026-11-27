@@ -98,6 +98,48 @@ fn a_hover_over_the_canvas_replays_the_bars_and_the_panel_bodies() {
     }
 }
 
+/// A hover over the canvas replays the toolbar's footer (the colour chips, Quick Mask and Screen Mode): the rail replays
+/// its tool buttons but calls its footer every pass, so before it was a view of its own it ran on every frame (#15493).
+#[test]
+fn a_hover_over_the_canvas_replays_the_toolbar_footer() {
+    let mut h = harness();
+    let at = h.state().last_canvas_rect.center();
+    for step in 1..=3 {
+        h.event(Event::PointerMoved(at + vec2(step as f32, 0.0)));
+        h.run_steps(1);
+        let footer = (views_ran(&h, "toolbar::FooterProps<"), views(&h, "toolbar::FooterProps<", MemoRun::Replayed));
+        assert_eq!(footer, (0, 1), "hover step {step}: the toolbar footer replays");
+    }
+}
+
+/// Zoom In from the menu runs no panel body that does not show the view: before, every command counted as a command
+/// run, so a zoom ran every panel body in the next frame (#15493).
+#[test]
+fn a_zoom_runs_only_the_panels_that_show_the_view() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "view.zoomIn", json!({})).unwrap();
+    h.run_steps(1);
+    let bodies = (views_ran(&h, "region_versions::PanelBody<"), views(&h, "region_versions::PanelBody<", MemoRun::Replayed));
+    assert!(bodies.0 <= 1 && bodies.1 >= 2, "only the Navigator's body may run, the others replay: {bodies:?}");
+}
+
+/// The footer runs again when a colour it shows changes without a command (the Color panel's sliders, a Color Picker
+/// preview) and when the document goes into Quick Mask, so its chips and button never show a stale state.
+#[test]
+fn the_toolbar_footer_runs_when_what_it_shows_changes() {
+    let mut h = harness();
+    assert_eq!(views_ran(&h, "toolbar::FooterProps<"), 0, "settled");
+    h.state_mut().session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
+    h.run_steps(1);
+    assert!(views_ran(&h, "toolbar::FooterProps<") > 0, "a new foreground colour runs the footer");
+    h.run_steps(2);
+    assert_eq!(views_ran(&h, "toolbar::FooterProps<"), 0, "settled again");
+    h.state_mut().session.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    h.run_steps(1);
+    assert!(views_ran(&h, "toolbar::FooterProps<") > 0, "Quick Mask on runs the footer");
+}
+
 #[test]
 fn a_hover_over_the_canvas_runs_no_dock_chrome_and_no_title_bar() {
     let mut h = harness();
