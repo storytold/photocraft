@@ -1057,7 +1057,7 @@ fn profile_and_metadata_follow_the_existing_exporter() {
 
     let mut f = Map::new();
     f.insert("format".into(), json!("jpg"));
-    assert!(settings(&f).embed_metadata, "a missing metadata choice keeps EXIF and resolution");
+    assert!(settings(&f).embed_metadata, "a missing metadata choice keeps EXIF");
     assert!(settings(&f).embed_icc);
     f.insert("metadata".into(), json!("none"));
     f.insert("embedProfile".into(), json!(false));
@@ -1098,4 +1098,32 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     assert!(kept.windows(b"ICC_PROFILE".len()).any(|w| w == b"ICC_PROFILE"));
     assert!(kept.windows(b"secret".len()).any(|w| w == b"secret"));
     assert_eq!(doc, before);
+}
+
+/// #10105: Export As with Metadata "None" (the dialog's default) writes the document resolution,
+/// at full size and scaled (resampling keeps the ppi, as Image Size does).
+#[test]
+fn export_as_with_metadata_none_keeps_the_document_resolution() {
+    use std::sync::{Arc, Mutex};
+    for (format, scale, side) in [("jpg", 100, 40), ("png", 100, 40), ("tif", 100, 40), ("jpg", 50, 20), ("png", 50, 20)] {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = written.clone();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // What the app wires up: the dialog's settings through `io_options`.
+        app.services.export = Some(Box::new(|doc, path, settings: &ExportSettings| {
+            photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+        }));
+        app.services.write = Some(Box::new(move |_, bytes| {
+            *sink.lock().unwrap() = bytes.to_vec();
+            Ok(())
+        }));
+        app.run("file.new", json!({"width": 40, "height": 40, "resolution": 300})).unwrap();
+        let path = format!("out.{format}");
+        replay(&mut app, &json!({"path": path, "format": format, "sizing": "scale", "scale": scale, "metadata": "none"})).unwrap();
+        let bytes = written.lock().unwrap().clone();
+        assert!(!bytes.is_empty(), "{}", app.ui.status);
+        let back = photocraft_codecs::decode(&bytes).unwrap();
+        assert_eq!(back.width(), side, "{path} at {scale} %");
+        assert_eq!(back.meta.dpi, Some((300.0, 300.0)), "{path} at {scale} %");
+    }
 }

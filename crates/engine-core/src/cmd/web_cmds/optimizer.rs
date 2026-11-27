@@ -149,6 +149,11 @@ pub fn optimize(
         }
     };
     let meta = || photocraft_codecs::Metadata { dpi: Some((dpi, dpi)), xmp: xmp.map(str::to_string), ..Default::default() };
+    // PNG-24 embeds metadata only with XMP. The PNG encoder writes `pHYs` whenever `dpi` is set,
+    // so `dpi` follows the same condition: the resolution is written only with metadata, as
+    // Save for Web and Quick Export have always written it.
+    let png_embeds = xmp.is_some();
+    let png_meta = || photocraft_codecs::Metadata { dpi: png_embeds.then_some((dpi, dpi)), ..meta() };
     let (bytes, colors) = match st.format {
         WebFormat::Png24 => {
             let (data, layout) = true_color();
@@ -158,13 +163,9 @@ pub fn optimize(
             // The profile only with Embed Color Profile on, as the WebP and JPEG branches do: Quick
             // Export, which never sets it, writes no iCCP chunk (#13798).
             let icc = icc.filter(|_| st.embed_icc);
-            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(meta());
-            let opts = photocraft_codecs::EncodeOptions {
-                png_interlaced: st.interlaced,
-                embed_icc: icc.is_some(),
-                embed_metadata: xmp.is_some(),
-                ..Default::default()
-            };
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(png_meta());
+            let opts =
+                photocraft_codecs::EncodeOptions { png_interlaced: st.interlaced, embed_icc: icc.is_some(), embed_metadata: png_embeds, ..Default::default() };
             (photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &opts).map_err(e)?, None)
         }
         WebFormat::Webp => {
