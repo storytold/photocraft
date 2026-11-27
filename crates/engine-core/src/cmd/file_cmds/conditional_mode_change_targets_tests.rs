@@ -169,6 +169,25 @@ fn bad_target_options_with_non_linear_history_go_back_to_the_state_before_the_ru
     assert_eq!(now, [redo.iter().map(String::as_str).collect::<Vec<_>>(), vec!["Mode Change"]].concat());
 }
 
+/// A 32-bit document whose only root layer is a group holds more than one layer: Indexed is
+/// refused for it, as for the two-layer document, rather than run as for the measured one.
+#[test]
+fn a_32_bit_document_of_one_group_is_refused_for_indexed() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 200, "height": 100, "depth": 32, "background": "transparent"})).unwrap();
+    let first = doc(&s).layers[0].id.0;
+    let second = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": first})).unwrap();
+    s.execute("layer.select", json!({"layer": second, "mode": "toggle"})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    assert_eq!(doc(&s).layers.len(), 1);
+    assert_eq!(doc(&s).layers[0].children().map(<[_]>::len), Some(2));
+    let before = (history(&s), shape(&s));
+    let e = s.execute(CMD, json!({"to": "indexed"})).unwrap_err();
+    assert!(e.to_string().contains("not supported"), "{e}");
+    assert_eq!((history(&s), shape(&s)), before);
+}
+
 /// With the state limit full, the Grayscale step moves three redo states onto the undo side and
 /// the limit drops the state before the run: a failed target still brings that state back, with
 /// the history list and the redo states as before the run.

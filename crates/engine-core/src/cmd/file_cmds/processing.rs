@@ -82,7 +82,8 @@ pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Valu
         }
     };
     let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let (cur, depth, layers) = (mode_name(d.mode), d.depth, d.layers.len());
+    // A lone root group still holds other layers: not the one-layer document measured below.
+    let (cur, depth, one_layer) = (mode_name(d.mode), d.depth, matches!(&d.layers[..], [l] if !l.is_group()));
     // One spelling per source mode, for the array and the single-string forms alike (#7042).
     let norm = |v: &str| {
         let v = v.to_ascii_lowercase();
@@ -104,7 +105,7 @@ pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Valu
         ("bitmap" | "duotone", "rgb") if eight => &["image.mode.grayscale"],
         ("bitmap" | "duotone" | "indexed" | "multichannel", "rgb" | "grayscale") if eight => &[],
         // Only a one-layer 32-bit document was measured.
-        ("indexed", "rgb" | "grayscale") if depth == SampleType::U16 || layers == 1 => &["image.mode.bits8"],
+        ("indexed", "rgb" | "grayscale") if depth == SampleType::U16 || one_layer => &["image.mode.bits8"],
         ("bitmap" | "duotone" | "indexed" | "multichannel", _) => {
             let msg = format!("converting this {}-bit {cur} document to {to} is not supported", depth.bits());
             return Err(EngineError::BadParams { cmd: cmd.into(), msg });
