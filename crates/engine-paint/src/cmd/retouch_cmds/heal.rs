@@ -85,8 +85,9 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let healed_from = match string(p, "sourceMode", "sampled") {
         "sampled" => HealedSource::Sampled(clone_mapping(s, p, &stroke, CMD)?),
         "pattern" => {
-            // `parse_brush` already refuses an empty `points`, so the first point is there.
-            let (_, tile, phase) = heal_pattern_setup(s, p, CMD, &stroke.points[0])?;
+            // `parse_brush` refuses an empty `points`; the guard keeps the index out of the code.
+            let first = stroke.points.first().ok_or_else(|| bad(CMD, "`points` is empty"))?;
+            let (_, tile, phase) = heal_pattern_setup(s, p, CMD, first)?;
             HealedSource::Pattern(tile, phase)
         }
         o => return Err(bad(CMD, format!("unknown sourceMode `{o}` (sampled|pattern)"))),
