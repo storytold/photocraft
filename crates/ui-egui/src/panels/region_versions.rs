@@ -159,7 +159,7 @@ pub(crate) fn changes_only_the_view(app: &PhotocraftApp, id: &str) -> bool {
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     app.commands_run.hash(&mut hasher);
-    app.session.prefs.rev().hash(&mut hasher);
+    app.session.prefs.settings_rev().hash(&mut hasher);
     app.session.active_generation().hash(&mut hasher);
     app.session.active_layer_changes().hash(&mut hasher);
     app.session.active().map(|st| st.revision).hash(&mut hasher);

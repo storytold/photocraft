@@ -249,7 +249,6 @@ fn a_tool_option_runs_the_options_bar_once() {
     let on = h.state().ui.tool_options.move_auto_select;
     h.state_mut().ui.tool_options.move_auto_select = !on;
     assert!(ran_over(&mut h, 1, "OptionsSlot<") > 0, "a changed option runs the bar");
-    // The frame after the run settles (a run's second pass replays what the first ran); then two idle frames run nothing.
-    h.run_steps(1);
-    assert_eq!(ran_over(&mut h, 2, "OptionsSlot<"), 0, "the bar's own run leaves the version as it was");
+    // What the bar's frame remembers of the option (the saved preferences) moves no version.
+    assert_eq!(ran_over(&mut h, 3, "OptionsSlot<"), 0, "the frames after the changed one run no bar");
 }

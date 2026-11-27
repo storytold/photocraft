@@ -1,5 +1,5 @@
 use craft::behavior::CanvasView;
-use craft::behavior::kurbo::{Point, Size};
+use craft::behavior::kurbo::Size;
 use craft::theme::variant::Tone;
 use craft::ui::bars::{Bar, BarKind, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, ShowContainer as _};
@@ -154,14 +154,12 @@ fn body_view(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
 fn body_members(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
     match (props.document, props.zoom) {
         (Some(size), Some(zoom)) => {
-            // The readout reads the zoom alone; the rest of the view is the document's own, which an edit leaves.
-            let view = CanvasView::new(egui::Rect::ZERO, Point::ZERO, zoom);
-            let out = StatusReadout::new(Bind::given(view), size, props.item, &props.values).show(ui);
+            let out = StatusReadout::new(Bind::given(zoom), size, props.item, &props.values).show(ui);
             if let Some(picked) = out.item {
                 props.out.send(StatusEvent::Item(picked));
             }
-            if let Some(view) = out.view.value() {
-                props.out.send(StatusEvent::Zoom(view.zoom));
+            if let Some(zoom) = out.zoom_edits.value() {
+                props.out.send(StatusEvent::Zoom(*zoom));
             }
             if let Some(invalid) = out.invalid_zoom {
                 props.out.send(StatusEvent::InvalidZoom(invalid));
@@ -189,9 +187,13 @@ pub(crate) fn document_window_status(app: &mut PhotocraftApp, ui: &mut egui::Ui,
     let (mut picked, mut edited, mut invalid_zoom) = (None, None, None);
     Bar::new("", BarKind::Status).show(ui, |ui, _| {
         if let (Some(size), Some(view)) = (size, view) {
-            let out = StatusReadout::new(Bind::given(view), size, item, &values).show(ui);
+            let out = StatusReadout::new(Bind::given(view.zoom), size, item, &values).show(ui);
             picked = out.item;
-            edited = out.view.value().copied();
+            edited = out.zoom_edits.value().map(|zoom| {
+                let mut zoomed = view;
+                zoomed.zoom = *zoom;
+                zoomed
+            });
             invalid_zoom = out.invalid_zoom;
         }
     });
