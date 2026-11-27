@@ -978,7 +978,7 @@ fn move_selected_layers_invalid_targets_leave_document_and_history_unchanged() {
 
 #[test]
 fn undoing_back_to_the_saved_step_clears_dirty() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.active_mut().unwrap().saved_to("crop.psd".into());
@@ -997,7 +997,7 @@ fn undoing_back_to_the_saved_step_clears_dirty() {
 
 #[test]
 fn purge_histories_on_a_dirty_document_does_not_reuse_the_saved_id() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     s.active_mut().unwrap().saved_to("a.psd".into());
     s.execute("layer.new.layer", json!({})).unwrap();
