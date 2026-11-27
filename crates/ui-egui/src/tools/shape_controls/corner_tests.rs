@@ -57,10 +57,14 @@ fn active(app: &PhotocraftApp) -> photocraft_doc::LayerId {
 
 /// A press at `from`, two moves and a release at `to`, as a mouse does it.
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
-    testing::press(app, from, NONE);
-    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], NONE);
-    testing::move_to(app, to, NONE);
-    testing::release(app, to, NONE);
+    drag_with_modifiers(app, from, to, NONE);
+}
+
+fn drag_with_modifiers(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
+    testing::press(app, from, mods);
+    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], mods);
+    testing::move_to(app, to, mods);
+    testing::release(app, to, mods);
 }
 
 /// Live rectangles, bottom first: (20, 20) 60 × 40 radii 15, (110, 20) 70 × 50 radii 15, and (20, 120) 80 × 60
@@ -94,6 +98,25 @@ fn dragging_a_widget_rounds_every_corner_in_one_step() {
     assert_eq!(steps(&app), n + 1, "one history step");
     assert!(app.session.undo());
     assert_eq!(radii_of(&app, id), [20.0; 4]);
+}
+
+#[test]
+fn alt_drag_changes_only_the_grabbed_corner_within_its_radius_limits() {
+    let mut app = app(Tool::PathSelection);
+    let id = active(&app);
+    let n = steps(&app);
+    let alt = Modifiers { alt: true, ..Modifiers::NONE };
+
+    // Drag the bottom-right widget far enough in to reach half the 80 px short side.
+    drag_with_modifiers(&mut app, [140.0, 100.0], [80.0, 40.0], alt);
+    assert_eq!(radii_of(&app, id), [20.0, 20.0, 40.0, 20.0]);
+    assert_eq!(steps(&app), n + 1);
+
+    // Drag the top-right widget out past its corner to take its radius down to zero.
+    drag_with_modifiers(&mut app, [140.0, 60.0], [180.0, 20.0], alt);
+    assert_eq!(radii_of(&app, id), [20.0, 0.0, 40.0, 20.0]);
+    assert_eq!(steps(&app), n + 2);
+    assert_eq!(active(&app), id);
 }
 
 #[test]
@@ -166,4 +189,20 @@ fn a_star_shows_widgets_at_its_outer_points_only() {
         let v = sharp[2 * i].anchor;
         assert_eq!((corner.vertex.x, corner.vertex.y), (v.x, v.y), "corner {i} is outer point {i}");
     }
+}
+
+/// A held corner widget keeps its shape out of the snap targets with Target Path hidden, where the widgets show
+/// without the scale box: the drag does not snap to the rectangle's own starting edges.
+#[test]
+fn a_held_corner_widget_is_no_snap_target_without_the_box() {
+    let mut app = app(Tool::Rectangle);
+    app.ui.view.show.target_path = false;
+    testing::frame(&mut app);
+    let id = active(&app);
+    assert!(!corner_targets(&app).is_empty(), "the widgets show with Target Path hidden");
+    testing::press(&mut app, [60.0, 60.0], NONE);
+    testing::move_to(&mut app, [64.0, 64.0], NONE);
+    assert!(super::pressed_layers(&app).contains(&id), "the rounded rectangle is no snap target while its widget is held");
+    testing::release(&mut app, [64.0, 64.0], NONE);
+    assert!(super::pressed_layers(&app).is_empty(), "nothing is held after the release");
 }
