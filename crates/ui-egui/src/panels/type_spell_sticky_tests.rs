@@ -3,6 +3,7 @@
 use craft::automation::actions::{Action, ActionStep};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::actions_cmds::ActionsExt as _;
 
 use super::*;
 
@@ -77,7 +78,7 @@ fn a_played_check_spelling_step_neither_reads_nor_changes_the_remembered_state()
     click(&mut h, "Done");
     let mut a = Action::new("Spell", vec![ActionStep::new("edit.checkSpelling", json!({"allLayers": true}))]);
     a.dialogs.insert(0);
-    h.state_mut().session.actions.list.push(a).unwrap();
+    h.state_mut().session.actions_mut().list.push(a).unwrap();
     crate::actions::play(h.state_mut(), &json!({"action": "Spell"})).unwrap();
     h.run_steps(3);
     assert!(h.state().ui.type_panels.spell.as_ref().is_some_and(|d| d.resume.is_some()), "the step paused at its dialog");
@@ -118,6 +119,6 @@ fn recording_with_a_remembered_off_records_it() {
     open(&mut h, json!({}));
     click(&mut h, "Done");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    let steps = &h.state().session.actions.list.action(0).unwrap().steps;
+    let steps = &h.state().session.actions().list.action(0).unwrap().steps;
     assert_eq!(steps, &vec![ActionStep::new("edit.checkSpelling", json!({"allLayers": false}))]);
 }
