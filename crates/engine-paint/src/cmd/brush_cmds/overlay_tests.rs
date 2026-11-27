@@ -18,17 +18,17 @@ fn t(f: impl Fn(&mut Session) + 'static) -> Tweak {
     Box::new(f)
 }
 
-fn surface(s: &Session) -> Surface {
+pub(super) fn surface(s: &Session) -> Surface {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().clone()
 }
 
-fn same_pixels(a: &Surface, b: &Surface, r: Rect) -> bool {
+pub(super) fn same_pixels(a: &Surface, b: &Surface, r: Rect) -> bool {
     (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| a.pixel(x, y) == b.pixel(x, y)))
 }
 
 /// A white canvas with a textured, partly transparent layer on top, then `setup`.
-fn scene(depth: u64, setup: &dyn Fn(&mut Session)) -> Session {
+pub(super) fn scene(depth: u64, setup: &dyn Fn(&mut Session)) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": depth, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -84,11 +84,11 @@ fn worst(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
     a.iter().zip(b).map(|(p, q)| (0..3).map(|c| (p[c] * p[3] - q[c] * q[3]).abs()).chain([(p[3] - q[3]).abs()]).fold(0.0f32, f32::max)).fold(0.0, f32::max)
 }
 
-fn points(v: &[[f64; 3]]) -> Vec<StrokePoint> {
+pub(super) fn points(v: &[[f64; 3]]) -> Vec<StrokePoint> {
     v.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect()
 }
 
-const PTS: [[f64; 3]; 6] = [[14.0, 40.0, 1.0], [34.0, 20.0, 0.8], [56.0, 52.0, 1.0], [78.0, 24.0, 0.6], [100.0, 44.0, 1.0], [70.0, 70.0, 1.0]];
+pub(super) const PTS: [[f64; 3]; 6] = [[14.0, 40.0, 1.0], [34.0, 20.0, 0.8], [56.0, 52.0, 1.0], [78.0, 24.0, 0.6], [100.0, 44.0, 1.0], [70.0, 70.0, 1.0]];
 
 /// Draws `PTS` live in chunks of two as the canvas does, and commits the same stroke on a second
 /// scene; returns the live stroke, the committed session and the live-versus-commit difference
@@ -108,7 +108,7 @@ fn run(build: &dyn Fn() -> Session, mut p: Value) -> (LiveStroke, Session, f32) 
     (live, committed, d)
 }
 
-fn brush(extra: Value) -> Value {
+pub(super) fn brush(extra: Value) -> Value {
     let mut p = json!({"brush": {"size": 22, "hardness": 0.3, "flow": 0.6}, "color": "#d02060", "opacity": 0.8, "smoothing": 0.0, "target": "pixels"});
     for (k, v) in extra.as_object().unwrap() {
         p[k] = v.clone();
