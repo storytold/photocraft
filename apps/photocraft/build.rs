@@ -27,6 +27,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft.ico");
     println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft-nightly.ico");
     println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft-document.ico");
+    println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft-pcraft-document.ico");
     println!("cargo:rerun-if-env-changed=PHOTOCRAFT_REQUIRE_WINRES");
     println!("cargo:rerun-if-env-changed=PHOTOCRAFT_VERSION");
     let built_version = if nightly {
@@ -59,6 +60,7 @@ fn main() {
     res.set_icon(build_channel::windows_icon_path(nightly))
         // Resource 2: the PSD/PSB document icon, referenced as "photocraft.exe",-2.
         .set_icon_with_id("../../assets/app-icon/photocraft-document.ico", "2")
+        .set_icon_with_id("../../assets/app-icon/photocraft-pcraft-document.ico", "3")
         .set("ProductName", if nightly { "PhotoCraft Nightly" } else { "PhotoCraft" })
         .set("FileDescription", if nightly { "PhotoCraft Nightly image editor" } else { "PhotoCraft image editor" })
         .set("CompanyName", "Learning Machines LLC")

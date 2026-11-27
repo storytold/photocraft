@@ -1,9 +1,11 @@
-PhotoCraft PSD document icon (photocraft-document.svg and photocraft-document.ico).
+PhotoCraft document file icons: photocraft-document.svg and photocraft-document.ico for
+.psd/.psb, photocraft-pcraft-document.svg and photocraft-pcraft-document.ico for .pcraft.
 SPDX-License-Identifier: MIT OR Apache-2.0
 
 The composition is adapted from design 01, "red outline page", one of the icon
 redesigns JustCallMeAD posted in
-https://github.com/storytold/pdfcraft/issues/308, redrawn and finished for PhotoCraft.
+https://github.com/storytold/pdfcraft/issues/308, redrawn and finished for PhotoCraft. The .pcraft icon is the same artwork with the native
+format's extension as its label.
 The folded corner is filled into a rounded flap, as on the shipped PdfCraft document
 icon, which is where that part of the treatment comes from.
 Copyright (c) 2026 JustCallMeAD and the PhotoCraft contributors.
