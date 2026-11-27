@@ -509,7 +509,7 @@ fn shift_right_menu_lists_each_tools_own_rows_in_order() {
         (Tool::Sponge, edit(vec!["Desaturate", "Saturate"])),
         (Tool::PaintBucket, with(&["Clear"])),
         (Tool::MixerBrush, vec!["Edit Brush…"]),
-        (Tool::Healing, vec!["Normal", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"]),
+        (Tool::Healing, vec!["Normal", "Replace", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"]),
         (Tool::SpotHealing, vec![]),
         (Tool::MagicEraser, vec![]),
     ] {

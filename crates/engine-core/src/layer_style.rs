@@ -164,7 +164,9 @@ pub fn effect_defaults(kind: &str) -> Value {
         "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
-            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "custom"})
+            // The reference application's "Gray, White" with the Smooth method (#14900). The page
+            // edits the stop list; From/To name the same ends for callers that read them.
+            json!({"blend": "Normal", "opacity": 100, "from": "#d7d7d7", "to": "#ffffff", "stops": [[0, "#d7d7d7"], [1, "#ffffff"]], "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "smooth", "smoothness": 100})
         }
         "patternOverlay" => json!({"blend": "Normal", "opacity": 100, "pattern": "", "angle": 0, "scale": 100, "link": true}),
         "bevelEmboss" => {
@@ -553,6 +555,12 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
     craft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
+/// A Gradient Overlay with `Gradient::default()` (black to white, straight stops) and no recorded
+/// method: what a command that names its own colours or stops starts from.
+fn blank_gradient_overlay() -> Effect {
+    Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+}
+
 /// An effect of `kind` with its factory settings (before params are applied).
 fn fresh_effect(kind: &str) -> Option<Effect> {
     let shadow = |inner: bool| Shadow {
@@ -598,7 +606,10 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         }),
         "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
         "gradientOverlay" => {
-            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+            // The factory values carry the recorded Smooth method, so build them like the page does.
+            let mut fx = blank_gradient_overlay();
+            overlay_effect(&mut fx, &effect_defaults(kind));
+            fx
         }
         "patternOverlay" => Effect::PatternOverlay {
             common: FxCommon::new(BlendMode::Normal, 1.0),
@@ -974,7 +985,10 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
 /// spread, range in percent; sizes in px; angles in degrees).
 pub fn effect_from_params(kind: &str, p: &Value) -> Option<Effect> {
     crate::commands::check_f32_values("layer.layerStyle", p).ok()?;
-    let mut fx = fresh_effect(kind)?;
+    // A Gradient Overlay given its own colours or stops keeps today's straight stops unless the
+    // params pick a method; only the factory one (#14900) starts from the Smooth grey to white.
+    let mut fx =
+        if kind == "gradientOverlay" && ["from", "to", "stops"].iter().any(|k| p.get(k).is_some()) { blank_gradient_overlay() } else { fresh_effect(kind)? };
     overlay_effect(&mut fx, p);
     Some(fx)
 }
@@ -1320,6 +1334,8 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(test)]
+mod gradient_overlay_defaults_tests;
 #[cfg(test)]
 mod satin_defaults_tests;
 

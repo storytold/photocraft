@@ -2,7 +2,7 @@ use super::planes::{channel_format, color_count, edit_mode, next_alpha_name, pla
 use super::refs::{ChanRef, alpha_index, bad, doc_index, gray_plane, parse_ref};
 use super::selection::{uniform, unselected_surface};
 use super::targeting::target;
-use super::view::{ChannelTarget, QuickMaskOptions, color_names, composite_name, fix_view, touch};
+use super::view::{ChannelTarget, QuickMaskOptions, color_names, composite_name, fix_view, keep_view_for_undo, touch, view_before_step};
 use super::{
     AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, EngineError, Layer, PixelFormat, Result, Session, Surface, Value, json, list, sel,
 };
@@ -32,6 +32,7 @@ pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
     let indicates = indicates_param(p.get("indicates"));
     let color = color_value("channel.new", p, "color")?;
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
+    let before = view_before_step(s);
     let i = s.edit("New Channel", |doc, _| {
         let area = doc.bounds();
         let fmt = channel_format(doc);
@@ -53,7 +54,8 @@ pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
         doc.channels.push(ch);
         Ok(doc.channels.len() - 1)
     })?;
-    // Photoshop targets and shows a new channel on its own.
+    // Photoshop targets and shows a new channel on its own; undo targets what was before.
+    keep_view_for_undo(s, before);
     target(s, ChannelTarget::Alpha(i));
     Ok(json!({ "channel": i }))
 }
