@@ -227,11 +227,7 @@ fn the_export_profile_flag_changes_tagging_without_changing_samples_or_the_docum
         assert!(!has(&untagged.bytes, "/ICCBased"), "OFF writes no profile reference");
         assert!(!has(&untagged.bytes, "/Alternate"), "OFF writes no profile object");
         assert!(has(&untagged.bytes, &format!("/ColorSpace /{device}")), "OFF uses the matching device space");
-        assert_eq!(
-            stream_after(&tagged.bytes, "/Subtype /Image"),
-            stream_after(&untagged.bytes, "/Subtype /Image"),
-            "embedding must not convert the samples"
-        );
+        assert_eq!(stream_after(&tagged.bytes, "/Subtype /Image"), stream_after(&untagged.bytes, "/Subtype /Image"), "embedding must not convert the samples");
         assert_eq!(d.icc_profile.as_deref(), Some(profile.as_ref()), "the source profile remains");
         assert_eq!(photocraft_compose::composite_to_surface(&d, rect, d.pixel_format(), None).read_region(rect), before, "source samples remain");
         assert_eq!(d.layers.len(), 1);
