@@ -305,6 +305,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("visibleOnly", tl!("Visible Layers Only"), ParamKind::bool(true)),
                 choice("format", tl!("File Type"), export_formats(), "png"),
                 export_quality(),
+                // Shown for every file type (#13973).
+                Param::new("iccProfile", tl!("Include ICC Profile"), ParamKind::bool(true)),
                 Param::new("trim", tl!("Trim Layers"), ParamKind::bool(false)),
             ])
         }
