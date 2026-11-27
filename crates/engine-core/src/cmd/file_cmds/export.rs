@@ -385,6 +385,8 @@ const GRID_POINTS_MAX: u64 = 256;
 /// The `size` param as grid points: the default when the row is unset, decimals truncated rather
 /// than rounded (the reference exports 9.6 as 9 points), and the 7..=256 range above. A value that
 /// is not a number keeps today's message; one outside the range is a bad param, never a panic.
+/// The command's rule and the form's rule are different on purpose: the form's whole-number row
+/// rounds what is typed (9.6 in the field exports 10), the issue measures truncation for the param.
 fn grid_points(size: Option<&Value>) -> Result<u64> {
     const CMD: &str = "file.export.colorLookupTables";
     let Some(size) = size.filter(|size| !size.is_null()) else { return Ok(GRID_POINTS_DEFAULT) };
@@ -392,7 +394,8 @@ fn grid_points(size: Option<&Value>) -> Result<u64> {
         return Err(EngineError::BadParams { cmd: CMD.into(), msg: "size must be an integer".into() });
     };
     let points = typed.trunc();
-    // `contains` is false for NaN and for an infinite literal alike, so both are refused, not cast.
+    // The range is checked on the number itself, before any cast, so nothing that does not fit a
+    // `u64` grid ever reaches one.
     if !(GRID_POINTS_MIN as f64..=GRID_POINTS_MAX as f64).contains(&points) {
         return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("size must be {GRID_POINTS_MIN}..={GRID_POINTS_MAX}") });
     }

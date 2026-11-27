@@ -6,6 +6,7 @@ use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use craft::ui::runtime::memory::{MemoryStage, SaveKey};
 use craft::ui::runtime::requests::PathKind;
 
 #[path = "artboard_export_options.rs"]
@@ -268,6 +269,13 @@ fn open_exr_parts(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> 
     Ok(opened(id))
 }
 
+/// The grid points the Color Lookup export form remembered under its own scope, if it remembers one.
+fn remembered_grid(app: &PhotocraftApp, id: &str) -> Option<f64> {
+    let key = SaveKey::named(crate::dialogs::params::memory_scope(id));
+    let saved: Option<DialogFields> = MemoryStage::peek_saved(app.ctx(), &key);
+    saved.and_then(|saved| saved.number("size"))
+}
+
 /// The rows, and the opening values that are not row defaults, of command `id`'s form. `None` when `id` has no form or
 /// its precondition (a document, a layer) is missing; the engine command then reports it.
 pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFields)> {
@@ -418,12 +426,21 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                     })
             });
             let scope = if selected_adjustments { "selected" } else { "all" };
-            plain(vec![
+            let rows = vec![
                 Param::new("path", tl!("File"), ParamKind::text(format!("{dir}/{base}.cube"))),
                 Param::new("size", tl!("Grid Size"), ParamKind::int(Some(7), Some(256), 32)),
                 Param::new("title", tl!("Title"), ParamKind::text(base)),
                 choice("scope", tl!("Scope"), opts(&[("all", tl!("All Visible Layers")), ("selected", tl!("Selected Adjustments"))]), scope),
-            ])
+            ];
+            // The framework drops a remembered grid the row can no longer hold, so a form last used
+            // at 3 or 5 (the row's minimum was 2 before #13749) would reopen at the 32 default: an
+            // export many times larger than the one the user made. Pass the nearest end instead, as
+            // #14649 does for the Opacity row that Fill and Stroke share.
+            let mut fields = DialogFields::new();
+            if remembered_grid(app, id).is_some_and(|points| points < 7.0) {
+                fields.set("size", 7.0);
+            }
+            Some((rows, fields))
         }
         // Photography automation (photo_cmds / lens_cmds): a folder (or the open documents).
         "file.automate.photomerge" => plain(vec![

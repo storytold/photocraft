@@ -54,6 +54,31 @@ fn seven_to_256_take_the_range_and_both_ends_are_inside_it() {
     }
 }
 
+/// One real write past the reader's 129: the adjustment-list path has no canvas work limit, so a
+/// 130-point request through it produces the whole table — the header names 130 and the body holds
+/// 130³ rows. The same grid still will not come back in as an adjustment (see the reader test below).
+#[test]
+fn a_grid_past_the_reader_limit_writes_through_the_layers_path() {
+    let mut s = session();
+    let a = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let reply = s.execute("file.export.colorLookupTables", json!({"size": 130, "layers": [a]})).unwrap();
+    assert_eq!(reply["size"], 130, "the reply names the grid it wrote");
+    let text = reply["cube"].as_str().unwrap();
+    assert!(text.contains("LUT_3D_SIZE 130"), "the header names 130 points");
+    assert_eq!(rows(text), 130 * 130 * 130, "130 cubed rows written");
+}
+
+/// The canvas-work limit that refuses a 256-point request on a small canvas is canvas-relative, not
+/// a cap on the grid: the same 256 points is 256³ entries sharing 64 pixels there (refused before
+/// anything is allocated) and 65536 renders on a 256 × 256 canvas (accepted, and then really 256³
+/// rows long). No test runs the second one: its lattice is about 256³ × 16 B and its text about
+/// 256³ × 24 characters.
+#[test]
+fn the_work_limit_that_refuses_256_points_is_canvas_relative() {
+    assert!(stack_render_rows(256, 8, 8) > MAX_STACK_RENDERS, "256³ entries over 64 pixels: refused");
+    assert!(stack_render_rows(256, 256, 256) <= MAX_STACK_RENDERS, "the same grid over a canvas that holds it: allowed");
+}
+
 #[test]
 fn a_grid_of_n_points_holds_n_cubed_rows() {
     let mut s = session();
