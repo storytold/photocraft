@@ -80,7 +80,7 @@ fn the_move_tools_picker_and_command_right_click_stay_as_they_are() {
     for (tool, mods) in [(Tool::Move, Modifiers::NONE), (Tool::Brush, Modifiers::COMMAND)] {
         let (mut app, _) = app(tool);
         testing::secondary_click(&mut app, [100.0, 90.0], mods);
-        assert_eq!(rows(&app).0, ["Red", "Background"], "{tool:?}: no indent, no Isolate Layers");
+        assert_eq!(rows(&app).0, ["Red Frame", "    Red", "Background"], "{tool:?}: nested hierarchy, no Isolate Layers");
     }
     assert!(!is_gesture(Tool::Brush, Mods::NONE) && is_gesture(Tool::Frame, Mods::NONE));
 }

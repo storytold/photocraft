@@ -12,21 +12,61 @@ use craft::ui::contract::{Bind, Props as _, Show as _};
 #[allow(unused_imports)]
 use super::{Color32, LayerContent, Pos2, Rect, Stroke, Vec2, vec2};
 
-/// View › Show › Layer Edges: the active layer's content bounds (cached per tile) where the canvas
-/// shows them, as a closed path. During a Move drag that is at the offset the image is drawn
-/// with, so the outline moves in lockstep with the layer's pixels (#2413). `None` with Layer Edges off.
+/// View › Show › Layer Edges: the active layer's visible bounds (intersected with its masks,
+/// clipping base, and enclosing group/frame/artboard) where the canvas shows them, as a closed
+/// path. During a Move drag that is at the offset the image is drawn with, so the outline moves in
+/// lockstep with the layer's pixels (#2413). `None` with Layer Edges off.
 pub(crate) fn layer_edges(app: &PhotocraftApp, idx: usize) -> Option<BezPath> {
     if !app.ui.view.shows(app.ui.view.show.layer_edges) {
         return None;
     }
     let st = app.session.documents().get(idx)?;
     let id = st.active_layer?;
-    let b = st.doc.layer(id)?.surface().map(photocraft_compose::bounds::content_bounds)?;
-    if b.is_empty() {
+    let layer = st.doc.layer(id)?;
+    let own = layer.surface().map(photocraft_compose::bounds::content_bounds)?;
+    if own.is_empty() {
         return None;
     }
     let (dx, dy) = crate::move_ui::shown_layer_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
-    let b = b.translate(dx, dy);
+    let b = if dx == 0 && dy == 0 {
+        photocraft_compose::visible_layer_bounds(&st.doc, id)
+    } else {
+        let mut rect = own.translate(dx, dy);
+        // A linked own mask moves with the layer; an unlinked own mask stays put.
+        if let Some(m) = layer.mask.as_ref().filter(|m| m.enabled) {
+            let def = m.surface.default_pixel().first().copied().unwrap_or(1.0);
+            if 1.0 - m.density * (1.0 - def) <= 0.0 {
+                let mb = photocraft_compose::bounds::content_bounds(&m.surface);
+                rect = rect.intersect(&if m.linked { mb.translate(dx, dy) } else { mb });
+            }
+        }
+        if let Some(path) = st.doc.path_of(id) {
+            for n in (1..=path.len()).rev() {
+                let sub = &path[..n];
+                let Some(node) = st.doc.layer_at(sub) else { break };
+                if n < path.len() {
+                    let (adx, ady) = crate::move_ui::shown_layer_offset(app, st.doc.id, st.revision, node.id).unwrap_or((0, 0));
+                    if let Some(a) = node.artboard() {
+                        rect = rect.intersect(&a.rect.translate(adx, ady));
+                    }
+                    if let Some(m) = photocraft_compose::masks::mask_clip_bounds(node) {
+                        rect = rect.intersect(&m.translate(adx, ady));
+                    }
+                }
+                if node.clipped
+                    && let Some(base_path) = photocraft_compose::clip_base_path(&st.doc, sub)
+                    && let Some(base) = st.doc.layer_at(&base_path)
+                {
+                    let (bdx, bdy) = crate::move_ui::shown_layer_offset(app, st.doc.id, st.revision, base.id).unwrap_or((0, 0));
+                    rect = rect.intersect(&photocraft_compose::visible_layer_bounds(&st.doc, base.id).translate(bdx, bdy));
+                }
+            }
+        }
+        rect
+    };
+    if b.is_empty() {
+        return None;
+    }
     let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
     let mut path = BezPath::new();
     path.move_to((x0, y0));

@@ -201,6 +201,64 @@ pub fn combined_mask(layer: &Layer, canvas: Rect) -> Option<Surface> {
     Some(cached_mask(cache(), key(layer, canvas), || (build_mask(layer, canvas), layer.mask.as_ref().map(|m| m.surface.clone()))))
 }
 
+/// Effective mask coverage (pixel mask with density × vector mask, with feathering) of `layer` at
+/// document pixel `(x, y)`. Matches the compositor: fast-paths layers without an enabled vector
+/// mask or feathered mask, samples the cached [`combined_mask`] inside `canvas`, and evaluates a
+/// 1×1 patch directly when `(x, y)` lies outside `canvas` (artboard documents).
+pub fn mask_value_at(layer: &Layer, canvas: Rect, x: i32, y: i32) -> f32 {
+    if !layer.vector_mask.as_ref().is_some_and(|v| v.enabled) && !has_feather(layer) {
+        return layer.mask.as_ref().map_or(1.0, |m| m.value(x, y));
+    }
+    if canvas.contains(x, y)
+        && let Some(cm) = combined_mask(layer, canvas)
+    {
+        return cm.sample_channel(x, y, 0);
+    }
+    let pm = layer.mask.as_ref().map_or(1.0, |m| m.value(x, y));
+    if pm <= 0.0 {
+        return 0.0;
+    }
+    let vm = layer
+        .vector_mask
+        .as_ref()
+        .filter(|v| v.enabled)
+        .map_or(1.0, |v| photocraft_vector::CompiledVectorMask::new(v).render_sequential(Rect::from_xywh(x, y, 1, 1)).first().copied().unwrap_or(1.0));
+    pm * vm
+}
+
+/// Tight bounding rectangle outside which `layer`'s enabled pixel mask, vector mask or frame
+/// guarantees zero coverage, or `None` when pixels can remain visible outside any finite mask box.
+pub fn mask_clip_bounds(layer: &Layer) -> Option<Rect> {
+    let mut limit: Option<Rect> = None;
+    let mut intersect = |r: Rect| {
+        limit = Some(match limit {
+            Some(prev) => prev.intersect(&r),
+            None => r,
+        });
+    };
+    if let Some(f) = &layer.frame {
+        intersect(f.bounds());
+    }
+    if let Some(vm) = layer.vector_mask.as_ref().filter(|v| v.enabled && v.density >= 1.0) {
+        if vm.path.is_empty() {
+            if vm.path.inverted {
+                intersect(Rect::EMPTY);
+            }
+        } else if !vm.path.inverted {
+            intersect(photocraft_vector::feather::path_area(&vm.path, feather_sigma(vm.feather)));
+        }
+    }
+    if let Some(m) = layer.mask.as_ref().filter(|m| m.enabled) {
+        let def = m.surface.default_pixel().first().copied().unwrap_or(1.0);
+        let outside = 1.0 - m.density * (1.0 - def);
+        if outside <= 0.0 {
+            let b = crate::bounds::content_bounds(&m.surface);
+            intersect(photocraft_vector::feather::grow(b, feather_sigma(m.feather)));
+        }
+    }
+    limit
+}
+
 fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
     let vm = layer.vector_mask.as_ref().filter(|v| v.enabled);
     let pixel = layer.mask.as_ref().filter(|m| m.enabled);
