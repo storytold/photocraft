@@ -21,7 +21,8 @@ use crate::brush_mode_menu::Item;
 use crate::state::Tool;
 use crate::{PhotocraftApp, brush_mode_menu};
 
-/// Photoshop's Healing Brush modes, less Replace (not implemented yet).
+/// Photoshop's Healing Brush modes. Replace is the tool's own option, not a blend mode: the menus
+/// add it as a row of its own (#12101), and the letters and steps below keep this list.
 pub const HEALING_MODES: [BlendMode; 7] =
     [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Darken, BlendMode::Lighten, BlendMode::Color, BlendMode::Luminosity];
 
@@ -129,7 +130,10 @@ fn set_tool_mode(app: &mut PhotocraftApp, mode: Option<BlendMode>) {
         brush.insert("behind".into(), json!(false));
     }
     if !brush.is_empty() {
-        let _ = app.run("tools.setBrush", json!({ "brush": brush }));
+        // Replace (#12101): a key-picked blend mode leaves it, in the same pick.
+        if app.run("tools.setBrush", json!({ "brush": brush })).is_ok() && app.ui.tool == Tool::Healing {
+            app.ui.tool_options.healing_replace = false;
+        }
     }
 }
 
