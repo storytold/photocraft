@@ -86,12 +86,7 @@ impl CutParts {
             // holds, which is the selection limited to the layer's own coverage (Photoshop's
             // marching ants hug the piece as the drag starts, #7538). A mask has no outline.
             if !mask {
-                let n = with_alpha.channels();
-                let cover: Vec<f32> = piece.try_read_region(b)?.chunks_exact(n).filter_map(|p| p.last().copied()).collect();
-                let mut o = Surface::new(PixelFormat::new(ColorMode::Grayscale, sel.format().sample, false));
-                o.try_write_region(b, &cover)?;
-                o.prune();
-                outline = Some(o);
+                outline = Some(piece_outline(&piece, sel.format().sample)?);
             }
             if fill {
                 let opaque_bg = [background[0], background[1], background[2], 1.0];
@@ -255,6 +250,65 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
         .collect::<Result<Vec<_>>>()?;
     piece.put_tiles(tiles.into_iter().flatten());
     Ok(piece)
+}
+
+/// The selection a piece's pixels take: its alpha as a grayscale mask in `sample`, built tile by
+/// tile in parallel from the piece's own tiles. A fully opaque piece tile shares one solid tile,
+/// and a tile with no coverage is left out. (Reading the whole piece as one `f32` region and
+/// writing it back took over a second on the UI thread for a large selection.)
+fn piece_outline(piece: &Surface, sample: photocraft_color::SampleType) -> Result<Surface> {
+    use photocraft_color::read_sample;
+    use photocraft_geom::TileCoord;
+    use photocraft_raster::Tile;
+    use rayon::prelude::*;
+
+    let fmt = piece.format();
+    let (bpp, a) = (fmt.bytes_per_pixel(), fmt.channels().saturating_sub(1));
+    let ofmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
+    let obpp = ofmt.bytes_per_pixel();
+    let mut o = Surface::new(ofmt);
+    if bpp == 0 || obpp == 0 || obpp > 8 {
+        return Ok(o);
+    }
+    let oom = |e| EngineError::Other(format!("not enough memory while floating selection ({e}); the document was not changed"));
+    let solid = o.try_solid_tile(&[1.0]).map_err(oom)?;
+    let mut src = crate::allocation::capacity(piece.tiles().count(), "floating selection")?;
+    src.extend(piece.tiles().map(|(&tc, t)| (tc, t.clone())));
+    let blank = &o;
+    let tiles = src
+        .into_par_iter()
+        .map(|(tc, t): (TileCoord, Arc<Tile>)| -> Result<Option<(TileCoord, Arc<Tile>)>> {
+            // A tile that can't be read back fails the float, rather than leave its part of the
+            // outline out: a scratch file problem, not a lack of memory.
+            let tb = t.try_bytes().map_err(|e| {
+                EngineError::Other(format!(
+                    "could not read the selection's pixels back from the scratch file ({e}) while floating it; the document was not changed"
+                ))
+            })?;
+            let mut out = blank.try_default_tile().map_err(oom)?;
+            let (mut any, mut full) = (false, true);
+            {
+                let mut ob = out.bytes_mut();
+                let mut enc = [0u8; 8];
+                let Some(enc) = enc.get_mut(..obpp) else { return Ok(None) };
+                for (px, dst) in tb.chunks_exact(bpp).zip(ob.chunks_exact_mut(obpp)) {
+                    let v = read_sample(px, fmt.sample, a);
+                    full &= v >= 1.0;
+                    if v <= 0.0 {
+                        continue;
+                    }
+                    photocraft_raster::encode_pixel(&ofmt, &[v], enc);
+                    if enc.iter().any(|&b| b != 0) {
+                        dst.copy_from_slice(enc);
+                        any = true;
+                    }
+                }
+            }
+            Ok(if full { Some((tc, solid.clone())) } else { any.then(|| (tc, Arc::new(out))) })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    o.put_tiles(tiles.into_iter().flatten());
+    Ok(o)
 }
 
 /// A piece floating `offset` whole pixels from where it was cut, over document `revision`.
