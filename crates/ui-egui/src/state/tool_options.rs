@@ -129,11 +129,20 @@ pub struct ToolOptions {
     pub enhance_edge: bool,
     /// Pen: a work path or a shape layer.
     pub vector_mode: VectorMode,
-    /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
-    /// the path or shape it is drawn into: "newLayer" (Shape mode: a new shape layer; Path mode
-    /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
+    /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397, #12905), the Shape-mode half
+    /// of the setting: how a new path combines with the shape it is drawn into: "newLayer" (a new
+    /// shape layer), "combine", "subtract", "intersect" or "exclude". Path mode has its own value,
+    /// [`Self::pen_path_mode_op`], which Path Selection and Direct Selection share.
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// The Path-mode half of the Pen family's Path Operations (#12905): the operation a subpath is
+    /// added to a document path or vector mask with, one value shared by the Pen, the Freeform Pen,
+    /// the Curvature Pen, Path Selection and Direct Selection. `None` means no Path-mode pick has
+    /// been made, so `pen_path_op` - the only value a settings file from an older build wrote -
+    /// counts for both modes; with that still at its "newLayer" default, Path mode reads Exclude
+    /// Overlapping Shapes, where the older build combined.
+    #[serde(default)]
+    pub pen_path_mode_op: Option<String>,
     /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
     /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
     /// means Exclude Overlapping Shapes.
@@ -501,6 +510,7 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: VectorMode::Path,
             pen_path_op: default_pen_path_op(),
+            pen_path_mode_op: None,
             shape_path_op: default_shape_path_op(),
             shape_mode: VectorMode::Shape,
             shape_fill: true,

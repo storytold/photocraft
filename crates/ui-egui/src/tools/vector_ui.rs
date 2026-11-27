@@ -45,7 +45,7 @@ pub(crate) use path_ops::{
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_panel};
 #[cfg(test)]
 use pen::pen_path_op;
-pub(crate) use pen::{PATH_OPS, path_op_field, pen_path};
+pub(crate) use pen::{PATH_OPS, pen_path, set_path_op};
 pub use pen::{cancel_stale, pen_commit};
 pub use shapes::is_shape_tool;
 pub(crate) use shapes::{create_geometry, kind_of, tool_history_name};
@@ -191,6 +191,9 @@ mod pen_draw_tests;
 
 #[cfg(test)]
 mod pen_path_ops_tests;
+
+#[cfg(test)]
+mod pen_default_path_op_tests;
 
 #[cfg(test)]
 mod pen_indexed_shape_tests;

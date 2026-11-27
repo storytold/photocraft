@@ -16,7 +16,8 @@ use crate::PhotocraftApp;
 use crate::direct_select::{DirectSelection, PathRef, active_paths};
 use crate::state::Tool;
 
-/// The `pen_path_op` value of an operation (`Join` belongs to its component's first subpath).
+/// The Path Operations value of an operation, as the tools store it (`Join` belongs to its
+/// component's first subpath; `pen_path_mode_op` and `shape_path_op` use the same names).
 fn op_value(op: PathOp) -> &'static str {
     match op {
         PathOp::Combine | PathOp::Join => "combine",
@@ -82,7 +83,7 @@ pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
 /// for the next path. New Layer is not an operation a component can have: it only sets the tool.
 /// The first component always combines (it is what the others act on), so it keeps its operation.
 pub(crate) fn set_op(app: &mut PhotocraftApp, op: &str) -> Result<(), String> {
-    *crate::vector_ui::path_op_field(app) = op.into();
+    crate::vector_ui::set_path_op(app, op);
     if op == "newLayer" {
         return Ok(());
     }
