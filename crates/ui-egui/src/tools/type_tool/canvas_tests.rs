@@ -751,7 +751,7 @@ fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
             for (side, zoom) in [(4096, 0.25), (4096, 0.5), (4096, 1.0), (4096, 1.5), (1200, 0.25), (1024, 0.25), (1024, 0.375), (1024, 1.5)] {
                 let mut app = new_app();
                 // Egui's font atlas needs at least 1024 texels. Grow the document instead of lowering its device cap.
-                std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).size.width = 3200;
+                std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).size.width = 3200;
                 let lower = LayerId(
                     app.run("type.create", json!({"text": "MMMM", "font": "Inter", "size": 96, "color": "#0000e0", "x": 700, "y": 480})).unwrap()["layer"]
                         .as_u64()
@@ -800,7 +800,7 @@ fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
                 cache.write_pixel(x - 32, y - 32, &[1.0, 0.5, 0.25, 0.0]);
                 cache.write_pixel(x + 32, y + 32, &[1.0, 0.5, 0.25, 0.0]);
                 let state = h.state_mut().session.active_mut().unwrap();
-                let doc = std::sync::Arc::make_mut(&mut state.doc);
+                let doc = std::sync::Arc::make_mut(state.doc_mut());
                 let LayerContent::Text(t) = &mut doc.layer_mut(upper).unwrap().content else { panic!("text") };
                 t.cache = Some(cache);
                 state.revision += 1;
@@ -837,7 +837,7 @@ fn cpu_type_click_respects_detail_occlusion_of_base_ink() {
         for ppp in [1.0, 2.0] {
             for opaque in [false, true] {
                 let mut app = new_app();
-                let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+                let doc = std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut());
                 doc.size.width = 4096;
                 doc.layers.clear();
                 let lower = LayerId(app.run("type.create", json!({"text":"LOWER","size":32,"x":2800,"y":100})).unwrap()["layer"].as_u64().unwrap());
@@ -846,7 +846,7 @@ fn cpu_type_click_respects_detail_occlusion_of_base_ink() {
                     let mut cache = Surface::new(format);
                     cache.fill_rect(Rect::new(x, 128, x + 1, 129), &color);
                     let state = app.session.active_mut().unwrap();
-                    let doc = std::sync::Arc::make_mut(&mut state.doc);
+                    let doc = std::sync::Arc::make_mut(state.doc_mut());
                     let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
                     text.cache = Some(cache);
                     state.revision += 1;
@@ -895,7 +895,7 @@ fn type_click_uses_painted_camera_when_zoom_changes_on_press() {
                     let mut cache = Surface::new(format);
                     cache.fill_rect(area, &color);
                     let state = app.session.active_mut().unwrap();
-                    let doc = std::sync::Arc::make_mut(&mut state.doc);
+                    let doc = std::sync::Arc::make_mut(state.doc_mut());
                     let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
                     text.cache = Some(cache);
                     state.revision += 1;
@@ -951,7 +951,7 @@ fn imported_cache_presses_preserve_editor_and_move_reach_ownership() {
             &[1.0, 0.0, 0.0, 1.0],
         );
         let state = app.session.active_mut().unwrap();
-        let doc = std::sync::Arc::make_mut(&mut state.doc);
+        let doc = std::sync::Arc::make_mut(state.doc_mut());
         let LayerContent::Text(t) = &mut doc.layer_mut(upper).unwrap().content else { panic!("text") };
         t.cache = Some(cache);
         state.revision += 1;
@@ -1006,7 +1006,7 @@ fn gpu_type_click_picks_filtered_imported_ink() {
             let ink_bounds = cache.content_bounds();
             cache.write_pixel(ink_bounds.x0 - 100, ink_bounds.y0 - 100, &[1.0, 0.0, 0.0, 0.0]);
             cache.write_pixel(ink_bounds.x1 + 100, ink_bounds.y1 + 100, &[1.0, 0.0, 0.0, 0.0]);
-            let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+            let doc = std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut());
             let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
             t.cache = Some(cache.clone());
             app.session.active_mut().unwrap().revision += 1;

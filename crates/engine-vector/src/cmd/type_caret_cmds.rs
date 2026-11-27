@@ -492,7 +492,7 @@ mod tests {
             cache.write_pixel(399, 299, &[1.0, 0.5, 0.25, 0.0]);
             cache.write_pixel(320, 250, &[0.2, 0.4, 0.8, 1.0]);
             assert!(cache.content_bounds().contains(x.floor() as i32, y.floor() as i32));
-            let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
             let LayerContent::Text(t) = &mut doc.layer_mut(LayerId(upper)).unwrap().content else { panic!("text") };
             t.cache = Some(cache);
             let steps = s.active().unwrap().history.entries().len();
@@ -521,7 +521,7 @@ mod tests {
             let mut cache = Surface::new(format);
             cache.write_pixel(256, -1, &[1.0, 0.0, 0.0, 0.25]);
             cache.write_pixel(-256, 256, &[1.0, 0.0, 0.0, 0.0]);
-            let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
             let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
             t.cache = Some(cache);
             assert!(cached_ink_in_rect(doc, id, Rect::new(254, -3, 258, 1)), "{format:?}: neighboring ink across a tile edge");
@@ -547,7 +547,7 @@ mod tests {
             let area = Rect::new(1100, 1100, 1102, 1102);
             let mut cache = Surface::new(format);
             cache.fill_rect(Rect::new(1024, 1024, 1280, 1280), &[0.7, 0.4, 0.9, 0.0]);
-            let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
             let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
             t.cache = Some(cache);
             assert!(!cached_ink_in_rect(doc, id, area), "{format:?}: warm transparent imported cache");
