@@ -1016,3 +1016,7 @@ actions.delete
 actions.toggle
 actions.rename
 actions.setColor
+curves.presets.list
+curves.presets.save
+curves.presets.load
+curves.presets.delete

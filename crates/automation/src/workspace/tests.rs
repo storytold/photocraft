@@ -815,6 +815,8 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("style.presets.exportAsl", serde_json::json!({"path": 5})),
         ("layer.layerStyle.contours.load", serde_json::json!({"path": "/outside/set.shc"})),
         ("layer.layerStyle.contours.save", serde_json::json!({"path": "/outside/set.shc"})),
+        ("curves.presets.save", serde_json::json!({"path": "/outside/Curve.pcrv", "curves": {"points": [[0, 0], [255, 255]]}})),
+        ("curves.presets.load", serde_json::json!({"path": "/outside/Curve.pcrv"})),
     ] {
         assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
     }
@@ -832,6 +834,8 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
         ("layer.layerStyle.contours.load", serde_json::json!({"data": "QUJD"})),
         ("layer.layerStyle.contours.save", serde_json::json!({"names": ["a"]})),
+        ("curves.presets.load", serde_json::json!({"data": "QUJD"})),
+        ("curves.presets.save", serde_json::json!({"curves": {"points": [[0, 0], [255, 255]]}})),
     ] {
         assert!(authorize_engine_command(id, &params).is_ok(), "{id}: {params}");
     }

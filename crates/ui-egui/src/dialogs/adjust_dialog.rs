@@ -21,12 +21,13 @@ use craft::ui::runtime::env::Label;
 use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use photocraft_doc::ColorMode;
 use photocraft_engine::channel_cmds::ToneTarget;
+use photocraft_engine::presets::PresetsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::adjust_editors::values::{self, ValueCx};
-use crate::adjust_editors::{self, AdjustAsk, AdjustValue, EditorSetup};
+use crate::adjust_editors::{self, AdjustAsk, AdjustValue, CurvesPresetAsk, EditorSetup};
 use crate::tone::{self, HistSource};
 
 const PREFIX: &str = "image.adjustments.";
@@ -583,6 +584,7 @@ fn build_setup(app: &mut PhotocraftApp, kind: &str, target: &ToneTarget, mode: C
         tone: None,
         stale: false,
         reported_clipping: Arc::new(Mutex::new(None)),
+        curves_current: (kind == "curves").then(|| app.session.presets().curves_preset.clone()).flatten(),
     }
 }
 
@@ -801,6 +803,10 @@ fn answer_asks(app: &mut PhotocraftApp, id: DialogId) {
                 }
             }
             AdjustAsk::ImportGradients => crate::preset_files_ui::import_gradients_dialog(app),
+            AdjustAsk::CurvesPreset(row) => {
+                let r = curves_preset_ask(app, id, row);
+                preset_report(app, r);
+            }
             AdjustAsk::PickColor(request) => {
                 crate::color_picker_ui::open_for_request(app, id, request);
             }
@@ -810,6 +816,164 @@ fn answer_asks(app: &mut PhotocraftApp, id: DialogId) {
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id) {
             adjust_editors::answer_color(&mut dialog.value_mut().value, &key, color);
         }
+    }
+}
+
+/// The Curves gear menu's three rows (#14379), answered through the engine's preset commands so the
+/// CLI, the control channel and MCP run the same three things: Save Preset… writes the dialog's
+/// curves to a file the user names, Load Preset… reads a `.pcrv` file and writes its curves into
+/// the dialog, and Delete Current Preset drops the current preset from the session's user list —
+/// the file on disk is the user's and stays.
+fn curves_preset_ask(app: &mut PhotocraftApp, id: DialogId, row: CurvesPresetAsk) -> Result<Value, String> {
+    match row {
+        CurvesPresetAsk::Save => save_curve_preset(app, id),
+        CurvesPresetAsk::Load => load_curve_preset(app, id),
+        CurvesPresetAsk::Delete => {
+            let r = app.run("curves.presets.delete", json!({}));
+            follow_preset_list(app, id);
+            r
+        }
+    }
+}
+
+/// The open dialog's curves without its addressing keys: what a preset file holds.
+fn preset_curves(app: &PhotocraftApp) -> Option<Value> {
+    let mut params = open_params(app)?;
+    if let Some(object) = params.as_object_mut() {
+        for key in ["target", "layer", "document"] {
+            object.remove(key);
+        }
+    }
+    Some(params)
+}
+
+/// Save Preset…: ask where to write, get the preset's bytes from `curves.presets.save` without
+/// recording anything (`record: false`), lay them at the chosen path through the app's writer, and
+/// only then let the command add the preset to the user's list — the order the Layer Style contour
+/// library uses, so a file the user cannot write leaves no preset behind.
+fn save_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, String> {
+    let curves = preset_curves(app).ok_or("the Curves dialog closed")?;
+    app.pick_save("Curves.pcrv", move |app, path| {
+        let name = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().trim().to_string()).filter(|s| !s.is_empty());
+        let mut asked = json!({ "curves": curves, "record": false });
+        if let Some(name) = &name {
+            asked["name"] = json!(name);
+        }
+        let preview = app.run("curves.presets.save", asked)?;
+        let bytes = preview["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the preset command returned no bytes")?;
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        if let Err(e) = write(&path, &bytes) {
+            follow_preset_list(app, id);
+            return Err(e);
+        }
+        let mut params = json!({ "curves": curves });
+        if let Some(name) = preview["name"].as_str() {
+            params["name"] = json!(name);
+        }
+        let saved = app.run("curves.presets.save", params)?;
+        follow_preset_list(app, id);
+        app.ui.status_error = false;
+        let template = "Saved curve preset {name} to {file}";
+        app.ui.status =
+            crate::i18n::fmt(tl!(template), &[("name", saved["name"].as_str().unwrap_or_default()), ("file", &crate::file_open::display_name(&path))]);
+        Ok(json!({ "path": path, "name": saved["name"] }))
+    })
+}
+
+/// What the open dialog edits of a curve, as `curves.presets.load` spells it: the colour mode, and
+/// when the Channels panel has aimed the dialog at part of the image, the curves its channel list
+/// shows - the selected components, and their combined entry where the panel lists one (aimed at a
+/// single component it lists that component alone, so that dialog holds no composite curve of its
+/// own). A gray document, or a mask or saved channel holding its own gray levels, edits its tone in
+/// the composite curve alone - the editor draws no channel curves for it - and is named `gray`. The
+/// preset's curves are checked against this, so a preset the dialog would quietly lose on the way to
+/// OK is refused instead.
+fn dialog_target(app: &PhotocraftApp, id: DialogId) -> Option<(&'static str, Option<Vec<&'static str>>, bool)> {
+    let open = app.adjust_open.iter().find(|open| open.id == id)?;
+    if gray_context(app, "curves", &open.target) {
+        return Some(("gray", None, false));
+    }
+    let tone = photocraft_engine::adjust_params::default_space(open.mode);
+    let space = match tone {
+        photocraft_doc::adjust::ToneSpace::Rgb => "rgb",
+        photocraft_doc::adjust::ToneSpace::Cmyk => "cmyk",
+        photocraft_doc::adjust::ToneSpace::Lab => "lab",
+    };
+    let Some(isolated) = open.target.channel.as_ref() else {
+        return Some((space, None, false));
+    };
+    if let Some(colors) = isolated.components {
+        // A colour set: the panel lists the set's combined entry, which edits the composite curve,
+        // and each selected component. The components it left out have no place in this dialog.
+        let keys: Vec<&'static str> = colors.indices().filter_map(|at| photocraft_engine::adjust_params::channel_keys(tone).get(at).copied()).collect();
+        if keys.is_empty() {
+            return Some((space, None, false));
+        }
+        return Some((space, Some(keys), true));
+    }
+    if isolated.key.is_empty() {
+        return Some((space, None, false));
+    }
+    Some((space, Some(vec![isolated.key]), false))
+}
+
+/// The open dialog's parameters, only when `id` is still the Curves dialog that is open: the file
+/// picker can answer after that dialog closed or another adjustment took its place.
+fn open_curve_params(app: &PhotocraftApp, id: DialogId) -> Option<Value> {
+    app.adjust_open.iter().any(|open| open.id == id && open.kind == "curves").then(|| open_params(app)).flatten()
+}
+
+/// Load Preset…: ask for a curve preset file, run `curves.presets.load` for it, and write its
+/// curves over the dialog's parameters, which is how a preset becomes the curve on screen.
+fn load_curve_preset(app: &mut PhotocraftApp, id: DialogId) -> Result<Value, String> {
+    app.pick_file_bytes_filtered(&[photocraft_engine::presets::curves::EXT], move |app, name, bytes| {
+        // The dialog is checked and its parameters read before the command runs: a picker answered
+        // after the dialog closed leaves no preset in the user's list.
+        let held = open_curve_params(app, id).ok_or("the Curves dialog closed")?;
+        let mut asked = crate::swatches_ui::source(&name, &bytes);
+        if let Some((space, channels, combined)) = dialog_target(app, id) {
+            asked["space"] = json!(space);
+            if let Some(channels) = channels {
+                asked["channel"] = json!(channels);
+                asked["combined"] = json!(combined);
+            }
+        }
+        let loaded = app.run("curves.presets.load", asked)?;
+        let given = loaded.get("curves").cloned().ok_or("the preset command returned no curves")?;
+        // The preset owns the curves and the mode they are drawn in: its points, channels and
+        // `pencil` replace what the dialog held, so a preset of control points loaded into a
+        // Pencil-mode dialog leaves the points editable instead of turning them into a sampled map.
+        let params = photocraft_engine::presets::curves::over(&held, &given).ok_or("the preset's curves are not the Curves command's parameters")?;
+        if !apply_params(app, id, &params) {
+            return Err("the preset's curves do not fit the open dialog".into());
+        }
+        follow_preset_list(app, id);
+        app.ui.status_error = false;
+        let template = "Loaded curve preset {name} from {file}";
+        app.ui.status =
+            crate::i18n::fmt(tl!(template), &[("name", loaded["name"].as_str().unwrap_or_default()), ("file", &crate::file_open::display_name(&name))]);
+        Ok(loaded)
+    })
+}
+
+/// Puts the session's current curve preset into what the Curves editor reads, so the gear's Delete
+/// row greys or lights up right after a save, a load or a delete.
+fn follow_preset_list(app: &mut PhotocraftApp, id: DialogId) {
+    let current = app.session.presets().curves_preset.clone();
+    if let Some(open) = app.adjust_open.as_ref().filter(|open| open.id == id)
+        && let Ok(mut shared) = open.setup.lock()
+    {
+        shared.curves_current = current;
+    }
+}
+
+/// A gear row that failed goes to the status bar; a file dialog the user cancelled is not a failure.
+fn preset_report(app: &mut PhotocraftApp, r: Result<Value, String>) {
+    if let Err(e) = r
+        && e != crate::file_dialog::CANCELLED
+    {
+        app.ui.status_error = true;
+        app.ui.status = e;
     }
 }
 
@@ -825,6 +989,13 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
         && shared.stale != stale
     {
         shared.stale = stale;
+    }
+    // The preset the gear's Delete row acts on can change while the dialog is open — another
+    // dialog's gear, the control channel, the CLI: what the editor reads follows the session.
+    if open.kind == "curves"
+        && let Ok(mut shared) = open.setup.lock()
+    {
+        shared.curves_current.clone_from(&app.session.presets().curves_preset);
     }
     if open.unresolved {
         if resolved.is_err() {

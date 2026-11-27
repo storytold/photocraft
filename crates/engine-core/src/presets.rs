@@ -14,12 +14,15 @@
 //!   that `paint.cloneStamp` / `paint.healingBrush` follow;
 //! - swatches ([`swatches`]): named colours in their own colour model (commands in
 //!   `crate::swatch_cmds`, `.aco`/`.ase` import and export).
+//! - curve presets ([`curves`]): the Curves dialog's gear menu (`curves.presets.*`), one file per
+//!   preset in our own `.pcrv` format.
 //!
 //! The built-in groups are our own (clean-room): colours, styles and shapes were designed here,
 //! not copied from Photoshop's presets. User edits persist with the preferences document: see
 //! [`PresetState::to_json`] (saved under `"presets"` by [`SavedPrefsExt::prefs_to_json`](crate::prefs::SavedPrefsExt::prefs_to_json)).
 
 pub mod clone_source;
+pub mod curves;
 pub mod gradients;
 pub mod patterns;
 pub mod shapes;
@@ -27,6 +30,8 @@ pub mod styles;
 pub mod swatches;
 pub mod tools;
 
+#[cfg(test)]
+mod curves_preset_file_tests;
 #[cfg(test)]
 mod tests;
 
@@ -96,6 +101,10 @@ pub struct PresetState {
     pub swatches: Vec<swatches::SwatchGroup>,
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
     pub contours: Vec<photocraft_doc::Contour>,
+    /// The curve presets the Curves dialog saved or loaded (`curves.presets.*`, #14379).
+    pub curves_presets: Vec<curves::CurvePreset>,
+    /// The curve preset the Curves dialog has selected; `None` is the Default curve.
+    pub curves_preset: Option<String>,
 }
 
 impl Default for PresetState {
@@ -115,6 +124,8 @@ impl Default for PresetState {
             layer_defaults: BTreeMap::new(),
             swatches: craft::color_ui::palette::default_swatches(),
             contours: Vec::new(),
+            curves_presets: Vec::new(),
+            curves_preset: None,
         }
     }
 }
@@ -150,6 +161,14 @@ struct Persisted {
     // Read entry by entry: a bad contour must not discard the other presets.
     #[serde(default)]
     contours: Option<Value>,
+    // Read entry by entry: a bad curve preset must not discard the other presets.
+    #[serde(default)]
+    curves_presets: Option<Value>,
+    /// The selected preset as the file has it, kept as a value: a name selects that preset, `null`
+    /// (which is what saving with none selected writes) selects the Default curve, and no key at all
+    /// leaves the session's choice alone.
+    #[serde(default)]
+    curves_preset: Option<Value>,
 }
 
 impl PresetState {
@@ -169,6 +188,8 @@ impl PresetState {
             layer_defaults: Some(self.layer_defaults.clone()),
             swatches: Some(self.swatches.clone()),
             contours: Some(crate::contour_lib_cmds::to_json(&self.contours)),
+            curves_presets: Some(curves::to_json(&self.curves_presets)),
+            curves_preset: self.curves_preset.clone().map(Value::String),
         };
         serde_json::to_value(p).unwrap_or(Value::Null)
     }
@@ -219,6 +240,10 @@ impl PresetsExt for Session {
                 take(&mut m, "swatches")
             },
             contours: take(&mut m, "contours"),
+            curves_presets: take(&mut m, "curves_presets"),
+            // Read as it stands, null included: the difference between a null and no key at all is
+            // the difference between "no preset is selected" and "this file says nothing".
+            curves_preset: m.remove("curves_preset"),
         };
         if let Some(c) = p.custom_shapes {
             self.edit_state.custom_shapes = c;
@@ -288,6 +313,24 @@ impl PresetsExt for Session {
         }
         if let Some(c) = p.contours.filter(Value::is_array) {
             st.contours = crate::contour_lib_cmds::from_json(&c);
+        }
+        if let Some(c) = p.curves_presets.filter(Value::is_array) {
+            st.curves_presets = curves::from_json(&c);
+        }
+        // The selection is read three ways, because the file says three things: a name selects that
+        // preset, an explicit null (what saving with the Default curve writes) clears the selection,
+        // and no key at all leaves the session alone. Either way a selection only means something
+        // while that preset is in the list the same file just loaded: a hand-edited file, or a list
+        // read entry by entry that dropped it, must not leave Delete aimed at a preset that is gone.
+        if let Some(given) = p.curves_preset {
+            let listed = matches!(&given, Value::String(name) if st.curves_presets.iter().any(|preset| &preset.name == name));
+            st.curves_preset = match given {
+                Value::String(name) if listed => Some(name),
+                _ => None,
+            };
+        }
+        if st.curves_preset.as_ref().is_some_and(|name| !st.curves_presets.iter().any(|preset| &preset.name == name)) {
+            st.curves_preset = None;
         }
     }
 }
@@ -471,6 +514,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v.extend(shapes::specs());
     v.extend(tools::specs());
     v.extend(clone_source::specs());
+    v.extend(curves::specs());
     v
 }
 
