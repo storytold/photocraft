@@ -232,18 +232,37 @@ fn show_status(app: &mut PhotocraftApp, status: &StatusMessage) {
 /// Answers a file dialog a menu command asked for through the app's pickers: a pick to read imports through the engine,
 /// a pick to write saves the export and says so in the status line.
 fn answer_file(app: &mut PhotocraftApp, request: PresetFileRequest) {
-    let started = match request {
+    // Keep the request to form its public Saved event after the host has written the bytes.
+    let started = match request.clone() {
         PresetFileRequest::Open { extensions, replace, .. } => {
             let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
             app.pick_file_bytes_filtered(&extensions, move |app, name, bytes| import_bytes(app, &name, &bytes, replace))
         }
-        PresetFileRequest::Save { file_name, bytes, .. } => app.pick_save(&file_name, move |app, path| {
-            let write = app.services.write.as_mut().ok_or("no writer configured")?;
-            write(&path, &bytes)?;
-            app.ui.status_error = false;
-            app.ui.status = crate::i18n::fmt(tl!("Exported to {file}"), &[("file", &crate::file_open::display_name(&path))]);
-            Ok(json!({"path": path}))
-        }),
+        PresetFileRequest::Save { file_name, bytes, .. } => {
+            // The opaque export report belongs to this save, not a later request. The picker never
+            // calls back on Cancel or an unavailable dialog, so dropping it also drops the report.
+            let mut pending = std::mem::take(&mut app.ui.swatches);
+            app.ui.swatches.browser = pending.browser.clone();
+            app.ui.swatches.selection = pending.selection.clone();
+            app.ui.swatches.rename = pending.rename.clone();
+            app.pick_save(&file_name, move |app, path| {
+                let write = app.services.write.as_mut().ok_or("no writer configured")?;
+                write(&path, &bytes)?;
+                let shown = crate::file_open::display_name(&path);
+                let env = craft::ui::runtime::env::Env::of_root(app.ctx());
+                let (swatch_words, preset_words) = words(app.ctx());
+                let status = request.saved(&shown).and_then(|event| {
+                    SwatchesPanel::apply_file(&mut pending, &event, &swatch_words, &preset_words, env.format()).status
+                });
+                if let Some(status) = status {
+                    show_status(app, &status);
+                } else {
+                    app.ui.status_error = false;
+                    app.ui.status = crate::i18n::fmt(tl!("Exported to {file}"), &[("file", &shown)]);
+                }
+                Ok(json!({"path": path}))
+            })
+        }
         _ => Ok(Value::Null),
     };
     if let Err(e) = started {
@@ -480,5 +499,143 @@ mod tests {
         assert_eq!(order[0], last, "the dragged folder moved to the front: {order:?}");
         assert_eq!(order[1], names[0]);
         assert_ne!(app.session.presets().revision(), rev, "the library saves its new order");
+    }
+
+    type ExportWrites = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+    // Original swatches generated here; no external palette or reference-app data.
+    fn export_fixture(answers: Vec<craft::host::Picked>, fail_write: bool, lossy: bool) -> (Box<PhotocraftApp>, ExportWrites) {
+        use craft::color_ui::palette::{SwatchEntry, SwatchGroup, SwatchKind};
+        let files: std::sync::Arc<dyn craft::host::Files> = std::sync::Arc::new(craft::host::ScriptedFiles::answering(answers));
+        let written: ExportWrites = Default::default();
+        let sink = written.clone();
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                files: Some(files),
+                write: Some(Box::new(move |path, bytes| {
+                    sink.lock().unwrap().push((path.to_owned(), bytes.to_vec()));
+                    if fail_write { Err("export destination is read-only".into()) } else { Ok(()) }
+                })),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let mut red = SwatchEntry::new("Red", SwatchColor::Rgb([1.0, 0.0, 0.0]));
+        let teal = SwatchEntry::new("Teal", SwatchColor::Rgb([0.0, 0.5, 0.5]));
+        app.session.presets_mut().swatches = if lossy {
+            red.kind = SwatchKind::Spot;
+            vec![SwatchGroup { name: "First".into(), entries: vec![red] }, SwatchGroup { name: "Second".into(), entries: vec![teal] }]
+        } else {
+            vec![SwatchGroup { name: "First".into(), entries: vec![red, teal] }]
+        };
+        app.ui.swatches.selection = Selection::single(SwatchKey::Swatch("Red".into()));
+        app.ui.swatches.rename = Some(SwatchKey::Swatch("Red".into()));
+        app.ui.status = "Previous status".into();
+        app.ui.status_error = false;
+        (app, written)
+    }
+
+    fn export_request(app: &mut PhotocraftApp, command: SwatchesCommand) -> PresetFileRequest {
+        let (words, _) = words(app.ctx());
+        let foreground = Srgba::from_array(app.session.tools.foreground);
+        let output = SwatchesMenu::run_command(&app.session.presets().swatches, &mut app.ui.swatches, command, foreground, &words);
+        assert!(output.edit.is_none() && output.status.is_none(), "asking for a file neither edits nor reports success");
+        output.file.expect("the nonempty library can export")
+    }
+
+    #[test]
+    fn swatch_save_reports_every_loss_after_writing_and_keeps_newer_panel_state() {
+        use craft::color_ui::palette::{SwatchFormat, SwatchNote, write_swatches};
+        let (mut app, written) = export_fixture(vec![craft::host::Picked::Paths(vec!["Saved.aco".into()])], false, true);
+        let library = app.session.presets().swatches.clone();
+        let document = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.entries();
+        let colors = (app.session.tools.foreground, app.session.tools.background);
+        let panel = app.ui.swatches.clone();
+        let (_, report) = write_swatches(&library, SwatchFormat::Aco).unwrap();
+        assert!(report.notes.contains(&SwatchNote::GroupsFlattened) && report.notes.contains(&SwatchNote::KindsDropped(1)));
+        let env = craft::ui::runtime::env::Env::of_root(app.ctx());
+        let (swatch_words, _) = words(app.ctx());
+        let lines = SwatchesPanel::note_lines(&report, true, &swatch_words, env.format());
+        let request = export_request(&mut app, SwatchesCommand::Export);
+        answer_file(&mut app, request);
+        assert!(written.lock().unwrap().is_empty(), "the deferred picker has not written yet");
+        assert_eq!(app.ui.status, "Previous status", "loss notes wait for a successful write");
+        assert_eq!(app.ui.swatches, panel, "starting the save retains the public panel state, without its pending report");
+        // A save completes asynchronously: its old state must not replace newer UI choices.
+        app.ui.swatches.browser.zoom += 0.125;
+        app.ui.swatches.selection = Selection::single(SwatchKey::Group("Second".into()));
+        app.ui.swatches.rename = Some(SwatchKey::Swatch("Teal".into()));
+        let newer_panel = app.ui.swatches.clone();
+        app.poll_file_dialog();
+        assert_eq!(written.lock().unwrap().len(), 1);
+        for line in lines {
+            assert!(app.ui.status.contains(&line), "the saved status lost note {line:?}: {}", app.ui.status);
+        }
+        assert!(!app.ui.status_error, "a saved warning is not a write failure");
+        assert_eq!(app.ui.swatches, newer_panel, "Saved only consumes its captured report");
+        assert_eq!(app.session.presets().swatches, library);
+        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &document));
+        assert_eq!(app.session.active().unwrap().history.entries(), history);
+        assert_eq!((app.session.tools.foreground, app.session.tools.background), colors);
+    }
+
+    #[test]
+    fn cancelled_or_failed_swatch_saves_leave_no_report_for_a_late_completion() {
+        let cases = [
+            (craft::host::Picked::Cancelled, false, "Previous status", 0),
+            (craft::host::Picked::Unavailable("picker unavailable".into()), false, "picker unavailable", 0),
+            (craft::host::Picked::Paths(vec!["Read-only.aco".into()]), true, "export destination is read-only", 1),
+        ];
+        for (answer, fail_write, status, attempts) in cases {
+            let (mut app, written) = export_fixture(vec![answer], fail_write, true);
+            let library = app.session.presets().swatches.clone();
+            let document = app.session.active().unwrap().doc.clone();
+            let history = app.session.active().unwrap().history.entries();
+            let panel = app.ui.swatches.clone();
+            let request = export_request(&mut app, SwatchesCommand::Export);
+            // Hostile late acknowledgement control, not an actual successful write.
+            let late = request.saved("Not-written.aco").unwrap();
+            answer_file(&mut app, request);
+            app.poll_file_dialog();
+            assert_eq!(written.lock().unwrap().len(), attempts);
+            assert_eq!(app.ui.status, status);
+            assert_eq!(app.ui.status_error, attempts != 0 || status != "Previous status");
+            assert_eq!(app.ui.swatches, panel);
+            let env = craft::ui::runtime::env::Env::of_root(app.ctx());
+            let (swatch_words, preset_words) = words(app.ctx());
+            let stale = SwatchesPanel::apply_file(&mut app.ui.swatches, &late, &swatch_words, &preset_words, env.format());
+            assert!(stale.report.is_none() && stale.status.is_none(), "an abandoned save must not leave success notes in the live state");
+            assert_eq!(app.session.presets().swatches, library);
+            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &document));
+            assert_eq!(app.session.active().unwrap().history.entries(), history);
+        }
+    }
+
+    #[test]
+    fn successful_aco_and_ase_saves_keep_their_bytes_and_clean_status() {
+        use craft::color_ui::palette::{count_swatches, read_swatches};
+        for (command, file) in [(SwatchesCommand::Export, "Saved.aco"), (SwatchesCommand::ExportExchange, "Saved.ase")] {
+            let (mut app, written) = export_fixture(vec![craft::host::Picked::Paths(vec![file.into()])], false, false);
+            let library = app.session.presets().swatches.clone();
+            let document = app.session.active().unwrap().doc.clone();
+            let history = app.session.active().unwrap().history.entries();
+            let panel = app.ui.swatches.clone();
+            let request = export_request(&mut app, command);
+            answer_file(&mut app, request);
+            app.poll_file_dialog();
+            let written = written.lock().unwrap();
+            assert_eq!(written.len(), 1);
+            assert_eq!(written[0].0, file);
+            let (back, _) = read_swatches(&written[0].1, file).unwrap();
+            assert_eq!(count_swatches(&back), count_swatches(&library));
+            assert_eq!(app.ui.status, crate::i18n::fmt(tl!("Exported to {file}"), &[("file", file)]));
+            assert!(!app.ui.status_error);
+            assert_eq!(app.ui.swatches, panel);
+            assert_eq!(app.session.presets().swatches, library);
+            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &document));
+            assert_eq!(app.session.active().unwrap().history.entries(), history);
+        }
     }
 }
