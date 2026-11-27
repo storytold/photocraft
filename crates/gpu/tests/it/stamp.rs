@@ -312,3 +312,52 @@ fn cells_are_made_as_dabs_reach_them() {
     assert!(g.comp.external_mask_cells(layer).is_empty());
     assert!(!g.comp.has_external_mask(layer));
 }
+
+/// Requested coverage tiles come back with the values stamped, from tiles in several page cells,
+/// in both precisions (R16F converted to `f32`); a tile no texture holds reads as zeros; and the
+/// queue holds a bounded number of buffers.
+#[test]
+fn requested_tiles_come_back_with_the_stamped_values() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut g) = gpu() else { return };
+    let brush = BrushSettings { size: 70.0, hardness: 0.0, spacing: 0.1, ..BrushSettings::default() };
+    let (dabs, _) = cpu_stroke(&brush, &path(50));
+    let ctx = BrushContext::new(&brush);
+    let gpu_dabs: Vec<GpuDab> = dabs.iter().filter_map(|d| ctx.tip_geometry(d)).map(|t| gpu_dab(&t)).collect();
+    for precision in precisions(&g) {
+        let (doc, layer) = document(1.0);
+        g.comp.begin_external_mask(&g.device, doc.id, layer, doc.bounds(), Some(precision));
+        stamp(&mut g, layer, &gpu_dabs);
+        let mask = mask_of(&g, layer);
+        let mut keys: Vec<(i32, i32)> = (0..(W + 63) / 64).flat_map(|x| (0..(H + 63) / 64).map(move |y| (x, y))).collect();
+        keys.push((500, 500));
+        let readback = photocraft_gpu::MaskReadback::new();
+        let mut pending = keys.clone();
+        let mut tiles = Vec::new();
+        while tiles.len() < keys.len() {
+            let taken = readback.request(&g.comp, &g.device, &g.queue, layer, &pending);
+            pending.drain(..taken);
+            assert!(readback.in_flight() <= photocraft_gpu::MAX_IN_FLIGHT + 1);
+            tiles.extend(readback.poll(&g.device, true));
+        }
+        assert_eq!(tiles.len(), keys.len());
+        assert!(readback.bytes_requested() > 0);
+        let mut seen = 0;
+        for ((tx, ty), values) in tiles {
+            assert_eq!(values.len(), 64 * 64);
+            if tx == 500 {
+                assert!(values.iter().all(|v| *v == 0.0), "no texture, no coverage");
+                continue;
+            }
+            for (i, v) in values.iter().enumerate() {
+                let (x, y) = (tx * 64 + (i % 64) as i32, ty * 64 + (i / 64) as i32);
+                if x < W && y < H {
+                    assert_eq!(*v, mask[(y * W + x) as usize], "{precision:?} tile ({tx}, {ty}) pixel ({x}, {y})");
+                    seen += 1;
+                }
+            }
+        }
+        assert_eq!(seen, (W * H) as usize, "every pixel of the canvas came back");
+        g.comp.clear_external_mask(layer);
+    }
+}

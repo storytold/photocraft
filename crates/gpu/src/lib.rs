@@ -148,7 +148,9 @@ pub mod readback;
 mod setup;
 pub use setup::{BuildFailure, BuildFailureKind};
 mod stamp;
+mod tile_readback;
 pub use stamp::{GpuDab, MaskPrecision, STAMP_SHADER, StampStats};
+pub use tile_readback::{MAX_IN_FLIGHT, MAX_TILES_PER_BUFFER, MaskReadback};
 mod textures;
 
 #[cfg(test)]
