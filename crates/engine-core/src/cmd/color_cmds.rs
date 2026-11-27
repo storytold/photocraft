@@ -510,6 +510,13 @@ impl ColorState {
         self.settings.working_spec(mode_space(mode))
     }
 
+    /// [`gamut_mask`] as this session sees `doc`: the composite is judged in the profile the canvas
+    /// shows it in, so the Gamut Warning count and Color Range › Out of Gamut agree with the pixels
+    /// the canvas marks (#14224).
+    pub fn gamut_mask(&self, doc: &Document, setup: &ProofSetup, threshold: f32) -> Result<(Vec<u8>, usize)> {
+        gamut_mask_against(doc, &self.composite_profile(doc), setup, threshold)
+    }
+
     /// Apply the colour management policy to a document being opened. Returns what happened
     /// (`action`: kept|converted|discarded|assigned|untagged) and whether to ask the user.
     ///
@@ -591,7 +598,7 @@ impl ColorState {
         }
         let working = self.working(doc.mode);
         let policy = self.settings.policy(doc.mode);
-        let embedded = doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == space);
+        let embedded = embedded_profile(doc);
         match embedded {
             Some(emb) => {
                 let linear_hdr =
@@ -621,7 +628,13 @@ impl ColorState {
     pub fn resolve_open(&self, doc: &mut Document, action: &str) -> Result<()> {
         match action {
             "preserve" | "useEmbedded" => Ok(()),
-            "convert" | "convertToWorking" => convert_document(doc, &self.working(doc.mode), self.settings.intent(), self.settings.bpc),
+            // An untagged document already lives in the working space, so converting it to that
+            // space keeps its samples and only tags it (#14224); a tagged one converts from its
+            // embedded profile as before.
+            "convert" | "convertToWorking" => {
+                let untagged = self.untagged_profile(doc);
+                convert_document_from(doc, &untagged, &self.working(doc.mode), self.settings.intent(), self.settings.bpc)
+            }
             "discard" | "off" => {
                 doc.icc_profile = None;
                 Ok(())
@@ -1235,7 +1248,10 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
         && doc.icc_profile.as_ref().is_none_or(|bytes| profile_from_bytes(bytes).ok().is_some_and(|p| p.color_space == ColorSpace::Rgb));
     let dst = match p.get("profile").and_then(Value::as_str) {
         Some(spec) => s.color().resolve(spec, Some(doc), Some(mode))?,
-        None if preserve_indexed_rgb => document_profile(doc),
+        // Indexed → RGB keeps its samples and its ICC bytes, so the space of the document that
+        // results is its embedded profile, or the working space of Color Settings when it carries
+        // none - the same space the canvas shows it in (#14224).
+        None if preserve_indexed_rgb => embedded_profile(doc).unwrap_or_else(|| s.color().working(ColorMode::Rgb)),
         None => s.color().working(mode),
     };
     if space_mode(dst.color_space)
@@ -1268,9 +1284,16 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
 // ------------------------------------------------------------------ gamut
 
 /// Out-of-gamut mask of the document composite against `setup`'s profile: one byte per
-/// canvas pixel (255 = out of gamut, transparent pixels never are), plus the count.
+/// canvas pixel (255 = out of gamut, transparent pixels never are), plus the count. Judged in the
+/// composite profile of the mode, as the free [`composite_profile`] describes it; a session judges
+/// in [`ColorState::composite_profile`] instead, the space the canvas shows ([`ColorState::gamut_mask`],
+/// #14224).
 pub fn gamut_mask(doc: &Document, setup: &ProofSetup, threshold: f32) -> Result<(Vec<u8>, usize)> {
-    let check = GamutCheck::new(&composite_profile(doc), &setup.profile, threshold).map_err(cms_err)?;
+    gamut_mask_against(doc, &composite_profile(doc), setup, threshold)
+}
+
+fn gamut_mask_against(doc: &Document, source: &Profile, setup: &ProofSetup, threshold: f32) -> Result<(Vec<u8>, usize)> {
+    let check = GamutCheck::new(source, &setup.profile, threshold).map_err(cms_err)?;
     let buf = photocraft_compose::flatten(doc);
     let mut mask = vec![0u8; buf.px.len()];
     let count = check.mask_rgba(&buf.px, &mut mask).map_err(cms_err)?;
@@ -1522,7 +1545,7 @@ fn gamut_warning(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(spec) = p.get("profile").and_then(Value::as_str) {
         setup.profile = resolve_profile(spec, Some(&doc), Some(ColorMode::Cmyk))?;
     }
-    let (_, count) = gamut_mask(&doc, &setup, threshold)?;
+    let (_, count) = s.color().gamut_mask(&doc, &setup, threshold)?;
     let total = doc.size.width as usize * doc.size.height as usize;
     Ok(json!({ "on": on, "profile": setup.profile.description, "threshold": threshold, "outOfGamut": count, "fraction": count as f64 / total.max(1) as f64 }))
 }

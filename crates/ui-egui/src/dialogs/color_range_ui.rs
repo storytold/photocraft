@@ -257,7 +257,7 @@ fn proxy_mask(app: &PhotocraftApp, proxy: &Document, k: u32, params: &Value) -> 
     }
     if params.get("select").and_then(Value::as_str) == Some("outOfGamut") {
         let pv = app.session.color().proof(proxy.id);
-        let (m, _) = photocraft_engine::color_cmds::gamut_mask(proxy, &pv.setup, pv.gamut_threshold).map_err(|e| e.to_string())?;
+        let (m, _) = app.session.color().gamut_mask(proxy, &pv.setup, pv.gamut_threshold).map_err(|e| e.to_string())?;
         let invert = params.get("invert").and_then(Value::as_bool).unwrap_or(false);
         let mut mask: Vec<f32> = m.iter().map(|v| f32::from(*v) / 255.0).map(|v| if invert { 1.0 - v } else { v }).collect();
         scope_preview(proxy, params, &mut mask);

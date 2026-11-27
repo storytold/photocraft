@@ -425,10 +425,11 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "outOfGamut" => {
             // Pixels the current proof setup (View › Proof Setup) can't reproduce, as the gamut
-            // warning shows them: judged on the composite.
+            // warning shows them: judged on the composite, in the space the canvas shows it in
+            // (#14224), so the selection marks the same pixels the warning marks.
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let pv = s.color().proof(d.doc.id);
-            let (m, _) = crate::color_cmds::gamut_mask(&d.doc, &pv.setup, pv.gamut_threshold)?;
+            let (m, _) = s.color().gamut_mask(&d.doc, &pv.setup, pv.gamut_threshold)?;
             (d.doc.bounds(), m.iter().map(|v| f32::from(*v) / 255.0).collect())
         }
         other => {

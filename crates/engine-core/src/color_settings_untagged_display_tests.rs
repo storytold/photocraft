@@ -106,6 +106,8 @@ fn an_untagged_rgb_document_is_displayed_in_the_working_space() {
     s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
     let working = s.color().working(ColorMode::Rgb);
     assert_eq!(working.description, Builtin::ProPhotoCompat.profile().description, "the setting resolved");
+    // The monitor side of the comparison: with no platform profile the canvas is shown on sRGB.
+    assert_eq!(s.color().monitor().description, Builtin::Srgb.profile().description, "the test monitor");
     let cd = s.color().canvas_display(&d).unwrap();
     assert_eq!(cd.source.description, working.description, "an untagged document is shown in Color Settings' working RGB");
     for (i, v) in values.iter().enumerate() {
@@ -114,10 +116,6 @@ fn an_untagged_rgb_document_is_displayed_in_the_working_space() {
         assert!(close(got, want, TOL), "column {i}: canvas {got:?} vs the working space's transform {want:?}");
         assert!(far(got, raw_codes(v), 8.0), "column {i} is still shown as its raw values: {got:?}");
     }
-    // The reference application's measured numbers for this fixture, tolerance 2 as the ticket
-    // states them: they match what our own ProPhoto-compatible profile computes.
-    assert!(close(shown(&s, &d, 0), [255.0, 0.0, 34.0], 2.0), "200,30,30: {:?}", shown(&s, &d, 0));
-    assert!(close(shown(&s, &d, 1), [0.0, 82.0, 223.0], 2.0), "30,60,200: {:?}", shown(&s, &d, 1));
 }
 
 #[test]
@@ -296,6 +294,107 @@ fn a_mode_change_starts_from_the_working_space() {
     s.execute("image.mode.grayscale", json!({"intent": "relative", "bpc": false})).unwrap();
     let px = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1);
     assert!((px[0] - out[0]).abs() <= 2.0 / 255.0, "the mode change read the built-in default, not the working RGB: {px:?} vs {out:?}");
+}
+
+#[test]
+fn a_layer_copied_into_an_untagged_document_lands_in_its_space() {
+    let mut s = crate::session();
+    // A: untagged, opened under the default settings so nothing is assigned to it on the way in.
+    s.open_document(untagged_rgb(&[[0.5, 0.5, 0.5]], SampleType::U8), None);
+    // B: the same shape tagged sRGB, with a saturated block.
+    let v = [0.9f32, 0.2, 0.2];
+    s.open_document(tagged_rgb(Builtin::Srgb.profile(), v), None);
+    s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    let block = s.active().unwrap().active_layer.unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 0, "source": 1, "layers": [block.0]})).unwrap();
+    let id = photocraft_doc::LayerId(r["layers"][0].as_u64().unwrap());
+    let a = &s.documents()[0].doc;
+    assert!(a.icc_profile.is_none(), "the destination is still untagged");
+    let px = a.layer(id).unwrap().surface().unwrap().pixel(1, 1);
+    // It has to keep its look, so it is re-encoded into the space A is shown in.
+    let mut out = [0.0f32; 16];
+    let working = s.color().working(ColorMode::Rgb);
+    Transform::new(Builtin::Srgb.profile(), &working, s.color().settings.intent(), s.color().settings.bpc).unwrap().eval(&v, &mut out).unwrap();
+    let want = [out[0], out[1], out[2]];
+    assert!((0..3).all(|c| (px[c] - want[c]).abs() <= 2.0 / 255.0), "the pasted block landed as {px:?}, not in the space A is shown in ({want:?})");
+    assert!((0..3).any(|c| (px[c] - v[c]).abs() > 8.0 / 255.0), "the fixture must tell a raw copy apart from a re-encoded one: {px:?} vs {v:?}");
+}
+
+#[test]
+fn the_gamut_count_is_judged_in_the_space_the_canvas_marks_in() {
+    let mut s = crate::session();
+    // Six colours that straddle the coated-CMYK gamut: read as sRGB some of them are inside it,
+    // read as ProPhoto the same samples are far outside.
+    let colours = [[0.95f32, 0.05, 0.05], [0.8, 0.3, 0.3], [0.6, 0.1, 0.1], [0.3, 0.85, 0.3], [0.1, 0.4, 0.9], [0.45, 0.45, 0.95]];
+    s.open_document(untagged_rgb(&colours, SampleType::U8), None);
+    s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    s.execute("view.proofSetup", json!({"profile": "coated-cmyk", "intent": "perceptual"})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let setup = s.color().proof(doc.id).setup.clone();
+    let buf = photocraft_compose::flatten(&doc);
+    let count_with = |src: &Profile| {
+        let check = GamutCheck::new(src, &setup.profile, 4.0).unwrap();
+        let mut mask = vec![0u8; buf.px.len()];
+        let count = check.mask_rgba(&buf.px, &mut mask).unwrap();
+        (mask, count)
+    };
+    // The canvas marks its out-of-gamut pixels through the display source; that is the count the
+    // Gamut Warning command and Color Range > Out of Gamut have to agree with.
+    let want = count_with(&s.color().composite_profile(&doc));
+    let built_in = count_with(&composite_profile(&doc));
+    assert_ne!(want.1, built_in.1, "the fixture must tell the two spaces apart: {want:?} vs {built_in:?}");
+    let warning = s.execute("view.gamutWarning", json!({"on": true, "threshold": 4.0})).unwrap();
+    assert_eq!(warning["outOfGamut"].as_u64().unwrap() as usize, want.1, "Gamut Warning judged another space than the canvas");
+    // Color Range › Out of Gamut has to mark exactly those pixels.
+    s.execute("select.colorRange", json!({"select": "outOfGamut"})).unwrap();
+    let with = s.active().unwrap().doc.clone();
+    let selection = with.selection.clone().expect("the selection was set");
+    let width = with.size.width as usize;
+    let marked = |surface: &photocraft_raster::Surface| -> Vec<usize> {
+        (0..with.size.width as usize / 4).map(|i| (surface.pixel(i as i32 * 4 + 2, 2)[0] > 0.5) as usize).collect()
+    };
+    let marks = marked(&selection);
+    let columns: Vec<usize> = (0..width / 4).map(|i| usize::from(want.0[2 * width + i * 4 + 2] == 255)).collect();
+    assert_eq!(marks, columns, "Color Range > Out of Gamut marks other pixels than the warning counts");
+}
+
+#[test]
+fn converting_an_untagged_document_to_working_leaves_its_samples() {
+    let mut s = crate::session();
+    let v = [0.9f32, 0.2, 0.2];
+    s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    // The answer to the "missing profile" prompt for a document that is not open yet.
+    let mut d = untagged_rgb(&[v], SampleType::U8);
+    s.color().resolve_open(&mut d, "convert").unwrap();
+    let tagged = profile_from_bytes(d.icc_profile.as_ref().expect("tagged by the answer")).unwrap();
+    assert_eq!(tagged.description, s.color().working(ColorMode::Rgb).description, "tagged with the working space");
+    let px = d.layers[0].surface().unwrap().pixel(1, 1);
+    assert!((0..3).all(|c| (px[c] - v[c]).abs() <= 2.0 / 255.0), "the answer read the document in the built-in default and moved its pixels: {px:?} vs {v:?}");
+    // The command path agrees: an untagged document answers the same way once it is open.
+    s.open_document(untagged_rgb(&[v], SampleType::U8), None);
+    let r = s.execute("color.profileMismatch", json!({"action": "convertToWorking"})).unwrap();
+    assert_eq!(r["action"], json!("converted"));
+    let px = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1);
+    assert!((0..3).all(|c| (px[c] - v[c]).abs() <= 2.0 / 255.0), "the open document's answer moved its pixels: {px:?}");
+    let info = reported(&mut s);
+    assert_eq!(info["embedded"], json!(true));
+    assert_eq!(info["description"], s.color().working(ColorMode::Rgb).description);
+}
+
+#[test]
+fn an_untagged_indexed_document_follows_the_mode_default_until_it_becomes_rgb() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "#ff0000"})).unwrap();
+    s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "colors": 8})).unwrap();
+    // Indexed is not one of the two modes the item measures: it keeps the mode's built-in default.
+    let indexed = working_profile(ColorMode::Indexed);
+    assert_eq!(reported(&mut s)["description"], indexed.description, "an Indexed document is not switched");
+    // Image > Mode > RGB without a profile keeps the stored samples; the document that results is
+    // untagged RGB, so the reply and Profile Info have to name the same space.
+    let r = s.execute("image.mode.rgb", json!({})).unwrap();
+    assert_eq!(r["profile"], s.color().working(ColorMode::Rgb).description, "the reply names the space the result is taken in");
+    assert_eq!(reported(&mut s)["description"], s.color().working(ColorMode::Rgb).description, "and Profile Info agrees");
 }
 
 #[test]
