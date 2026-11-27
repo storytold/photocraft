@@ -78,6 +78,27 @@ fn a_bounded_soft_stroke_warns_when_spacing_leaves_the_path_past_its_reach() {
 }
 
 #[test]
+fn a_sampled_stroke_ignores_the_tip_boundary_for_coverage_and_spacing() {
+    let stroke = |boundary: Option<f64>| {
+        let mut s = session(120, 96);
+        let tip = TipShape::Sampled(photocraft_paint::GrayTile::from_fn(8, 8, |_, _| 1.0));
+        s.execute("tools.setBrush", json!({"brush": {"tip": tip}})).unwrap();
+        let mut params = json!({"points": [[40.5, 48.5], [70.5, 48.5]], "size": 80, "hardness": 0, "spacing": 1, "color": "#000000"});
+        if let Some(boundary) = boundary {
+            params["tipBoundary"] = json!(boundary);
+        }
+        let result = s.execute("paint.stroke", params).unwrap();
+        (surface(&s), result)
+    };
+    let (baseline, expected) = stroke(None);
+    let (bounded, actual) = stroke(Some(0.55));
+    assert!(baseline.rgba(70, 48)[3] > 0.9, "the first dab covers the end of the path");
+    assert!(same_pixels(&baseline, &bounded, Rect::new(0, 0, 120, 96)));
+    assert!(stroke_warnings(&expected).is_empty(), "{expected}");
+    assert_eq!(actual, expected, "a sampled tip ignores the boundary");
+}
+
+#[test]
 fn a_stroke_from_far_off_the_canvas_paints_only_what_reaches_it() {
     // Dabs that cannot reach the canvas are not rasterized (their coverage is never read).
     let mut s = session(80, 80);

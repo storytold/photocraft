@@ -453,7 +453,7 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
 /// without any other sign (#8389). Returns that pitch and a warning naming it; `None` when the
 /// stroke keeps its coverage or Spacing is off (dabs then follow the stroke's speed, not a pitch).
 /// Whether the first dab covers the path is judged by that dab's own diameter, so a light first
-/// point that shrinks a pressure-sized dab still warns. A `tipBoundary` shortens that reach.
+/// point that shrinks a pressure-sized dab still warns. An active `tipBoundary` scales that reach.
 fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, String)> {
     use photocraft_paint::dynamics::{DabBuilder, StepInput, apply_pose, base_diameter};
     let brush = brush.bounded_for_render();
@@ -467,7 +467,7 @@ fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, S
     let diameter = base_diameter(&brush, &step).max(1.0);
     let length: f64 = pts.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).filter(|d| d.is_finite()).sum();
     let radius = f64::from(diameter) / 2.0;
-    let reach = brush.tip_boundary.filter(|f| *f > 0.0 && *f <= photocraft_paint::MAX_TIP_BOUNDARY).map_or(radius, |f| radius * f64::from(f));
+    let reach = brush.tip_boundary.map_or(radius, |f| radius * f64::from(f));
     (length > reach && pitch > length).then(|| {
         let dab = if (diameter - brush.size).abs() < 0.05 { format!("size {}", brush.size) } else { format!("the first dab's {diameter:.1} px (size {} at its pressure)", brush.size) };
         let warning = format!(

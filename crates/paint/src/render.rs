@@ -246,10 +246,7 @@ pub(crate) fn rect_around(d: &Dab, reach: f32) -> Rect {
 impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
-        let mips = |t: &TipShape| match t.bitmap() {
-            Some(g) if g.is_valid() => Some(crate::mip_cache::tip_mips(g)),
-            _ => None,
-        };
+        let mips = |t: &TipShape| t.valid_bitmap().map(crate::mip_cache::tip_mips);
         Self {
             tip: mips(&brush.tip),
             dual_tip: if brush.dual_brush.enabled { mips(&brush.dual_brush.tip) } else { None },
