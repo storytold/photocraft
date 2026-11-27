@@ -155,10 +155,16 @@ fn only_the_three_measured_cursors_rules_carry_a_help_line() {
 
 // --- the other pages, byte for byte ---------------------------------------------------------------------------------------
 
+/// The rules whose state the build target or the host's font stack decides, so they are pinned on their own in
+/// `the_target_and_host_dependent_rows_stay_as_they_are` and stay out of the byte-for-byte state: the language
+/// picker shows a locale's native name only while the active fonts can draw it (`fields.rs`, `language_label`),
+/// WinTab is a Windows-only row, and the title bar only follows its setting where the app draws its own frame.
+const TARGET_AND_HOST_DEPENDENT: [&str; 3] = ["interface.language", "interface.systemTitleBar", "tools.tabletInput"];
+
 /// The rule state of every page but Cursors: the fields PhotoCraft itself sets, one line per rule, in key order.
 fn other_pages_rule_state(ctx: &egui::Context) -> String {
     let mut lines: Vec<String> = Vec::new();
-    for rule in rules(ctx).iter().filter(|rule| !rule.key.starts_with("cursors.")) {
+    for rule in rules(ctx).iter().filter(|rule| !rule.key.starts_with("cursors.") && !TARGET_AND_HOST_DEPENDENT.contains(&rule.key.as_str())) {
         let kind = match &rule.kind {
             None => "-".to_string(),
             Some(RuleKind::Int { range, unit, .. }) => format!("int {range:?} {unit:?}"),
@@ -188,12 +194,44 @@ fn fnv1a(text: &str) -> u64 {
 }
 
 /// #16833 touches the `cursors.*` rules only: every other page's rules come out byte-identical. The pinned
-/// length and checksum are that state as `upstream/main` gives it.
+/// length and checksum are that state as `upstream/main` ed09854be0 gives it; the web build hides its own set
+/// of rows, so this state is the native one.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_other_pages_rules_stay_byte_identical() {
     let ctx = egui::Context::default();
     let state = other_pages_rule_state(&ctx);
     let (lines, bytes) = (state.lines().count(), state.len());
-    let (wanted_lines, wanted_bytes, wanted_hash) = (105usize, 18912usize, 10297778473294635895u64);
+    let (wanted_lines, wanted_bytes, wanted_hash) = (102usize, 18452usize, 13006842060618656633u64);
     assert_eq!((lines, bytes, fnv1a(&state)), (wanted_lines, wanted_bytes, wanted_hash), "{lines} rules of the other pages, {bytes} bytes");
+}
+
+/// The three rows a build target or the host's fonts decide, kept exactly as they are today.
+#[test]
+fn the_target_and_host_dependent_rows_stay_as_they_are() {
+    let ctx = egui::Context::default();
+    let rules = rules(&ctx);
+    let find = |key: &str| rules.iter().find(|rule| rule.key == key).unwrap_or_else(|| panic!("{key} has a rule"));
+
+    let language = find("interface.language");
+    let options = match &language.kind {
+        Some(RuleKind::Choice(options)) => options,
+        other => panic!("interface.language offers a choice, got {other:?}"),
+    };
+    assert_eq!(options.first().map(|(id, label)| (id.as_str(), label.as_str())), Some(("auto", "Auto")), "the picker still starts with Auto");
+    assert!(options.iter().any(|(id, label)| id == "en" && label == "English"), "English names itself: {options:?}");
+
+    let tablet = find("tools.tabletInput");
+    if cfg!(target_os = "windows") {
+        assert_eq!(tablet.kind, Some(RuleKind::CustomRows), "WinTab draws its own row on Windows");
+        assert!(!tablet.hidden && tablet.restart, "and its context opens at launch there");
+    } else {
+        assert!(tablet.hidden, "WinTab is Windows-only");
+        assert!(!tablet.restart, "so nothing opens its context elsewhere");
+    }
+
+    let title_bar = find("interface.systemTitleBar");
+    let draws_its_own_frame = cfg!(not(target_arch = "wasm32")) && cfg!(not(target_os = "macos"));
+    assert_eq!(title_bar.restart, draws_its_own_frame, "the title bar applies at next launch where the app draws the frame");
+    assert!(title_bar.help.is_none() && title_bar.label.is_none(), "and it gains no wording here");
 }
