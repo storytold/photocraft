@@ -419,6 +419,48 @@ fn colour_range_judges_sampled_colours_in_the_space_the_canvas_shows() {
 }
 
 #[test]
+fn replace_color_judges_its_lab_bounds_in_the_space_the_canvas_shows() {
+    // A Lab cube drawn around one column of the gamut fixture through the profile this session reads
+    // the layer in. The same device numbers sit far away when they are read in the mode's built-in
+    // default, so the cube has to catch that column here and miss it in a session at the default.
+    let columns = [[0.95f32, 0.05, 0.05], [0.8f32, 0.3, 0.3], [0.6f32, 0.1, 0.1], [0.3, 0.85, 0.3], [0.1, 0.4, 0.9], [0.45, 0.45, 0.95]];
+    let column = 1usize;
+    let lab_in = |profile: &Profile, v: [f32; 3]| -> [f32; 3] {
+        let t = craft_cms::cached(profile, Builtin::LabD50.profile(), craft_cms::TransformOptions::default()).unwrap();
+        let mut out = [0.0f32; 16];
+        t.eval(&v, &mut out).unwrap();
+        [out[0] * 100.0, out[1] * 255.0 - 128.0, out[2] * 255.0 - 128.0]
+    };
+    let mut s = crate::session();
+    s.open_document(untagged_rgb(&columns, SampleType::U8), None);
+    s.execute("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let centre = lab_in(&s.color().document_profile(&doc), columns[column]);
+    let elsewhere = lab_in(&document_profile(&doc), columns[column]);
+    assert!((0..3).any(|c| (centre[c] - elsewhere[c]).abs() > 10.0), "the fixture must tell the two readings apart: {centre:?} vs {elsewhere:?}");
+    let cube = json!({
+        "labMinimum": [centre[0] - 4.0, centre[1] - 4.0, centre[2] - 4.0],
+        "labMaximum": [centre[0] + 4.0, centre[1] + 4.0, centre[2] + 4.0],
+        "fuzziness": 0,
+        "saturation": -60,
+    });
+    let shifted = |s: &Session| -> bool {
+        // The layer makes a Lab round trip whether it is inside the cube or not, which moves single
+        // codes here and there; only the desaturation is a real change.
+        let surf = s.active().unwrap().doc.layers[0].surface().unwrap();
+        let got = raw_codes(&surf.pixel(column as i32 * 4 + 2, 2));
+        let stored = raw_codes(&columns[column]);
+        (0..3).any(|c| (got[c] - stored[c]).abs() > 8.0)
+    };
+    s.execute("image.adjustments.replaceColor", cube.clone()).unwrap();
+    assert!(shifted(&s), "the cube drawn in this session's own space missed the column it was drawn around: {centre:?}");
+    let mut plain = crate::session();
+    plain.open_document(untagged_rgb(&columns, SampleType::U8), None);
+    plain.execute("image.adjustments.replaceColor", cube).unwrap();
+    assert!(!shifted(&plain), "the same cube also caught the column read in the built-in default: {centre:?} vs {elsewhere:?}");
+}
+
+#[test]
 fn the_profile_commands_answer_the_same_for_a_tagged_document() {
     let mut replies = Vec::new();
     for working in ["srgb", "prophoto-compat"] {
