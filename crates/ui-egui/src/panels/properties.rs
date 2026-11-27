@@ -156,6 +156,9 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
         let params = crate::adjust_editors::layer_reset(app, id, adj);
         let _ = app.run("layer.setAdjustment", params);
         app.live_adjust = None;
+        if matches!(adj, photocraft_doc::Adjustment::BlackWhite { .. }) {
+            crate::adjust_editors::black_white_presets::clear_custom(ui);
+        }
     }
 }
 

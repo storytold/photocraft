@@ -17,9 +17,9 @@ use craft::behavior::{EditEvent, EditEvents, Mixed};
 use craft::color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft::draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMapOutput};
 use craft::imaging::ui::adjust::{
-    AdjustDialogCx, AdjustField, AdjustSliders, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast, BrightnessContrastEditor, ChannelMixer,
-    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsPanel,
-    PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
+    AdjustDialogCx, AdjustField, AdjustSliders, AdjustWords, BlackWhite, BrightnessContrast, BrightnessContrastEditor, ChannelMixer, ChannelMixerEditor,
+    ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsPanel, PhotoFilter,
+    PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
@@ -35,6 +35,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+pub(crate) mod black_white_presets;
 mod session;
 pub mod values;
 
@@ -317,11 +318,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             let out = editor.show(ui);
             lifted(out.edit.events, |value| AdjustValue::ColorBalance { value })
         }
-        ("blackWhite", AdjustValue::BlackWhite { value }) => {
-            let out = BlackWhiteEditor::new("Black & White", Bind::bound(value)).context(context).show(ui);
-            let ask = if out.auto { Some(AdjustAsk::Auto) } else { out.pick_color.map(AdjustAsk::PickColor) };
-            AdjustOut { ask, edit: out.edit.events.map(|value| AdjustValue::BlackWhite { value }) }
-        }
+        ("blackWhite", AdjustValue::BlackWhite { value }) => black_white_presets::show(ui, value, context),
         ("photoFilter", AdjustValue::PhotoFilter { value }) => {
             let out = PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).context(context).show(ui);
             AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }) }

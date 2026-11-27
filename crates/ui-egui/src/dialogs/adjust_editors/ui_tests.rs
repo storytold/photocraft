@@ -492,3 +492,154 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(history_len(&h), steps + 1);
 }
+
+#[track_caller]
+fn assert_black_white_preset(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) {
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value().as_deref(), Some(name));
+}
+
+#[test]
+fn black_white_presets_apply_the_requested_weights_and_keep_tint() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    // Leave enough vertical space for the complete dropdown to be visible at once.
+    h.set_size(vec2(1440.0, 1350.0));
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "tint": true, "tintColor": "#336699"})).unwrap();
+    h.run_steps(4);
+    let (_, original) = layer(&h);
+    let Adjustment::BlackWhite { tint: original_tint, .. } = &original else { panic!("{original:?}") };
+
+    for (name, expected) in [
+        ("Blue Filter", [0.0, 0.0, 0.0, 110.0, 110.0, 110.0]),
+        ("Darker", [30.0, 50.0, 30.0, 50.0, 10.0, 70.0]),
+        ("Green Filter", [50.0, 120.0, 90.0, 50.0, 0.0, 0.0]),
+        ("High Contrast Blue Filter", [-50.0, -50.0, -50.0, 150.0, 150.0, 150.0]),
+        ("High Contrast Red Filter", [120.0, 120.0, -10.0, -50.0, -50.0, 120.0]),
+        ("Infrared", [-40.0, 235.0, 144.0, -68.0, -3.0, -107.0]),
+        ("Lighter", [50.0, 70.0, 50.0, 70.0, 30.0, 90.0]),
+        ("Maximum Black", [0.0; 6]),
+        ("Maximum White", [100.0; 6]),
+        ("Neutral Density", [128.0, 128.0, 100.0, 100.0, 128.0, 100.0]),
+        ("Red Filter", [120.0, 110.0, -10.0, -50.0, 0.0, 120.0]),
+        ("Yellow Filter", [120.0, 110.0, 40.0, -30.0, 0.0, 70.0]),
+        ("Default", [40.0, 60.0, 40.0, 60.0, 20.0, 80.0]),
+    ] {
+        let history = history_len(&h);
+        h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::ListBoxOption, name).click();
+        h.run_steps(4);
+
+        let (_, applied) = layer(&h);
+        let Adjustment::BlackWhite { weights, tint } = applied else { panic!("{applied:?}") };
+        assert_eq!(weights, expected, "{name} applies the requested mix");
+        assert_black_white_preset(&h, name);
+        assert_eq!(&tint, original_tint, "{name} preserves Tint");
+        assert_eq!(history_len(&h), history + 1, "{name} is one history step");
+        assert!(h.state().live_adjust.is_none(), "{name} finishes the preview");
+    }
+    assert_eq!(layer(&h).1, original, "Default restores the original mix");
+}
+
+#[test]
+fn black_white_presets_apply_through_properties_and_undo() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "tint": true, "tintColor": "#336699"})).unwrap();
+    h.run_steps(4);
+    let (_, before) = layer(&h);
+    let Adjustment::BlackWhite { weights: original, tint: original_tint } = &before else { panic!("{before:?}") };
+    let history = history_len(&h);
+    let pixel = h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap();
+    assert_black_white_preset(&h, "Default");
+
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::ListBoxOption, "Darker").click();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Darker");
+    let (_, after) = layer(&h);
+    let Adjustment::BlackWhite { weights, tint } = &after else { panic!("{after:?}") };
+    assert!(weights.iter().zip(original).all(|(weight, original)| weight < original));
+    assert_eq!(tint, original_tint);
+    assert_ne!(h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap(), pixel);
+    assert_eq!(history_len(&h), history + 1);
+    assert!(h.state().live_adjust.is_none());
+
+    let ctx = h.ctx.clone();
+    let picker = open_picker(&mut h, "Tint Color");
+    show_in_picker(&mut h, picker, "#ad632a");
+    h.state_mut().framework.dialogs.cancel_by_id(&ctx, picker);
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Darker");
+    assert_eq!(layer(&h).1, after);
+    assert_eq!(history_len(&h), history + 1);
+
+    let picker = open_picker(&mut h, "Tint Color");
+    show_in_picker(&mut h, picker, "#ad632a");
+    crate::dialogs::confirm(h.state_mut(), &ctx, picker).expect("OK is enabled");
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Custom");
+    assert_eq!(history_len(&h), history + 2);
+
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, after);
+    assert_black_white_preset(&h, "Darker");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, before);
+    assert_black_white_preset(&h, "Default");
+}
+
+#[test]
+fn black_white_presets_distinguish_manual_edits_from_named_choices() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    // Opening the dropdown on Custom reveals the last row, so leave room for Default too.
+    h.set_size(vec2(1440.0, 1350.0));
+    let (id, defaults) = layer(&h);
+    let Adjustment::BlackWhite { weights, .. } = &defaults else { panic!("{defaults:?}") };
+    let red = weights[0];
+    let type_default = |h: &mut Harness<'_, Box<PhotocraftApp>>| {
+        h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "reds": red + 7.0})).unwrap();
+        h.run_steps(4);
+        assert_black_white_preset(h, "Custom");
+        h.get_by_role_and_label(Role::SpinButton, "Reds").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(red.to_string()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(layer(h).1, defaults);
+        assert_black_white_preset(h, "Custom");
+    };
+
+    type_default(&mut h);
+
+    h.state_mut().run("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Default");
+    h.state_mut().run("layer.select", json!({"layer": id.0})).unwrap();
+    // Layer selection can keep the mask targeted. Return to the adjustment's controls.
+    h.state_mut().run("channel.target.composite", json!({})).unwrap();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Custom");
+
+    let history = history_len(&h);
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::ListBoxOption, "Default").click();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Default");
+    assert_eq!(layer(&h).1, defaults);
+    assert_eq!(history_len(&h), history);
+
+    type_default(&mut h);
+    h.get_by_role_and_label(Role::Button, "Reset to defaults").scroll_to_me();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Reset to defaults").click();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Default");
+    assert_eq!(layer(&h).1, defaults);
+}

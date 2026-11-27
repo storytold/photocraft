@@ -13,7 +13,7 @@ use photocraft_engine::adjust_params;
 use serde_json::{Value, json};
 
 use super::values::{self, ValueCx};
-use super::{AdjustAsk, AdjustValue, EditorSetup, answer_color, black_white_auto, editor, gradient_presets, is_gray, swatches};
+use super::{AdjustAsk, AdjustValue, EditorSetup, answer_color, black_white_auto, black_white_presets, editor, gradient_presets, is_gray, swatches};
 use crate::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
 use crate::theme::Tokens;
@@ -189,7 +189,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         record.session.track(session_target(doc, id), app.properties_hidden, &committed);
         app.properties_tracked = true;
     }
-    follow_color_pick(app, id, &mut record, &committed, &vcx);
+    follow_color_pick(app, ui, id, &mut record, &committed, &vcx);
     let mut value = match &app.live_adjust {
         Some((layer, params)) if *layer == id => values::from_params(kind, params, &vcx).unwrap_or_else(|_| committed.clone()),
         _ => committed.clone(),
@@ -240,7 +240,12 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
                     target.extend(weights);
                 }
                 match values::from_params(kind, &params, &vcx) {
-                    Ok(auto) => commit(app, id, &mut record, &committed, &auto, &vcx, None),
+                    Ok(auto) => {
+                        if auto != committed {
+                            black_white_presets::mark_custom(ui, &auto);
+                        }
+                        commit(app, id, &mut record, &committed, &auto, &vcx, None);
+                    }
                     Err(err) => app.ui.status = err,
                 }
             }
@@ -288,7 +293,7 @@ fn commit(
 
 /// A colour well's Color Picker while it is open: its colour previews on the layer. Once it
 /// closed, OK's colour is one edit and Cancel (or OK without a colour) leaves the layer as it was.
-fn follow_color_pick(app: &mut PhotocraftApp, id: LayerId, record: &mut PropertiesAdjust, committed: &AdjustValue, vcx: &ValueCx) {
+fn follow_color_pick(app: &mut PhotocraftApp, ui: &egui::Ui, id: LayerId, record: &mut PropertiesAdjust, committed: &AdjustValue, vcx: &ValueCx) {
     let Some(pick) = record.pick.take() else { return };
     match app.framework.dialogs.get_by_id::<ColorPickerDialog>(pick.dialog).map(ColorPickerDialog::current) {
         Some(current) => {
@@ -304,6 +309,9 @@ fn follow_color_pick(app: &mut PhotocraftApp, id: LayerId, record: &mut Properti
             Some((key, color)) if key == pick.key && Some(color) != pick.opened => {
                 let mut answered = pick.before;
                 if answer_color(&mut answered, &key, color) {
+                    if answered != *committed {
+                        black_white_presets::mark_custom(ui, &answered);
+                    }
                     commit(app, id, record, committed, &answered, vcx, None);
                 } else {
                     app.live_adjust = None;
