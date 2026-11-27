@@ -40,7 +40,7 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
             .tooltip(tl!("Images in subfolders will start on a new Contact Sheet")),
         Param::section(tl!("Document")),
         Param::new("units", tl!("Units"), ParamKind::choice(opts(&UNITS), Some("inches".into()))),
-        Param::custom(UNITS_SHOWN, Label::Empty, follow_units).full_width(),
+        Param::custom(UNITS_SHOWN, Label::Empty, units_row).full_width(),
         Param::new("width", tl!("Width"), ParamKind::number(Some(0.0), Some(300_000.0), 8.0, 0.5, 2)),
         Param::new("height", tl!("Height"), ParamKind::number(Some(0.0), Some(300_000.0), 10.0, 0.5, 2)),
         Param::number_with_units("resolution", tl!("Resolution"), 300.0, 1.0, 2, resolution).bounds(Some(1.0), Some(10_000.0)),
@@ -63,11 +63,19 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
 /// The units Width and Height were last shown in, kept by [`follow_units`].
 const UNITS_SHOWN: &str = "unitsShown";
 
+/// The row of [`follow_units`]: it shows nothing, so Units stays a plain list and the dialog remembers it with the
+/// size. Following here converts in the pass that picked the unit.
+fn units_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomContext) -> egui::Response {
+    follow_units(fields);
+    ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
+}
+
 /// Follows the Units list: switching it converts Width and Height at the resolution, as the command reads them, so
-/// the sheet keeps its size: 8 x 10 in is 20.32 x 25.4 cm, and 2400 x 3000 px at 300 ppi. The row shows nothing;
-/// Units stays a plain list, so the dialog remembers it with the size.
-fn follow_units(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomContext) -> egui::Response {
-    let units = fields.text("units").unwrap_or("inches").to_owned();
+/// the sheet keeps its size: 8 x 10 in is 20.32 x 25.4 cm, and 2400 x 3000 px at 300 ppi. The form's builder runs it
+/// too, before each pass, OK and automation write, so an OK right after `ui.dialog.set units` sends the converted size.
+pub(crate) fn follow_units(fields: &mut DialogFields) {
+    // The first build runs before the defaults are in: nothing to follow yet.
+    let Some(units) = fields.text("units").map(str::to_owned) else { return };
     if let Some(shown) = fields.text(UNITS_SHOWN).filter(|shown| *shown != units).map(str::to_owned) {
         let ppi = fields.number("resolution").unwrap_or(300.0);
         let (from, to) = (unit_of(&shown), unit_of(&units));
@@ -81,7 +89,6 @@ fn follow_units(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomCont
     if fields.text(UNITS_SHOWN) != Some(units.as_str()) {
         fields.set(UNITS_SHOWN, units);
     }
-    ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
 }
 
 /// The unit a `units` value stands for, read as the command reads it (inches when unknown).

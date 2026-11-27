@@ -63,6 +63,9 @@ fn names(names: &[String]) -> Vec<(String, Label)> {
 fn open_form(app: &mut PhotocraftApp, key: &'static str, title: &str, rows: Vec<Param>) -> DialogId {
     let title = Label::from(title.to_string());
     params::open_param(app, key, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
+        if key == CONTACT_SHEET {
+            crate::dialogs::contact_sheet_ui::follow_units(fields);
+        }
         ParamDialog::command(key, title.clone(), rows.clone()).values(Bind::bound(fields))
     })
 }
