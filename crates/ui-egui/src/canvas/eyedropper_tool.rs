@@ -25,6 +25,10 @@ use crate::PhotocraftApp;
 #[path = "../eyedropper_cmyk_tests.rs"]
 mod cmyk_tests;
 
+#[cfg(test)]
+#[path = "other_precise_cursor_tests.rs"]
+mod other_precise_cursor_tests;
+
 /// The gesture's flags, kept in `CanvasTools::eyedropper`.
 #[derive(Debug, Default)]
 pub(crate) struct EyedropperState {
@@ -44,6 +48,8 @@ pub(crate) struct PcEyedropper<'a> {
     stand_in: bool,
     /// Runs as a shape tool's Alt stand-in: a pick also sets the tool's Fill.
     shape_fill: bool,
+    /// The named Eyedropper uses a target for the Precise Other Cursors preference.
+    precise_target: bool,
 }
 
 /// The Eyedropper tool, for `Tool::Eyedropper`.
@@ -68,7 +74,7 @@ impl<'a> PcEyedropper<'a> {
             let precise = app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise;
             (app.ui.tool_options.eyedropper, Srgba::rgb(r, g, b), precise, shape_alt_sets_fill(app.ui.tool))
         });
-        // Preferences › Cursors › Other Cursors = Precise wants the plain crosshair, so no ring.
+        // The sampling ring is the colour preview while held, separate from the pointer.
         options.show_ring &= !precise;
         let native = std::rc::Rc::new(std::cell::Cell::new(None));
         let sampled_native = native.clone();
@@ -81,7 +87,15 @@ impl<'a> PcEyedropper<'a> {
                 })
                 .map(|c| Srgba::rgb(c[0], c[1], c[2]))
         };
-        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), native, stand_in, shape_fill: stand_in && shape_fill }
+        PcEyedropper {
+            scope,
+            state,
+            inner: EyedropperTool::new(options, sample).foreground(foreground),
+            native,
+            stand_in,
+            shape_fill: stand_in && shape_fill,
+            precise_target: precise && !stand_in,
+        }
     }
 
     /// Writes the newest pick to its swatch; as a shape tool's stand-in, also makes the tool's Fill
@@ -176,8 +190,10 @@ impl CanvasTool for PcEyedropper<'_> {
         self.inner.paint(draw, cx);
     }
 
-    /// `EyedropperTool::cursor`: the pipette, the precise crosshair with Caps Lock or the preference.
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if self.precise_target && cx.precise() {
+            return super::cursor_policy::sample_target();
+        }
         self.inner.cursor(cx)
     }
 
