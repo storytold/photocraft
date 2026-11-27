@@ -190,3 +190,19 @@ fn a_star_shows_widgets_at_its_outer_points_only() {
         assert_eq!((corner.vertex.x, corner.vertex.y), (v.x, v.y), "corner {i} is outer point {i}");
     }
 }
+
+/// A held corner widget keeps its shape out of the snap targets with Target Path hidden, where the widgets show
+/// without the scale box: the drag does not snap to the rectangle's own starting edges.
+#[test]
+fn a_held_corner_widget_is_no_snap_target_without_the_box() {
+    let mut app = app(Tool::Rectangle);
+    app.ui.view.show.target_path = false;
+    testing::frame(&mut app);
+    let id = active(&app);
+    assert!(!corner_targets(&app).is_empty(), "the widgets show with Target Path hidden");
+    testing::press(&mut app, [60.0, 60.0], NONE);
+    testing::move_to(&mut app, [64.0, 64.0], NONE);
+    assert!(super::pressed_layers(&app).contains(&id), "the rounded rectangle is no snap target while its widget is held");
+    testing::release(&mut app, [64.0, 64.0], NONE);
+    assert!(super::pressed_layers(&app).is_empty(), "nothing is held after the release");
+}

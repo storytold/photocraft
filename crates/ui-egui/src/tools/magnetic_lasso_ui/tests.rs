@@ -149,7 +149,8 @@ fn the_magnetic_lasso_cursor_follows_other_cursors_and_caps_lock() {
         let shown = cursor::current(&h.ctx);
         let matches = match (radius, &shown) {
             (Some(expected), Some(Cursor::Painted(PaintedCursor::Circle { radius, .. }))) => (*radius - expected).abs() < 1e-3,
-            (None, Some(Cursor::Painted(PaintedCursor::Tool { icon, .. }))) => *icon == lasso,
+            // The arrow with the lasso icon beside it (#16671).
+            (None, Some(Cursor::Painted(PaintedCursor::PointerTool { icon, .. }))) => *icon == lasso,
             _ => false,
         };
         assert!(matches, "{preference}, Caps Lock {caps_lock}, zoom {zoom}: expected radius {radius:?} or a lasso icon, got {shown:?}");
