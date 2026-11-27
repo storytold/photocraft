@@ -312,7 +312,7 @@ fn native_drop_read_failures_name_the_source_once_in_foreground_and_background()
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn recent_grid_and_list_read_failures_keep_the_reason_without_repeating_the_path() {
-    let (_, source, reason) = missing_source("recent", "missing.psd");
+    let (path, source, reason) = missing_source("recent", "missing.psd");
     for grid in [false, true] {
         let mut app = app_with(None);
         app.background_jobs = false;
@@ -325,7 +325,8 @@ fn recent_grid_and_list_read_failures_keep_the_reason_without_repeating_the_path
             app,
         );
         h.run_steps(3);
-        h.get_by_label("missing.psd").click();
+        let label = if grid { "missing.psd".to_owned() } else { format!("missing.psd, {}", path.parent().unwrap().display()) };
+        h.get_by_role_and_label(egui::accesskit::Role::ListItem, &label).click();
         h.run_steps(3);
         finish_read_failure(h.state_mut(), &source, &reason, "no worker in this foreground control");
         assert_eq!(h.state().ui.recent_files.as_slice(), std::slice::from_ref(&source));
