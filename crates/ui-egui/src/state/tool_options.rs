@@ -16,6 +16,128 @@ pub enum ObjectFinderMode {
     Manual,
 }
 
+/// Warp › the guide-line gear: the three visibility rows (#12501, as measured by the maintainers on
+/// 2026-11-26). Auto draws the thin lines only while a drag of the grid runs - hidden at rest and
+/// under the pointer, hidden again on mouse-up; Always draws them everywhere, the rule the grid has
+/// always painted; Never leaves them out while the patch boundaries stay.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarpGuideShow {
+    Auto,
+    #[default]
+    Always,
+    Never,
+}
+
+/// Warp › the guide-line gear's Color dropdown (#12501): the named entries in the reference
+/// application's order, as the maintainers measured it on 2026-11-26, with Default picked at the
+/// start. The issue rules the entries' colour values as ours to choose, not measured: each name
+/// takes its standard colour, and Default and Seafoam - names no standard table carries - take the
+/// app's own label hues.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarpGuideColor {
+    /// The theme's own overlay line: what the grid drew before a host had a say.
+    Classic,
+    /// The reference application's blue default.
+    #[default]
+    Default,
+    Green,
+    Chartreuse,
+    Yellow,
+    Orange,
+    Red,
+    Magenta,
+    Purple,
+    Indigo,
+    Fuchsia,
+    Seafoam,
+    White,
+    Black,
+}
+
+impl WarpGuideColor {
+    /// The dropdown's entries, in the measured order.
+    pub const ALL: [Self; 14] = [
+        Self::Classic,
+        Self::Default,
+        Self::Green,
+        Self::Chartreuse,
+        Self::Yellow,
+        Self::Orange,
+        Self::Red,
+        Self::Magenta,
+        Self::Purple,
+        Self::Indigo,
+        Self::Fuchsia,
+        Self::Seafoam,
+        Self::White,
+        Self::Black,
+    ];
+
+    /// The entry's visible name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Classic => "Classic",
+            Self::Default => "Default",
+            Self::Green => "Green",
+            Self::Chartreuse => "Chartreuse",
+            Self::Yellow => "Yellow",
+            Self::Orange => "Orange",
+            Self::Red => "Red",
+            Self::Magenta => "Magenta",
+            Self::Purple => "Purple",
+            Self::Indigo => "Indigo",
+            Self::Fuchsia => "Fuchsia",
+            Self::Seafoam => "Seafoam",
+            Self::White => "White",
+            Self::Black => "Black",
+        }
+    }
+
+    /// The entry's colour, channels 0..=255; `None` (Classic) keeps the theme's own overlay line.
+    /// The chromatic names take the standard value of their name as the app's SVG colour parser
+    /// knows it; Default and Seafoam - names no standard table carries - take the app's own
+    /// label hues (#12501: these values are the app's choice, not measured numbers).
+    pub fn rgb(self) -> Option<[u8; 3]> {
+        match self {
+            Self::Classic => None,
+            Self::Default => Some([0x78, 0xAD, 0xF6]),
+            Self::Green => Some([0x00, 0x80, 0x00]),
+            Self::Chartreuse => Some([0x7F, 0xFF, 0x00]),
+            Self::Yellow => Some([0xFF, 0xFF, 0x00]),
+            Self::Orange => Some([0xFF, 0xA5, 0x00]),
+            Self::Red => Some([0xFF, 0x00, 0x00]),
+            Self::Magenta => Some([0xFF, 0x00, 0xFF]),
+            Self::Purple => Some([0x80, 0x00, 0x80]),
+            Self::Indigo => Some([0x4B, 0x00, 0x82]),
+            Self::Fuchsia => Some([0xFF, 0x00, 0xFF]),
+            Self::Seafoam => Some([0x1C, 0x84, 0x88]),
+            Self::White => Some([0xFF, 0xFF, 0xFF]),
+            Self::Black => Some([0x00, 0x00, 0x00]),
+        }
+    }
+}
+
+/// Warp › the gear right of the style dropdown: the guide lines inside each grid cell (#12501), with
+/// the starting values the maintainers measured on 2026-11-26: Default's colour, 70 % and 2 lines.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WarpGuideOptions {
+    /// Color: the dropdown entry the thin lines take. Classic keeps the theme's own overlay line.
+    pub color: WarpGuideColor,
+    /// Opacity in whole percent, 1..=100: the share of the colour's alpha the lines show.
+    pub opacity: f32,
+    /// Density: the thin lines inside every cell, each way, whole numbers 1..=10.
+    pub density: f32,
+    /// Auto / Always / Never Show Guides.
+    pub show: WarpGuideShow,
+}
+
+impl Default for WarpGuideOptions {
+    fn default() -> Self {
+        WarpGuideOptions { color: WarpGuideColor::Default, opacity: 70.0, density: 2.0, show: WarpGuideShow::Always }
+    }
+}
+
 /// Options-bar state for tools (Photoshop keeps these per tool).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -240,6 +362,10 @@ pub struct ToolOptions {
     /// picked (unset follows General's default), Legacy scaling, the W/H link and unit.
     #[serde(default)]
     pub transform: TransformSettings,
+    /// Warp (Free Transform's Warp phase) › the gear's guide-line options: the colour, opacity,
+    /// density and visibility of the thin lines inside each grid cell (#12501).
+    #[serde(default)]
+    pub warp_guides: WarpGuideOptions,
     /// The Crop tool: ratio, W x H x Resolution, Delete Cropped Pixels, Fill, the guide
     /// overlay and the shield (#1919, #2443, #3823).
     #[serde(default)]
@@ -542,6 +668,7 @@ impl Default for ToolOptions {
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
             transform: TransformSettings::default(),
+            warp_guides: WarpGuideOptions::default(),
             crop: CropSettings::default(),
             perspective_crop: CropSizeFields::default(),
             perspective_crop_grid: true,

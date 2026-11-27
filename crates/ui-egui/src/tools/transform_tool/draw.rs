@@ -9,16 +9,17 @@ use craft::draw::ui::pen::{AnchorsShown, BezierOverlay, BezierTool, EditPath, Ed
 use craft::draw::ui::transform::{ApplyBy, Interpolation, TransformEdit, TransformOverlay, TransformPhase, TransformRequest};
 use craft::imaging::ui::selection::PointMap;
 use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, TransformPreview};
-use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh};
+use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpGuides, WarpGuidesShow, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::primitives::PaintSlot;
+use craft::ui::style::DataColor;
 use photocraft_doc::DocId;
 use photocraft_geom::warp::WarpStyle;
 
 use super::{OpenPreview, begin, cancel, commit, warp};
 use crate::PhotocraftApp;
-use crate::state::{FreeTransform, SessionWarp};
+use crate::state::{FreeTransform, SessionWarp, WarpGuideOptions, WarpGuideShow};
 use crate::transform_fx::LayerStyleSource;
 
 /// The host key of the transformed path outline in its `EditPath`.
@@ -121,7 +122,7 @@ fn show_session(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
             .show_at(ui, rect);
     }
     match t.session.warp() {
-        Some(w) => show_warp(t, pv, w, ui, rect, &mut out),
+        Some(w) => show_warp(t, pv, w, &app.ui.tool_options.warp_guides, ui, rect, &mut out),
         None => {
             let settings = super::settings(app);
             let shown = TransformOverlay::new("Free Transform", &t.session, &settings).id_salt(super::BOX_ID_SALT).show_at(ui, rect);
@@ -217,8 +218,27 @@ pub(crate) fn styled_composite(app: &PhotocraftApp, zoom: f32) -> Option<(egui::
     Some((source.compose(&plan, &content)?, plan))
 }
 
+/// The grid's guide lines as the framework takes them, from the remembered options (#12501, values
+/// as measured by the maintainers on 2026-11-26): the picked colour entry - Classic keeps the theme's
+/// own overlay line - Opacity scales the line's alpha, Density is the number of thin lines inside
+/// every cell each way on every patch, and the Show Guides row says when they draw: Auto only while a
+/// drag of the grid runs, Never not at all, leaving the patch boundaries.
+pub(super) fn guide_look(options: &WarpGuideOptions) -> WarpGuides {
+    let mut guides = WarpGuides::default();
+    guides.line = options.color.rgb().map(|[r, g, b]| DataColor::new(egui::Color32::from_rgb(r, g, b)));
+    guides.share = if options.opacity.is_finite() { (options.opacity / 100.0).clamp(0.0, 1.0) } else { 1.0 };
+    let lines = if options.density.is_finite() { options.density.round() } else { WarpGuideOptions::default().density };
+    guides.density = Some(lines.clamp(1.0, 10.0) as usize);
+    guides.show = match options.show {
+        WarpGuideShow::Auto => WarpGuidesShow::WhileDragging,
+        WarpGuideShow::Always => WarpGuidesShow::Always,
+        WarpGuideShow::Never => WarpGuidesShow::Never,
+    };
+    guides
+}
+
 /// The warp grid, or the cylinder editor for a cylinder, with its events for the caller to apply.
-fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui::Ui, rect: egui::Rect, out: &mut Shown) {
+fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, guides: &WarpGuideOptions, ui: &mut egui::Ui, rect: egui::Rect, out: &mut Shown) {
     if w.warp.style == WarpStyle::Cylinder {
         if let Some(values) = warp::cylinder_values(&w.warp) {
             let shown = CylinderWarp::new("Warp cylinder", Bind::given(values), &w.mesh).show_at(ui, rect);
@@ -242,6 +262,7 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     if let Some(split) = split {
         grid = grid.split(split);
     }
+    grid = grid.guides(guide_look(guides));
     let shown = grid.show_at(ui, rect);
     out.busy |= gesture_open(&shown.mesh.events);
     out.picked = shown.picked;

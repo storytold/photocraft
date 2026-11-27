@@ -658,6 +658,13 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     fit(&mut o.magic_eraser_opacity, 1.0, 100.0, d.magic_eraser_opacity);
     fit(&mut o.bg_tolerance, 0.0, 100.0, d.bg_tolerance);
     fit(&mut o.cr_tolerance, 0.0, 100.0, d.cr_tolerance);
+    // Warp's guide-line gear (#12501, the fields as measured by the maintainers on 2026-11-26): both
+    // hold whole numbers - Opacity 1-100 % and Density 1-10 lines per cell - so a file with a number
+    // outside a field's range gets the closest it can hold, a fractional number of its own rounds to
+    // a whole, and a value that is not a number at all goes back to the field's starting value.
+    let whole = |v: &mut f32, lo: f32, hi: f32, def: f32| *v = if v.is_finite() { v.round().clamp(lo, hi) } else { def };
+    whole(&mut o.warp_guides.opacity, 1.0, 100.0, d.warp_guides.opacity);
+    whole(&mut o.warp_guides.density, 1.0, 10.0, d.warp_guides.density);
     let (width_min, width_max) = MagneticSettings::WIDTH_RANGE;
     fit(&mut o.magnetic.width, width_min, width_max, d.magnetic.width);
     fit(&mut o.magnetic.contrast, 1.0, 100.0, d.magnetic.contrast);
