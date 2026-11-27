@@ -119,6 +119,9 @@ mod targeting;
 mod tone_target;
 mod view;
 
+#[cfg(test)]
+mod undo_channel_target_tests;
+
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
 use planes::edit_mode;
@@ -147,8 +150,8 @@ pub(crate) use targeting::{
     targeted_channel,
 };
 pub use tone_target::{ToneTarget, resolve_tone_target};
-pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
+pub(crate) use view::{fix_view, restore_view_after_undo};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
