@@ -59,6 +59,101 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
     }
 }
 
+/// Path of the clipping base for the layer at `path`, when that layer has `clipped = true` and a
+/// preceding unclipped sibling exists in the same sibling list.
+pub fn clip_base_path(doc: &Document, path: &[usize]) -> Option<Vec<usize>> {
+    let layer = doc.layer_at(path)?;
+    if !layer.clipped {
+        return None;
+    }
+    let (&idx, parent) = path.split_last()?;
+    let siblings = if parent.is_empty() { &doc.layers[..] } else { doc.layer_at(parent)?.children()? };
+    let base_idx = siblings.get(..idx)?.iter().rposition(|s| !s.clipped)?;
+    let mut base_path = Vec::with_capacity(path.len());
+    base_path.extend_from_slice(parent);
+    base_path.push(base_idx);
+    Some(base_path)
+}
+
+/// Visible document-space bounds of layer `id` after intersecting with its own masks, any clipping
+/// mask base, and every enclosing group's masks, frame, or artboard. Hidden layers (or layers
+/// whose enclosing group or clipping base is hidden) return [`Rect::EMPTY`].
+pub fn visible_layer_bounds(doc: &Document, id: photocraft_doc::LayerId) -> Rect {
+    let Some(path) = doc.path_of(id) else { return Rect::EMPTY };
+    visible_bounds_at(doc, &path, 0)
+}
+
+fn visible_bounds_at(doc: &Document, path: &[usize], depth: usize) -> Rect {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH + 4 {
+        return Rect::EMPTY;
+    }
+    let Some(layer) = doc.layer_at(path) else { return Rect::EMPTY };
+    if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
+        return Rect::EMPTY;
+    }
+    let canvas = doc.bounds();
+    let board_rect = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard()).map(|a| a.rect);
+    let mut b = if let Some(a) = layer.artboard() {
+        a.rect
+    } else if let Some(f) = &layer.frame {
+        f.bounds()
+    } else {
+        match &layer.content {
+            LayerContent::Group(g) => {
+                let mut child_path = Vec::with_capacity(path.len() + 1);
+                child_path.extend_from_slice(path);
+                let mut acc = Rect::EMPTY;
+                for (ci, child) in g.children.iter().enumerate() {
+                    if !child.visible {
+                        continue;
+                    }
+                    child_path.push(ci);
+                    let cb = visible_bounds_at(doc, &child_path, depth + 1);
+                    child_path.pop();
+                    if !cb.is_empty() {
+                        acc = if acc.is_empty() { cb } else { acc.union(&cb) };
+                    }
+                }
+                acc
+            }
+            LayerContent::Adjustment(_) => Rect::EMPTY,
+            LayerContent::Fill(_) => board_rect.unwrap_or(canvas),
+            _ => layer_bounds(layer, canvas),
+        }
+    };
+    if b.is_empty() {
+        return Rect::EMPTY;
+    }
+    if let Some(m) = masks::mask_clip_bounds(layer) {
+        b = b.intersect(&m);
+        if b.is_empty() {
+            return Rect::EMPTY;
+        }
+    }
+    for n in (1..=path.len()).rev() {
+        let sub = &path[..n];
+        let Some(node) = doc.layer_at(sub) else { return Rect::EMPTY };
+        if n < path.len() {
+            if let Some(a) = node.artboard() {
+                b = b.intersect(&a.rect);
+            }
+            if let Some(m) = masks::mask_clip_bounds(node) {
+                b = b.intersect(&m);
+            }
+        }
+        if node.clipped
+            && let Some(base_path) = clip_base_path(doc, sub)
+        {
+            let base_rect = visible_bounds_at(doc, &base_path, depth + 1);
+            b = b.intersect(&base_rect);
+        }
+        if b.is_empty() {
+            return Rect::EMPTY;
+        }
+    }
+    b
+}
+
 /// Where a Photoshop Frame's stroke ([`shape_split::frame_shape`]) draws, within `canvas`; empty
 /// for other layers. Taken from the compiled stroke the renderer draws, not the path grown by the
 /// stroke width: a mitered corner reaches up to `miter_limit` widths past the path, and a frame

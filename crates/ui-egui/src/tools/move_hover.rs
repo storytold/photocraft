@@ -8,7 +8,7 @@
 use craft::behavior::kurbo;
 use craft::ui::canvas_controls::{HoverOutline, HoverShape};
 use craft::ui::contract::Show as _;
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 
 use crate::PhotocraftApp;
@@ -60,32 +60,16 @@ pub(crate) fn target(app: &mut PhotocraftApp, at: Option<[f64; 2]>, command: boo
     bounds
 }
 
-/// The outline of a picked layer: its visible content (a group's, its visible layers' together).
-/// Not the Background: it fills the canvas, and the Move tool doesn't move it.
+/// The outline of a picked layer: its visible nested content (clipped to its own masks, any
+/// clipping mask base, and enclosing group/frame/artboard masks). Not the Background: it fills the
+/// canvas, and the Move tool doesn't move it.
 fn outline(doc: &Document, id: LayerId) -> Option<Rect> {
-    let rows = doc.walk();
-    let (prefix, _, top) = rows.iter().find(|(_, _, l)| l.id == id)?;
+    let top = doc.layer(id)?;
     if crate::doc_props_ui::is_background(doc, top) {
         return None;
     }
-    let b = rows
-        .iter()
-        .filter(|(p, _, _)| p.starts_with(prefix) && (prefix.len()..=p.len()).all(|n| p.get(..n).and_then(|q| doc.layer_at(q)).is_some_and(|l| l.visible)))
-        .fold(Rect::EMPTY, |acc, (_, _, l)| acc.union(&bounds(doc, l)));
+    let b = photocraft_compose::visible_layer_bounds(doc, id);
     (!b.is_empty()).then_some(b)
-}
-
-fn bounds(doc: &Document, l: &Layer) -> Rect {
-    if let Some(a) = l.artboard() {
-        return a.rect;
-    }
-    let content = |s| photocraft_compose::bounds::content_bounds(s);
-    match &l.content {
-        LayerContent::Group(_) | LayerContent::Adjustment(_) => Rect::EMPTY,
-        // A fill layer covers the canvas; its mask limits it.
-        LayerContent::Fill(_) => l.mask.as_ref().filter(|m| m.enabled).map_or(doc.bounds(), |m| content(&m.surface)),
-        _ => l.surface().map_or(Rect::EMPTY, content),
-    }
 }
 
 /// The document-space bounds to outline: either a layer hovered in the Layers panel, or what a
@@ -214,5 +198,38 @@ mod tests {
         // Hovering empty area clears canvas_hover_layer:
         assert!(target(&mut app, Some([40.0, 40.0]), false, false).is_none());
         assert_eq!(app.canvas_hover_layer, None);
+    }
+
+    #[test]
+    fn clipped_layer_hover_outline_matches_nested_clip_region() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        app.session.execute("layer.new.layer", json!({"name": "Base"})).unwrap();
+        let base_rect = Rect::new(20, 20, 50, 45);
+        app.session
+            .edit("paint base", |doc, a| {
+                doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(base_rect, &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.execute("layer.new.layer", json!({"name": "Photo"})).unwrap();
+        let photo = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint photo", |doc, _| {
+                doc.layer_mut(photo).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 100, 100), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.execute("layer.setProps", json!({"layer": photo.0, "clipped": true})).unwrap();
+        app.ui.tool = Tool::Move;
+
+        // Inside the clipping base: hovering outlines only the clipped region, not 0..100.
+        assert_eq!(target(&mut app, Some([30.0, 30.0]), false, false), Some(base_rect));
+        assert_eq!(app.canvas_hover_layer, Some(photo));
+        // Outside the clipping base: nothing is highlighted.
+        assert_eq!(target(&mut app, Some([80.0, 80.0]), false, false), None);
+        // Hovering the clipped layer in the Layers panel also outlines only the clipped region.
+        app.hover_layer = Some(photo);
+        assert_eq!(active_outline(&mut app, None, false, false), Some(base_rect));
     }
 }

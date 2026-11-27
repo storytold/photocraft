@@ -55,13 +55,16 @@ pub enum MenuKind {
         /// The shape of the committed text, which picks the Convert row (#12043).
         shape: TypeShape,
     },
-    /// The layers with visible pixels under the pointer, topmost first (id, name).
+    /// The layers with visible pixels under the pointer, nested by group/frame/clipping hierarchy.
     Layers {
-        /// The layers listed.
+        /// The layers listed (id, name), in hierarchical display order.
         layers: Vec<(u64, String)>,
-        /// Each row's level: a frame's image one in, under its frame (the Frame tool, #13885); empty: none.
+        /// Each row's nesting depth (0 = top-level, +1 per enclosing group / frame / clipping base).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         depth: Vec<u8>,
+        /// Whether each row is clipped to the base layer directly above it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        clipped: Vec<bool>,
         /// A separator and Isolate Layers end the rows (the Frame tool, #13885).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         isolate: bool,
@@ -1624,10 +1627,11 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if layers.is_empty() {
                 return false;
             }
-            // The Frame tool's picker nests frames' images and ends with Isolate Layers (#13885).
+            // Group, frame, artboard and clipping-mask nesting are shown hierarchically for every
+            // layer picker; the Frame tool also appends Isolate Layers (#13885).
             let frame = tool == Tool::Frame;
-            let (layers, depth) = if frame { crate::layer_pick_ui::frame_rows(app, layers) } else { (layers, Vec::new()) };
-            menu.kind = MenuKind::Layers { layers, depth, isolate: frame };
+            let (layers, depth, clipped) = crate::layer_pick_ui::nested_rows(app, layers);
+            menu.kind = MenuKind::Layers { layers, depth, clipped, isolate: frame };
         }
         MenuKind::TypeEdit { .. } => {
             if !editing_text(app, tool) {
@@ -1885,7 +1889,7 @@ pub fn close_stale(app: &mut PhotocraftApp) {
 /// `layer_pick_ui::entries`, the brush-mode menu `brush_mode_menu::entries`.
 pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>> {
     match &menu.kind {
-        MenuKind::Layers { layers, depth, isolate } => {
+        MenuKind::Layers { layers, depth, isolate, .. } => {
             return crate::layer_pick_ui::entries(layers, depth, *isolate, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
         }
         MenuKind::BrushMode { plain } => return crate::brush_mode_menu::entries(app, menu.tool, *plain),
@@ -1996,17 +2000,22 @@ pub(crate) fn run(
     if let Some(menu) = app.ui.canvas_tool_menu.clone()
         && menu.canvas == canvas.response.id
     {
-        let list = entries(app, &menu);
-        let mut open = true;
-        let shown = Menu::new(tl!("Canvas menu").to_string())
-            .opened_by(&canvas.response, Trigger::Manual)
-            .anchor(Anchor::Point(Pos2::new(menu.pos[0], menu.pos[1])))
-            .open(Bind::bound(&mut open))
-            .pick(ui, &list);
-        if let Some(command) = shown.picked {
-            choose(app, &ui.ctx().clone(), &command);
-        } else if !open || shown.closed.is_some() {
-            app.ui.canvas_tool_menu = None;
+        if let MenuKind::Layers { layers, depth, clipped, isolate } = &menu.kind {
+            let data = crate::layer_pick_ui::LayerMenuData { pos: menu.pos, layers, depth, clipped, isolate: *isolate };
+            crate::layer_pick_ui::show_menu(ui, app, &canvas.response, data);
+        } else {
+            let list = entries(app, &menu);
+            let mut open = true;
+            let shown = Menu::new(tl!("Canvas menu").to_string())
+                .opened_by(&canvas.response, Trigger::Manual)
+                .anchor(Anchor::Point(Pos2::new(menu.pos[0], menu.pos[1])))
+                .open(Bind::bound(&mut open))
+                .pick(ui, &list);
+            if let Some(command) = shown.picked {
+                choose(app, &ui.ctx().clone(), &command);
+            } else if !open || shown.closed.is_some() {
+                app.ui.canvas_tool_menu = None;
+            }
         }
     }
     crate::brush_picker::show_at(ui, app);

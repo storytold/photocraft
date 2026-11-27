@@ -19,6 +19,90 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
     layers_hit(doc, x, y, false)
 }
 
+/// Whether the layer at `path` (acting as a clipping base) has non-zero visible alpha at `(x, y)`.
+/// Clipping masks clip to the base's actual alpha (glyph pixels for type, visible descendants for a
+/// group, and masks applied).
+fn clip_base_covers_at(doc: &Document, path: &[usize], x: i32, y: i32, depth: usize) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH + 4 {
+        return false;
+    }
+    let Some(base) = doc.layer_at(path) else { return false };
+    if !base.visible {
+        return false;
+    }
+    if let Some(a) = base.artboard() {
+        return a.rect.contains(x, y);
+    }
+    let canvas = doc.bounds();
+    if photocraft_compose::masks::mask_value_at(base, canvas, x, y) <= 0.0 {
+        return false;
+    }
+    match &base.content {
+        LayerContent::Group(g) => {
+            let mut child_path = Vec::with_capacity(path.len() + 1);
+            child_path.extend_from_slice(path);
+            for (ci, child) in g.children.iter().enumerate() {
+                if !child.visible || matches!(child.content, LayerContent::Adjustment(_)) {
+                    continue;
+                }
+                child_path.push(ci);
+                let hit = if child.clipped
+                    && let Some(bp) = photocraft_compose::clip_base_path(doc, &child_path)
+                {
+                    clip_base_covers_at(doc, &bp, x, y, depth + 1) && clip_base_covers_at(doc, &child_path, x, y, depth + 1)
+                } else {
+                    clip_base_covers_at(doc, &child_path, x, y, depth + 1)
+                };
+                child_path.pop();
+                if hit {
+                    return true;
+                }
+            }
+            false
+        }
+        LayerContent::Adjustment(_) => false,
+        LayerContent::Fill(_) => true,
+        _ => match base.surface() {
+            Some(s) => {
+                let mut px = [[0.0f32; 4]; 1];
+                s.read_rgba_into(Rect::from_xywh(x, y, 1, 1), &mut px);
+                px[0][3] > 0.0
+            }
+            None => false,
+        },
+    }
+}
+
+/// Whether enclosing groups' masks/frames and any clipping mask bases along `path` allow pixels at
+/// `(x, y)` to be visible.
+fn nested_clip_allows(doc: &Document, path: &[usize], x: i32, y: i32) -> bool {
+    let canvas = doc.bounds();
+    for n in 1..=path.len() {
+        let sub = &path[..n];
+        let Some(node) = doc.layer_at(sub) else { return false };
+        if !node.visible {
+            return false;
+        }
+        if n < path.len() {
+            if let Some(f) = &node.frame
+                && !f.bounds().contains(x, y)
+            {
+                return false;
+            }
+            if photocraft_compose::masks::mask_value_at(node, canvas, x, y) <= 0.0 {
+                return false;
+            }
+        }
+        if node.clipped
+            && let Some(base_path) = photocraft_compose::clip_base_path(doc, sub)
+            && !clip_base_covers_at(doc, &base_path, x, y, 0)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// [`layers_at`], but with `type_bounds` a type layer is hit anywhere inside the bounds of its
 /// rendered text (the gaps between glyphs included), as Photoshop's Auto-Select does.
 fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId> {
@@ -32,11 +116,13 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId>
     if !doc.has_artboards() && !doc.bounds().contains(x, y) {
         return Vec::new();
     }
+    let canvas = doc.bounds();
     let rows = doc.walk();
     let mut out = Vec::new();
     for (path, _, l) in rows.iter().rev() {
-        // The layer and every enclosing group must be visible.
-        if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
+        // The layer, every enclosing group, their masks/frames, and any clipping mask base must
+        // keep this pixel visible.
+        if !nested_clip_allows(doc, path, x, y) {
             continue;
         }
         // An artboard clips its layers to the board (#1531): pixels past its edge aren't shown,
@@ -67,8 +153,8 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId>
                 None => 0.0,
             },
         };
-        // As the compositor sees it: density applied, all ones when the mask is disabled.
-        let mask = l.mask.as_ref().map_or(1.0, |m| m.value(x, y));
+        // As the compositor sees it: pixel mask with density × vector mask.
+        let mask = photocraft_compose::masks::mask_value_at(l, canvas, x, y);
         if alpha * mask > 0.0 {
             out.push(l.id);
         }
@@ -159,10 +245,7 @@ fn layers_in_rect_with_locks(doc: &Document, r: Rect, group: bool, skip_position
         {
             continue;
         }
-        let mut b = photocraft_compose::layer_bounds(l, canvas);
-        if let Some(board) = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard()) {
-            b = b.intersect(&board.rect);
-        }
+        let b = photocraft_compose::visible_layer_bounds(doc, l.id);
         if b.is_empty() || b.intersect(&r).is_empty() {
             continue;
         }
@@ -538,5 +621,60 @@ mod tests {
         let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
         let ids: Vec<_> = list["layers"].as_array().unwrap().iter().map(|l| l["layer"].clone()).collect();
         assert_eq!(ids, vec![json!(red.0), json!(bg.0)]);
+    }
+
+    /// A clipped layer is only pickable and marquee-selectable inside its clipping base's visible
+    /// area, not over its unclipped overflow outside the base.
+    #[test]
+    fn clipped_layer_picks_and_marquees_only_inside_clipping_base() {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        // Small base square at (20..40, 20..40)
+        s.execute("layer.new.layer", json!({"name": "Base"})).unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 20, "height": 20})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let base = s.active().unwrap().active_layer.unwrap();
+        // Oversized photo filling the entire 100×100 canvas, clipped into Base
+        s.execute("layer.new.layer", json!({"name": "Photo"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let photo = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.setProps", json!({"layer": photo.0, "clipped": true})).unwrap();
+
+        // Inside the clipping base: Photo is hit on top of Base.
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 30, "y": 30, "select": false})).unwrap()["layer"], photo.0);
+        let inside_list = s.execute("layer.pickAt", json!({"x": 30, "y": 30, "list": true})).unwrap();
+        let inside_ids: Vec<u64> = inside_list["layers"].as_array().unwrap().iter().map(|l| l["layer"].as_u64().unwrap()).collect();
+        assert_eq!(inside_ids, vec![photo.0, base.0]);
+
+        // Outside the clipping base: Photo's clipped overflow is NOT hit and NOT listed.
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 80, "y": 80, "select": false})).unwrap()["layer"], Value::Null);
+        let outside_list = s.execute("layer.pickAt", json!({"x": 80, "y": 80, "list": true})).unwrap();
+        assert_eq!(outside_list["layers"], json!([]));
+
+        // Marquee outside the base selects nothing; marquee touching the base selects both.
+        let outside_marquee = s.execute("layer.selectInRect", json!({"x": 60, "y": 60, "width": 30, "height": 30})).unwrap();
+        assert_eq!(outside_marquee["layers"], json!([]));
+        let inside_marquee = s.execute("layer.selectInRect", json!({"x": 25, "y": 25, "width": 10, "height": 10})).unwrap();
+        assert_eq!(inside_marquee["layers"], json!([photo.0, base.0]));
+
+        // Hiding the base hides the clipped photo from picking too.
+        s.execute("layer.setProps", json!({"layer": base.0, "visible": false})).unwrap();
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 30, "y": 30, "select": false})).unwrap()["layer"], Value::Null);
+    }
+
+    /// An image nested inside a Frame is only pickable and marquee-selectable inside the Frame.
+    #[test]
+    fn framed_layer_picks_only_inside_frame_bounds() {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Big"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#00aa44"})).unwrap();
+        let big = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.frame", json!({"x": 10, "y": 10, "width": 30, "height": 30, "layer": big.0})).unwrap();
+
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 20, "y": 20, "select": false})).unwrap()["layer"], big.0);
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 75, "y": 75, "select": false})).unwrap()["layer"], Value::Null);
+        assert_eq!(s.execute("layer.selectInRect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap()["layers"], json!([]));
     }
 }
