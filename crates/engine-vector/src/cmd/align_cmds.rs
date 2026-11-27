@@ -84,38 +84,28 @@ fn blend_enabled(s: &Session) -> std::result::Result<(), String> {
 /// The selected pixel layers, plus the pixels of a selected group (#14206): with a group and a
 /// pixel layer selected, the reference application blends the group's pixels in and masks them to
 /// their side of the seam, while the group itself takes no mask. A group lends its pixels only
-/// when it is the only group in the selection, sits at the top level of the stack and holds exactly
-/// one pixel layer - the measured case. A group holding several layers or none that is a pixel
-/// layer, a group inside another group and a second selected group were not measured and contribute
-/// nothing, as they do today; so does a group whose own pixel layer is selected next to it.
+/// when [`blend_donor`] accepts it. A group whose own pixel layer is selected next to it lends that
+/// layer once: `selected_layers` puts the group before its child, and the child is then skipped
+/// where it appears, so the group stays the entry the added layers sit above.
 /// The anchor is the top entry that took part, so a selected group keeps the merged layer beside it
 /// instead of gaining one inside; for a selection of pixel layers that is the top blended layer.
 fn blend_layers(s: &Session) -> (Vec<LayerId>, Option<LayerId>) {
     let Some(st) = s.active() else { return (Vec::new(), None) };
     let selected = st.selected_layers();
-    let groups: Vec<LayerId> = selected.iter().copied().filter(|id| st.doc.layer(*id).is_some_and(Layer::is_group)).collect();
-    let donor = match groups.as_slice() {
-        [g] if st.doc.layers.index().depth(*g) == Some(0)
-            && st.doc.layer(*g).is_some_and(|l| matches!(l.children(), Some([c]) if matches!(c.content, LayerContent::Raster(_)))) =>
-        {
-            Some(*g)
-        }
-        _ => None,
-    };
+    let donor = blend_donor(&st.doc, selected);
     let mut ids: Vec<LayerId> = Vec::with_capacity(selected.len());
     let mut top: Option<LayerId> = None;
     for id in selected {
         let Some(l) = st.doc.layer(*id) else { continue };
         match &l.content {
+            LayerContent::Raster(_) if Some(*id) == donor.map(|(_, child)| child) => {}
             LayerContent::Raster(_) => {
                 ids.push(*id);
                 top = Some(*id);
             }
-            LayerContent::Group(_) if Some(*id) == donor => {
-                if let Some([child]) = l.children()
-                    && !ids.contains(&child.id)
-                {
-                    ids.push(child.id);
+            LayerContent::Group(_) if donor.is_some_and(|(group, _)| group == *id) => {
+                if let Some((_, child)) = donor {
+                    ids.push(child);
                 }
                 top = Some(*id);
             }
@@ -123,6 +113,21 @@ fn blend_layers(s: &Session) -> (Vec<LayerId>, Option<LayerId>) {
         }
     }
     (ids, top)
+}
+
+/// The group whose pixels join the blend and the layer it lends, or `None` when no selected group
+/// does. The measured case of #14206: the selection holds exactly one group, that group sits at the
+/// top level of the stack, and it holds exactly one pixel layer. A group holding several layers or
+/// none that is a pixel layer, a group inside another group and a second selected group were not
+/// measured and lend nothing, as they do today.
+fn blend_donor(doc: &Document, selected: &[LayerId]) -> Option<(LayerId, LayerId)> {
+    let groups: Vec<LayerId> = selected.iter().copied().filter(|id| doc.layer(*id).is_some_and(Layer::is_group)).collect();
+    let [g] = groups.as_slice() else { return None };
+    let [child] = doc.layer(*g)?.children()? else { return None };
+    if doc.layers.index().depth(*g) != Some(0) || !matches!(child.content, LayerContent::Raster(_)) {
+        return None;
+    }
+    Some((*g, child.id))
 }
 
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {

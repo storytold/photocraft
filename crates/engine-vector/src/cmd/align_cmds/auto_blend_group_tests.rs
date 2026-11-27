@@ -98,6 +98,9 @@ fn a_group_and_a_pixel_layer_blend_together() {
     assert!(g.mask.is_none(), "the group carries no mask");
     assert_eq!(g.children().map_or(0, <[Layer]>::len), 1, "the group still holds one layer");
     assert_eq!(doc.layer(right).unwrap().surface().unwrap().content_bounds(), Rect::new(160, 0, 400, 300), "Right's pixels stay put");
+    // Only the two layers that took part are masked: nothing else in the document gained a mask.
+    let masked: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| l.mask.is_some()).map(|(_, _, l)| l.id).collect();
+    assert_eq!(masked, vec![left, right], "Left and Right are the masked layers");
     // One merged layer, above the group rather than inside it.
     assert_eq!(layer_count(&s), states + 1, "one new layer, the merged one ({r})");
     let blended = LayerId(r["blended"].as_u64().expect("Seamless Tones is on by default"));
@@ -138,6 +141,75 @@ fn a_group_selection_blends_like_the_same_two_pixel_layers() {
     assert_eq!(rf["blended"].is_null(), rg["blended"].is_null(), "the same merged layer");
     assert_eq!(layer_count(&flat), flat_states + 1, "one new layer in the plain run");
     assert_eq!(layer_count(&grouped), grouped_states + 1, "one new layer in the group run");
+    // The merged layer holds the same pixels in both runs, not just the same shape of result.
+    let (fb, gb) = {
+        let (a, b) = (flat.active().unwrap(), grouped.active().unwrap());
+        (
+            a.doc.layer(LayerId(rf["blended"].as_u64().unwrap())).unwrap().surface().unwrap().clone(),
+            b.doc.layer(LayerId(rg["blended"].as_u64().unwrap())).unwrap().surface().unwrap().clone(),
+        )
+    };
+    assert_eq!(fb.content_bounds(), gb.content_bounds(), "the merged layer covers the same area");
+    for y in (0..H).step_by(11) {
+        for x in 0..W {
+            assert_eq!(fb.pixel(x, y), gb.pixel(x, y), "merged pixel x {x} y {y}");
+        }
+    }
+}
+
+/// The group and the pixel layer inside it selected together: the branch takes part once, not
+/// twice, and the merged layer still lands beside the group rather than inside it.
+#[test]
+fn a_group_and_its_own_layer_selected_together_blend_once() {
+    let (mut s, left, right) = issue_document();
+    let group = group_of(&mut s, right, "G");
+    select(&mut s, &[left, group, right]);
+    let before = s.active().unwrap().history.past_len();
+    let states = layer_count(&s);
+    let r = s.execute("edit.autoBlendLayers", json!({"method": "panorama"})).unwrap();
+    assert_eq!(r["layers"], json!([left.0, right.0]), "the pair blends once");
+    let st = s.active().unwrap();
+    assert_eq!(st.history.past_len(), before + 1, "one history state");
+    let masked: Vec<LayerId> = st.doc.walk().into_iter().filter(|(_, _, l)| l.mask.is_some()).map(|(_, _, l)| l.id).collect();
+    assert_eq!(masked, vec![left, right], "one mask for each layer of the pair");
+    let blended = LayerId(r["blended"].as_u64().unwrap());
+    assert_eq!(st.doc.layers.index().parent(blended), None, "the merged layer sits beside the group");
+    assert_eq!(st.doc.layer(group).unwrap().children().map_or(0, <[Layer]>::len), 1, "the group keeps its one layer");
+    assert_eq!(layer_count(&s), states + 1, "one new layer, the merged one");
+}
+
+/// A merged layer never lands inside a group that only lent its pixels: the group is the anchor.
+#[test]
+fn the_merged_layer_sits_above_a_group_that_lent_its_pixels() {
+    let (mut s, left, right) = issue_document();
+    let group = group_of(&mut s, right, "G");
+    select(&mut s, &[left, group]);
+    let r = s.execute("edit.autoBlendLayers", json!({"method": "panorama"})).unwrap();
+    let blended = LayerId(r["blended"].as_u64().unwrap());
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.layers.index().parent(blended), None, "beside the group, at the top level");
+    let root = |id: LayerId| st.doc.layers.iter().position(|l| l.id == id).expect("a top-level layer");
+    assert!(root(blended) > root(group) && root(blended) > root(left), "above both entries of the selection");
+}
+
+/// A Stack Images run on a group pair adds the hidden Depth layer beside the group, and scales it
+/// for the two layers that took part, not for three.
+#[test]
+fn a_group_pair_still_gets_a_depth_map_scaled_for_two_layers() {
+    let (mut s, left, right) = issue_document();
+    let group = group_of(&mut s, right, "G");
+    select(&mut s, &[left, group]);
+    let r = s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false, "depthMap": true})).unwrap();
+    assert_eq!(r["layers"], json!([left.0, right.0]), "two layers take part ({r})");
+    let st = s.active().unwrap();
+    let depth = LayerId(r["depth"].as_u64().expect("a depth map"));
+    let d = st.doc.layer(depth).unwrap();
+    assert!(!d.visible && d.name.starts_with("Depth"), "{} visible {}", d.name, d.visible);
+    assert_eq!(st.doc.layers.index().parent(depth), None, "beside the group, not inside it");
+    // White = the top layer: the scale is 1 / (2 - 1), so the layer above shows as 1.0.
+    let surf = d.surface().unwrap();
+    assert!(surf.pixel(390, 150)[0] > 0.9, "the top layer is white: {:?}", surf.pixel(390, 150));
+    assert!(surf.pixel(10, 150)[0] < 0.1, "the bottom layer is black: {:?}", surf.pixel(10, 150));
 }
 
 /// Builds one unmeasured case on the issue's document and returns the layers to select.
@@ -147,7 +219,7 @@ type Build = fn(&mut Session, LayerId, LayerId) -> Vec<LayerId>;
 /// Auto-Blend stays unavailable and changes neither the document nor the history.
 #[test]
 fn other_group_selections_keep_todays_refusal() {
-    let builds: [(&str, Build); 6] = [
+    let builds: [(&str, Build); 11] = [
         ("a group alone", |s, _, right| vec![group_of(s, right, "G")]),
         ("an empty group and a pixel layer", |s, left, _| {
             let r = s.execute("layer.new.group", json!({"name": "Empty"})).unwrap();
@@ -177,6 +249,34 @@ fn other_group_selections_keep_todays_refusal() {
             let g2 = group_of(s, third, "Two");
             vec![left, g1, g2]
         }),
+        ("a group and its own pixel layer alone", |s, _, right| {
+            let g = group_of(s, right, "G");
+            vec![g, right]
+        }),
+        ("an artboard holding one pixel layer and a pixel layer", |s, left, right| {
+            let g = group_of(s, right, "G");
+            s.execute("layer.new.artboardFromGroup", json!({"layer": g.0})).unwrap();
+            vec![left, g]
+        }),
+        ("a frame holding its layer and a pixel layer", |s, left, right| {
+            select(s, &[right]);
+            let r = s.execute("layer.new.frameFromLayers", json!({})).unwrap();
+            vec![left, LayerId(r["layer"].as_u64().unwrap())]
+        }),
+        ("a hidden group and a pixel layer", |s, left, right| {
+            let g = group_of(s, right, "G");
+            s.execute("layer.hideLayers", json!({"layer": g.0})).unwrap();
+            vec![left, g]
+        }),
+        ("a masked group and a pixel layer", |s, left, right| {
+            let g = group_of(s, right, "G");
+            s.edit("mask", |doc, _| {
+                doc.layer_mut(g).unwrap().mask = Some(LayerMask::reveal_all());
+                Ok(())
+            })
+            .unwrap();
+            vec![left, g]
+        }),
     ];
     for (name, build) in builds {
         let (mut s, left, right) = issue_document();
@@ -184,11 +284,15 @@ fn other_group_selections_keep_todays_refusal() {
         select(&mut s, &ids);
         let before = s.active().unwrap().history.past_len();
         let states = layer_count(&s);
+        let masked = |s: &Session| -> Vec<LayerId> {
+            s.active().unwrap().doc.walk().into_iter().filter(|(_, _, l)| l.mask.is_some()).map(|(_, _, l)| l.id).collect()
+        };
+        let masks = masked(&s);
         assert!(!s.is_enabled("edit.autoBlendLayers"), "{name}: unavailable");
         assert!(s.execute("edit.autoBlendLayers", json!({"method": "panorama"})).is_err(), "{name}: refused");
         let st = s.active().unwrap();
         assert_eq!(st.history.past_len(), before, "{name}: no history state");
-        assert!(st.doc.walk().into_iter().all(|(_, _, l)| l.mask.is_none()), "{name}: no mask added");
+        assert_eq!(masked(&s), masks, "{name}: no mask added");
         assert_eq!(layer_count(&s), states, "{name}: no layer added");
         assert!(!s.is_enabled("edit.autoAlignLayers"), "{name}: Auto-Align stays as it was");
     }
