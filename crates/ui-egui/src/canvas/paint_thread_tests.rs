@@ -161,13 +161,21 @@ fn layer_alpha(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)[3]
 }
 
-/// A Brush stroke released while its thread is still painting the pen's last point and holds the
-/// commit, with the canvas not waiting for it: the stroke is pending. Returns what lets the thread go.
-fn release_with_commit_pending(app: &mut PhotocraftApp) -> impl FnOnce() + Send + 'static {
+/// A stroke from x 20 to the pen's last point at x 130, every step painted, so a hold taken next
+/// holds the commit itself. (A step still queued would hold up the release frame's feed, which
+/// waits for the thread in tests.)
+fn paint_to_the_last_point(app: &mut PhotocraftApp) {
     tool_event(app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, M);
-    move_along(app);
+    for x in (30..=130).step_by(10) {
+        tool_event(app, ToolEvent::Move { x: f64::from(x), y: 30.0, pressure: 1.0 }, M);
+    }
+}
+
+/// A Brush stroke released while its thread holds the commit, with the canvas not waiting for it:
+/// the stroke is pending. Returns what lets the thread go.
+fn release_with_commit_pending(app: &mut PhotocraftApp) -> impl FnOnce() + Send + 'static {
+    paint_to_the_last_point(app);
     let release = app.live_stroke.as_ref().unwrap().paint.hold();
-    feed_last_point_without_waiting(app);
     app.stroke_commit_wait = Duration::ZERO;
     tool_event(app, ToolEvent::Up { x: 130.0, y: 30.0 }, M);
     assert!(app.pending_stroke.is_some(), "the commit is still being made");
@@ -258,11 +266,7 @@ fn a_stroke_started_while_another_is_pending_lands_after_it() {
 fn a_panic_while_the_commit_is_made_falls_back_to_rendering_the_stroke() {
     let mut app = app_for(Tool::Brush);
     let steps = app.session.active().unwrap().history.past_len();
-    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, M);
-    // To the pen's last point, all painted: the panic comes in the commit, not in a step.
-    for x in (30..=130).step_by(10) {
-        tool_event(&mut app, ToolEvent::Move { x: f64::from(x), y: 30.0, pressure: 1.0 }, M);
-    }
+    paint_to_the_last_point(&mut app);
     let paint = &app.live_stroke.as_ref().unwrap().paint;
     let (release, alive) = (paint.hold(), paint.thread_alive());
     paint.panic_next_step();
