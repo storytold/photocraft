@@ -166,8 +166,8 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // Escape and Enter close it once this frame's edits are in (a typed size applies), unless they
     // end a rename in its rename bar.
-    let picker_renaming = app.ui.presets_ui.renaming.as_ref().is_some_and(|(panel, _, _)| panel == "brush-picker")
-        || app.ui.presets_ui.group_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker");
+    let picker_renaming = app.ui.presets_ui.renaming.as_ref().is_some_and(|(panel, _, _)| panel == "brushes")
+        || app.ui.presets_ui.group_renaming.as_ref().is_some_and(|rename| rename.panel == "brushes");
     let key_close = !picker_renaming && ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
     let screen = ctx.content_rect();
     // The picker's content size: the one its grip was dragged to, or the one it last closed with
@@ -196,7 +196,6 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui,
                 &mut b,
                 &app.session.tools.presets,
-                &app.session.tools.preset_hierarchy,
                 app.session.tools.current_preset.as_deref(),
                 &mut app.ui.presets_ui,
                 content,

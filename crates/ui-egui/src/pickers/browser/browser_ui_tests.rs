@@ -17,7 +17,8 @@ const PANEL: &str = "shared-browser-ui-tests";
 type UiTestState = (PresetUi, Vec<BrowserAction>, Vec<(String, String, String, usize)>);
 
 fn group(name: &str, items: Vec<ItemView>) -> GroupView {
-    GroupView { name: name.into(), root_only: false, items }
+    GroupView {
+            label: String::new(), name: name.into(), root_only: false, items }
 }
 
 fn item(key: &str, name: &str, path: &[&str]) -> ItemView {
@@ -67,6 +68,7 @@ fn harness_with_state_layout(groups: Vec<GroupView>, size: Vec2, mut initial_sta
                 canonical_hierarchy_move: None,
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: Some(&mut commit_item_move),
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: None,
@@ -121,6 +123,7 @@ fn harness_with_intent_capture(
                 canonical_hierarchy_move: Some(&mut capture_intent),
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: None,
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: None,
@@ -886,6 +889,7 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
                 canonical_hierarchy_move: None,
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: None,
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: Some(&mut paint_list_item),
@@ -974,6 +978,7 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
                 canonical_hierarchy_move: None,
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: None,
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: None,
@@ -1472,6 +1477,7 @@ fn domain_active_item_does_not_select_a_card_in_a_fresh_browser() {
                 canonical_hierarchy_move: None,
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: None,
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: None,
@@ -1521,6 +1527,7 @@ fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
                 canonical_hierarchy_move: None,
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: Some(&mut commit_item_move),
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: None,
@@ -1618,6 +1625,7 @@ fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identi
                 canonical_hierarchy_move: None,
                 rekey_hierarchy_after_move: None,
                 hierarchy_item_move: None,
+                hierarchy_group_move: None,
                 paint_group: None,
                 paint_item: &mut paint_item,
                 paint_list_item: None,
@@ -2970,6 +2978,7 @@ mod filter_tests {
                     canonical_hierarchy_move: Some(&mut canonical_move),
                     rekey_hierarchy_after_move: None,
                     hierarchy_item_move: None,
+                    hierarchy_group_move: None,
                     paint_group: None,
                     paint_item: &mut paint_item,
                     paint_list_item: None,
@@ -3067,7 +3076,8 @@ pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView>
                 .filter(|item| crate::pickers::search::item_visible_for_query(item, &query, group_matches))
                 .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), group_path: item.group_path.clone() })
                 .collect();
-            (query.is_empty() || group_matches || !items.is_empty()).then(|| GroupView { name: group.name.clone(), root_only: group.root_only, items })
+            (query.is_empty() || group_matches || !items.is_empty()).then(|| GroupView {
+            label: String::new(), name: group.name.clone(), root_only: group.root_only, items })
         })
         .collect()
 }
@@ -3134,7 +3144,8 @@ mod moved_unit_tests {
 
         #[test]
         fn item_context_actions_target_the_selected_cards_and_keep_single_card_fallback() {
-            let clicked_group = GroupView { name: "A".into(), root_only: false, items: Vec::new() };
+            let clicked_group = GroupView {
+            label: String::new(), name: "A".into(), root_only: false, items: Vec::new() };
             let clicked = ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() };
             let selected = vec![
                 ("A".to_owned(), clicked.clone()),
@@ -3537,7 +3548,8 @@ mod moved_unit_tests {
         use super::{GroupView, HierarchyOrderEntry, ItemView, filter_groups, group_render_segments, item_occurrence_position, test_projection_keys};
 
         fn group(name: &str, items: Vec<ItemView>) -> GroupView {
-            GroupView { name: name.into(), root_only: false, items }
+            GroupView {
+            label: String::new(), name: name.into(), root_only: false, items }
         }
 
         fn item(key: &str, name: &str, group_path: &[&str]) -> ItemView {
@@ -3576,7 +3588,8 @@ mod moved_unit_tests {
 
         #[test]
         fn adjacent_root_cards_share_an_unindented_grid_segment() {
-            let groups = vec![GroupView { name: "Presets".into(), root_only: true, items: vec![item("first", "First", &[]), item("second", "Second", &[])] }];
+            let groups = vec![GroupView {
+            label: String::new(), name: "Presets".into(), root_only: true, items: vec![item("first", "First", &[]), item("second", "Second", &[])] }];
             let orders = std::collections::BTreeMap::from([(
                 "".into(),
                 vec![

@@ -130,6 +130,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let groups: Vec<GroupView> = src
         .iter()
         .map(|g| GroupView {
+            label: String::new(),
             name: g.name.clone(),
             root_only: false,
             items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
@@ -171,6 +172,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
                 ui.painter().rect_filled(rect, 2.0, t.field);
@@ -212,6 +214,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let groups: Vec<GroupView> = src
         .iter()
         .map(|g| GroupView {
+            label: String::new(),
             name: g.name.clone(),
             root_only: false,
             items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
@@ -250,6 +253,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
                 let texture = shape_texture(&ctx, &src[group_index].items[item_index]);
@@ -650,11 +654,13 @@ mod tests {
     fn shape_custom_source_has_distinct_identity_even_when_names_overlap() {
         let groups = vec![
             GroupView {
+            label: String::new(),
                 name: "Custom Shapes".into(),
                 root_only: false,
                 items: vec![ItemView { key: "Star".into(), name: "Star".into(), group_path: Vec::new() }],
             },
             GroupView {
+            label: String::new(),
                 name: "Custom Shapes".into(),
                 root_only: false,
                 items: vec![ItemView { key: "Star".into(), name: "Star".into(), group_path: Vec::new() }],
@@ -909,6 +915,7 @@ mod tests {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -953,6 +960,7 @@ mod tests {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -1018,6 +1026,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let groups = vec![GroupView {
+            label: String::new(),
             name: "Only group".into(),
             root_only: false,
             items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
@@ -1051,6 +1060,7 @@ mod tests {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -1103,6 +1113,7 @@ mod tests {
     #[test]
     fn asset_group_projects_legacy_folder_paths_into_the_shared_group_hierarchy() {
         let group = GroupView {
+            label: String::new(),
             name: "Brushes".into(),
             root_only: false,
             items: vec![
@@ -1392,6 +1403,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let groups = vec![GroupView {
+            label: String::new(),
             name: "Only group".into(),
             root_only: false,
             items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
@@ -1417,6 +1429,7 @@ mod tests {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,

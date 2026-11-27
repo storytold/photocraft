@@ -304,11 +304,13 @@ mod tests {
         // but now belongs to a different root group and nested folder.
         let groups = [
             GroupView {
+            label: String::new(),
                 name: "Destination group".into(),
                 root_only: false,
                 items: vec![ItemView { key: "stable-asset-id".into(), name: "Moved asset".into(), group_path: vec!["Destination folder".into()] }],
             },
             GroupView {
+            label: String::new(),
                 name: "Other group".into(),
                 root_only: false,
                 items: vec![ItemView { key: "another-asset-id".into(), name: "Other asset".into(), group_path: Vec::new() }],

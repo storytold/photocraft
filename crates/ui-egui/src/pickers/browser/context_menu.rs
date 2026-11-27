@@ -118,12 +118,12 @@ pub(crate) fn picker_context_menu(
     if !move_targets.is_empty() {
         ui.separator();
         ui.menu_button(tl!("Move to"), |ui| {
-            for destination in groups.iter().map(|group| &group.name) {
-                if move_targets.iter().all(|(source, _)| source == destination) {
+            for destination in groups {
+                if move_targets.iter().all(|(source, _)| source == &destination.name) {
                     continue;
                 }
-                if ui.button(destination).clicked() {
-                    events.extend(move_item_actions(&move_targets, destination));
+                if ui.button(destination.display_label()).clicked() {
+                    events.extend(move_item_actions(&move_targets, &destination.name));
                     ui.close();
                 }
             }
@@ -507,6 +507,7 @@ mod tests {
     #[test]
     fn swatches_context_menu_has_append_selected_export_and_exchange_actions() {
         let groups = vec![GroupView {
+            label: String::new(),
             name: "Basics".into(),
             root_only: false,
             items: vec![ItemView { key: "Black".into(), name: "Black".into(), group_path: Vec::new() }],
@@ -577,7 +578,8 @@ mod tests {
         use crate::pickers::state::PresetUi;
 
         let item = ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() };
-        let group = GroupView { name: "Basics".into(), root_only: false, items: vec![item.clone()] };
+        let group = GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: vec![item.clone()] };
         let group_names = vec!["Basics".into(), "Grays".into()];
         let selected_items = vec![("Basics".into(), item.clone())];
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
@@ -605,7 +607,8 @@ mod tests {
         use crate::pickers::state::PresetUi;
 
         let item = ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() };
-        let group = GroupView { name: "Basics".into(), root_only: false, items: vec![item.clone()] };
+        let group = GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: vec![item.clone()] };
         let selected_items = vec![("Basics".into(), item.clone())];
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
@@ -644,7 +647,8 @@ mod tests {
         use super::standard_group_context_menu;
         use crate::pickers::state::PresetUi;
 
-        let group = GroupView { name: "Basics".into(), root_only: false, items: Vec::new() };
+        let group = GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: Vec::new() };
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
                 standard_group_context_menu(ui, &mut PresetUi::default(), "gradients", &group, &mut Vec::new());
@@ -660,7 +664,8 @@ mod tests {
 
     #[test]
     fn brush_group_context_menu_queues_the_shared_rename_dialog_action() {
-        let group = GroupView { name: "Basics".into(), root_only: false, items: Vec::new() };
+        let group = GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: Vec::new() };
         let events = Rc::new(RefCell::new(Vec::new()));
         let captured = Rc::clone(&events);
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
@@ -682,7 +687,8 @@ mod tests {
 
     #[test]
     fn brush_group_context_menu_opens_the_shared_rename_dialog_with_the_existing_name() {
-        let group = GroupView { name: "Basics".into(), root_only: false, items: Vec::new() };
+        let group = GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: Vec::new() };
         let events = Rc::new(RefCell::new(Vec::new()));
         let captured = Rc::clone(&events);
         let mut state = PresetUi::default();
@@ -709,8 +715,10 @@ mod tests {
     #[test]
     fn gradient_context_menu_orders_all_actions_and_dispatches_import() {
         let groups = vec![
-            GroupView { name: "Basics".into(), root_only: false, items: Vec::new() },
-            GroupView { name: "Grays".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Grays".into(), root_only: false, items: Vec::new() },
         ];
         let items = vec![
             ("Basics".into(), ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() }),
@@ -791,7 +799,8 @@ mod tests {
 
     #[test]
     fn group_context_menu_uses_group_singular_plural_labels() {
-        let groups = vec![GroupView { name: "Basics".into(), root_only: false, items: Vec::new() }];
+        let groups = vec![GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: Vec::new() }];
         let selection = crate::pickers::browser::selection::BrowserSelection {
             groups: vec!["Basics".into(), "Grays".into()],
             contains_group: true,
@@ -817,7 +826,8 @@ mod tests {
 
     #[test]
     fn single_group_context_menu_uses_singular_labels() {
-        let groups = vec![GroupView { name: "Basics".into(), root_only: false, items: Vec::new() }];
+        let groups = vec![GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: Vec::new() }];
         let selection = crate::pickers::browser::selection::BrowserSelection {
             groups: vec!["Basics".into()],
             contains_group: true,
@@ -840,7 +850,9 @@ mod tests {
     #[test]
     fn mixed_card_and_group_selection_keeps_group_and_card_actions() {
         let groups =
-            vec![GroupView { name: "A".into(), root_only: false, items: Vec::new() }, GroupView { name: "B".into(), root_only: false, items: Vec::new() }];
+            vec![GroupView {
+            label: String::new(), name: "A".into(), root_only: false, items: Vec::new() }, GroupView {
+            label: String::new(), name: "B".into(), root_only: false, items: Vec::new() }];
         let summary = crate::pickers::browser::selection::BrowserSelection {
             contains_selected_card: true,
             contains_card: true,

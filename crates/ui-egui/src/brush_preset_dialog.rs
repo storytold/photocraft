@@ -31,14 +31,7 @@ fn taken(presets: &[BrushPreset], name: &str) -> bool {
 /// Open the dialog for the tool's brush, or for `brush` (the Brush Settings panel's copy, which
 /// may be ahead of the tool's by a frame). Returns the dialog's id.
 pub fn open(app: &mut PhotocraftApp, brush: Option<&BrushSettings>) -> u64 {
-    let panel = ["brushes", "brush-picker"]
-        .into_iter()
-        .find(|panel| {
-            app.ui.presets_ui.browser_selection_snapshot.get(*panel).is_some_and(|selection| !selection.targets.is_empty())
-                || app.ui.presets_ui.selected.contains_key(*panel)
-                || app.ui.presets_ui.selected_group.contains_key(*panel)
-        })
-        .unwrap_or("brush-picker");
+    let panel = "brushes";
     let selection = app
         .ui
         .presets_ui
@@ -46,40 +39,62 @@ pub fn open(app: &mut PhotocraftApp, brush: Option<&BrushSettings>) -> u64 {
         .get(panel)
         .cloned()
         .or_else(|| crate::pickers::adapters::brush_engine_adapter::active_brush_selection(&app.ui.presets_ui, panel));
-    let destination = crate::pickers::adapters::brush_engine_adapter::browser_actions_to_actions(
+    let destination = Some(crate::pickers::adapters::brush_engine_adapter::new_preset_destination(
         &app.session.tools.presets,
-        &app.session.tools.preset_hierarchy,
-        vec![crate::pickers::browser::asset_browser::BrowserAction::New],
+        &mut app.ui.presets_ui,
+        panel,
         selection.as_ref(),
-    )
-    .into_iter()
-    .find_map(|action| match action {
-        crate::pickers::adapters::brush_engine_adapter::Action::NewPreset { group, folder, index, root_index } => Some((group, folder, index, root_index)),
-        _ => None,
-    });
-    open_at(app, brush, destination)
+    ));
+    open_at_panel(app, panel, brush, destination)
 }
 
 /// Open the creation dialog with an optional browser insertion destination.
-pub fn open_at(app: &mut PhotocraftApp, brush: Option<&BrushSettings>, destination: Option<(String, Vec<String>, usize, Option<usize>)>) -> u64 {
+pub fn open_at(app: &mut PhotocraftApp, brush: Option<&BrushSettings>, destination: Option<(String, Vec<String>, usize)>) -> u64 {
+    open_at_panel(app, "brushes", brush, destination)
+}
+
+pub fn open_at_named(
+    app: &mut PhotocraftApp,
+    brush: Option<&BrushSettings>,
+    destination: Option<(String, Vec<String>, usize)>,
+    name: Option<&str>,
+) -> u64 {
+    open_at_panel_named(app, "brushes", brush, destination, name)
+}
+
+pub fn open_at_panel(
+    app: &mut PhotocraftApp,
+    panel: &str,
+    brush: Option<&BrushSettings>,
+    destination: Option<(String, Vec<String>, usize)>,
+) -> u64 {
+    open_at_panel_named(app, panel, brush, destination, None)
+}
+
+pub fn open_at_panel_named(
+    app: &mut PhotocraftApp,
+    panel: &str,
+    brush: Option<&BrushSettings>,
+    destination: Option<(String, Vec<String>, usize)>,
+    name: Option<&str>,
+) -> u64 {
     let tools = &app.session.tools;
     let mut fields = Map::new();
     fields.insert(MARK.into(), json!(true));
     fields.insert("__label".into(), json!("New Brush Preset…"));
+    fields.insert("__insertPanel".into(), json!(panel));
     fields.insert("name".into(), json!(suggested_name(&tools.presets, tools.current_preset.as_deref())));
+    if let Some(name) = name { fields.insert("name".into(), json!(name)); }
     fields.insert("captureSize".into(), json!(true));
     fields.insert("toolSettings".into(), json!(false));
     fields.insert("color".into(), json!(false));
     if let Some(b) = brush.and_then(|b| serde_json::to_value(b).ok()) {
         fields.insert("brush".into(), b);
     }
-    if let Some((group, folder, index, root_index)) = destination {
+    if let Some((group, folder, index)) = destination {
         fields.insert("__insertGroup".into(), json!(group));
         fields.insert("__insertFolder".into(), json!(folder));
         fields.insert("__insertIndex".into(), json!(index));
-        if let Some(root_index) = root_index {
-            fields.insert("__insertRootIndex".into(), json!(root_index));
-        }
     }
     app.ui.open_dialog(DialogKind::Command, fields)
 }
@@ -202,24 +217,24 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         (f.get("__insertGroup").and_then(Value::as_str), f.get("__insertFolder").and_then(Value::as_array), f.get("__insertIndex").and_then(Value::as_u64))
     {
         let folder: Vec<String> = folder.iter().filter_map(Value::as_str).map(str::to_owned).collect();
-        let mut params = json!({"name":created_name, "group":group, "folder":folder, "index":index});
-        if let Some(root_index) = f.get("__insertRootIndex").and_then(Value::as_u64) {
-            params["rootIndex"] = json!(root_index);
-        }
+        let params = json!({"name":created_name, "group":group, "folder":folder, "index":index});
         app.run("brush.presets.move", params)?;
-        crate::pickers::adapters::brush_engine_adapter::expand_brush_destination(app, group, &folder);
+        let panel = f.get("__insertPanel").and_then(Value::as_str).unwrap_or("brushes");
+        crate::pickers::adapters::brush_engine_adapter::expand_brush_destination(app, panel, group, &folder);
     }
-    // Saving a brush from any entry point creates the active preset. Mirror that active identity
-    // into both browser surfaces, including root-level creation where no insertion destination was
-    // supplied by the picker.
+    // Saving a brush from any entry point creates the active preset. Keep the shared browser's
+    // selected identity in sync, including root-level creation without an insertion destination.
     if let Some(preset) = app.session.tools.presets.iter().find(|preset| preset.name == created_name) {
-        let group = preset.group.clone();
-        let folder = preset.folder.clone();
         let key = crate::pickers::adapters::brush_engine_adapter::preview_identity(preset);
-        for panel in ["brushes", "brush-picker"] {
-            app.ui.presets_ui.clear_browser_selection(panel);
-            app.ui.presets_ui.set_selected_item(panel, &group, &folder, &key);
-        }
+        let panel = f.get("__insertPanel").and_then(Value::as_str).unwrap_or("brushes");
+        let projection = crate::pickers::adapters::brush_engine_adapter::project_brush_browser(
+            &app.session.tools.presets,
+            &mut app.ui.presets_ui,
+            panel,
+        );
+        let group = crate::pickers::adapters::brush_engine_adapter::container_key_for_preset(&projection, preset);
+        app.ui.presets_ui.clear_browser_selection(panel);
+        app.ui.presets_ui.set_selected_item(panel, &group, &[], &key);
     }
     Ok(result)
 }
@@ -227,96 +242,62 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 #[cfg(test)]
 mod tests {
     use super::confirm;
-    use serde_json::{Map, json};
+    use serde_json::{Map, Value, json};
 
-    #[test]
-    fn confirming_a_root_brush_preset_selects_the_new_card_on_both_surfaces() {
-        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    fn fields(name: &str, group: &str, folder: &[&str], index: usize) -> Map<String, Value> {
         let mut fields = Map::new();
-        fields.insert("name".into(), json!("Created brush"));
+        fields.insert("name".into(), json!(name));
         fields.insert("captureSize".into(), json!(true));
         fields.insert("toolSettings".into(), json!(false));
         fields.insert("color".into(), json!(false));
-
-        let result = confirm(&mut app, &fields).unwrap();
-        let created_name = result["name"].as_str().unwrap();
-        let preset = app.session.tools.presets.iter().find(|preset| preset.name == created_name).unwrap();
-        let group = preset.group.clone();
-        let folder = preset.folder.clone();
-        let key = crate::pickers::adapters::brush_engine_adapter::preview_identity(preset);
-
-        for panel in ["brushes", "brush-picker"] {
-            assert!(app.ui.presets_ui.is_selected_item(panel, &group, &folder, &key), "{panel} should select the newly saved brush");
-            assert!(app.ui.presets_ui.browser_selection.get(panel).is_none_or(|selection| selection.is_empty()));
-        }
+        fields.insert("__insertGroup".into(), json!(group));
+        fields.insert("__insertFolder".into(), json!(folder));
+        fields.insert("__insertIndex".into(), json!(index));
+        fields
     }
 
     #[test]
-    fn confirming_creation_expands_the_selected_brush_folder_but_opening_does_not() {
+    fn confirming_creation_selects_the_new_name_key_in_the_shared_browser() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        confirm(&mut app, &fields("Created brush", "", &[], 0)).unwrap();
+        let preset = app.session.tools.presets.iter().find(|preset| preset.name == "Created brush").unwrap();
+        let projection = crate::pickers::adapters::brush_engine_adapter::project_brush_browser(
+            &app.session.tools.presets, &mut app.ui.presets_ui, "brushes",
+        );
+        let group = crate::pickers::adapters::brush_engine_adapter::container_key_for_preset(&projection, preset);
+        assert!(app.ui.presets_ui.is_selected_item("brushes", &group, &[], "Created brush"));
+        assert!(app.ui.presets_ui.browser_selection.get("brushes").is_none_or(|selection| selection.is_empty()));
+    }
+
+    #[test]
+    fn confirming_creation_moves_the_saved_preset_into_the_main_engine_folder() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("brush.presets.save", json!({"name":"First"})).unwrap();
+        app.run("brush.presets.save", json!({"name":"Second"})).unwrap();
+        app.run("brush.presets.move", json!({"name":"First", "group":"Pens", "folder":["Fine"]})).unwrap();
+        app.run("brush.presets.move", json!({"name":"Second", "group":"Pens", "folder":["Fine"]})).unwrap();
+
+        confirm(&mut app, &fields("Created brush", "Pens", &["Fine"], 1)).unwrap();
+        let created = app.session.tools.presets.iter().find(|preset| preset.name == "Created brush").unwrap();
+        assert_eq!(created.group, "Pens");
+        assert_eq!(created.folder, vec!["Fine".to_owned()]);
+    }
+
+    #[test]
+    fn opening_does_not_expand_a_folder_but_confirmation_expands_its_shared_group_key() {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("brush.presets.save", json!({"name":"Ink"})).unwrap();
         app.run("brush.presets.move", json!({"name":"Ink", "group":"Pens", "folder":["Fine"]})).unwrap();
-        app.ui.presets_ui.layout.toggled.extend(["brushes/Pens/Fine".into(), "brush-picker/Pens/Fine".into()]);
-
-        let mut fields = Map::new();
-        fields.insert("name".into(), json!("New Ink"));
-        fields.insert("captureSize".into(), json!(true));
-        fields.insert("toolSettings".into(), json!(false));
-        fields.insert("color".into(), json!(false));
-        fields.insert("__insertGroup".into(), json!("Pens"));
-        fields.insert("__insertFolder".into(), json!(["Fine"]));
-        fields.insert("__insertIndex".into(), json!(1));
-
-        // Merely opening the dialog has no expansion side effect; confirmation performs it.
-        crate::brush_preset_dialog::open_at(&mut app, None, Some(("Pens".into(), vec!["Fine".into()], 1, None)));
-        assert!(!app.ui.presets_ui.expanded_groups.contains("brushes/Pens"));
-        assert!(app.ui.presets_ui.layout.toggled.contains("brushes/Pens/Fine"));
-
-        confirm(&mut app, &fields).unwrap();
-
-        for panel in ["brushes", "brush-picker"] {
-            assert!(app.ui.presets_ui.expanded_groups.contains(&format!("{panel}/Pens")));
-            assert!(!app.ui.presets_ui.layout.toggled.contains(&format!("{panel}/Pens/Fine")));
-            assert!(!app.ui.presets_ui.expanded_groups.contains(&format!("{panel}/Other")));
-        }
-    }
-
-    #[test]
-    fn confirming_a_root_brush_uses_the_mixed_root_insertion_index() {
-        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.tools.presets.clear();
-        app.session.tools.preset_hierarchy = photocraft_engine::BrushPresetHierarchy {
-            groups: vec!["Folder".into()],
-            folders: Vec::new(),
-            root_order: vec![
-                photocraft_engine::BrushPresetRootEntry::Preset("First".into()),
-                photocraft_engine::BrushPresetRootEntry::Group("Folder".into()),
-                photocraft_engine::BrushPresetRootEntry::Preset("Second".into()),
-            ],
-        };
-        for name in ["First", "Second"] {
-            app.run("brush.presets.save", json!({"name":name})).unwrap();
-        }
-        let mut fields = Map::new();
-        fields.insert("name".into(), json!("Created brush"));
-        fields.insert("captureSize".into(), json!(true));
-        fields.insert("toolSettings".into(), json!(false));
-        fields.insert("color".into(), json!(false));
-        fields.insert("__insertGroup".into(), json!(""));
-        fields.insert("__insertFolder".into(), json!([]));
-        fields.insert("__insertIndex".into(), json!(1));
-        fields.insert("__insertRootIndex".into(), json!(1));
-
-        confirm(&mut app, &fields).unwrap();
-
-        assert_eq!(
-            app.session.tools.preset_hierarchy.root_order,
-            [
-                photocraft_engine::BrushPresetRootEntry::Preset("First".into()),
-                photocraft_engine::BrushPresetRootEntry::Preset("Created brush".into()),
-                photocraft_engine::BrushPresetRootEntry::Group("Folder".into()),
-                photocraft_engine::BrushPresetRootEntry::Preset("Second".into()),
-            ]
+        let projection = crate::pickers::adapters::brush_engine_adapter::project_brush_browser(
+            &app.session.tools.presets, &mut app.ui.presets_ui, "brushes",
         );
+        let key = projection.containers.values().find(|container| container.engine_group == "Pens" && container.folder == vec!["Fine".to_owned()])
+            .unwrap().key.clone();
+        let expanded = format!("brushes/{}", crate::pickers::state::escape_hierarchy_key_part(&key));
+        app.ui.presets_ui.expanded_groups.remove(&expanded);
+        crate::brush_preset_dialog::open_at(&mut app, None, Some(("Pens".into(), vec!["Fine".into()], 1)));
+        assert!(!app.ui.presets_ui.expanded_groups.contains(&expanded));
+        confirm(&mut app, &fields("New Ink", "Pens", &["Fine"], 1)).unwrap();
+        assert!(app.ui.presets_ui.expanded_groups.contains(&expanded));
     }
 }

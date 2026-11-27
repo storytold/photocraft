@@ -43,7 +43,7 @@ impl Pick {
     /// Does this pick dismiss the picker? A double-click on a preset does (Photoshop), and so does
     /// anything that opens another panel or dialog.
     pub fn closes(&self) -> bool {
-        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset { .. }))
+        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset { .. } | Action::NewAtSelection { .. } | Action::NewNamed { .. }))
     }
 }
 
@@ -73,14 +73,14 @@ pub fn on_chip(ctx: &egui::Context, p: egui::Pos2) -> bool {
 /// panels share `PresetUi` and must retain their own rename state.
 pub fn close(ui: &mut crate::state::UiState) {
     ui.brush_picker = None;
-    if ui.presets_ui.item_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker") {
+    if ui.presets_ui.item_renaming.as_ref().is_some_and(|rename| rename.panel == "brushes") {
         ui.presets_ui.item_renaming = None;
     }
-    ui.presets_ui.item_rename_queue.retain(|rename| rename.panel != "brush-picker");
-    if ui.presets_ui.renaming.as_ref().is_some_and(|(panel, _, _)| panel == "brush-picker") {
+    ui.presets_ui.item_rename_queue.retain(|rename| rename.panel != "brushes");
+    if ui.presets_ui.renaming.as_ref().is_some_and(|(panel, _, _)| panel == "brushes") {
         ui.presets_ui.renaming = None;
     }
-    if ui.presets_ui.group_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker") {
+    if ui.presets_ui.group_renaming.as_ref().is_some_and(|rename| rename.panel == "brushes") {
         ui.presets_ui.group_renaming = None;
     }
 }
@@ -138,7 +138,6 @@ pub fn body(
     ui: &mut egui::Ui,
     b: &mut BrushSettings,
     presets: &[BrushPreset],
-    hierarchy: &photocraft_engine::BrushPresetHierarchy,
     current: Option<&str>,
     preset_ui: &mut crate::pickers::state::PresetUi,
     size: egui::Vec2,
@@ -202,12 +201,11 @@ pub fn body(
     // outer reservation the picker grows by the height of these brush-specific controls.
     let controls_h = (ui.cursor().min.y - top).max(0.0);
     let mut footer = |ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi| -> Vec<crate::pickers::browser::asset_browser::BrowserAction> {
-        crate::pickers::adapters::brushes::draw_brush_footer_controls(ui, state, presets, "brush-picker", true)
+        crate::pickers::adapters::brushes::draw_brush_footer_controls(ui, state, presets, "brushes", true)
     };
     let actions = crate::pickers::adapters::brushes::picker_browser_with_shell(
         ui,
         presets,
-        hierarchy,
         current,
         preset_ui,
         crate::pickers::shell::ShellOptions {
@@ -293,10 +291,9 @@ mod menu_tests {
             |ui, app: &mut PhotocraftApp| {
                 let mut brush = app.session.tools.brush.clone();
                 let presets = app.session.tools.presets.clone();
-                let hierarchy = app.session.tools.preset_hierarchy.clone();
                 let current = app.session.tools.current_preset.clone();
                 let mut preset_ui = std::mem::take(&mut app.ui.presets_ui);
-                let picks = body(ui, &mut brush, &presets, &hierarchy, current.as_deref(), &mut preset_ui, vec2(420.0, 620.0));
+                let picks = body(ui, &mut brush, &presets, current.as_deref(), &mut preset_ui, vec2(420.0, 620.0));
                 app.ui.presets_ui = preset_ui;
                 apply(app, picks);
             },

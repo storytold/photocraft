@@ -24,11 +24,19 @@ pub(crate) struct ItemView {
 /// Asset-neutral group projection supplied by a picker adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroupView {
-    /// Stable adapter-defined group key and display label.
+    /// Stable adapter-defined group key used by hierarchy/layout state.
     pub(crate) name: String,
+    /// Display label. Empty keeps the historical behavior of displaying `name`.
+    pub(crate) label: String,
     /// Backing-only group whose cards participate in the root mixed sequence.
     pub(crate) root_only: bool,
     pub(crate) items: Vec<ItemView>,
+}
+
+impl GroupView {
+    pub(crate) fn display_label(&self) -> &str {
+        if self.label.is_empty() { &self.name } else { &self.label }
+    }
 }
 
 /// Flattened rendering segment for one consecutive run of cards in a canonical sibling sequence.

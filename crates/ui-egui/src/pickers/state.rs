@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use super::browser::data::HierarchyOrderEntry;
-use super::browser::data::PickerBrowserData;
+use super::browser::data::{HierarchyOrderEntry, PickerBrowserData};
 pub(crate) use super::browser::inline_rename::{InlineGroupRenameState, ItemRenameState};
 pub(crate) use super::browser::path_identity_model::MAX_GROUP_DEPTH;
 
@@ -167,6 +167,85 @@ pub(crate) struct RecentPickerItem {
 pub(crate) const MAX_RECENT_PICKER_ITEMS: usize = 15;
 
 impl PresetUi {
+    /// Keep persisted order and selected/recent keys in sync with a name-addressed engine rename.
+    /// Browser IDs are transient and are cleared so the next projection assigns the renamed item
+    /// a fresh opaque ID without retaining a stale selection token.
+    pub(crate) fn rename_item_key(&mut self, from: &str, to: &str) {
+        for sequences in self.layout.hierarchy_order.values_mut() {
+            for entries in sequences.values_mut() {
+                for entry in entries {
+                    match entry {
+                        HierarchyOrderEntry::Item(key) if key == from => *key = to.to_owned(),
+                        HierarchyOrderEntry::RootItem { key, .. } if key == from => *key = to.to_owned(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for key in self.selected.values_mut() {
+            if key.as_str() == from { *key = to.to_owned(); }
+        }
+        for recent in self.recent_items.values_mut() {
+            for item in recent {
+                if item.key == from { item.key = to.to_owned(); }
+            }
+        }
+        for selection in self.browser_selection_snapshot.values_mut() {
+            for (_, item) in &mut selection.selected_items {
+                if item.key.as_str() == from { item.key = to.to_owned(); }
+                if item.name.as_str() == from { item.name = to.to_owned(); }
+            }
+            for (_, key) in selection.cards.iter_mut().chain(selection.selected_cards.iter_mut()) {
+                if key.as_str() == from { *key = to.to_owned(); }
+            }
+            for target in &mut selection.targets {
+                if let super::browser::selection::SelectionTarget::Item { key, .. } = target
+                    && key.as_str() == from
+                {
+                    *key = to.to_owned();
+                }
+            }
+        }
+        if let Some(rename) = &mut self.item_renaming {
+            if rename.key == from { rename.key = to.to_owned(); }
+        }
+        for rename in &mut self.item_rename_queue {
+            if rename.key == from { rename.key = to.to_owned(); }
+        }
+        let panels = self.browser_selection.keys().chain(self.browser_selection_snapshot.keys()).cloned().collect::<BTreeSet<_>>();
+        for panel in panels {
+            self.clear_browser_selection(&panel);
+        }
+    }
+
+    /// Remove deleted item keys from every panel's saved order and transient selection state.
+    pub(crate) fn delete_item_key(&mut self, key: &str) {
+        for sequences in self.layout.hierarchy_order.values_mut() {
+            for entries in sequences.values_mut() {
+                entries.retain(|entry| match entry {
+                    HierarchyOrderEntry::Item(item) => item != key,
+                    HierarchyOrderEntry::RootItem { key: item, .. } => item != key,
+                    HierarchyOrderEntry::Group(_) => true,
+                });
+            }
+        }
+        self.selected.retain(|_, selected| selected.as_str() != key);
+        for recent in self.recent_items.values_mut() { recent.retain(|item| item.key != key); }
+        for selection in self.browser_selection_snapshot.values_mut() {
+            selection.selected_items.retain(|(_, item)| item.key != key);
+            selection.cards.retain(|(_, item)| item != key);
+            selection.selected_cards.retain(|(_, item)| item != key);
+            selection.targets.retain(|target| !matches!(target, super::browser::selection::SelectionTarget::Item { key: item, .. } if item == key));
+        }
+        if self.item_renaming.as_ref().is_some_and(|rename| rename.key == key) { self.item_renaming = None; }
+        self.item_rename_queue.retain(|rename| rename.key != key);
+        if self.renaming.as_ref().is_some_and(|(_, selected, _)| selected == key) { self.renaming = None; }
+        let panels = self.browser_selection.keys().chain(self.browser_selection_snapshot.keys()).cloned().collect::<BTreeSet<_>>();
+        for panel in panels {
+            self.clear_browser_selection(&panel);
+        }
+    }
+
     pub(crate) fn recents_visible(&self, panel: &str) -> bool {
         self.recents_visible.get(panel).copied().unwrap_or(true)
     }
@@ -277,11 +356,13 @@ pub(crate) fn restore(app: &mut crate::PhotocraftApp) {
 /// The legacy policy is used only to interpret preferences written by older versions; all current
 /// browser rendering and interactions use `expanded_groups` directly, with no picker defaults.
 fn migrate_group_expansion(app: &mut crate::PhotocraftApp, has_saved_picker_state: bool) {
-    const CURRENT_VERSION: u8 = 1;
+    const CURRENT_VERSION: u8 = 2;
     let state = &mut app.ui.presets_ui;
     if state.group_expansion_version >= CURRENT_VERSION {
         return;
     }
+
+    migrate_legacy_brush_picker_panel(state);
 
     if has_saved_picker_state {
         let groups = vec![
@@ -297,26 +378,15 @@ fn migrate_group_expansion(app: &mut crate::PhotocraftApp, has_saved_picker_stat
             ("styles".to_owned(), app.session.presets.styles.iter().map(|group| group.name.clone()).collect(), false),
             ("shapes".to_owned(), app.session.presets.shapes.iter().map(|group| group.name.clone()).collect(), false),
             ("swatches".to_owned(), app.session.presets.swatches.iter().map(|group| group.name.clone()).collect(), true),
-            (
-                "brushes".to_owned(),
-                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
-                    .into_iter()
-                    .map(|group| group.name)
-                    .collect(),
-                false,
-            ),
-            (
-                "brush-picker".to_owned(),
-                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
-                    .into_iter()
-                    .map(|group| group.name)
-                    .collect(),
-                true,
-            ),
+            ("brushes".to_owned(), Vec::new(), false),
         ];
 
         for (panel, names, legacy_all_open) in groups {
-            migrate_panel_group_expansion(state, &panel, &names, legacy_all_open);
+            if panel == "brushes" {
+                migrate_brush_group_expansion(&app.session.tools.presets, state, &panel, legacy_all_open);
+            } else {
+                migrate_panel_group_expansion(state, &panel, &names, legacy_all_open);
+            }
         }
 
         // Compact pattern browsers shared the old first-group-open policy and persisted their
@@ -344,6 +414,79 @@ fn migrate_panel_group_expansion(state: &mut PresetUi, panel: &str, group_names:
         } else {
             state.expanded_groups.remove(&key);
         }
+    }
+}
+
+/// Merge the old right-click brush picker state into the single shared Brushes browser panel.
+/// This removes the old cross-panel synchronization model while preserving any saved order,
+/// expansion, selection and search preference the user had in the floating picker.
+fn migrate_legacy_brush_picker_panel(state: &mut PresetUi) {
+    if let Some(old_orders) = state.layout.hierarchy_order.remove("brush-picker") {
+        let new_orders = state.layout.hierarchy_order.entry("brushes".into()).or_default();
+        for (parent, entries) in old_orders {
+            let sequence = new_orders.entry(parent).or_default();
+            for entry in entries {
+                if !sequence.contains(&entry) { sequence.push(entry); }
+            }
+        }
+    }
+    for key in state.layout.expanded_groups.iter().filter(|key| key.starts_with("brush-picker/")).cloned().collect::<Vec<_>>() {
+        state.layout.expanded_groups.remove(&key);
+        state.layout.expanded_groups.insert(key.replacen("brush-picker/", "brushes/", 1));
+    }
+    for key in state.layout.toggled.iter().filter(|key| key.starts_with("brush-picker/")).cloned().collect::<Vec<_>>() {
+        state.layout.toggled.remove(&key);
+        state.layout.toggled.insert(key.replacen("brush-picker/", "brushes/", 1));
+    }
+    if !state.selected.contains_key("brushes") {
+        if let Some(value) = state.selected.remove("brush-picker") { state.selected.insert("brushes".into(), value); }
+    } else {
+        state.selected.remove("brush-picker");
+    }
+    if !state.selected_group.contains_key("brushes") {
+        if let Some(value) = state.selected_group.remove("brush-picker") { state.selected_group.insert("brushes".into(), value); }
+    } else {
+        state.selected_group.remove("brush-picker");
+    }
+    if !state.selected_group_path.contains_key("brushes") {
+        if let Some(value) = state.selected_group_path.remove("brush-picker") { state.selected_group_path.insert("brushes".into(), value); }
+    } else {
+        state.selected_group_path.remove("brush-picker");
+    }
+    if !state.search.contains_key("brushes") {
+        if let Some(value) = state.search.remove("brush-picker") { state.search.insert("brushes".into(), value); }
+    } else {
+        state.search.remove("brush-picker");
+    }
+    if !state.search_visible.contains_key("brushes") {
+        if let Some(value) = state.search_visible.remove("brush-picker") { state.search_visible.insert("brushes".into(), value); }
+    } else {
+        state.search_visible.remove("brush-picker");
+    }
+    state.initialized_browsers.remove("brush-picker");
+}
+
+/// Brush groups/folders now use the shared browser's stable group keys rather than engine group
+/// names or folder paths. Translate both the old group toggles and path-based folder collapses
+/// into the new per-node expanded state once.
+fn migrate_brush_group_expansion(presets: &[photocraft_engine::paint::BrushPreset], state: &mut PresetUi, panel: &str, legacy_all_open: bool) {
+    let projection = crate::pickers::adapters::brush_engine_adapter::project_brush_browser(presets, state, panel);
+    let groups = projection.groups.iter().filter(|group| !group.root_only).collect::<Vec<_>>();
+    for (index, group) in groups.into_iter().enumerate() {
+        let Some(container) = projection.containers.get(&group.name) else { continue };
+        let old_path = if container.folder.is_empty() {
+            format!("{panel}/{}", escape_hierarchy_key_part(&container.label))
+        } else {
+            format!("{panel}/{}", escape_hierarchy_key_part(&container.engine_group)) + &format!("/{}", container.folder.join("/"))
+        };
+        let new_key = format!("{panel}/{}", escape_hierarchy_key_part(&group.name));
+        let old_expanded = state.expanded_groups.remove(&old_path);
+        let old_toggle = state.toggled.remove(&old_path);
+        let default_open = index == 0 || legacy_all_open;
+        let open = if old_expanded { true } else { default_open != old_toggle };
+        if open { state.expanded_groups.insert(new_key); } else { state.expanded_groups.remove(&new_key); }
+        let old_folder_prefix = format!("{old_path}/");
+        state.toggled.retain(|key| !key.starts_with(&old_folder_prefix));
     }
 }
 
@@ -1100,8 +1243,6 @@ mod tests {
         assert_eq!(restarted.ui.presets_ui.toggled, app.ui.presets_ui.toggled);
         assert!(crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "patterns", "Open group"));
         assert!(!crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "patterns", "Closed group"));
-        assert!(crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "brushes", "Pens"));
-        assert!(crate::pickers::browser::groups::group_open(&restarted.ui.presets_ui, "brush-picker", "Pens"));
     }
 
     #[test]
@@ -1109,7 +1250,7 @@ mod tests {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         super::restore(&mut app);
 
-        assert_eq!(app.ui.presets_ui.group_expansion_version, 1);
+        assert_eq!(app.ui.presets_ui.group_expansion_version, 2);
         assert!(app.ui.presets_ui.expanded_groups.is_empty());
         for (panel, names) in [
             ("gradients", app.session.presets.gradients.iter().map(|group| group.name.clone()).collect::<Vec<_>>()),
@@ -1119,7 +1260,7 @@ mod tests {
             ("swatches", app.session.presets.swatches.iter().map(|group| group.name.clone()).collect()),
             (
                 "brushes",
-                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+                crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &mut app.ui.presets_ui, "brushes")
                     .into_iter()
                     .map(|group| group.name)
                     .collect(),
@@ -1130,12 +1271,6 @@ mod tests {
                     !crate::pickers::browser::groups::group_open(&app.ui.presets_ui, panel, &group),
                     "{panel}/{group} must use the persisted collapsed state"
                 );
-                if panel == "brushes" {
-                    assert!(
-                        !crate::pickers::browser::groups::group_open(&app.ui.presets_ui, "brush-picker", &group),
-                        "brush-picker/{group} must use the persisted collapsed state"
-                    );
-                }
             }
         }
     }
@@ -1153,19 +1288,18 @@ mod tests {
         }
         let first_pattern = app.session.presets.pattern_groups.first().expect("built-in pattern group").name.clone();
         let first_swatch = app.session.presets.swatches.first().expect("built-in swatch group").name.clone();
-        let first_brush = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
-            .first()
-            .expect("built-in brush group")
-            .name
-            .clone();
+        let first_brush_group = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &mut app.ui.presets_ui, "brushes")
+            .into_iter().find(|group| !group.root_only).expect("built-in brush group");
+        let first_brush_label = first_brush_group.display_label().to_owned();
+        let first_brush_key = first_brush_group.name.clone();
         let legacy_toggles = [
             "gradients/First".to_owned(),
             "gradients/Second".to_owned(),
             "gradients/Second/Closed folder".to_owned(),
             format!("patterns/{}", escape_hierarchy_key_part(&first_pattern)),
             format!("swatches/{}", escape_hierarchy_key_part(&first_swatch)),
-            format!("brushes/{}", escape_hierarchy_key_part(&first_brush)),
-            format!("brush-picker/{}", escape_hierarchy_key_part(&first_brush)),
+            format!("brushes/{}", escape_hierarchy_key_part(&first_brush_label)),
+            format!("brush-picker/{}", escape_hierarchy_key_part(&first_brush_label)),
         ];
         app.session.prefs.edit(|prefs| {
             prefs.dialogs.insert("pickerBrowserUi".into(), json!({"toggled":legacy_toggles}));
@@ -1173,7 +1307,7 @@ mod tests {
 
         super::restore(&mut app);
 
-        assert_eq!(app.ui.presets_ui.group_expansion_version, 1);
+        assert_eq!(app.ui.presets_ui.group_expansion_version, 2);
         assert!(!app.ui.presets_ui.expanded_groups.contains("gradients/First"), "the old first-group default plus toggle meant closed");
         assert!(app.ui.presets_ui.expanded_groups.contains("gradients/Second"), "the old later-group toggle meant open");
         assert_eq!(
@@ -1181,7 +1315,7 @@ mod tests {
             ["gradients/Second/Closed folder".to_owned()],
             "folder collapse state is not reinterpreted as a group toggle"
         );
-        for (panel, group) in [("patterns", first_pattern), ("swatches", first_swatch), ("brushes", first_brush.clone()), ("brush-picker", first_brush)] {
+        for (panel, group) in [("patterns", first_pattern), ("swatches", first_swatch)] {
             assert!(
                 !app.ui.presets_ui.expanded_groups.contains(&format!("{panel}/{}", escape_hierarchy_key_part(&group))),
                 "legacy all-open/first-open toggles migrate closed for {panel}"
@@ -1193,11 +1327,8 @@ mod tests {
         if let Some(group) = app.session.presets.swatches.get(1) {
             assert!(app.ui.presets_ui.expanded_groups.contains(&format!("swatches/{}", escape_hierarchy_key_part(&group.name))));
         }
-        if let Some(group) = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy).get(1) {
-            let key = escape_hierarchy_key_part(&group.name);
-            assert!(!app.ui.presets_ui.expanded_groups.contains(&format!("brushes/{key}")), "the docked Brushes panel used first-group-open defaults");
-            assert!(app.ui.presets_ui.expanded_groups.contains(&format!("brush-picker/{key}")), "the floating brush picker used all-groups-open defaults");
-        }
+        let key = escape_hierarchy_key_part(&first_brush_key);
+        assert!(!app.ui.presets_ui.expanded_groups.contains(&format!("brushes/{key}")), "the docked Brushes panel used first-group-open defaults");
 
         super::persist(&mut app, &egui::Context::default());
         let saved = app.session.prefs_to_json();
@@ -1210,6 +1341,36 @@ mod tests {
 
     fn names(values: &[&str]) -> Vec<String> {
         values.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn brush_item_rename_preserves_saved_positions_and_selection_keys() {
+        let mut state = PresetUi::default();
+        state.set_hierarchy_order(
+            "brushes",
+            "",
+            vec![HierarchyOrderEntry::RootItem { group: "__photocraft_root_items__".into(), key: "Old".into() }],
+        );
+        state.set_hierarchy_order("brushes", "Pens", vec![HierarchyOrderEntry::Item("Old".into())]);
+        state.selected.insert("brushes".into(), "Old".into());
+        state.record_recent_item("brushes", "Pens", &[], "Old");
+
+        state.rename_item_key("Old", "Renamed");
+
+        assert_eq!(state.hierarchy_order["brushes"][""], vec![HierarchyOrderEntry::RootItem { group: "__photocraft_root_items__".into(), key: "Renamed".into() }]);
+        assert_eq!(state.hierarchy_order["brushes"]["Pens"], vec![HierarchyOrderEntry::Item("Renamed".into())]);
+        assert_eq!(state.selected["brushes"], "Renamed");
+        assert_eq!(state.recent_items["brushes"][0].key, "Renamed");
+    }
+
+    #[test]
+    fn brush_item_delete_removes_saved_positions_and_recents() {
+        let mut state = PresetUi::default();
+        state.set_hierarchy_order("brushes", "Pens", vec![HierarchyOrderEntry::Item("Gone".into())]);
+        state.record_recent_item("brushes", "Pens", &[], "Gone");
+        state.delete_item_key("Gone");
+        assert!(state.hierarchy_order["brushes"]["Pens"].is_empty());
+        assert!(state.recent_items["brushes"].is_empty());
     }
 
     #[test]

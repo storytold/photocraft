@@ -102,6 +102,7 @@ fn rename_preserves_selected_group_folder_and_card_while_delete_coalesces_them()
     ]);
     let selected = BTreeSet::from([group, folder, card]);
     let groups = [GroupView {
+            label: String::new(),
         name: "Parent".into(),
         root_only: false,
         items: vec![ItemView { key: "card".into(), name: "Card".into(), group_path: vec!["Nested".into()] }],
@@ -158,6 +159,7 @@ fn folder_selection_is_one_rename_target_but_covers_its_descendant_cards_for_oth
     ]);
     let selected = BTreeSet::from([folder]);
     let groups = [GroupView {
+            label: String::new(),
         name: "Parent".into(),
         root_only: false,
         items: vec![ItemView { key: "inside".into(), name: "Inside".into(), group_path: vec!["Folder".into()] }],

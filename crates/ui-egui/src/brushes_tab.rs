@@ -13,7 +13,7 @@
 //! Both the Brushes tab and the right-click Brush Picker use the shared asset browser and its
 //! standard card/list layout, with brush-tip thumbnails supplied by the adapter.
 
-use crate::brush_panel::{BrushesView, commit_gesture};
+use crate::brush_panel::commit_gesture;
 use crate::brush_preview;
 use crate::pickers::adapters::brushes::preview_identity;
 use crate::theme::Tokens;
@@ -22,7 +22,7 @@ use egui::{RichText, vec2};
 use photocraft_engine::paint::MAX_BRUSH_SIZE;
 
 pub use crate::pickers::adapters::brushes::{
-    Action, GroupNode, ListLayout, MAX_VIEW_DEPTH, Node, PANEL_LIST, apply, drop_target, folder_drop, folder_tree, folder_view_key, group_key, preset_list,
+    Action, ListLayout, PANEL_LIST, apply, folder_view_key, group_key, preset_list,
 };
 fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
     let height = ui.available_height().clamp(180.0, 640.0);
@@ -55,20 +55,16 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     let layout = responsive_list_layout(ui);
     // The brush adapter owns one complete shared shell: search row, browser viewport and footer.
-    // Keep the legacy BrushesView bridge only until an explicit shared display mode is selected.
     if !app.ui.presets_ui.display_modes.contains_key("brushes") {
-        app.ui.presets_ui.sizes.insert(
-            "brushes".to_owned(),
-            if app.ui.brushes_panel.view == BrushesView::List { crate::pickers::browser::asset_browser::MIN_THUMB } else { 40.0 },
-        );
+        let list_layout = app.ui.presets_ui.display_mode("brushes").uses_list_layout();
+        app.ui.presets_ui.sizes.insert("brushes".to_owned(), if list_layout {
+            crate::pickers::browser::asset_browser::MIN_THUMB
+        } else { 40.0 });
     }
-    app.ui.brushes_panel.view = if app.ui.presets_ui.display_mode("brushes").uses_list_layout() { BrushesView::List } else { BrushesView::Grid };
     let acts = preset_list(
         ui,
         &app.session.tools.presets,
-        &app.session.tools.preset_hierarchy,
         app.session.tools.current_preset.as_deref(),
-        &mut app.ui.brushes_panel,
         &mut app.ui.presets_ui,
         layout,
     );

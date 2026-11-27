@@ -142,7 +142,7 @@ impl Painters<'_, '_> {
             if self.has_group() {
                 self.group(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
             } else {
-                crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, GROUP_DRAG_GHOST_OPACITY);
+                crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, group.display_label(), depth, GROUP_DRAG_GHOST_OPACITY);
             }
         }
         for ghost in ghosts.nested_groups {

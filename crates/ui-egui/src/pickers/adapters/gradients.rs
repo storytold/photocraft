@@ -156,6 +156,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let groups: Vec<GroupView> = library
         .iter()
         .map(|group| GroupView {
+            label: String::new(),
             name: group.name.clone(),
             root_only: group.name == ROOT_ITEMS_GROUP,
             items: group.items.iter().map(|item| ItemView { key: item.name.clone(), name: item.name.clone(), group_path: Vec::new() }).collect(),
@@ -230,6 +231,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
                 let group = &groups[group_index];

@@ -33,7 +33,7 @@ pub(crate) fn show_search_bar(ui: &mut egui::Ui, state: &mut PresetUi, panel: &s
 }
 
 pub(crate) fn group_matches_query(group: &GroupView, query: &str) -> bool {
-    !query.is_empty() && group.name.to_lowercase().contains(query)
+    !query.is_empty() && (group.name.to_lowercase().contains(query) || group.display_label().to_lowercase().contains(query))
 }
 
 pub(crate) fn item_matches_query(item: &ItemView, query: &str) -> bool {
@@ -78,16 +78,19 @@ mod tests {
     fn matching_child_group_keeps_its_complete_parent_hierarchy_visible() {
         let groups = vec![
             GroupView {
+            label: String::new(),
                 name: "Group A".into(),
                 root_only: false,
                 items: vec![ItemView { key: "parent-card".into(), name: "Parent card".into(), group_path: Vec::new() }],
             },
             GroupView {
+            label: String::new(),
                 name: "Group B".into(),
                 root_only: false,
                 items: vec![ItemView { key: "child-card".into(), name: "Child card".into(), group_path: Vec::new() }],
             },
             GroupView {
+            label: String::new(),
                 name: "Unrelated".into(),
                 root_only: false,
                 items: vec![ItemView { key: "other-card".into(), name: "Other card".into(), group_path: Vec::new() }],
@@ -100,9 +103,12 @@ mod tests {
     #[test]
     fn matching_group_item_also_keeps_all_ancestors_visible() {
         let groups = vec![
-            GroupView { name: "Root".into(), root_only: false, items: Vec::new() },
-            GroupView { name: "Child".into(), root_only: false, items: Vec::new() },
             GroupView {
+            label: String::new(), name: "Root".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Child".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(),
                 name: "Grandchild".into(),
                 root_only: false,
                 items: vec![ItemView { key: "target".into(), name: "Target asset".into(), group_path: Vec::new() }],

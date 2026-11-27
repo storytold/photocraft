@@ -25,9 +25,19 @@ use crate::{PhotocraftApp, icons, widgets};
 
 pub use crate::brush_preview::{preview_pixels, preview_sig};
 pub use crate::brush_sections::section_body;
-pub use crate::pickers::adapters::brushes::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, grouped_presets};
+pub use crate::pickers::adapters::brushes::{Renaming, UNGROUPED};
 pub(crate) use crate::pickers::adapters::brushes::{clear_texture_pattern_selection, full_uv, run_or_status};
 pub use photocraft_engine::brush_cmds::brush_patch;
+
+/// Compatibility value for the control API; the actual display preference is stored in
+/// `PresetUi.display_modes`, not a separate Brushes-panel state object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BrushesView {
+    #[default]
+    List,
+    Grid,
+}
 
 /// Sections in Photoshop's order. The bool says whether the section has an enable box.
 pub const SECTIONS: [(&str, bool); 13] = [
@@ -414,20 +424,21 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
 }
 
 /// Resolve the menu's current brush when the browser has no explicit selection.
-fn brush_menu_selection(app: &PhotocraftApp, state: &crate::pickers::state::PresetUi, panel: &str) -> crate::pickers::browser::selection::BrowserSelection {
+fn brush_menu_selection(app: &PhotocraftApp, state: &mut crate::pickers::state::PresetUi, panel: &str) -> crate::pickers::browser::selection::BrowserSelection {
     let mut selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
     if selection.targets.is_empty()
         && let Some(name) = app.session.tools.current_preset.as_deref()
-        && !crate::pickers::adapters::brushes::is_ambiguous_preset_name(&app.session.tools.presets, name)
         && let Some(preset) = app.session.tools.presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name))
     {
         let key = crate::pickers::adapters::brushes::preview_identity(preset);
+        let projection = crate::pickers::adapters::brush_engine_adapter::project_brush_browser(&app.session.tools.presets, state, panel);
+        let container = crate::pickers::adapters::brush_engine_adapter::container_key_for_preset(&projection, preset);
         selection.targets.push(crate::pickers::browser::selection::SelectionTarget::Item {
-            group: preset.group.clone(),
-            path: preset.folder.clone(),
+            group: container.clone(),
+            path: Vec::new(),
             key: key.clone(),
         });
-        selection.cards.push((preset.group.clone(), key));
+        selection.cards.push((container, key));
         selection.contains_card = true;
         selection.contains_selected_card = true;
     }
@@ -469,16 +480,11 @@ fn brush_menu_leading(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut cr
     let confirmed = popup_dialogs::confirm_deletions(
         ui,
         panel,
-        &crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy),
+        &crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, state, panel),
         requested,
     );
     if !confirmed.is_empty() {
-        let actions = crate::pickers::adapters::brushes::browser_actions_to_actions(
-            &app.session.tools.presets,
-            &app.session.tools.preset_hierarchy,
-            confirmed,
-            Some(&selection),
-        );
+        let actions = crate::pickers::adapters::brushes::browser_actions_to_actions_for_panel(&app.session.tools.presets, panel, confirmed, Some(&selection));
         crate::pickers::adapters::brushes::apply(app, actions);
         ui.close();
     }
@@ -507,11 +513,7 @@ pub(crate) fn export_selected_brushes(app: &mut PhotocraftApp, keys: &[String]) 
     })
 }
 
-fn brush_menu_trailing(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &crate::pickers::state::PresetUi, panel: &str) {
-    if crate::menu_keys::menu_item_button(ui, tl!("Append Default Brushes…"), true).clicked() {
-        crate::pickers::adapters::brush_engine_adapter::run_or_status(app, "brush.presets.appendDefault", json!({}));
-        ui.close();
-    }
+fn brush_menu_trailing(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi, panel: &str) {
     if crate::menu_keys::menu_item_button(ui, tl!("Import Brushes…"), true).clicked() {
         ui.close();
         if let Err(error) = crate::preset_files_ui::import_brushes(app)
@@ -571,7 +573,7 @@ fn brush_library_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
         state.recents_visible.insert(panel.to_owned(), !recents_visible);
     }
     ui.separator();
-    brush_menu_trailing(app, ui, &state, panel);
+                    brush_menu_trailing(app, ui, &mut state, panel);
     app.ui.presets_ui = state;
 }
 
@@ -582,7 +584,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The floating picker uses the same menu contents but keeps its own display preferences.
 pub fn picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    brush_library_menu(app, ui, "brush-picker");
+    brush_library_menu(app, ui, "brushes");
 }
 
 /// Menu for the separate Brush Settings editor, not the docked Brushes library.
@@ -755,7 +757,6 @@ mod panel_menu_tests {
             "Brush Tip",
             "Show Search Bar",
             "Show Recent Brushes",
-            "Append Default Brushes…",
             "Import Brushes…",
             "Export Selected Brushes…",
         ];

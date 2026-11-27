@@ -1243,9 +1243,6 @@ pub struct UiState {
     pub brush_section: usize,
     #[serde(default)]
     pub brush_tab: usize,
-    /// Brushes panel: collapsed groups and the search filter.
-    #[serde(default)]
-    pub brushes_panel: crate::brush_panel::BrushesPanelState,
     /// Marquee options-bar mode: 0 new, 1 add, 2 subtract, 3 intersect (modifier keys override).
     #[serde(default)]
     pub selection_mode: u8,
@@ -1370,7 +1367,6 @@ impl Default for UiState {
             color_panel: Default::default(),
             brush_section: 0,
             brush_tab: 0,
-            brushes_panel: Default::default(),
             selection_mode: 0,
             tool_options: ToolOptions::default(),
             polygon: Vec::new(),

@@ -222,6 +222,9 @@ pub(super) struct CanonicalDropCallbacks<'a, 'cb> {
     pub(super) hierarchy_move: &'a mut Option<&'cb mut CanonicalHierarchyMove<'cb>>,
     pub(super) rekey_after_move: &'a mut Option<&'cb mut RekeyHierarchyAfterMove<'cb>>,
     pub(super) item_move: &'a mut Option<&'cb mut HierarchyItemMove<'cb>>,
+    /// Optional domain commit for moving populated groups/folders. Layout-only empty groups need
+    /// no domain command and are still committed by `commit_hierarchy_move`.
+    pub(super) group_move: &'a mut Option<&'cb mut HierarchyGroupMove<'cb>>,
 }
 
 pub(super) struct HierarchyCommit<'a, 'cb> {
@@ -638,6 +641,8 @@ pub(crate) struct ItemContextMenuArgs<'a> {
 /// `picker_shell` owns their shared structure and exposes one ordered domain-extension point. The
 /// browser never knows about gradient, pattern, swatch, style, or brush data.
 pub(super) type CanonicalHierarchyMove<'a> = dyn FnMut(&DropMoveIntent, &std::collections::BTreeMap<PickerId, PickerNodeIdentity>) -> Result<(), String> + 'a;
+pub(super) type HierarchyGroupMove<'a> =
+    dyn FnMut(&DropMoveIntent, &PickerBrowserHierarchy, &std::collections::BTreeMap<PickerId, PickerNodeIdentity>) -> Result<(), String> + 'a;
 pub(super) type RekeyHierarchyAfterMove<'a> =
     dyn FnMut(&PickerBrowserHierarchy, &std::collections::BTreeMap<PickerId, PickerNodeIdentity>, &mut PickerIdRegistry) + 'a;
 pub(super) type HierarchyItemMove<'a> = dyn FnMut(&str, &str, &str, usize) -> Result<(), String> + 'a;
@@ -671,6 +676,9 @@ pub(crate) struct BrowserAdapter<'a> {
     pub(crate) rekey_hierarchy_after_move: Option<&'a mut RekeyHierarchyAfterMove<'a>>,
     /// Domain commit for simple flat item moves.
     pub(crate) hierarchy_item_move: Option<&'a mut HierarchyItemMove<'a>>,
+    /// Optional domain commit for moving a populated group or nested folder. Other adapters leave
+    /// this unset and rely on the shared layout-only hierarchy commit.
+    pub(crate) hierarchy_group_move: Option<&'a mut HierarchyGroupMove<'a>>,
     /// Optional override for group-row visuals; absent uses the shared disclosure header.
     pub(crate) paint_group: Option<&'a mut PaintGroup>,
     /// Consumer-specific preview painter; receives selection/drag-ghost state.
@@ -725,10 +733,10 @@ fn draw_browser_group_header(
         }
         painters.group(ui, rect, group, open, response.hovered() || response.dragged(), 1.0);
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &group.name));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.display_label()));
         (rect, response)
     } else {
-        asset_browser_header(ui, &group.name, open, depth, GROUP_HEADER_HEIGHT, selected)
+        asset_browser_header(ui, group.display_label(), open, depth, GROUP_HEADER_HEIGHT, selected)
     }
 }
 
@@ -1086,6 +1094,7 @@ pub(crate) fn browser_with_root_sequence(
     let canonical_hierarchy_move = &mut adapter.canonical_hierarchy_move;
     let rekey_hierarchy_after_move = &mut adapter.rekey_hierarchy_after_move;
     let hierarchy_item_move = &mut adapter.hierarchy_item_move;
+    let hierarchy_group_move = &mut adapter.hierarchy_group_move;
     let mut painters =
         Painters { group: adapter.paint_group.as_deref_mut(), item: &mut *adapter.paint_item, list_item: adapter.paint_list_item.as_deref_mut() };
     let display_mode = st.display_mode(panel);
@@ -1203,7 +1212,7 @@ pub(crate) fn browser_with_root_sequence(
                     drag_state.canonical_drop.node_bounds.borrow_mut().insert(group_id.clone(), header_hit_rect);
                     if capabilities.group_drag {
                         let selection = selected_drag_nodes(sink.state, panel, &projection.visible_selection_order, &group_id, &projection.hierarchy);
-                        asset_browser_header_drag_source_with_id(&response, panel, group_id.clone(), &g.name, &selection);
+                        asset_browser_header_drag_source_with_id(&response, panel, group_id.clone(), g.display_label(), &selection);
                     }
                     if capabilities.selection {
                         let disclosure_clicked = asset_browser_selection_clicked(&disclosure);
@@ -1242,8 +1251,8 @@ pub(crate) fn browser_with_root_sequence(
                     {
                         sink.select_node(panel, group_id, false);
                     }
-                    drag_state.headers.push((gi, inset_row_rect(header_rect, depth), g.name.clone()));
-                    if let Some(action) = paint_group_name(ui, header_rect, depth, panel, &g.name, &[], &mut sink.state.inline_group_renaming) {
+                    drag_state.headers.push((gi, inset_row_rect(header_rect, depth), g.display_label().to_owned()));
+                    if let Some(action) = paint_group_name(ui, header_rect, depth, panel, g.display_label(), &[], &mut sink.state.inline_group_renaming) {
                         sink.state.inline_group_renaming = None;
                         sink.emit(action);
                     }
@@ -1473,6 +1482,7 @@ pub(crate) fn browser_with_root_sequence(
                 hierarchy_move: canonical_hierarchy_move,
                 rekey_after_move: rekey_hierarchy_after_move,
                 item_move: hierarchy_item_move,
+                group_move: hierarchy_group_move,
             },
             viewport: CanonicalDropViewport { parent_clip: browser_parent_clip, view_clip: browser_view_clip },
         },

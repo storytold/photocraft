@@ -92,6 +92,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let groups: Vec<GroupView> = library
         .iter()
         .map(|g| GroupView {
+            label: String::new(),
             name: g.name.clone(),
             root_only: false,
             items: g.items.iter().map(|s| ItemView { key: s.name.clone(), name: s.name.clone(), group_path: Vec::new() }).collect(),
@@ -139,6 +140,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
                 let color = table.get(group_index).and_then(|items| items.get(item_index)).copied().unwrap_or(Color32::GRAY);

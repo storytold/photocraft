@@ -106,6 +106,7 @@ pub(crate) fn pattern_group_views(patterns: &[photocraft_doc::Pattern], groups: 
     let mut views: Vec<GroupView> = groups
         .iter()
         .map(|g| GroupView {
+            label: String::new(),
             name: g.name.clone(),
             root_only: false,
             items: g
@@ -126,7 +127,8 @@ pub(crate) fn pattern_group_views(patterns: &[photocraft_doc::Pattern], groups: 
         if let Some(group) = views.iter_mut().find(|g| g.name == "Patterns") {
             group.items.extend(loose);
         } else {
-            views.push(GroupView { name: "Patterns".into(), root_only: false, items: loose });
+            views.push(GroupView {
+            label: String::new(), name: "Patterns".into(), root_only: false, items: loose });
         }
     }
     views
@@ -171,6 +173,7 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
+            hierarchy_group_move: None,
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
                 if let Some(pattern) =
@@ -361,6 +364,7 @@ pub(crate) fn compact_pattern_browser(
         canonical_hierarchy_move: None,
         rekey_hierarchy_after_move: None,
         hierarchy_item_move: None,
+        hierarchy_group_move: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, paint_state: ItemPaintState| {
             if let Some(pattern) =

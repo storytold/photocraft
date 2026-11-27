@@ -784,7 +784,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     app.ui.brush_tab = (i as usize).min(1);
                 }
                 if let Some(v) = brushes_view {
-                    app.ui.brushes_panel.view = v;
+                    let mode = match v {
+                        crate::brush_panel::BrushesView::List => crate::pickers::state::PickerDisplayMode::SmallList,
+                        crate::brush_panel::BrushesView::Grid => crate::pickers::state::PickerDisplayMode::SmallThumbnail,
+                    };
+                    app.ui.presets_ui.display_modes.insert("brushes".into(), mode);
+                    app.ui.presets_ui.sizes.insert("brushes".into(), mode.item_height());
                 }
                 if let Some(v) = brush_picker_name {
                     app.ui.presets_ui.brush_picker.show_name = v;
@@ -1302,15 +1307,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
 
 /// Snapshot of everything on screen, addressable by id.
 fn brush_picker_collapsed_paths(app: &PhotocraftApp) -> Vec<String> {
-    let panel = "brush-picker";
-    let mut collapsed: Vec<String> = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy)
+    let panel = "brushes";
+    let mut preset_ui = app.ui.presets_ui.clone();
+    let mut collapsed: Vec<String> = crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &mut preset_ui, panel)
         .into_iter()
         .filter_map(|group| {
+            if group.root_only { return None; }
             let key = format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name));
-            (!app.ui.presets_ui.expanded_groups.contains(&key)).then_some(group.name)
+            (!app.ui.presets_ui.expanded_groups.contains(&key)).then_some(group.display_label().to_owned())
         })
         .collect();
-    collapsed.extend(app.ui.presets_ui.toggled.iter().filter_map(|key| key.strip_prefix("brush-picker/").filter(|path| path.contains('/')).map(str::to_owned)));
     collapsed
 }
 
@@ -1340,18 +1346,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             "size": app.ui.brush_picker_size,
             "list": {
                 "collapsed": brush_picker_collapsed_paths(app),
-                "filter": app.ui.presets_ui.search.get("brush-picker").cloned().unwrap_or_default(),
-                "renaming": app.ui.presets_ui.renaming.as_ref().filter(|(panel, _, _)| panel == "brush-picker").map(|(_, key, text)| {
-                    let group_name = key.strip_prefix("group:");
-                    let name = crate::pickers::adapters::brushes::preset_by_identity(&app.session.tools.presets, key)
-                        .map(|preset| preset.name.clone())
-                        .or_else(|| group_name.map(str::to_owned))
-                        .unwrap_or_else(|| key.clone());
-                    json!({"group": group_name.is_some(), "name": name, "folder": [], "text": text})
-                }).or_else(|| app.ui.presets_ui.group_renaming.as_ref().filter(|rename| rename.panel == "brush-picker").map(|rename| {
+                "filter": app.ui.presets_ui.search.get("brushes").cloned().unwrap_or_default(),
+                "renaming": app.ui.presets_ui.renaming.as_ref().filter(|(panel, _, _)| panel == "brushes").map(|(_, key, text)| {
+                    let preset = crate::pickers::adapters::brushes::preset_by_identity(&app.session.tools.presets, key);
+                    let name = preset.map(|preset| preset.name.clone()).unwrap_or_else(|| crate::pickers::adapters::brush_engine_adapter::group_label_for_key(&app.session.tools.presets, key).unwrap_or_else(|| key.clone()));
+                    json!({"group": preset.is_none(), "name": name, "folder": [], "text": text})
+                }).or_else(|| app.ui.presets_ui.group_renaming.as_ref().filter(|rename| rename.panel == "brushes").map(|rename| {
                     json!({"group": true, "name": rename.group, "folder": rename.group_path, "text": rename.text})
                 })),
-                // The card's parts (`view` is the Brushes panel's listing and doesn't apply).
+                // Shared card presentation settings used by both the tab and the picker.
                 "showName": app.ui.presets_ui.brush_picker.show_name,
                 "showStroke": app.ui.presets_ui.brush_picker.show_stroke,
                 "showTip": app.ui.presets_ui.brush_picker.show_tip,

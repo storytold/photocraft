@@ -161,7 +161,7 @@ pub(crate) fn show_new_group_dialog(ui: &mut egui::Ui, panel: &str, groups: &[Gr
 }
 
 /// Render the Rename Group dialogue and translate accepted names into rename actions.
-fn show_next_group_rename(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<BrowserAction>) {
+fn show_next_group_rename(ui: &mut egui::Ui, panel: &str, groups: &[GroupView], actions: &mut Vec<BrowserAction>) {
     let ctx = ui.ctx().clone();
     let request_id = egui::Id::new((RENAME_GROUP, panel));
     let defer = ctx.data_mut(|data| data.remove_temp::<bool>(request_id.with("defer")).unwrap_or(false));
@@ -173,7 +173,7 @@ fn show_next_group_rename(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<Brow
         if let Some(first) = first {
             ctx.data_mut(|data| {
                 let name = match &first {
-                    super::selection::SelectionTarget::Group(group) => group.clone(),
+                    super::selection::SelectionTarget::Group(group) => groups.iter().find(|view| &view.name == group).map(|view| view.display_label().to_owned()).unwrap_or_else(|| group.clone()),
                     super::selection::SelectionTarget::Folder { path, .. } => path.last().cloned().unwrap_or_default(),
                     super::selection::SelectionTarget::Item { .. } => String::new(),
                 };
@@ -192,7 +192,7 @@ fn show_next_group_rename(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<Brow
     let target = ctx.data(|data| data.get_temp::<super::selection::SelectionTarget>(request_id.with(RENAME_TARGET)));
     let Some(target) = target else { return };
     let target_name = match &target {
-        super::selection::SelectionTarget::Group(group) => group.clone(),
+        super::selection::SelectionTarget::Group(group) => groups.iter().find(|view| &view.name == group).map(|view| view.display_label().to_owned()).unwrap_or_else(|| group.clone()),
         super::selection::SelectionTarget::Folder { path, .. } => path.last().cloned().unwrap_or_default(),
         super::selection::SelectionTarget::Item { .. } => return,
     };
@@ -210,9 +210,9 @@ fn show_next_group_rename(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<Brow
                 }
                 super::selection::SelectionTarget::Item { .. } => return,
             });
-            advance_group_rename(&ctx, request_id, name_id, true);
+            advance_group_rename(&ctx, request_id, name_id, true, groups);
         }
-        Some(false) => advance_group_rename(&ctx, request_id, name_id, false),
+        Some(false) => advance_group_rename(&ctx, request_id, name_id, false, groups),
         _ => {
             ctx.data_mut(|data| data.insert_temp(name_id, name));
         }
@@ -301,7 +301,7 @@ pub(crate) fn show_rename_selection_dialog(
     paint_item: &mut PaintItem<'_>,
 ) {
     show_next_item_rename(ui, panel, groups, actions, paint_item);
-    show_next_group_rename(ui, panel, actions);
+    show_next_group_rename(ui, panel, groups, actions);
 }
 
 fn show_group_name_editor(ctx: &egui::Context, request_id: egui::Id, title: &str, name: &mut String, decision: &mut Option<bool>) {
@@ -461,7 +461,7 @@ fn clear_group_name_dialog(ctx: &egui::Context, request_id: egui::Id, name_id: e
     });
 }
 
-fn advance_group_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui::Id, confirmed: bool) {
+fn advance_group_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui::Id, confirmed: bool, groups: &[GroupView]) {
     ctx.data_mut(|data| {
         data.remove::<String>(name_id);
         data.remove::<bool>(name_id.with("focused"));
@@ -470,7 +470,7 @@ fn advance_group_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui
         if confirmed && !queue.is_empty() {
             let next = queue.remove(0);
             let name = match &next {
-                super::selection::SelectionTarget::Group(group) => group.clone(),
+                super::selection::SelectionTarget::Group(group) => groups.iter().find(|view| &view.name == group).map(|view| view.display_label().to_owned()).unwrap_or_else(|| group.clone()),
                 super::selection::SelectionTarget::Folder { path, .. } => path.last().cloned().unwrap_or_default(),
                 super::selection::SelectionTarget::Item { .. } => String::new(),
             };
@@ -498,7 +498,7 @@ fn apply_dialog_keyboard(ctx: &egui::Context, decision: &mut Option<bool>, confi
 
 fn next_group_name(groups: &[GroupView]) -> String {
     let next =
-        groups.iter().filter_map(|group| group.name.strip_prefix("Group ").and_then(|suffix| suffix.parse::<u64>().ok())).max().unwrap_or(0).saturating_add(1);
+        groups.iter().filter_map(|group| group.display_label().strip_prefix("Group ").and_then(|suffix| suffix.parse::<u64>().ok())).max().unwrap_or(0).saturating_add(1);
     format!("Group {next}")
 }
 
@@ -639,7 +639,7 @@ fn describe(actions: &[BrowserAction], groups: &[GroupView], panel: &str) -> (St
         _ => "item",
     };
     let name = match actions.first() {
-        Some(BrowserAction::DeleteGroup(group)) if actions.len() == 1 => group.clone(),
+        Some(BrowserAction::DeleteGroup(group)) if actions.len() == 1 => groups.iter().find(|view| &view.name == group).map(|view| view.display_label().to_owned()).unwrap_or_else(|| group.clone()),
         Some(BrowserAction::DeleteNestedGroup { group_path, .. }) if actions.len() == 1 => group_path.last().cloned().unwrap_or_default(),
         Some(BrowserAction::DeleteItem { group, key, .. }) => groups
             .iter()
@@ -689,6 +689,7 @@ mod tests {
     #[test]
     fn copied_swatch_name_uses_the_next_available_number() {
         let groups = [GroupView {
+            label: String::new(),
             name: "Basics".into(),
             root_only: false,
             items: vec![
@@ -732,9 +733,12 @@ mod tests {
     #[test]
     fn new_group_name_increments_the_highest_exact_group_number() {
         let groups = [
-            GroupView { name: "Group 2".into(), root_only: false, items: Vec::new() },
-            GroupView { name: "Group 10".into(), root_only: false, items: Vec::new() },
-            GroupView { name: "Group 3 backup".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Group 2".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Group 10".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Group 3 backup".into(), root_only: false, items: Vec::new() },
         ];
         assert_eq!(next_group_name(&groups), "Group 11");
         assert_eq!(next_group_name(&[]), "Group 1");
@@ -742,7 +746,8 @@ mod tests {
 
     #[test]
     fn new_group_dialog_shows_name_field_and_stacked_confirmation_buttons() {
-        let groups = [GroupView { name: "Group 4".into(), root_only: false, items: Vec::new() }];
+        let groups = [GroupView {
+            label: String::new(), name: "Group 4".into(), root_only: false, items: Vec::new() }];
         let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui(|ui| {
             request_new_group(ui.ctx(), "test-panel");
             let mut actions = Vec::new();
@@ -784,8 +789,10 @@ mod tests {
     #[test]
     fn reopening_new_group_dialog_recomputes_unique_default_name() {
         let groups = [
-            GroupView { name: "Group 1".into(), root_only: false, items: Vec::new() },
-            GroupView { name: "Group 4".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Group 1".into(), root_only: false, items: Vec::new() },
+            GroupView {
+            label: String::new(), name: "Group 4".into(), root_only: false, items: Vec::new() },
         ];
         let mut harness = Harness::builder()
             .with_size(vec2(640.0, 480.0))
@@ -827,7 +834,8 @@ mod tests {
 
     #[test]
     fn new_group_dialog_emits_creation_only_after_confirmation() {
-        let groups = [GroupView { name: "Group 4".into(), root_only: false, items: Vec::new() }];
+        let groups = [GroupView {
+            label: String::new(), name: "Group 4".into(), root_only: false, items: Vec::new() }];
         let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(
             |ui, actions: &mut Vec<super::BrowserAction>| {
                 show_new_group_dialog(ui, "test-panel", &groups, actions);
@@ -899,6 +907,7 @@ mod tests {
         use crate::pickers::browser::asset_browser::{BrowserAction, ItemPaintState, ItemView};
 
         let groups = vec![GroupView {
+            label: String::new(),
             name: "A".into(),
             root_only: false,
             items: vec![ItemView { key: "gradient-a".into(), name: "Gradient A".into(), group_path: Vec::new() }],

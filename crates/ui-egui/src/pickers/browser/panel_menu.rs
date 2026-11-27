@@ -464,7 +464,8 @@ mod tests {
                 crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
                     browser_actions_menu(app, ui, state, "gradients");
                 });
-                let groups = [GroupView { name: "Basics".into(), root_only: false, items: targets.iter().map(|(_, item)| item.clone()).collect() }];
+                let groups = [GroupView {
+            label: String::new(), name: "Basics".into(), root_only: false, items: targets.iter().map(|(_, item)| item.clone()).collect() }];
                 let mut actions = Vec::new();
                 let mut paint = |ui: &egui::Ui, rect: egui::Rect, _: usize, _: usize, _: crate::pickers::browser::asset_browser::ItemPaintState| {
                     ui.painter().rect_filled(rect, 0.0, egui::Color32::WHITE);

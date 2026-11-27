@@ -377,6 +377,21 @@ pub(super) fn resolve_canonical_drop(
             commit_hierarchy_move(&mut staged_state, ctx.panel, &mut staged_hierarchy, source, &intent.position, identities)
                 .map_err(|error| format!("Could not persist hierarchy move: {error:?}"))?;
         }
+        let group_sources: Vec<PickerId> = hierarchy_sources
+            .iter()
+            .filter(|source| identities.get(*source).is_some_and(|identity| identity.role() == PickerNodeRole::AssetGroup))
+            .cloned()
+            .collect();
+        if !group_sources.is_empty()
+            && let Some(commit_group) = commit.callbacks.group_move.as_deref_mut()
+        {
+            let group_intent = crate::pickers::browser::dragging_model::DropMoveIntent {
+                source: group_sources.first().cloned().unwrap_or_else(|| intent.source.clone()),
+                selection: group_sources,
+                position: intent.position.clone(),
+            };
+            commit_group(&group_intent, hierarchy, identities)?;
+        }
         if !item_moves.is_empty() {
             let Some(commit_item) = commit.callbacks.item_move.as_deref_mut() else {
                 return Err("This asset adapter does not support authoritative item moves.".to_owned());
