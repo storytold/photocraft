@@ -89,5 +89,7 @@ impl PhotocraftApp {
         // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead
         // (shortcuts.rs), like Photoshop.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        // A pointer move that changes nothing under the pointer runs no frame (#17148).
+        craft::ui::runtime::pointer::gate_pointer_moves(ctx);
     }
 }
