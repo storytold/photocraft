@@ -53,6 +53,22 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     if app.ui.tool == Tool::Healing && o.healing_replace {
         p["mode"] = json!("replace");
     }
+    // The Healing Brush's Source: Pattern (#12104). A clone source set by an Alt-click wins, as
+    // the reference's does: the pattern then paints no params of its own, and `set_source` puts
+    // the control back to Sampled.
+    let mut pattern_source = false;
+    if app.ui.tool == Tool::Healing && o.healing_source == "pattern" && app.ui.clone_source.is_none() {
+        pattern_source = true;
+        p["sourceMode"] = json!("pattern");
+        let id = if o.healing_pattern.is_empty() {
+            photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone())
+        } else {
+            Some(o.healing_pattern.clone())
+        };
+        if let Some(id) = id {
+            p["pattern"] = json!(id);
+        }
+    }
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
@@ -61,6 +77,10 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
     // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
     // so falling back to them would read another document's coordinates from this one's pixels.
+    // A pattern-source stroke asks for no source point at all (#12104).
+    if pattern_source {
+        return Some(p);
+    }
     app.session.presets().clone.active().source?;
     Some(p)
 }
@@ -770,6 +790,8 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
     }
     app.ui.clone_source = Some([x.round(), y.round()]);
     app.ui.clone_offset = None;
+    // Sampling a source with ⌥/Alt puts the Healing Brush's Source control back to Sampled (#12104).
+    app.ui.tool_options.healing_source = "sampled".into();
     let _ = app.run("cloneSource.set", json!({"source": [x.round(), y.round()]}));
     let template = "Clone source set at {x}, {y}";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("x", &format!("{x:.0}")), ("y", &format!("{y:.0}"))]);

@@ -2,14 +2,14 @@
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
 use craft::behavior::Value;
-use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::choice::{Checkbox, Radio, RadioGroup, Segmented};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::text::RangeAlert;
 use photocraft_engine::presets::PresetsExt;
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 use crate::PhotocraftApp;
 use crate::option_cells::{hint, number};
@@ -140,10 +140,35 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
     None
 }
 
-/// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
-/// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
+/// The Healing Brush's options: its Source pair, then the Clone Stamp's cells. The "Alt-click to
+/// set the source" hint stays away while Source reads Pattern (#12104).
+pub(super) fn healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let source_unset = app.session.presets().clone.active().source.is_none();
+    healing_cells(ui, app);
+    clone_cells(ui, app, false);
+    if source_unset && app.ui.tool_options.healing_source != "pattern" {
+        Divider::vertical().show(ui);
+        hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+    }
+    None
+}
+
+/// Clone Stamp's options: its cells, and the hint a stroke without a source point needs. In an
+/// Indexed Color document the Sample cell greys at Current Layer and keeps the stored choice for
+/// other documents (#12613).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let source_unset = app.session.presets().clone.active().source.is_none();
+    clone_cells(ui, app, true);
+    if source_unset {
+        Divider::vertical().show(ui);
+        hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+    }
+    None
+}
+
+/// The Aligned and Sample cells Clone Stamp and Healing Brush share. `tooltips` is the Clone
+/// Stamp's (#12607); the Healing Brush's Source cells carry their own (#12104).
+fn clone_cells(ui: &mut egui::Ui, app: &mut PhotocraftApp, tooltips: bool) {
     let clone_stamp = app.ui.tool == Tool::CloneStamp;
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
     let o = &mut app.ui.tool_options;
@@ -151,12 +176,50 @@ pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeA
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
-    choose(ui, tl!("Sample"), sample, &samples, !indexed, clone_stamp.then(|| tl!("Choose which layers to sample")));
-    if source_unset {
-        Divider::vertical().show(ui);
-        hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+    choose(ui, tl!("Sample"), sample, &samples, !indexed, tooltips.then(|| tl!("Choose which layers to sample")));
+}
+
+/// The Healing Brush's Source pair: the Sampled · Pattern segmented control and the pattern
+/// picker after it (#12104), the reference's measured cells. The picker greys while Source reads
+/// Sampled; the pattern is the tool's own option, which Reset Tool keeps while it puts Source
+/// back to Sampled.
+fn healing_cells(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let sources = string_entries(&[("sampled", tl!("Sampled")), ("pattern", tl!("Pattern"))]);
+    let held_source = app.ui.tool_options.healing_source.clone();
+    let picked = Field::new(tl!("Source"))
+        .side(SideLabel::new().tooltip(tl!("Set a source to repair the area")))
+        .sizing(Sizing::Content)
+        .show(ui, |ui, _| Segmented::new(tl!("Source"), Bind::given(held_source.clone()), &sources).show(ui).value().cloned())
+        .inner
+        .flatten();
+    if let Some(picked) = picked {
+        app.ui.tool_options.healing_source = picked;
     }
-    None
+    let on_pattern = app.ui.tool_options.healing_source == "pattern";
+    let patterns: Vec<Entry<String>> = app.session.patterns.items.iter().map(|p| Entry::new(p.id.clone(), p.display_name().to_string())).collect();
+    let held = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone()).unwrap_or_default();
+    // With Source on Pattern the option holds the pattern the picker shows, so Reset Tool has a
+    // last chosen pattern to keep (the measured row) and the stroke always names it.
+    if on_pattern && app.ui.tool_options.healing_pattern.is_empty() {
+        app.ui.tool_options.healing_pattern = held.clone();
+    }
+    let shown = if app.ui.tool_options.healing_pattern.is_empty() { held.clone() } else { app.ui.tool_options.healing_pattern.clone() };
+    let picked = Field::new(tl!("Pattern"))
+        .side(SideLabel::new().scrub(true))
+        .sizing(Sizing::Content)
+        .show(ui, |ui, _| {
+            let cell = Select::new(tl!("Pattern"), Bind::given(shown.clone()), &patterns).enabled(on_pattern && !patterns.is_empty());
+            let cell = if on_pattern { cell.tooltip(tl!("Use pattern as source for heal")) } else { cell };
+            cell.show(ui).value().cloned()
+        })
+        .inner
+        .flatten();
+    if let Some(picked) = picked.filter(|_| on_pattern) {
+        app.ui.tool_options.healing_pattern = picked.clone();
+        if picked != held {
+            let _ = app.run("pattern.presets.select", json!({"pattern": picked}));
+        }
+    }
 }
 
 #[allow(dead_code)]
