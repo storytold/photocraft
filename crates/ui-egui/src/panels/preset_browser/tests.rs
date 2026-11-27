@@ -104,6 +104,29 @@ fn each_panel_uses_a_preset_its_own_way() {
     assert_eq!(panel_act(&app, SHAPES, &PresetEvent::drop_at(item("Star"), drop, none)), run("shape.presets.place", expected));
 }
 
+/// #12868: the Patterns panel changes the stamp's own choice only for Pattern Stamp; other tools
+/// keep that choice while their shared selection still follows the panel.
+#[test]
+fn a_pattern_panel_pick_updates_only_the_active_tools_choice() {
+    let mut app = app();
+    let other = app.session.patterns.items.iter().find(|p| p.name == "Bricks").unwrap().id.clone();
+    let held = app.session.patterns.items.iter().find(|p| p.name == "Checkerboard").unwrap().id.clone();
+    app.ui.tool_options.pattern_stamp_pattern = Some(held.clone());
+    let event = PresetEvent::select(item(&other), Mods::default());
+
+    app.ui.tool = Tool::PaintBucket;
+    let ctx = app.ctx().clone();
+    apply(&mut app, &ctx, PATTERNS, &[], &[], vec![event.clone()]);
+    assert_eq!(app.ui.tool_options.pattern_stamp_pattern.as_deref(), Some(held.as_str()));
+    assert_eq!(crate::retouch_ui::pattern_stamp_pattern_id(&app).as_deref(), Some(held.as_str()));
+    assert_eq!(photocraft_engine::presets::patterns::current(&app.session).map(|p| p.id.as_str()), Some(other.as_str()));
+
+    app.ui.tool = Tool::PatternStamp;
+    apply(&mut app, &ctx, PATTERNS, &[], &[], vec![event]);
+    assert_eq!(app.ui.tool_options.pattern_stamp_pattern.as_deref(), Some(other.as_str()));
+    assert_eq!(crate::retouch_ui::pattern_stamp_pattern_id(&app).as_deref(), Some(other.as_str()));
+}
+
 /// Regression: preset drops mapped the pointer through the raw widget rect, ignoring the rulers' inset — a dropped
 /// shape landed off the pointer, and a drop on the ruler strip counted as a canvas drop. Drops map through, and
 /// target, the same content rect the canvas draws with.

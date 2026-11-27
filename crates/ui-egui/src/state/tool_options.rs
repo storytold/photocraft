@@ -91,6 +91,9 @@ pub struct ToolOptions {
     pub pattern_stamp_scale: f32,
     /// Pattern Stamp rotation in degrees (counter-clockwise).
     pub pattern_stamp_angle: f32,
+    /// Pattern Stamp's own pattern, separate from the shared selection Fill and the Paint Bucket
+    /// read (#12868). `None` follows the shared selection until the tool chooses or resets one.
+    pub pattern_stamp_pattern: Option<String>,
     /// current | currentAndBelow | all
     pub clone_sample: String,
     /// Spot Healing: contentAware | createTexture | proximityMatch
@@ -478,6 +481,7 @@ impl Default for ToolOptions {
             pattern_stamp_impressionist: false,
             pattern_stamp_scale: 100.0,
             pattern_stamp_angle: 0.0,
+            pattern_stamp_pattern: None,
             clone_sample: "current".into(),
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),

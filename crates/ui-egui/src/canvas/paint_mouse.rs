@@ -136,6 +136,8 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// The Adjustment Brush's starting tip (#12519): a 100 px soft round (hardness 0 %). Its spacing
 /// was not measured, so it stays the default brush's.
 const ADJUSTMENT_BRUSH_TIP: (f32, f32) = (100.0, 0.0);
+/// The Pattern Stamp's tip after Reset Tool (#12868): a 21 px soft round at 25 % spacing.
+const PATTERN_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
@@ -144,8 +146,9 @@ const ADJUSTMENT_BRUSH_TIP: (f32, f32) = (100.0, 0.0);
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] and the Art History Brush's [`ART_HISTORY_BRUSH_TIP`], both with no
 /// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
-/// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
-/// default tip.
+/// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the Pattern Stamp's
+/// [`PATTERN_STAMP_TIP`] comes back on Reset Tool only (#12868). The other tools keep the default
+/// tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -175,6 +178,10 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         }
         Tool::ArtHistoryBrush => {
             (brush.size, brush.hardness, brush.spacing) = ART_HISTORY_BRUSH_TIP;
+            brush.smoothing.amount = 0.0;
+        }
+        Tool::PatternStamp => {
+            (brush.size, brush.hardness, brush.spacing) = PATTERN_STAMP_TIP;
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
