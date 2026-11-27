@@ -26,12 +26,14 @@ fn label_of(mode: PaintMode) -> String {
 pub(crate) fn mode_entries(tool: Tool, behind_enabled: bool, threshold: bool) -> Vec<Entry<PaintMode>> {
     static CACHE: crate::i18n::LangCache<(Tool, bool, bool), Vec<Entry<PaintMode>>> = crate::i18n::LangCache::new();
     CACHE.get_or_build((tool, behind_enabled, threshold), || {
-        let keyed: Vec<BlendKeyEntry<PaintMode>> = if tool == Tool::PatternStamp {
-            crate::brush_mode_menu::pattern_stamp_choices()
+        let keyed: Vec<BlendKeyEntry<PaintMode>> = if tool == Tool::PatternStamp || tool == Tool::PaintBucket {
+            let choices = if tool == Tool::PatternStamp { crate::brush_mode_menu::pattern_stamp_choices() } else { crate::brush_mode_menu::choices() };
+            choices
                 .into_iter()
                 .filter_map(|((mode, behind), _)| match (mode, behind) {
                     (Some(blend), false) => Some(crate::panels::blend_entry(PaintMode::Blend(blend), blend)),
                     (None, true) => Some(BlendKeyEntry::behind(PaintMode::Behind)),
+                    (None, false) => Some(BlendKeyEntry::clear(PaintMode::Clear)),
                     _ => None,
                 })
                 .collect()
@@ -50,7 +52,7 @@ pub(crate) fn mode_entries(tool: Tool, behind_enabled: bool, threshold: bool) ->
             key => label_of(key).into(),
         })
         .into_iter()
-        .map(|entry| if entry.value() == Some(&PaintMode::Behind) { entry.enabled(behind_enabled) } else { entry })
+        .map(|entry| if matches!(entry.value(), Some(&PaintMode::Behind) | Some(&PaintMode::Clear)) { entry.enabled(behind_enabled) } else { entry })
         .collect()
     })
 }
@@ -65,19 +67,34 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.tool != Tool::PaintBucket {
         return;
     }
-    let entries = mode_entries(Tool::PaintBucket, true, false);
+    let entries = mode_entries(Tool::PaintBucket, crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind), false);
     let sources = [Entry::new(false, tl!("Foreground").to_owned()), Entry::new(true, tl!("Pattern").to_owned())];
     let o = &mut app.ui.tool_options;
     labelled(ui, tl!("Fill"), |ui| Select::new(tl!("Source").to_owned(), Bind::bound(&mut o.bucket_fill_pattern), &sources).show(ui));
-    let mut mode = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
+    let mut mode = if o.bucket_clear {
+        PaintMode::Clear
+    } else if o.bucket_behind {
+        PaintMode::Behind
+    } else {
+        PaintMode::Blend(o.bucket_blend_mode)
+    };
     labelled(ui, tl!("Mode"), |ui| mode_select(Bind::bound(&mut mode), &entries).show(ui));
     match mode {
-        PaintMode::Clear => o.bucket_clear = true,
+        PaintMode::Clear => {
+            o.bucket_clear = true;
+            o.bucket_behind = false;
+        }
         PaintMode::Blend(blend) => {
             o.bucket_clear = false;
+            o.bucket_behind = false;
             o.bucket_blend_mode = blend;
         }
-        PaintMode::Behind => {}
+        PaintMode::Behind => {
+            o.bucket_clear = false;
+            o.bucket_behind = true;
+            // Behind names no blend: the stored mode reads Normal while it is chosen (#12531).
+            o.bucket_blend_mode = BlendMode::Normal;
+        }
     }
     if let Some(opacity) = number_field(ui, tl!("Opacity"), o.fill_opacity, 1.0..=100.0, "%").landed() {
         o.fill_opacity = *opacity;

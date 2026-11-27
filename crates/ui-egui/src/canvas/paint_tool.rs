@@ -162,6 +162,11 @@ fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
     if tool == Tool::Brush && app.ui.tool_options.brush_clear && !app.held_erase && on_background && paint_target(app) == json!("pixels") {
         app.ui.tool_options.brush_clear = false;
     }
+    // The Paint Bucket's Behind is greyed on the Background (#12531), so a bucket click there
+    // turns it off the same way and the fill goes with the bucket's blend mode.
+    if tool == Tool::PaintBucket && app.ui.tool_options.bucket_behind && on_background && paint_target(app) == json!("pixels") {
+        app.ui.tool_options.bucket_behind = false;
+    }
 }
 
 /// Reports why a Mixer Brush press could not start: the two refusals every press would meet get
@@ -191,9 +196,18 @@ fn with_resize<R>(app: &mut PhotocraftApp, f: impl FnOnce(&mut crate::brush_resi
 fn click_tool(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
     match tool {
         Tool::PaintBucket => {
+            // The press path returns before the stroke paths clear-off call, so the buckets
+            // own clear-off on the Background (#12531) happens here, before the options are read.
+            clear_off_on_background(app, Tool::PaintBucket);
             let o = app.ui.tool_options.clone();
             let contents = if o.bucket_fill_pattern { "pattern" } else { "foreground" };
-            let mode = if o.bucket_clear { "clear" } else { o.bucket_blend_mode.label() };
+            let mode = if o.bucket_clear {
+                "clear"
+            } else if o.bucket_behind {
+                "behind"
+            } else {
+                o.bucket_blend_mode.label()
+            };
             let params = json!({
                 "x": at[0].floor(),
                 "y": at[1].floor(),

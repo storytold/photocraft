@@ -5,12 +5,16 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde::{Deserialize, Serialize};
 
-/// How a fill lays down its colour: blended with a mode, or Clear, which erases what it covers
-/// (the Paint Bucket's Mode › Clear).
+/// How a fill lays down its colour: blended with a mode, Clear, which erases what it covers
+/// (the Paint Bucket's Mode › Clear), or Behind, which paints only into the pixels' transparency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FillMode {
     Blend(BlendMode),
     Clear,
+    /// The fill goes under each pixel at `fill α × coverage × (1 − α)`, as the Brush's Behind
+    /// lays it: opaque pixels keep what they have, transparent ones take the fill as in Normal
+    /// (#12531). Locked transparency leaves the layer as it is.
+    Behind,
 }
 
 /// Gradient tool shape.
@@ -93,7 +97,7 @@ fn composite_area(
             for x in r.x0..r.x1 {
                 let mut k = coverage(x, y);
                 let on_rim = match rim {
-                    Some(rim) if k <= 0.0 && !lock_transparency && matches!(mode, FillMode::Blend(_)) => rim(x, y),
+                    Some(rim) if k <= 0.0 && !lock_transparency && matches!(mode, FillMode::Blend(_) | FillMode::Behind) => rim(x, y),
                     _ => 0.0,
                 };
                 if k <= 0.0 && on_rim <= 0.0 {
@@ -113,18 +117,25 @@ fn composite_area(
                         continue;
                     }
                 }
+                // Behind leaves opaque and transparency-locked pixels unchanged; skip the
+                // encode and write, whose CMYK round trip can shift their inks (#12531 review).
+                if mode == FillMode::Behind && (lock_transparency || d[3] >= 1.0) {
+                    continue;
+                }
                 let o = match mode {
                     FillMode::Blend(m) if lock_transparency => blend::composite_atop(m, d, color(x, y), k),
                     FillMode::Blend(m) => blend::composite(m, d, color(x, y), k),
                     // Locked transparency keeps the alpha, so Clear leaves the pixel as it is.
                     FillMode::Clear if lock_transparency => d,
                     FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
+                    FillMode::Behind if lock_transparency => d,
+                    FillMode::Behind => behind(d, color(x, y), k),
                 };
                 from_rgba_into(&fmt, o, &mut enc);
                 // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it is.
                 if let Some(i) = inks
                     && fmt.mode == photocraft_color::ColorMode::Cmyk
-                    && mode == FillMode::Blend(BlendMode::Normal)
+                    && (mode == FillMode::Blend(BlendMode::Normal) || (mode == FillMode::Behind && d[3] <= 0.0))
                     && k >= 1.0
                 {
                     enc[..4].copy_from_slice(&i);
@@ -144,6 +155,19 @@ fn composite_area(
     for (r, region) in done {
         s.write_region(r, &region);
     }
+}
+
+/// [`FillMode::Behind`] for one pixel: `src` laid under `d` at coverage `k`, with the Brush's
+/// Behind formula (`photocraft_paint`'s render): the fill's share is `src α × k × (1 − d α)`.
+fn behind(d: [f32; 4], src: [f32; 4], k: f32) -> [f32; 4] {
+    let da = d[3].clamp(0.0, 1.0);
+    let underneath = src[3].clamp(0.0, 1.0) * k.clamp(0.0, 1.0) * (1.0 - da);
+    let alpha = da + underneath;
+    if da >= 1.0 || alpha <= 0.0 || alpha.is_nan() {
+        return d;
+    }
+    let mix = |c: usize| (d[c] * da + src[c] * underneath) / alpha;
+    [mix(0), mix(1), mix(2), alpha]
 }
 
 /// Gradient tool over `area` (the selection bounds or canvas).
@@ -312,7 +336,7 @@ fn fill_region(
     // The ring is only ever read for an unlocked Blend fill (see composite_area), and it is
     // empty when the region covers every pixel, so do not build it in those cases: on a large
     // canvas it is a bool per pixel plus a full scan of the mask.
-    let use_rim = rim && !lock_transparency && matches!(mode, FillMode::Blend(_)) && region.mask.contains(&0);
+    let use_rim = rim && !lock_transparency && matches!(mode, FillMode::Blend(_) | FillMode::Behind) && region.mask.contains(&0);
     let ring = if use_rim { rim_ring(region) } else { Vec::new() };
     let on_ring = |x: i32, y: i32| {
         let at = usize::try_from(y - b.y0).ok().zip(usize::try_from(x - b.x0).ok()).filter(|_| b.contains(x, y));
@@ -483,6 +507,29 @@ mod tests {
         let edge = s.rgba(3, 0);
         assert!(edge[3] > 0.5, "the fill raised the partial pixel's alpha: {edge:?}");
         assert!(!is_inks(&raw(&s, 3)), "a blended destination keeps its own encoding: {:?}", raw(&s, 3));
+    }
+
+    /// #12531 review: Behind returns an opaque or transparency-locked pixel unchanged, so
+    /// composite_area must not run it through the RGB encode at all — on a CMYK target the
+    /// round trip is lossy and shifts the inks of artwork Behind cannot touch. The stored
+    /// channels stay byte for byte.
+    #[test]
+    fn behind_leaves_opaque_and_locked_cmyk_pixels_as_stored() {
+        let a = Rect::new(0, 0, 8, 1);
+        let green = |_, _| [0.0, 1.0, 0.0, 1.0];
+        // Opaque inks off the conversion lattice: a CMYK -> RGB -> CMYK trip moves them.
+        let mut s = Surface::new(PixelFormat::CMYKA8);
+        s.fill_rect(a, &[0.13, 0.37, 0.71, 0.29, 1.0]);
+        let before = s.read_region(a);
+        assert!(bucket_fill_inks(&mut s, a, (1, 0), 255.0, false, false, 1.0, None, false, green, None, FillMode::Behind));
+        assert_eq!(s.read_region(a), before, "opaque pixels keep their stored inks");
+
+        // Locked transparency: a partly transparent pixel is likewise returned unchanged.
+        let mut s = Surface::new(PixelFormat::CMYKA8);
+        s.fill_rect(a, &[0.13, 0.37, 0.71, 0.29, 0.5]);
+        let before = s.read_region(a);
+        assert!(bucket_fill_inks(&mut s, a, (1, 0), 255.0, false, false, 1.0, None, true, green, None, FillMode::Behind));
+        assert_eq!(s.read_region(a), before, "locked pixels keep their stored inks");
     }
 
     /// #11354 review: the soft rim a Clear leaves rises only partly. The reference application
