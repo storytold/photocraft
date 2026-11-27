@@ -135,6 +135,10 @@ pub struct PatternM {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    /// The colour mode Edit › Define Pattern took this pattern from
+    /// (`photocraft_doc::Pattern::source_mode`); absent in older files, which recorded no source.
+    #[serde(default)]
+    pub source_mode: Option<ColorMode>,
     pub surface: SurfaceM,
 }
 
@@ -293,6 +297,10 @@ pub enum ContentM {
         path: Path,
         #[serde(default)]
         stroke: Option<ShapeStroke>,
+        /// Align Edges. Absent in files from before it existed, which keep rendering as they did
+        /// (off); written only when on, so files without it stay readable by older versions.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        use_aligned_rendering: bool,
         #[serde(default)]
         live: Option<LiveShape>,
         /// Arrow parameters stored separately for backward compatibility.

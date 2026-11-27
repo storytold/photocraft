@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::app::framework::BuildApp;
+use egui::vec2;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
