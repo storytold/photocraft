@@ -2,7 +2,7 @@
 
 use craft_cms::Builtin;
 use photocraft_color::ColorMode;
-use photocraft_engine::Session;
+use photocraft_engine::{Session, color_cmds::ColorExt};
 use serde_json::{Value, json};
 
 /// Use non-default working spaces, including a synthetic CMYK profile with no external asset.
@@ -27,7 +27,7 @@ fn new_documents_capture_the_working_profile_for_every_mode_and_depth() {
     let directory = tempfile::tempdir().unwrap();
     let mut session = configured_session(directory.path());
     for (name, mode) in [("rgb", ColorMode::Rgb), ("cmyk", ColorMode::Cmyk), ("gray", ColorMode::Grayscale), ("lab", ColorMode::Lab)] {
-        let expected = session.color.working(mode).to_bytes();
+        let expected = session.color().working(mode).to_bytes();
         for depth in [8, 16, 32] {
             for background in ["white", "transparent"] {
                 for profile in [None, Some("working")] {
@@ -50,7 +50,7 @@ fn new_artboards_capture_the_working_profile_and_allow_untagged_creation() {
     let directory = tempfile::tempdir().unwrap();
     let mut session = configured_session(directory.path());
     for (name, mode) in [("rgb", ColorMode::Rgb), ("cmyk", ColorMode::Cmyk), ("gray", ColorMode::Grayscale), ("lab", ColorMode::Lab)] {
-        let expected = session.color.working(mode).to_bytes();
+        let expected = session.color().working(mode).to_bytes();
         for depth in [8, 16, 32] {
             for profile in [None, Some("working"), Some("none")] {
                 let mut params = json!({"width": 3, "height": 2, "mode": name, "depth": depth, "artboard": true});
@@ -86,15 +86,15 @@ fn a_created_document_keeps_its_profile_after_the_working_space_changes() {
     let directory = tempfile::tempdir().unwrap();
     for (name, mode) in [("rgb", ColorMode::Rgb), ("cmyk", ColorMode::Cmyk), ("gray", ColorMode::Grayscale)] {
         let mut session = configured_session(directory.path());
-        let expected = session.color.working(mode).to_bytes();
+        let expected = session.color().working(mode).to_bytes();
         session.execute("file.new", json!({"width": 3, "height": 2, "mode": name, "depth": 16})).unwrap();
         let original = session.active().unwrap().doc.clone();
         session.execute("edit.colorSettings", json!({"reset": true})).unwrap();
-        assert_ne!(session.color.working(mode).to_bytes(), expected);
+        assert_ne!(session.color().working(mode).to_bytes(), expected);
         assert_eq!(embedded(&session), Some(expected.as_slice()), "{name}");
         assert_eq!(photocraft_engine::color_cmds::document_profile(&original).to_bytes(), expected);
         session.execute("file.new", json!({"width": 3, "height": 2, "mode": name})).unwrap();
-        assert_eq!(embedded(&session), Some(session.color.working(mode).to_bytes().as_slice()));
+        assert_eq!(embedded(&session), Some(session.color().working(mode).to_bytes().as_slice()));
         assert_eq!(original.icc_profile.as_deref().map(Vec::as_slice), Some(expected.as_slice()));
     }
 }
@@ -106,7 +106,7 @@ fn invalid_profile_requests_do_not_open_a_document() {
     let mut session = configured_session(directory.path());
     session.execute("file.new", json!({"width": 3, "height": 2})).unwrap();
     let original = session.active().unwrap().doc.clone();
-    let settings = session.color.settings.clone();
+    let settings = session.color().settings.clone();
     for (mode, profiles) in [
         ("rgb", vec![json!("coated-cmyk"), json!("no-such-profile"), json!(""), json!(null), json!(12)]),
         ("cmyk", vec![json!("working-rgb"), json!("srgb")]),
@@ -116,7 +116,7 @@ fn invalid_profile_requests_do_not_open_a_document() {
             assert!(session.execute("file.new", json!({"width": 3, "height": 2, "mode": mode, "profile": profile})).is_err());
             assert_eq!(session.documents().len(), 1);
             assert!(std::sync::Arc::ptr_eq(&session.active().unwrap().doc, &original));
-            assert_eq!(session.color.settings, settings);
+            assert_eq!(session.color().settings, settings);
         }
     }
 }

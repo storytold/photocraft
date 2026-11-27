@@ -65,6 +65,25 @@ fn read_growth_is_rejected_at_the_observed_length() {
 }
 
 #[test]
+fn location_names_the_file_below_the_root_that_holds_it() {
+    let (library, work, _) = roots("location");
+    std::fs::create_dir_all(work.join("shots")).unwrap();
+    std::fs::write(work.join("shots/a.png"), b"a").unwrap();
+    std::fs::write(library.join("same.png"), b"first").unwrap();
+    std::fs::write(work.join("same.png"), b"second").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    // A root-relative request names the file below the root that holds it, as an absolute path.
+    assert_eq!(workspace.location("shots/a.png"), Some(work.join("shots").join("a.png")));
+    // The first root that holds the name wins, as for `read`.
+    assert_eq!(workspace.location("same.png"), Some(library.join("same.png")));
+    // An absolute request below a root keeps naming that file.
+    assert_eq!(workspace.location(&work.join("same.png").to_string_lossy()), Some(work.join("same.png")));
+    assert_eq!(workspace.location("missing.png"), None);
+    assert_eq!(workspace.location("../outside.png"), None, "a path escaping the roots has no location");
+    assert_eq!(AuthorizedWorkspace::default().location("shots/a.png"), None, "no read root, no location");
+}
+
+#[test]
 fn open_pcraft_loads_a_directory_below_the_read_root() {
     let (inside, _, workspace) = roots("pcraft-dir");
     let doc = photocraft_doc::Document::new("Native", photocraft_doc::Size::new(16, 12), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
@@ -789,6 +808,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"path": "/outside/set.aco"})),
         ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
         ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
+        ("actions.replace", serde_json::json!({"path": "/outside/set.atn","confirm":true})),
         ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
         ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
         ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
@@ -806,6 +826,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"data": "QUJD"})),
         ("swatches.export", serde_json::json!({"format": "ase"})),
         ("actions.load", serde_json::json!({"data": "QUJD"})),
+        ("actions.replace", serde_json::json!({"data": "QUJD","confirm":true})),
         ("actions.save", serde_json::json!({"set": "S"})),
         ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
         ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
@@ -926,7 +947,7 @@ fn svg_smart_handoff_is_memory_only_and_linked_sources_stay_denied() {
         assert!(authorize_desktop_engine_command(id, &ambient).is_err(), "{id}");
         assert!(headless.command_run(id, ambient).is_err(), "{id}");
     }
-    let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
     let id = photocraft_doc::LayerId(layer.as_u64().unwrap());
     let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("SVG smart object") };
     sm.source = photocraft_doc::SmartSource::Linked { path: "/outside/source.svg".into() };
@@ -957,7 +978,7 @@ fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
         .unwrap();
         let target = photocraft_doc::LayerId(pasted["layer"].as_u64().unwrap());
         let filtered = if shared_only {
-            let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+            let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
             let duplicate = doc.layer(target).unwrap().duplicate();
             let id = duplicate.id;
             doc.layers.push(duplicate);
@@ -982,7 +1003,7 @@ fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
         assert_eq!(headless.session.active().unwrap().doc, before);
         assert_eq!(headless.session.active().unwrap().revision, revision);
         // A hidden stored filter is not executed, so its unused filename grants no access.
-        let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
         let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(filtered).unwrap().content else { panic!("smart object") };
         sm.smart_filters.last_mut().unwrap().visible = false;
         assert_eq!(headless.command_run("layer.smartObjects.updateSvg", params).unwrap()["updated"], true);
@@ -1048,6 +1069,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.addAnchor"
             | "path.deleteAnchor"
             | "path.deleteSegment"
+            | "path.deleteComponents"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"
@@ -1062,6 +1084,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"
             | "layer.vectorMask.info"
+            | "layer.vectorMask.currentPath"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
             // `"as":"path"` pastes the clipboard as a vector path (#10694).
@@ -1385,18 +1408,23 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
 /// A desktop's configured ICC path is outside the caller's directory capabilities.
 #[test]
 fn new_document_implicit_profile_is_refused_by_desktop_automation() {
-    use photocraft_engine::{Session, actions_cmds::Action, doc::ColorMode};
+    use photocraft_engine::{
+        Session,
+        actions_cmds::{Action, ActionsExt},
+        color_cmds::ColorExt,
+        doc::ColorMode,
+    };
     use serde_json::json;
 
     let (_, outside, workspace) = roots("new-document-profile");
     let mut session = Session::new();
-    let mut profile = (*session.color.working(ColorMode::Rgb)).clone();
+    let mut profile = (*session.color().working(ColorMode::Rgb)).clone();
     profile.description = "Synthetic profile outside automation roots".into();
     let bytes = profile.with_encoded_bytes().to_bytes();
     let path = outside.join("working.icc");
     std::fs::write(&path, &*bytes).unwrap();
     assert!(workspace.read(path.to_str().unwrap()).is_err());
-    session.color.settings.working_rgb = path.to_str().unwrap().into();
+    session.color_mut().settings.working_rgb = path.to_str().unwrap().into();
     // The unrestricted UI really reads this profile, rather than falling back to sRGB.
     session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
     assert_eq!(session.active().unwrap().doc.icc_profile.as_deref(), Some(&*bytes));
@@ -1412,7 +1440,8 @@ fn new_document_implicit_profile_is_refused_by_desktop_automation() {
         let denied = session.execute("file.new", params.clone()).unwrap_err();
         assert!(denied.to_string().contains(expected), "{denied}");
         assert_eq!(session.active().unwrap().doc.id, before);
-        session.actions.list = vec![Action::new("Create", vec![("file.new".into(), params)])];
+        session.actions_mut().list = Default::default();
+        session.actions_mut().list.push(Action::new("Create", vec![("file.new".to_owned(), params).into()])).unwrap();
         let playback = session.execute("actions.play", json!({"action": "Create"})).unwrap();
         assert_eq!(playback["ran"], 0);
         assert_eq!(playback["failed"]["id"], "file.new");
@@ -1558,6 +1587,22 @@ fn same_root_leaf_link_save_replaces_the_link_without_writing_its_target() {
     assert!(!std::fs::symlink_metadata(inside.join("link.png")).unwrap().file_type().is_symlink());
 }
 
+/// A hardlink inside a root names the outside inode, so it reads that content. Writing over it is
+/// an atomic replace of the directory entry: the other name and its inode keep their bytes.
+#[cfg(unix)]
+#[test]
+fn hardlink_inside_a_root_reads_the_target_but_write_over_replaces_the_link() {
+    let (inside, outside, workspace) = roots("hardlink");
+    let target = outside.join("target.png");
+    std::fs::write(&target, b"outside").unwrap();
+    std::fs::hard_link(&target, inside.join("linked.png")).unwrap();
+
+    assert_eq!(workspace.read("linked.png").unwrap(), b"outside");
+    workspace.write("linked.png", b"replacement").unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"outside", "the outside inode is not modified");
+    assert_eq!(std::fs::read(inside.join("linked.png")).unwrap(), b"replacement");
+}
+
 #[test]
 fn directory_pcraft_uses_ordered_roots_without_falling_back_after_selection() {
     let (library, work, _) = roots("pcraft-ordered");
@@ -1649,7 +1694,11 @@ fn csh_import_with_inline_data_ignores_an_unreadable_path() {
 /// Built-in working spaces remain usable directly and through recorded desktop actions.
 #[test]
 fn new_document_implicit_builtin_profile_is_available_to_desktop_automation() {
-    use photocraft_engine::{Session, actions_cmds::Action};
+    use photocraft_engine::{
+        Session,
+        actions_cmds::{Action, ActionsExt},
+        color_cmds::ColorExt,
+    };
     use serde_json::json;
 
     let mut session = Session::new();
@@ -1665,13 +1714,14 @@ fn new_document_implicit_builtin_profile_is_available_to_desktop_automation() {
             session.execute("file.new", params.clone()).unwrap();
             let expected = session.active().unwrap().doc.icc_profile.clone();
             assert!(expected.is_some());
-            session.actions.list = vec![Action::new("Create", vec![("file.new".into(), params)])];
+            session.actions_mut().list = Default::default();
+            session.actions_mut().list.push(Action::new("Create", vec![("file.new".to_owned(), params).into()])).unwrap();
             let result = session.execute("actions.play", json!({"action": "Create"})).unwrap();
             assert_eq!(result["ran"], 1, "{result}");
             assert_eq!(session.active().unwrap().doc.icc_profile, expected);
         }
     }
     // A path used only by another colour mode must not block RGB creation.
-    session.color.settings.working_cmyk = "/outside/unused.icc".into();
+    session.color_mut().settings.working_cmyk = "/outside/unused.icc".into();
     session.execute("file.new", json!({"width": 2, "height": 2, "mode": "rgb"})).unwrap();
 }

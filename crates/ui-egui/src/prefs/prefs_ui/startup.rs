@@ -1,3 +1,6 @@
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::preset_store::PresetStoreExt;
+
 use super::{JobEvent, JobOutcome, PhotocraftApp, Started, Value, json, prefs};
 
 /// View › Rulers follows `unitsAndRulers.showRulers` when the preference changes (at launch, from
@@ -20,25 +23,18 @@ pub(crate) fn remember_rulers(app: &mut PhotocraftApp, on: bool) {
 
 // ------------------------------------------------------------------ lifecycle
 
-/// Load saved preferences once, when the app is created. Recovery starts during frame upkeep.
+/// Load saved preferences once, when the app is created: the settings store opened with the
+/// services (its `config.toml`, or the older `preferences.json` it imported) and its load report.
+/// Recovery starts during frame upkeep.
 pub fn load(app: &mut PhotocraftApp) {
     if app.prefs_rt.loaded {
         return;
     }
     app.prefs_rt.loaded = true;
-    let mut invalid = Vec::new();
-    let mut stored = None;
-    if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f()) {
-        match app.session.load_prefs_json(&text) {
-            Ok(found) => {
-                invalid = found;
-                stored = serde_json::from_str::<Value>(&text).ok();
-            }
-            Err(e) => {
-                let template = "Preferences were reset: {error}";
-                app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
-            }
-        }
+    let reset = adopt_stored(app);
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.prefs_rt.saved_colors = Some(app.session.prefs().tool_colors.0.clone());
     }
     // Applies Memory Usage and the scratch disks even when the stored preferences were reset.
     app.session.apply_prefs();
@@ -50,66 +46,57 @@ pub fn load(app: &mut PhotocraftApp) {
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
     app.sync_recent();
+    // The store holds what was loaded; only a change from here on is handed to it.
     app.prefs_rt.saved_rev = app.session.prefs.rev();
-    let loaded = app.session.prefs_value();
-    app.prefs_rt.saved_value = Some(match stored {
-        Some(stored) => stored_base(&loaded, &stored),
-        None => loaded,
-    });
-    if !invalid.is_empty() {
-        repair_invalid(app, &invalid);
+    if !reset.is_empty() {
+        repair_invalid(app, &reset);
     }
 }
 
-/// The save base after loading `stored`: what was loaded, with the keys the shift tool switch
-/// migration may change (#5647) put back as the file had them, the way [`repair_invalid`] puts
-/// back unreadable values. The migrated value and the new version then differ from the base, so
-/// the next save writes them rather than keeping the old value under a newer version. Every other
-/// key keeps its loaded value, so the three-way merge leaves another instance's changes alone,
-/// also for keys the file doesn't have yet. A file from a newer version keeps its version.
-fn stored_base(loaded: &Value, stored: &Value) -> Value {
-    let mut base = loaded.clone();
-    let Some(obj) = base.as_object_mut() else {
-        return base;
-    };
-    match stored.get("version") {
-        Some(v) if v.as_u64().is_some_and(|v| v > prefs::PREFS_VERSION) => {}
-        Some(v) => {
-            obj.insert("version".into(), v.clone());
-        }
-        None => {
-            obj.remove("version");
-        }
+/// Takes the store's values into the session and reports what its load found: a damaged file
+/// moved aside on the status line; the values reset to defaults, from either source, come back.
+#[cfg(not(target_arch = "wasm32"))]
+fn adopt_stored(app: &mut PhotocraftApp) -> Vec<craft::settings::SectionError> {
+    let Some((store, report)) = app.services.settings.as_ref() else { return Vec::new() };
+    let saved = store.get().clone();
+    let mut reset = report.section_errors.clone();
+    let moved = report.broken_moved_to.clone();
+    reset.extend(app.session.set_saved_prefs(saved).iter().map(prefs::reset_value));
+    if let Some(moved) = moved {
+        let template = "Preferences were reset: {error}";
+        let error = format!("the settings file was damaged and was kept as {}", moved.display());
+        app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &error)]);
     }
-    if let (Some(v), Some(tools)) = (stored.pointer("/tools/useShiftKeyForToolSwitch"), obj.get_mut("tools").and_then(Value::as_object_mut)) {
-        tools.insert("useShiftKeyForToolSwitch".into(), v.clone());
-    }
-    base
+    reset
 }
 
-/// Some saved values couldn't be read and took their defaults (#6611): say which, and write
-/// the defaults over them on the next save so the next launch reads a clean file. The save
-/// base holds the unreadable values, so the three-way merge sees them as changed here and
-/// replaces (or removes) exactly those, keeping everything else in the stored file.
-fn repair_invalid(app: &mut PhotocraftApp, invalid: &[prefs::InvalidPref]) {
-    if let Some(base) = app.prefs_rt.saved_value.as_mut() {
-        for bad in invalid {
-            let Some((key, parent)) = bad.keys.split_last() else {
-                continue;
-            };
-            if let Some(obj) = parent.iter().try_fold(&mut *base, |cur, k| cur.get_mut(k.as_str())).and_then(Value::as_object_mut) {
-                obj.insert(key.clone(), bad.value.clone());
-            }
+/// The web build reads `Services::load_prefs` (browser storage) until it opens its own settings
+/// store (FW-264).
+#[cfg(target_arch = "wasm32")]
+fn adopt_stored(app: &mut PhotocraftApp) -> Vec<craft::settings::SectionError> {
+    let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f()) else { return Vec::new() };
+    match app.session.load_prefs_json(&text) {
+        Ok(found) => found.iter().map(prefs::reset_value).collect(),
+        Err(e) => {
+            let template = "Preferences were reset: {error}";
+            app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
+            Vec::new()
         }
     }
+}
+
+/// Some saved values couldn't be read and took their defaults (#6611): say which, and mark the
+/// preferences changed so the next save writes the defaults over them and the next launch reads
+/// a clean file.
+fn repair_invalid(app: &mut PhotocraftApp, reset: &[craft::settings::SectionError]) {
     app.session.prefs.edit(|_| ());
-    let paths = invalid.iter().map(prefs::InvalidPref::path).collect::<Vec<_>>().join(", ");
+    let paths = reset.iter().map(|e| e.section.as_str()).collect::<Vec<_>>().join(", ");
     let (title, line) = (
         "Some preferences were reset",
         "The preferences file held values PhotoCraft can't read for {paths}. Those settings are back to their defaults; the rest of your preferences loaded.",
     );
     // Notices keep their English source and are translated when drawn.
-    let id = crate::notices::post(app, title, vec![line.into()], false, None);
+    let id = crate::notices::post(app, title, vec![line.into()], craft::theme::variant::Tone::Neutral, None);
     if let Some(notice) = app.ui.notices.iter_mut().find(|n| n.id == id) {
         notice.args.push(("paths".into(), paths));
     }
@@ -177,7 +164,7 @@ fn finish_recovery(app: &mut PhotocraftApp, key: &str, v: &Value) {
         return;
     };
     // Track the admitted snapshot's revision, even if another job has already edited it.
-    app.prefs_rt.autosaved.insert(id, revision);
+    app.autosave.mark_autosaved(id.0, revision);
     if let Some(adopt) = app.services.adopt_autosave.as_mut() {
         adopt(id.0, key);
     }
@@ -240,7 +227,7 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.preset_store = None,
         }
     }
-    if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
+    if let Some(w) = app.session.preset_store_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
         app.ui.status = w;
     }
 }

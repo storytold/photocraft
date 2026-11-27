@@ -209,13 +209,14 @@ impl B {
     fn bevel_fields(&mut self, width: f32) -> [In; 2] {
         [FieldKind::BevelInside, FieldKind::BevelOutside].map(|k| self.field(k, width))
     }
-    /// `Map::shifted` by whole pixels (`invert`: of `1 - a`); identity shifts of the plain map
-    /// are skipped.
+    /// `Map::shifted`, whole-pixel or sub-pixel (`invert`: of `1 - a`, per tap as the CPU inverts
+    /// its map before sampling); identity shifts of the plain map are skipped. A sub-pixel shift
+    /// reads the tap beyond its base, so the radius ceils rather than truncates.
     fn shift(&mut self, src: In, dx: f32, dy: f32, outside: f32, invert: bool) -> In {
         if dx == 0.0 && dy == 0.0 && !invert {
             return src;
         }
-        let r = dx.abs().max(dy.abs()) as i32;
+        let r = dx.abs().max(dy.abs()).ceil() as i32;
         self.push(stage(Kernel::MShift, Some(src), None, [dx, dy, outside, f32::from(u8::from(invert))], r))
     }
     /// `dilate(src, r)` given `dist_outside(src)`.
@@ -255,9 +256,10 @@ impl B {
         self.stages.push(s);
     }
 
+    /// `invert` flips the coverage after the contour (`fs_mfinish` mode 2), as the CPU's `satin_map` (#14981).
     fn finish_lut(&mut self, a: In, b: Option<In>, invert: bool, lut: Option<Vec<f32>>, times_shape: bool, out: usize) {
         let flag = |v: bool| f32::from(u8::from(v));
-        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
+        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), 2.0 * flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
         s.lut = lut.map(Arc::new);
         if times_shape {
             s.s = Some(In::Shape);
@@ -566,6 +568,13 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
                 }
             }
             LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+            LayerContent::Shape(sh) => {
+                format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(h);
+                (sh.use_aligned_rendering, sh.density.to_bits(), sh.feather.to_bits()).hash(h);
+                if let Some(s) = &sh.cache {
+                    surface_fp(s, h, pin);
+                }
+            }
             _ => {
                 if let Some(s) = l.surface() {
                     surface_fp(s, h, pin);

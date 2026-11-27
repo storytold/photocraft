@@ -5,43 +5,45 @@ fn crashed(backend: &str, adapter_backend: &str) -> Marker {
     Marker { backend: backend.into(), adapter: "Intel(R) UHD Graphics".into(), adapter_backend: adapter_backend.into(), ..Default::default() }
 }
 
+/// Writes `json` as the settings folder `dir`'s older preferences file (no `config.toml`), and
+/// returns Performance as the launch reads it (`services::saved_prefs`).
+fn launch_performance(dir: &Path, json: &str) -> photocraft_engine::prefs::Performance {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE), json).unwrap();
+    photocraft_engine::prefs::read_saved(Some(dir)).prefs.performance
+}
+
+/// Performance without a settings folder.
+fn default_performance() -> photocraft_engine::prefs::Performance {
+    photocraft_engine::prefs::read_saved(None).prefs.performance
+}
+
 #[test]
 fn low_latency_drawing_is_read_before_the_window_opens_and_defaults_off() {
-    let dir = std::env::temp_dir().join(format!("photocraft-low-latency-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("preferences.json");
-    let read = |json: &str| {
-        std::fs::write(&file, json).unwrap();
-        read_low_latency(Some(&file))
-    };
+    let dir = temp_dir("low-latency");
+    let read = |json: &str| launch_performance(&dir, json).low_latency_drawing;
     assert!(read(r#"{"performance":{"lowLatencyDrawing":true}}"#));
     assert!(!read(r#"{"performance":{"lowLatencyDrawing":false}}"#));
     assert!(!read(r#"{"performance":{"lowLatencyDrawing":"nope"}}"#), "garbage keeps the default (off)");
     assert!(!read("not json"));
-    assert!(!read_low_latency(None), "no settings file: the default (off)");
+    assert!(!default_performance().low_latency_drawing, "no settings folder: the default (off)");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn display_server_preference_is_read_before_the_window_opens() {
     use photocraft_engine::prefs::LinuxDisplayServer;
-    let dir = std::env::temp_dir().join(format!("photocraft-display-server-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("preferences.json");
-    let read = |json: &str| {
-        std::fs::write(&file, json).unwrap();
-        read_display_server(Some(&file))
-    };
+    let dir = temp_dir("display-server");
+    let read = |json: &str| launch_performance(&dir, json).linux_display_server;
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"x11"}}"#), LinuxDisplayServer::X11);
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"auto","gpuBackend":"vulkan"}}"#), LinuxDisplayServer::Auto);
-    // Unknown values, other types, broken JSON and a missing file all start as Auto.
+    // Unknown values, other types, broken JSON and no settings folder all start as Auto.
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"wayland"}}"#), LinuxDisplayServer::Auto);
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":11}}"#), LinuxDisplayServer::Auto);
     // A bad value beside it resets only itself, as when the app loads the file (#6611).
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"x11","cacheLevels":"four"}}"#), LinuxDisplayServer::X11);
     assert_eq!(read("{not json"), LinuxDisplayServer::Auto);
-    assert_eq!(read_display_server(Some(&dir.join("missing.json"))), LinuxDisplayServer::Auto);
-    assert_eq!(read_display_server(None), LinuxDisplayServer::Auto);
+    assert_eq!(default_performance().linux_display_server, LinuxDisplayServer::Auto);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -203,20 +205,15 @@ fn adapter_names_match_loosely_and_the_environment_wins() {
 
 #[test]
 fn gpu_adapter_is_read_before_the_window_opens() {
-    let dir = std::env::temp_dir().join(format!("photocraft-gpu-adapter-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("preferences.json");
-    let read = |json: &str| {
-        std::fs::write(&file, json).unwrap();
-        read_gpu_adapter(Some(&file))
-    };
+    let dir = temp_dir("gpu-adapter");
+    let read = |json: &str| gpu_adapter(&launch_performance(&dir, json));
     assert_eq!(read(r#"{"performance":{"gpuAdapter":"nvidia"}}"#), "nvidia");
     assert_eq!(read(r#"{"performance":{"gpuAdapter":7}}"#), "");
     // A bad value beside it resets only itself, as when the app loads the file (#6611).
     assert_eq!(read(r#"{"performance":{"gpuAdapter":"nvidia","cacheLevels":"four"}}"#), "nvidia");
     assert_eq!(read(r#"{"performance":{}}"#), "");
     assert_eq!(read("not json"), "");
-    assert_eq!(read_gpu_adapter(None), "");
+    assert_eq!(gpu_adapter(&default_performance()), "");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -527,18 +524,12 @@ fn unwritable_config_dir_is_not_fatal() {
 #[test]
 fn prefs_are_read_leniently() {
     let dir = temp_dir("prefs");
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join("preferences.json");
-    assert_eq!(read_rendering_prefs(None), (Auto, RenderingMode::Auto));
-    assert_eq!(read_rendering_prefs(Some(&p)), (Auto, RenderingMode::Auto));
-    std::fs::write(&p, r#"{"performance": {"gpuBackend": "dx12", "useGpu": false}, "interface": {}}"#).unwrap();
-    assert_eq!(read_rendering_prefs(Some(&p)), (Dx12, RenderingMode::Cpu));
-    std::fs::write(&p, r#"{"performance": {"gpuBackend": "quantum"}}"#).unwrap();
-    assert_eq!(read_rendering_prefs(Some(&p)), (Auto, RenderingMode::Auto));
-    std::fs::write(&p, r#"{"performance": {"useGpu": false, "renderingMode": "gpu"}}"#).unwrap();
-    assert_eq!(read_rendering_prefs(Some(&p)), (Auto, RenderingMode::Gpu));
-    std::fs::write(&p, "{not json").unwrap();
-    assert_eq!(read_rendering_prefs(Some(&p)), (Auto, RenderingMode::Auto));
+    let read = |json: &str| rendering_prefs(&launch_performance(&dir, json));
+    assert_eq!(rendering_prefs(&default_performance()), (Auto, RenderingMode::Auto));
+    assert_eq!(read(r#"{"performance": {"gpuBackend": "dx12", "useGpu": false}, "interface": {}}"#), (Dx12, RenderingMode::Cpu));
+    assert_eq!(read(r#"{"performance": {"gpuBackend": "quantum"}}"#), (Auto, RenderingMode::Auto));
+    assert_eq!(read(r#"{"performance": {"useGpu": false, "renderingMode": "gpu"}}"#), (Auto, RenderingMode::Gpu));
+    assert_eq!(read("{not json"), (Auto, RenderingMode::Auto));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
