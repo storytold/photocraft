@@ -300,22 +300,21 @@ pub(crate) fn project_brush_browser<'a>(presets: &'a [BrushPreset], state: &mut 
         let child_groups = children_by_parent.get(&container.key).cloned().unwrap_or_default();
         if !state.layout.hierarchy_order.get(panel).is_some_and(|orders| orders.contains_key(&container.key)) {
             let mut entries = Vec::new();
-            let mut seen = BTreeSet::new();
             for preset in presets.iter().filter(|preset| preset.group == container.engine_group && preset.folder.starts_with(&container.folder)) {
                 if preset.folder.len() == container.folder.len() {
                     let entry = HierarchyOrderEntry::Item(preset.name.clone());
-                    if seen.insert(entry.clone()) { entries.push(entry); }
+                    if !entries.contains(&entry) { entries.push(entry); }
                 } else {
                     let child_path = preset.folder[..container.folder.len() + 1].to_vec();
                     if let Some(child) = containers.values().find(|child| child.engine_group == container.engine_group && child.folder == child_path) {
                         let entry = HierarchyOrderEntry::Group(child.key.clone());
-                        if seen.insert(entry.clone()) { entries.push(entry); }
+                        if !entries.contains(&entry) { entries.push(entry); }
                     }
                 }
             }
             for child in child_groups {
                 let entry = HierarchyOrderEntry::Group(child);
-                if seen.insert(entry.clone()) { entries.push(entry); }
+                if !entries.contains(&entry) { entries.push(entry); }
             }
             state.set_hierarchy_order(panel, &container.key, entries);
         }
@@ -329,7 +328,7 @@ pub(crate) fn project_brush_browser<'a>(presets: &'a [BrushPreset], state: &mut 
                     HierarchyOrderEntry::RootItem { group: owner, key } if owner == ROOT_ITEMS_GROUP => Some((key.clone(), index)),
                     _ => None,
                 }).collect::<BTreeMap<_, _>>()
-            })).unwrap_or_default()
+            }).unwrap_or_default()
         } else {
             let child_groups = children_by_parent.get(&group.view.name).cloned().unwrap_or_default();
             let entries = state.ordered_hierarchy_entries(panel, &group.view.name, &item_keys, &child_groups);
@@ -429,7 +428,7 @@ pub fn preset_by_identity<'a>(presets: &'a [BrushPreset], key: &str) -> Option<&
     presets.iter().find(|preset| preset.name == key)
 }
 
-pub(super) fn group_label_for_key(_presets: &[BrushPreset], key: &str) -> Option<String> {
+pub(crate) fn group_label_for_key(_presets: &[BrushPreset], key: &str) -> Option<String> {
     Some(key_label(key))
 }
 
@@ -545,7 +544,8 @@ pub fn browser_actions_to_actions_for_panel(
             BrowserAction::ExportAll(_) => Some(Action::ExportSelected(presets.iter().map(|preset| preset.name.clone()).collect())),
             BrowserAction::Drop(_, _) | BrowserAction::NewGroup | BrowserAction::CopyItem { .. }
             | BrowserAction::BeginInlineRenameItem(..) | BrowserAction::CancelInlineRenameItem
-            | BrowserAction::BeginInlineRenameGroup { .. } | BrowserAction::CancelInlineRenameGroup => None,
+            | BrowserAction::BeginInlineRenameGroup { .. } | BrowserAction::CancelInlineRenameGroup
+            | BrowserAction::BeginRenameSelection { .. } => None,
         })
         .collect()
 }

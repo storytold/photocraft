@@ -513,7 +513,75 @@ pub(crate) fn export_selected_brushes(app: &mut PhotocraftApp, keys: &[String]) 
     })
 }
 
+fn append_default_brush_library(app: &mut PhotocraftApp, state: &mut crate::pickers::state::PresetUi, panel: &str) {
+    use crate::pickers::state::HierarchyOrderEntry;
+
+    let presets = &mut app.session.tools.presets;
+    // Repair duplicate names left by the earlier UI-only append implementation before projecting:
+    // the browser and engine commands both address brush presets by name.
+    let reserved_names = presets.iter().map(|preset| preset.name.clone()).collect::<Vec<_>>();
+    let mut occupied_names = reserved_names.clone();
+    let mut seen_names = Vec::<String>::new();
+    for preset in presets.iter_mut() {
+        if seen_names.iter().any(|name| name.eq_ignore_ascii_case(&preset.name)) {
+            let unique = photocraft_engine::presets::collisions::unique_name_from_names(&occupied_names, &preset.name);
+            preset.name = unique.clone();
+            occupied_names.push(unique);
+        }
+        seen_names.push(preset.name.clone());
+    }
+
+    // Let the shared brush projection seed the existing mixed root sequence before we append.
+    let _ = crate::pickers::adapters::brush_engine_adapter::project_brush_browser(presets, state, panel);
+
+    let mut existing_names = presets.iter().map(|preset| preset.name.clone()).collect::<Vec<_>>();
+    let mut group_names = presets.iter().filter(|preset| !preset.group.is_empty()).map(|preset| preset.group.clone()).collect::<Vec<_>>();
+    let mut group_map = std::collections::BTreeMap::<String, String>::new();
+    let mut appended_groups = Vec::<String>::new();
+    let mut defaults = photocraft_paint::presets::builtin();
+
+    for preset in &mut defaults {
+        let original_group = preset.group.clone();
+        let group = group_map.entry(original_group.clone()).or_insert_with(|| {
+            let unique = photocraft_engine::presets::collisions::unique_group_name_from_names(&group_names, &original_group);
+            group_names.push(unique.clone());
+            appended_groups.push(unique.clone());
+            unique
+        });
+        preset.group = group.clone();
+        preset.name = photocraft_engine::presets::collisions::unique_name_from_names(&existing_names, &preset.name);
+        existing_names.push(preset.name.clone());
+        // Copies become ordinary user presets so their appended group/order persists.
+        preset.builtin = false;
+    }
+
+    let mut root_order = state.layout.hierarchy_order.get(panel).and_then(|orders| orders.get("")).cloned().unwrap_or_default();
+    let mut seen_root_entries = Vec::new();
+    root_order.retain(|entry| {
+        if seen_root_entries.contains(entry) { false } else { seen_root_entries.push(entry.clone()); true }
+    });
+    for group in &appended_groups {
+        let key = crate::pickers::adapters::brush_engine_adapter::root_group_key(group);
+        let entry = HierarchyOrderEntry::Group(key);
+        if !root_order.contains(&entry) {
+            root_order.push(entry);
+        }
+    }
+
+    let added = defaults.len();
+    presets.extend(defaults);
+    state.set_hierarchy_order(panel, "", root_order);
+    app.session.brush_presets_changed();
+    app.session.sync_preset_store();
+    app.ui.status_error = false;
+    app.ui.status = format!("Appended {added} default brush presets, including their groups and folders.");
+}
+
 fn brush_menu_trailing(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi, panel: &str) {
+    if crate::menu_keys::menu_item_button(ui, tl!("Append Default Brushes…"), true).clicked() {
+        append_default_brush_library(app, state, panel);
+        ui.close();
+    }
     if crate::menu_keys::menu_item_button(ui, tl!("Import Brushes…"), true).clicked() {
         ui.close();
         if let Err(error) = crate::preset_files_ui::import_brushes(app)

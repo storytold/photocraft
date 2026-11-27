@@ -6,8 +6,8 @@ use photocraft_engine::paint::BrushPreset;
 
 pub(crate) use super::brush_engine_adapter::browser_groups;
 pub use super::brush_engine_adapter::{
-    Action, Renaming, UNGROUPED, apply, browser_actions_to_actions, browser_actions_to_actions_for_panel,
-    group_view_key, preset_by_identity, preview_identity, run_or_status,
+    Action, Renaming, UNGROUPED, apply, browser_actions_to_actions_for_panel,
+    preset_by_identity, preview_identity, run_or_status,
 };
 use super::brush_engine_adapter::{
     active_brush_selection, brush_group_move_actions, brush_item_move_action, container_key_for_preset, project_brush_browser,

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use super::browser::data::HierarchyOrderEntry;
-use super::browser::data::{HierarchyOrderEntry, PickerBrowserData};
+use super::browser::data::PickerBrowserData;
 pub(crate) use super::browser::inline_rename::{InlineGroupRenameState, ItemRenameState};
 pub(crate) use super::browser::path_identity_model::MAX_GROUP_DEPTH;
 

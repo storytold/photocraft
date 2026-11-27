@@ -22,7 +22,7 @@ use egui::{RichText, vec2};
 use photocraft_engine::paint::MAX_BRUSH_SIZE;
 
 pub use crate::pickers::adapters::brushes::{
-    Action, ListLayout, PANEL_LIST, apply, folder_view_key, group_key, preset_list,
+    Action, ListLayout, PANEL_LIST, apply, preset_list,
 };
 fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
     let height = ui.available_height().clamp(180.0, 640.0);
