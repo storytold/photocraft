@@ -41,6 +41,26 @@ fn defaults_match_photoshop() {
 }
 
 #[test]
+fn appearance_contrast_and_motion_preferences_round_trip_and_reset() {
+    let mut s = crate::session();
+    s.load_prefs_json(&json!({"interface": {}})).unwrap();
+    let read = |s: &mut Session, path| s.execute("prefs.get", json!({"path": path})).unwrap();
+    assert_eq!(read(&mut s, "interface.contrast"), "system");
+    assert_eq!(read(&mut s, "interface.motion"), "system");
+    s.execute("prefs.set", json!({"values": {"interface.contrast": "high", "interface.motion": "reduced"}})).unwrap();
+    let mut restored = crate::session();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(read(&mut restored, "interface.contrast"), "high");
+    assert_eq!(read(&mut restored, "interface.motion"), "reduced");
+    assert!(restored.execute("prefs.set", json!({"values": {"interface.contrast": "standard", "interface.motion": "invalid"}})).is_err());
+    assert_eq!(read(&mut restored, "interface.contrast"), "high");
+    assert_eq!(read(&mut restored, "interface.motion"), "reduced");
+    restored.execute("prefs.reset", json!({"section": "interface"})).unwrap();
+    assert_eq!(read(&mut restored, "interface.contrast"), "system");
+    assert_eq!(read(&mut restored, "interface.motion"), "system");
+}
+
+#[test]
 fn intermediate_ui_scale_presets_survive_restart() {
     let mut s = crate::session();
     assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("auto"));

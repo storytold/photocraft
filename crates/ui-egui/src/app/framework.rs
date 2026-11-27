@@ -17,7 +17,7 @@ use craft::host::target::{Backend, ShellInfo};
 use craft::host::{AppInfo, Files, Host, SectionStore};
 use craft::i18n::Direction;
 use craft::keymap::Overrides;
-use craft::theme::{AppDefaults, AppSizes, ComponentSet, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
+use craft::theme::{AppDefaults, AppSizes, ComponentSet, ContrastChoice, ModeChoice, MotionChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
 use craft::theme_store::{SelectionChange, SuiteClient};
 use craft::ui::contract::{MemoProps, Tracked};
 use craft::ui::dialog::DialogHost;
@@ -182,19 +182,28 @@ impl ThemeUnavailable {
     }
 }
 
-/// The preferences that choose the theme: the appearance mode, the theme id of each slot and the size.
+/// The appearance preferences PhotoCraft shares with the suite.
 #[derive(Clone, Debug, PartialEq)]
 struct ThemePrefs {
     mode: AppearanceMode,
     dark: String,
     light: String,
     size: UiDensity,
+    contrast: ContrastChoice,
+    motion: MotionChoice,
 }
 
 impl ThemePrefs {
     fn of(prefs: &Preferences) -> Self {
         let i = &prefs.interface;
-        ThemePrefs { mode: i.appearance_mode, dark: i.dark_theme.clone(), light: i.light_theme.clone(), size: i.density }
+        ThemePrefs {
+            mode: i.appearance_mode,
+            dark: i.dark_theme.clone(),
+            light: i.light_theme.clone(),
+            size: i.density,
+            contrast: i.contrast,
+            motion: i.motion,
+        }
     }
 
     /// What the suite shows: its chosen fields, else PhotoCraft's defaults.
@@ -206,6 +215,8 @@ impl ThemePrefs {
             dark: shown.theme.dark.as_str().to_owned(),
             light: shown.theme.light.as_str().to_owned(),
             size: app_density(shown.size),
+            contrast: shown.contrast,
+            motion: shown.motion,
         }
     }
 
@@ -217,6 +228,8 @@ impl ThemePrefs {
             theme_light: (self.light != before.light).then(|| id(&self.light)).flatten(),
             mode: (self.mode != before.mode).then(|| mode_choice(self.mode)),
             size: (self.size != before.size).then(|| suite_size(self.size)),
+            contrast: (self.contrast != before.contrast).then_some(self.contrast),
+            motion: (self.motion != before.motion).then_some(self.motion),
             ..SelectionChange::default()
         }
     }
@@ -397,13 +410,16 @@ impl Framework {
             Some(def) => base_root().library_theme(Arc::clone(def)),
             None => base_root().theme(theme.id().clone()),
         };
+        let interface = &session.prefs().interface;
         let mut root = root
             .mode(if theme.is_dark() { ModeChoice::Dark } else { ModeChoice::Light })
-            .scale(Scale::new(crate::prefs_ui::interface_zoom(session.prefs().interface.ui_scale, ctx)))
+            .scale(Scale::new(crate::prefs_ui::interface_zoom(interface.ui_scale, ctx)))
             .direction(if rtl { Direction::Rtl } else { Direction::Ltr })
-            .density(suite_size(session.prefs().interface.density));
+            .density(suite_size(interface.density))
+            .contrast(interface.contrast);
         // Read each frame, so a preference change shows at once.
-        root.canvas_pattern = session.prefs().interface.show_canvas_dots;
+        root.motion = interface.motion;
+        root.canvas_pattern = interface.show_canvas_dots;
         root.values.set(craft::ui::canvas::ShowReadouts(session.prefs().tools.show_transformation_values));
         // Length fields read the Point/Pica size from the root; each passes its document's pixels
         // per inch in its own `LengthUnits`.
@@ -478,6 +494,16 @@ impl Framework {
                     None if mine.size != blank.size => change.size = Some(suite_size(mine.size)),
                     None => {}
                 }
+                match chosen.contrast {
+                    Some(contrast) => start.contrast = contrast,
+                    None if mine.contrast != blank.contrast => change.contrast = Some(mine.contrast),
+                    None => {}
+                }
+                match chosen.motion {
+                    Some(motion) => start.motion = motion,
+                    None if mine.motion != blank.motion => change.motion = Some(mine.motion),
+                    None => {}
+                }
                 self.suite.change(change);
                 start
             }
@@ -497,6 +523,8 @@ impl Framework {
                 p.interface.dark_theme = agreed.dark.clone();
                 p.interface.light_theme = agreed.light.clone();
                 p.interface.density = agreed.size;
+                p.interface.contrast = agreed.contrast;
+                p.interface.motion = agreed.motion;
             });
         }
         let changed = moved || previous.as_ref() != Some(&agreed);
@@ -992,6 +1020,59 @@ mod tests {
         if let Err(errors) = craft::theme::AppSizes::parse(super::SIZES) {
             panic!("sizes.json: {errors:?}");
         }
+    }
+
+    #[test]
+    fn appearance_contrast_and_motion_reach_the_root() {
+        use craft::behavior::MotionMode;
+        use craft::theme::{Contrast, SystemAppearance};
+        use craft::ui::runtime::commands::CommandGate;
+
+        let mut framework = Framework::default();
+        let mut session = Session::new();
+        let ctx = egui::Context::default();
+        let theme = AppTheme::default();
+        let gate = CommandGate::new((), |_, _| true);
+        let system = SystemAppearance { contrast: Some(Contrast::High), reduced_motion: Some(true), ..SystemAppearance::default() };
+        let resolve = |framework: &mut Framework, session: &mut Session, system| {
+            let root = framework.frame_input(session, &ctx, &theme, gate.clone(), craft::keymap::Mods::NONE).root.resolved_for(system);
+            (root.contrast, root.motion)
+        };
+        assert_eq!(resolve(&mut framework, &mut session, SystemAppearance::default()), (Contrast::Standard, MotionMode::Full));
+        assert_eq!(resolve(&mut framework, &mut session, system), (Contrast::High, MotionMode::Reduced));
+        session.edit_prefs(|prefs| {
+            prefs.interface.contrast = ContrastChoice::Standard;
+            prefs.interface.motion = MotionChoice::Full;
+        });
+        assert_eq!(resolve(&mut framework, &mut session, system), (Contrast::Standard, MotionMode::Full));
+        session.edit_prefs(|prefs| {
+            prefs.interface.contrast = ContrastChoice::High;
+            prefs.interface.motion = MotionChoice::Reduced;
+        });
+        assert_eq!(resolve(&mut framework, &mut session, SystemAppearance::default()), (Contrast::High, MotionMode::Reduced));
+        session.edit_prefs(|prefs| prefs.interface.motion = MotionChoice::Off);
+        assert_eq!(resolve(&mut framework, &mut session, SystemAppearance::default()), (Contrast::High, MotionMode::Off));
+    }
+
+    #[test]
+    fn appearance_contrast_and_motion_restore_per_field_when_the_suite_first_syncs() {
+        use craft::theme_store::Op;
+
+        let mut framework = Framework::default();
+        let mut session = Session::new();
+        session.edit_prefs(|prefs| {
+            prefs.interface.contrast = ContrastChoice::High;
+            prefs.interface.motion = MotionChoice::Reduced;
+        });
+        let client = framework.suite();
+        client.watch().request(Op::Update { base: client.accepted().clone(), change: SelectionChange::contrast(ContrastChoice::Standard) });
+        for _ in 0..4 {
+            framework.sync_theme(&mut session);
+        }
+        let i = &session.prefs().interface;
+        assert_eq!((i.contrast, i.motion), (ContrastChoice::Standard, MotionChoice::Reduced));
+        let suite = &framework.suite().accepted().suite;
+        assert_eq!((suite.contrast, suite.motion), (Some(ContrastChoice::Standard), Some(MotionChoice::Reduced)));
     }
 
     /// The overrides reach the root every frame's tokens resolve under, not only the suite's defaults.

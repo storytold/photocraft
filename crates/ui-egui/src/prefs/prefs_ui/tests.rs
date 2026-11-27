@@ -535,6 +535,67 @@ fn appearance_size_row_keeps_comfortable_and_shares_it_with_the_suite() {
     assert_eq!(app.framework.suite().shown().size, Some(craft::theme::Size::Comfortable), "the suite has it");
 }
 
+#[test]
+fn appearance_contrast_and_motion_choices_follow_ok_cancel_and_the_suite() {
+    use craft::theme::{ContrastChoice, MotionChoice};
+    use craft::theme_store::{Op, SelectionChange};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let (_, files) = app_with_store();
+    let mut h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let choices = |h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>| {
+        ["Contrast", "Motion"].map(|label| h.get_by_role_and_label(Role::ComboBox, label).accesskit_node().value().unwrap().to_string())
+    };
+    let choose = |h: &mut egui_kittest::Harness<'static, Box<PhotocraftApp>>, label: &str, value: &str| {
+        h.get_by_role_and_label(Role::ComboBox, label).click();
+        h.run_steps(2);
+        h.get_by_label(value).click();
+        h.run_steps(4);
+    };
+    let before = stored(&files);
+
+    for button in ["Cancel", "OK"] {
+        assert_eq!(choices(&h), ["Sync with system", "Sync with system"]);
+        choose(&mut h, "Contrast", "High");
+        choose(&mut h, "Motion", "Reduced");
+        assert_eq!(choices(&h), ["High", "Reduced"], "the draft keeps both picks");
+        assert_eq!(stored(&files), before, "the draft has not been saved");
+        let suite = h.state().framework.suite().shown();
+        assert_eq!((suite.contrast, suite.motion), (None, None), "the draft does not go to the suite");
+
+        h.get_by_label(button).click();
+        h.run_steps(4);
+        assert!(!window_open(h.state()), "{button} closes Preferences");
+        if button == "Cancel" {
+            assert_eq!(stored(&files), before);
+            open_prefs(h.state_mut(), "interface");
+            h.run_steps(4);
+        }
+    }
+
+    assert_eq!(stored(&files)["interface"]["contrast"], "high");
+    assert_eq!(stored(&files)["interface"]["motion"], "reduced");
+    let suite = h.state().framework.suite().accepted().suite.clone();
+    assert_eq!((suite.contrast, suite.motion), (Some(ContrastChoice::High), Some(MotionChoice::Reduced)));
+
+    let change = SelectionChange { contrast: Some(ContrastChoice::Standard), motion: Some(MotionChoice::Off), ..SelectionChange::default() };
+    let client = h.state().framework.suite();
+    client.watch().request(Op::Update { base: client.accepted().clone(), change });
+    h.run_steps(4);
+    assert_eq!(stored(&files)["interface"]["contrast"], "standard");
+    assert_eq!(stored(&files)["interface"]["motion"], "off");
+
+    open_prefs(h.state_mut(), "interface");
+    h.run_steps(4);
+    assert_eq!(choices(&h), ["Standard", "Reduced"]);
+    choose(&mut h, "Contrast", "High");
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(stored(&files)["interface"]["motion"], "off", "editing contrast preserves the suite's motion choice");
+    assert_eq!(h.state().framework.suite().accepted().suite.motion, Some(MotionChoice::Off));
+}
+
 // --- the settings store -------------------------------------------------------------------------------------------
 
 #[test]

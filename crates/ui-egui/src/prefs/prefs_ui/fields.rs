@@ -140,6 +140,8 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
         "interface.darkTheme",
         "interface.favoriteThemes",
         "interface.density",
+        "interface.contrast",
+        "interface.motion",
         "unitsAndRulers.showRulers",
         "performance.useGpu",
         "performance.gpuBackend",
@@ -200,7 +202,8 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
 /// `prefs::Interface` lists its fields in this order.
 fn interface_group(key: &str) -> &'static str {
     match key {
-        "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "density" | "canvasColor" | "canvasCustomColor" | "canvasBorder" => "Appearance",
+        "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "density" | "contrast" | "motion" | "canvasColor" | "canvasCustomColor"
+        | "canvasBorder" => "Appearance",
         "language" | "uiFontSize" | "uiScale" => "Presentation",
         _ => "Options",
     }

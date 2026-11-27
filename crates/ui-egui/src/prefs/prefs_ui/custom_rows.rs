@@ -4,7 +4,7 @@
 //! written before Apply or OK.
 
 use craft::theme::variant::Tone;
-use craft::theme::{ModeChoice, Size, ThemeId};
+use craft::theme::{ContrastChoice, ModeChoice, MotionChoice, Size, ThemeId};
 use craft::theme_store::ui::AppearancePage;
 use craft::theme_store::{SelectionChange, SuiteView};
 use craft::ui::buttons::Button;
@@ -37,6 +37,8 @@ const LIGHT_THEME: &str = "interface.lightTheme";
 const DARK_THEME: &str = "interface.darkTheme";
 const FAVORITE_THEMES: &str = "interface.favoriteThemes";
 const DENSITY: &str = "interface.density";
+const CONTRAST: &str = "interface.contrast";
+const MOTION: &str = "interface.motion";
 /// The page agents' settings live on, drawn whole by [`craft::automation::ui::agents::AgentsPage`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const AGENTS_PAGE: &str = "integrations";
@@ -268,8 +270,18 @@ impl PrefsCustom {
             Some("comfortable") => Size::Comfortable,
             _ => Size::Compact,
         };
-        let shown =
-            SelectionChange { mode: Some(mode), theme_light: theme(LIGHT_THEME), theme_dark: theme(DARK_THEME), size: Some(size), ..Default::default() };
+        let motion = draft.get::<MotionChoice>(MOTION).unwrap_or_default();
+        // The shared page offers Reduced for an explicit reduced-motion choice. Keep a suite
+        // choice of Off in the draft until the user chooses a different value.
+        let shown = SelectionChange {
+            mode: Some(mode),
+            theme_light: theme(LIGHT_THEME),
+            theme_dark: theme(DARK_THEME),
+            size: Some(size),
+            contrast: Some(draft.get::<ContrastChoice>(CONTRAST).unwrap_or_default()),
+            motion: Some(if motion == MotionChoice::Off { MotionChoice::Reduced } else { motion }),
+            ..Default::default()
+        };
         let mut change = shown.clone();
         let favorites: Vec<ThemeId> = draft.get::<Vec<String>>(FAVORITE_THEMES).unwrap_or_default().iter().filter_map(|s| ThemeId::parse(s).ok()).collect();
         // Unknown OS answer previews light, which is what Auto resolves to then.
@@ -298,6 +310,16 @@ impl PrefsCustom {
                 && let Some(size) = change.size
             {
                 draft.set(DENSITY, &if size == Size::Comfortable { "comfortable" } else { "compact" });
+            }
+            if change.contrast != shown.contrast
+                && let Some(contrast) = change.contrast
+            {
+                draft.set(CONTRAST, &contrast);
+            }
+            if change.motion != shown.motion
+                && let Some(motion) = change.motion
+            {
+                draft.set(MOTION, &motion);
             }
         }
         if let Some(id) = out.favorite_toggled {
