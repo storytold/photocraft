@@ -362,3 +362,29 @@ fn requested_tiles_come_back_with_the_stamped_values() {
         g.comp.clear_external_mask(layer);
     }
 }
+
+/// `request_all` asks for every key whatever is in flight: more staging buffers than the capped
+/// request allows are out at once, and every tile still comes back with the request's tag.
+#[test]
+fn request_all_goes_past_the_in_flight_cap() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut g) = gpu() else { return };
+    let brush = BrushSettings { size: 70.0, hardness: 0.0, spacing: 0.1, ..BrushSettings::default() };
+    let (dabs, _) = cpu_stroke(&brush, &path(20));
+    let ctx = BrushContext::new(&brush);
+    let gpu_dabs: Vec<GpuDab> = dabs.iter().filter_map(|d| ctx.tip_geometry(d)).map(|t| gpu_dab(&t)).collect();
+    let (doc, layer) = document(1.0);
+    g.comp.begin_external_mask(&g.device, doc.id, layer, doc.bounds(), None);
+    stamp(&mut g, layer, &gpu_dabs);
+    let tiles: Vec<(i32, i32)> = (0..(W + 63) / 64).flat_map(|x| (0..(H + 63) / 64).map(move |y| (x, y))).collect();
+    // More keys than the capped request would take at once: each of MAX_IN_FLIGHT + 2 buffers full.
+    let keys: Vec<(i32, i32)> = tiles.iter().copied().cycle().take(photocraft_gpu::MAX_TILES_PER_BUFFER * (photocraft_gpu::MAX_IN_FLIGHT + 2)).collect();
+    let readback = photocraft_gpu::MaskReadback::new();
+    readback.request_all(&g.comp, &g.device, &g.queue, layer, &keys, 9);
+    assert!(readback.in_flight() > photocraft_gpu::MAX_IN_FLIGHT, "every buffer is out at once: {}", readback.in_flight());
+    let back = readback.poll(&g.device, true);
+    assert_eq!(back.len(), keys.len(), "every tile came back");
+    assert!(back.iter().all(|(_, values, tag)| *tag == 9 && values.len() == 64 * 64));
+    assert_eq!(readback.in_flight(), 0);
+    g.comp.clear_external_mask(layer);
+}
