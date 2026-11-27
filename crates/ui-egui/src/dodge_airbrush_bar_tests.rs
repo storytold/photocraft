@@ -194,6 +194,6 @@ fn a_held_dodge_stroke_is_one_history_state() {
         let app = h.state();
         assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "one Dodge Tool state, Airbrush {build_up}");
         assert_eq!(app.session.journal.len(), journal + 1, "one command, Airbrush {build_up}");
-        assert_eq!(app.session.journal.iter().rev().next().unwrap().0, "paint.dodge", "Airbrush {build_up}");
+        assert_eq!(app.session.journal.iter().next_back().unwrap().0, "paint.dodge", "Airbrush {build_up}");
     }
 }

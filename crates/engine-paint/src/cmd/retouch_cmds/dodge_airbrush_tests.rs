@@ -205,7 +205,7 @@ fn one_dodge_history_state_per_held_stroke() {
         s.execute("paint.dodge", dodge(&held_points(6), 50.0)).unwrap();
         let st = s.active().unwrap();
         assert_eq!(st.history.past_len(), before + 1, "one state, Build-up {on}");
-        assert_eq!(s.journal.iter().rev().next().unwrap().0, "paint.dodge", "Build-up {on}");
+        assert_eq!(s.journal.iter().next_back().unwrap().0, "paint.dodge", "Build-up {on}");
     }
 }
 
