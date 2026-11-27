@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
 use craft::ui::contract::Bind;
-use craft::ui::dialog::DialogId;
+use craft::ui::dialog::{DialogId, HostedAlert, StackDialog};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::commands::CommandRef;
 use egui_kittest::Harness;
@@ -295,4 +295,22 @@ fn conditional_mode_change_target_dialog_opens_with_the_steps_options() {
     confirm(&mut h, child).unwrap();
     let step = &h.state().session.actions().list.action(0).unwrap().steps[0];
     assert_eq!(step.params["method"], json!("threshold"), "{}", step.params);
+}
+
+/// #13681: Record Again of a Conditional Mode Change step with nothing to convert shows Photoshop's alert on OK, as the
+/// dialog does from the menu, and the editor stays open with the step and the document unchanged. Only the same mode is
+/// set up here: the editor does not take the step's `from` (its checkboxes are a custom row `ui.dialog.set` refuses).
+#[test]
+fn conditional_mode_change_editor_shows_the_alert_and_stays_open() {
+    let mut h = harness("file.automate.conditionalModeChange", json!({"from": "any", "to": "rgb"}));
+    let dialog = open(&mut h);
+    let (original, revision) = (h.state().session.actions().list.clone(), h.state().session.active().unwrap().revision);
+    assert!(confirm(&mut h, dialog).is_err(), "OK is refused");
+    let dialogs = &h.state().framework.dialogs;
+    let alert = |id: DialogId| Some(dialogs.get_by_id::<HostedAlert>(id)?.json_fields()?.get("message")?.as_str()?.to_owned());
+    let alerts: Vec<String> = dialogs.open_dialogs().into_iter().filter_map(|d| alert(d.id)).collect();
+    assert_eq!(alerts, ["Mode of the document is the same as the Target Mode.  No conversion performed."]);
+    assert!(is_open(&h, dialog), "the editor is still open");
+    assert_eq!(h.state().session.actions().list, original, "the step is unchanged");
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "the document is unchanged");
 }

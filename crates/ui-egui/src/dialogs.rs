@@ -249,12 +249,15 @@ pub(crate) mod params {
             let Some(result) = dialog_mut(app, id).and_then(HostedParamDialog::take_ok) else { continue };
             let answer = if crate::actions::is_editor(app, id) {
                 // An editor of Record Again or of a paused menu step: its answer is judged as the step requires, with the
-                // values OK runs.
-                match conditional_mode_change_dialog::editor_answer(app, &result.key, &result.fields) {
-                    Some(params) => crate::actions::check_editor(app, id, conditional_mode_change_dialog::COMMAND, &params),
-                    None => crate::actions::check_editor(app, id, &result.key, &crate::filter_dialog::command_params(&result.key, &result.fields)),
-                }
-                .map_err(Label::from)
+                // values OK runs. Conditional Mode Change shows its alerts there too (#13681).
+                let alert = if result.key == conditional_mode_change_dialog::COMMAND { conditional_mode_change_dialog::check(app, &result) } else { Ok(()) };
+                alert.and_then(|()| {
+                    match conditional_mode_change_dialog::editor_answer(app, &result.key, &result.fields) {
+                        Some(params) => crate::actions::check_editor(app, id, conditional_mode_change_dialog::COMMAND, &params),
+                        None => crate::actions::check_editor(app, id, &result.key, &crate::filter_dialog::command_params(&result.key, &result.fields)),
+                    }
+                    .map_err(Label::from)
+                })
             } else {
                 match family_for(&result.key).and_then(|family| family.check) {
                     Some(check) => check(app, &result),
