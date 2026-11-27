@@ -90,3 +90,5 @@ mod object_selection_not_found_tests;
 
 #[cfg(test)]
 mod options_bar_field_labels_tests;
+#[cfg(test)]
+mod remove_overlay_options_tests;

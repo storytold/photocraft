@@ -2,6 +2,7 @@ use craft::color_ui::ui::EyedropperOptions;
 use craft::draw::ui::crop::{CropSettings, CropSizeFields};
 use craft::draw::ui::{PathOptionsSettings, TransformSettings, VectorMode};
 use craft::imaging::ui::select::MagneticSettings;
+use craft::ui::canvas_controls::brush::TrailTone;
 
 use super::tool::Tool;
 use super::{Deserialize, Serialize};
@@ -39,6 +40,12 @@ pub struct ToolOptions {
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
+    /// Remove tool › Overlay options: the colour of the overlay over the brushed area, channels 0..=1,
+    /// as the person set it in the gear popup. `None` shows it in the theme's own overlay colour (#12549).
+    pub remove_overlay_color: Option<[f32; 3]>,
+    /// Remove tool › Overlay options: the overlay's opacity in percent, 1..=100. Its default is the
+    /// share the tool's own trail tone shows, so a fresh start looks as the tool always did (#12549).
+    pub remove_overlay_opacity: f32,
     /// Adjustment Brush: the Adjustment dropdown's entry (`photocraft_engine::adjustment_brush_cmds::ENTRIES`).
     pub adjustment_brush_kind: String,
     /// Adjustment Brush: Subtract (paints black into the mask) instead of Add.
@@ -452,6 +459,9 @@ impl Default for ToolOptions {
             object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
+            remove_overlay_color: None,
+            // The opacity Remove's overlay shows untouched: the share its own trail tone paints (#12549).
+            remove_overlay_opacity: TrailTone::Danger.share() * 100.0,
             adjustment_brush_kind: photocraft_engine::adjustment_brush_cmds::DEFAULT_KIND.into(),
             adjustment_brush_subtract: false,
             adjustment_brush_overlay: false,

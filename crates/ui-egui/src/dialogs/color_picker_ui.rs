@@ -47,6 +47,8 @@ pub(crate) enum PickTarget {
     NoteColor,
     /// The pasteboard's custom colour.
     Pasteboard,
+    /// The Remove tool's overlay colour (#12549).
+    RemoveOverlayColor,
     /// A colour row `key` of `window`, which the app holds itself; the answer waits in [`answer_for_window`].
     Window { window: PickWindow, key: String },
 }
@@ -83,6 +85,7 @@ impl PickTarget {
             PickTarget::ArtboardBackground => "artboardBackground".into(),
             PickTarget::NoteColor => "noteColor".into(),
             PickTarget::Pasteboard => "pasteboard".into(),
+            PickTarget::RemoveOverlayColor => "removeOverlayColor".into(),
         }
     }
 }
@@ -109,6 +112,7 @@ impl PickTarget {
             PickTarget::ArtboardBackground => Identity::Plain("artboardBackground"),
             PickTarget::NoteColor => Identity::Plain("noteColor"),
             PickTarget::Pasteboard => Identity::Plain("pasteboard"),
+            PickTarget::RemoveOverlayColor => Identity::Plain("removeOverlayColor"),
             PickTarget::Request { parent, key } => Identity::Request(*parent, key),
             PickTarget::Window { window, key } => Identity::Window(*window, key),
             PickTarget::Command { command, document, .. } => Identity::Command(command, document.map(|d| d.0)),
@@ -218,7 +222,7 @@ pub(crate) fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 
 }
 
 /// Opens the picker on `rgb` for a colour the shell keeps itself: `cropShield`, `artboardBackground`,
-/// `noteColor` or `pasteboard` (or `foreground`/`background`). Any other name is refused.
+/// `noteColor`, `pasteboard` or `removeOverlayColor` (or `foreground`/`background`). Any other name is refused.
 pub(crate) fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> Result<DialogId, String> {
     let which = match target {
         "foreground" | "background" => return Ok(open(app, target)),
@@ -226,6 +230,7 @@ pub(crate) fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str
         "artboardBackground" => PickTarget::ArtboardBackground,
         "noteColor" => PickTarget::NoteColor,
         "pasteboard" => PickTarget::Pasteboard,
+        "removeOverlayColor" => PickTarget::RemoveOverlayColor,
         other => return Err(format!("unknown colour target: {other}")),
     };
     Ok(open_for(app, label, Srgba::from_rgb_array(rgb), None, which))
@@ -448,6 +453,11 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         }
         // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
         PickTarget::Pasteboard => app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}})),
+        // Remove tool › Overlay options: the colour of its overlay over the brushed area (#12549).
+        PickTarget::RemoveOverlayColor => {
+            app.ui.tool_options.remove_overlay_color = Some(picked.color.to_rgb_array());
+            Ok(json!({ "color": color }))
+        }
     }
 }
 
