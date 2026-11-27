@@ -11,6 +11,7 @@ use craft::ui::dialog::{DialogId, PromptAnswer, PromptChoice, StandardPrompt};
 use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamKind, ParamResult};
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::sections::{DialogRole, FooterButton};
 use photocraft_engine::prefs::Unit;
 use serde_json::{Map, Value, json};
 
@@ -163,8 +164,10 @@ pub(crate) fn command_params(map: &mut Map<String, Value>) {
 mod settings_file;
 
 /// The footer buttons after OK and Cancel, as `(action, label)`.
-pub(crate) fn footer_buttons() -> Vec<(String, Label)> {
-    [("load", tl!("Load…")), ("save", tl!("Save…")), ("reset", tl!("Reset…"))].map(|(id, label)| (id.to_owned(), Label::from(label))).into()
+pub(crate) fn footer_buttons() -> Vec<(String, FooterButton)> {
+    [("load", tl!("Load…")), ("save", tl!("Save…")), ("reset", tl!("Reset…"))]
+        .map(|(id, label)| (id.to_owned(), FooterButton::new(label, DialogRole::Other)))
+        .into()
 }
 
 /// Every open of the dialog has the same id, so Load…'s pick and Reset…'s question, answered after the dialog closed,

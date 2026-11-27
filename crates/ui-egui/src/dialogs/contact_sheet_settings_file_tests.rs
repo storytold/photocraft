@@ -301,7 +301,7 @@ fn alerts(h: &H) -> Vec<String> {
 
 #[test]
 fn the_dialog_has_load_save_and_reset_buttons() {
-    let labels: Vec<String> = super::super::footer_buttons().into_iter().map(|(id, label)| format!("{id}:{}", label.as_str())).collect();
+    let labels: Vec<String> = super::super::footer_buttons().into_iter().map(|(id, button)| format!("{id}:{}", button.label().as_str())).collect();
     assert_eq!(labels, ["load:Load…", "save:Save…", "reset:Reset…"]);
     let (h, _) = opened();
     for label in ["Load…", "Save…", "Reset…"] {
