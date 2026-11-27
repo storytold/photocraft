@@ -218,8 +218,10 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
     h
 }
 
-/// Frames the options bar may take to settle: opening the font list loads the rows' samples over several
-/// passes, more of them where the system has more fonts.
+/// Frames the options bar may take to settle. Opening the font list loads the rows' sample faces on
+/// worker threads, and each pass that runs before a face has loaded is one more frame. The rows are
+/// the fixed test catalog's (`photocraft_text::fonts::catalog`), so the count is bounded, but on a
+/// busy runner the threads can miss many passes.
 const BAR_SETTLE_STEPS: u64 = 64;
 
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
@@ -415,7 +417,7 @@ mod panel_defaults {
         let mut app = new_app();
         app.ui.tool_options.type_style_defaults =
             json!({"tracking": 20, "text": "Injected", "box": [0, 0, 2, 2], "coalesce": "unrelated"}).as_object().unwrap().clone();
-        let p = super::super::default_style_params(&app);
+        let p = super::super::default_style_params(&app, &app.ui.tool_options);
         assert_eq!(p["tracking"], 20);
         assert!(p.get("text").is_none() && p.get("box").is_none() && p.get("coalesce").is_none());
         app.ui.tool_options.type_style_defaults = json!({
@@ -425,7 +427,7 @@ mod panel_defaults {
         .as_object()
         .unwrap()
         .clone();
-        let p = super::super::default_style_params(&app);
+        let p = super::super::default_style_params(&app, &app.ui.tool_options);
         for key in ["tracking", "leading", "spaceAfter", "variations", "features"] {
             assert!(p.get(key).is_none(), "hostile {key} is ignored");
         }

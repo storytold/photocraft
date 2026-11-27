@@ -155,9 +155,14 @@ fn sampled(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<Srgba> {
 /// the image changes nothing but is still the dialog's press.
 pub(crate) fn pick_color(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
     let Some((id, key)) = app.dialog_dropper.clone() else { return false };
-    let Some(color) = sampled(app, at) else { return true };
+    let native = crate::canvas::sampling::native_color(app, at, app.ui.tool_options.eyedropper.size, craft::color_ui::ui::SampleSource::All);
+    let Some(color) = native.map(|(rgb, _)| Srgba::from_rgb_array(rgb)).or_else(|| sampled(app, at)) else { return true };
     let Some(picker) = app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(id) else { return false };
-    picker.requests().answer_eyedropper(key, color);
+    if let Some((_, inks)) = native {
+        picker.set_color(craft::color_ui::ui::PickedColor::cmyk(color, inks.map(|v| v * 100.0)));
+    } else {
+        picker.requests().answer_eyedropper(key, color);
+    }
     true
 }
 

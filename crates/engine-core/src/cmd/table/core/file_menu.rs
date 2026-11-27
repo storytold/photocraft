@@ -7,7 +7,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Close",
         ["File"],
         Some("Cmd+W"),
-        r##"{"document":index?,"save":"discard|ask"|false="discard"} (false means discard; ask refuses to close a changed document in headless playback)"##,
+        r##"{"document":index?,"save":"discard|ask"|false="discard","force":bool?,"discard":bool?} (false means discard; ask refuses to close a changed document in headless playback; force is an older recorded Close and is ignored; discard:true is an older spelling of save:discard)"##,
         has_doc,
         |s, p| {
             let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;

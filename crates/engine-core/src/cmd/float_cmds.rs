@@ -135,7 +135,7 @@ impl CutParts {
         let mut out = self.rest.clone();
         let piece = self.piece.translated(dx, dy, self.piece_bounds);
         if self.mask {
-            crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
+            crate::pixel_fill::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
         } else {
             crate::transform_cmds::composite_over(&mut out, &piece);
         }
@@ -183,7 +183,7 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
         .into_par_iter()
         .map(|tc| -> Result<Option<(TileCoord, Arc<Tile>)>> {
             let tr = tc.rect().intersect(&b);
-            let mask = crate::fill_cmds::Mask::of(sel, tc);
+            let mask = crate::pixel_fill::Mask::of(sel, tc);
             if mask.empty(tr) {
                 return Ok(None);
             }

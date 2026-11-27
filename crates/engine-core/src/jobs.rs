@@ -1744,7 +1744,7 @@ impl Session {
         result
     }
 
-    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::brush_cmds::LiveCommit>) -> Result<Started> {
+    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::state::LiveCommit>) -> Result<Started> {
         let spec = crate::registry::spec(id)?;
         let hooks = crate::registry::hooks();
         // Params are named fields: anything but an object (or null, meaning none) is a caller
@@ -1979,6 +1979,13 @@ impl Session {
         let hooks = crate::registry::hooks();
         for after in &hooks.after_command {
             after(self, id, &params);
+        }
+        // A command that left the document as it was (Content-Aware Fill with the whole canvas
+        // selected, #14253) made no step for Edit › Fade to fade.
+        if !before.kept(self) {
+            for after in &hooks.after_edit {
+                after(self, id, &params);
+            }
         }
         if !journal {
             return;

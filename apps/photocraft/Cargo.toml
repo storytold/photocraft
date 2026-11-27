@@ -53,6 +53,11 @@ open = "5"
 ron = "0.12"
 # Background release checks; HTTPS with Rust TLS, no async runtime.
 
+[target.'cfg(windows)'.dependencies]
+# The process allocator on Windows (main.rs): the system heap's alloc and free were about 14 % of the UI
+# thread in a frame (#15493). MIT.
+mimalloc = { version = "0.1", default-features = false }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
 # `event` (CGEventSource) is used for the Caps Lock poll (#1758).
@@ -70,7 +75,7 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = ["
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSGraphics", "NSResponder", "NSView", "NSWindow"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.5", features = ["fs"] }
+rustix = { version = "=1.1.6", features = ["fs"] }
 # Reads CFBundleExecutable from a chosen macOS application bundle's Info.plist (XML or binary) for
 # external vector editing. Already in Cargo.lock (craft-update); built on every Unix so Linux CI
 # compiles and tests the bundle checks. The event-stream reader (behind plist's "unstable"
@@ -111,7 +116,7 @@ winit = { version = "=0.30.13", default-features = false, features = ["wayland-c
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
-winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
+winsafe = { version = "=0.0.29", default-features = false, features = ["user", "shell"] }
 
 
 [build-dependencies]

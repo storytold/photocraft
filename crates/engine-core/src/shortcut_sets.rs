@@ -144,8 +144,9 @@ pub fn describe(p: &Preferences) -> Value {
     })
 }
 
-/// A key as the Summarize table shows it on `mac` (⌘ spelled Cmd, ⌥ Option) or elsewhere
-/// (Ctrl, Alt).
+/// A key as the Summarize table shows it on `mac` (⌘ spelled Cmd, ⌥ Option, in the stored order)
+/// or elsewhere (Ctrl, Alt, ordered Alt, Shift, Ctrl as the reference shows them:
+/// `Alt+Shift+Ctrl+K`).
 fn key_label(sc: &str, mac: bool) -> String {
     let Some(n) = normalize_shortcut(sc) else { return sc.to_string() };
     // `Cmd++` splits into an empty part before the key, which joins back as `++`.
@@ -162,6 +163,16 @@ fn key_label(sc: &str, mac: bool) -> String {
             continue;
         }
         parts.push(shown);
+    }
+    // Off the Mac the modifiers read Alt, Shift, Ctrl. The key stays last, and `Cmd++`'s empty
+    // part before it ranks after the modifiers.
+    if !mac && let Some((_, modifiers)) = parts.split_last_mut() {
+        modifiers.sort_by_key(|m| match *m {
+            "Alt" => 0,
+            "Shift" => 1,
+            "Ctrl" => 2,
+            _ => 3,
+        });
     }
     parts.join("+")
 }
@@ -364,8 +375,20 @@ mod tests {
         assert!(mac.contains("Cmd+Control+Option+G") && mac.contains("Gaussian Blur &amp; more") && mac.contains("Filter &lt;x&gt;"), "{mac}");
         assert!(!mac.contains("Unbound") && !mac.contains("Empty"), "{mac}");
         let pc = summarize("S", &sections, false);
-        assert!(pc.contains("<td>Ctrl+C, F3</td>") && pc.contains("Ctrl+Alt+G"), "{pc}");
+        assert!(pc.contains("<td>Ctrl+C, F3</td>") && pc.contains("Alt+Ctrl+G"), "{pc}");
         assert_eq!(key_label("Cmd++", true), "Cmd++");
+    }
+
+    #[test]
+    fn summarize_orders_modifiers_alt_shift_ctrl_off_the_mac() {
+        // Edit › Keyboard Shortcuts… as the reference's Summarize page lists it (#14882).
+        let sections = vec![("Edit".to_string(), vec![("Keyboard Shortcuts...".to_string(), vec!["Cmd+Alt+Shift+K".to_string()])])];
+        let pc = summarize("S", &sections, false);
+        assert!(pc.contains("<td>Keyboard Shortcuts...</td><td>Alt+Shift+Ctrl+K</td>"), "{pc}");
+        assert_eq!(key_label("Shift+Ctrl+F8", false), "Shift+Ctrl+F8");
+        assert_eq!(key_label("Cmd+Alt++", false), "Alt+Ctrl++");
+        // The Mac keeps the stored order.
+        assert_eq!(key_label("Cmd+Ctrl+Alt+Shift+K", true), "Cmd+Control+Option+Shift+K");
     }
 
     #[test]

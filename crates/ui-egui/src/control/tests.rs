@@ -552,7 +552,13 @@ fn agent_can_inspect_and_choose_pen_make_selection_from_full_context_menu() {
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     assert_eq!(app.ui.canvas_tool_menu.as_ref().unwrap().pos, screen_point(&app, 8.0, 8.0));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
-    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 9);
+    // #12915: (8,8) lies on the closed work path's diagonal, so the menu now leads with the
+    // segment's Add Anchor Point entry above one more separator.
+    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 10);
+    assert!(
+        entries.iter().any(|row| row.get("id") == Some(&json!("path.addAnchor")) && row.get("enabled") == Some(&json!(true))),
+        "the segment entry heads the menu"
+    );
     assert!(entries.iter().any(|row| row.get("id") == Some(&json!("path.toSelection")) && row.get("enabled") == Some(&json!(true))));
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"file.new"}))["ok"], false);
     let chosen = call(&mut app, &ctx, "ui.context.choose", json!({"id":"path.toSelection"}));
@@ -951,6 +957,21 @@ fn ui_set_theme_picks_a_library_theme_the_suite_has_not_loaded() {
     }
     assert_eq!(app.ui.theme.id().as_str(), SAMPLE_THEME_ID);
     assert!(app.ui.theme.is_dark());
+}
+
+/// #17096: a size another Craft app writes to the suite becomes PhotoCraft's density preference, which the root reads.
+#[test]
+fn a_size_another_app_picks_becomes_the_density_preference() {
+    use craft::theme_store::{Op, SelectionChange};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.framework.sync_theme(&mut app.session);
+    assert_eq!(app.session.prefs().interface.density, photocraft_engine::prefs::UiDensity::Compact);
+    let base = app.framework.suite().accepted().clone();
+    app.framework.suite().watch().request(Op::Update { base, change: SelectionChange::size(craft::theme::Size::Comfortable) });
+    for _ in 0..4 {
+        app.framework.sync_theme(&mut app.session);
+    }
+    assert_eq!(app.session.prefs().interface.density, photocraft_engine::prefs::UiDensity::Comfortable);
 }
 
 /// A slot naming a theme the suite doesn't know (a deleted library theme) shows the mode's
@@ -2256,6 +2277,17 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     // Magic Eraser has no menu.
     shift_right(&mut app, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
+}
+
+#[test]
+fn ui_set_align_edges_uses_scripted_tool_option_name() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": true}))["ok"], true);
+    assert!(app.ui.tool_options.align_edges);
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["useAlignedRendering"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": "true"}))["ok"], false);
+    assert!(app.ui.tool_options.align_edges);
 }
 
 /// A fresh app with a document, as a control client finds it, and the context the control channel runs on.
