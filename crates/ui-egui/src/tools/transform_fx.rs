@@ -200,7 +200,10 @@ fn scaled_backdrop_with_cache(doc: &Document, shown: Rect, scale: f64, cache: Op
         while x < shown.x1 {
             let tile = Rect::new(x, y, x.saturating_add(TILE_WIDTH).min(shown.x1), y1);
             let part = if let Some(cache) = cache {
-                let mut cache = cache.lock().expect("backdrop cache lock");
+                let mut cache = match cache.lock() {
+                    Ok(cache) => cache,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 let scale_key = scale.to_bits();
                 if cache.revision != revision || cache.scale != scale_key {
                     cache.revision = revision;
@@ -211,10 +214,10 @@ fn scaled_backdrop_with_cache(doc: &Document, shown: Rect, scale: f64, cache: Op
                     part.clone()
                 } else {
                     let part = scaled_backdrop_tile(doc, tile, scale);
-                    if cache.tiles.len() >= 32 {
-                        if let Some(key) = cache.tiles.keys().next().copied() {
-                            cache.tiles.remove(&key);
-                        }
+                    if cache.tiles.len() >= 32
+                        && let Some(key) = cache.tiles.keys().next().copied()
+                    {
+                        cache.tiles.remove(&key);
                     }
                     cache.tiles.insert(tile, part.clone());
                     part
