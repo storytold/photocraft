@@ -53,6 +53,11 @@ open = "5"
 ron = "0.12"
 # Background release checks; HTTPS with Rust TLS, no async runtime.
 
+[target.'cfg(windows)'.dependencies]
+# The process allocator on Windows (main.rs): the system heap's alloc and free were about 14 % of the UI
+# thread in a frame (#15493). MIT.
+mimalloc = { version = "0.1", default-features = false }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
 # `event` (CGEventSource) is used for the Caps Lock poll (#1758).

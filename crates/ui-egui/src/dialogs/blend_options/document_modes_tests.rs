@@ -16,7 +16,7 @@ fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
 
 /// The labels of the Mode row's disabled entries in the Fill and Stroke rows of `app`.
 fn greyed(app: &PhotocraftApp) -> Vec<&'static str> {
-    let rows = blending_rows(app);
+    let rows = blending_rows(app, None);
     let row = rows.iter().find(|p| p.key == "mode").unwrap();
     let ParamKind::Blend { modes, .. } = &row.kind else { panic!("Mode is a blend row") };
     assert_eq!(modes.len(), BlendMode::LAYER_MODES.len(), "every mode stays listed");
@@ -67,8 +67,8 @@ fn without_a_document_nothing_is_greyed() {
 fn a_remembered_greyed_mode_opens_as_normal() {
     let mut saved = DialogFields::new();
     saved.set("mode", BlendMode::Darken.key().to_string());
-    let lab = ParamDialog::remembered(&blending_rows(&app("lab", 8)), &saved);
+    let lab = ParamDialog::remembered(&blending_rows(&app("lab", 8), None), &saved);
     assert_eq!(lab.text("mode"), None, "Darken is greyed in Lab 8-bit");
-    let rgb = ParamDialog::remembered(&blending_rows(&app("rgb", 16)), &saved);
+    let rgb = ParamDialog::remembered(&blending_rows(&app("rgb", 16), None), &saved);
     assert_eq!(rgb.text("mode"), Some(BlendMode::Darken.key()), "Darken stays in RGB 16-bit");
 }

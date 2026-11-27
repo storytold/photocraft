@@ -380,6 +380,7 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
         if let Some(p) = list.iter_mut().find(|p| p.key == "preset") {
             *p = color_settings_presets::row(Label::from(tl!("Settings")));
         }
+        color_settings_presets::text_gamma_rows(&mut list);
         // The monitor line under the rows: the cell holds the text each frame refreshes, which the build closure cannot read from the app.
         let note = crate::monitor_status::note_cell(app);
         list.push(craft::ui::patterns::form_dialogs::Param::custom("monitorNote", craft::ui::runtime::env::Label::Empty, move |ui, _, _| {

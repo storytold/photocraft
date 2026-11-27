@@ -59,6 +59,12 @@ pub enum MenuKind {
     Layers {
         /// The layers listed.
         layers: Vec<(u64, String)>,
+        /// Each row's level: a frame's image one in, under its frame (the Frame tool, #13885); empty: none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depth: Vec<u8>,
+        /// A separator and Isolate Layers end the rows (the Frame tool, #13885).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        isolate: bool,
     },
     /// A painting tool's Shift+right-click mode list (`brush_mode_menu`).
     BrushMode { plain: bool },
@@ -1018,8 +1024,9 @@ fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
 
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
 /// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's, the shape
-/// tools' (in Shape mode only: [`open`] checks it) and the Horizontal Type tool's layer or
-/// selection menu away from text (#12042).
+/// tools' (in Shape mode only: [`open`] checks it), the Horizontal Type tool's layer or
+/// selection menu away from text (#12042) and the Vertical Type Mask tool's selection or layer
+/// menu while it edits no mask (#12091).
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -1038,9 +1045,13 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // The layer menu (#11772).
             | Tool::Count
-            // The layer or selection menu away from text (#12042); Vertical Type and the Type
-            // Mask tools are not measured and stay on their no-menu path.
+            // The layer or selection menu away from text (#12042); Vertical Type and the
+            // Horizontal Type Mask tool are not measured and stay on their no-menu path.
             | Tool::Type
+            // The measured selection menu with an active selection, the layer menu without one
+            // (#12091). Only the Vertical Type Mask tool was measured; while its mask is edited
+            // the type edit menu of #12084 comes first.
+            | Tool::VerticalTypeMask
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
@@ -1197,6 +1208,13 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
                 SAMPLER_MENU
             } else if menu.tool == Tool::Count {
                 COUNT_MENU
+            } else if menu.tool == Tool::VerticalTypeMask {
+                // #12091: the measured selection table when the document has an active selection -
+                // the rows the Type, Red Eye and Object Selection branch shows, no Distort or
+                // Perspective - and the generic layer menu of #12042 when it has none. Which rows
+                // are greyed was not measured, so this tool adds no rule: `entry_enabled` keeps the
+                // menu bar's.
+                if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection | Tool::Type) {
                 if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if menu.tool == Tool::Eyedropper {
@@ -1606,7 +1624,10 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if layers.is_empty() {
                 return false;
             }
-            menu.kind = MenuKind::Layers { layers };
+            // The Frame tool's picker nests frames' images and ends with Isolate Layers (#13885).
+            let frame = tool == Tool::Frame;
+            let (layers, depth) = if frame { crate::layer_pick_ui::frame_rows(app, layers) } else { (layers, Vec::new()) };
+            menu.kind = MenuKind::Layers { layers, depth, isolate: frame };
         }
         MenuKind::TypeEdit { .. } => {
             if !editing_text(app, tool) {
@@ -1700,8 +1721,10 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
             }
             return;
         }
-        Some(MenuKind::Layers { .. }) => {
-            if let Some(layer) = command.strip_prefix(crate::layer_pick_ui::ROW).and_then(|n| n.parse::<u64>().ok()) {
+        Some(MenuKind::Layers { isolate, .. }) => {
+            if *isolate && command == crate::layer_pick_ui::ISOLATE {
+                crate::layer_pick_ui::isolate(app);
+            } else if let Some(layer) = command.strip_prefix(crate::layer_pick_ui::ROW).and_then(|n| n.parse::<u64>().ok()) {
                 crate::layer_pick_ui::choose(app, layer);
             }
             return;
@@ -1862,8 +1885,8 @@ pub fn close_stale(app: &mut PhotocraftApp) {
 /// `layer_pick_ui::entries`, the brush-mode menu `brush_mode_menu::entries`.
 pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>> {
     match &menu.kind {
-        MenuKind::Layers { layers } => {
-            return crate::layer_pick_ui::entries(layers, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
+        MenuKind::Layers { layers, depth, isolate } => {
+            return crate::layer_pick_ui::entries(layers, depth, *isolate, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
         }
         MenuKind::BrushMode { plain } => return crate::brush_mode_menu::entries(app, menu.tool, *plain),
         _ => {}
@@ -2011,6 +2034,9 @@ mod type_layer_menu_tests;
 
 #[cfg(test)]
 mod type_off_text_tests;
+
+#[cfg(test)]
+mod vertical_mask_idle_menu_tests;
 
 #[cfg(test)]
 mod add_anchor_menu_tests;
