@@ -61,7 +61,7 @@ pub(crate) enum TexKind {
     R8Direct,
     /// 16-bit masks as R16F (the precision 16-bit pixels get as RGBA16F).
     R16F,
-    /// 32-bit masks as R32F.
+    /// 32-bit masks, and 16-bit ones that hide effects, as R32F.
     R32F,
 }
 
@@ -69,6 +69,9 @@ impl TexKind {
     pub(crate) fn for_surface(role: Role, f: PixelFormat) -> Self {
         match role {
             Role::Coverage => TexKind::Rgba32F,
+            // Only an `F_COVER` record reads a hiding mask, which must tell near-full and
+            // near-empty coverage apart from full and none.
+            Role::HidingMask if f != PixelFormat::GRAY8 => TexKind::R32F,
             Role::Content | Role::Fill | Role::Stroke if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
             Role::Content | Role::Fill | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
             Role::Content | Role::Fill | Role::Stroke => TexKind::Rgba16F,
