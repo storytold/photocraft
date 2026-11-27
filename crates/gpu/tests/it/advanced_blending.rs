@@ -521,6 +521,9 @@ fn interior_effects_as_group_on_a_clipped_layer_match_the_cpu() {
             d.layers.push(noise_layer("base", d.pixel_format(), Rect::new(4, 4, 44, 36), 6, 0.3));
             let base_alone = photocraft_compose::render(&d, d.bounds());
             let mut c = interior_layer(&d, items, BlendMode::Normal, 0.8, fill);
+            // Opaque pixels: on a noisy alpha the inside stroke covers nearly the whole layer and
+            // hides the grouping.
+            c.content = noise_layer("interior", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 1.0).content;
             c.clipped = true;
             d.layers.push(c);
             let cpu = photocraft_compose::render(&d, d.bounds());
