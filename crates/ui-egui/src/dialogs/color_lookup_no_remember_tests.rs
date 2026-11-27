@@ -70,14 +70,15 @@ fn assert_no_lut(app: &PhotocraftApp, id: DialogId, opened: &str) {
     }
 }
 
-/// The first opening shows no LUT and the schema defaults for the other rows.
+/// The first opening shows no LUT and the schema defaults for the other rows: Dither checked and
+/// tetrahedral interpolation, as the reference application applies the adjustment (#14419).
 #[test]
 fn color_lookup_opens_with_no_lut_and_its_defaults() {
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
     assert_no_lut(&app, id, "the first opening");
-    assert_eq!(field_json(&app, id, "dither"), json!(false), "the first opening: dither");
-    assert_eq!(field_json(&app, id, "interpolation"), json!("trilinear"), "the first opening: interpolation");
+    assert_eq!(field_json(&app, id, "dither"), json!(true), "the first opening: dither");
+    assert_eq!(field_json(&app, id, "interpolation"), json!("tetrahedral"), "the first opening: interpolation");
     cancel(&mut app, id);
 }
 
@@ -95,14 +96,15 @@ fn color_lookup_ok_with_a_builtin_look_reopens_with_no_lut() {
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
     set(&mut app, id, "lut", json!("warm"));
-    set(&mut app, id, "dither", json!(true));
-    set(&mut app, id, "interpolation", json!("tetrahedral"));
+    // The opposite of the defaults, so the reopening can only show them if they were remembered.
+    set(&mut app, id, "dither", json!(false));
+    set(&mut app, id, "interpolation", json!("trilinear"));
     assert!(ok(&mut app, id), "OK with the built-in look warm closes the dialog");
 
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
     assert_no_lut(&app, id, "after OK with the built-in look warm");
-    assert_eq!(field_json(&app, id, "dither"), json!(true), "Dither keeps its remembered value");
-    assert_eq!(field_json(&app, id, "interpolation"), json!("tetrahedral"), "Interpolation keeps its remembered value");
+    assert_eq!(field_json(&app, id, "dither"), json!(false), "Dither keeps its remembered value");
+    assert_eq!(field_json(&app, id, "interpolation"), json!("trilinear"), "Interpolation keeps its remembered value");
     assert!(!app.session.prefs().dialogs.contains_key(COLOR_LOOKUP), "the LUT memory no longer lives in the preferences");
 }
 
@@ -129,7 +131,7 @@ fn color_lookup_ok_with_a_lut_file_reopens_at_the_defaults() {
 fn color_lookup_legacy_saved_preferences_never_restore_a_lut() {
     let mut app = app_with_doc();
     app.session.edit_prefs(|prefs| {
-        prefs.dialogs.insert(COLOR_LOOKUP.into(), json!({"lut": "warm", "file": "old.cube", "dither": true, "interpolation": "tetrahedral"}))
+        prefs.dialogs.insert(COLOR_LOOKUP.into(), json!({"lut": "warm", "file": "old.cube", "dither": false, "interpolation": "trilinear"}))
     });
     app.framework.move_memories(&mut app.session);
     assert!(!app.session.prefs().dialogs.contains_key(COLOR_LOOKUP), "the entry was moved out of the preferences");
@@ -138,8 +140,8 @@ fn color_lookup_legacy_saved_preferences_never_restore_a_lut() {
     assert_no_lut(&app, id, "with a legacy saved look in the preferences");
     // The move routes `image.adjustments.*` entries to the adjustment panel's memory, not the
     // dialog's scope, so the other rows start at their defaults as well on this first opening.
-    assert_eq!(field_json(&app, id, "dither"), json!(false), "a legacy saved Dither does not reach the dialog");
-    assert_eq!(field_json(&app, id, "interpolation"), json!("trilinear"), "a legacy saved Interpolation does not reach the dialog");
+    assert_eq!(field_json(&app, id, "dither"), json!(true), "a legacy saved Dither does not reach the dialog");
+    assert_eq!(field_json(&app, id, "interpolation"), json!("tetrahedral"), "a legacy saved Interpolation does not reach the dialog");
 }
 
 /// Only the LUT row stopped being remembered: another schema dialog still reopens with what its OK

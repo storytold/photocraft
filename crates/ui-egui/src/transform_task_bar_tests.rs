@@ -472,7 +472,8 @@ fn drag_task_bar_grip(h: &mut AppHarness) -> Rect {
     let grip = h.get_by_label("Move bar").rect();
     assert!(grip.is_positive(), "the named shared grip has real positive bounds: {grip:?}");
     assert!(before.contains_rect(grip), "the pointer must hit the grip inside the visible bar");
-    assert!(h.state().ui.panels.task_bar.at.is_none(), "a fresh bar follows its frame before the drag");
+    let fresh = h.state().ui.panels.task_bar;
+    assert!(fresh.at.is_none() && fresh.offset.is_none(), "a fresh bar follows its frame before the drag");
     let area = view(h.state()).rect;
     let from = grip.center();
     let delta = egui::vec2(40.0, -24.0);
@@ -485,10 +486,12 @@ fn drag_task_bar_grip(h: &mut AppHarness) -> Rect {
     assert_eq!(after.size(), before.size(), "a grip drag moves the bar without resizing it");
     let movement = after.min - before.min;
     assert!(movement.length() > 12.0 && movement.dot(delta) > 0.0, "the grip must move the bar: {before:?} -> {after:?}");
+    // An unpinned bar keeps the drop as its offset from its unmoved place and goes on following the frame.
     let place = h.state().ui.panels.task_bar;
-    let [x, y] = place.at.expect("a grip drag stores the canvas-relative bar position");
-    assert!((after.min - (area.min + egui::vec2(x, y))).length() <= 1.0, "the displayed bar must use the saved position");
-    assert_eq!(bar(h)["at"], json!([x, y]));
+    assert!(place.at.is_none(), "an unpinned bar keeps no fixed position: {place:?}");
+    let [x, y] = place.offset.expect("a grip drag stores the bar's offset from its unmoved place");
+    assert!((movement - egui::vec2(x, y)).length() <= 1.0, "the displayed bar must use the saved offset: {movement:?} vs {place:?}");
+    assert_eq!(bar(h)["offset"], json!([x, y]));
     // This is the same serialized panel-layout field used across restarts, not a transient Area rect.
     let restored: crate::state::TaskBarPlace = serde_json::from_value(serde_json::to_value(place).unwrap()).unwrap();
     assert_eq!(restored, place);

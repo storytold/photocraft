@@ -125,7 +125,10 @@ impl RasterSource for AfterRaster {
     }
 
     fn revision(&self) -> Revision {
-        Revision::of(&(RasterSource::revision(&*self.picture), self.detail().ready))
+        // The canvas asks every pass: a refinement that landed since is collected here.
+        let mut detail = self.detail();
+        detail.refresh();
+        Revision::of(&(RasterSource::revision(&*self.picture), detail.shown()))
     }
 
     fn damage(&self, since: Revision) -> Option<PixelRect> {
@@ -316,12 +319,18 @@ impl RawDevelopSource for PcRawSource {
     }
 
     fn develop(&self, request: &RawPreviewRequest) -> Job<PreviewDone, String> {
-        if self.needs_detail(request) {
-            self.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner).request(&self.ctx, request.revision, &request.settings, &self.inputs);
-        }
         // The request's revision only counts source changes; the develops of one source are told apart by this order, so
-        // an older job that finishes after a newer one does not replace its result.
+        // an older job that finishes after a newer one does not replace its result, and the refinement follows the
+        // settings.
         let order = self.issued.fetch_add(1, Ordering::Relaxed) + 1;
+        {
+            let mut detail = self.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.needs_detail(request) {
+                detail.want(&self.ctx, order, &request.settings, &self.inputs);
+            } else {
+                detail.unwant();
+            }
+        }
         let job = self.proxy_job(&request.settings);
         let settings = request.settings.clone();
         let picture = self.after.picture.clone();
@@ -503,7 +512,8 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
             "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows,
             "highlights": h.highlights})
     });
-    let detail = source.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut detail = source.detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    detail.refresh();
     let mut result = json!({
         "layer": session.layer.0,
         "params": serde_json::to_value(hosted.workspace().session()).unwrap_or(Value::Null),

@@ -27,11 +27,10 @@ fn saved_language(files: &MemoryFiles) -> Value {
     toml::from_str::<Value>(&text).expect("saved TOML")["interface"]["language"].clone()
 }
 
-/// The File menu's title as the menu bar draws it in `lang`: the translation, plus the English access key where it
-/// has no Latin letter of its own ("文件(F)", #5863). Read from the drawn bar, whose rule spans all its titles.
+/// The File menu's translated title in `lang`, as a bare menu bar draws it (its first text). The app's own bar may
+/// follow it with the English access key where the language shows one ("ファイル(F)", #5863), so the tests look for
+/// a drawn text that starts with it.
 fn file_title(lang: Lang) -> String {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::{NodeT, Queryable};
     with_language(lang, || {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
         let mut h = egui_kittest::Harness::builder()
@@ -39,7 +38,7 @@ fn file_title(lang: Lang) -> String {
             .with_context(app.ctx().clone())
             .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::menus::menu_bar(app, ui), app);
         h.run_steps(2);
-        h.query_all_by_role(Role::MenuItem).next().and_then(|node| node.accesskit_node().label()).expect("the bar's first title")
+        drawn_text(&h).into_iter().next().expect("the bar's first title")
     })
 }
 
@@ -90,7 +89,7 @@ fn azerbaijani_draw_after_switching_and_restore_after_restart() {
         h.run_steps(4);
         assert_eq!(current(), lang(code));
         assert_eq!(tr(current(), "File"), file);
-        assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))));
+        assert!(drawn_text(&h).iter().any(|text| text.starts_with(&file_title(lang(code)))));
         assert_eq!(saved_language(&files), code);
         h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("switch back");
         h.run_steps(4);
@@ -105,7 +104,7 @@ fn azerbaijani_draw_after_switching_and_restore_after_restart() {
         let restarted = harness_with_services(services_on(&files));
         assert_eq!(restarted.state().session.prefs().interface.language, code);
         assert_eq!(current(), lang(code));
-        assert!(drawn_text(&restarted).iter().any(|text| *text == file_title(lang(code))));
+        assert!(drawn_text(&restarted).iter().any(|text| text.starts_with(&file_title(lang(code)))));
     });
 }
 
@@ -239,7 +238,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
                 let h = harness();
                 assert_eq!(h.state().session.prefs().interface.language, "auto");
                 assert_eq!(current(), lang(code), "{tags:?}");
-                assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))), "first-launch menu: {tags:?}");
+                assert!(drawn_text(&h).iter().any(|text| text.starts_with(&file_title(lang(code)))), "first-launch menu: {tags:?}");
             });
         });
     }
@@ -267,7 +266,7 @@ fn an_explicit_language_survives_restart_on_a_different_system_language() {
             let h = harness_with_services(services_on(&files));
             assert_eq!(h.state().session.prefs().interface.language, "ko");
             assert_eq!(current(), lang("ko"));
-            assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang("ko"))));
+            assert!(drawn_text(&h).iter().any(|text| text.starts_with(&file_title(lang("ko")))));
         });
     });
 }
@@ -289,7 +288,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
             h.step();
             assert_eq!(reply.try_recv().expect("response")["ok"], true);
             assert_eq!(current(), lang(code));
-            assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))), "the menu must change in this frame: {code}");
+            assert!(drawn_text(&h).iter().any(|text| text.starts_with(&file_title(lang(code)))), "the menu must change in this frame: {code}");
             assert!(std::sync::Arc::ptr_eq(&document, &h.state().session.active().expect("document").doc), "switching language must preserve the document");
         }
         assert!(h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": []})).is_err());
@@ -298,7 +297,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     });
 }
 
-/// The draft language previews inside the Preferences window only; Apply commits it.
+/// The draft language previews inside the Preferences window only; OK commits it.
 #[test]
 fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
     if !needs_catalogs() {
@@ -314,7 +313,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         let fr = lang("fr");
         assert!(text.iter().any(|text| text == tr(fr, "Appearance")), "the draft language must translate the visible window");
         assert!(text.iter().any(|text| text == tr(fr, "Cancel")), "the window buttons must preview the language too");
-        assert!(text.iter().any(|text| text == tr(fr, "Apply")), "Apply must use the draft language without committing it");
+        assert!(text.iter().any(|text| text == tr(fr, "OK")), "OK must use the draft language without committing it");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
         assert_eq!(h.state().session.prefs().interface.language, "auto");
         assert_eq!(current(), Lang::EN, "preview must not leak to the main window");

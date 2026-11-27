@@ -239,7 +239,8 @@ pub struct Session {
     pub style_clipboard: craft_tracked::Tracked<Option<CopiedStyle>>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
-    pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
+    /// Complete stroke and the source layer's Align Edges setting.
+    pub path_stroke_clipboard: Option<(photocraft_doc::ShapeStroke, bool)>,
     /// Open Edit Contents documents and the smart objects they update.
     pub smart_links: Vec<state::SmartLink>,
     /// Type › Save Default Type Styles: character and paragraph style new type layers start from.
