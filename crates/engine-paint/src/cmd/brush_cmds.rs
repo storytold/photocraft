@@ -1055,6 +1055,10 @@ impl LiveStroke {
         if overlay.invert {
             return Err("the eraser".into());
         }
+        // The GPU stamps one pass: the mirrored passes of a symmetric stroke would be lost.
+        if self.symmetry.is_some() || !self.mirrors.is_empty() {
+            return Err("symmetry".into());
+        }
         if self.sel.is_some() {
             return Err("a selection".into());
         }

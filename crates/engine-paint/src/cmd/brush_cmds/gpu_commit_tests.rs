@@ -88,3 +88,16 @@ fn a_stroke_the_gpu_cannot_draw_is_refused_with_a_reason() {
     p["points"] = json!(PTS);
     assert!(LiveStroke::begin_gpu(&s, "paint.stroke", &p).is_err());
 }
+
+/// A symmetric stroke paints mirrored passes the GPU does not stamp: it is refused, so the caller
+/// draws it on the CPU, and a CPU overlay stroke of the same session reports the same refusal.
+#[test]
+fn a_symmetric_stroke_is_refused() {
+    let mut s = scene(8, &|_| ());
+    s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+    let mut p = brush(json!({}));
+    p["points"] = json!(PTS);
+    assert!(LiveStroke::begin_gpu(&s, "paint.stroke", &p).is_err());
+    let cpu = LiveStroke::begin_overlay(&s, "paint.stroke", &p).unwrap();
+    assert!(cpu.gpu_preview().is_err(), "no GPU preview of a symmetric stroke");
+}
