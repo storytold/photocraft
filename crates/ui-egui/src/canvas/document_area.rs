@@ -128,14 +128,13 @@ pub(crate) fn publish_shown(app: &PhotocraftApp) {
 }
 
 /// What the document area does after Window › Arrange changed the document windows (top-w15 calls it after
-/// `arrange`). A new n-up or Tile arrangement starts from even panes and every document fits its new pane, as
-/// production's layouts do; Tile is a pane per open document, floating windows docked first (the framework's
-/// `arrange` consolidates before it splits). The other window commands and the Match commands leave the panes and
-/// views alone.
+/// `arrange`). A new n-up or Tile arrangement starts from even panes; every document keeps its zoom and view centre,
+/// as the reference application's layouts do (#16885), so it shows centred in its new pane. Tile is a pane per open
+/// document, floating windows docked first (the framework's `arrange` consolidates before it splits). The other window
+/// commands and the Match commands leave the panes and views alone.
 pub(crate) fn apply_arranged(app: &mut PhotocraftApp, arranged: Arranged) {
     if arranged == Arranged::Windows && app.ui.document_windows.arrangement.is_some() {
         app.ui.split_at = SplitAt::default();
-        app.ui.views.iter_mut().for_each(|view| view.place(craft::ui::canvas::ViewCommands::FitOnScreen));
     }
 }
 
@@ -279,3 +278,7 @@ fn arranged(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, active: usiz
     }
     true
 }
+
+#[cfg(test)]
+#[path = "arrange_keeps_zoom_tests.rs"]
+mod arrange_keeps_zoom_tests;
