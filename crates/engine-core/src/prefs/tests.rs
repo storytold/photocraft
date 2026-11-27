@@ -43,7 +43,7 @@ fn defaults_match_photoshop() {
 #[test]
 fn appearance_contrast_and_motion_preferences_round_trip_and_reset() {
     let mut s = crate::session();
-    s.load_prefs_json(&json!({"interface": {}})).unwrap();
+    s.load_prefs_json(r#"{"interface": {}}"#).unwrap();
     let read = |s: &mut Session, path| s.execute("prefs.get", json!({"path": path})).unwrap();
     assert_eq!(read(&mut s, "interface.contrast"), "system");
     assert_eq!(read(&mut s, "interface.motion"), "system");
