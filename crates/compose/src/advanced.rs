@@ -14,7 +14,8 @@
 //! - **Transparency Shapes Layer off.** The layer's effects and knockout cover the whole layer
 //!   (its masks still apply) instead of following its transparency. In the special eight
 //!   ([`crate::psblend::fill_is_special`]) the layer's own transparency then blends as Fill does
-//!   (`blend_layer_into` in `composite.rs`; measured in Photoshop, #5692).
+//!   (`blend_layer_into` in `composite.rs`; measured in Photoshop, #5692). A clipped layer blends
+//!   onto its base the same way (`composite_atop_any`, #12412).
 //! - **Layer / Vector Mask Hides Effects.** The effects are built from the layer without that
 //!   mask, and the mask is applied to the finished layer and effects.
 //!
