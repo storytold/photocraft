@@ -43,7 +43,7 @@ pub fn specs() -> Vec<CommandSpec> {
         (
             "channelMixer",
             "Channel Mixer…",
-            r##"{"red":json,"green":json,"blue":json,"gray":json,"monochrome":bool=false} (per output channel [red %, green %, blue %, constant %] in -200..200; gray = the monochrome mix)"##,
+            r##"{"red":json,"green":json,"blue":json,"cyan":json,"magenta":json,"yellow":json,"black":json,"gray":json,"monochrome":bool=false} (per output channel [red %, green %, blue %, constant %] in -200..200; CMYK documents (or cyan/magenta/yellow/black keys): per ink output [cyan %, magenta %, yellow %, black %, constant %]; gray = the monochrome mix; monochrome is unsupported for CMYK outputs)"##,
         ),
         ("invert", "Invert", "{}"),
         ("posterize", "Posterize…", r##"{"levels":2..255=4}"##),
@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
         (
             "selectiveColor",
             "Selective Color…",
-            r##"{"method":"relative|absolute"="relative","colors":"reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"="reds","cyan":-100..100=0,"magenta":-100..100=0,"yellow":-100..100=0,"black":-100..100=0,"reds":json} (per-range [c,m,y,k] arrays: reds yellows greens cyans blues magentas whites neutrals blacks)"##,
+            r##"{"method":"relative|absolute"?="relative","relative":bool? (false = absolute; method wins when both are set),"colors":"reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"?="reds","cyan":-100..100?=0,"magenta":-100..100?=0,"yellow":-100..100?=0,"black":-100..100?=0,"reds":json?,"yellows":json?,"greens":json?,"cyans":json?,"blues":json?,"magentas":json?,"whites":json?,"neutrals":json?,"blacks":json?} (per-range [c,m,y,k] arrays)"##,
         ),
         (
             "colorLookup",
@@ -60,6 +60,26 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text,"lutFormat":"auto|cube|3dl|look"="auto"} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection, auto detects it)"##,
         ),
     ];
+    /// Composed layer options (`path`, `opacity`, `name`, `mode`, `clipToPrevious`) belong immediately
+    /// after the adjustment's input object. Notes after that object (`(stops …)`) must not come first:
+    /// the schema reader would treat the options as prose and reject `opacity` as unknown (#15255).
+    fn with_new_layer_options(params: &'static str) -> &'static str {
+        let composed = format!(
+            r#" + {{{NEW_LAYER_PATH},"opacity":0..1=1,"name":str?=the adjustment's name + number,"mode":blend mode name="normal" (not Pass Through),"clipToPrevious":bool=false}}"#
+        );
+        Box::leak(insert_composed_params(params, &composed).into_boxed_str())
+    }
+
+    /// Place `composed` after the documented input objects and before any trailing notes.
+    fn insert_composed_params(doc: &str, composed: &str) -> String {
+        match crate::param_schema::Params::parse(doc) {
+            Some(schema) if doc.ends_with(&schema.notes) => {
+                format!("{}{}{}", &doc[..doc.len() - schema.notes.len()], composed, schema.notes)
+            }
+            _ => format!("{doc}{composed}"),
+        }
+    }
+
     for &(kind, label, params) in ADJ {
         let layer_id: &'static str = Box::leak(format!("layer.newAdjustmentLayer.{kind}").into_boxed_str());
         let image_id: &'static str = Box::leak(format!("image.adjustments.{kind}").into_boxed_str());
@@ -68,7 +88,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label,
             menu: &["Layer", "New Adjustment Layer"],
             shortcut: None,
-            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1,"name":str?=the adjustment's name + number,"mode":blend mode name="normal" (not Pass Through),"clipToPrevious":bool=false}}"#).into_boxed_str()),
+            params: with_new_layer_options(params),
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
@@ -94,10 +114,27 @@ pub fn specs() -> Vec<CommandSpec> {
                 "blackWhite" => Some("Cmd+Alt+Shift+B"),
                 _ => None,
             },
-            params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            params: match kind {
+                "colorLookup" => Box::leak(params.replace(LOOKUP_LAYER_DEFAULTS, LOOKUP_IMAGE_DEFAULTS).into_boxed_str()),
+                _ => params,
+            },
+            // Brightness/Contrast also refuses a hidden pixel layer (#14359).
+            enabled: match kind {
+                "brightnessContrast" => crate::adjust_cmds::brightness_contrast_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "brightnessContrast" {
+                    crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?;
+                }
+                let filled;
+                let p = if kind == "colorLookup" {
+                    filled = image_lookup_defaults(p);
+                    &filled
+                } else {
+                    p
+                };
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }
@@ -144,4 +181,29 @@ pub fn specs() -> Vec<CommandSpec> {
         });
     }
     v
+}
+
+/// The interpolation and dither defaults the shared Color Lookup line documents, which the adjustment layer keeps,
+/// and the ones Image › Adjustments › Color Lookup documents in their place (#14419).
+const LOOKUP_LAYER_DEFAULTS: &str = r#""interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false"#;
+const LOOKUP_IMAGE_DEFAULTS: &str = r#""interpolation":"trilinear|tetrahedral"="tetrahedral","dither":bool=true"#;
+
+/// `p` with Image › Adjustments › Color Lookup's own defaults: tetrahedral interpolation and dither on, as the
+/// reference application applies the adjustment (#14419). A call that gives `interpolation` (or the `tetrahedral`
+/// flag) or `dither` keeps its value; a null counts as not given, as in `lookup_from_params`. The defaults
+/// go into the params rather than into `lookup_from_params`, so the adjustment layer, its `layer.setAdjustment` edits
+/// and Color Lookup layers read from PSD files keep trilinear and no dither, and a smart filter records the values it
+/// ran with.
+fn image_lookup_defaults(p: &Value) -> Value {
+    let mut p = p.clone();
+    if let Value::Object(map) = &mut p {
+        let given = |map: &serde_json::Map<String, Value>, key: &str| map.get(key).is_some_and(|v| !v.is_null());
+        if !given(map, "interpolation") && !given(map, "tetrahedral") {
+            map.insert("interpolation".into(), Value::from("tetrahedral"));
+        }
+        if !given(map, "dither") {
+            map.insert("dither".into(), Value::Bool(true));
+        }
+    }
+    p
 }

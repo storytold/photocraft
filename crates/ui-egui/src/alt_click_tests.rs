@@ -11,7 +11,7 @@ use crate::app::framework::BuildApp as _;
 use crate::state::Tool;
 use craft::keymap::Mods;
 
-fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+pub(crate) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
@@ -48,7 +48,7 @@ fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, m: 
 }
 
 /// A click at document point (x, y) with `m` held from before the press until after the release.
-fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
+pub(crate) fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     let p = screen(h, x, y);
     mods(h, m);
     h.event(egui::Event::PointerMoved(p));
@@ -78,7 +78,7 @@ fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: [f32; 2], to: [f32; 
 }
 
 /// Two halves: red on the left, green on the right, on one background layer.
-fn two_colours() -> Box<PhotocraftApp> {
+pub(crate) fn two_colours() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();

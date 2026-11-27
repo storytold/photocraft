@@ -53,7 +53,7 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
     // `edit.colorSettings` sets them. Process-wide: only a colour change moves them, so another
     // session's values survive this one's unrelated preferences.
     if color_changed {
-        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
@@ -94,7 +94,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.prefs.edit(|_| ());
     if path.is_none_or(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
-        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
@@ -220,7 +220,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
-            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"allowUnknown":bool=false (bind ids that are not registered commands, such as actions.play:<name>),"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
             keyboard_shortcuts,
             true
         ),
