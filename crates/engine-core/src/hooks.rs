@@ -66,6 +66,8 @@ pub struct Hooks {
     pub run_params: Vec<RunParams>,
     /// After a successful command or job apply, each in turn.
     pub after_command: Vec<AfterCommand>,
+    /// Then, when the command changed the active document or made another one active, each in turn.
+    pub after_edit: Vec<AfterCommand>,
     /// While recording: a command's own recorded step, by command id.
     pub recorded_steps: Vec<(&'static str, RecordedStepFor)>,
     /// While recording: the recorded step of every other command. None keeps the params.
