@@ -1704,10 +1704,14 @@ fn error_titles(app: &PhotocraftApp) -> Vec<String> {
 }
 
 fn open_error_messages(app: &PhotocraftApp) -> Vec<String> {
-    app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert"))
-        .filter_map(|d| d.fields.and_then(|f| f.get("message").and_then(serde_json::Value::as_str).map(str::to_owned))).collect()
+    app.framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter(|d| d.key.as_deref() == Some("alert"))
+        .filter_map(|d| d.fields.and_then(|f| f.get("message").and_then(serde_json::Value::as_str).map(str::to_owned)))
+        .collect()
 }
-
 
 /// The Home screen (no document open) is where a first drop lands: every file opens as its own
 /// document, in drop order, whatever the type, and nothing is placed.
@@ -1852,10 +1856,7 @@ fn open_as_smart_object_dialog_opens_one_document_per_selected_file() {
 
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(
-        open_error_messages(&app).iter().any(|message| message.starts_with("Couldn't open bad.png")),
-        "the unreadable file is reported"
-    );
+    assert!(open_error_messages(&app).iter().any(|message| message.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1877,10 +1878,7 @@ fn open_as_smart_object_opens_in_the_background_in_name_order() {
     tick_until(&mut app, &ctx, |app| app.jobs.opens.is_empty());
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(
-        open_error_messages(&app).iter().any(|message| message.starts_with("Couldn't open bad.png")),
-        "the unreadable file is reported"
-    );
+    assert!(open_error_messages(&app).iter().any(|message| message.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

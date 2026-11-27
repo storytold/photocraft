@@ -3,13 +3,13 @@
 
 use super::*;
 use crate::control::{ControlRequest, Reply, handle};
+use crate::{Services, menus};
 use craft::host::{Picked, ScriptedFiles};
 use craft::ui::dialog::{DialogId, OpenDialog};
 use craft::ui::runtime::drag::OsFile;
-use std::sync::Arc;
-use crate::{Services, menus};
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
+use std::sync::Arc;
 
 fn app_with(answer: Option<Picked>) -> Box<PhotocraftApp> {
     let services = Services {
@@ -36,7 +36,9 @@ fn messages(app: &PhotocraftApp) -> Vec<String> {
     error_dialogs(app).into_iter().map(|d| d.fields.unwrap()["message"].as_str().unwrap().to_owned()).collect()
 }
 
-fn no_dialogs(app: &PhotocraftApp) -> bool { app.framework.dialogs.open_dialogs().is_empty() }
+fn no_dialogs(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.open_dialogs().is_empty()
+}
 
 fn memory_id(app: &PhotocraftApp) -> DialogId {
     crate::dialogs::alerts::prompt_tagged::<crate::open_prompt::MemoryTag>(app).unwrap()
@@ -303,15 +305,12 @@ fn recent_grid_and_list_read_failures_keep_the_reason_without_repeating_the_path
         app.background_jobs = false;
         app.ui.chrome.home_recent_view = if grid { craft::ui::shell::RecentView::Grid } else { craft::ui::shell::RecentView::List };
         app.push_recent(&source);
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(900.0, 760.0))
-            .with_context(app.ctx().clone())
-            .build_ui_state(
-                |ui, app: &mut Box<PhotocraftApp>| {
-                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 760.0)).with_context(app.ctx().clone()).build_ui_state(
+            |ui, app: &mut Box<PhotocraftApp>| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
+            },
+            app,
+        );
         h.run_steps(3);
         h.get_by_label("missing.psd").click();
         h.run_steps(3);
@@ -495,10 +494,20 @@ fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_re
         direct.background_jobs = false;
         let source = photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.clone()));
         let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
-        let id = direct.session.store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
-            id: 0, name: "Untitled-1".into(), source, fingerprint, required: 1000, soft_limit: 500,
-            hard_limit: 2000, available_ram: Some(4000), confirm_damage: true,
-        }).unwrap();
+        let id = direct
+            .session
+            .store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+                id: 0,
+                name: "Untitled-1".into(),
+                source,
+                fingerprint,
+                required: 1000,
+                soft_limit: 500,
+                hard_limit: 2000,
+                available_ram: Some(4000),
+                confirm_damage: true,
+            })
+            .unwrap();
         crate::open_prompt::arrive_memory(&mut direct, id, "Untitled-1".into(), None, Some("card.psdt".into()), None, None, 1000, Some(4000), false, false);
         let error = crate::open_prompt::answer_memory(&mut direct, true).unwrap_err();
         assert_eq!(error, "Untitled-1: Untitled-1: PSD: unsupported file version 0", "preserve the approval's original wrapper");

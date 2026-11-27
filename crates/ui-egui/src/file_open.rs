@@ -240,11 +240,21 @@ struct OpenFailureAlert {
 impl StackDialog for OpenFailureAlert {
     type Result = ();
 
-    fn id(&self) -> DialogId { self.id }
-    fn instance(&self) -> Option<DialogId> { Some(self.id) }
-    fn key(&self) -> Option<&str> { self.alert.key() }
-    fn json_fields(&self) -> Option<serde_json::Value> { self.alert.json_fields() }
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<()> { self.alert.confirm(ctx) }
+    fn id(&self) -> DialogId {
+        self.id
+    }
+    fn instance(&self) -> Option<DialogId> {
+        Some(self.id)
+    }
+    fn key(&self) -> Option<&str> {
+        self.alert.key()
+    }
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        self.alert.json_fields()
+    }
+    fn confirm(&mut self, ctx: &egui::Context) -> Option<()> {
+        self.alert.confirm(ctx)
+    }
     fn show(&mut self, ui: &mut egui::Ui, stack: &DialogStack) -> Option<DialogResult<()>> {
         ui.push_id(self.id, |ui| self.alert.show(ui, stack)).inner
     }

@@ -383,7 +383,19 @@ fn memory_confirmation_refuses_when_source_changed_inline() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "changed.psd".into(), Some(path.to_string_lossy().to_string()), None, None, None, 1000, Some(100_000), false, false);
+    crate::open_prompt::arrive_memory(
+        &mut app,
+        preflight_id,
+        "changed.psd".into(),
+        Some(path.to_string_lossy().to_string()),
+        None,
+        None,
+        None,
+        1000,
+        Some(100_000),
+        false,
+        false,
+    );
     let dlg_id = memory_dialog(&mut app);
 
     // Mutate file before confirming:
@@ -423,7 +435,19 @@ fn memory_confirmation_refuses_when_source_changed_async() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "changed_async.psd".into(), Some(path.to_string_lossy().to_string()), None, None, None, 1000, Some(100_000), false, false);
+    crate::open_prompt::arrive_memory(
+        &mut app,
+        preflight_id,
+        "changed_async.psd".into(),
+        Some(path.to_string_lossy().to_string()),
+        None,
+        None,
+        None,
+        1000,
+        Some(100_000),
+        false,
+        false,
+    );
     let dlg_id = memory_dialog(&mut app);
 
     // Mutate file before confirming:
@@ -1025,81 +1049,81 @@ fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_e
     ];
     for (name, file_name) in [("failed.psd", None), ("failed.psd", Some("failed.psd")), ("Untitled-1", Some("template.psdt"))] {
         for typed in [false, true] {
-        let mut app = app();
-        let temp = tempfile::tempdir().unwrap();
-        let path = file_name.map(|file| {
-            let path = temp.path().join(file);
-            std::fs::write(&path, header).unwrap();
-            path.to_string_lossy().into_owned()
-        });
-        let source = path.as_ref().map_or_else(
-            || photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.to_vec())),
-            |path| photocraft_engine::jobs::OpenSource::Path(path.clone()),
-        );
-        let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
-        let first = app
-            .session
-            .store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
-                id: 0,
-                name: name.into(),
-                source,
-                fingerprint,
-                required: 1000,
-                soft_limit: 500,
-                hard_limit: 2000,
-                available_ram: Some(4000),
-                confirm_damage: true,
-            })
-            .unwrap();
-        let second = store_preflight(&mut app, "next.psd", 1000, Some(4000));
-        let batch = crate::jobs_ui::begin_batch(&mut app);
-        let first_order = crate::jobs_ui::OpenOrder { batch, seq: 0 };
-        let second_order = crate::jobs_ui::OpenOrder { batch, seq: 1 };
-        crate::open_prompt::arrive_memory(&mut app, first, name.into(), path.clone(), None, None, Some(first_order), 1000, Some(4000), false, false);
-        crate::open_prompt::arrive_memory(&mut app, second, "next.psd".into(), None, None, None, Some(second_order), 1000, Some(4000), false, false);
-        let dialog = alerts::prompt_tagged::<MemoryTag>(&app).unwrap();
-        if typed {
-            let reply = call(&mut app, "ui.dialog.confirm", json!({"dialog": dialog.value()}));
-            assert_eq!(reply["ok"], true, "typed confirmation acknowledges delivery; the real consumer presents the approval failure");
-        } else {
-            let error = crate::open_prompt::answer_memory(&mut app, true).unwrap_err();
-            assert_eq!(error, format!("{name}: {name}: PSD: unsupported file version 0"), "keep the approval's original raw error");
-            let ctx = app.ctx().clone();
-            ctx.run_ui(Default::default(), |ui| crate::dialogs::run(&mut app, ui)).textures_delta.clear();
-        }
-        let source_name = file_name.unwrap_or(name);
-        let wanted = format!("Couldn't open {source_name}: PSD: unsupported file version 0");
-        let errors: Vec<_> = app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert")).collect();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].fields.as_ref().unwrap()["message"], wanted);
-        let error_id = errors[0].id;
-        assert_eq!(app.ui.status, wanted);
-        assert_eq!(app.ui.status.matches(source_name).count(), 1);
-        if name != source_name {
-            assert!(!app.ui.status.contains(name));
-        }
-        assert!(app.ui.status_error);
-        assert!(app.ui.notices.is_empty());
-        assert!(app.session.documents().is_empty());
-        assert!(app.ui.recent_files.is_empty());
-        assert!(app.jobs.opens.is_empty());
-        assert!(app.session.take_pending_preflight(first).is_none());
-        assert_eq!(app.held_memory_prompts.len(), 1);
-        assert_eq!(app.held_memory_prompts[0].id, second);
-        assert_eq!(app.prompt_order.len(), 1);
-        assert_eq!(app.jobs.batches.len(), 1, "the waiting successor still owns this batch");
-        let next = alerts::prompt_tagged::<MemoryTag>(&app).unwrap();
-        crate::open_prompt::advance_memory(&mut app);
-        assert_eq!(app.framework.dialogs.open_dialogs().len(), 2, "neither the alert nor the successor prompt is duplicated");
-        assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": error_id.value()}))["ok"], true);
-        assert_eq!(app.framework.dialogs.open_dialogs().len(), 1);
-        assert_eq!(app.framework.dialogs.open_dialogs()[0].id, next);
-        assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": next.value()}))["ok"], true);
-        assert!(app.session.take_pending_preflight(second).is_none());
-        assert!(app.framework.dialogs.open_dialogs().is_empty());
-        assert!(app.held_memory_prompts.is_empty());
-        assert!(app.prompt_order.is_empty());
-        assert!(app.jobs.batches.is_empty());
+            let mut app = app();
+            let temp = tempfile::tempdir().unwrap();
+            let path = file_name.map(|file| {
+                let path = temp.path().join(file);
+                std::fs::write(&path, header).unwrap();
+                path.to_string_lossy().into_owned()
+            });
+            let source = path.as_ref().map_or_else(
+                || photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.to_vec())),
+                |path| photocraft_engine::jobs::OpenSource::Path(path.clone()),
+            );
+            let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
+            let first = app
+                .session
+                .store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+                    id: 0,
+                    name: name.into(),
+                    source,
+                    fingerprint,
+                    required: 1000,
+                    soft_limit: 500,
+                    hard_limit: 2000,
+                    available_ram: Some(4000),
+                    confirm_damage: true,
+                })
+                .unwrap();
+            let second = store_preflight(&mut app, "next.psd", 1000, Some(4000));
+            let batch = crate::jobs_ui::begin_batch(&mut app);
+            let first_order = crate::jobs_ui::OpenOrder { batch, seq: 0 };
+            let second_order = crate::jobs_ui::OpenOrder { batch, seq: 1 };
+            crate::open_prompt::arrive_memory(&mut app, first, name.into(), path.clone(), None, None, Some(first_order), 1000, Some(4000), false, false);
+            crate::open_prompt::arrive_memory(&mut app, second, "next.psd".into(), None, None, None, Some(second_order), 1000, Some(4000), false, false);
+            let dialog = alerts::prompt_tagged::<MemoryTag>(&app).unwrap();
+            if typed {
+                let reply = call(&mut app, "ui.dialog.confirm", json!({"dialog": dialog.value()}));
+                assert_eq!(reply["ok"], true, "typed confirmation acknowledges delivery; the real consumer presents the approval failure");
+            } else {
+                let error = crate::open_prompt::answer_memory(&mut app, true).unwrap_err();
+                assert_eq!(error, format!("{name}: {name}: PSD: unsupported file version 0"), "keep the approval's original raw error");
+                let ctx = app.ctx().clone();
+                ctx.run_ui(Default::default(), |ui| crate::dialogs::run(&mut app, ui)).textures_delta.clear();
+            }
+            let source_name = file_name.unwrap_or(name);
+            let wanted = format!("Couldn't open {source_name}: PSD: unsupported file version 0");
+            let errors: Vec<_> = app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert")).collect();
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].fields.as_ref().unwrap()["message"], wanted);
+            let error_id = errors[0].id;
+            assert_eq!(app.ui.status, wanted);
+            assert_eq!(app.ui.status.matches(source_name).count(), 1);
+            if name != source_name {
+                assert!(!app.ui.status.contains(name));
+            }
+            assert!(app.ui.status_error);
+            assert!(app.ui.notices.is_empty());
+            assert!(app.session.documents().is_empty());
+            assert!(app.ui.recent_files.is_empty());
+            assert!(app.jobs.opens.is_empty());
+            assert!(app.session.take_pending_preflight(first).is_none());
+            assert_eq!(app.held_memory_prompts.len(), 1);
+            assert_eq!(app.held_memory_prompts[0].id, second);
+            assert_eq!(app.prompt_order.len(), 1);
+            assert_eq!(app.jobs.batches.len(), 1, "the waiting successor still owns this batch");
+            let next = alerts::prompt_tagged::<MemoryTag>(&app).unwrap();
+            crate::open_prompt::advance_memory(&mut app);
+            assert_eq!(app.framework.dialogs.open_dialogs().len(), 2, "neither the alert nor the successor prompt is duplicated");
+            assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": error_id.value()}))["ok"], true);
+            assert_eq!(app.framework.dialogs.open_dialogs().len(), 1);
+            assert_eq!(app.framework.dialogs.open_dialogs()[0].id, next);
+            assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": next.value()}))["ok"], true);
+            assert!(app.session.take_pending_preflight(second).is_none());
+            assert!(app.framework.dialogs.open_dialogs().is_empty());
+            assert!(app.held_memory_prompts.is_empty());
+            assert!(app.prompt_order.is_empty());
+            assert!(app.jobs.batches.is_empty());
         }
     }
 }
