@@ -517,7 +517,12 @@ mod tests {
         );
         let (steps, got) = finishing.wait_forever().flatten().expect("the thread's result");
         assert!(steps >= 1, "the release's points are a step of their own");
-        assert!(woken.load(std::sync::atomic::Ordering::SeqCst), "the canvas is woken once the result is there");
+        // The wake comes right after the result is handed over, so it can trail this wait a moment.
+        let start = Instant::now();
+        while !woken.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the canvas is woken once the result is there");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(got.bounds, expected.bounds);
         let r = expected.bounds;
         let differ =
