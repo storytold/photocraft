@@ -364,7 +364,10 @@ impl DabTool {
                             }
                             // The Mode combines the sharpened value with the pixel the way a paint
                             // colour is combined, and the result is laid down through the same
-                            // coverage `k`; alpha keeps the Normal mix.
+                            // coverage `k`; alpha keeps the Normal mix. Reachable only in 8-bit RGB
+                            // (the Mode is forced to Normal for every other format above), so the
+                            // native pixel is at most R, G, B, A: the same 8-slot buffer `color_dab`
+                            // uses.
                             let mut src = [0.0f32; 8];
                             src[..n].copy_from_slice(&out[o..o + n]);
                             let (d, s) = (to_rgba(&fmt, px), to_rgba(&fmt, &src[..n]));
