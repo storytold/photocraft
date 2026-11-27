@@ -136,12 +136,14 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
     let shown = rect(plan.shown);
     let width = shown.width() as usize;
     let mut out = Buffer::transparent(shown);
-    let backdrop =
-        if matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough) { Buffer::transparent(shown) } else { scaled_backdrop(preview, shown, plan.scale) };
     bands(&mut out.px, width * BAND_ROWS, |i, px| {
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
-        let mut over = crop(&backdrop, band);
+        let mut over = if matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough) {
+            Buffer::transparent(band)
+        } else {
+            scaled_backdrop(preview, band, plan.scale)
+        };
         effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns);
         // Copied, not moved out, so `over` hands its band back to the scratch pool on drop.
         for (o, p) in px.iter_mut().zip(over.px.iter().copied()) {
@@ -155,6 +157,25 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
 /// coordinates used by the styled preview. Rendering `shown` directly would sample the wrong
 /// document pixels whenever the style budget lowers `plan.scale` below one.
 fn scaled_backdrop(doc: &Document, shown: Rect, scale: f64) -> Buffer {
+    const TILE_WIDTH: i32 = 128;
+    const TILE_HEIGHT: i32 = 64;
+    let mut out = Buffer::transparent(shown);
+    let mut y = shown.y0;
+    while y < shown.y1 {
+        let y1 = y.saturating_add(TILE_HEIGHT).min(shown.y1);
+        let mut x = shown.x0;
+        while x < shown.x1 {
+            let tile = Rect::new(x, y, x.saturating_add(TILE_WIDTH).min(shown.x1), y1);
+            let part = scaled_backdrop_tile(doc, tile, scale);
+            copy_into(&mut out, &part);
+            x = tile.x1;
+        }
+        y = y1;
+    }
+    out
+}
+
+fn scaled_backdrop_tile(doc: &Document, shown: Rect, scale: f64) -> Buffer {
     let scale = scale.max(f64::EPSILON);
     let source_rect = Rect::new(
         (f64::from(shown.x0) / scale).floor() as i32,
@@ -164,6 +185,9 @@ fn scaled_backdrop(doc: &Document, shown: Rect, scale: f64) -> Buffer {
     );
     let source = photocraft_compose::render(doc, source_rect);
     let mut out = Buffer::transparent(shown);
+    if source.rect.is_empty() {
+        return out;
+    }
     let sw = source.rect.width().max(1) as usize;
     for y in shown.y0..shown.y1 {
         let sy = (f64::from(y) + 0.5) / scale - f64::from(source.rect.y0) - 0.5;
@@ -194,6 +218,21 @@ fn scaled_backdrop(doc: &Document, shown: Rect, scale: f64) -> Buffer {
         }
     }
     out
+}
+
+fn copy_into(dst: &mut Buffer, src: &Buffer) {
+    let part = dst.rect.intersect(&src.rect);
+    if part.is_empty() {
+        return;
+    }
+    let (sw, dw, n) = (src.rect.width() as usize, dst.rect.width() as usize, part.width() as usize);
+    for y in part.y0..part.y1 {
+        let s0 = (y - src.rect.y0) as usize * sw + (part.x0 - src.rect.x0) as usize;
+        let d0 = (y - dst.rect.y0) as usize * dw + (part.x0 - dst.rect.x0) as usize;
+        if let (Some(source), Some(target)) = (src.px.get(s0..s0 + n), dst.px.get_mut(d0..d0 + n)) {
+            target.copy_from_slice(source);
+        }
+    }
 }
 
 /// Rows composited per parallel band.
