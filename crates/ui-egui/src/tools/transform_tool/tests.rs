@@ -2219,3 +2219,6 @@ fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
 
 #[path = "warp_remove_split_tests.rs"]
 mod warp_remove_split_tests;
+
+#[path = "group_warp_greyed_tests.rs"]
+mod group_warp_greyed_tests;
