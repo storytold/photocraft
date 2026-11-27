@@ -1,3 +1,4 @@
+pub mod adjustment_brush;
 pub(super) mod align_bar;
 pub mod analysis;
 pub mod artboard_tool;
@@ -43,6 +44,7 @@ pub mod stroke_trail;
 pub mod symmetry_ui;
 pub(super) mod tool_reset;
 pub mod transform_fx;
+pub mod transform_task_bar;
 pub mod transform_tool;
 pub(super) mod type_box_preview;
 pub(super) mod type_font_preview;
@@ -64,9 +66,15 @@ mod count_show_extras_tests;
 #[cfg(test)]
 mod crop_mode_tests;
 #[cfg(test)]
+mod freeform_shift_tests;
+#[cfg(test)]
 mod gradient_options_bar_mode_tests;
 #[cfg(test)]
 mod line_tool_defaults_tests;
+#[cfg(test)]
+mod note_import_show_tests;
+#[cfg(test)]
+mod object_selection_gear_tests;
 #[cfg(test)]
 mod object_selection_mode_tests;
 #[cfg(test)]
@@ -76,3 +84,9 @@ mod path_selection_shape_over_saved_path_tests;
 
 #[cfg(test)]
 mod art_history_reset_tip_tests;
+
+#[cfg(test)]
+mod object_selection_not_found_tests;
+
+#[cfg(test)]
+mod options_bar_field_labels_tests;
