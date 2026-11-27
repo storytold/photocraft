@@ -259,7 +259,7 @@ fn installed_filter(cmd: &str, key: &str) -> Option<fn(&InstalledProfile) -> boo
 }
 
 /// The `installed` profiles a menu of `cmd` lists (see [`installed_filter`]), by path and description.
-pub(super) fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProfile]) -> Vec<(String, String)> {
+pub(crate) fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProfile]) -> Vec<(String, String)> {
     let Some(fits) = installed_filter(cmd, key) else { return Vec::new() };
     installed.iter().filter(|i| i.is_destination() && fits(i)).map(|i| (i.path.clone(), i.description.clone())).collect()
 }
