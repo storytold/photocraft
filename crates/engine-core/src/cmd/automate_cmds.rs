@@ -36,7 +36,10 @@ fn extendscript_ext(path: &str) -> Option<&str> {
 
 fn reject_extendscript(cmd: &str, path: &str) -> Result<()> {
     match extendscript_ext(path) {
-        Some(_) => Err(bad(cmd, "PhotoCraft scripts are JSON or command lists (one command.id {json} per line), not Photoshop ExtendScript (.js/.jsx)")),
+        Some(_) => Err(bad(
+            cmd,
+            "Action scripts are JSON or command lists (one command.id {json} per line), not Photoshop ExtendScript (.js/.jsx); the PhotoCraft app runs those with file.scripts.run",
+        )),
         None => Ok(()),
     }
 }

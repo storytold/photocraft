@@ -601,6 +601,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>, wa
         files: Some(Arc::new(files)),
         file_panels: Some(file_panels),
         settings: Some(settings_store()),
+        scripts: Some(crate::scripts::service()),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         file_stamp: Some(Box::new(|path: &str| {
             // Follows a symlink, as Save writes through it to the file it points at.

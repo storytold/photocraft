@@ -108,6 +108,7 @@ impl PhotocraftApp {
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
+            crate::scripts::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
             // `fired` and `delivered` come only from the runtime's last pass, so a hidden logic
@@ -255,6 +256,8 @@ impl PhotocraftApp {
         // Over the window: the background job and update dialogs before the host runs, then every
         // hosted dialog, then the other OS windows' contents.
         jobs_ui::dialog(self, ui);
+        // A running script's Stop window, and what scripts wrote.
+        crate::scripts::show(self, &ctx);
         updates_ui::show(self, &ctx);
         // The Keyboard Shortcuts dialog draws while its session is open.
         prefs_ui::show_shortcuts(self, ui);

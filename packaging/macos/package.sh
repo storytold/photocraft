@@ -63,7 +63,7 @@ fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in photocraft photocraft-cli; do
+for bin in photocraft photocraft-cli photocraft-script-host; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -123,6 +123,8 @@ cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
 # The CLI too, beside the app: Preferences › AI Integrations points MCP clients at it
 # (`photocraft-cli mcp`), and it starts the app when an agent needs it.
 cp "$WORK/bin/photocraft-cli" "$APP/Contents/MacOS/photocraft-cli"
+# The script host the app starts for each script run, from next to its own executable.
+cp "$WORK/bin/photocraft-script-host" "$APP/Contents/MacOS/photocraft-script-host"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
 # Notices for the bundled font fallback, included before the bundle is signed.
 cp "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md" "$APP/Contents/Resources/"
@@ -140,6 +142,7 @@ printf 'APPL????' >"$APP/Contents/PkgInfo"
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # The bundled CLI is nested executable code; sign it before sealing the app bundle.
 sign --options runtime --identifier ai.storyteller.photocraft-cli "$APP/Contents/MacOS/photocraft-cli"
+sign --options runtime --identifier ai.storyteller.photocraft-script-host "$APP/Contents/MacOS/photocraft-script-host"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PhotoCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"

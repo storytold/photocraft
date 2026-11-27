@@ -106,6 +106,7 @@ modules:
       - cargo --offline build --release --locked -p photocraft -p photocraft-cli --features heif
       - install -Dm755 target/release/photocraft /app/bin/photocraft
       - install -Dm755 target/release/photocraft-cli /app/bin/photocraft-cli
+      - install -Dm755 target/release/photocraft-script-host /app/bin/photocraft-script-host
       - install -Dm644 docs/mcp.md /app/share/doc/photocraft/mcp.md
       - install -Dm644 docs/control-protocol.md /app/share/doc/photocraft/control-protocol.md
       - install -Dm644 NOTICE /app/share/doc/photocraft/NOTICE

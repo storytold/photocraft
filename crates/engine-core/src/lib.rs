@@ -136,6 +136,7 @@ pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
 pub use cmd::render_cmds;
 pub use cmd::sample_cmds;
+pub use cmd::script_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
@@ -225,6 +226,8 @@ pub struct Session {
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
     pub coalesce_request: Option<String>,
+    /// The serial the last admitted document got ([`DocState::serial`]).
+    pub(crate) doc_serial: u64,
     /// The outer action's original document/history states, independent of command transactions.
     action_history: Option<action_history::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.

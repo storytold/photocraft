@@ -140,6 +140,7 @@ photocraft/
 │  ├─ platform/                photocraft-platform  traits: file dialogs, clipboard, fonts, tablet input, menus, storage; native + web impls
 │  ├─ ui-egui/                 photocraft-ui-egui   the (first) GUI shell: panels, dialogs, canvas widget, theme
 │  ├─ automation/              photocraft-automation  MCP server (rmcp) + JSON-RPC over the command registry
+│  ├─ script-js/               photocraft-script-js   Boa runner for `.js` / `.jsx` against a session
 │  └─ testkit/                 photocraft-testkit   golden images, perceptual diff, fixtures, PSD corpus helpers
 ├─ apps/
 │  ├─ photocraft/              desktop binary (winit + wgpu + ui-egui + platform-native)
@@ -153,7 +154,7 @@ photocraft/
 └─ plan/                       this directory
 ```
 
-**What exists today.** This layout is the target design. Built so far: `geom`, `cms`, `color`, `raster`, `psd`, `codecs`, `doc`, `ops`, `algo`, `paint`, `text`, `vector`, `compose`, `gpu`, `format`, `raw`, `io`, `plugins`, `engine`, `ui-egui`, `automation`, `testkit`, and the three apps. Not yet split out: `viewport` and `tools` live inside `ui-egui` and `engine`; `platform` services are function hooks injected by each app (`ui_egui::Services`); `adobe-assets` and `ml` are not started.
+**What exists today.** This layout is the target design. Built so far: `geom`, `cms`, `color`, `raster`, `psd`, `codecs`, `doc`, `ops`, `algo`, `paint`, `text`, `vector`, `compose`, `gpu`, `format`, `raw`, `io`, `plugins`, `engine`, `ui-egui`, `automation`, `script-js`, `testkit`, and the three apps. Not yet split out: `viewport` and `tools` live inside `ui-egui` and `engine`; `platform` services are function hooks injected by each app (`ui_egui::Services`); `adobe-assets` and `ml` are not started.
 
 **Crate granularity:** start with the crates above. Split `algo` into `-adjust`, `-filters`, `-select`, `-inpaint` and `-warp` once any module passes about 10k lines, or once compile times hurt. Its internal module boundaries should already follow those lines.
 
@@ -165,7 +166,7 @@ photocraft/
 
 ```text
  L7  apps/*                         (binaries: wire everything together)
- L6  ui-egui · automation · platform
+ L6  ui-egui · automation · script-js · platform
  L5  engine
  L4  tools · viewport · io · ml · plugins
  L3  compose · gpu · format
@@ -477,7 +478,7 @@ psd/src/
     paths are validated relative names; engine commands that still require ambient filesystem
     access fail closed at the automation boundary.
 - **Actions:** recorded `Vec<CommandInvocation>`, replayable in batch (File → Automate → Batch).
-- **Scripting (later):** embed a scripting language over the same registry. Options are Rhai, or Lua via mlua (C). JS via QuickJS is possible if we want Photoshop-script familiarity.
+- **Scripting:** `script-js` runs `.js` / `.jsx` against a session through a Boa engine. On the desktop each run has its own script host process (`photocraft-script-host`), which waits at each dialog for its answer and which the app stops at the run's time and memory limits; it starts with an empty environment, which isolates crashes and resources but is not a sandbox; every request the host sends is checked against `script-js/src/commands.rs`, each parameter included, in process and again by the app. On the desktop, File › Scripts › Browse… runs one (`ui-egui/src/scripts.rs` drives the run through the app's own command path, with its output window, Stop and dialogs; `apps/photocraft/src/scripts.rs` starts the host); the web build runs none. See `docs/scripting.md`.
 - **Plugins:** sandboxed WebAssembly filter plug-ins (`photocraft-plugins`, L4) run by `wasmi`, a pure-Rust interpreter, with fuel, memory, stack and wall-time limits and no host imports. They are driven by the `plugin.*` commands and listed under Filter › Plug-ins; the ABI is in [`plugins.md`](plugins.md). Native Photoshop `.8BF`/CEP/UXP hosting is out of scope (it needs unsafe FFI and can't run on the web). Panel plug-ins are later.
 
 ---

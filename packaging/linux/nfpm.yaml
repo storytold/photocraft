@@ -72,6 +72,10 @@ contents:
   - src: ${STAGE}/usr/bin/photocraft-cli
     dst: /usr/bin/photocraft-cli
     file_info: { mode: 0755 }
+  # The script host the app starts for each script run, from next to its own executable.
+  - src: ${STAGE}/usr/bin/photocraft-script-host
+    dst: /usr/bin/photocraft-script-host
+    file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree
