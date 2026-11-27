@@ -5,7 +5,7 @@
 //! craft-menu owns the layout, the clash rules, the key equivalents and the driver. This module
 //! supplies what is PhotoCraft's: the app name, the translated labels, the shortcuts bound outside
 //! the menus and the gate and modal rules ([`crate::menus::menu_gate`]). The menus are laid out again
-//! only when the model's bar or the keymap changed.
+//! when the model, keymap or keyboard focus changes.
 //!
 //! A menu click is a fired command ([`poll`] fires it with `FireSource::Menu`); the runtime's
 //! drain runs it like any other fired command, so the menu has no command path of its own.
@@ -30,7 +30,25 @@ pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
     // The system items give way to the command the keymap gives a key to, in a menu or not (tool keys, canvas keys).
     let keys = |chord: &craft::keymap::Chord| holder(ctx, chord);
     let options = LayoutOptions::new(APP_NAME).label(&label).keys(&keys);
-    mac_layout(items::model(app, ctx).source(), &options)
+    let mut layout = mac_layout(items::model(app, ctx).source(), &options);
+    if document_history_keys(app, ctx)
+        && let Some(edit) = layout.bar.menus.iter_mut().find(|menu| menu.role == craft::menu::MenuRole::Edit)
+    {
+        for node in &mut edit.children {
+            if let craft::menu::Node::Item(item) = node
+                && matches!(item.command.id.as_str(), "edit.undo" | "edit.redo")
+            {
+                // AppKit has already matched the menu accelerator. Deliver its command once,
+                // even if the main window never receives a corresponding key release.
+                item.layout_shortcut = true;
+            }
+        }
+    }
+    layout
+}
+
+fn document_history_keys(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    !app.dialog_open() && app.ui.text_edit.is_none() && !WindowHost::of(ctx).typing() && !egui::Popup::is_any_open(ctx)
 }
 
 /// Installs the macOS menu bar; `None` where there is none (every other platform).
@@ -47,7 +65,7 @@ pub fn install(_ctx: &egui::Context, _app: &mut PhotocraftApp) -> Option<NativeM
 }
 
 /// Before the frame: reads the menu's events and fires the clicks the gate allows into the runtime.
-/// Key equivalents reach egui as key presses inside craft-menu's driver.
+/// Document Undo and Redo arrive as menu commands. Other key equivalents use craft-menu's driver.
 pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(native) = app.services.native_menu.as_mut() else { return };
     native.poll(ctx);
@@ -57,15 +75,14 @@ pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// Once per frame after the pass: sets what may run from the menus and brings the menus up to date
-/// when what they show changed: the model's bar (its revision) or the keymap whose keys the layout
-/// gives way to.
+/// when the model, key bindings or ownership of Undo and Redo changes.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Taken out for the pass: the layout borrows the whole app.
     let Some(mut native) = app.services.native_menu.take() else { return };
     let (gate, rules) = crate::menus::menu_gate(app);
     native.set_gate(gate.text_editing(WindowHost::of(ctx).typing()));
     native.set_modal_rules(rules);
-    let shown = (items::model(app, ctx).bar.revision(), app.framework.keymap_inputs());
+    let shown = (items::model(app, ctx).bar.revision(), app.framework.keymap_inputs(), document_history_keys(app, ctx));
     for c in native.sync_with(&shown, || laid_out(app, ctx)) {
         log::info!("menu: {} is {} on macOS and {} in PhotoCraft; {}", c.shortcut.portable(), c.system, c.command.id, c.resolution);
     }

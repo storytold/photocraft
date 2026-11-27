@@ -60,6 +60,32 @@ fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, events: &Events, id: &str
     h.run_steps(3);
 }
 
+#[test]
+fn successive_native_undo_shortcuts_after_edits() {
+    let (mut h, synced, events) = harness(true);
+    craft::ui::testing::windows::set_os(&h.ctx, craft::host::target::Os::Mac);
+    let undo = craft::keymap::Chord::parse("Cmd+Z").unwrap();
+    for switch_tool in [false, false, true] {
+        if switch_tool {
+            h.key_press(egui::Key::M);
+            h.run_steps(3);
+            assert_eq!(h.state().ui.tool, crate::state::Tool::RectMarquee);
+        }
+        h.state_mut().run("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8})).unwrap();
+        h.run_steps(2);
+        assert!(h.state().session.active().unwrap().doc.selection.is_some());
+        let bars = synced.borrow();
+        let item = bars.last().unwrap().find(&CommandRef::new("edit.undo")).unwrap();
+        assert!(item.enabled);
+        assert_eq!(item.shortcut, Some(undo));
+        let event = Dispatch::default().chosen(&item.command, item.shortcut.as_ref(), item.layout_shortcut, true, undo.mods, item.alternate.as_ref());
+        events.borrow_mut().push(event);
+        drop(bars);
+        h.run_steps(3);
+        assert!(h.state().session.active().unwrap().doc.selection.is_none(), "Undo clears the selection with {:?}", h.state().ui.tool);
+    }
+}
+
 fn laid(app: &mut PhotocraftApp) -> Layout {
     let ctx = app.ctx().clone();
     laid_out(app, &ctx)
