@@ -3,6 +3,10 @@
 //! session's own undo steps (⌘Z / ⌘⇧Z step the session while it is open, not the document history). ↩ / Commit runs
 //! `edit.puppetWarp` with the pins.
 //!
+//! A right-click on the mesh opens the pin menu (#16734). On a pin it selects that pin, as a press does, and lists the
+//! pin's rows; away from the pins it offers Add Pin at the clicked point; off the mesh it opens nothing. Each row is a
+//! session edit like the bar's and the keys', and the control channel lists and picks the same rows (`"menu"`).
+//!
 //! The preview is the layer texture on the solver's deformed triangle mesh, drawn by `TransformPreview`. Every pin
 //! change solves from the rest mesh with the engine's iteration count, so the preview, the release and the commit
 //! show one shape whatever path the pointer took.
@@ -12,10 +16,12 @@ use std::sync::Arc;
 use craft::behavior::kurbo::{Point, Rect as DocRect};
 use craft::imaging::ui::transform_preview::{PreviewPixels, PreviewTextures};
 use craft::imaging::ui::warp::pin::{
-    Pin, PinDensity, PinEdit, PinMeshView, PinMode, PinSolver, PinWarp, PinWarpBar, PinWarpOptions, PinWarpSession, PinWarpSettings,
+    Pin, PinDensity, PinEdit, PinMeshView, PinMode, PinSolver, PinWarp, PinWarpBar, PinWarpOptions, PinWarpOutput, PinWarpSession, PinWarpSettings,
 };
 use craft::imaging::ui::{PreviewMap, TransformPreview};
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::overlay::{Anchor, Trigger};
+use craft::ui::contract::{Bind, Entry, Outcome as _, Show as _};
+use craft::ui::menu::Menu;
 use craft::ui::runtime::memory::{self, SaveKey};
 use photocraft_algo::puppet::{ITERATIONS, PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetSolver, PuppetWarp, build_mesh};
 use photocraft_doc::{DocId, Document, LayerId};
@@ -185,6 +191,23 @@ pub struct PuppetSession {
     textures: PreviewTextures,
     /// The text of the last refused edit, shown by the bar until the next edit.
     notice: Option<String>,
+    /// The open pin menu.
+    menu: Option<PinMenu>,
+}
+
+/// The pin menu a right-click opened.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PinMenu {
+    /// The canvas the menu belongs to: the pins' response id there.
+    canvas: egui::Id,
+    /// Where the menu opens, in screen points.
+    pos: egui::Pos2,
+    /// The document point right-clicked: where Add Pin puts its pin.
+    at: Point,
+    /// The pin right-clicked; `None` on the mesh away from the pins.
+    pin: Option<usize>,
+    /// That pin as it was when the menu opened: the menu closes when the pins change under it (a session undo).
+    was: Option<Pin>,
 }
 
 impl PuppetSession {
@@ -202,8 +225,46 @@ impl PuppetSession {
             "vertices": mesh.rest.len(),
             "triangles": mesh.triangles.len(),
             "selected": self.warp.selected().first(),
+            "menu": self.menu.map(|menu| menu_json(&self.menu_entries(menu.pin))),
         })
     }
+
+    /// The rows of the pin menu opened on `pin`, or on the mesh away from the pins with `None`. The ids are the
+    /// control channel's names for the rows.
+    fn menu_entries(&self, pin: Option<usize>) -> Vec<Entry<String>> {
+        let row = |id: &str, label: &str, enabled: bool| Entry::new(id.to_string(), label.to_string()).enabled(enabled);
+        let pins = self.warp.pins();
+        let mut rows = match pin.and_then(|i| pins.get(i)) {
+            Some(on) => vec![
+                row("deletePin", tl!("Delete Pin"), true),
+                row("setAutoRotation", tl!("Set Auto Rotation"), on.angle.is_some()),
+                row("resetDepth", tl!("Reset Depth"), true),
+                Entry::separator(),
+                row("bringForward", tl!("Bring Forward"), true),
+                row("sendBackward", tl!("Send Backward"), true),
+            ],
+            None => vec![row("addPin", tl!("Add Pin"), true)],
+        };
+        rows.push(Entry::separator());
+        rows.push(row("removeAllPins", tl!("Remove All Pins"), !pins.is_empty()));
+        rows.push(row("selectAllPins", tl!("Select All Pins"), pins.len() > 1));
+        let mesh = if self.warp.show_mesh() { tl!("Hide Mesh") } else { tl!("Show Mesh") };
+        rows.push(row("toggleMesh", mesh, true));
+        rows
+    }
+}
+
+/// The pin menu's rows as the control channel lists them: a separator, or an item with its id and whether it can be
+/// chosen.
+fn menu_json(rows: &[Entry<String>]) -> Value {
+    let row = |entry: &Entry<String>| {
+        if entry.is_separator() {
+            json!({"separator": true})
+        } else {
+            json!({"id": entry.value(), "label": entry.label().as_str(), "enabled": entry.is_enabled()})
+        }
+    };
+    Value::Array(rows.iter().map(row).collect())
 }
 
 /// Runs `f` on the open session and saves the settings when it changed them, so every path that changes one (the
@@ -228,6 +289,129 @@ fn apply_edit(app: &mut PhotocraftApp, edit: PinEdit) -> Result<(), String> {
         result
     })
     .unwrap_or_else(|| Err(tl!("Puppet Warp is not active").into()))
+}
+
+/// Whether the pin menu is open. The canvas pass opens it before the tool menus are asked for, so a right-click that
+/// opened it opens no tool menu or picker as well.
+pub(crate) fn menu_open(app: &PhotocraftApp) -> bool {
+    app.distort.puppet.as_ref().is_some_and(|s| s.menu.is_some())
+}
+
+/// Opening the pin menu on `pin` selects it, as a press on it does, unless it is already selected: a right-click on one
+/// of several selected pins keeps them all.
+fn select_for_menu(app: &mut PhotocraftApp, pin: Option<usize>) {
+    update(app, |s| {
+        if let Some(i) = pin
+            && !s.warp.selected().contains(&i)
+        {
+            let _ = s.warp.apply(PinEdit::Select(vec![i]), &mut s.solver);
+        }
+    });
+}
+
+/// Runs row `id` of the pin menu opened on `pin`, or at document point `at` on the mesh. A row the menu greys, or one
+/// it does not list, is refused. Delete Pin removes the selected pins, as Delete does; the pin rows change the pin the
+/// menu was opened on, as the bar changes the selected one; each pin change is one session step.
+fn run_menu_row(app: &mut PhotocraftApp, id: &str, at: Point, pin: Option<usize>) -> Result<(), String> {
+    let s = app.distort.puppet.as_ref().ok_or(tl!("Puppet Warp is not active"))?;
+    let rows = s.menu_entries(pin);
+    let row = rows.iter().find(|row| row.value().is_some_and(|v| v == id)).ok_or_else(|| format!("{id}: not in this pin menu"))?;
+    if !row.is_enabled() {
+        return Err(format!("{id}: not available here"));
+    }
+    let pins = s.warp.pins().to_vec();
+    let on_pin = |change: fn(&mut Pin), label: &str| {
+        let mut after = pins.clone();
+        change(pin.and_then(|i| after.get_mut(i))?);
+        (after != pins).then(|| PinEdit::replace(&pins, after, label))
+    };
+    let edit = match id {
+        "addPin" => {
+            let rest = s.solver.mesh().rest_of(at).ok_or("Add Pin: the point is off the mesh")?;
+            let mut grown = pins.clone();
+            grown.push(Pin::new(rest, at));
+            Some(PinEdit::replace(&pins, grown, "Add Pin"))
+        }
+        "deletePin" => {
+            let selected = s.warp.selected();
+            let rest: Vec<Pin> = pins.iter().enumerate().filter(|(i, _)| !selected.contains(i) && Some(*i) != pin).map(|(_, p)| *p).collect();
+            Some(PinEdit::replace(&pins, rest, "Delete Pin"))
+        }
+        "setAutoRotation" => on_pin(|p| p.angle = None, "Set Auto Rotation"),
+        "resetDepth" => on_pin(|p| p.depth = 0, "Reset Depth"),
+        "bringForward" => on_pin(|p| p.depth += 1, "Pin Depth"),
+        "sendBackward" => on_pin(|p| p.depth -= 1, "Pin Depth"),
+        "removeAllPins" => Some(PinEdit::replace(&pins, Vec::new(), "Remove All Pins")),
+        "selectAllPins" => Some(PinEdit::Select((0..pins.len()).collect())),
+        "toggleMesh" => Some(PinEdit::ShowMesh(!s.warp.show_mesh())),
+        _ => None,
+    };
+    edit.map_or(Ok(()), |edit| apply_edit(app, edit))
+}
+
+/// Control channel: `{"menu": {"pin": i}}` is the menu on pin `i`, `{"menu": {"at": [x, y]}}` the menu on the mesh at a
+/// document point; `"pick": id` runs a row. Opening selects the pin, as the right-click does. The reply is the session
+/// with the menu's rows as it opened.
+fn menu_control(app: &mut PhotocraftApp, menu: &Value) -> Result<Value, String> {
+    let s = app.distort.puppet.as_ref().ok_or(tl!("Puppet Warp is not active"))?;
+    let pin = menu.get("pin").and_then(Value::as_u64).map(|i| usize::try_from(i).unwrap_or(usize::MAX));
+    let at = match pin {
+        Some(i) => s.warp.pins().get(i).map(|p| p.at).ok_or("menu.pin: no such pin")?,
+        None => {
+            let xy = menu.get("at").and_then(Value::as_array).ok_or(r#"menu: {"pin": index} or {"at": [x, y]}"#)?;
+            let at = match xy.as_slice() {
+                [x, y] => Point::new(x.as_f64().ok_or("menu.at: numbers")?, y.as_f64().ok_or("menu.at: numbers")?),
+                _ => return Err("menu.at: [x, y]".into()),
+            };
+            s.solver.mesh().rest_of(at).ok_or("menu.at: off the mesh, where no pin menu opens")?;
+            at
+        }
+    };
+    let rows = menu_json(&s.menu_entries(pin));
+    select_for_menu(app, pin);
+    if let Some(id) = menu.get("pick").and_then(Value::as_str) {
+        run_menu_row(app, id, at, pin)?;
+    }
+    let mut out = app.distort.puppet.as_ref().map(PuppetSession::describe).ok_or(tl!("Puppet Warp is not active"))?;
+    out["menu"] = rows;
+    Ok(out)
+}
+
+/// Opens the pin menu on a right-click over the mesh, and shows the open menu on the canvas it belongs to. The pins
+/// report the pin and the document point under the pointer; a right-click off the mesh, or over another control,
+/// opens nothing.
+fn pin_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, output: &PinWarpOutput) {
+    let response = output.response();
+    let right = ui.input(|i| if i.pointer.secondary_clicked() { i.pointer.interact_pos() } else { None });
+    if let (Some(pos), Some(at)) = (right, output.pointer)
+        && let Some(s) = app.distort.puppet.as_ref()
+    {
+        let pin = output.hovered.filter(|&i| i < s.warp.pins().len());
+        let was = pin.and_then(|i| s.warp.pins().get(i).copied());
+        if pin.is_some() || s.solver.mesh().rest_of(at).is_some() {
+            select_for_menu(app, pin);
+            update(app, |s| s.menu = Some(PinMenu { canvas: response.id, pos, at, pin, was }));
+        }
+    }
+    let Some(s) = app.distort.puppet.as_ref() else { return };
+    let Some(menu) = s.menu.filter(|menu| menu.canvas == response.id) else { return };
+    if menu.pin.and_then(|i| s.warp.pins().get(i).copied()) != menu.was {
+        update(app, |s| s.menu = None);
+        return;
+    }
+    let rows = s.menu_entries(menu.pin);
+    let mut open = true;
+    let shown = Menu::new(tl!("Pin menu").to_string())
+        .opened_by(response, Trigger::Manual)
+        .anchor(Anchor::Point(menu.pos))
+        .open(Bind::bound(&mut open))
+        .pick(ui, &rows);
+    if let Some(id) = shown.picked {
+        update(app, |s| s.menu = None);
+        let _ = run_menu_row(app, &id, menu.at, menu.pin);
+    } else if !open || shown.closed.is_some() {
+        update(app, |s| s.menu = None);
+    }
 }
 
 /// Applies a pin edit from a test, as the canvas or the bar would.
@@ -285,6 +469,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
         solver,
         textures,
         notice: None,
+        menu: None,
     });
     Ok(())
 }
@@ -310,6 +495,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         return Ok(json!({"cancelled": true}));
     }
     let s = app.distort.puppet.as_ref().ok_or(tl!("Puppet Warp is not active"))?;
+    if let Some(menu) = ui.get("menu") {
+        return menu_control(app, menu);
+    }
     if flag("undo") {
         undo(app);
     } else if flag("redo") {
@@ -363,6 +551,8 @@ pub fn canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect) {
         commit(app);
     } else if output.discard {
         app.distort.puppet = None;
+    } else {
+        pin_menu(app, ui, &output);
     }
 }
 
@@ -396,3 +586,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod context_menu_tests;
