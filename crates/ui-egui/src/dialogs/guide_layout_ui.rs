@@ -1,410 +1,297 @@
-//! Photoshop-style guide layout dialog. Its preview is a pure guide overlay, never an edit.
+//! View › New Guide Layout…: the framework's hosted form over the document's guides. Its preview is a pure guide
+//! overlay, never an edit; OK runs `view.newGuideLayout`.
+//!
+//! The remembered layout (`app.ui.view.guide_layout`) keeps lengths as the pixels they applied, so a bare "5" typed
+//! in px still means 5 px after the ruler unit changes; percent stays percent, of whatever the next target is.
 
-use egui::{Color32, Stroke};
+use craft::behavior::Axis;
+use craft::theme::Rgba;
+use craft::ui::canvas::{Guide, GuideColor, GuideKey};
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::patterns::form_dialogs::{
+    GuideGroup, GuideLayoutDialog, GuideLayoutOptions, GuideLayoutResult, GuideLayoutValues, GuideLength, GuideRect, GuideTarget, GuideUnits, HostRequests,
+    HostedGuideLayoutDialog,
+};
+use craft::ui::runtime::env::UnitKind;
+use egui::Color32;
 use photocraft_doc::{Document, Guides};
+use photocraft_engine::prefs::Unit;
 use serde_json::{Map, Value, json};
 
-use crate::{PhotocraftApp, theme::Tokens, widgets};
+use crate::PhotocraftApp;
 
 const COMMAND: &str = "view.newGuideLayout";
-const MARK: &str = "__guideLayout";
+
+/// The most columns or rows a remembered layout may hold.
+const MAX_COUNT: u64 = 1000;
 
 /// A `"#rrggbb"` colour as drawn.
 fn rgb(hex: &str) -> Option<Color32> {
     photocraft_engine::prefs::parse_hex(hex).map(|[r, g, b]| Color32::from_rgb(r, g, b))
 }
 
-/// The Color list: New Guide's colours (`GUIDE_COLORS`) by their `"#rrggbb"`, then `current` as
-/// Custom when it's none of them.
-fn color_options(current: &str) -> Vec<(String, &'static str)> {
-    let mut colors: Vec<(String, &'static str)> = photocraft_engine::edit_cmds::GUIDE_COLORS
+fn ruler_unit(app: &PhotocraftApp) -> Unit {
+    app.session.prefs().units_and_rulers.rulers
+}
+
+/// What the guide dialogs measure in: the active document's size and resolution and the ruler unit. With no document
+/// it is a 1 px page at 72 ppi, so a dialog still opens.
+pub(crate) fn guide_units(app: &PhotocraftApp) -> GuideUnits {
+    let prefs = &app.session.prefs().units_and_rulers;
+    let (width, height, dpi) = app
+        .session
+        .active()
+        .map_or((1.0, 1.0, 72.0), |st| (f64::from(st.doc.size.width), f64::from(st.doc.size.height), f64::from(st.doc.resolution_dpi.max(1.0))));
+    GuideUnits::new(crate::prefs::unit_kind(ruler_unit(app)), width, height, dpi).points_per_inch(prefs.point_size.per_inch())
+}
+
+/// The guide colour preference as a framework colour (Cyan when it does not parse).
+pub(crate) fn preference_rgba(app: &PhotocraftApp) -> Rgba {
+    rgb(&app.session.prefs().guides_grid_and_slices.guide_color).map_or(GuideColor::Cyan.rgba(), |c| Rgba::rgb(c.r(), c.g(), c.b()))
+}
+
+/// The document's guides as the framework's, keyed by the canvas's guide key rule.
+pub(crate) fn document_guides(guides: &Guides) -> Vec<Guide> {
+    let mut out = Vec::new();
+    for (vertical, list) in [(false, &guides.horizontal), (true, &guides.vertical)] {
+        for (index, &position) in list.iter().enumerate() {
+            let mut guide = Guide::new(crate::guide_select::key(vertical, index), if vertical { Axis::Y } else { Axis::X }, position);
+            guide.color = guides.color(vertical, position).map(|[r, g, b]| Rgba::rgb(r, g, b));
+            out.push(guide);
+        }
+    }
+    out
+}
+
+/// The key after every existing guide's, for the first guide a layout makes.
+fn next_key(existing: &[Guide]) -> u64 {
+    existing.iter().map(|guide: &Guide| GuideKey::get(guide.key) + 1).max().unwrap_or(0)
+}
+
+/// `px` pixels as a length in the ruler unit, so a reopened dialog shows it in the unit now chosen.
+fn shown(px: f64, units: &GuideUnits, extent: f64) -> GuideLength {
+    units.from_pixels(px, units.ruler, extent).map_or(GuideLength::pixels(px), |value| GuideLength::new(value, units.ruler))
+}
+
+/// A remembered length: a number is pixels, "n%" is percent.
+fn length_of(value: &Value, units: &GuideUnits, extent: f64) -> Option<GuideLength> {
+    match value {
+        Value::Number(n) => n.as_f64().filter(|px| px.is_finite() && *px >= 0.0).map(|px| shown(px, units, extent)),
+        Value::String(s) => {
+            let text = s.trim();
+            match text.strip_suffix('%') {
+                Some(percent) => percent.trim().parse().ok().map(GuideLength::percent),
+                None => text.parse::<f64>().ok().filter(|px| px.is_finite() && *px >= 0.0).map(|px| shown(px, units, extent)),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A remembered length as the engine takes it: percent stays percent, anything else is the pixels it applied.
+fn length_json(length: GuideLength, units: &GuideUnits, extent: f64) -> Value {
+    if length.unit == UnitKind::Percent { json!(format!("{}%", length.value)) } else { units.to_pixels(length, extent).map_or(Value::Null, |px| json!(px)) }
+}
+
+fn read_group(group: &mut GuideGroup, m: &Map<String, Value>, [count, flag, size, gap]: [&str; 4], extent: f64, units: &GuideUnits) {
+    let number = m.get(count).and_then(Value::as_u64);
+    if let Some(n) = number {
+        if n > 0 {
+            group.number = n.min(MAX_COUNT) as u32;
+        }
+        group.enabled = n > 0;
+    }
+    if let Some(on) = m.get(flag).and_then(Value::as_bool) {
+        group.enabled = on;
+    }
+    if let Some(v) = m.get(size) {
+        group.size = length_of(v, units, extent).filter(|l| l.value > 0.0);
+    }
+    if let Some(length) = m.get(gap).and_then(|v| length_of(v, units, extent)) {
+        group.gutter = length;
+    }
+}
+
+/// The remembered layout as options; whatever it lacks keeps the factory layout's value.
+fn options_of(remembered: &Value, units: &GuideUnits) -> GuideLayoutOptions {
+    let mut options = GuideLayoutOptions::default();
+    let Some(m) = remembered.as_object() else { return options };
+    let (w, h) = (units.width_px, units.height_px);
+    read_group(&mut options.columns, m, ["columns", "columnsEnabled", "width", "gutter"], w, units);
+    read_group(&mut options.rows, m, ["rows", "rowsEnabled", "height", "rowGutter"], h, units);
+    // Top, left, bottom, right: left and right measure along x.
+    let extents = [h, w, h, w];
+    match m.get("margin") {
+        Some(Value::Array(a)) if a.len() == 4 => {
+            for ((slot, v), extent) in options.margin.iter_mut().zip(a).zip(extents) {
+                if let Some(length) = length_of(v, units, extent) {
+                    *slot = length;
+                }
+            }
+        }
+        Some(v) => {
+            for (slot, extent) in options.margin.iter_mut().zip(extents) {
+                if let Some(length) = length_of(v, units, extent) {
+                    *slot = length;
+                }
+            }
+        }
+        None => {}
+    }
+    if let Some(on) = m.get("marginEnabled").and_then(Value::as_bool) {
+        options.margin_enabled = on;
+    }
+    if let Some(on) = m.get("centerColumns").and_then(Value::as_bool) {
+        options.center_columns = on;
+    }
+    if let Some(on) = m.get("clearExisting").and_then(Value::as_bool) {
+        options.clear_existing = on;
+    }
+    if m.get("target").and_then(Value::as_str) == Some("selectedArtboards") {
+        options.target = GuideTarget::SelectedArtboards;
+    }
+    options
+}
+
+/// The layout as the app remembers it: lengths as applied pixels, percent kept, the switches beside their counts.
+fn remembered_json(o: &GuideLayoutOptions, units: &GuideUnits) -> Value {
+    let (w, h) = (units.width_px, units.height_px);
+    let size = |length: Option<GuideLength>, extent: f64| length.map_or(Value::Null, |l| length_json(l, units, extent));
+    json!({
+        "columns": o.columns.number,
+        "columnsEnabled": o.columns.enabled,
+        "rows": o.rows.number,
+        "rowsEnabled": o.rows.enabled,
+        "width": size(o.columns.size, w),
+        "height": size(o.rows.size, h),
+        "gutter": length_json(o.columns.gutter, units, w),
+        "rowGutter": length_json(o.rows.gutter, units, h),
+        "margin": [
+            length_json(o.margin[0], units, h),
+            length_json(o.margin[1], units, w),
+            length_json(o.margin[2], units, h),
+            length_json(o.margin[3], units, w),
+        ],
+        "marginEnabled": o.margin_enabled,
+        "centerColumns": o.center_columns,
+        "clearExisting": o.clear_existing,
+        "target": if o.target == GuideTarget::SelectedArtboards { "selectedArtboards" } else { "document" },
+    })
+}
+
+/// The parameters of `view.newGuideLayout`: a disabled axis or margin contributes nothing.
+fn params(o: &GuideLayoutOptions, units: &GuideUnits) -> Value {
+    let mut p = remembered_json(o, units);
+    if let Some(m) = p.as_object_mut() {
+        for (enabled, count, size, gap) in [(o.columns.enabled, "columns", "width", "gutter"), (o.rows.enabled, "rows", "height", "rowGutter")] {
+            if !enabled {
+                m.insert(count.into(), json!(0));
+                m.insert(size.into(), Value::Null);
+                m.insert(gap.into(), json!(0));
+            }
+        }
+        if !o.margin_enabled {
+            m.insert("margin".into(), json!(0));
+        }
+        for flag in ["columnsEnabled", "rowsEnabled", "marginEnabled"] {
+            m.remove(flag);
+        }
+    }
+    p
+}
+
+/// Opens New Guide Layout on the active document; `None` without one.
+pub fn open(app: &mut PhotocraftApp) -> Option<DialogId> {
+    let st = app.session.active()?;
+    let doc_id = st.doc.id;
+    let existing = document_guides(&st.doc.guides);
+    let first_key = next_key(&existing);
+    let artboards: Vec<GuideRect> = photocraft_engine::guide_layout::selected_artboards(&app.session)
         .iter()
-        .map(|(name, [r, g, b])| (format!("#{r:02x}{g:02x}{b:02x}"), crate::new_guide_ui::color_label(name)))
+        .map(|r| GuideRect::new(f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)))
         .collect();
-    if !colors.iter().any(|(v, _)| v == current) {
-        colors.push((current.to_string(), "Custom"));
+    let units = guide_units(app);
+    let document = GuideRect::new(0.0, 0.0, units.width_px, units.height_px);
+    let mut options = options_of(&app.ui.view.guide_layout, &units);
+    // A remembered Selected Artboards target needs a selected artboard.
+    if options.target == GuideTarget::SelectedArtboards && artboards.is_empty() {
+        options.target = GuideTarget::Document;
     }
-    colors
-}
-
-pub fn owns(f: &Map<String, Value>) -> bool {
-    f.contains_key(MARK)
-}
-
-/// Alt+Cancel (Reset): factory New Guide Layout values, not the last-used remembered layout.
-pub fn reset(app: &PhotocraftApp, f: &mut Map<String, Value>) {
-    if !owns(f) {
-        return;
-    }
-    let Value::Object(defaults) = crate::view_cmds::default_guide_layout() else { return };
-    // Drop layout params and interactive toggles; keep dialog chrome (`__command`, …).
-    f.retain(|k, _| {
-        k.starts_with("__")
-            && !matches!(
-                k.as_str(),
-                "__preset" | "__columnsEnabled" | "__rowsEnabled" | "__marginEnabled" | "__previewGuides" | "__previewParams" | "__previewSource"
-            )
+    let color = GuideColor::from_rgba(preference_rgba(app));
+    let dialog = HostedGuideLayoutDialog::new(GuideLayoutValues::new(options, color), move |bind| {
+        GuideLayoutDialog::new(units, document, bind).artboards(artboards.clone()).existing(existing.clone()).first_key(first_key)
     });
-    f.extend(defaults);
-    f.insert("color".into(), json!(app.session.prefs().guides_grid_and_slices.guide_color));
-    f.insert("target".into(), json!("document"));
-    f.insert("__preset".into(), json!("custom"));
-    f.insert("width".into(), Value::Null);
-    f.insert("height".into(), Value::Null);
-    let margin = f.get("margin").cloned().unwrap_or(json!(0));
-    if !margin.is_array() {
-        f.insert("margin".into(), json!([margin.clone(), margin.clone(), margin.clone(), margin]));
-    }
-    f.insert("__preview".into(), json!(true));
+    let id = app.framework.dialogs.open(dialog);
+    app.guide_layout_doc = Some((id, doc_id));
+    Some(id)
 }
 
-fn on(f: &Map<String, Value>, key: &str, fallback: bool) -> bool {
-    f.get(key).and_then(Value::as_bool).unwrap_or(fallback)
-}
-fn positive(f: &Map<String, Value>, key: &str) -> bool {
-    f.get(key).and_then(Value::as_f64).is_some_and(|n| n > 0.0)
+fn layout_requests(app: &mut PhotocraftApp, id: DialogId) -> Option<&mut HostRequests> {
+    app.framework.dialogs.get_mut_by_id::<HostedGuideLayoutDialog>(id).map(HostedGuideLayoutDialog::requests)
 }
 
-pub fn open(app: &mut PhotocraftApp) -> u64 {
-    let mut f = app.ui.view.guide_layout.as_object().cloned().unwrap_or_default();
-    f.insert(MARK.into(), json!(true));
-    f.insert("__command".into(), json!(COMMAND));
-    f.insert("__label".into(), json!("New Guide Layout…"));
-    f.insert("__document".into(), app.session.active().map(|s| json!(s.doc.id)).unwrap_or(Value::Null));
-    f.insert("__preview".into(), json!(true));
-    f.insert("color".into(), json!(app.session.prefs().guides_grid_and_slices.guide_color));
-    f.entry("target").or_insert_with(|| json!("document"));
-    if f.get("target").and_then(Value::as_str) == Some("selectedArtboards") && photocraft_engine::guide_layout::selected_artboards(&app.session).is_empty() {
-        f.insert("target".into(), json!("document"));
+/// Opens the colour picker for a hosted dialog's Custom… request and hands the picked colour back with the request's
+/// key. `requests` finds the dialog's request queue.
+pub(crate) fn pump_colors(app: &mut PhotocraftApp, id: DialogId, requests: for<'a> fn(&'a mut PhotocraftApp, DialogId) -> Option<&'a mut HostRequests>) {
+    if let Some(request) = requests(app, id).and_then(HostRequests::take_color) {
+        crate::color_picker_ui::open_for_request(app, id, request);
     }
-    f.entry("__preset").or_insert_with(|| json!("custom"));
-    f.entry("width").or_insert(Value::Null);
-    f.entry("height").or_insert(Value::Null);
-    let margin = f.get("margin").cloned().unwrap_or(json!(0));
-    if !margin.is_array() {
-        f.insert("margin".into(), json!([margin.clone(), margin.clone(), margin.clone(), margin]));
+
+    if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
+        && let Some(queue) = requests(app, id)
+    {
+        queue.answer_color(key, color);
     }
-    for key in ["__previewGuides", "__previewParams", "__previewSource"] {
-        f.remove(key);
-    }
-    app.ui.open_dialog(crate::state::DialogKind::Command, f)
 }
 
-/// Preserve legacy command parameter names for automation and remembered defaults.
-pub fn params(f: &Map<String, Value>) -> Value {
-    let mut p: Map<String, Value> = ["columns", "rows", "width", "height", "gutter", "rowGutter", "margin", "centerColumns", "clearExisting", "target"]
-        .into_iter()
-        .filter_map(|k| f.get(k).cloned().map(|v| (k.to_string(), v)))
-        .collect();
-    for (toggle, key) in [("__columnsEnabled", "columns"), ("__rowsEnabled", "rows")] {
-        if !on(f, toggle, positive(f, key)) {
-            p.insert(key.into(), json!(0));
-        }
+/// The dialog's colour requests and its answer, once per pass.
+pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    let Some((id, doc)) = app.guide_layout_doc else { return };
+    pump_colors(app, id, layout_requests);
+    let Some(result) = app.framework.dialogs.take_by_id::<HostedGuideLayoutDialog>(id) else { return };
+    app.guide_layout_doc = None;
+    if let DialogResult::Ok(layout) = result
+        && let Err(error) = apply(app, doc, &layout)
+    {
+        app.ui.status = error;
     }
-    if !on(f, "__marginEnabled", true) {
-        p.insert("margin".into(), json!(0));
-    }
-    for key in ["width", "height"] {
-        if let Some(Value::String(s)) = p.get(key) {
-            let value = if s.trim().is_empty() {
-                Value::Null
-            } else {
-                widgets::parse_num(s).and_then(serde_json::Number::from_f64).map(Value::Number).unwrap_or_else(|| json!(s))
-            };
-            p.insert(key.into(), value);
-        }
-    }
-    // A disabled axis must not be rejected for a stale width or gap typed before disabling it.
-    for (key, size, gap) in [("columns", "width", "gutter"), ("rows", "height", "rowGutter")] {
-        if p.get(key).and_then(Value::as_u64) == Some(0) {
-            p.insert(size.into(), Value::Null);
-            p.insert(gap.into(), json!(0));
-        }
-    }
-    Value::Object(p)
 }
 
-fn source(app: &PhotocraftApp) -> Value {
-    app.session.active().map(|st| json!([st.doc.id, st.revision, st.active_layer, st.selected_layers])).unwrap_or(Value::Null)
-}
-
-fn calculate(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Guides, String> {
-    let st = app.session.active().ok_or("no document")?;
-    if f.get("__document") != Some(&json!(st.doc.id)) {
+/// OK: the layout on the document the dialog opened on, the guides revealed, the colour preference and the layout
+/// remembered.
+fn apply(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, result: &GuideLayoutResult) -> Result<(), String> {
+    if app.session.active().map(|st| st.doc.id) != Some(doc) {
         return Err("the guide layout belongs to another document".into());
     }
-    let params = params(f);
-    // Painting an unchanged dialog must not repeat the duplicate scans every frame.
-    if f.get("__previewParams") == Some(&params)
-        && f.get("__previewSource") == Some(&source(app))
-        && let Some(guides) = f.get("__previewGuides").and_then(|v| serde_json::from_value(v.clone()).ok())
-    {
-        return Ok(guides);
-    }
-    photocraft_engine::guide_layout::calculate(&app.session, &params).map(|l| l.guides).map_err(|e| e.to_string())
-}
-
-pub fn validate(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<(), String> {
-    let color = f.get("color").and_then(Value::as_str).unwrap_or("#4affff");
-    rgb(color).ok_or("invalid guide color")?;
-    calculate(app, f).map(|_| ())
-}
-
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    validate(app, f)?;
-    let color = f.get("color").and_then(Value::as_str).unwrap_or("#4affff");
-    // Colour is the existing global guide display preference, not document data.
-    let color = rgb(color).ok_or("invalid guide color")?;
-    let hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
-    let result = app.run(COMMAND, params(f))?;
-    // The preview is visible even when guides were hidden. Keep a committed layout visible too.
+    let units = guide_units(app);
+    app.run(COMMAND, params(&result.options, &units))?;
+    // The preview shows even when guides were hidden. Keep a committed layout visible too.
     app.ui.view.extras = true;
     app.ui.view.show.canvas_guides = true;
     app.ui.extras.guides = true;
+    // Colour is the existing global guide display preference, not document data.
+    let [r, g, b, _] = result.color.0;
+    let hex = format!("#{r:02x}{g:02x}{b:02x}");
     app.session.prefs.edit(|prefs| prefs.guides_grid_and_slices.guide_color = hex);
-    let mut remembered = f.clone();
-    for key in [MARK, "__command", "__label", "__document", "__previewGuides", "__previewParams", "__previewSource"] {
-        remembered.remove(key);
-    }
-    app.ui.view.guide_layout = Value::Object(remembered);
-    Ok(result)
+    app.ui.view.guide_layout = remembered_json(&result.options, &units);
+    Ok(())
 }
 
-/// Full replacement guide set for the dialog's own document. Cancel/removal drops it immediately.
+/// Full replacement guide set for the dialog's own document. Cancel and removal drop it at once.
 pub fn preview(app: &PhotocraftApp, doc: &Document) -> Option<(Guides, Color32)> {
-    let dialog = app.ui.dialogs.iter().rev().find(|d| owns(&d.fields))?;
-    let f = &dialog.fields;
-    if !on(f, "__preview", true) || f.get("__document") != Some(&json!(doc.id)) {
+    let (id, opened_on) = app.guide_layout_doc?;
+    if opened_on != doc.id {
         return None;
     }
-    let guides = calculate(app, f).ok().or_else(|| f.get("__previewGuides").and_then(|v| serde_json::from_value(v.clone()).ok()))?;
-    let color = f.get("color").and_then(Value::as_str).and_then(rgb).unwrap_or(Color32::from_rgb(74, 255, 255));
-    Some((guides, color))
-}
-
-fn check(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, fallback: bool) -> bool {
-    let mut value = on(f, key, fallback);
-    if widgets::checkbox(ui, &mut value, label).changed() {
-        f.insert(key.into(), json!(value));
+    let dialog = app.framework.dialogs.get_by_id::<HostedGuideLayoutDialog>(id)?;
+    // The colour is the dialog's own, drawn for the whole set; OK commits guides without colours of their own.
+    let mut guides = Guides::default();
+    for line in dialog.preview()? {
+        let vertical = line.along == Axis::Y;
+        if vertical { &mut guides.vertical } else { &mut guides.horizontal }.push(line.position);
     }
-    value
-}
-
-fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, name: &str, count: bool) {
-    let mut value = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-    if widgets::value_field(ui, &mut value, (if count { 1.0 } else { 0.0 })..=if count { 1000.0 } else { 300_000.0 }, if count { "" } else { "px" }, 68.0)
-        .accessible_name(tl!(name))
-        .changed()
-        // A disabled field still clamps its value into range (a zero count to 1); writing that
-        // back would switch the axis on through its `positive` fallback (#5625).
-        && ui.is_enabled()
-    {
-        f.insert(key.into(), if count { json!(value.round() as u64) } else { json!(value) });
-    }
-}
-
-fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id) {
-    let mut value = match f.get(key) {
-        Some(Value::String(s)) => s.clone(),
-        Some(v) if v.is_number() => v.to_string(),
-        _ => String::new(),
-    };
-    let t = Tokens::get(ui.ctx());
-    let response = ui
-        .add(egui::TextEdit::singleline(&mut value).id_salt(key).desired_width(60.0).font(crate::theme::mono(12.0)).background_color(t.field))
-        .labelled_by(label);
-    if ui.is_enabled() {
-        crate::field_tab::register(ui.ctx(), response.id);
-    }
-    if response.gained_focus() {
-        crate::field_tab::select_all(ui.ctx(), response.id, &value);
-    }
-    if response.changed() {
-        f.insert(key.into(), json!(value));
-    }
-    response.on_hover_text(tl!("Leave empty for automatic size"));
-}
-
-fn group<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let t = Tokens::get(ui.ctx());
-    egui::Frame::new().stroke(Stroke::new(1.0, t.field_border)).inner_margin(8).show(ui, |ui| ui.vertical(content).inner).inner
-}
-
-fn axis(ui: &mut egui::Ui, f: &mut Map<String, Value>, rows: bool) {
-    let (toggle, count, size, gap, title, size_label) = if rows {
-        ("__rowsEnabled", "rows", "height", "rowGutter", tl!("Rows"), tl!("Height"))
-    } else {
-        ("__columnsEnabled", "columns", "width", "gutter", tl!("Columns"), tl!("Width"))
-    };
-    group(ui, |ui| {
-        let enabled = check(ui, f, toggle, title, positive(f, count));
-        if enabled && f.get(count).and_then(Value::as_f64) == Some(0.0) {
-            f.insert(count.into(), json!(1));
-        }
-        ui.add_space(6.0);
-        ui.add_enabled_ui(enabled, |ui| {
-            egui::Grid::new(count).spacing([8.0, 6.0]).show(ui, |ui| {
-                ui.label(tl!("Number"));
-                number(ui, f, count, "Number", true);
-                ui.end_row();
-                let size_label_resp = ui.label(size_label);
-                optional(ui, f, size, size_label_resp.id);
-                ui.end_row();
-                ui.label(tl!("Spacing"));
-                number(ui, f, gap, "Spacing", false);
-                ui.end_row();
-            });
-        });
-    });
-}
-
-fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let before: Map<String, Value> = f.iter().filter(|(key, _)| !key.starts_with("__preview")).map(|(k, v)| (k.clone(), v.clone())).collect();
-    egui::Grid::new("guide-header").spacing([8.0, 6.0]).show(ui, |ui| {
-        ui.label(tl!("Preset:"));
-        let mut preset = f.get("__preset").and_then(Value::as_str).unwrap_or("custom").to_string();
-        if widgets::dropdown(
-            ui,
-            "guide-preset",
-            tl!("Preset:"),
-            &mut preset,
-            &[("custom".into(), "Custom"), ("five".into(), "5 Columns, 3 Rows"), ("eight".into(), "8 Columns"), ("twelve".into(), "12 Columns")],
-            222.0,
-        ) {
-            f.insert("__preset".into(), json!(preset));
-            match preset.as_str() {
-                "five" | "eight" | "twelve" => {
-                    let (cols, rows, gap) = match preset.as_str() {
-                        "five" => (5, 3, 0),
-                        "eight" => (8, 0, 20),
-                        _ => (12, 0, 24),
-                    };
-                    for (k, v) in [
-                        ("columns", json!(cols)),
-                        ("rows", json!(rows)),
-                        ("gutter", json!(gap)),
-                        ("rowGutter", json!(0)),
-                        ("width", Value::Null),
-                        ("height", Value::Null),
-                        ("margin", json!([0, 0, 0, 0])),
-                        ("__columnsEnabled", json!(true)),
-                        ("__rowsEnabled", json!(rows > 0)),
-                        ("__marginEnabled", json!(true)),
-                        ("centerColumns", json!(false)),
-                    ] {
-                        f.insert(k.into(), v);
-                    }
-                }
-                _ => {}
-            }
-        }
-        ui.end_row();
-        ui.label(tl!("Target:"));
-        let mut target = f.get("target").and_then(Value::as_str).unwrap_or("document").to_string();
-        let mut options = vec![("document".to_string(), "Document")];
-        if !photocraft_engine::guide_layout::selected_artboards(&app.session).is_empty() {
-            options.push(("selectedArtboards".into(), "Selected Artboards"));
-        }
-        if widgets::dropdown(ui, "guide-target", tl!("Target"), &mut target, &options, 222.0) {
-            f.insert("target".into(), json!(target));
-        }
-        ui.end_row();
-    });
-    ui.add_space(10.0);
-    group(ui, |ui| {
-        ui.label(tl!("Color"));
-        ui.horizontal(|ui| {
-            ui.label(tl!("Color:"));
-            let mut color = f.get("color").and_then(Value::as_str).unwrap_or("#4affff").to_string();
-            let colors = color_options(&color);
-            if widgets::dropdown(ui, "guide-color", tl!("Color"), &mut color, &colors, 174.0) {
-                f.insert("color".into(), json!(color));
-            }
-            let shown = rgb(&color).unwrap_or(Tokens::get(ui.ctx()).accent);
-            if widgets::color_swatch_button(ui, shown, tl!("Guide color")).clicked() {
-                crate::color_picker_ui::request(f, tl!("Guide color"));
-            }
-        });
-    });
-    ui.add_space(10.0);
-    ui.horizontal_top(|ui| {
-        axis(ui, f, false);
-        ui.add_space(4.0);
-        axis(ui, f, true);
-    });
-    ui.add_space(10.0);
-    group(ui, |ui| {
-        let enabled = check(ui, f, "__marginEnabled", tl!("Margin"), true);
-        let mut margins = f.get("margin").and_then(Value::as_array).cloned().unwrap_or_else(|| vec![json!(0); 4]);
-        ui.add_space(5.0);
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.horizontal(|ui| {
-                for (value, label) in margins.iter_mut().zip([tl!("Top:"), tl!("Left:"), tl!("Bottom:"), tl!("Right:")]) {
-                    ui.vertical(|ui| {
-                        ui.label(label);
-                        let mut n = value.as_f64().unwrap_or(0.0) as f32;
-                        if widgets::value_field(ui, &mut n, 0.0..=300_000.0, "px", 64.0).accessible_name(label).changed() {
-                            *value = json!(n);
-                        }
-                    });
-                }
-            });
-        });
-        f.insert("margin".into(), Value::Array(margins));
-    });
-    ui.add_space(8.0);
-    check(ui, f, "centerColumns", tl!("Center Columns"), false);
-    check(ui, f, "clearExisting", tl!("Clear Existing Guides"), false);
-    // A typed edit makes a named preset custom; changing target/colour/preview does not.
-    if ["columns", "rows", "width", "height", "gutter", "rowGutter", "margin", "centerColumns", "__columnsEnabled", "__rowsEnabled", "__marginEnabled"]
-        .iter()
-        .any(|k| before.get(*k) != f.get(*k))
-        && before.get("__preset") == f.get("__preset")
-    {
-        f.insert("__preset".into(), json!("custom"));
-    }
-}
-
-/// Own the action rail as well as the body, so OK/Cancel/Preview follow Photoshop's arrangement.
-pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, interactive: bool) -> Option<bool> {
-    let before = (params(f), on(f, "__preview", true), f.get("color").cloned());
-    let mut outcome = None;
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            main_fields(app, ui, f);
-        });
-        ui.add_space(12.0);
-        ui.vertical(|ui| {
-            let valid = validate(app, f).is_ok();
-            if ui.add_enabled_ui(valid, |ui| widgets::primary_button(ui, tl!("OK"), 96.0)).inner.clicked() {
-                outcome = Some(true);
-            }
-            ui.add_space(4.0);
-            if widgets::secondary_button(ui, tl!("Cancel"), 96.0).clicked() {
-                outcome = Some(false);
-            }
-            ui.add_space(6.0);
-            check(ui, f, "__preview", tl!("Preview"), true);
-        });
-    });
-    match calculate(app, f) {
-        Ok(guides) => {
-            f.insert("__previewGuides".into(), json!(guides));
-            f.insert("__previewParams".into(), params(f));
-            f.insert("__previewSource".into(), source(app));
-        }
-        Err(error) => {
-            ui.colored_label(Tokens::get(ui.ctx()).text_dim, tl!("Invalid guide layout")).on_hover_text(error);
-        }
-    }
-    if outcome.is_none() && interactive && validate(app, f).is_ok() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        outcome = Some(true);
-    }
-    // The canvas paints before the dialog. Schedule the frame that displays this draft edit.
-    if before != (params(f), on(f, "__preview", true), f.get("color").cloned()) {
-        ui.ctx().request_repaint();
-    }
-    outcome
+    let [r, g, b, _] = dialog.values().color.rgba().0;
+    Some((guides, Color32::from_rgb(r, g, b)))
 }
 
 #[cfg(test)]

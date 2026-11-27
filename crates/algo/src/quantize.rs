@@ -89,9 +89,11 @@ pub fn web_palette() -> Vec<Rgb8> {
     v
 }
 
-/// Classic Mac OS system palette: the web cube plus 10-step red, green, blue and gray ramps.
+/// Classic Mac OS system palette: the web cube plus 10-step red, green, blue and gray ramps. The
+/// table runs from white down through the cube (FFFFFF, FFFFCC, FFFF99, …), then the four ramps,
+/// and ends with black (#14344).
 pub fn mac_palette() -> Vec<Rgb8> {
-    let mut v = web_palette();
+    let mut v: Vec<Rgb8> = web_palette().into_iter().skip(1).rev().collect();
     // Ramps use the values between cube steps (17-unit spacing, skipping multiples of 51).
     let steps: Vec<u8> = (1..=15u8).map(|k| k * 17).filter(|x| x % 51 != 0).collect();
     for &s in steps.iter().rev() {
@@ -106,11 +108,13 @@ pub fn mac_palette() -> Vec<Rgb8> {
     for &s in steps.iter().rev() {
         v.push([s, s, s]);
     }
+    v.push([0, 0, 0]);
     v.truncate(256);
     v
 }
 
-/// Windows default palette: the 20 static system colours plus the web cube and a gray ramp.
+/// Windows default palette: the 20 static system colours plus the web cube and a gray ramp. The
+/// table starts with black and the static colours and ends with white (#14344).
 pub fn windows_palette() -> Vec<Rgb8> {
     let mut v: Vec<Rgb8> = vec![
         [0, 0, 0],
@@ -132,20 +136,21 @@ pub fn windows_palette() -> Vec<Rgb8> {
         [0, 0, 255],
         [255, 0, 255],
         [0, 255, 255],
-        [255, 255, 255],
     ];
+    const WHITE: Rgb8 = [255, 255, 255];
     for c in web_palette() {
-        if !v.contains(&c) {
+        if c != WHITE && !v.contains(&c) {
             v.push(c);
         }
     }
     let mut g = 8u8;
-    while v.len() < 256 {
+    while v.len() < 255 {
         if !v.contains(&[g, g, g]) {
             v.push([g, g, g]);
         }
         g = g.wrapping_add(12);
     }
+    v.push(WHITE);
     v
 }
 
@@ -403,6 +408,11 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
         PaletteKind::Exact => {
             if hist.len() > 256 {
                 return Err(format!("the image has {} colours; Exact needs 256 or fewer", hist.len()));
+            }
+            // Forced entries absent from the image still consume palette slots.
+            let required = hist.len() + pal.iter().filter(|color| !hist.iter().any(|(existing, _)| existing == *color)).count();
+            if required > 256 {
+                return Err(format!("the image and forced colours need {required} entries; Exact needs 256 or fewer"));
             }
             hist.iter().map(|h| h.0).collect()
         }
@@ -805,27 +815,45 @@ fn pass_down(errs: &[f32], below: &mut [f32]) {
 /// spaced levels `(k + 0.5) / n`, whatever the pattern's own contrast, as Photoshop's does
 /// (measured: a 2x2 pattern of 32/96/160/224, a 3x1 of 50/128/200 and a 7x1 ramp all give
 /// exactly those levels).
-pub fn custom_pattern_thresholds(lightness: &[f32]) -> Vec<f32> {
+/// Reject oversized workspace or allocation failure rather than aborting the process.
+pub fn custom_pattern_thresholds(lightness: &[f32]) -> Result<Vec<f32>, photocraft_raster::AllocationError> {
     let n = lightness.len();
+    let bytes = custom_pattern_working_bytes(n)?;
     let key = |i: usize| lightness.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|a, b| key(*a).total_cmp(&key(*b)));
-    let mut out = vec![0.5; n];
+    let allocation = || photocraft_raster::AllocationError::NotEnoughMemory { bytes };
+    let mut order = Vec::new();
+    order.try_reserve_exact(n).map_err(|_| allocation())?;
+    order.extend((0..n).map(|i| i as u32));
+    // Ties receive the same mean rank, so stability is unnecessary. This sort
+    // uses no heap scratch; fixed-width indices also bound web/desktop equally.
+    order.sort_unstable_by(|a, b| key(*a as usize).total_cmp(&key(*b as usize)));
+    let mut out = Vec::new();
+    out.try_reserve_exact(n).map_err(|_| allocation())?;
+    out.resize(n, 0.5);
     let mut start = 0;
     while start < n {
-        let v = order.get(start).map(|i| key(*i));
-        let end = (start..n).find(|&j| order.get(j).map(|i| key(*i)) != v).unwrap_or(n);
+        let v = order.get(start).map(|i| key(*i as usize));
+        let end = (start..n).find(|&j| order.get(j).map(|i| key(*i as usize)) != v).unwrap_or(n);
         // Ranks start..end share their mean.
         let rank = (start + end - 1) as f32 / 2.0;
         let t = 1.0 - (rank + 0.5) / n as f32;
         for i in order.get(start..end).unwrap_or_default() {
-            if let Some(o) = out.get_mut(*i) {
+            if let Some(o) = out.get_mut(*i as usize) {
                 *o = t;
             }
         }
         start = end;
     }
-    out
+    Ok(out)
+}
+
+/// Admit input lightness, fixed-width order and output thresholds before reading any pattern pixels.
+pub fn custom_pattern_working_bytes(count: usize) -> Result<usize, photocraft_raster::AllocationError> {
+    let bytes = count.checked_mul(12).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+    if bytes > 256 << 20 {
+        return Err(photocraft_raster::AllocationError::SizeOverflow);
+    }
+    Ok(bytes)
 }
 
 /// Bitmap's Custom Pattern over a whole image (gray 0..=1, row-major `w` wide), see

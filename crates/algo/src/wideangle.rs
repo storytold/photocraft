@@ -20,71 +20,15 @@
 
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
-use serde::{Deserialize, Serialize};
 
 use crate::photo_util::{BandChol, Csr, par_rows, pcg, solve_dense};
 use crate::transform::Interp;
 
-/// Lens projection of the source image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum WideModel {
-    #[default]
-    Auto,
-    Fisheye,
-    Perspective,
-    FullSpherical,
-}
-
-impl WideModel {
-    pub fn parse(s: &str) -> Option<WideModel> {
-        Some(match s {
-            "auto" => WideModel::Auto,
-            "fisheye" => WideModel::Fisheye,
-            "perspective" => WideModel::Perspective,
-            "fullSpherical" | "spherical" => WideModel::FullSpherical,
-            _ => return None,
-        })
-    }
-}
-
-/// Constraint orientation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum Orientation {
-    #[default]
-    Free,
-    Horizontal,
-    Vertical,
-}
-
-/// A constraint: the end points of a scene line (image px).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Constraint {
-    pub a: [f64; 2],
-    pub b: [f64; 2],
-    #[serde(default)]
-    pub orientation: Orientation,
-}
-
-/// Adaptive Wide Angle settings.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct WideAngle {
-    pub model: WideModel,
-    /// Focal length in mm (35 mm frame after the crop factor).
-    pub focal_length: f64,
-    pub crop_factor: f64,
-    /// Output scale in percent.
-    pub scale: f64,
-    pub constraints: Vec<Constraint>,
-}
-
-impl Default for WideAngle {
-    fn default() -> Self {
-        WideAngle { model: WideModel::Auto, focal_length: 0.0, crop_factor: 1.0, scale: 100.0, constraints: Vec::new() }
-    }
-}
+// The settings, lens model, constraint and orientation are the framework workspace's own types:
+// one definition serves the solver, the command's JSON and the dialog.
+pub use craft::imaging::wide_angle::{
+    ConstraintOrientation as Orientation, WideAngleConstraint as Constraint, WideAngleModel as WideModel, WideAngleSession as WideAngle,
+};
 
 /// Camera model over an image frame.
 #[derive(Clone, Copy, Debug)]
@@ -572,6 +516,17 @@ pub fn apply(src: &Surface, frame: Rect, p: &WideAngle, interp: Interp) -> Surfa
     crate::warp::warp_triangles(src, frame, &mesh.verts, &tris, interp)
 }
 
+/// A session with the given lens and constraints (the framework's types are `non_exhaustive`
+/// outside their crate, so tests cannot use struct literals).
+#[cfg(test)]
+fn wide(model: WideModel, focal_length: f64, constraints: Vec<Constraint>) -> WideAngle {
+    let mut p = WideAngle::default();
+    p.model = model;
+    p.focal_length = focal_length;
+    p.constraints = constraints;
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,7 +535,7 @@ mod tests {
     fn camera_models_round_trip() {
         let frame = Rect::new(0, 0, 600, 400);
         for model in [WideModel::Fisheye, WideModel::Perspective] {
-            let cam = Camera::new(&WideAngle { model, focal_length: 15.0, ..Default::default() }, frame);
+            let cam = Camera::new(&wide(model, 15.0, vec![]), frame);
             for (x, y) in [(10.0, 20.0), (300.0, 200.0), (590.0, 350.0)] {
                 let p = cam.pixel(cam.ray(x, y)).unwrap();
                 assert!((p[0] - x).abs() < 1e-6 && (p[1] - y).abs() < 1e-6, "{model:?}");
@@ -591,11 +546,11 @@ mod tests {
         let p = eq.pixel(eq.ray(123.0, 77.0)).unwrap();
         assert!((p[0] - 123.0).abs() < 1e-6 && (p[1] - 77.0).abs() < 1e-6);
         // Perspective arcs are straight; fisheye arcs bend.
-        let cam = Camera::new(&WideAngle { model: WideModel::Perspective, ..Default::default() }, frame);
+        let cam = Camera::new(&wide(WideModel::Perspective, 0.0, vec![]), frame);
         let arc = cam.arc([50.0, 50.0], [550.0, 80.0], 10);
         let mid = arc[5];
         assert!((mid[1] - 65.0).abs() < 2.0, "{mid:?}");
-        let fish = Camera::new(&WideAngle { model: WideModel::Fisheye, focal_length: 8.0, ..Default::default() }, frame);
+        let fish = Camera::new(&wide(WideModel::Fisheye, 8.0, vec![]), frame);
         let arc = fish.arc([50.0, 60.0], [550.0, 60.0], 10);
         assert!(arc[5][1] < 50.0, "a line near the top bows away from the centre: {:?}", arc[5]);
     }
@@ -603,15 +558,11 @@ mod tests {
     #[test]
     fn constraints_become_straight_and_level() {
         let frame = Rect::new(0, 0, 480, 320);
-        let p = WideAngle {
-            model: WideModel::Fisheye,
-            focal_length: 8.0,
-            constraints: vec![
-                Constraint { a: [60.0, 70.0], b: [420.0, 70.0], orientation: Orientation::Horizontal },
-                Constraint { a: [80.0, 60.0], b: [80.0, 260.0], orientation: Orientation::Free },
-            ],
-            ..Default::default()
-        };
+        let p = wide(
+            WideModel::Fisheye,
+            8.0,
+            vec![Constraint::new([60.0, 70.0], [420.0, 70.0], Orientation::Horizontal), Constraint::new([80.0, 60.0], [80.0, 260.0], Orientation::Free)],
+        );
         let cam = Camera::new(&p, frame);
         let before = {
             let c = cam.arc([60.0, 70.0], [420.0, 70.0], 24);
@@ -650,16 +601,10 @@ mod tests {
     fn direct_solve_matches_the_dense_reference() {
         let frame = Rect::new(0, 0, 240, 160);
         for constraints in [
-            vec![
-                Constraint { a: [30.0, 40.0], b: [210.0, 40.0], orientation: Orientation::Horizontal },
-                Constraint { a: [40.0, 30.0], b: [45.0, 130.0], orientation: Orientation::Free },
-            ],
-            vec![
-                Constraint { a: [20.0, 120.0], b: [220.0, 110.0], orientation: Orientation::Free },
-                Constraint { a: [200.0, 20.0], b: [205.0, 140.0], orientation: Orientation::Vertical },
-            ],
+            vec![Constraint::new([30.0, 40.0], [210.0, 40.0], Orientation::Horizontal), Constraint::new([40.0, 30.0], [45.0, 130.0], Orientation::Free)],
+            vec![Constraint::new([20.0, 120.0], [220.0, 110.0], Orientation::Free), Constraint::new([200.0, 20.0], [205.0, 140.0], Orientation::Vertical)],
         ] {
-            let p = WideAngle { model: WideModel::Fisheye, focal_length: 8.0, constraints, ..Default::default() };
+            let p = wide(WideModel::Fisheye, 8.0, constraints);
             let mut system: Option<StaticSystem> = None;
             let fast = solve_with(&p, frame, 12.0, &mut |g, lines, x| system.get_or_insert_with(|| StaticSystem::new(g)).solve(lines, x));
             let exact = solve_with(&p, frame, 12.0, &mut dense_linsolve);
@@ -676,13 +621,11 @@ mod tests {
     fn many_constraints_use_the_conjugate_gradient_fallback() {
         let frame = Rect::new(0, 0, 240, 160);
         let constraints: Vec<Constraint> = (0..12)
-            .map(|k| Constraint {
-                a: [20.0 + 4.0 * k as f64, 15.0 + 10.0 * k as f64],
-                b: [210.0 - 3.0 * k as f64, 18.0 + 10.0 * k as f64],
-                orientation: Orientation::Horizontal,
+            .map(|k| {
+                Constraint::new([20.0 + 4.0 * k as f64, 15.0 + 10.0 * k as f64], [210.0 - 3.0 * k as f64, 18.0 + 10.0 * k as f64], Orientation::Horizontal)
             })
             .collect();
-        let p = WideAngle { model: WideModel::Fisheye, focal_length: 8.0, constraints, ..Default::default() };
+        let p = wide(WideModel::Fisheye, 8.0, constraints);
         let mut rows = 0;
         let mut system: Option<StaticSystem> = None;
         let fast = solve_with(&p, frame, 12.0, &mut |g, lines, x| {
@@ -699,12 +642,7 @@ mod tests {
     #[test]
     fn unfactored_system_falls_back_to_jacobi_cg() {
         let frame = Rect::new(0, 0, 240, 160);
-        let p = WideAngle {
-            model: WideModel::Fisheye,
-            focal_length: 8.0,
-            constraints: vec![Constraint { a: [30.0, 40.0], b: [210.0, 40.0], orientation: Orientation::Horizontal }],
-            ..Default::default()
-        };
+        let p = wide(WideModel::Fisheye, 8.0, vec![Constraint::new([30.0, 40.0], [210.0, 40.0], Orientation::Horizontal)]);
         let mut system: Option<StaticSystem> = None;
         let jacobi = solve_with(&p, frame, 12.0, &mut |g, lines, x| {
             let sys = system.get_or_insert_with(|| {
@@ -721,12 +659,11 @@ mod tests {
 
     #[test]
     fn hostile_frames_and_constraints_solve_to_finite_meshes() {
-        let wild = Constraint { a: [-1e6, 5e5], b: [1e6, -5e5], orientation: Orientation::Free };
-        let same = Constraint { a: [3.0, 3.0], b: [3.0, 3.0], orientation: Orientation::Free };
-        let nan = Constraint { a: [f64::NAN, 1.0], b: [2.0, f64::INFINITY], orientation: Orientation::Horizontal };
+        let wild = Constraint::new([-1e6, 5e5], [1e6, -5e5], Orientation::Free);
+        let same = Constraint::new([3.0, 3.0], [3.0, 3.0], Orientation::Free);
+        let nan = Constraint::new([f64::NAN, 1.0], [2.0, f64::INFINITY], Orientation::Horizontal);
         for frame in [Rect::new(0, 0, 1, 1), Rect::new(0, 0, 2, 200), Rect::new(0, 0, 400, 3), Rect::new(-50, -20, 90, 60)] {
-            let p =
-                WideAngle { model: WideModel::Fisheye, focal_length: 8.0, constraints: vec![wild.clone(), same.clone(), nan.clone()], ..Default::default() };
+            let p = wide(WideModel::Fisheye, 8.0, vec![wild.clone(), same.clone(), nan.clone()]);
             let mesh = solve(&p, frame);
             assert!(mesh.verts.iter().all(|(o, s)| o.iter().chain(s).all(|v| v.is_finite())), "{frame:?}");
         }
@@ -740,7 +677,9 @@ mod tests {
         s.fill_rect(frame, &[0.2, 0.4, 0.6, 1.0]);
         let mesh = solve(&WideAngle::default(), frame);
         assert!(mesh.verts.iter().all(|(o, s)| (o[0] - s[0]).abs() < 1e-9 && (o[1] - s[1]).abs() < 1e-9));
-        let out = apply(&s, frame, &WideAngle { scale: 80.0, ..Default::default() }, Interp::Bilinear);
+        let mut scaled = WideAngle::default();
+        scaled.scale = 80.0;
+        let out = apply(&s, frame, &scaled, Interp::Bilinear);
         assert!(out.pixel(32, 24)[3] > 0.99 && out.pixel(1, 1)[3] < 0.01);
     }
 }
@@ -755,15 +694,7 @@ mod tile_tests {
         let frame = Rect::new(0, 0, 772, 517);
         let mut s = Surface::new(PixelFormat::RGBA8);
         s.fill_rect(frame, &[0.2, 0.4, 0.6, 1.0]);
-        for p in [
-            WideAngle::default(),
-            WideAngle {
-                model: WideModel::Fisheye,
-                focal_length: 12.0,
-                constraints: vec![Constraint { a: [20.0, 30.0], b: [700.0, 35.0], orientation: Orientation::Horizontal }],
-                ..Default::default()
-            },
-        ] {
+        for p in [WideAngle::default(), wide(WideModel::Fisheye, 12.0, vec![Constraint::new([20.0, 30.0], [700.0, 35.0], Orientation::Horizontal)])] {
             let out = apply(&s, frame, &p, Interp::Bilinear);
             let holes: Vec<(i32, i32)> = (80..440).flat_map(|y| (80..690).map(move |x| (x, y))).filter(|&(x, y)| out.rgba(x, y)[3] < 0.5).collect();
             let m = solve(&p, frame);
