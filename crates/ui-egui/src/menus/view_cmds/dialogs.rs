@@ -510,7 +510,6 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
     }
 }
 
-
 /// File › Automate › Batch…: the selected action and its set, and where the files come from and go.
 fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogFields)> {
     let action = crate::actions::selected_action(app)?;
