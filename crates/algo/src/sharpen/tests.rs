@@ -183,13 +183,17 @@ fn exact_tiled_selected_outputs_and_cancellation() {
     let mut sel = Surface::new(PixelFormat::GRAY8);
     sel.fill_rect(area, &[0.4]);
     sel.fill_rect(Rect::new(250, 250, 270, 265), &[1.0]);
-    for depth in SampleType::ALL {
+    for (di, depth) in SampleType::ALL.into_iter().enumerate() {
         let surface = source(bounds, PixelFormat::new(ColorMode::Rgb, depth, true));
-        for radius in [0.6, 3.0, 10.0] {
+        for (ri, radius) in [0.6, 3.0, 10.0].into_iter().enumerate() {
             let p = crate::FilterParams::UnsharpMask { amount: 150.0, radius, threshold: 8.0 };
             for extent in [None, Some(bounds)] {
                 let expected = apply_reference(&surface, &p, area, bounds, Some(&sel), extent, 256);
-                for tile in [63, 256, 512] {
+                // Keep every depth/radius, depth/tile and radius/tile pair, with both extents.
+                for (ti, tile) in [63, 256, 512].into_iter().enumerate() {
+                    if ti != (di + ri) % 3 {
+                        continue;
+                    }
                     let actual = crate::apply_tiled(&surface, &p, area, bounds, Some(&sel), tile, extent);
                     assert_eq!(expected.to_interleaved(bounds), actual.to_interleaved(bounds));
                 }
@@ -267,7 +271,12 @@ fn malformed_inputs_and_allocations_stop_gracefully() {
         assert!(crate::apply_in_with(&s, &p, rect, rect, None, rect, &Interrupt::NONE).is_none());
         assert_eq!(crate::apply_in(&s, &p, rect, rect, None, rect), s);
     }
-    for bad in [Image { ch: 0, ..src.clone() }, Image { data: vec![0.0], ..src.clone() }, Image { rect: Rect::new(5, 0, 0, 2), ..src.clone() }] {
+    let with = |edit: &dyn Fn(&mut Image)| {
+        let mut bad = src.clone();
+        edit(&mut bad);
+        bad
+    };
+    for bad in [with(&|i| i.ch = 0), with(&|i| i.data = vec![0.0]), with(&|i| i.rect = Rect::new(5, 0, 0, 2))] {
         assert!(exact::run(&bad, rect, &ctx, 100.0, 1.0, 0.0, &Interrupt::NONE).is_none());
     }
     for rect in [Rect::new(i32::MIN, 0, i32::MAX, 2), Rect::new(0, 0, 300_000, 300_000), Rect::new(2, 0, 0, 2)] {

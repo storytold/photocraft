@@ -1,7 +1,8 @@
 use super::display::{canvas_display, display_doc, display_image};
 use super::strokes::live_stroke;
-use super::textures::{effect_reach, ensure_texture};
-use super::{Document, PhotocraftApp, Rect, TextureOptions};
+use super::textures::effect_reach;
+use super::{Document, PhotocraftApp, Rect};
+use egui::TextureOptions;
 
 /// Longest side of the Navigator panel's image (about twice the panel's width, for HiDPI).
 pub const NAVIGATOR_SIDE: u32 = 512;
@@ -37,10 +38,7 @@ pub fn navigator_gpu_view(app: &PhotocraftApp, idx: usize, rect: Rect, ctx: &egu
         zoom: rect.width() / w as f32,
         center: [w as f32 / 2.0, h as f32 / 2.0],
         rotation: 0.0,
-        shadow: false,
-        pixel_grid: false,
         view_key: egui::Id::unique(("pc-navigator", ctx.viewport_id(), idx)).value(),
-        offset: [0.0, 0.0],
         ..params
     })
 }
@@ -66,20 +64,19 @@ pub fn navigator_waits_for_gpu(app: &PhotocraftApp, idx: usize, ctx: &egui::Cont
         return false;
     }
     ctx.data_mut(|d| d.insert_temp(key, waited + 1));
-    ctx.request_repaint();
+    craft::ui::runtime::frame::request_repaint(ctx);
     true
 }
 
 pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
-    if app.gpu.is_none() {
-        return ensure_texture(app, ctx, idx, app.session.color.main_display).map(|(t, _)| t);
-    }
     // Keyed by the document snapshot, not its revision: selecting a layer changes no pixels.
-    let (snapshot, id, revision, last_damage) =
-        app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.last_damage))?;
+    let (snapshot, id, revision, damage_from, last_damage) =
+        app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.damage_from(), st.last_damage))?;
     let (doc, preview_key) = display_doc(app, idx);
     let (display, display_key) = canvas_display(app, &doc, None);
-    let preview_key = preview_key ^ display_key;
+    // A tile that fails to read and recovers keeps the snapshot and its revision: the picture and its partial updates
+    // follow the scratch read-error generation too (`crate::scratch_reads`).
+    let preview_key = crate::scratch_reads::with(preview_key ^ display_key);
     let cached = app.navigator_textures.get(&id).cloned();
     if let Some((r, p, _, t)) = &cached
         && r.ptr_eq(&snapshot)
@@ -98,17 +95,17 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         && r.ptr_eq(&snapshot)
         && crate::adjust_preview::settling(app, NAVIGATOR_SETTLE_MS)
     {
-        ctx.request_repaint_after(std::time::Duration::from_millis(NAVIGATOR_SETTLE_MS as u64));
+        craft::ui::runtime::frame::request_repaint_after(ctx, NAVIGATOR_SETTLE_MS / 1000.0);
         return Some(t.id());
     }
     let t0 = crate::gpu_canvas::now_ms();
-    // One edit since the cached image, with the area it changed: update just that part (nothing
+    // One edit (or command) since the cached image, with the area it changed: update just that part (nothing
     // for a rename, a selection or a new empty layer). A thumbnail composite of the whole
     // document on every edit cost a full-resolution CPU composite on the UI thread.
     let size = photocraft_compose::thumbnail_size(&doc, NAVIGATOR_SIDE);
     if let Some((_, p, rev, t)) = &cached
         && *p == preview_key
-        && rev.checked_add(1) == Some(revision)
+        && (damage_from..revision).contains(rev)
         && let Some(d) = last_damage
         && t.size() == [size.0 as usize, size.1 as usize]
     {

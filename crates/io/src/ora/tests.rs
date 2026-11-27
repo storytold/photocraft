@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_doc::{Adjustment, Color, Fill, LayerMask};
+use photocraft_doc::{Adjustment, BlendRange, Color, Fill, LayerMask};
 
 const CANVAS: Size = Size { width: 70, height: 50 };
 
@@ -42,7 +42,7 @@ fn doc(depth: SampleType) -> Document {
     through_child.blend = BlendMode::LinearLight;
     through_child.locks.all = true;
     let through = Layer::group("Pass <&> \"through\"", vec![through_child]);
-    d.layers = vec![base, off, hidden, group, through];
+    d.layers = vec![base, off, hidden, group, through].into();
     d
 }
 
@@ -93,7 +93,7 @@ fn float_documents_save_as_16_bit() {
     let mut d = doc(SampleType::U16);
     d.depth = SampleType::F32;
     let fmt = PixelFormat::RGBA32F;
-    d.layers = vec![block("Float", fmt, 0, 0, 10, 10, 9)];
+    d.layers = vec![block("Float", fmt, 0, 0, 10, 10, 9)].into();
     let (back, warnings, _) = round_trip(&d);
     assert!(warnings.iter().any(|w| w.contains("16-bit")), "{warnings:?}");
     assert_eq!(back.depth, SampleType::U16);
@@ -170,15 +170,15 @@ fn archive_layout_follows_the_specification() {
     assert_eq!(out.bytes.get(30..38), Some(&b"mimetype"[..]));
     assert_eq!(out.bytes.get(38..54), Some(MIMETYPE));
     assert!(is_ora(&out.bytes));
-    let zip = ZipReader::new(&out.bytes).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
     for entry in ["stack.xml", "mergedimage.png", "Thumbnails/thumbnail.png"] {
-        assert!(zip.find(entry).is_some(), "{entry}");
+        assert!(archive.entry(entry, 1 << 20).unwrap().is_some(), "{entry}");
     }
-    let thumb = codecs::decode(&zip.read_by_name("Thumbnails/thumbnail.png", 1 << 20).unwrap()).unwrap();
+    let thumb = codecs::decode(&archive.entry("Thumbnails/thumbnail.png", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(thumb.dimensions().0 <= 256 && thumb.dimensions().1 <= 256);
-    let merged = codecs::decode(&zip.read_by_name("mergedimage.png", 1 << 20).unwrap()).unwrap();
+    let merged = codecs::decode(&archive.entry("mergedimage.png", 1 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(merged.dimensions(), (70, 50));
-    let xml = String::from_utf8(zip.read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    let xml = String::from_utf8(archive.entry("stack.xml", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("name=\"Pass &lt;&amp;&gt; &quot;through&quot;\""), "{xml}");
     assert!(xml.contains("isolation=\"auto\""), "{xml}");
     assert!(xml.contains("composite-op=\"krita:linear light\""), "{xml}");
@@ -370,7 +370,8 @@ fn soft_light_exports_as_svg_soft_light() {
     soft.blend = BlendMode::SoftLight;
     d.layers.push(soft);
     let out = export(&d).unwrap();
-    let xml = String::from_utf8(ZipReader::new(&out.bytes).unwrap().read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
+    let xml = String::from_utf8(archive.entry("stack.xml", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("name=\"Soft\"") && xml.contains("composite-op=\"svg:soft-light\""), "{xml}");
     assert!(!xml.contains("soft_light"), "{xml}");
     let (back, exported, imported) = round_trip(&d);
@@ -468,13 +469,13 @@ fn truncated_and_corrupted_files_never_panic() {
 
 #[test]
 fn zip_mimetype_reads_only_a_leading_stored_entry() {
-    assert_eq!(zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
-    assert_eq!(zip_mimetype(b"PK\x03\x04"), None);
-    assert_eq!(zip_mimetype(&[]), None);
+    assert_eq!(craft_ora::zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
+    assert_eq!(craft_ora::zip_mimetype(b"PK\x03\x04"), None);
+    assert_eq!(craft_ora::zip_mimetype(&[]), None);
     let mut z = ZipWriter::new();
     z.add("stack.xml", b"x").unwrap();
     z.add("mimetype", MIMETYPE).unwrap();
-    assert_eq!(zip_mimetype(&z.finish().unwrap()), None);
+    assert_eq!(craft_ora::zip_mimetype(&z.finish().unwrap()), None);
 }
 
 #[test]
@@ -539,12 +540,14 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
             with(&move |d| d.layers.push(l.clone()))
         }),
         ("clipped", with(&|d| d.layers[1].clipped = true)),
+        ("channel blending", with(&|d| d.layers[0].excluded_channels = 1)),
+        ("Blend If", with(&|d| d.layers[0].blend_if.set(0, [BlendRange { black: [128, 128], ..BlendRange::FULL }, BlendRange::FULL]))),
         ("fill opacity", with(&|d| d.layers[0].fill_opacity = 0.5)),
         ("pixel lock", with(&|d| d.layers[0].locks.pixels = true)),
         // Not the bottom layer: with its transparency lock, `Base` would become the Background.
         ("position lock", with(&|d| d.layers[1].locks.position = true)),
         ("float", doc(SampleType::F32)),
-        ("profile", with(&|d| d.icc_profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes()))),
+        ("profile", with(&|d| d.icc_profile = Some(craft_cms::Builtin::DisplayP3.profile().to_bytes()))),
         ("metadata", with(&|d| d.metadata.xmp = Some("<x/>".into()))),
     ]
 }
@@ -566,7 +569,9 @@ fn plain_documents_lose_nothing() {
     for depth in [SampleType::U8, SampleType::U16] {
         let mut d = doc(depth);
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?}");
-        d.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        d.layers[0].blend_if.ranges = vec![[BlendRange::FULL; 2]; 4];
+        assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} full Blend If ranges");
+        d.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} tagged sRGB");
         assert_eq!(export(&d).unwrap().warnings, Vec::<String>::new());
         // OpenRaster's edit-locked and alpha-preserve hold Lock All and Lock Transparent Pixels.

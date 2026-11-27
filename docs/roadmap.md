@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-12 · **Change:** minor (M11: the desktop app connects to MCP clients from Edit › Preferences › AI Integrations, no terminal, no restart; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
 
 - UI.5: Panels can detach, join other tab groups, split, resize and redock through shared docking transactions. Custom layouts persist with workspaces, respect workspace locking, and retain collapse flags for intact native groups.
 
@@ -116,9 +116,14 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | M11: Edit › Preferences › AI Integrations connects MCP clients to the running app without a terminal or restart; milestones, alpha gate and estimates unchanged |
 | 2026-10-11 | minor | Linked adaptive Unsharp Mask performance and quality evidence; milestones, alpha gate and estimates unchanged |
 | 2026-10-10 | minor | Photomerge is implemented; real-world quality validation remains open |
 | 2026-10-10 | minor | Alpha gate table (core-workflow gate): passes, stage stays alpha |
 | 2026-10-10 | major | Progress docs restructured: honest assessment and dated measurements moved to `target-app-parity.md`, Affinity notes to `file-format-parity.md`; new Current focus and estimates; `parity.md` renamed `parity-checklist.md` |
 | 2026-10-08 | minor | Tools, Affinity import and performance measurements added |
 | 2026-10-05 | major | Honest parity assessment added |
+
+2026-10-13: native scratch storage pages current and history tiles through compressed, CRC-checked files. Fresh RAM budgets default to 70%; engine-owned memory supervision stops with its last session. Scratch errors block edit/save commits and permit retry. Unix files are private and stale files swept at startup; Windows files use delete-on-close. See [scratch disks](scratch-disks.md). Streaming import and viewport rendering follow separately.
+
+2026-10-13: native path opens of single-part flat scanline EXR files decode one compression block at a time into tiles at the original resolution. See [EXR streaming](streaming-io.md).

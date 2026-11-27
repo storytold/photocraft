@@ -380,6 +380,71 @@ fn object_select_downsampled_with_band_refinement() {
     assert!(far_wrong < 300, "{far_wrong} pixels wrong away from the edge");
 }
 
+/// A standing figure on a grey studio backdrop whose light falls off towards the corners
+/// (0.61 in the centre, 0.55 at the edge midpoints, 0.49 in the corners). Laid out on a
+/// 2000 x 3000 reference frame and scaled to `w` x `h`. Returns (image, truth).
+fn backdrop_falloff_scene(w: usize, h: usize, noise: f32, seed: u64) -> (RgbImage, Vec<bool>) {
+    let mut rng = Rng::new(seed);
+    let mut truth = vec![false; w * h];
+    let (sx, sy) = (w as f32 / 2000.0, h as f32 / 3000.0);
+    let img = RgbImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (x as f32 / sx, y as f32 / sy);
+        let n = noise * rng.normal();
+        let e = |cx: f32, cy: f32, rx: f32, ry: f32| ((fx - cx) / rx).powi(2) + ((fy - cy) / ry).powi(2) <= 1.0;
+        let hair = e(1000.0, 760.0, 125.0, 150.0);
+        let face = e(1000.0, 820.0, 100.0, 130.0);
+        let neck = (960.0..1040.0).contains(&fx) && (930.0..1000.0).contains(&fy);
+        let half = 170.0 + (fy - 1000.0).max(0.0) * 0.1;
+        let torso = (1000.0..2100.0).contains(&fy) && (fx - 1000.0).abs() <= half;
+        let arm = (1000.0..1750.0).contains(&fy)
+            && ((760.0..820.0).contains(&(fx - (fy - 1000.0) * 0.02)) || (1180.0..1240.0).contains(&(fx + (fy - 1000.0) * 0.02)));
+        let leg = (2100.0..2750.0).contains(&fy) && ((900.0..970.0).contains(&fx) || (1030.0..1100.0).contains(&fx));
+        let tex = ((fx * 0.15).sin() * (fy * 0.11).cos()) * 0.04;
+        let c = if face || neck {
+            [0.86, 0.66, 0.56]
+        } else if hair {
+            [0.20, 0.14, 0.10]
+        } else if arm || leg {
+            [0.82, 0.62, 0.52]
+        } else if torso {
+            [0.10 + tex, 0.10 + tex, 0.12 + tex]
+        } else {
+            let (dx, dy) = ((fx - 1000.0) / 1000.0, (fy - 1500.0) / 1500.0);
+            let g = 0.55 + 0.06 * (1.0 - dx * dx - dy * dy);
+            [g, g, g * 0.99]
+        };
+        truth[y * w + x] = face || neck || hair || arm || leg || torso;
+        c.map(|v| (v + n).clamp(0.0, 1.0))
+    });
+    (img, truth)
+}
+
+/// Backdrop pixels Object Selection takes with a loose rectangle (the central 80 % of the frame).
+fn loose_rect_backdrop_px(w: usize, h: usize, work_px: usize) -> usize {
+    let (img, truth) = backdrop_falloff_scene(w, h, 0.003, 7);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let canvas = Rect::new(0, 0, w as i32, h as i32);
+    let rect = Rect::new((w / 10) as i32, (h / 10) as i32, (w * 9 / 10) as i32, (h * 9 / 10) as i32);
+    let reg = grabcut::object_select(&s, canvas, rect, work_px).unwrap();
+    (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| reg.at(x as i32, y as i32) >= 0.5 && !truth[y * w + x]).count()
+}
+
+#[test]
+fn object_select_loose_rect_on_a_backdrop_with_light_falloff_leaves_the_backdrop_out() {
+    // #6975: only the ring outside the rectangle seeds the background model, and it is darker
+    // than the lit backdrop beside the figure, so each pass gives up just the next brightness
+    // band. Stopping after 8 passes selected 21041 backdrop pixels here (the figure is 14209).
+    let backdrop = loose_rect_backdrop_px(286, 429, 1_000_000);
+    assert!(backdrop < 200, "{backdrop} backdrop pixels selected");
+}
+
+#[test]
+fn object_select_loose_rect_on_a_lit_backdrop_downsampled_leaves_the_backdrop_out() {
+    // The same at step 2 with the full-resolution band re-cut: 81534 backdrop pixels at 8 passes.
+    let backdrop = loose_rect_backdrop_px(572, 858, 160_000);
+    assert!(backdrop < 800, "{backdrop} backdrop pixels selected");
+}
+
 // ---------- Quick selection ----------
 
 /// Left: textured warm region; right: cool region; strong vertical edge at x = 60.
@@ -853,6 +918,25 @@ fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     assert!(grabcut::object_at(&s, canvas, 400.0, 10.0, 0).is_none());
 }
 
+#[test]
+fn object_at_samples_a_transparent_seed_before_the_coarse_pass() {
+    struct TransparentSeed;
+
+    impl Sampler for TransparentSeed {
+        fn rgba(&self, rect: Rect) -> Vec<[f32; 4]> {
+            assert_eq!(rect, Rect::from_xywh(242, 217, 1, 1));
+            vec![[0.0; 4]]
+        }
+
+        fn rgba_scaled(&self, _: Rect, _: usize) -> Vec<[f32; 4]> {
+            panic!("a transparent seed must skip the working-resolution pass");
+        }
+    }
+
+    let canvas = Rect::new(0, 0, 800, 600);
+    assert!(grabcut::object_at(&TransparentSeed, canvas, 242.7, 217.3, grabcut::OBJECT_AT_WORK_PX).is_none());
+}
+
 /// #6576: a 24 px object in a 4000×3000 document is found (a 1000×800 one still is).
 #[test]
 fn object_at_finds_small_object_in_large_canvas() {
@@ -958,6 +1042,148 @@ fn select_subject_leaves_a_background_coloured_gap_open() {
     let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap();
     let g = coverage(&reg, &gap, w, h);
     assert!(g < 0.1, "the backdrop inside the ring stays unselected: covered {g}");
+    let v = iou(&reg, &truth, w, h);
+    assert!(v > 0.9, "IoU {v}");
+}
+
+/// A portrait on a light wall shading down the picture: dark hair, a face, a neck and a
+/// torso of colour `shirt` running off the bottom edge (as most portraits are cropped). With
+/// `floor`, the torso ends on a dark table that fills the bottom quarter, the full width (so it
+/// runs up the picture's sides too). Returns (image, truth, the torso).
+fn portrait_scene(seed: u64, shirt: [f32; 3], floor: bool) -> (RgbImage, Vec<bool>, Vec<bool>) {
+    let (w, h) = (240usize, 200usize);
+    let mut rng = Rng::new(seed);
+    let mut img = RgbImage::new(w, h);
+    let mut truth = vec![false; w * h];
+    let mut torso = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let hair = ((fx - 120.0) / 30.0).powi(2) + ((fy - 52.0) / 27.0).powi(2) <= 1.0;
+            let face = ((fx - 120.0) / 26.0).powi(2) + ((fy - 66.0) / 32.0).powi(2) <= 1.0;
+            let neck = (109..131).contains(&x) && (90..112).contains(&y);
+            // Shoulders widening towards the bottom, wider than the head's box.
+            let half = 40.0 + (fy - 110.0) * 0.8;
+            let body = y >= 110 && (fx - 120.0).abs() <= half && (!floor || y < 150);
+            let table = floor && y >= 150;
+            let n = 0.012 * rng.normal();
+            let i = y * w + x;
+            truth[i] = hair || face || neck || body;
+            torso[i] = body && !neck;
+            let wall = 0.95 - 0.07 * fy / h as f32;
+            img.px[i] = if table {
+                [0.35, 0.22, 0.12]
+            } else if face {
+                [0.88, 0.71, 0.59]
+            } else if hair {
+                [0.24, 0.16, 0.12]
+            } else if neck {
+                [0.84, 0.67, 0.55]
+            } else if body {
+                shirt
+            } else {
+                [wall, wall - 0.01, wall - 0.04]
+            }
+            .map(|v| (v + n).clamp(0.0, 1.0));
+        }
+    }
+    (img, truth, torso)
+}
+
+#[test]
+fn select_subject_keeps_a_low_contrast_part_that_runs_off_the_edge() {
+    // A cream shirt on a near-white wall, cut off by the bottom edge: it used to train the
+    // backdrop model and be fixed as background there, so only the head was selected.
+    let (img, truth, torso) = portrait_scene(3, [0.92, 0.85, 0.72], false);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap();
+    let c = coverage(&reg, &torso, 240, 200);
+    assert!(c > 0.9, "the torso is part of the subject: covered {c}");
+    let v = iou(&reg, &truth, 240, 200);
+    assert!(v > 0.9, "IoU {v}");
+}
+
+#[test]
+fn select_subject_leaves_a_table_along_the_bottom_edge_out() {
+    // The same figure behind a table that fills the bottom of the picture: the table also runs
+    // off the edge, but it is not the subject.
+    let (img, truth, _) = portrait_scene(3, [0.12, 0.2, 0.45], true);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap();
+    let table: Vec<bool> = (0..240 * 200).map(|i| i / 240 >= 150).collect();
+    let t = coverage(&reg, &table, 240, 200);
+    assert!(t < 0.1, "the table stays unselected: covered {t}");
+    let v = iou(&reg, &truth, 240, 200);
+    assert!(v > 0.9, "IoU {v}");
+}
+
+#[test]
+fn select_subject_leaves_a_nearby_single_edge_object_out() {
+    // A horizontal door-frame piece enters only from the left and stops just short of the
+    // shoulder. It is large enough to be considered by the edge release heuristic.
+    let (mut img, truth, _) = low_contrast_figure(7);
+    let (w, h) = (240, 200);
+    let mut frame = vec![false; w * h];
+    for y in 48..56 {
+        for x in 0..77 {
+            frame[y * w + x] = true;
+            img.px[y * w + x] = [0.32, 0.24, 0.16];
+        }
+    }
+    let reg = subject::select_subject(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+    let subject_coverage = coverage(&reg, &truth, w, h);
+    let frame_coverage = coverage(&reg, &frame, w, h);
+    assert!(subject_coverage > 0.85, "subject coverage {subject_coverage}");
+    assert!(frame_coverage < 0.1, "door-frame coverage {frame_coverage}");
+}
+
+#[test]
+fn select_subject_ignores_a_stray_pixel_at_the_edge() {
+    // One white pixel in the corner (a dead pixel, a speck of dust) is not the subject running
+    // out of the picture: it stays unselected and the subject is found as without it.
+    let canvas = Rect::new(0, 0, 200, 160);
+    for seed in 1..=8 {
+        let (mut img, truth) = disc_scene(200, 160, 100.0, 80.0, 45.0, seed);
+        img.px[0] = [1.0, 1.0, 1.0];
+        let reg = subject::select_subject(&ImageSampler { img: &img, origin: (0, 0) }, canvas).unwrap();
+        assert!(reg.at(0, 0) < 0.5, "seed {seed}: the stray pixel is selected");
+        let v = iou(&reg, &truth, 200, 160);
+        assert!(v > 0.9, "seed {seed}: IoU {v}");
+    }
+}
+
+#[test]
+fn select_subject_keeps_a_small_detached_part_next_to_the_subject() {
+    // A standing figure whose head is apart from its body (the neck too thin to survive the
+    // working resolution): the head is under a fifth of the body's size but part of the subject.
+    let (w, h) = (300usize, 200usize);
+    let mut rng = Rng::new(9);
+    let mut img = RgbImage::new(w, h);
+    let mut truth = vec![false; w * h];
+    let mut head = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let is_head = ((fx - 150.0) / 9.0).powi(2) + ((fy - 40.0) / 11.0).powi(2) <= 1.0;
+            let body = (128..172).contains(&x) && (55..170).contains(&y);
+            let n = 0.012 * rng.normal();
+            let i = y * w + x;
+            truth[i] = is_head || body;
+            head[i] = is_head;
+            img.px[i] = if is_head {
+                [0.88, 0.7, 0.58]
+            } else if body {
+                [0.75, 0.15, 0.15]
+            } else {
+                [0.55, 0.72, 0.9]
+            }
+            .map(|v| (v + n).clamp(0.0, 1.0));
+        }
+    }
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+    let c = coverage(&reg, &head, w, h);
+    assert!(c > 0.9, "the head is part of the subject: covered {c}");
     let v = iou(&reg, &truth, w, h);
     assert!(v > 0.9, "IoU {v}");
 }
