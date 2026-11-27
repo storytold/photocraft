@@ -13,7 +13,7 @@ use crate::canvas::document_display::CanvasHost;
 use crate::state::Tool;
 use craft::behavior::geometry::{ConstrainStyle, Directions, MoveGesture};
 use craft::behavior::kurbo::{self, Point};
-use craft::behavior::{CancelReason, Cursor, CursorIcon};
+use craft::behavior::{CancelReason, Cursor, CursorIcon, PaintedCursor, PointerGlyph};
 use craft::keymap::{Chord, Key, Mods};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
@@ -135,6 +135,12 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
 
 fn inside_selection(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|sel| covers(sel, p))
+}
+
+/// Whether document point `p` lies inside the Move tool's transform box with Auto-Select on (the box shows only with
+/// Show Transform Controls on, [`frame`](crate::canvas::transform_controls::frame)).
+fn inside_transform_box(app: &PhotocraftApp, p: Point) -> bool {
+    app.ui.tool_options.move_auto_select && crate::canvas::transform_controls::frame(app).is_some_and(|b| b.contains(p))
 }
 
 fn rect4(r: photocraft_geom::Rect) -> [f64; 4] {
@@ -428,9 +434,22 @@ impl CanvasTool for MoveRun<'_> {
         draw.stroke(&PaintShape::Path(vec![to - dir * 10.0 + side * 5.0, to, to - dir * 10.0 - side * 5.0]), StrokeWidth::Medium, accent);
     }
 
+    /// The arrow with the four-way cross below right of it, the hotspot on the arrow's tip (#16819); the plain arrow
+    /// inside a selection, and inside the transform box while Auto-Select and Show Transform Controls are both on. A
+    /// drag keeps the plain arrow, and ⌥'s duplicate the copy arrow.
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         let alt = cx.mods.alt;
-        if self.scope.with_app(|app| crate::move_mods::copying(app, alt)) { Cursor::System(CursorIcon::Copy) } else { Cursor::System(CursorIcon::Default) }
+        let at = cx.pointer.as_ref().zip(cx.space()).map(|(pointer, space)| space.view.to_doc(pointer.pos));
+        let dragging = self.state.run.is_some();
+        self.scope.with_app(|app| {
+            if crate::move_mods::copying(app, alt) {
+                return Cursor::System(CursorIcon::Copy);
+            }
+            if dragging || at.is_some_and(|at| inside_selection(app, [at.x, at.y]) || inside_transform_box(app, at)) {
+                return Cursor::System(CursorIcon::Default);
+            }
+            Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Arrow, crate::icons::tool_icon(Tool::Move)))
+        })
     }
 
     /// A layer or pixel move takes every move from the press, so a move of a few pixels moves; its click is decided by
@@ -443,3 +462,7 @@ impl CanvasTool for MoveRun<'_> {
         ToolPath::Command("the Move Layer command")
     }
 }
+
+#[cfg(test)]
+#[path = "move_cursor_cross_tests.rs"]
+mod move_cursor_cross_tests;

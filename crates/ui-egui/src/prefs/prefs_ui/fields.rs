@@ -132,13 +132,14 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
         }
     }
 
-    // Drawn elsewhere or not at all: the theme keys follow the Appearance row, View › Rulers sets showRulers, and the
+    // Drawn elsewhere or not at all: the theme and size keys follow the Appearance row, View › Rulers sets showRulers, and the
     // GPU row draws the adapter, backend and GPU switch together.
     for path in [
         "interface.theme",
         "interface.lightTheme",
         "interface.darkTheme",
         "interface.favoriteThemes",
+        "interface.density",
         "unitsAndRulers.showRulers",
         "performance.useGpu",
         "performance.gpuBackend",
@@ -199,7 +200,7 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
 /// `prefs::Interface` lists its fields in this order.
 fn interface_group(key: &str) -> &'static str {
     match key {
-        "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "canvasColor" | "canvasCustomColor" | "canvasBorder" => "Appearance",
+        "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "density" | "canvasColor" | "canvasCustomColor" | "canvasBorder" => "Appearance",
         "language" | "uiFontSize" | "uiScale" => "Presentation",
         _ => "Options",
     }

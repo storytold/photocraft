@@ -83,6 +83,14 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, paths))
 }
 
+/// The version of the toolbar's footer: the colour chips' two colours, whether the active document is in Quick Mask and
+/// the screen mode the Screen Mode button shows. A shortcut changed in the keymap reaches the buttons' tooltips through
+/// the framework, which tracks the keymap a view reads.
+pub(crate) fn toolbar_footer(app: &PhotocraftApp) -> u64 {
+    let quick_mask = app.session.active().is_some_and(|st| st.doc.quick_mask.is_some());
+    version(app, (colours(app), quick_mask, app.ui.view.screen_mode))
+}
+
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
 /// its menu titles are in, whether the menus are in the bar (not in the macOS menu bar) and whether the bar takes the
 /// menu keys (F10, Alt, Alt+letter), which a dialog or the shortcut recorder holds back: a dialog closed with Escape

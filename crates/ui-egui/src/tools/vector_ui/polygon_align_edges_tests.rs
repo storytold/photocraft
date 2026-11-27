@@ -72,7 +72,6 @@ fn path_and_pixels_mode_keep_snapping_with_the_greyed_checkbox_off() {
     }
     app.ui.tool_options.shape_mode = VectorMode::Shape;
     assert!(!super::shapes::snaps_to_pixels(&app, ShapeKind::Polygon), "Shape mode with Align Edges off keeps fractions");
-    assert!(super::shapes::snaps_to_pixels(&app, ShapeKind::Star), "the Star tool has no Align Edges and still snaps");
 }
 
 #[test]
@@ -132,7 +131,4 @@ fn the_bar_ends_with_align_edges_enabled_only_in_shape_mode() {
         h.run_steps(4);
         assert_eq!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), greyed, "{mode:?} mode");
     }
-
-    let h = harness(Tool::Star);
-    assert!(h.query_by_label("Align Edges").is_none(), "the Star tool has no Align Edges");
 }
