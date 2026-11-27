@@ -232,13 +232,13 @@ fn show_status(app: &mut PhotocraftApp, status: &StatusMessage) {
 /// Answers a file dialog a menu command asked for through the app's pickers: a pick to read imports through the engine,
 /// a pick to write saves the export and says so in the status line.
 fn answer_file(app: &mut PhotocraftApp, request: PresetFileRequest) {
-    // Keep the request to form its public Saved event after the host has written the bytes.
-    let started = match request.clone() {
+    let started = match request {
         PresetFileRequest::Open { extensions, replace, .. } => {
             let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
             app.pick_file_bytes_filtered(&extensions, move |app, name, bytes| import_bytes(app, &name, &bytes, replace))
         }
-        PresetFileRequest::Save { file_name, bytes, .. } => {
+        PresetFileRequest::Save { ref file_name, .. } => {
+            let file_name = file_name.clone();
             // The opaque export report belongs to this save, not a later request. The picker never
             // calls back on Cancel or an unavailable dialog, so dropping it also drops the report.
             let mut pending = std::mem::take(&mut app.ui.swatches);
@@ -246,8 +246,9 @@ fn answer_file(app: &mut PhotocraftApp, request: PresetFileRequest) {
             app.ui.swatches.selection = pending.selection.clone();
             app.ui.swatches.rename = pending.rename.clone();
             app.pick_save(&file_name, move |app, path| {
+                let PresetFileRequest::Save { bytes, .. } = &request else { return Err(crate::file_dialog::UNEXPECTED.into()) };
                 let write = app.services.write.as_mut().ok_or("no writer configured")?;
-                write(&path, &bytes)?;
+                write(&path, bytes)?;
                 let shown = crate::file_open::display_name(&path);
                 let env = craft::ui::runtime::env::Env::of_root(app.ctx());
                 let (swatch_words, preset_words) = words(app.ctx());
