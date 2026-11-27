@@ -11,6 +11,7 @@
 use std::hash::{Hash, Hasher};
 
 use craft::ui::contract::{MemoProps, MemoView};
+use photocraft_engine::link_watch::LinkWatchExt as _;
 
 use super::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
@@ -109,7 +110,8 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
 /// pass (open a row for renaming, focus its Name filter, reveal a layer, follow the Move tool's pick), the Info panel the pointer's document pixel, the zoom and the Eyedropper's Sample
 /// Size it samples at and the Crop tool's frame size, the Clone Source panel the pairing at the last hover point, the
 /// Modifier Keys panel the latched keys, which their use releases, the Properties panel the colour its well's open
-/// Color Picker previews and the answer that picker left, the Histogram the adjustment preview it counts and the
+/// Color Picker previews and the answer that picker left and which linked files the last look found missing (a
+/// linked smart object's mark and its greyed Embed, which the link watch changes with no command), the Histogram the adjustment preview it counts and the
 /// histograms its worker lands (`histogram_panel::update`, with no command). Brush
 /// Settings and Brushes show the brush and its presets; Color, Swatches, Gradients and the Gradient Editor show the
 /// colours, and so do Properties (a shape layer's fill and stroke swatches, a gradient fill's Foreground and
@@ -130,7 +132,10 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         }
         "cloneSource" => version(app, app.ui.presets_ui.clone_cursor.map(|(document, at)| (document, at.map(f64::to_bits)))),
         "modifierKeys" => version(app, app.ui.shell.latched),
-        "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app))),
+        "properties" => {
+            let picker = crate::color_picker_ui::window_picker_state(app, PickWindow::Properties);
+            version(app, (picker, colours(app), text_target(app), app.session.missing_links_revision()))
+        }
         "brushSettings" | "brushes" => version(app, brush(app)),
         "histogram" => version(app, (adjustment_preview(app), histograms(app))),
         "character" => version(app, (colours(app), type_defaults(app), text_target(app))),
@@ -379,5 +384,39 @@ mod tests {
         assert!(app.ui.artboard_tool.adding, "Add New Artboard ran");
         let after = (options_bar(&app), panel(&app, "layers"), title_bar(&app));
         assert!(after.0 != before.0 && after.1 != before.1 && after.2 != before.2, "every version moved");
+    }
+
+    /// A linked file the link watch finds gone moves the Properties version with no command or document edit, so the
+    /// panel shows the missing mark and greys Embed, and moves it back when the file returns (#14121).
+    #[test]
+    fn a_link_found_missing_or_back_moves_the_properties_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let (file, away) = (directory.path().join("linked.png"), directory.path().join("away.png"));
+        let mut source = photocraft_engine::Session::new();
+        source.execute("file.new", serde_json::json!({"width": 10, "height": 10})).unwrap();
+        source.execute("file.saveACopy", serde_json::json!({"path": file.to_string_lossy(), "layers": false})).unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", serde_json::json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("file.placeLinked", serde_json::json!({"path": file.to_string_lossy()})).unwrap();
+        let look = |app: &mut PhotocraftApp| {
+            app.session.start_link_scan();
+            let started = std::time::Instant::now();
+            while app.session.poll_link_scan().is_none() {
+                assert!(started.elapsed() < std::time::Duration::from_secs(30), "the look finished");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        look(&mut app);
+        assert!(app.session.missing_links().is_empty());
+        let before = panel(&app, "properties");
+        std::fs::rename(&file, &away).unwrap();
+        look(&mut app);
+        assert_eq!(app.session.missing_links().len(), 1, "the look found the file gone");
+        let missing = panel(&app, "properties");
+        assert_ne!(missing, before, "the file found missing moves the version");
+        std::fs::rename(&away, &file).unwrap();
+        look(&mut app);
+        assert!(app.session.missing_links().is_empty(), "the look found the file back");
+        assert_ne!(panel(&app, "properties"), missing, "the file back moves the version");
     }
 }

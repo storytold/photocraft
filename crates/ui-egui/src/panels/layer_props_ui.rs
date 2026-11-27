@@ -2,18 +2,25 @@
 //! (W/H/X/Y of the layer content, editable), Align and Distribute, the kind's sections and Quick Actions. Edits dispatch
 //! `edit.transform`, `layer.translate`, `layer.align.*` and selection commands.
 
+use craft::behavior::IconId;
 use craft::behavior::geometry::quad::BoxState;
 use craft::behavior::kurbo::{Point, Rect, Size};
 use craft::behavior::{ColumnWidth, EditEvent, EditEvents, Mixed, RulerUnits, Ticks};
 use craft::draw::ui::{SizeUnit, TransformFields, TransformGroups, TransformRow};
+use craft::theme::variant::Tone;
 use craft::ui::bars::AlignBar;
 use craft::ui::buttons::Button;
 use craft::ui::canvas::{CanvasRulers, RulerText};
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
-use craft::ui::layout_components::Grid;
+use craft::ui::display::{Elide, Icon, Shade, Text};
+use craft::ui::layout_components::{Grid, Row};
+use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::commands::CommandRef;
+use craft::ui::runtime::env::LengthUnits;
 use craft::ui::sections::Section;
-use photocraft_doc::{Layer, LayerContent, LayerId};
+use craft::ui::text::NumberField;
+use photocraft_doc::{Layer, LayerContent, LayerId, SmartSource};
+use photocraft_engine::link_watch::LinkWatchExt;
 use photocraft_engine::prefs::Unit;
 use serde_json::{Value, json};
 
@@ -161,22 +168,82 @@ fn transform_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, 
     // `TransformGroups` is non-exhaustive: start from none and switch the shown groups on.
     let mut groups = TransformGroups::NONE;
     groups.position = true;
-    groups.size = true;
+    // A linked smart object's size is read-only in Photoshop (#14121); X and Y still move it.
+    let linked_size = linked_file(&layer.content).is_some();
+    groups.size = !linked_size;
     let rect = Rect::new(bb[0], bb[1], bb[2], bb[3]);
     let corners = [Point::new(bb[0], bb[1]), Point::new(bb[2], bb[1]), Point::new(bb[2], bb[3]), Point::new(bb[0], bb[3])];
     let row = TransformRow::new(BoxState::new(corners, corners[0]), 0.0);
     let shown = Section::new(tl!("Transform")).show(ui, |ui, _| {
-        TransformFields::new(tl!("Transform"), Bind::given(row), rect, Bind::bound(&mut app.ui.properties_linked))
+        let out = TransformFields::new(tl!("Transform"), Bind::given(row), rect, Bind::bound(&mut app.ui.properties_linked))
             .groups(groups)
             .document(Size::new(dw, dh))
             .rulers(CanvasRulers::new(x_text, y_text, Point::ZERO))
             .size_unit(SizeUnit::length(x_text, y_text))
-            .show(ui)
+            .show(ui);
+        if linked_size {
+            read_only_size(ui, unit, dpi, ppi, [bb[2] - bb[0], bb[3] - bb[1]], [dw, dh]);
+        }
+        out
     });
     let Some(out) = shown.inner else { return };
     // The bound link already holds this pass's toggle; a toggle carries no edit.
     let linked = app.ui.properties_linked;
     apply_transform(app, layer, linked, tol, &out.events);
+}
+
+/// A linked smart object's W and H: read-only fields in the rulers' unit, as Photoshop shows a linked
+/// smart object's size (#14121). `size` is the box's width and height in pixels, `extent` the
+/// document's, the 100% of percent.
+fn read_only_size(ui: &mut egui::Ui, unit: Unit, dpi: f64, ppi: f64, size: [f64; 2], extent: [f64; 2]) {
+    // The value is converted here, so the field keeps and shows the same unit.
+    let lengths = LengthUnits::new(unit_kind(unit), unit_kind(unit), dpi);
+    Row::new().show(ui, |ui, _| {
+        for (label, px, extent) in [(tl!("Width"), size[0], extent[0]), (tl!("Height"), size[1], extent[1])] {
+            NumberField::length(label, Bind::given(Some(unit.from_px(px, dpi, extent, ppi))), lengths).read_only(true).show(ui);
+        }
+    });
+}
+
+/// The file a linked smart object follows (File › Place Linked, Relink to File, Convert to
+/// Linked), as stored in the document; `None` for any other layer. A placed layer read from a PSD
+/// is not one: its path is the uuid of an entry in the PSD's own file table, which PhotoCraft
+/// reads its source from, until a relink or Convert to Linked gives it a file (and drops the PSD
+/// placed-layer data, `psd_raw`).
+pub(crate) fn linked_file(content: &LayerContent) -> Option<&str> {
+    match content {
+        LayerContent::Smart(sm) if sm.psd_raw.is_none() => match &sm.source {
+            SmartSource::Linked { path } => Some(path),
+            SmartSource::Embedded { .. } => None,
+        },
+        _ => None,
+    }
+}
+
+/// The path a linked smart object's file is shown by: the full absolute path, a relative stored
+/// path taken from the document's folder ([`photocraft_engine::doc_path::resolve_in`]), or the
+/// stored text itself when it is not followed.
+fn shown_path(app: &PhotocraftApp, stored: &str) -> String {
+    let document = app.session.active().and_then(|st| st.path.as_deref()).map(std::path::Path::new);
+    photocraft_engine::doc_path::resolve_in(stored, document).map_or_else(|_| stored.to_string(), |p| p.display().to_string())
+}
+
+/// Accessible name and tooltip of the red mark beside a missing linked file's path.
+pub(crate) const MISSING_MARK: &str = "Linked file is missing";
+
+/// The linked file's row below Transform, as in Photoshop (#14121): its full path, wrapped to the
+/// panel; while the file is missing (the last look found nothing, [`photocraft_engine::Session::missing_links`])
+/// a red mark before it, and the path on one line, its leading folders dropped first so the file
+/// name stays. The row follows the file: put back, it shows as before with nothing to do.
+fn linked_file_row(app: &PhotocraftApp, ui: &mut egui::Ui, stored: &str) {
+    let path = shown_path(app, stored);
+    let missing = app.session.missing_links().contains(stored);
+    Row::new().show(ui, |ui, _| {
+        if missing {
+            Icon::new(IconSpec::svg(IconId::new("error"))).tone(Tone::Bad).label(tl!(MISSING_MARK).to_owned()).show(ui);
+        }
+        Text::new(path.clone()).shade(Shade::Muted).elide(if missing { Elide::Path } else { Elide::Off }).show(ui);
+    });
 }
 
 /// Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
@@ -186,6 +253,9 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     if let Some(s) = layer.surface() {
         let bb = frame(layer, app.layer_frame_bounds(layer, s));
         transform_section(app, ui, layer, bb);
+    }
+    if let Some(stored) = linked_file(&layer.content) {
+        linked_file_row(app, ui, stored);
     }
     // Gradient fills: their gradient first, as in Photoshop's Properties panel.
     if matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. })) {
@@ -221,8 +291,12 @@ pub fn selection_align(ui: &mut egui::Ui) {
 }
 
 /// The Quick Actions a layer kind offers, as (label, command id), Photoshop-style: pixel layers get
-/// subject selection, type layers its conversions, shapes and smart objects their own.
+/// subject selection, type layers its conversions, shapes and smart objects their own. A linked
+/// smart object offers Edit Contents, Embed and Convert to Layers, in that order (#14121).
 pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'static str)] {
+    if linked_file(content).is_some() {
+        return &[("Edit Contents", "layer.smartObjects.editContents"), EMBED, ("Convert to Layers", "layer.smartObjects.convertToLayers")];
+    }
     match content {
         LayerContent::Raster(_) => &[("Remove Background", "layer.removeBackground"), ("Select Subject", "select.subject")],
         LayerContent::Text(_) => &[
@@ -244,6 +318,16 @@ pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'stati
     }
 }
 
+/// A linked smart object's Embed Quick Action: Layer › Smart Objects › Embed Linked.
+pub const EMBED: (&str, &str) = ("Embed", "layer.smartObjects.convertToEmbedded");
+
+/// Whether the Quick Action `id` can't run on `content` right now though its command is enabled:
+/// Embed while the linked file is missing (the last look at it found nothing), as Photoshop greys
+/// it, so the button stays, greyed, until the file is back.
+fn greyed(app: &PhotocraftApp, content: &LayerContent, id: &str) -> bool {
+    id == EMBED.1 && linked_file(content).is_some_and(|path| app.session.missing_links().contains(path))
+}
+
 /// The Quick Actions shown right now: the kind's list, limited to commands that exist and are
 /// enabled (Convert to Paragraph Text only for point type, and vice versa).
 pub fn visible_quick_actions(app: &PhotocraftApp, content: &LayerContent) -> Vec<(&'static str, &'static str)> {
@@ -261,11 +345,15 @@ fn quick_actions_section(app: &PhotocraftApp, ui: &mut egui::Ui, content: &Layer
         let columns = if ui.available_width() >= TWO_COLUMNS_FROM { TWO_COLUMNS } else { ONE_COLUMN };
         Grid::new(columns).label(tl!("Quick Actions")).sizing(Sizing::FillWidth).show(ui, |ui, _| {
             for (_, id) in &actions {
-                Button::command(CommandRef::new(*id)).sizing(Sizing::FillWidth).show(ui);
+                Button::command(CommandRef::new(*id)).enabled(!greyed(app, content, id)).sizing(Sizing::FillWidth).show(ui);
             }
         });
     });
 }
+
+#[cfg(test)]
+#[path = "linked_properties_tests.rs"]
+mod linked_properties_tests;
 
 #[cfg(test)]
 mod tests {

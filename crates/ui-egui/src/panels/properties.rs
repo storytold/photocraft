@@ -42,13 +42,15 @@ fn kind_icon(content: &LayerContent) -> &'static str {
 }
 
 /// "Type Layer", "Curves", "Artboard"…
-fn kind_label(layer: &Layer) -> String {
+pub(super) fn kind_label(layer: &Layer) -> String {
     if layer.frame.is_some() {
         return tl!("Frame").into();
     }
     match &layer.content {
         LayerContent::Adjustment(a) => a.label().to_string(),
         LayerContent::Group(g) if g.artboard.is_some() => "Artboard".to_string(),
+        // Photoshop tells a linked smart object apart in the header (#14121).
+        content if crate::layer_props_ui::linked_file(content).is_some() => "Linked Smart Object".to_string(),
         other => format!("{} Layer", other.kind_name()),
     }
 }
