@@ -14,6 +14,7 @@ use craft::ui::contract::{MemoProps, MemoView};
 
 use super::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
+use crate::state::Tool;
 
 /// The props of a shell slot's view: the app the slot reads, which its version stands for. One type per slot, so a
 /// trial and the frame's memo log tell the views apart.
@@ -65,7 +66,7 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 /// The version of the options bar: every tool option (`app.ui.tool_options`, all of which the bar shows; keys, the
 /// canvas menu, the canvas and its task bars, panels and presets write them without a command), the commit and cancel
 /// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
-/// Zoom tool's view, an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
+/// Zoom and Rotate View tools' zoom and rotation ([`bar_view`]), an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
 /// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
 /// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets, the
 /// colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
@@ -80,7 +81,7 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let gesture = crate::canvas::tools::in_gesture(app);
     let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
     let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), hidden);
-    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, paths))
+    version(app, (bar_view(app), sessions, shown, brush(app), colours(app), gesture, paths))
 }
 
 /// The version of the toolbar's footer: the colour chips' two colours, whether the active document is in Quick Mask and
@@ -148,7 +149,7 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
 /// or `prefs.edit`, not as a counted command: units, the language, toolbar slots).
 /// Whether running command `id` leaves every settling region's version as it is: a view command (zoom, fit, print size,
 /// rotate) changes only the canvas view, which every region that shows it holds in its version (the Navigator, the Info
-/// panel and the options bar through [`view`], the status bar in its own props), so it need not count as a command run
+/// panel and the options bar through [`view`] and [`bar_view`], the status bar in its own props), so it need not count as a command run
 /// and run every panel body in the next frame (#15493). While an action is recorded it counts: the Actions panel lists
 /// the step it records.
 pub(crate) fn changes_only_the_view(app: &PhotocraftApp, id: &str) -> bool {
@@ -226,6 +227,17 @@ fn colours(app: &PhotocraftApp) -> [u32; 8] {
     bits
 }
 
+/// The part of the active document's view the options bar shows: the Zoom tool's bar the zoom, the Rotate View tool's
+/// the rotation, every other tool's none (the Hand tool's bar has no view field).
+fn bar_view(app: &PhotocraftApp) -> Option<u64> {
+    let view = crate::canvas::active_view(app)?;
+    match app.ui.tool {
+        Tool::Zoom => Some(view.zoom.to_bits()),
+        Tool::RotateView => Some(view.rotation.to_bits()),
+        _ => None,
+    }
+}
+
 /// The active document's view as the canvas showed it: its zoom, centre and turn.
 fn view(app: &PhotocraftApp) -> Option<[u64; 5]> {
     crate::canvas::active_view(app)
@@ -235,7 +247,6 @@ fn view(app: &PhotocraftApp) -> Option<[u64; 5]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::Tool;
 
     /// The brush, the colours, the type defaults, the tool options, the type caret, the Move tool's rollover and an
     /// adjustment's live preview move the versions of the bars and panels that show them and of no other, so a drag that

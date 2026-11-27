@@ -35,6 +35,11 @@ impl View {
             .aspect(f64::from(aspect))
     }
 
+    /// Takes `zoom` points per document unit, shown at `ppp` device pixels per point, and leaves the centre and rotation.
+    pub(crate) fn set_zoom(&mut self, zoom: f64, ppp: f32) {
+        self.zoom = (zoom * f64::from(ppp)) as f32;
+    }
+
     /// Takes the zoom, centre and rotation of `view`, shown at `ppp` device pixels per point.
     pub(crate) fn set_from(&mut self, view: &CanvasView, ppp: f32) {
         self.zoom = (view.zoom * f64::from(ppp)) as f32;

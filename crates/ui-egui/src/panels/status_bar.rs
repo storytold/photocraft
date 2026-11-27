@@ -1,5 +1,5 @@
 use craft::behavior::CanvasView;
-use craft::behavior::kurbo::Size;
+use craft::behavior::kurbo::{Point, Size};
 use craft::theme::variant::Tone;
 use craft::ui::bars::{Bar, BarKind, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, ShowContainer as _};
@@ -40,8 +40,9 @@ struct StatusProps<'a> {
     values: StatusValues,
     item: StatusItem,
     document: Option<Size>,
-    /// The active document's main canvas as its last pass showed it; a document not yet shown has no readout.
-    view: Option<CanvasView>,
+    /// The zoom of the active document's main canvas as its last pass showed it, the one view field the readout shows
+    /// (a pan leaves it as it is); a document not yet shown has no readout.
+    zoom: Option<f64>,
     message: Option<StatusMessage>,
     out: Outbox<'a, StatusEvent>,
 }
@@ -59,8 +60,8 @@ struct TrailingProps<'a> {
 enum StatusEvent {
     /// The readout's item was picked.
     Item(StatusItem),
-    /// The zoom field edited the view.
-    View(CanvasView),
+    /// The zoom field set the zoom, about the view's centre.
+    Zoom(f64),
     /// The zoom field cut an entry to its range.
     InvalidZoom(InvalidZoom),
     /// The job's Cancel was clicked.
@@ -77,7 +78,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let values = chrome_ui::status_values(app);
     let item = chrome_ui::status_item(&app.ui.chrome);
     let document = app.session.active().map(|st| Size::new(st.doc.size.width as f64, st.doc.size.height as f64));
-    let view = crate::canvas::active_view(app);
+    let zoom = crate::canvas::active_view(app).map(|view| view.zoom);
     let message =
         (!app.ui.status.is_empty()).then(|| StatusMessage::new(app.ui.status.clone()).tone(if app.ui.status_error { Tone::Warn } else { Tone::Neutral }));
     let render_path = chrome_ui::render_path_label(app)
@@ -93,14 +94,14 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let _ = MemoView::new("status-bar-trailing", props, trailing_view).show(ui);
         })
         .show(ui, |ui, _| {
-            let props = StatusProps { values: values.clone(), item, document, view, message: message.clone(), out: Outbox::new(&mut body_sent) };
+            let props = StatusProps { values: values.clone(), item, document, zoom, message: message.clone(), out: Outbox::new(&mut body_sent) };
             let _ = MemoView::new("status-bar", props, body_view).show(ui);
         });
     let (mut picked, mut edited, mut invalid_zoom, mut cancelled) = (None, None, None, false);
     for event in body_sent.into_iter().chain(trailing_sent) {
         match event {
             StatusEvent::Item(item) => picked = Some(item),
-            StatusEvent::View(new) => edited = Some(new),
+            StatusEvent::Zoom(new) => edited = Some(new),
             StatusEvent::InvalidZoom(invalid) => invalid_zoom = Some(invalid),
             StatusEvent::CancelJob => cancelled = true,
         }
@@ -108,11 +109,11 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(picked) = picked {
         chrome_ui::set_status_item(&mut app.ui.chrome, picked);
     }
-    if let Some(new) = edited
+    if let Some(zoom) = edited
         && let Some(i) = app.session.active_index()
     {
         let ppp = app.canvas_ppp();
-        app.ui.views[i].set_from(&new, ppp);
+        app.ui.views[i].set_zoom(zoom, ppp);
     }
     if cancelled && let Some((id, _)) = &job {
         crate::jobs_ui::cancel(app, *id);
@@ -151,14 +152,16 @@ fn body_view(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
 
 /// The members of the status bar's body: the readout, or "No document", and the status message.
 fn body_members(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
-    match (props.document, props.view) {
-        (Some(size), Some(view)) => {
+    match (props.document, props.zoom) {
+        (Some(size), Some(zoom)) => {
+            // The readout reads the zoom alone; the rest of the view is the document's own, which an edit leaves.
+            let view = CanvasView::new(egui::Rect::ZERO, Point::ZERO, zoom);
             let out = StatusReadout::new(Bind::given(view), size, props.item, &props.values).show(ui);
             if let Some(picked) = out.item {
                 props.out.send(StatusEvent::Item(picked));
             }
-            if let Some(view) = out.view.value().copied() {
-                props.out.send(StatusEvent::View(view));
+            if let Some(view) = out.view.value() {
+                props.out.send(StatusEvent::Zoom(view.zoom));
             }
             if let Some(invalid) = out.invalid_zoom {
                 props.out.send(StatusEvent::InvalidZoom(invalid));

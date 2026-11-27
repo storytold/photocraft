@@ -201,3 +201,55 @@ fn the_menu_keys_open_a_menu_after_a_dialog_closes_with_escape() {
     h.run_steps(4);
     assert!(items(&h) > titles, "Alt+F opens the File menu: {} menu items, {titles} titles", items(&h));
 }
+
+/// The options bar and status bar views that ran over the next `steps` frames, summed.
+fn ran_over(h: &mut H, steps: usize, name: &str) -> usize {
+    (0..steps)
+        .map(|_| {
+            h.run_steps(1);
+            views_ran(h, name)
+        })
+        .sum()
+}
+
+/// A pan with a tool whose bar shows no view field runs neither the options bar nor the status bar (it shows the zoom
+/// only); a zoom runs the status bar, and the options bar only while the Zoom tool's bar shows the zoom.
+#[test]
+fn a_pan_runs_neither_bar_and_a_zoom_runs_the_status_bar() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Move;
+    h.run_steps(4);
+    h.state_mut().ui.views[0].center[0] += 40.0;
+    assert_eq!(ran_over(&mut h, 3, "OptionsSlot<"), 0, "a pan runs no options bar");
+    h.state_mut().ui.views[0].center[0] += 40.0;
+    assert_eq!(ran_over(&mut h, 3, "status_bar::StatusProps<"), 0, "a pan runs no status bar");
+
+    h.state_mut().ui.views[0].zoom *= 2.0;
+    let status = ran_over(&mut h, 3, "status_bar::StatusProps<");
+    assert!(status > 0, "a zoom runs the status bar: {status}");
+}
+
+/// The Zoom tool's bar shows the zoom, so a zoom runs it.
+#[test]
+fn a_zoom_runs_the_zoom_tools_options_bar() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Zoom;
+    h.run_steps(4);
+    h.state_mut().ui.views[0].zoom *= 2.0;
+    assert!(ran_over(&mut h, 3, "OptionsSlot<") > 0, "a zoom runs the Zoom tool's bar");
+}
+
+/// A tool option changed outside the bar runs the bar, and the frames after it replay it.
+#[test]
+fn a_tool_option_runs_the_options_bar_once() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Move;
+    h.run_steps(4);
+    assert_eq!(ran_over(&mut h, 2, "OptionsSlot<"), 0, "settled");
+    let on = h.state().ui.tool_options.move_auto_select;
+    h.state_mut().ui.tool_options.move_auto_select = !on;
+    assert!(ran_over(&mut h, 1, "OptionsSlot<") > 0, "a changed option runs the bar");
+    // The frame after the run settles (a run's second pass replays what the first ran); then two idle frames run nothing.
+    h.run_steps(1);
+    assert_eq!(ran_over(&mut h, 2, "OptionsSlot<"), 0, "the bar's own run leaves the version as it was");
+}
