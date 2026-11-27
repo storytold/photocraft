@@ -315,3 +315,28 @@ fn blur_and_sponge_keep_their_own_params() {
         }
     }
 }
+
+#[test]
+fn a_mode_leaves_the_layer_alpha_as_normal_does() {
+    // A layer with an empty half: the Mode blends colour channels only, so the alpha a stroke
+    // leaves behind - including where the sharpened value is read through transparency - is the
+    // alpha Normal leaves.
+    let alpha_row = |s: &Session| {
+        let d = s.active().unwrap();
+        (0..200).map(|x| d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, Y)[3]).collect::<Vec<f32>>()
+    };
+    let run = |mode: Option<&str>| {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 200, "height": 60, "background": "transparent"})).unwrap();
+        s.execute("paint.pencil", json!({"points": [[0, Y], [99, Y]], "size": 40, "color": "#c82828"})).unwrap();
+        s.execute("paint.sharpen", stroke(mode)).unwrap_or_else(|e| panic!("{mode:?}: {e}"));
+        (alpha_row(&s), image(&s))
+    };
+    let (normal_alpha, normal_rgb) = run(None);
+    assert!(normal_alpha.iter().any(|&a| a > 0.5), "the stroke sits on painted and on empty pixels");
+    assert_ne!(normal_rgb, image(&two_tone(8, "rgb", RED, BLUE)), "the stroke changes pixels");
+    for mode in ["darken", "lighten", "hue", "saturation", "color", "luminosity"] {
+        let (alpha, _) = run(Some(mode));
+        assert_eq!(alpha, normal_alpha, "{mode}: the alpha is Normal's alpha");
+    }
+}
