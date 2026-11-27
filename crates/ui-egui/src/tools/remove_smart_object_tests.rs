@@ -124,14 +124,12 @@ fn stroke(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     retouch_ui::finish_stroke(h.state_mut(), Tool::Remove, &[[30.0, 40.0, 1.0], [90.0, 40.0, 1.0]], Mods::default(), false);
 }
 
-/// Frames until the removal has landed: with background jobs on that is when the job's edit is
-/// applied, and the card can only be posted after it. The worker's time, not a frame count, decides
-/// when: a frame that changes nothing on screen takes well under a millisecond.
-fn wait_until_landed(h: &mut Harness<'static, Box<PhotocraftApp>>, layers_before: usize) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while layers(h.state()).len() != layers_before + 1 && std::time::Instant::now() < deadline {
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(1));
+/// Until the removal has landed: with background jobs on, the test waits for the job's worker
+/// (`Session::wait_job`, which applies its edit), and the next frames' `jobs_ui::tick` takes the
+/// job's end, which posts the card.
+fn wait_until_landed(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    for job in h.state().session.jobs() {
+        let _ = h.state_mut().session.wait_job(job.id);
     }
     h.run_steps(3);
 }
@@ -215,7 +213,7 @@ fn the_notice_card_arrives_when_the_removal_runs_as_a_background_job() {
             assert!(retouch_ui::remove_pending_commit(h.state_mut()), "{after_each}: the ✓ applies the waiting strokes");
         }
         assert_eq!(layers(h.state()), before, "{after_each}: the removal is still running as a job");
-        wait_until_landed(&mut h, before.len());
+        wait_until_landed(&mut h);
         let after = layers(h.state());
         assert_eq!(after.len(), before.len() + 1, "{after_each}: the job added the edits layer");
         assert_eq!(name(h.state(), *after.last().unwrap()), "Remove tool edits", "{after_each}");
@@ -265,7 +263,7 @@ fn a_removal_on_a_pixel_layer_with_create_new_layer_notices_nothing() {
         h.state_mut().ui.tool_options.remove_new_layer = true;
         let before = layers(h.state());
         stroke(&mut h);
-        wait_until_landed(&mut h, before.len());
+        wait_until_landed(&mut h);
         let after = layers(h.state());
         assert_eq!(after.len(), before.len() + 1, "background {background}: Create new layer adds the edits layer");
         assert_eq!(name(h.state(), *after.last().unwrap()), "Remove tool edits", "background {background}");

@@ -32,7 +32,7 @@ pub(crate) struct PropertiesAdjust {
     pub channel: usize,
     /// The Levels clipping display.
     pub clipping: Option<LevelsClip>,
-    /// A tone for Color Balance to show, given once: the Reset to defaults shows Midtones again.
+    /// The tone Color Balance shows, as the editor last reported it; the Reset to defaults sets Midtones.
     pub tone: Option<ColorBalanceTone>,
     /// The Color Picker a colour well opened, while it is open.
     pub pick: Option<ColorPick>,
@@ -206,7 +206,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         },
         gradients: if kind == "gradientMap" { gradient_presets(app) } else { Vec::new() },
         swatches: swatches(app),
-        tone: record.tone.take(),
+        tone: record.tone,
         ..Default::default()
     };
     let armed = crate::layer_picker::armed(app).filter(|(layer, _)| *layer == id).map(|(_, picker)| picker);
@@ -218,6 +218,9 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     };
     if picker != armed {
         crate::layer_picker::arm(app, id, picker);
+    }
+    if out.tone.is_some() {
+        record.tone = out.tone;
     }
 
     for event in out.edit {
