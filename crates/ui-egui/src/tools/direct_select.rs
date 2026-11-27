@@ -503,6 +503,9 @@ fn targeted(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
 mod tests;
 
 #[cfg(test)]
+mod nudge_history_tests;
+
+#[cfg(test)]
 mod convert_point_history_tests;
 
 #[cfg(test)]
@@ -513,6 +516,9 @@ mod convert_point_drag_segment_tests;
 
 #[cfg(test)]
 mod delete_key_tests;
+
+#[cfg(test)]
+mod live_shape_warning_tests;
 
 #[cfg(test)]
 mod history_names_tests;

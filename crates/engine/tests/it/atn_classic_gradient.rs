@@ -3,6 +3,7 @@ use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionsFile},
@@ -257,7 +258,7 @@ fn omitted_transparency_and_dither_use_recorded_defaults_during_playback() {
             for s in [&mut actual, &mut control] {
                 s.execute("file.new", json!({"width":8,"height":4,"depth":depth,"background":"#204060"})).unwrap();
             }
-            actual.actions.list = ActionList::from_file(ActionsFile::new(loaded.actions, Vec::new()));
+            actual.actions_mut().list = ActionList::from_file(ActionsFile::new(loaded.actions, Vec::new()));
             actual.execute("actions.play", json!({"action":0})).unwrap();
             // The descriptor contains non-opaque Trns, but omitted UsMs disables them.
             // Dthr=false is explicit, overriding the native command's true default.
@@ -295,7 +296,7 @@ fn recorded_gradients_match_native_pixels_and_undo_at_each_depth() {
                         s.execute("file.new", json!({"width":8,"height":4,"depth":depth,"background":"#204060"})).unwrap();
                     }
                     let before = actual.active().unwrap().doc.clone();
-                    actual.actions.list = ActionList::from_file(ActionsFile::new(loaded.actions, Vec::new()));
+                    actual.actions_mut().list = ActionList::from_file(ActionsFile::new(loaded.actions, Vec::new()));
                     actual.execute("actions.play", json!({"action":0})).unwrap();
                     control
                         .execute(

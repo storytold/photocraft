@@ -187,3 +187,114 @@ fn a_click_on_a_grouped_layer_covering_another_layer_keeps_the_box_open() {
     assert!(app.ui.transform.is_some(), "the box stays open");
     assert_eq!(steps(&app), before);
 }
+
+/// An 800 × 600 document with "A" (red, x 120..220, y 150..250) and "B" (blue, x 300..400) on one
+/// artboard, the loose layer "C" (magenta, 100 × 80 at `loose`) on no board, and an empty second
+/// board 100 px right of the first, hidden when `hidden`. Free Transform is open on A, its box
+/// moved 10 px right. Returns A and the two boards' rects.
+fn on_artboards(loose: [i32; 2], hidden: bool) -> (Box<PhotocraftApp>, LayerId, [photocraft_geom::Rect; 2]) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.ui.extras.rulers = false;
+    app.ui.extras.snap = false;
+    let mut ids = Vec::new();
+    for (name, at, size, color) in [("C", loose, [100, 80], "#ff00ff"), ("B", [300, 150], [100, 100], "#0000ff"), ("A", [120, 150], [100, 100], "#ff0000")] {
+        let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.select", json!({"layer": id})).unwrap();
+        app.run("select.rect", json!({"x": at[0], "y": at[1], "width": size[0], "height": size[1]})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        ids.push(id);
+    }
+    app.run("layer.select", json!({"layer": ids[1], "mode": "add"})).unwrap();
+    app.run("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap();
+    let first = board_rects(&app)[0];
+    let second = [first.x1 + 100, first.y0, 200, first.height() as i32];
+    let board = app.run("layer.new.artboard", json!({"rect": second, "name": "Second"})).unwrap()["layer"].as_u64().unwrap();
+    if hidden {
+        app.run("layer.hideLayers", json!({"layer": board})).unwrap();
+    }
+    app.run("layer.select", json!({"layer": ids[2]})).unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    assert!(doc.layers.iter().all(|l| l.id.0 != ids[2]), "A is on a board");
+    assert!(doc.layers.iter().any(|l| l.id.0 == ids[0]), "C is on no board");
+    let rects = board_rects(&app);
+    assert_eq!(rects.len(), 2);
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, "edit.freeTransform", json!({})).unwrap();
+    shift_right(&mut app);
+    (app, LayerId(ids[2]), [rects[0], rects[1]])
+}
+
+/// The artboards' rects, in document pixels, first board first.
+fn board_rects(app: &PhotocraftApp) -> Vec<photocraft_geom::Rect> {
+    let mut rects: Vec<_> = app.session.active().unwrap().doc.layers.iter().filter_map(|l| l.artboard()).map(|a| a.rect).collect();
+    rects.sort_by_key(|r| r.x0);
+    rects
+}
+
+fn inside_canvas(app: &PhotocraftApp, p: [f64; 2]) {
+    let size = app.session.active().unwrap().doc.size;
+    assert!(p[0] >= 0.0 && p[1] >= 0.0 && p[0] < f64::from(size.width) && p[1] < f64::from(size.height), "{p:?} is inside the canvas size {size:?}");
+}
+
+fn commits(app: &mut PhotocraftApp, a: LayerId, p: [f64; 2]) {
+    inside_canvas(app, p);
+    let before = steps(app);
+    click(app, p);
+    assert!(app.ui.transform.is_none(), "committed at {p:?}");
+    assert_eq!(steps(app), before + 1);
+    assert_eq!(app.session.active().unwrap().history.entries().last().map(ToString::to_string).as_deref(), Some("Free Transform"));
+    assert_eq!(app.session.active().unwrap().selected_layers(), vec![a], "the selection doesn't change");
+}
+
+fn stays_open(app: &mut PhotocraftApp, p: [f64; 2]) {
+    inside_canvas(app, p);
+    let (before, q) = (steps(app), quad(app));
+    click(app, p);
+    assert!(app.ui.transform.is_some(), "the box stays open at {p:?}");
+    assert_eq!(quad(app), q);
+    assert_eq!(steps(app), before);
+}
+
+/// Measured in the reference application (#17019): in an artboard document the pasteboard is what
+/// lies outside the bounding box of the visible boards, also within the canvas size, so a click
+/// there commits one Free Transform step and the transformed layer stays selected. That holds on a
+/// loose layer's pixels out there too.
+#[test]
+fn a_click_outside_the_artboards_commits() {
+    let (mut app, a, [_, second]) = on_artboards([100, 480], false);
+    commits(&mut app, a, [f64::from(second.x1) + 20.0, f64::from(second.y0) + 10.0]);
+    let (mut app, a, _) = on_artboards([100, 480], false);
+    commits(&mut app, a, [150.0, 520.0]);
+}
+
+/// Measured in the reference application (#17019): a hidden board doesn't count, a click on its
+/// area commits.
+#[test]
+fn a_click_on_a_hidden_artboard_commits() {
+    let (mut app, a, [_, second]) = on_artboards([100, 480], true);
+    commits(&mut app, a, [f64::from(second.x0) + 50.0, f64::from(second.y0) + 50.0]);
+}
+
+/// Measured in the reference application (#17019): inside the boards' bounding box the box stays
+/// open: on another layer's pixels on the board, on an empty spot of it, in the gap between two
+/// boards, and on a loose layer's pixels in that gap.
+#[test]
+fn a_click_within_the_artboards_keeps_the_box_open() {
+    let (mut app, _, [first, _]) = on_artboards([100, 480], false);
+    let gap = [f64::from(first.x1) + 50.0, f64::from(first.y0) + 20.0];
+    // B's pixels, then the board between A's box (x 130..230) and B (x 300..400), then the gap.
+    for p in [[350.0, 200.0], [260.0, 200.0], gap] {
+        assert!(app.ui.transform.as_ref().is_some(), "the box is open");
+        stays_open(&mut app, p);
+    }
+    // C fills the 100 px gap between the boards.
+    let (mut app, _, _) = on_artboards([first.x1, first.y0], false);
+    let p = [f64::from(first.x1) + 50.0, f64::from(first.y0) + 40.0];
+    let doc = &app.session.active().unwrap().doc;
+    let hit = photocraft_engine::pick_cmds::layers_at(doc, p[0] as i32, p[1] as i32);
+    assert_eq!(hit.first().and_then(|id| doc.layer(*id)).map(|l| l.name.as_str()), Some("C"), "the click lands on C");
+    stays_open(&mut app, p);
+}
