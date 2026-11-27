@@ -369,9 +369,19 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
         if !doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
             return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
         }
+        let topmost = doc.artboards().last().map(|b| b.2.rect);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // A hidden group keeps today's measure (not measured in the reference).
-        let rect = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) }.unwrap_or(canvas);
+        let bounds = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) };
+        // A group without bounds covers the canvas, or once there are boards, takes the slot
+        // right of the topmost one (#14558). A hidden group keeps the canvas (not measured).
+        let rect = match (bounds, topmost) {
+            (Some(r), _) => r,
+            (None, Some(board)) if l.visible => {
+                right_of(board).ok_or_else(|| bad(cmd, format!("no room for an artboard right of the topmost one (its right edge is x = {})", board.x1)))?
+            }
+            (None, _) => canvas,
+        };
         set_artboard(l, Artboard { rect, background, preset });
         // As in the reference application, the new artboard is Normal at 100 % whatever the group had.
         l.blend = photocraft_color::BlendMode::Normal;
@@ -383,6 +393,14 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// A board the size of `board`, [`GAP`] right of it at the same top; `None` past the 32-bit range
+/// (computed in i64, #931).
+fn right_of(board: Rect) -> Option<Rect> {
+    let x0 = i32::try_from(i64::from(board.x1) + i64::from(GAP)).ok()?;
+    let x1 = i32::try_from(i64::from(x0) + i64::from(board.width())).ok()?;
+    Some(Rect::new(x0, board.y0, x1, board.y1))
 }
 
 /// [`layer_multi_cmds::layer_bounds`](crate::layer_multi_cmds::layer_bounds) of what shows: a
@@ -1527,6 +1545,10 @@ mod from_layers_size_range_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
 mod from_group_hidden_bounds_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_empty_placement_tests.rs"]
+mod from_group_empty_placement_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]

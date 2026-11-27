@@ -380,6 +380,10 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     if command == super::rotate_canvas_ui::COMMAND {
         list = super::rotate_canvas_ui::params();
     }
+    // Auto-Align Layers: the Projection and Lens Correction groups and the text block (#14196).
+    if command == super::auto_align_ui::COMMAND {
+        list = super::auto_align_ui::params(app);
+    }
     rows::custom_rows(app, command, &mut list);
     if command == color_settings_presets::COMMAND {
         // The Settings menu: Custom, a greyed group label and the named setups in groups (#14229).
@@ -583,8 +587,8 @@ fn builder(
             .reset_to(reset.clone())
             .layout(ParamLayout::Stacked)
             .previews(preview)
-            // Alt keeps Rotate Canvas's Cancel a Cancel, as in the reference application (#14462).
-            .alt_resets(key != super::rotate_canvas_ui::COMMAND)
+            // Alt keeps Rotate Canvas's and Auto-Align's Cancel a Cancel, as in the reference application (#14462, #14196).
+            .alt_resets(key != super::rotate_canvas_ui::COMMAND && key != super::auto_align_ui::COMMAND)
             .alert_title(tl!("PhotoCraft"));
         if let Some(canvas) = canvas {
             dialog = dialog.canvas(canvas);
@@ -740,6 +744,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
+    }
+    if command == super::auto_align_ui::COMMAND {
+        super::auto_align_ui::command_params(&mut map, fields);
     }
     // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
     // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
