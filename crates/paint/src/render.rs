@@ -950,11 +950,30 @@ pub struct StrokeRenderer {
     gpu: Option<GpuTiles>,
 }
 
-/// The coverage tiles of a stroke whose coverage a GPU draws.
+/// The coverage tiles of a stroke whose coverage a GPU draws, and what is known of reading each
+/// back. Time is counted in pushes (`epoch`, the push or finish that last ran): a tile was touched
+/// at an epoch, and a read-back asked for at an epoch reflects every stamp up to it.
 #[derive(Clone, Debug, Default)]
 struct GpuTiles {
-    touched: HashSet<(i32, i32)>,
-    fed: HashSet<(i32, i32)>,
+    epoch: u64,
+    tiles: FxHashMap<(i32, i32), GpuTile>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GpuTile {
+    /// The epoch a dab last touched the tile.
+    touched: u64,
+    /// The epoch of the latest read-back asked for.
+    requested: Option<u64>,
+    /// The epoch the tile's stored coverage reflects, if any was fed.
+    have: Option<u64>,
+}
+
+impl GpuTile {
+    /// Whether the stored coverage includes every dab that touched the tile.
+    fn current(&self) -> bool {
+        self.have.is_some_and(|h| h >= self.touched)
+    }
 }
 
 /// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
@@ -1269,6 +1288,7 @@ impl StrokeRenderer {
     /// to stamp. The coverage tiles they reach are noted as touched and the stroke's bounds grow
     /// by their rectangles.
     pub fn push_dabs(&mut self, pts: &[StrokePoint]) -> Vec<Dab> {
+        self.next_gpu_epoch();
         self.generator.push(pts, &mut self.dab_buf, &mut self.dual_buf);
         self.take_gpu_dabs()
     }
@@ -1276,6 +1296,7 @@ impl StrokeRenderer {
     /// [`finish`](Self::finish) without rasterising: the dabs that ending the stroke makes (a lone
     /// first dab).
     pub fn finish_dabs(&mut self) -> Vec<Dab> {
+        self.next_gpu_epoch();
         self.generator.finish(&mut self.dab_buf, &mut self.dual_buf);
         self.take_gpu_dabs()
     }
@@ -1291,9 +1312,11 @@ impl StrokeRenderer {
             }
             self.cov.bounds = self.cov.bounds.union(&rect);
             if let Some(gpu) = self.gpu.as_mut() {
+                let epoch = gpu.epoch;
                 for ty in rect.y0.div_euclid(COV_TILE)..=(rect.y1 - 1).div_euclid(COV_TILE) {
                     for tx in rect.x0.div_euclid(COV_TILE)..=(rect.x1 - 1).div_euclid(COV_TILE) {
-                        gpu.touched.insert((tx, ty));
+                        // A touch makes whatever was fed before stale (`GpuTile::current`).
+                        gpu.tiles.entry((tx, ty)).and_modify(|t| t.touched = epoch).or_insert(GpuTile { touched: epoch, requested: None, have: None });
                     }
                 }
             }
@@ -1308,31 +1331,79 @@ impl StrokeRenderer {
         painted
     }
 
-    /// Every coverage tile (keys `(x / COV_TILE, y / COV_TILE)`) a dab touched, sorted: what the
-    /// GPU's coverage must be read back for.
+    fn next_gpu_epoch(&mut self) {
+        if let Some(g) = self.gpu.as_mut() {
+            g.epoch += 1;
+        }
+    }
+
+    /// Every coverage tile (keys `(x / COV_TILE, y / COV_TILE)`) a dab touched, sorted.
     pub fn touched_keys(&self) -> Vec<(i32, i32)> {
-        let mut keys: Vec<_> = self.gpu.iter().flat_map(|g| g.touched.iter().copied()).collect();
+        let mut keys: Vec<_> = self.gpu.iter().flat_map(|g| g.tiles.keys().copied()).collect();
         keys.sort_unstable();
         keys
     }
 
-    /// How many touched coverage tiles still lack the GPU's coverage.
+    /// How many touched coverage tiles lack coverage that includes every dab that touched them.
     pub fn unfed_count(&self) -> usize {
-        self.gpu.as_ref().map_or(0, |g| g.touched.iter().filter(|k| !g.fed.contains(*k)).count())
+        self.gpu.as_ref().map_or(0, |g| g.tiles.values().filter(|t| !t.current()).count())
+    }
+
+    /// The coverage tiles to read back now, and the epoch to give [`feed_coverage`]
+    /// (Self::feed_coverage) with them: tiles whose coverage is not current, not already asked
+    /// for since their last touch, and untouched by the last `calm` pushes (the stroke's head is
+    /// still changing). The read-back must be recorded after the stamps of every dab pushed so
+    /// far. The tiles count as asked for from here on.
+    pub fn calm_keys(&mut self, calm: u64) -> (Vec<(i32, i32)>, u64) {
+        let Some(g) = self.gpu.as_mut() else { return (Vec::new(), 0) };
+        let epoch = g.epoch;
+        let mut out = Vec::new();
+        for (key, t) in g.tiles.iter_mut() {
+            if !t.current() && t.requested.is_none_or(|r| r < t.touched) && t.touched.saturating_add(calm) <= epoch {
+                t.requested = Some(epoch);
+                out.push(*key);
+            }
+        }
+        out.sort_unstable();
+        (out, epoch)
+    }
+
+    /// Every coverage tile whose coverage is not current, and the epoch to feed them as of: what
+    /// the end of the stroke (after [`finish_dabs`](Self::finish_dabs) and its stamps) reads back.
+    /// They count as asked for.
+    pub fn unfed_keys(&mut self) -> (Vec<(i32, i32)>, u64) {
+        let Some(g) = self.gpu.as_mut() else { return (Vec::new(), 0) };
+        let epoch = g.epoch;
+        let mut out = Vec::new();
+        for (key, t) in g.tiles.iter_mut() {
+            if !t.current() {
+                t.requested = Some(epoch);
+                out.push(*key);
+            }
+        }
+        out.sort_unstable();
+        (out, epoch)
     }
 
     /// Put the GPU's coverage of tile `key` (`COV_TILE`² values, row-major) in the stroke, to be
-    /// composited with the rest. Feeding a tile again replaces it.
-    pub fn feed_coverage(&mut self, key: (i32, i32), values: &[f32]) {
+    /// composited with the rest. `as_of` is the epoch the read-back was asked for at (from
+    /// [`calm_keys`](Self::calm_keys) or [`unfed_keys`](Self::unfed_keys)): the values reflect
+    /// the dabs up to it, so they count as the tile's coverage only if no later dab touched the
+    /// tile; otherwise the tile stays unfed and is read again once it is calm. Coverage older than
+    /// what the tile already holds is ignored.
+    pub fn feed_coverage(&mut self, key: (i32, i32), values: &[f32], as_of: u64) {
         if values.len() != (COV_TILE * COV_TILE) as usize {
             return;
+        }
+        if let Some(t) = self.gpu.as_mut().and_then(|g| g.tiles.get_mut(&key)) {
+            if t.have.is_some_and(|h| h > as_of) {
+                return;
+            }
+            t.have = Some(as_of);
         }
         let mut tile = CovTile::new();
         tile.cov.copy_from_slice(values);
         self.cov.tiles.insert(tile_key(key), tile);
-        if let Some(gpu) = self.gpu.as_mut() {
-            gpu.fed.insert(key);
-        }
     }
 
     /// See [`DabGenerator::wants_time`].
