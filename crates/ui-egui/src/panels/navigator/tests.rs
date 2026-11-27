@@ -1,6 +1,7 @@
 //! The Navigator panel on the whole app: its zoom row shows the canvas's eased camera, and its buttons
 //! follow General › Animated Zoom.
 
+use craft::theme::MotionChoice;
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -9,14 +10,17 @@ use serde_json::json;
 use crate::PhotocraftApp;
 
 /// The app with a 200 × 100 document at 100 % and the Navigator shown, in 60 fps steps.
-fn whole_app(animated_zoom: bool) -> Harness<'static, Box<PhotocraftApp>> {
+fn whole_app(motion: MotionChoice) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut session = photocraft_engine::Session::new();
-        session.edit_prefs(|p| p.general.auto_show_home_screen = false);
+        session.edit_prefs(|p| {
+            p.general.auto_show_home_screen = false;
+            p.interface.motion = motion;
+        });
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
-        app.run("prefs.set", json!({"values": {"general.animatedZoom": animated_zoom}})).unwrap();
+        app.run("prefs.set", json!({"values": {"general.animatedZoom": true}})).unwrap();
         crate::panel_docking::show_panel(&mut app, "navigator", Some(true)).unwrap();
         app.sync_views();
         app
@@ -46,7 +50,7 @@ fn percents(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<f32> {
 /// eased camera, not the target zoom.
 #[test]
 fn navigator_viewport_follows_the_canvas_zoom_ease() {
-    let mut h = whole_app(true);
+    let mut h = whole_app(MotionChoice::Full);
     assert!(percents(&h).iter().any(|p| (p - 100.0).abs() < 0.5), "{:?}", percents(&h));
     let view = &mut h.state_mut().ui.views[0];
     view.request_zoom_animation(true);
@@ -64,4 +68,19 @@ fn navigator_viewport_follows_the_canvas_zoom_ease() {
     assert!(midway, "the row shows the eased zoom while the canvas eases: {seen:?}");
     h.run_steps(90);
     assert!(percents(&h).iter().any(|p| (p - 200.0).abs() < 0.5), "the ease ends on the target: {:?}", percents(&h));
+}
+
+#[test]
+fn navigator_and_canvas_skip_the_zoom_ease_with_reduced_motion() {
+    let mut h = whole_app(MotionChoice::Reduced);
+    let view = &mut h.state_mut().ui.views[0];
+    view.request_zoom_animation(true);
+    view.zoom = 2.0;
+
+    h.run_steps(2);
+    let row = percents(&h);
+    assert!(!row.is_empty() && row.iter().all(|p| (p - 200.0).abs() < 0.5), "the zoom fields show the target: {row:?}");
+    let canvas = crate::canvas::active_view(h.state()).expect("the document has a shown canvas");
+    let zoom = canvas.zoom * f64::from(h.ctx.pixels_per_point());
+    assert!((zoom - 2.0).abs() < 0.005, "the canvas shows the target: {zoom}");
 }
