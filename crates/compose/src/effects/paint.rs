@@ -374,12 +374,34 @@ pub fn gradient_units(angle: f32, w: f32, h: f32) -> (f32, f32) {
 /// Gradient parameter `t` in `0..=1` for pixel centre `(x, y)` inside `bounds`.
 #[allow(clippy::too_many_arguments)]
 pub fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), bounds: Rect, x: f32, y: f32) -> f32 {
+    gradient_t_at(style, angle, scale, reverse, offset, bounds, x, y, false)
+}
+
+/// [`gradient_t`] for a Gradient Overlay (#14907): Radial, Angle and Diamond sample the pixel's
+/// top-left corner, as Linear and Reflected already do, so their centre falls on one pixel
+/// (the reference application's (200, 150) on a 200 × 150 layer at (100, 75)) instead of between
+/// four; a Diamond's radius is one pixel short of half its length (its row and column then
+/// match the measured ones exactly). Linear and Reflected are [`gradient_t`] bit for bit. Gradient
+/// fills, gradient strokes, shape gradients and overlays on `bounds` with an odd width or height
+/// ([`crate::fill_layout::overlay_centres_on_corner`]) were not measured and keep [`gradient_t`].
+#[allow(clippy::too_many_arguments)]
+pub fn overlay_gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), bounds: Rect, x: f32, y: f32) -> f32 {
+    gradient_t_at(style, angle, scale, reverse, offset, bounds, x, y, crate::fill_layout::overlay_centres_on_corner(bounds))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn gradient_t_at(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), bounds: Rect, x: f32, y: f32, overlay: bool) -> f32 {
     let w = bounds.width().max(1) as f32;
     let h = bounds.height().max(1) as f32;
     let cx = bounds.x0 as f32 + w / 2.0 + offset.0 * w;
     let cy = bounds.y0 as f32 + h / 2.0 + offset.1 * h;
     let (s, c) = angle.to_radians().sin_cos();
-    let (dx, dy) = (x - cx, y - cy);
+    let (mut dx, mut dy) = (x - cx, y - cy);
+    // An overlay's Radial, Angle and Diamond sample the pixel's top-left corner (overlay_gradient_t).
+    let centred = matches!(style, GradientStyle::Radial | GradientStyle::Angle | GradientStyle::Diamond);
+    if overlay && centred {
+        (dx, dy) = (dx - 0.5, dy - 0.5);
+    }
     // Distance along the gradient direction (y axis points down).
     let along = dx * c - dy * s;
     let across = dx * s + dy * c;
@@ -393,7 +415,7 @@ pub fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, o
         GradientStyle::Linear => (along - corner) / chord + 0.5,
         GradientStyle::Reflected => ((along - corner) / (chord / 2.0)).abs(),
         GradientStyle::Radial => (dx * dx + dy * dy).sqrt() / (len / 2.0),
-        GradientStyle::Diamond => (along.abs() + across.abs()) / (len / 2.0),
+        GradientStyle::Diamond => (along.abs() + across.abs()) / if overlay { (len / 2.0 - 1.0).max(0.5) } else { len / 2.0 },
         // Clockwise sweep starting at the gradient angle.
         GradientStyle::Angle => ((angle.to_radians() - (-dy).atan2(dx)) / std::f32::consts::TAU).rem_euclid(1.0),
     };
@@ -619,25 +641,40 @@ pub(super) fn paint_fx(
 ) {
     match p {
         FxPaint::Color(c) => paint_color(dst, m, rgb(c), blend, opacity),
-        FxPaint::Gradient(g) => {
-            let prepared = PreparedGradient::new(g);
-            let (angle, scale, offset) = crate::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, shape_bounds);
-            let w = big.width() as usize;
-            paint(
-                dst,
-                m,
-                |i| {
-                    let (x, y) = ((big.x0 + (i % w) as i32) as f32 + 0.5, (big.y0 + (i / w) as i32) as f32 + 0.5);
-                    prepared.sample(gradient_t(g.style, angle, scale, g.reverse, offset, shape_bounds, x, y))
-                },
-                blend,
-                opacity,
-            )
-        }
+        FxPaint::Gradient(g) => paint_gradient(dst, m, g, shape_bounds, big, blend, opacity, false),
         FxPaint::Pattern { name, id, scale } => {
             paint_pattern(dst, m, patterns, name, id, Placement::anchored(anchor, true, (0.0, 0.0), *scale, 0.0), big, blend, opacity)
         }
     }
+}
+
+/// A Gradient Overlay's paint: [`paint_fx`]'s gradient laid out and sampled the overlay way
+/// ([`crate::fill_layout::overlay_gradient_layout`], [`overlay_gradient_t`]; #14907) when
+/// `shape_bounds` is even-sized ([`crate::fill_layout::overlay_centres_on_corner`]), else as today.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn paint_gradient_overlay(dst: &mut Buffer, m: &Map, g: &Gradient, shape_bounds: Rect, big: Rect, blend: BlendMode, opacity: f32) {
+    paint_gradient(dst, m, g, shape_bounds, big, blend, opacity, crate::fill_layout::overlay_centres_on_corner(shape_bounds));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_gradient(dst: &mut Buffer, m: &Map, g: &Gradient, shape_bounds: Rect, big: Rect, blend: BlendMode, opacity: f32, overlay: bool) {
+    let prepared = PreparedGradient::new(g);
+    let (angle, scale, offset) = if overlay {
+        crate::fill_layout::overlay_gradient_layout(g.style, g.angle, g.scale, g.offset, shape_bounds)
+    } else {
+        crate::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, shape_bounds)
+    };
+    let w = big.width() as usize;
+    paint(
+        dst,
+        m,
+        |i| {
+            let (x, y) = ((big.x0 + (i % w) as i32) as f32 + 0.5, (big.y0 + (i / w) as i32) as f32 + 0.5);
+            prepared.sample(gradient_t_at(g.style, angle, scale, g.reverse, offset, shape_bounds, x, y, overlay))
+        },
+        blend,
+        opacity,
+    )
 }
 
 /// The opacity gain of a gradient glow: it is opaque from strength `range²` on (see [`paint_glow`]).

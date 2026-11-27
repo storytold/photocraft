@@ -1051,7 +1051,7 @@ impl<'a> Planner<'a> {
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.paint(l, content, Cov::One, &Paint::OverlayGradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
             }
         }
         for &(_, e) in &rev {
@@ -1395,10 +1395,15 @@ impl<'a> Planner<'a> {
         match paint {
             Paint::None => {}
             Paint::Color(c) => p.color = [c[0], c[1], c[2], 1.0],
-            Paint::Gradient(g) => {
-                // effects::paint_fx: whole-pixel end points (fill_layout::gradient_layout).
-                let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, sb);
-                p.params[0] = [angle, scale, if g.reverse { 1.0 } else { 0.0 }, style_index(g.style)];
+            Paint::Gradient(g) | Paint::OverlayGradient(g) => {
+                // effects::paint_fx: whole-pixel end points (fill_layout::gradient_layout); an
+                // overlay on an even-sized frame is laid out and sampled the overlay way (style + 8
+                // in the shader), as effects::paint_gradient_overlay decides.
+                let overlay = matches!(paint, Paint::OverlayGradient(_)) && photocraft_compose::fill_layout::overlay_centres_on_corner(sb);
+                let layout = if overlay { photocraft_compose::fill_layout::overlay_gradient_layout } else { photocraft_compose::fill_layout::gradient_layout };
+                let (angle, scale, offset) = layout(g.style, g.angle, g.scale, g.offset, sb);
+                let style = style_index(g.style) + if overlay { 8.0 } else { 0.0 };
+                p.params[0] = [angle, scale, if g.reverse { 1.0 } else { 0.0 }, style];
                 p.params[1] = [sb.x0 as f32, sb.y0 as f32, sb.width() as f32, sb.height() as f32];
                 p.params[2][0] = offset.0;
                 p.params[2][1] = offset.1;

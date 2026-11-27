@@ -1418,6 +1418,47 @@ fn satin_size_one_gpu_matches_cpu() {
     assert_eq!(stats.fx_programs, 1, "the GPU built the Satin effect map");
 }
 
+/// #14907: Gradient Overlays sample the corner-centred overlay layout on the GPU as on the CPU,
+/// for every style, scaled Linear and offset centres, while a gradient stroke keeps the shared
+/// pixel-centre sampling. Layers with an odd width or height keep today's layout and sampling on
+/// both.
+#[test]
+fn gradient_overlay_centre_gpu_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let stops: Vec<(f32, Color)> = (0..=96)
+        .map(|k| {
+            let u = k as f32 / 96.0;
+            let v = (-u * u * u + 1.5 * u * u + 0.5 * u).clamp(0.0, 1.0);
+            (u, Color::rgb(v, v, v))
+        })
+        .collect();
+    let styles = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];
+    let shapes = [Rect::new(100, 75, 300, 225), Rect::new(100, 75, 301, 226), Rect::new(100, 75, 301, 225)];
+    for (shape, style) in shapes.into_iter().flat_map(|shape| styles.map(|style| (shape, style))) {
+        for (scale, offset) in [(1.0, (0.0, 0.0)), (0.5, (0.0, 0.0)), (0.1, (0.0, 0.0)), (1.0, (0.25, 0.0)), (0.7, (-0.1, 0.2))] {
+            let gradient = Gradient { stops: stops.clone(), opacity_stops: Vec::new(), style, angle: 90.0, scale, reverse: false, align: true, offset };
+            for effect in [
+                Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: gradient.clone(), dither: false, interpolation: None },
+                Effect::Stroke(StrokeFx {
+                    common: FxCommon::new(BlendMode::Normal, 1.0),
+                    size: 3.0,
+                    position: StrokePosition::Inside,
+                    paint: FxPaint::Gradient(gradient),
+                    overprint: false,
+                }),
+            ] {
+                let mut doc = Document::new("Gradient overlay centre", Size::new(400, 300), ColorMode::Rgb, SampleType::U8);
+                doc.layers.push(Layer::new("Background", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+                let mut layer = Layer::raster("Shape", PixelFormat::RGBA8);
+                layer.surface_mut().unwrap().fill_rect(shape, &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+                layer.effects.items.push(effect);
+                doc.layers.push(layer);
+                diff_rect(&mut g, &doc, doc.bounds(), &format!("{style:?} scale {scale} offset {offset:?} {shape:?}")).unwrap();
+            }
+        }
+    }
+}
+
 /// An anti-aliased blob (disc plus a soft-edged bar and a hole) with partially transparent parts,
 /// so effects see real edge coverage, concavities and interior alpha.
 /// Small layers composite only over their bounds and are copied back into the backdrop (#125):
