@@ -407,6 +407,16 @@ fn interior_effects() -> Vec<(&'static str, Vec<Effect>)> {
     let Effect::DropShadow(mut drop) = Effect::default_drop_shadow() else { unreachable!() };
     drop.distance = 4.0;
     drop.size = 3.0;
+    let pat = checker_pattern();
+    let pattern_overlay = Effect::PatternOverlay {
+        common: FxCommon::new(BlendMode::Normal, 0.8),
+        name: pat.name.clone(),
+        id: pat.id.clone(),
+        scale: 1.0,
+        angle: 0.0,
+        link: true,
+        phase: (2.0, 1.0),
+    };
     vec![
         ("color overlay", vec![overlay(BlendMode::Normal, 0.7)]),
         ("soft light overlay", vec![overlay(BlendMode::SoftLight, 0.8)]),
@@ -428,6 +438,8 @@ fn interior_effects() -> Vec<(&'static str, Vec<Effect>)> {
                 Effect::OuterGlow(glow(BlendMode::Screen)),
             ],
         ),
+        // Paints only in a document holding `checker_pattern`.
+        ("pattern overlay", vec![pattern_overlay]),
     ]
 }
 
@@ -455,9 +467,17 @@ fn interior_effects_as_group_match_the_cpu() {
         cases.push((BlendMode::Normal, 1.0, 1.0));
         for (blend, opacity, fill) in cases {
             let mut d = doc(SampleType::U8, true);
+            d.patterns.push(checker_pattern());
             d.layers.push(underlay(&d, 2));
             d.layers.push(interior_layer(&d, &items, blend, opacity, fill));
             check(&mut g, &d, &format!("{name}, {blend:?}, opacity {opacity}, fill {fill}"));
+            if name == "pattern overlay" && fill > 0.0 {
+                let mut without = d.clone();
+                without.patterns.clear();
+                let painted = photocraft_compose::render(&d, d.bounds());
+                let missing = photocraft_compose::render(&without, without.bounds());
+                assert!(painted.px != missing.px, "{blend:?}, opacity {opacity}, fill {fill}: the pattern must paint");
+            }
         }
     }
 }
@@ -485,6 +505,36 @@ fn individually_blended_clipped_layers_without_transparency_shapes_match_the_cpu
         layers.insert(1, c);
         d.layers.extend(layers);
         check(&mut g, &d, &format!("individually clipped, Transparency Shapes Layer off, {blend:?}, fill {fill}, effects {fx}"));
+    }
+}
+
+/// Blend Interior Effects as Group on a layer clipped to a partly transparent base: its Fill
+/// scales the layer with its overlay atop the base, and the base's alpha stays.
+#[test]
+fn interior_effects_as_group_on_a_clipped_layer_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let effects = interior_effects();
+    for (name, items) in [&effects[0], &effects[7]] {
+        for fill in [0.5, 0.0] {
+            let what = format!("clipped {name}, fill {fill}");
+            let mut d = doc(SampleType::U8, false);
+            d.layers.push(noise_layer("base", d.pixel_format(), Rect::new(4, 4, 44, 36), 6, 0.3));
+            let base_alone = photocraft_compose::render(&d, d.bounds());
+            let mut c = interior_layer(&d, items, BlendMode::Normal, 0.8, fill);
+            c.clipped = true;
+            d.layers.push(c);
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            let mut ungrouped = d.clone();
+            ungrouped.layers[1].advanced.blend_interior = false;
+            let ungrouped = photocraft_compose::render(&ungrouped, ungrouped.bounds());
+            assert!(
+                cpu.px.iter().zip(&ungrouped.px).any(|(a, b)| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 0.05)),
+                "{what}: grouping the interior effects must show"
+            );
+            assert!(cpu.px.iter().zip(&base_alone.px).all(|(a, b)| (a[3] - b[3]).abs() <= 1e-6), "{what}: the clipped layer keeps the base's alpha");
+            photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).expect("renders on the GPU");
+            check(&mut g, &d, &what);
+        }
     }
 }
 
