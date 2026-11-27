@@ -242,15 +242,7 @@ fn the_preview_applies_unicode_selection_ranges() {
     app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
     let id = app.run("type.create", serde_json::json!({"text": "🙂e\u{301}中\rworld  ", "size": 24})).unwrap()["layer"].as_u64().unwrap();
     app.run("layer.select", serde_json::json!({"layer": id})).unwrap();
-    app.ui.text_edit = Some(crate::state::TextEdit {
-        layer: id,
-        document: None,
-        caret: 0,
-        anchor: 0,
-        session: "s".into(),
-        created: false,
-        mask: false,
-    });
+    app.ui.text_edit = Some(crate::state::TextEdit { layer: id, document: None, caret: 0, anchor: 0, session: "s".into(), created: false, mask: false });
     assert_eq!(super::preview_text(&app).as_deref(), Some("🙂e\u{301}中 world"), "the whole text, on one line");
     if let Some(ed) = app.ui.text_edit.as_mut() {
         ed.anchor = 5;
