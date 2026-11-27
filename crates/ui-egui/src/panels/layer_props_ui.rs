@@ -280,8 +280,10 @@ fn transform_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, 
             apply_transform(app, layer, linked, tol, &out.events);
         }
     }
+    // The flip commands act on the active layer, which is the layer shown here, and take no
+    // `layer` parameter (their schema is closed: an unknown key is an error).
     if let Some(id) = flip {
-        run(app, id, json!({"layer": layer.id.0}));
+        run(app, id, json!({}));
     }
 }
 
