@@ -218,6 +218,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: Mods, line: bool, history: Option<Value>) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
+    // Which Remove stroke writes its fill to a new layer above a Smart Object (#12555), settled
+    // before the run: the new layer is the active one afterwards.
+    let remove_edits = tool == Tool::Remove && remove_on_smart_object(app);
     let (cmd, mut p): (&str, Value) = match tool {
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {
@@ -225,7 +228,7 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
                 remove_pending_add(app, points);
                 return true;
             }
-            ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels")))
+            ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels"), remove_edits))
         }
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
@@ -296,6 +299,9 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Ok(r) if tool == Tool::PatternStamp => {
             app.ui.pattern_stamp_phase = r.get("phase").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.pattern_stamp_aligned);
         }
+        // A removal that wrote to a new layer above a Smart Object says so in its result: the inline
+        // one lands here, the job one in [`crate::jobs_ui`]'s end (#12555).
+        Ok(r) if removal_edits_a_smart_object(&r) => notice_edits_layer(app),
         Ok(_) => {}
         // The Art History Brush's source refusals are alerts with OK, as the press-time ones, and
         // not in the status bar as well (#12638). They were measured on a layer's pixels only: a
@@ -313,9 +319,42 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
     true
 }
 
-/// `paint.remove` params from the options bar (without the strokes).
-fn remove_params(o: &crate::state::ToolOptions, composite: bool) -> Value {
-    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer && composite})
+/// `paint.remove` params from the options bar (without the strokes). A Smart Object is never
+/// painted into: its fill always goes to a new layer above it (#12555).
+fn remove_params(o: &crate::state::ToolOptions, composite: bool, smart_object: bool) -> Value {
+    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": (o.remove_new_layer || smart_object) && composite})
+}
+
+/// Whether the Remove tool's stroke lands on a Smart Object layer, which keeps its own pixels while
+/// the fill goes to a new layer above it (#12555).
+fn remove_on_smart_object(app: &PhotocraftApp) -> bool {
+    app.session
+        .active()
+        .is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.layer(id).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Smart(_)))))
+}
+
+/// What the reference says the first time the Remove tool keeps a Smart Object intact (#12555).
+pub(crate) const EDITS_NOTICE: &str = "We created a new layer with your edits to help you make changes without affecting the original content.";
+
+/// The notice's dismiss key: the card's Do not show again stores it, and the notice center then
+/// keeps the notice out of later removals.
+pub(crate) const EDITS_NOTICE_PREF: &str = "removeTool.newLayerNotice";
+
+/// Whether a finished `paint.remove` wrote its fill to a new layer above a Smart Object, which kept
+/// its own pixels (#12555). The result says so itself, which is how the job path learns it too.
+pub(crate) fn removal_edits_a_smart_object(result: &Value) -> bool {
+    result.get("smartObject").and_then(Value::as_bool) == Some(true)
+}
+
+/// Post [`EDITS_NOTICE`]: it stays until closed, and one card at a time.
+pub(crate) fn notice_edits_layer(app: &mut PhotocraftApp) {
+    if crate::notices::shown_titled(app, EDITS_NOTICE) {
+        return;
+    }
+    let id = crate::notices::post(app, EDITS_NOTICE, Vec::new(), craft::theme::variant::Tone::Neutral, Some(EDITS_NOTICE_PREF));
+    if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
+        notice.sticky = true;
+    }
 }
 
 /// The selection a queued Remove stroke was drawn against. A later selection must not
@@ -364,13 +403,22 @@ pub fn remove_pending_commit(app: &mut PhotocraftApp) -> bool {
     let strokes = std::mem::take(&mut app.remove_pending);
     app.remove_trail = None;
     app.remove_pending_target = None;
-    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"));
+    // Taken before the run: a removal that writes to a new layer above a Smart Object makes that
+    // layer the active one (#12555).
+    let smart_object = remove_on_smart_object(app);
+    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"), smart_object);
     p["strokes"] = json!(strokes);
     p["target"] = crate::canvas::paint_target(app);
     app.ui.status.clear();
-    if let Err(e) = app.run("paint.remove", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match app.run("paint.remove", p) {
+        // Inline (the web build, and the tests): the notice. With background jobs on, the run ends
+        // in [`crate::jobs_ui`]'s end, which posts the same notice from the job's result.
+        Ok(r) if removal_edits_a_smart_object(&r) => notice_edits_layer(app),
+        Ok(_) => {}
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
     true
 }
@@ -754,3 +802,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "../smudge_bar_angle_tests.rs"]
+mod smudge_bar_angle_tests;

@@ -113,7 +113,7 @@ impl Policy {
 /// Honoured when files are opened ([`ColorExt::open_document`](crate::color_cmds::ColorExt::open_document)), by Image › Mode conversions
 /// and by "working" profile specs (Convert to Profile, Proof Setup).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", remote = "Self")]
 pub struct ColorSettings {
     /// Working spaces: built-in profile ids (see `edit.profileInfo`) or `.icc` paths.
     pub working_rgb: String,
@@ -131,9 +131,13 @@ pub struct ColorSettings {
     pub intent: String,
     pub bpc: bool,
     pub dither: bool,
-    /// Advanced › "Blend Text Colors Using Gamma" (1 = off; Photoshop's default 1.45): type
-    /// layers mix anti-aliased edges in this gamma (`photocraft_compose::psblend::set_text_gamma`).
+    /// Advanced › "Blend Text Colors Using Gamma": the field's value, 1.00 to 3.00 (Photoshop's
+    /// default 1.45). While [`blend_text_gamma_on`](Self::blend_text_gamma_on) is set, type layers
+    /// mix anti-aliased edges in this gamma ([`text_gamma`](Self::text_gamma),
+    /// `photocraft_compose::psblend::set_text_gamma`); the field keeps it while the box is off.
     pub blend_text_gamma: f32,
+    /// Advanced › the "Blend Text Colors Using Gamma" checkbox (on by default).
+    pub blend_text_gamma_on: bool,
     /// Working Spaces › Spot: the dot gain, in percent at a 50 % dot, that previews of spot
     /// channels add (Photoshop's default Dot Gain 20 %; its menu offers 10–30 % and custom
     /// values). Lives in the compositor too (`photocraft_compose::multichannel::set_spot_dot_gain`).
@@ -163,6 +167,7 @@ impl Default for ColorSettings {
             bpc: true,
             dither: true,
             blend_text_gamma: photocraft_compose::psblend::TEXT_GAMMA,
+            blend_text_gamma_on: true,
             spot_dot_gain: photocraft_compose::multichannel::SPOT_DOT_GAIN,
             monitor_profile: "auto".into(),
             // PhotoCraft's defaults match none of the named setups.
@@ -278,6 +283,7 @@ pub fn preset_setup(from: &ColorSettings, name: &str, monitor_rgb: &str) -> Opti
         bpc: true,
         dither: true,
         blend_text_gamma: photocraft_compose::psblend::TEXT_GAMMA,
+        blend_text_gamma_on: true,
         spot_dot_gain: p.spot,
         preset: p.name.into(),
         // The rest (the monitor profile) is not part of a setup. A setting a setup does
@@ -301,7 +307,39 @@ fn same_setup(a: &ColorSettings, b: &ColorSettings) -> bool {
         && (&a.intent, a.bpc, a.dither) == (&b.intent, b.bpc, b.dither)
 }
 
+/// The lowest text blending gamma the field takes; 1 also mixes the encoded values, as the box off does.
+pub const MIN_TEXT_GAMMA: f32 = 1.0;
+
+impl serde::Serialize for ColorSettings {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        ColorSettings::serialize(self, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ColorSettings {
+    /// Reads the settings, and settings saved before the checkbox (#14243): those held one number,
+    /// `blendTextGamma`, with 1 meaning off. A 1 there loads as the box off with 1.45 in the
+    /// field, any other number as the box on with that number (one out of range is then reported
+    /// by the saved-preferences check, as in the new format).
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let raw = Value::deserialize(deserializer)?;
+        let legacy = raw.as_object().is_some_and(|m| m.contains_key("blendTextGamma") && !m.contains_key("blendTextGammaOn"));
+        let mut settings = ColorSettings::deserialize(raw).map_err(serde::de::Error::custom)?;
+        if legacy && settings.blend_text_gamma == MIN_TEXT_GAMMA {
+            settings.blend_text_gamma = photocraft_compose::psblend::TEXT_GAMMA;
+            settings.blend_text_gamma_on = false;
+        }
+        Ok(settings)
+    }
+}
+
 impl ColorSettings {
+    /// The gamma type layers blend their colours in: the field's value while the box is on, else 1
+    /// (a mix of the encoded values).
+    pub fn text_gamma(&self) -> f32 {
+        if self.blend_text_gamma_on { self.blend_text_gamma } else { 1.0 }
+    }
+
     pub fn intent(&self) -> Intent {
         Intent::parse(&self.intent).unwrap_or(Intent::RelativeColorimetric)
     }
@@ -327,6 +365,10 @@ impl ColorSettings {
 /// Check that each working space resolves to the right colour space and RGB can be both a
 /// source and editing destination for the configured rendering intent.
 pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
+    let g = c.blend_text_gamma;
+    if !(g.is_finite() && (MIN_TEXT_GAMMA..=photocraft_compose::psblend::MAX_TEXT_GAMMA).contains(&g)) {
+        return Err(format!("`blendTextGamma` {g} is not in {MIN_TEXT_GAMMA:.2}..{:.2}", photocraft_compose::psblend::MAX_TEXT_GAMMA));
+    }
     for (space, spec) in [(ColorSpace::Rgb, &c.working_rgb), (ColorSpace::Cmyk, &c.working_cmyk), (ColorSpace::Gray, &c.working_gray)] {
         let p = resolve_profile(spec, None, space_mode(space)).map_err(|e| e.to_string())?;
         if p.color_space != space {
@@ -1487,16 +1529,26 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = str_of("intent") {
         next.intent = Intent::parse(&v).map(|i| i.id().to_string()).unwrap_or(v);
     }
+    // A bool is the checkbox alone (the field keeps its value); a number in range is the field's
+    // value and checks the box, as typing into the field does. `blendTextGammaOn` sets the box
+    // after that, so the dialog can send a value with the box off.
+    let max = f64::from(photocraft_compose::psblend::MAX_TEXT_GAMMA);
     match p.get("blendTextGamma") {
-        Some(Value::Bool(false)) => next.blend_text_gamma = 1.0,
-        Some(Value::Bool(true)) => next.blend_text_gamma = photocraft_compose::psblend::TEXT_GAMMA,
+        Some(Value::Bool(on)) => next.blend_text_gamma_on = *on,
         Some(v) => {
             let g = v
                 .as_f64()
-                .filter(|g| (1.0..=2.2).contains(g))
-                .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`blendTextGamma` must be 1.0..2.2 or a bool".into() })?;
-            next.blend_text_gamma = g as f32;
+                .filter(|g| (f64::from(MIN_TEXT_GAMMA)..=max).contains(g))
+                .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`blendTextGamma` must be {MIN_TEXT_GAMMA:.2}..{max:.2} or a bool") })?;
+            // Two decimals, as the field shows it.
+            next.blend_text_gamma = ((g * 100.0).round() / 100.0) as f32;
+            next.blend_text_gamma_on = true;
         }
+        None => {}
+    }
+    match p.get("blendTextGammaOn") {
+        Some(Value::Bool(on)) => next.blend_text_gamma_on = *on,
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "`blendTextGammaOn` must be a bool".into() }),
         None => {}
     }
     if let Some(v) = p.get("spotDotGain") {
@@ -1522,7 +1574,7 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     };
     validate_settings(&next).map_err(|msg| EngineError::BadParams { cmd: cmd.into(), msg })?;
     if next != s.color().settings {
-        photocraft_compose::psblend::set_text_gamma(next.blend_text_gamma);
+        photocraft_compose::psblend::set_text_gamma(next.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(next.spot_dot_gain);
         s.color_mut().settings = next;
         // Persisted with the preferences.
@@ -1636,7 +1688,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.colorSettings",
             "Color Settings…",
             ["Edit"],
-            r##"{"preset":"Custom|Europe General Purpose 3|Europe Prepress 3|Europe Web/Internet 2|Monitor Color|Japan Color for Newspaper|Japan General Purpose 2|Japan Magazine Advertisement Color|Japan Prepress 2|Japan Web/Internet|North America General Purpose 2|North America Newspaper|North America Prepress 2|North America Web/Internet","workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk|coated-fogra39","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"spotDotGain":0..49=20,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (preset = the Settings menu: a named setup sets the working spaces, policies, Ask boxes and intent, Black Point Compensation and Dither on and Blend Text Colors Using Gamma 1.45, then the other params change those values; the reply's `preset` is that name while the values still match it, else Custom, as after any change made without `preset`; spotDotGain = the Spot working space: the dot gain, in % at a 50 % dot, that spot channel previews add, as Photoshop's Spot menu (Dot Gain 10–30 %, or a custom value); working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
+            r##"{"preset":"Custom|Europe General Purpose 3|Europe Prepress 3|Europe Web/Internet 2|Monitor Color|Japan Color for Newspaper|Japan General Purpose 2|Japan Magazine Advertisement Color|Japan Prepress 2|Japan Web/Internet|North America General Purpose 2|North America Newspaper|North America Prepress 2|North America Web/Internet","workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk|coated-fogra39","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..3.0|bool=1.45,"blendTextGammaOn":bool=true,"spotDotGain":0..49=20,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (preset = the Settings menu: a named setup sets the working spaces, policies, Ask boxes and intent, Black Point Compensation and Dither on and Blend Text Colors Using Gamma 1.45, then the other params change those values; the reply's `preset` is that name while the values still match it, else Custom, as after any change made without `preset`; spotDotGain = the Spot working space: the dot gain, in % at a 50 % dot, that spot channel previews add, as Photoshop's Spot menu (Dot Gain 10–30 %, or a custom value); working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
             always,
             color_settings,
             true,
