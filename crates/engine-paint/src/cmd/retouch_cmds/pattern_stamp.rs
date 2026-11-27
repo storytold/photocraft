@@ -93,7 +93,7 @@ impl Setup {
         let Some(first) = stroke.points.first() else {
             return Err(bad(CMD, "`points` is empty"));
         };
-        let phase = stamp_phase(p, CMD, aligned, first, (pat.width, pat.height))?;
+        let phase = stamp_phase(p, CMD, aligned, first, (pat.width, pat.height), scale == 1.0 && angle == 0.0)?;
         let tile = std::sync::Arc::new(Tile::new(&pat).ok_or_else(|| bad(CMD, "the pattern is empty or too large to paint"))?);
         reject_huge_stroke(CMD, &stroke)?;
         let seed = p.get("seed").and_then(Value::as_u64).unwrap_or_else(|| {
@@ -251,7 +251,7 @@ fn stamp_angle(p: &Value, cmd: &str) -> Result<f32> {
     }
 }
 
-fn stamp_phase(p: &Value, cmd: &str, aligned: bool, first: &StrokePoint, size: (u32, u32)) -> Result<(f32, f32)> {
+fn stamp_phase(p: &Value, cmd: &str, aligned: bool, first: &StrokePoint, size: (u32, u32), native_period: bool) -> Result<(f32, f32)> {
     match p.get("phase") {
         None => {
             if aligned {
@@ -260,7 +260,11 @@ fn stamp_phase(p: &Value, cmd: &str, aligned: bool, first: &StrokePoint, size: (
                 // Each axis starts from half its tile plus one pixel, mirrored about the
                 // stroke's first point. Keep one phase for the complete stroke, independent
                 // of its brush tip. Empty patterns have already been rejected by Setup.
-                let origin = |first: f64, edge: u32| (f64::from(edge / 2 + 1) - first).rem_euclid(f64::from(edge)) as f32;
+                // A native tile offset preserves the sampled pixels only before any scale or rotation.
+                let origin = |first: f64, edge: u32| {
+                    let offset = f64::from(edge / 2 + 1) - first;
+                    if native_period { offset.rem_euclid(f64::from(edge)) as f32 } else { offset as f32 }
+                };
                 Ok((origin(first.x, size.0), origin(first.y, size.1)))
             }
         }

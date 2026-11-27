@@ -170,6 +170,8 @@ fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str,
 fn open_step_editor(app: &mut PhotocraftApp, command: &str, values: &Value) -> Result<DialogId, String> {
     if crate::sizing::is_sizing(command) {
         crate::sizing::open_with(app, command, values).ok_or_else(|| tl!("No document.").into())
+    } else if command == crate::dialogs::fit_image_ui::COMMAND {
+        crate::view_cmds::dialogs::open_command_form(app, command, &label_of(command)).ok_or_else(|| tl!("No document.").into())
     } else if crate::filter_dialog::has_dialog(command)
         || crate::adjust_dialog::has_dialog(command)
         || (command == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app))

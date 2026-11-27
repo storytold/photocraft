@@ -741,6 +741,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
     }
+    if command == crate::dialogs::fit_image_ui::COMMAND {
+        crate::dialogs::fit_image_ui::command_values(fields, &mut map);
+    }
     // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
     // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
     // Drop display-only and other keys a closed schema does not take (Bitmap's Input row is

@@ -65,6 +65,7 @@ pub use paths::{
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, read_file, read_file_limited, write_file};
 pub(crate) use place_steps::PlaceSteps;
+pub use processing::IMAGE_PROCESSOR_FORMATS;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 pub use save::SaveOpts;
 pub(crate) use save::encode;

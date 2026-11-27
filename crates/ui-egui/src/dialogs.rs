@@ -29,7 +29,7 @@ pub(crate) mod params {
 
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
-        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
+        equalize_ui, file_forms, fill_ui, filter_dialog, fit_image_ui, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
         paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
@@ -103,6 +103,11 @@ pub(crate) mod params {
             check: Some(image_processor_ui::check),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
+        },
+        ParamFamily {
+            check: Some(fit_image_ui::check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == fit_image_ui::COMMAND, filter_dialog::run)
         },
         ParamFamily {
             check: Some(crate::view_cmds::dialogs::batch_check),
@@ -241,8 +246,11 @@ pub(crate) mod params {
             let answer = if crate::actions::is_editor(app, id) {
                 // An editor of Record Again or of a paused menu step: its answer is judged as the step requires, with the
                 // values OK runs.
-                let params = crate::filter_dialog::command_params(&result.key, &result.fields);
-                crate::actions::check_editor(app, id, &result.key, &params).map_err(Label::from)
+                let input = if result.key == fit_image_ui::COMMAND { fit_image_ui::check(app, &result) } else { Ok(()) };
+                input.and_then(|()| {
+                    let params = crate::filter_dialog::command_params(&result.key, &result.fields);
+                    crate::actions::check_editor(app, id, &result.key, &params).map_err(Label::from)
+                })
             } else {
                 match family_for(&result.key).and_then(|family| family.check) {
                     Some(check) => check(app, &result),
@@ -270,6 +278,9 @@ pub(crate) mod params {
         settle_picks(app, ctx);
         for id in hosted(app) {
             let key = key_of(app, id);
+            if key.as_deref() == Some(fit_image_ui::COMMAND) {
+                fit_image_ui::answer_input(app, id);
+            }
             let Some(dialog) = dialog_mut(app, id) else { continue };
             let (colour, path, dropper, listing, footer, range) = (
                 dialog.take_color_request(),
@@ -784,6 +795,7 @@ pub mod filter_dialog;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
+pub(crate) mod fit_image_ui;
 pub(crate) mod format_prompts;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;

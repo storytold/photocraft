@@ -223,14 +223,18 @@ pub fn canvas_view(
         crate::spring_tools::note_canvas_press(app);
     }
     if let Some(stored) = stored
-        && let Some(current) = app.ui.views.get(idx)
-        && let Some(asked) = current.pending.strip_prefix(&stored.pending[..])
-        && (View { pending: stored.pending.clone(), ..current.clone() }) == stored
+        && let Some(current) = app.ui.views.get_mut(idx)
     {
-        // View commands asked while the pass ran (a canvas menu row) wait for the next pass.
-        let mut next = view.clone();
-        next.pending.extend_from_slice(asked);
-        app.ui.views[idx] = next;
+        if let Some(asked) = current.pending.strip_prefix(&stored.pending[..])
+            && (View { pending: stored.pending.clone(), ..current.clone() }) == stored
+        {
+            // View commands asked while the pass ran (a canvas menu row) wait for the next pass.
+            view.pending.extend_from_slice(asked);
+            *current = view.clone();
+        } else {
+            // A menu or a tool replaced the view during this pass.
+            view = current.clone();
+        }
     }
     (view, shown.output)
 }

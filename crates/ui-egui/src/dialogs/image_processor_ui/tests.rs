@@ -64,3 +64,31 @@ fn run_dispatches_all_enabled_formats_with_their_own_dimensions() {
     sizes.sort();
     assert_eq!(sizes, [("jpg".into(), 20, 10), ("psd".into(), 10, 5), ("tif".into(), 40, 20)]);
 }
+
+#[test]
+fn processor_dialog_offers_jpeg_psd_and_tiff() {
+    let (mut app, ctx, id) = open();
+    ctx.run_ui(Default::default(), |ui| crate::dialogs::run(&mut app, ui)).textures_delta.clear();
+    let fields = app.framework.dialogs.open_dialogs().into_iter().find(|dialog| dialog.id == id).unwrap().fields.unwrap();
+    let formats: Vec<_> = fields.as_object().unwrap().keys().filter_map(|key| key.strip_suffix("/enabled")).collect();
+    assert_eq!(formats, ["jpeg", "psd", "tiff"]);
+}
+
+#[test]
+fn dimensions_need_both_switches_for_every_format() {
+    use craft::ui::patterns::form_dialogs::DialogFields;
+    for (format, _) in super::IMAGE_PROCESSOR_FORMATS {
+        let mut values = DialogFields::new();
+        for (enabled, resize) in [(false, true), (true, false), (true, true), (false, false)] {
+            values.set(format!("{format}/enabled"), enabled);
+            values.set(format!("{format}/resize"), resize);
+            let mut rows = super::resize_rows(format);
+            super::apply_resize_gates(&mut rows, &values);
+            assert_eq!(rows[0].enabled(&values), enabled, "{format} resize");
+            for row in &rows[1..] {
+                assert_eq!(row.enabled(&values), enabled && resize, "{format} {}", row.key);
+            }
+            assert_eq!(values.bool(&format!("{format}/resize")), Some(resize));
+        }
+    }
+}

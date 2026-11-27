@@ -7,8 +7,9 @@ use craft::theme::Variant;
 use craft::ui::buttons::Button;
 use craft::ui::contract::{LeastWidth, Props as _, Show as _, TooltipSpec, clicked};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamDialog, ParamResult};
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_engine::file_cmds::IMAGE_PROCESSOR_FORMATS;
 use serde_json::{Map, Value};
 
 use crate::PhotocraftApp;
@@ -16,12 +17,29 @@ use crate::PhotocraftApp;
 /// The command id of the dialog.
 pub(crate) const COMMAND: &str = "file.scripts.imageProcessor";
 
-/// The formats the Image Processor saves.
-const FORMATS: [&str; 3] = ["jpeg", "psd", "tiff"];
+/// All formats share resize options. Keep the saved dimensions and resize tick when a format is switched off.
+pub(crate) fn resize_rows(format: &str) -> [Param; 3] {
+    [
+        Param::new(format!("{format}/resize"), tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when(format!("{format}/enabled"), true),
+        Param::new(format!("{format}/width"), tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when(format!("{format}/resize"), true),
+        Param::new(format!("{format}/height"), tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when(format!("{format}/resize"), true),
+    ]
+}
+
+/// Build the dimension rows' enabled condition from both switches. The hosted schema accepts one predicate per row.
+pub(crate) fn apply_resize_gates(params: &mut [Param], fields: &DialogFields) {
+    for param in params {
+        let Some((format, "width" | "height")) = param.key.split_once('/') else { continue };
+        let enabled = format!("{format}/enabled");
+        if !fields.bool(&enabled).unwrap_or(format == "jpeg") {
+            *param = param.clone().enabled_when(enabled, true);
+        }
+    }
+}
 
 /// Folds the `<format>/<option>` values into the `{jpeg: {..}, psd: {..}, tiff: {..}}` objects the command takes.
 pub(crate) fn nest(map: &mut Map<String, Value>) {
-    for format in FORMATS {
+    for (format, _) in IMAGE_PROCESSOR_FORMATS {
         let prefix = format!("{format}/");
         let keys: Vec<String> = map.keys().filter(|key| key.starts_with(&prefix)).cloned().collect();
         let mut options = Map::new();
@@ -54,7 +72,7 @@ pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(),
     if waits_for_transform(app, result.fields.text("source")) {
         return Err(Label::from(tl!("Commit or cancel the transform first")));
     }
-    if FORMATS.iter().any(|format| result.fields.bool(&format!("{format}/enabled")) == Some(true)) {
+    if IMAGE_PROCESSOR_FORMATS.iter().any(|(format, _)| result.fields.bool(&format!("{format}/enabled")) == Some(true)) {
         Ok(())
     } else {
         Err(Label::from(tl!("You must save to at least one file type.")))

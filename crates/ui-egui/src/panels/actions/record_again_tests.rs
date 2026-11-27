@@ -85,6 +85,27 @@ fn sizing() -> Harness<'static, Box<PhotocraftApp>> {
     harness("image.imageSize", json!({"width":4,"height":3,"resample":"nearest"}))
 }
 
+#[test]
+fn fit_image_editor_refuses_an_invalid_dimension() {
+    let mut h = harness("file.automate.fitImage", json!({"width": 4, "height": 3}));
+    let dialog = open(&mut h);
+    let original = h.state().session.actions().list.clone();
+    let size = h.state().session.active().unwrap().doc.size;
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, "width", json!("1/0")).unwrap();
+    assert!(confirm(&mut h, dialog).is_err());
+    assert_eq!(number(&h, dialog, "width"), Some(4.0));
+    assert!(is_open(&h, dialog));
+    assert_eq!(h.state().session.actions().list, original);
+    assert_eq!(h.state().session.active().unwrap().doc.size, size);
+    let alert = crate::dialogs::alerts::alerts(h.state())[0];
+    confirm(&mut h, alert).unwrap();
+    assert_eq!(set_field(&mut h, dialog, "width", json!(6))["ok"], true);
+    confirm(&mut h, dialog).unwrap();
+    let action = h.state().session.actions().list.action(0).unwrap();
+    assert_eq!(action.steps[0].params["width"], json!(6));
+}
+
 /// Cancel preserves the step and document; OK runs only that step and stores its new settings.
 #[test]
 fn seeded_editor_cancels_or_updates_only_the_original_step() {

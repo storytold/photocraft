@@ -117,3 +117,26 @@ fn one_stroke_keeps_its_origin_and_new_stroke_resets_it() {
         assert_patch(&s, (561, 503), (20, 20), (10, 8));
     }
 }
+
+#[test]
+fn transformed_unaligned_stamps_use_the_unwrapped_document_origin() {
+    let points = [(511, 500), (512, 500)];
+    for (scale, angle) in [(200, 0), (150, 30), (100, -45), (50, 0)] {
+        for at in points {
+            let paint = |phase: Value| {
+                let (mut s, id) = fixture(20, 20, 16);
+                let mut options = json!({"scale": scale, "angle": angle});
+                if !phase.is_null() {
+                    options["phase"] = phase;
+                }
+                let result = stamp(&mut s, &id, &[at], 64, options);
+                let st = s.active().unwrap();
+                let pixels = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+                let patch = (-6..=6).flat_map(|x| (-6..=6).map(move |y| pixels.rgba(at.0 + x, at.1 + y))).collect::<Vec<_>>();
+                (result["phase"].clone(), patch)
+            };
+            let raw = json!([11 - at.0, 11 - at.1]);
+            assert_eq!(paint(Value::Null), paint(raw), "scale {scale}, angle {angle}, stroke at {at:?}");
+        }
+    }
+}

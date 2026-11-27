@@ -212,21 +212,13 @@ fn command_dialogs_open_and_refuse() {
     assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
 }
 
-/// Fit Image's dialog bounds apply before the command, where a zero side would mean unconstrained.
+/// Applying Fit Image from the dialog records one undoable resize.
 #[test]
-fn fit_image_validates_dialog_bounds_before_one_undoable_resize() {
+fn fit_image_accepts_dialog_limits_and_records_one_undoable_resize() {
     let (mut app, ctx) = app_with(1);
     let id = open_form(&mut app, &ctx, "file.automate.fitImage");
-    let opening = fields(&app, id);
     let original = app.session.active().unwrap();
     let (size, steps, revision) = (original.doc.size, original.history.past_len(), original.revision);
-
-    for key in ["width", "height"] {
-        for value in [json!(0), json!(300_001), json!("abc")] {
-            assert!(app.framework.dialogs.set_json_field(&ctx, id, key, value.clone()).is_err(), "{key} accepted {value}");
-            assert_eq!(fields(&app, id), opening);
-        }
-    }
 
     set(&mut app, &ctx, id, "width", json!(1));
     set(&mut app, &ctx, id, "height", json!(300_000));

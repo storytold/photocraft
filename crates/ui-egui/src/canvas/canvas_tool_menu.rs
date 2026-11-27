@@ -7,7 +7,7 @@
 use craft::behavior::IconId;
 use craft::draw::ui::crop::{CROP_RATIOS, CROP_SIZES, CropBarWords, CropPresetChoice, CropRatio, CropSettings, CropSizeFields};
 use craft::keymap::Mods;
-use craft::ui::canvas::{CanvasOutput, MomentaryTool, ToolHostResponse};
+use craft::ui::canvas::{CanvasOutput, MomentaryTool, ToolHostResponse, ViewCommands, ViewRequest};
 use craft::ui::canvas_controls::GuidesOutput;
 use craft::ui::contract::overlay::{Anchor, Trigger};
 use craft::ui::contract::{Bind, CommandSet, Entry};
@@ -15,7 +15,7 @@ use craft::ui::menu::Menu;
 use craft::ui::runtime::commands::CommandRef;
 use craft::ui::runtime::env::{Env, UnitKind};
 use egui::{Context, Pos2};
-use photocraft_doc::{ColorMode, LayerContent};
+use photocraft_doc::{ColorMode, DocId, LayerContent};
 use photocraft_engine::prefs::{self, CanvasColor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -85,6 +85,9 @@ pub struct CanvasToolMenu {
     /// adopts a menu opened outside it.
     #[serde(skip, default = "no_canvas")]
     pub canvas: egui::Id,
+    /// Document and point captured by a Zoom menu. Both belong to the press that opened it.
+    #[serde(skip)]
+    zoom_at: Option<(DocId, [f64; 2])>,
     pub has_selection: bool,
     #[serde(default)]
     pub has_path: bool,
@@ -1597,6 +1600,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
         tool,
         kind: MenuKind::Tool,
         canvas: egui::Id::NULL,
+        zoom_at: None,
         has_selection: false,
         has_path: false,
         path_name: None,
@@ -1627,6 +1631,9 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
         MenuKind::View => {
             if !is_view_tool(tool) {
                 return false;
+            }
+            if tool == Tool::Zoom {
+                menu.zoom_at = app.session.active().map(|state| (state.doc.id, doc));
             }
             menu.under = (tool != app.ui.tool).then_some(app.ui.tool);
             menu.kind = kind;
@@ -1723,10 +1730,52 @@ fn capture(app: &mut PhotocraftApp, menu: &mut CanvasToolMenu, doc: [f64; 2], po
     }
 }
 
-/// A view menu row: the View menu's item, which asks the canvas for its own command when the row is one (zoom, fit,
-/// 100%, Fill Screen: the command its chord fires, zooming about the centre).
-fn choose_view(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<(), String> {
-    crate::menus::invoke(app, ctx, command, json!({})).map(|_| ())
+/// Temporary Zoom keeps the press under the cursor. The selected Zoom tool uses the view centre unless
+/// Zoom Clicked Point to Center is enabled.
+fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    let step = match command {
+        "view.zoomIn" => ViewCommands::ZoomIn,
+        "view.zoomOut" => ViewCommands::ZoomOut,
+        _ => return crate::menus::invoke(app, ctx, command, json!({})).map(|_| ()),
+    };
+    let Some((document, point)) = menu.zoom_at else { return crate::menus::invoke(app, ctx, command, json!({})).map(|_| ()) };
+    let Some(index) = app.session.active_index().filter(|&i| app.session.documents().get(i).is_some_and(|state| state.doc.id == document)) else {
+        return Ok(());
+    };
+    let pref = app.session.prefs();
+    let center = pref.tools.zoom_clicked_point_to_center;
+    if !center && app.ui.spring.is_none() {
+        return crate::menus::invoke(app, ctx, command, json!({})).map(|_| ());
+    }
+    let animated = pref.general.animated_zoom;
+    let shown = super::document_display::active_view(app);
+    crate::menus::invoke(app, ctx, command, json!({}))?;
+    let Some(shown) = shown else { return Ok(()) };
+    let target = super::document_display::view_target(app, index);
+    let ppp = app.canvas_ppp();
+    let view = app.ui.views.get_mut(index).ok_or("no document view")?;
+    // Keep the normal command's authorization and journal. If another view command is already
+    // waiting, leave the queue intact so its steps still run in order.
+    if view.pending.as_slice() != [ViewRequest::Command(step)] {
+        return Ok(());
+    }
+    view.pending.pop();
+    let mut next = view.canvas_view(shown.rect, ppp, shown.flip_x, shown.aspect as f32);
+    if step.apply(&mut next, &target, None, ppp, &craft::behavior::canvas::ZoomScheme::PHOTOSHOP) {
+        use craft::behavior::kurbo::Point;
+        let doc = Point::new(point[0], point[1]);
+        let screen = Pos2::new(menu.pos[0], menu.pos[1]);
+        let zoom = next.zoom * f64::from(ppp);
+        let screen = if center { next.rect.center() } else { screen };
+        craft::behavior::canvas::zoom::anchor(&mut next, screen, doc, zoom, ppp);
+        view.request_zoom_animation(animated);
+        if animated {
+            view.zoom_from = Some(((shown.zoom * f64::from(ppp)) as f32, [shown.center.x as f32, shown.center.y as f32]));
+        }
+        view.zoom_anchor = (animated && !center).then_some((point, [screen.x, screen.y]));
+        view.set_from(&next, ppp);
+    }
+    Ok(())
 }
 
 /// Runs a row of the open menu and closes it.
@@ -1761,7 +1810,7 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
             MenuKind::Crop { .. } => choose_crop(app, &menu, command),
             MenuKind::Guide => choose_guide(app, ctx, command),
             MenuKind::Pasteboard => choose_pasteboard(app, &menu, command),
-            MenuKind::View => choose_view(app, ctx, command),
+            MenuKind::View => choose_view(app, ctx, &menu, command),
             MenuKind::TypeEdit { .. } if is_spelling(&menu, command) => choose_spelling(app, &menu, command),
             MenuKind::TypeEdit { .. } | MenuKind::TypeLayer { .. } => choose_type(app, ctx, command),
             MenuKind::Layers { .. } | MenuKind::BrushMode { .. } => Ok(()),

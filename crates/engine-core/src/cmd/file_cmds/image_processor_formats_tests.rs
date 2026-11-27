@@ -146,17 +146,12 @@ fn legacy_format_and_resize_parameters_still_work() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = crate::session();
     document(&mut s, "Source", 8).unwrap();
-    let result = s
-        .execute(
-            COMMAND,
-            json!({
-                "source": "current", "output": dir.path(), "format": "png", "width": 20
-            }),
-        )
-        .unwrap();
-    assert_eq!(result["errors"], json!([]));
-    let files = paths(&result).unwrap();
-    assert_eq!(files, [dir.path().join("Source.png")]);
-    let png = reopen(&files[0]).unwrap();
-    assert_eq!((png.size.width, png.size.height), (20, 10));
+    for format in ["png", "webp"] {
+        let result = s.execute(COMMAND, json!({"source": "current", "output": dir.path(), "format": format, "width": 20})).unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        let files = paths(&result).unwrap();
+        assert_eq!(files, [dir.path().join(format!("Source.{format}"))]);
+        let exported = reopen(&files[0]).unwrap();
+        assert_eq!((exported.size.width, exported.size.height), (20, 10));
+    }
 }

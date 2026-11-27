@@ -116,7 +116,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "source must be folder, current or open".into() }),
     };
     let output = str_param(p, "output", cmd)?.to_string();
-    if p.get("format").is_none() && ["jpeg", "psd", "tiff"].iter().any(|key| p.get(key).is_some()) {
+    if p.get("format").is_none() && IMAGE_PROCESSOR_FORMATS.iter().any(|(key, _)| p.get(key).is_some()) {
         return image_processor_formats(s, p, source, &output);
     }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("jpg");
@@ -158,6 +158,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
 const IMAGE_PROCESSOR: &str = "file.scripts.imageProcessor";
 const IMAGE_PROCESSOR_NO_FORMAT: &str = "You must save to at least one file type.";
 const IMAGE_PROCESSOR_NO_SOURCE: &str = "There were no source files that could be opened by PhotoCraft.";
+pub const IMAGE_PROCESSOR_FORMATS: [(&str, &str); 3] = [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif")];
 
 fn image_processor_folder_inputs(p: &Value, output: &str) -> Result<Vec<BatchInput>> {
     if p.get("input").or_else(|| p.get("files")).and_then(Value::as_str) == Some("") {
@@ -254,7 +255,7 @@ enum ProcessorInputs<'a> {
 fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -> Result<Value> {
     // Resolve all settings and collect inputs before a format can write any files.
     let mut formats = Vec::new();
-    for (key, extension) in [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif")] {
+    for (key, extension) in IMAGE_PROCESSOR_FORMATS {
         if let Some(options) = p.get(key)
             && let Some(format) = processor_format(s, key, extension, options)?
         {

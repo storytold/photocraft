@@ -53,6 +53,11 @@ fn opened(id: DialogId) -> Value {
     json!({"dialog": id.value().to_string()})
 }
 
+pub(crate) fn open_command_form(app: &mut PhotocraftApp, id: &str, label: &str) -> Option<DialogId> {
+    let (rows, fields) = params_for(app, id)?;
+    Some(open_form(app, id, label, rows, fields, Value::Null))
+}
+
 /// Opens the hosted parameter form of command `id`. `fixed` holds values the command needs that no row edits.
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
@@ -64,7 +69,11 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
-        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        let mut params = params.clone();
+        if image_processor {
+            image_processor_ui::apply_resize_gates(&mut params, fields);
+        }
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params).values(Bind::bound(fields));
         if image_processor {
             image_processor_ui::settings_footer(dialog)
         } else if calculations {
@@ -293,11 +302,9 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             let kept = app.session.prefs().dialogs.get(photocraft_engine::file_cmds::FIT_IMAGE).cloned().unwrap_or_default();
             let size = |key: &str| kept.get(key).and_then(Value::as_u64).filter(|v| (1..=300_000).contains(v)).and_then(|v| i64::try_from(v).ok());
             let enlarge = kept.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false);
-            plain(vec![
-                Param::new("width", tl!("Width"), ParamKind::int(Some(1), Some(300_000), size("width").unwrap_or(i64::from(w)))).not_remembered(),
-                Param::new("height", tl!("Height"), ParamKind::int(Some(1), Some(300_000), size("height").unwrap_or(i64::from(h)))).not_remembered(),
-                Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered(),
-            ])
+            let mut rows = Vec::from(crate::dialogs::fit_image_ui::rows(size("width").unwrap_or(i64::from(w)), size("height").unwrap_or(i64::from(h))));
+            rows.push(Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered());
+            plain(rows)
         }
         crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows()),
         "file.export.layersToFiles" => {
@@ -477,35 +484,38 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("saturation", tl!("Saturation"), ParamKind::number(None, None, 20.0, 1.0, 0)),
         ]),
         crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(dir.clone())),
-        "file.scripts.imageProcessor" => plain(vec![
-            choice(
-                "source",
-                tl!("Source"),
-                opts(&[("current", tl!("Current document")), ("open", tl!("All open documents")), ("folder", tl!("Folder"))]),
-                if doc.is_some() { "current" } else { "folder" },
-            ),
-            folder("input", tl!("Input Folder"), dir.clone()).visible_when("source", "folder"),
-            Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)).visible_when("source", "folder"),
-            folder("output", tl!("Output Folder"), format!("{dir}/processed")),
-            Param::section(tl!("File Type")),
-            // One section per format: the checkbox that enables it, then its own options and size.
-            Param::new("jpeg/enabled", tl!("Save as JPEG"), ParamKind::bool(true)),
-            Param::new("jpeg/quality", tl!("Quality"), ParamKind::number(Some(1.0), Some(12.0), 5.0, 1.0, 2)).enabled_when("jpeg/enabled", true),
-            Param::new("jpeg/convertToSrgb", tl!("Convert Profile to sRGB"), ParamKind::bool(false)).enabled_when("jpeg/enabled", true),
-            Param::new("jpeg/resize", tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when("jpeg/enabled", true),
-            Param::new("jpeg/width", tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("jpeg/resize", true),
-            Param::new("jpeg/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("jpeg/resize", true),
-            Param::new("psd/enabled", tl!("Save as PSD"), ParamKind::bool(false)),
-            Param::new("psd/maximizeCompatibility", tl!("Maximize Compatibility"), ParamKind::bool(true)).enabled_when("psd/enabled", true),
-            Param::new("psd/resize", tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when("psd/enabled", true),
-            Param::new("psd/width", tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("psd/resize", true),
-            Param::new("psd/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("psd/resize", true),
-            Param::new("tiff/enabled", tl!("Save as TIFF"), ParamKind::bool(false)),
-            Param::new("tiff/lzw", tl!("LZW Compression"), ParamKind::bool(false)).enabled_when("tiff/enabled", true),
-            Param::new("tiff/resize", tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when("tiff/enabled", true),
-            Param::new("tiff/width", tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("tiff/resize", true),
-            Param::new("tiff/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("tiff/resize", true),
-        ]),
+        "file.scripts.imageProcessor" => {
+            let mut rows = vec![
+                choice(
+                    "source",
+                    tl!("Source"),
+                    opts(&[("current", tl!("Current document")), ("open", tl!("All open documents")), ("folder", tl!("Folder"))]),
+                    if doc.is_some() { "current" } else { "folder" },
+                ),
+                folder("input", tl!("Input Folder"), dir.clone()).visible_when("source", "folder"),
+                Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)).visible_when("source", "folder"),
+                folder("output", tl!("Output Folder"), format!("{dir}/processed")),
+                Param::section(tl!("File Type")),
+            ];
+            use crate::dialogs::image_processor_ui::resize_rows;
+            rows.extend([
+                Param::new("jpeg/enabled", tl!("Save as JPEG"), ParamKind::bool(true)),
+                Param::new("jpeg/quality", tl!("Quality"), ParamKind::number(Some(1.0), Some(12.0), 5.0, 1.0, 2)).enabled_when("jpeg/enabled", true),
+                Param::new("jpeg/convertToSrgb", tl!("Convert Profile to sRGB"), ParamKind::bool(false)).enabled_when("jpeg/enabled", true),
+            ]);
+            rows.extend(resize_rows("jpeg"));
+            rows.extend([
+                Param::new("psd/enabled", tl!("Save as PSD"), ParamKind::bool(false)),
+                Param::new("psd/maximizeCompatibility", tl!("Maximize Compatibility"), ParamKind::bool(true)).enabled_when("psd/enabled", true),
+            ]);
+            rows.extend(resize_rows("psd"));
+            rows.extend([
+                Param::new("tiff/enabled", tl!("Save as TIFF"), ParamKind::bool(false)),
+                Param::new("tiff/lzw", tl!("LZW Compression"), ParamKind::bool(false)).enabled_when("tiff/enabled", true),
+            ]);
+            rows.extend(resize_rows("tiff"));
+            plain(rows)
+        }
         "file.automate.batch" => batch_form(app, &dir),
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => channel_form(app, id),
         _ => None,
@@ -1117,10 +1127,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app).value().to_string()}))),
         "file.export.dataSetsAsFiles" if cfg!(target_arch = "wasm32") => Some(Err(tl!("Data Sets as Files is unavailable on the web").to_string())),
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
-        _ if is_form(id) => {
-            let (rows, fields) = params_for(app, id)?;
-            Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))
-        }
+        _ if is_form(id) => open_command_form(app, id, label).map(|dialog| Ok(opened(dialog))),
         _ => None,
     }
 }
