@@ -44,68 +44,50 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
     out
 }
 
-/// The Diffusion the Healing Brush's field holds by default. At 5 the stroke reads its source
-/// texture exactly as it did before the field existed (#12103).
+/// The Diffusion the Healing Brush's field holds by default (#12103).
 const DEFAULT_DIFFUSION: u8 = 5;
-
-/// The Gaussian the Diffusion field mixes the source texture with, in pixels. It reads
-/// `ceil(3·sigma)` pixels around each output pixel, so it spans a typical texture cell.
-const DIFFUSION_SIGMA: f32 = 2.0;
 
 /// Optional whole-number `diffusion` in 1..7, absent or null being 5. Written here because the
 /// two level readers of the same family, `patch::level` and `content_aware_move::level`, are
-/// private to their own modules (#12103).
+/// private to their own modules (#12103). Unlike those two it refuses a fraction outright: the
+/// field holds whole numbers, so `5.5` is an error rather than a rounded 6.
 fn diffusion_param(p: &Value, cmd: &str) -> Result<u8> {
     match p.get("diffusion") {
         None | Some(Value::Null) => Ok(DEFAULT_DIFFUSION),
         Some(v) => match v.as_f64() {
-            Some(x) if x.is_finite() && (1.0..=7.0).contains(&x) => Ok(x.round() as u8),
-            _ => Err(bad(cmd, "`diffusion` must be a number 1..7")),
+            Some(x) if x.is_finite() && x.fract() == 0.0 && (1.0..=7.0).contains(&x) => Ok(x as u8),
+            _ => Err(bad(cmd, "`diffusion` must be a whole number 1..7")),
         },
     }
-}
-
-/// Diffusion (#12103): how far the source texture's own detail spreads before it is blended. 5
-/// leaves the texture as it is; above it the blurred texture mixes in and the detail diffuses away,
-/// below it the blur is subtracted, so the texture keeps more of its edges. The reference
-/// application's pixels for the other six values are not measured, so this is our engine's own
-/// model and its tests only compare one value with another. Colour channels only: the alpha
-/// channel says whether a source pixel exists there at all, and stays as it was.
-fn diffuse_texture(fmt: &PixelFormat, src: &Region, diffusion: u8) -> Region {
-    let (w, h, ch) = (src.width(), src.height(), src.ch);
-    let alpha = super::alpha_index(fmt);
-    let blurred = photocraft_algo::retouch::local_blur(&src.data, w, h, ch, alpha, (0, 0, w, h), DIFFUSION_SIGMA);
-    // Diffusion 1 pulls the blur a whole texture's worth off, 7 puts the blurred texture in whole.
-    let t = (f64::from(diffusion) - f64::from(DEFAULT_DIFFUSION)) * 0.5;
-    let mut data = src.data.clone();
-    for (px, bl) in data.chunks_exact_mut(ch).zip(blurred.chunks_exact(ch)) {
-        // Both sides of the zip span exactly `ch` channels, so `c` is always a channel index.
-        for (c, v) in px.iter_mut().enumerate() {
-            if Some(c) != alpha {
-                *v += (t * (f64::from(bl[c]) - f64::from(*v))) as f32;
-            }
-        }
-    }
-    clamp_samples(fmt, &mut data);
-    Region { rect: src.rect, ch, data }
 }
 
 /// Use Legacy (#12103): the older Healing Brush blend. The source texture keeps its own pixels and
 /// takes the destination's average colour over the healed area, instead of the gradient-domain
 /// solve of [`heal_region`] - so the dab keeps its edge rather than melting into its surroundings.
-/// The reference application's legacy blend is a different algorithm, and its measured levels are
-/// not reproduced here (that row is open on the ticket); what this engine pins is that Use Legacy
-/// gives its own blend of the same click, inside the same tip.
+/// That average is matched in CIE L\*a\*b\* (`photocraft_color::convert`, the same conversion the
+/// Color Picker and the Lab document mode use): transferring a neutral texture onto a coloured
+/// ground channel by channel costs the reds and blues the ticket's measured legacy row keeps. An
+/// Grayscale, CMYK or Lab document, where the ticket measured nothing, takes the mean channel by
+/// channel as it always has.
 fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> Region {
     let n = src.ch;
     let alpha = super::alpha_index(fmt);
-    // The mean colour difference between destination and source over the healed area: the level
-    // the texture is brought to. Both regions cover the same rect, and the mask is dense over it.
+    let lab = fmt.mode == photocraft_color::ColorMode::Rgb && n >= 3;
+    // One value per channel, in the space the mean is taken in. Both regions cover the same rect
+    // and the mask is dense over it.
+    let space = |px: &[f32]| {
+        let mut v = px.to_vec();
+        if lab {
+            v[0..3].copy_from_slice(&photocraft_color::convert::srgb_to_lab([px[0], px[1], px[2]]));
+        }
+        v
+    };
     let mut sums = vec![0.0f64; n];
     let mut count = 0usize;
     for (i, m) in mask.iter().enumerate() {
         let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
         let (Some(want), Some(have)) = (dst.data.get(at..at + n), src.data.get(at..at + n)) else { continue };
+        let (want, have) = (space(want), space(have));
         // `want`, `have` and `sums` all hold one value per channel, so `c` is a channel index.
         for (c, v) in sums.iter_mut().enumerate() {
             *v += f64::from(want[c]) - f64::from(have[c]);
@@ -119,12 +101,21 @@ fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> 
     let shift: Vec<f32> = sums.into_iter().map(|v| (v / count as f64) as f32).collect();
     for (i, m) in mask.iter().enumerate() {
         let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
-        let (Some(tex), Some(want)) = (src.data.get(at..at + n), out.data.get_mut(at..at + n)) else { continue };
-        // `tex`, `want` and `shift` hold one value per channel, and `count` is past its zero
-        // guard above, so every index here is a channel index.
-        for (c, v) in want.iter_mut().enumerate() {
-            *v = if Some(c) == alpha { tex[c] } else { tex[c] + shift[c] };
+        let (Some(tex), Some(slot)) = (src.data.get(at..at + n), out.data.get_mut(at..at + n)) else { continue };
+        // `tex`, `slot` and `shift` hold one value per channel, and `count` is past its zero guard
+        // above, so every index here is a channel index. The alpha channel marks whether a source
+        // pixel exists at all, so it comes over unshifted.
+        let mut px = space(tex);
+        for (c, v) in px.iter_mut().enumerate() {
+            if Some(c) != alpha {
+                *v += shift[c];
+            }
         }
+        if lab {
+            let rgb = photocraft_color::convert::lab_to_srgb([px[0], px[1], px[2]]);
+            px[0..3].copy_from_slice(&rgb);
+        }
+        slot.copy_from_slice(&px);
     }
     clamp_samples(fmt, &mut out.data);
     out
@@ -142,9 +133,12 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     // The options bar's Use Legacy check box and Diffusion field (#12103), read before anything is
-    // sampled so an out-of-range value costs no work.
+    // sampled so an out-of-range value costs no work. Diffusion is accepted, validated and
+    // remembered - the bar, a preset and an action step all keep it - but its pixels for the values
+    // other than 5 were never measured, so every whole value 1..7 paints today's stroke: the field
+    // costs nothing until that row of the ticket is measured.
     let legacy = flag(p, "legacy", false);
-    let diffusion = diffusion_param(p, CMD)?;
+    diffusion_param(p, CMD)?;
     let which = sample_layers(p, CMD)?;
     let source = super::clone_sampling::resolve(s, p, CMD)?;
     let mode = blend_param(p, CMD)?;
@@ -183,9 +177,6 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
             };
             let dst = if fmt.alpha && !surf.format().alpha { super::clone_sampling::opaque_alpha(dst, surf.format()) } else { dst };
             let mask: Vec<bool> = cov.iter().zip(src.data.chunks_exact(fmt.channels())).map(|(c, pixel)| *c > 0.0 && has_source(pixel)).collect();
-            // Diffusion works on the texture before either blend reads it, so both arms get the
-            // texture the field asks for; 5 leaves the stroke's pixels as they are today.
-            let src = if diffusion == DEFAULT_DIFFUSION { src } else { diffuse_texture(&fmt, &src, diffusion) };
             let mut healed = if legacy { legacy_heal(&fmt, &src, &dst, &mask) } else { heal_region(&fmt, &src, &dst, &mask) };
             for (pixel, sample) in healed.data.chunks_exact_mut(fmt.channels()).zip(src.data.chunks_exact(fmt.channels())) {
                 if !has_source(sample) {
