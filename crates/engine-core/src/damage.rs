@@ -170,6 +170,8 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         advanced,
         video: _,
         xmp: _,
+        // A generative layer draws the pixels of the variation it shows, compared as its content.
+        generative: _,
     } = a;
     *id == b.id
         && *visible == b.visible

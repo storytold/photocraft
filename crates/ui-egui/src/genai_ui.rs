@@ -54,9 +54,9 @@ pub(crate) const FAMILY: ParamFamily = ParamFamily { footer: Some(footer), cance
 /// Shell state that must not be serialised or inspected.
 #[derive(Default)]
 pub struct Runtime {
-    /// Variation thumbnails for the Properties panel, by variation layer: (pixels fingerprint,
-    /// texture).
-    thumbs: std::collections::HashMap<LayerId, (u64, egui::TextureHandle)>,
+    /// Variation thumbnails for the Properties panel, by generative layer and variation: (pixels
+    /// fingerprint, texture).
+    thumbs: std::collections::HashMap<(LayerId, usize), (u64, egui::TextureHandle)>,
     /// Fills in progress, as drawn ([`pending`]).
     pending: pending::Pending,
     /// The setup dialog's state ([`setup`]); holds what is typed in the key field, outside the
@@ -396,10 +396,9 @@ fn surface_fingerprint(s: &photocraft_raster::Surface) -> u64 {
     h.finish()
 }
 
-/// The selection-shaped crop of a variation: its pixels inside the mask's bounds, faded where the
-/// mask hides them.
-fn variation_image(variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) -> Option<egui::ColorImage> {
-    let s = variation.surface()?;
+/// The mask-shaped crop of a variation: its pixels inside the mask's bounds, faded where the mask
+/// hides them.
+fn variation_image(s: &photocraft_raster::Surface, mask: Option<&photocraft_doc::LayerMask>) -> Option<egui::ColorImage> {
     let area = mask.map_or_else(|| s.content_bounds(), |m| m.surface.content_bounds().intersect(&s.content_bounds()));
     if area.is_empty() {
         return None;
@@ -427,39 +426,42 @@ fn variation_image(variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) 
     Some(egui::ColorImage::new([w, h], out))
 }
 
-/// A variation's thumbnail texture, made again only when its pixels or the mask changed.
-fn variation_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) -> Option<egui::TextureId> {
-    let rev = variation.surface().map_or(0, surface_fingerprint) ^ mask.map_or(0, |m| surface_fingerprint(&m.surface));
-    if let Some((r, tex)) = app.genai.thumbs.get(&variation.id)
+/// Variation `index` of generative layer `layer`'s thumbnail texture, made again only when its
+/// pixels or the mask changed.
+fn variation_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, layer: &Layer, index: usize) -> Option<egui::TextureId> {
+    let pixels = layer.generative.as_ref()?.variations.get(index)?;
+    let mask = layer.mask.as_ref();
+    let rev = surface_fingerprint(pixels) ^ mask.map_or(0, |m| surface_fingerprint(&m.surface));
+    let key = (layer.id, index);
+    if let Some((r, tex)) = app.genai.thumbs.get(&key)
         && *r == rev
     {
         return Some(tex.id());
     }
-    let img = variation_image(variation, mask)?;
-    let tex = ctx.load_texture(format!("genai-variation-{}", variation.id.0), img, egui::TextureOptions::LINEAR);
+    let img = variation_image(pixels, mask)?;
+    let tex = ctx.load_texture(format!("genai-variation-{}-{index}", layer.id.0), img, egui::TextureOptions::LINEAR);
     let id = tex.id();
-    app.genai.thumbs.insert(variation.id, (rev, tex));
+    app.genai.thumbs.insert(key, (rev, tex));
     Some(id)
 }
 
-/// Properties › Variations, for the active generative layer (or one of its variations): a row of
-/// thumbnails, one per variation (click one to show it), and Generate More, as Photoshop's
-/// Properties panel offers for a generative layer. Compact, since the dock can be short.
+/// Properties › Variations, for the active generative layer, as Photoshop's Properties panel
+/// shows one: a thumbnail per variation (click one and the layer shows it, one undo step), the
+/// prompt, and Generate, which asks for three more with the same picture, mask and prompt.
+/// Compact, since the dock can be short.
 pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(group_id) = app.session.generative_layer() else { return };
-    let Some(group) = app.session.active().and_then(|st| st.doc.layer(group_id).cloned()) else { return };
-    let Some(children) = group.children() else { return };
+    let Some(id) = app.session.generative_layer() else { return };
+    let Some(layer) = app.session.active().and_then(|st| st.doc.layer(id).cloned()) else { return };
+    let Some(generative) = layer.generative.as_deref() else { return };
     let t = crate::theme::Tokens::get(ui.ctx());
     if let Some(st) = app.session.active() {
-        app.genai.thumbs.retain(|id, _| st.doc.layer(*id).is_some());
+        app.genai.thumbs.retain(|(l, i), _| st.doc.layer(*l).and_then(|l| l.generative.as_ref()).is_some_and(|g| *i < g.variations.len()));
     }
-    let prompt = app.session.generative_prompt(group_id).unwrap_or("").to_owned();
     let enabled = app.session.is_enabled(MORE);
     // Why it can't, as the shared layer says it; else what it does.
-    let tip = app.session.disabled_reason(MORE).unwrap_or_else(|| tl!("Sends the same area and prompt again for three more.").to_owned());
+    let tip = app.session.disabled_reason(MORE).unwrap_or_else(|| tl!("Sends the same area and prompt again for three more variations.").to_owned());
     ui.add_space(2.0);
     ui.label(egui::RichText::new(tl!("Variations")).font(crate::theme::semibold(12.5)).color(t.text));
-    faint(ui, if prompt.is_empty() { tl!("No prompt: continues the image") } else { &prompt });
     ui.add_space(4.0);
     let ctx = ui.ctx().clone();
     let height = 48.0;
@@ -467,9 +469,9 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     egui::ScrollArea::horizontal().id_salt("genai-variations").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            for (i, v) in children.iter().enumerate() {
-                let tex = variation_thumb(app, &ctx, v, group.mask.as_ref());
-                let size = app.genai.thumbs.get(&v.id).map_or(egui::vec2(1.0, 1.0), |(_, h)| h.size_vec2());
+            for i in 0..generative.variations.len() {
+                let tex = variation_thumb(app, &ctx, &layer, i);
+                let size = app.genai.thumbs.get(&(id, i)).map_or(egui::vec2(1.0, 1.0), |(_, h)| h.size_vec2());
                 let width = (height * size.x / size.y.max(1.0)).clamp(36.0, 96.0);
                 let (r, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
                 ui.painter().rect_filled(r, t.radius_sm, t.field);
@@ -478,7 +480,8 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let img = egui::Rect::from_center_size(r.center(), size * fit);
                     ui.painter().image(tex, img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
                 }
-                let (w, c) = if v.visible {
+                let shown = i == generative.selected;
+                let (w, c) = if shown {
                     (2.0, t.accent)
                 } else if resp.hovered() {
                     (1.0, t.accent_border)
@@ -486,8 +489,9 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     (1.0, t.field_border)
                 };
                 ui.painter().rect_stroke(r, t.radius_sm, egui::Stroke::new(w, c), egui::StrokeKind::Inside);
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, v.visible, &v.name));
-                if resp.on_hover_text(&v.name).clicked() && !v.visible {
+                let name = crate::i18n::fmt(tl!("Variation {n}"), &[("n", &(i + 1).to_string())]);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, shown, &name));
+                if resp.on_hover_text(&name).clicked() && !shown {
                     chosen = Some(i);
                 }
             }
@@ -495,28 +499,31 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     // How the variation showing was placed, when it wasn't plainly (colour matching skipped, the
     // service's picture framed differently).
-    if let Some(note) = children.iter().find(|v| v.visible).and_then(|v| app.session.generative_variation_note(v.id)) {
+    if let Some(note) = app.session.generative_variation_note(id, generative.selected) {
         for line in note_lines(note) {
             ui.add_space(2.0);
             faint(ui, &line);
         }
     }
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!("Prompt")).font(crate::theme::semibold(12.0)).color(t.text_dim));
+    let prompt = if generative.prompt.is_empty() { tl!("No prompt: continues the image") } else { generative.prompt.as_str() };
+    ui.add(egui::Label::new(egui::RichText::new(prompt).color(t.text)).wrap());
     ui.add_space(4.0);
-    let more = clicked(&Button::new(tl!("Generate More")).enabled(enabled).tooltip(tip).sizing(Sizing::FillWidth).show(ui));
-    if offers_diagnostics(app, group_id) && clicked(&Button::new(tl!("Save Fill Diagnostics…")).tooltip(diagnostics_tip()).sizing(Sizing::FillWidth).show(ui))
-    {
+    let more = clicked(&Button::new(tl!("Generate")).enabled(enabled).tooltip(tip).sizing(Sizing::FillWidth).show(ui));
+    if offers_diagnostics(app, id) && clicked(&Button::new(tl!("Save Fill Diagnostics…")).tooltip(diagnostics_tip()).sizing(Sizing::FillWidth).show(ui)) {
         let ctx = ui.ctx().clone();
-        if let Err(e) = crate::menus::invoke(app, &ctx, SAVE, json!({"layer": group_id.0})) {
+        if let Err(e) = crate::menus::invoke(app, &ctx, SAVE, json!({"layer": id.0})) {
             app.ui.status = e;
         }
     }
     if let Some(i) = chosen
-        && let Err(e) = app.run(SELECT_VARIATION, json!({"layer": group_id.0, "index": i}))
+        && let Err(e) = app.run(SELECT_VARIATION, json!({"layer": id.0, "index": i}))
     {
         app.ui.status = e;
     }
     if more {
-        match app.run(MORE, json!({"layer": group_id.0})) {
+        match app.run(MORE, json!({"layer": id.0, "count": photocraft_engine::genai_cmds::DEFAULT_VARIATIONS})) {
             Ok(_) => consent::ask_if_waiting(app),
             Err(e) => {
                 consent::ask_if_waiting(app);

@@ -361,7 +361,7 @@ fn unavailable_greys_the_tool_out_with_the_layers_reason_and_sends_nothing() {
 }
 
 #[test]
-fn the_results_land_in_a_new_group_masked_by_the_selection_and_undo_in_one_step() {
+fn the_results_land_in_one_generative_layer_masked_by_the_selection_and_undo_in_one_step() {
     let mut s = session(200, 100);
     s.execute("select.rect", json!({"x": 80, "y": 30, "width": 40, "height": 40})).unwrap();
     let f = install(&mut s, fake([255, 0, 0]));
@@ -372,12 +372,14 @@ fn the_results_land_in_a_new_group_masked_by_the_selection_and_undo_in_one_step(
     let d = doc(&s);
     assert_eq!(d.layers.len(), before + 1);
     let layer = d.layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap();
-    assert_eq!(layer.name, "a red balloon");
-    assert!(layer.is_group());
+    assert_eq!(layer.name, "a red balloon", "named after the prompt");
+    assert!(!layer.is_group(), "one layer, not a group");
+    let g = layer.generative.as_ref().expect("a generative layer");
+    assert_eq!((g.variations.len(), g.selected, g.prompt.as_str()), (3, 0, "a red   balloon"));
     assert!(layer.mask.is_some(), "masked by the selection, like Photoshop's generative layer");
     assert_eq!(s.active().unwrap().active_layer, Some(layer.id));
     assert_eq!(rgb_at(&s, 100, 50), [255, 0, 0], "inside the selection: the result");
-    assert_eq!(rgb_at(&s, 70, 50), [255, 255, 255], "outside it: untouched, though the result covers it");
+    assert_eq!(rgb_at(&s, 64, 50), [255, 255, 255], "outside its mask: untouched, though the result covers it");
     assert_eq!(rgb_at(&s, 5, 5), [255, 255, 255]);
     assert_eq!(s.active().unwrap().history.past_len(), history + 1);
     assert!(doc(&s).selection.is_some(), "the selection stays");
@@ -464,9 +466,11 @@ fn the_document_keeps_its_mode_and_depth() {
         install(&mut s, fake([128, 128, 128]));
         let r = s.execute(FILL, json!({"prompt": "x"})).unwrap();
         let d = doc(&s);
-        let l = d.layer(photocraft_doc::LayerId(r["variations"][0].as_u64().unwrap())).unwrap();
-        let f = l.surface().unwrap().format();
-        assert_eq!((f.mode, f.sample), (d.mode, d.depth), "{mode} {depth}");
+        let l = d.layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap();
+        for v in std::iter::once(l.surface().unwrap()).chain(&l.generative.as_ref().unwrap().variations) {
+            let f = v.format();
+            assert_eq!((f.mode, f.sample), (d.mode, d.depth), "{mode} {depth}");
+        }
     }
 }
 
@@ -499,18 +503,19 @@ fn the_context_area_grows_toward_a_common_shape_inside_the_canvas() {
     assert_eq!(nearest_ratio(5, 5, &[]), None);
 }
 
-fn group(s: &Session, id: u64) -> &photocraft_doc::Layer {
-    doc(s).layer(photocraft_doc::LayerId(id)).unwrap()
+fn generative(s: &Session, id: u64) -> &photocraft_doc::Generative {
+    doc(s).layer(photocraft_doc::LayerId(id)).unwrap().generative.as_deref().unwrap()
 }
 
+/// Which of generative layer `id`'s variations it shows, as a flag each.
 fn shown(s: &Session, id: u64) -> Vec<bool> {
-    group(s, id).children().unwrap().iter().map(|l| l.visible).collect()
+    let g = generative(s, id);
+    (0..g.variations.len()).map(|i| i == g.selected).collect()
 }
 
-/// The colour variation `i` of group `id` holds at (`x`, `y`).
+/// The colour variation `i` of generative layer `id` holds at (`x`, `y`).
 fn variation_rgb(s: &Session, id: u64, i: usize, x: i32, y: i32) -> [u8; 3] {
-    let l = &group(s, id).children().unwrap()[i];
-    let surf = l.surface().unwrap();
+    let surf = &generative(s, id).variations[i];
     let mut px = [0.0f32; 4];
     surf.read_pixel(x, y, &mut px[..surf.channels()]);
     let p = photocraft_raster::to_rgba(&surf.format(), &px[..surf.channels()]);
@@ -530,8 +535,7 @@ fn a_fill_makes_three_variations_with_the_first_showing() {
     let (s, f, r) = filled(None);
     let id = r["layer"].as_u64().unwrap();
     assert_eq!(r["variations"].as_array().unwrap().len(), 3);
-    let names: Vec<_> = group(&s, id).children().unwrap().iter().map(|l| l.name.clone()).collect();
-    assert_eq!(names, ["Variation 1", "Variation 2", "Variation 3"]);
+    assert_eq!(doc(&s).layers.len(), 2, "the Background and the one generative layer");
     assert_eq!(shown(&s, id), [true, false, false]);
     assert_eq!(rgb_at(&s, 50, 50), variation_rgb(&s, id, 0, 50, 50));
     assert_eq!(f.sent.lock().unwrap().len(), 3);
@@ -550,7 +554,7 @@ fn a_fill_makes_three_variations_with_the_first_showing() {
 }
 
 #[test]
-fn choosing_a_variation_shows_it_alone_in_one_undo_step() {
+fn choosing_a_variation_swaps_the_layers_pixels_in_one_undo_step() {
     let (mut s, _, r) = filled(None);
     let id = r["layer"].as_u64().unwrap();
     let colors: Vec<_> = (0..3).map(|i| variation_rgb(&s, id, i, 50, 50)).collect();
@@ -561,9 +565,6 @@ fn choosing_a_variation_shows_it_alone_in_one_undo_step() {
     assert_eq!(rgb_at(&s, 50, 50), colors[2]);
     assert_eq!(rgb_at(&s, 10, 10), [255, 255, 255], "still masked by the selection");
     assert_eq!(s.active().unwrap().history.past_len(), history + 1);
-    // With a variation itself active, the command still finds its group.
-    let child = group(&s, id).children().unwrap()[0].id;
-    s.execute("layer.select", json!({"layer": child.0})).unwrap();
     s.execute(SELECT_VARIATION, json!({"index": 1})).unwrap();
     assert_eq!(shown(&s, id), [false, true, false]);
     assert!(s.execute(SELECT_VARIATION, json!({"index": 3})).is_err());
@@ -578,7 +579,7 @@ fn variation_commands_need_a_generative_layer() {
     install(&mut s, fake([0, 0, 0]));
     assert!(!s.is_enabled(SELECT_VARIATION));
     assert!(!s.is_enabled(MORE));
-    // A group that wasn't made by Generative Fill isn't one.
+    // A group, or any layer not made by Generative Fill, isn't one.
     s.execute("type.create", json!({"text": "Hi", "size": 20, "x": 5, "y": 30})).unwrap();
     s.execute("layer.groupLayers", json!({})).unwrap();
     assert_eq!(s.generative_layer(), None);
@@ -596,9 +597,9 @@ fn generate_more_resends_the_same_request_and_adds_variations() {
     let history = s.active().unwrap().history.past_len();
     let more = s.execute(MORE, json!({"count": 2})).unwrap();
     assert_eq!(more["variations"].as_array().unwrap().len(), 2);
-    let names: Vec<_> = group(&s, id).children().unwrap().iter().map(|l| l.name.clone()).collect();
-    assert_eq!(names, ["Variation 1", "Variation 2", "Variation 3", "Variation 4", "Variation 5"]);
+    assert_eq!(more["variations"], json!([3, 4]));
     assert_eq!(shown(&s, id), [false, false, false, true, false], "the first new one shows");
+    assert_eq!(rgb_at(&s, 50, 50), variation_rgb(&s, id, 3, 50, 50));
     let sent = f.sent.lock().unwrap();
     assert_eq!(sent.len(), 5);
     assert_eq!(sent[4], sent[0]);
@@ -967,7 +968,7 @@ fn a_result_is_dropped_when_the_canvas_changed_size_or_its_document_closed() {
     s.execute("image.canvasSize", json!({"width": 80, "height": 80})).unwrap();
     assert!(s.wait_job(job).unwrap_err().to_string().contains("canvas"));
     assert!(s.generative_fills().is_empty(), "not something Retry could place");
-    assert!(doc(&s).layers.iter().all(|l| !l.is_group()));
+    assert!(doc(&s).layers.iter().all(|l| l.generative.is_none()));
 
     // Canvas Size let the selection go.
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
@@ -1004,8 +1005,8 @@ fn each_separate_area_can_be_filled_on_its_own() {
     let areas = s.execute(AREAS, json!({})).unwrap();
     assert_eq!(areas["areas"], json!([[10, 10, 40, 40], [120, 50, 160, 90]]));
     let r = s.execute(FILL, json!({"prompt": "x", "variations": 1, "area": 1})).unwrap();
-    let mask = &group(&s, r["layer"].as_u64().unwrap()).mask.as_ref().unwrap().surface;
-    assert_eq!(mask.content_bounds(), photocraft_geom::Rect::new(120, 50, 160, 90), "masked by that area alone");
+    let mask = &doc(&s).layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap().mask.as_ref().unwrap().surface;
+    assert_eq!(mask.content_bounds(), photocraft_geom::Rect::new(110, 40, 170, 100), "masked by that area alone, grown by 10 px");
     assert_eq!(rgb_at(&s, 20, 20), [255, 255, 255]);
     assert_eq!(rgb_at(&s, 130, 60), [255, 0, 0]);
     for bad in [json!(2), json!(-1), json!("0")] {
@@ -1025,3 +1026,83 @@ fn consent_terms_use_the_shared_layers_ids() {
 
 /// Review follow-ups (#10903): feathered edges, colour matching, framing, diagnostics.
 mod review;
+
+// ---- The generative layer (davidmann4 on #10903) ----------------------------------------------
+
+/// Measured in the reference application: a 100 × 100 px selection gets a 120 × 120 px mask and
+/// 162 × 162 px of content, the generated pixels reaching past the mask.
+#[test]
+fn the_mask_is_the_selection_grown_by_ten_and_the_pixels_reach_past_it() {
+    let mut s = session(400, 400);
+    s.execute("select.rect", json!({"x": 150, "y": 150, "width": 100, "height": 100})).unwrap();
+    install(&mut s, fake([255, 0, 0]));
+    let r = s.execute(FILL, json!({"prompt": "a red ball"})).unwrap();
+    let layer = doc(&s).layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap();
+    assert_eq!(layer.name, "a red ball");
+    let mask = &layer.mask.as_ref().unwrap().surface;
+    assert_eq!(mask.content_bounds(), Rect::from_xywh(140, 140, 120, 120), "the mask");
+    assert_eq!(layer.surface().unwrap().content_bounds(), Rect::from_xywh(119, 119, 162, 162), "the content");
+    assert_eq!(r["content"], json!([119, 119, 162, 162]));
+    for v in &layer.generative.as_ref().unwrap().variations {
+        assert_eq!(v.content_bounds(), Rect::from_xywh(119, 119, 162, 162), "every variation covers the same area");
+    }
+    // The grown mask shows the fill 10 px past the selection, and nothing beyond.
+    assert_eq!(rgb_at(&s, 145, 200), [255, 0, 0]);
+    assert_eq!(rgb_at(&s, 135, 200), [255, 255, 255]);
+    // Near the canvas edge the content stops at the canvas.
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
+    install(&mut s, fake([255, 0, 0]));
+    let r = s.execute(FILL, json!({"variations": 1})).unwrap();
+    let layer = doc(&s).layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap();
+    assert_eq!(layer.surface().unwrap().content_bounds(), Rect::from_xywh(0, 0, 52, 52));
+    assert_eq!(layer.mask.as_ref().unwrap().surface.content_bounds(), Rect::from_xywh(0, 0, 50, 50));
+}
+
+/// A duplicate is a generative layer of its own, with every variation; undo and redo bring back
+/// the variation shown and the variations.
+#[test]
+fn duplicate_undo_and_redo_keep_the_variations() {
+    let (mut s, _, r) = filled(None);
+    let id = r["layer"].as_u64().unwrap();
+    s.execute(SELECT_VARIATION, json!({"index": 1})).unwrap();
+    let dup = s.execute("layer.duplicate", json!({})).unwrap()["layer"].as_u64().unwrap();
+    assert_ne!(dup, id);
+    assert_eq!(shown(&s, dup), [false, true, false]);
+    assert_eq!(generative(&s, dup).prompt, "a boat");
+    assert_eq!(s.generative_layer(), Some(photocraft_doc::LayerId(dup)));
+    s.execute(SELECT_VARIATION, json!({"index": 2})).unwrap();
+    assert_eq!(shown(&s, id), [false, true, false], "the original keeps its own");
+    assert!(s.undo());
+    assert!(s.undo());
+    assert!(doc(&s).layer(photocraft_doc::LayerId(dup)).is_none());
+    assert!(s.redo());
+    assert_eq!(shown(&s, dup), [false, true, false]);
+}
+
+/// A native save keeps the prompt, every variation and the one shown; Generate More works on the
+/// reopened layer, rendering what it sends again.
+#[test]
+fn a_native_save_and_reopen_keeps_the_generative_layer() {
+    let (mut s, f, r) = filled(None);
+    let id = r["layer"].as_u64().unwrap();
+    s.execute(SELECT_VARIATION, json!({"index": 2})).unwrap();
+    let colours: Vec<_> = (0..3).map(|i| variation_rgb(&s, id, i, 50, 50)).collect();
+    let bytes = photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let l = reopened.layer(photocraft_doc::LayerId(id)).unwrap();
+    let g = l.generative.as_ref().expect("still a generative layer");
+    assert_eq!((g.prompt.as_str(), g.selected, g.variations.len()), ("a boat", 2, 3));
+    assert!(l.mask.is_some());
+
+    let mut s = crate::session();
+    install(&mut s, Fake { vary: true, ..fake([0, 0, 255]) });
+    s.add_document(reopened, None);
+    s.execute("layer.select", json!({"layer": id})).unwrap();
+    assert_eq!((0..3).map(|i| variation_rgb(&s, id, i, 50, 50)).collect::<Vec<_>>(), colours);
+    assert_eq!(s.generative_prompt(photocraft_doc::LayerId(id)), Some("a boat"));
+    drop(f);
+    let more = s.execute(MORE, json!({"count": 1})).unwrap();
+    assert_eq!(more["variations"], json!([3]));
+    assert_eq!(shown(&s, id), [false, false, false, true]);
+}

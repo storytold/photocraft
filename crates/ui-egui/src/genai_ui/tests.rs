@@ -205,8 +205,9 @@ fn generate(app: &mut PhotocraftApp, prompt: &str) {
     crate::dialogs::confirm(app, &ctx, id).unwrap();
 }
 
+/// The generative layers of the active document.
 fn groups(app: &PhotocraftApp) -> Vec<Layer> {
-    app.session.active().unwrap().doc.layers.iter().filter(|l| l.is_group()).cloned().collect()
+    app.session.active().unwrap().doc.layers.iter().filter(|l| l.generative.is_some()).cloned().collect()
 }
 
 /// Tick the shell until `done` holds (at most 10 s).
@@ -348,7 +349,7 @@ fn separate_areas_are_filled_one_by_one_unless_asked_otherwise() {
         |app: &PhotocraftApp| -> Vec<photocraft_geom::Rect> { groups(app).iter().map(|l| l.mask.as_ref().unwrap().surface.content_bounds()).collect() };
     let r = photocraft_geom::Rect::from_xywh;
     assert_eq!(bounds(&app).len(), 2);
-    assert!(bounds(&app)[0].contains_rect(&r(4, 4, 12, 12)) && bounds(&app)[1].contains_rect(&r(40, 40, 16, 16)), "{:?}", bounds(&app));
+    assert_eq!(bounds(&app), [r(0, 0, 26, 26), r(30, 30, 34, 34)], "each area's mask, grown by 10 px inside the canvas");
     // Turned off, the selection is filled as one.
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
     app.run("select.rect", json!({"x": 40, "y": 40, "width": 16, "height": 16, "mode": "add"})).unwrap();
@@ -467,27 +468,30 @@ fn the_canvas_draws_fills_in_progress() {
     h.get_by_label("Cancel this Generative Fill");
 }
 
-/// Properties shows a generative layer's variations: clicking one shows it, and Generate More
-/// adds three.
+/// Properties shows a generative layer's variations, its prompt and Generate: clicking a
+/// thumbnail makes the layer show it (one undo step), and Generate adds three more.
 #[test]
-fn properties_show_the_variations() {
-    let (mut app, _) = app_with(fake());
+fn properties_show_the_variations_the_prompt_and_generate() {
+    let (mut app, f) = app_with(Fake { remote: false, ..fake() });
     app.run("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 24})).unwrap();
     app.run(FILL, json!({"prompt": "a red kite"})).unwrap();
-    let group = app.session.generative_layer().expect("the fill finished");
+    let layer = app.session.generative_layer().expect("the fill finished");
+    let steps = app.session.active().unwrap().history.past_len();
     let mut h = harness(|ui, app: &mut PhotocraftApp| variations_section(app, ui), app);
     h.run_steps(3);
-    let shown = |h: &egui_kittest::Harness<'_, PhotocraftApp>| -> Vec<bool> {
-        h.state().session.active().unwrap().doc.layer(group).unwrap().children().unwrap().iter().map(|l| l.visible).collect()
-    };
-    assert_eq!(shown(&h), [true, false, false]);
+    let generative = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layer(layer).unwrap().generative.clone().unwrap();
+    assert_eq!((generative(&h).variations.len(), generative(&h).selected), (3, 0));
     h.get_by_label("Variations");
+    h.get_by_label("a red kite");
     h.get_by_label("Variation 3").click();
     h.run_steps(3);
-    assert_eq!(shown(&h), [false, false, true]);
-    h.get_by_label("Generate More").click();
+    assert_eq!(generative(&h).selected, 2);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    h.get_by_label("Generate").click();
     h.run_steps(3);
-    assert_eq!(shown(&h), [false, false, false, true, false, false]);
+    assert_eq!((generative(&h).variations.len(), generative(&h).selected), (6, 3), "three more, the first of them showing");
+    assert_eq!(f.sent.load(Ordering::SeqCst), 6);
+    h.get_by_label("Variation 6");
 }
 
 /// Review follow-ups (#10903).

@@ -15,6 +15,7 @@ pub mod blend_if;
 pub mod comps;
 pub mod effects;
 pub mod frame;
+pub mod generative;
 pub mod import_conversion;
 pub mod layer_tree;
 pub mod mode;
@@ -39,6 +40,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use frame::Frame;
+pub use generative::Generative;
 pub use mode::{ColorIndices, ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -742,6 +744,9 @@ pub struct Layer {
     /// embedding apps keep data about the layer under their own namespaces. Copied by
     /// [`Layer::duplicate`], as in Photoshop. PSD `shmd` › `cust` › `layerXMP`.
     pub xmp: Option<Arc<str>>,
+    /// Edit › Generative Fill's generative layer: the prompt and every variation, the pixels
+    /// showing being the selected one's (None for any other layer). Boxed, as `frame` is.
+    pub generative: Option<Box<Generative>>,
 }
 
 impl Layer {
@@ -777,6 +782,7 @@ impl Layer {
             advanced: AdvancedBlending::default(),
             video: None,
             xmp: None,
+            generative: None,
         }
     }
     pub fn raster(name: impl Into<String>, format: PixelFormat) -> Self {

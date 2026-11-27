@@ -63,14 +63,18 @@ is what tests do so they never touch a person's real settings.
    connection is billed, never a price). Its button says the number too (Generate 3).
 2. If the model runs off this computer and nothing on file covers it, PhotoCraft asks first (see
    [Consent](#consent)). Nothing is sent until the person agrees.
-3. Three variations come back, as in Photoshop. They land in a new group named after the prompt
-   and masked by the selection, one layer per variation (Variation 1, 2, 3), with the first
-   showing. Nothing under it changes; one undo removes it. The three are separate requests, sent
+3. Three variations come back, as in Photoshop. They land in one generative layer named after the
+   prompt, above the active layer, showing the first and keeping all of them. Its mask is the
+   selection grown by 10 px on each side, and its pixels reach further, about 0.31 of the
+   selection's longer side past each edge (measured in the reference application: a 100 × 100 px
+   selection gives a 120 × 120 px mask and 162 × 162 px of content). Nothing under it changes; one
+   undo removes it. The three are separate requests, sent
    side by side; if some fail and others succeed, the successes are kept.
-4. With the group (or one of its variations) active, Properties › Variations shows a thumbnail
-   per variation: click one to show it alone (`layer.generative.selectVariation`, one undo step).
-   Generate More sends the same picture, mask and prompt again and adds three more
-   (`layer.generative.more`), also one undo step.
+4. With the generative layer active, Properties › Variations shows a thumbnail per variation,
+   the prompt and Generate. Click a thumbnail and the layer shows that variation
+   (`layer.generative.selectVariation`, one undo step). Generate sends the same picture, mask and
+   prompt again and adds three more, the first of them showing (`layer.generative.more`), also one
+   undo step.
 
 Fills don't wait for each other, and nothing waits for them. Press Generate and the selection is
 let go: select the next thing and start another while the first generates. Each fill in progress
@@ -86,10 +90,11 @@ meanwhile or the document was closed. Cancel stops a fill's jobs at the service 
 separate areas on its own* (on by default, up to 16 areas): each area becomes its own fill and
 layer, generated side by side, from one prompt. One consent answer covers all of them.
 
-Photoshop keeps its variations inside one generative layer. PhotoCraft uses a group of ordinary
-layers instead, so a PSD round trip needs no format changes and other apps see plain layers. What
-each group was generated from is kept in the session only: after reopening a file the group is an
-ordinary group, and Generate More is off for it.
+The variations live in the layer itself (`Layer::generative`: the prompt, every variation and the
+one shown), so undo, duplicate and PhotoCraft's own format keep them, and a reopened file's layer
+still switches variations and Generates more (rendering what it sends again, since what a fill
+sent is kept in the session only). A PSD gets the layer as the pixel layer it shows: the other
+variations aren't written.
 
 ## What is sent, and where
 
@@ -126,7 +131,7 @@ variation that failed at the service, and the fill fails only if none is left.
 The result is then colour-matched to the photo around the selection (models relight what they
 redraw: a tone curve fitted outside the selection is undone, and what is left at the edge is
 carried smoothly inward), scaled back into the area, and composited only inside the selection
-through the group's mask. Matching is skipped when the picture around the selection came back
+through the layer's mask. Matching is skipped when the picture around the selection came back
 too different (a mean difference over 0.25: reframed or restyled) or too little of the area lies
 outside the selection. Skipping is never silent: the status line says how many variations it
 skipped when a fill lands, Properties › Variations says so under the variation showing (and when
@@ -205,7 +210,7 @@ cancelled fill shows nothing.
 | Id | Does |
 |---|---|
 | `edit.generativeFill` | `{prompt?, variations: 1..4 = 3, area?}` fills the selection (or one of its separate areas) |
-| `layer.generative.selectVariation` | `{index, layer?}` shows one variation of a generative layer |
+| `layer.generative.selectVariation` | `{index, layer?}` makes a generative layer show one of its variations |
 | `layer.generative.more` | `{count: 1..4 = 3, layer?}` more variations of a generative layer |
 | `layer.generative.agree` | `{fill, term}` the person agreed to send a fill waiting for consent |
 | `layer.generative.retry` | `{fill}` sends a failed fill again |

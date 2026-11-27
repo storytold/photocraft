@@ -15,7 +15,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use photocraft_doc::{Document, Layer, LayerId};
+use photocraft_doc::{Document, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -35,8 +35,8 @@ pub(super) struct Returned {
     pub(super) bytes: Vec<u8>,
     /// How it was placed, or why it wasn't.
     pub(super) outcome: std::result::Result<VariationNote, String>,
-    /// The variation layer it became, once it landed.
-    pub(super) layer: Option<LayerId>,
+    /// The variation it became in its generative layer, once it landed.
+    pub(super) variation: Option<usize>,
 }
 
 /// What one fill (or Generate More) sent and got back.
@@ -163,8 +163,8 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
         let returned_file = format!("{prefix}returned-{n}.{ext}");
         files.push((returned_file.clone(), ret.bytes.clone()));
         let size = pixels::decode(&ret.bytes).ok().map(|(_, full)| [full.width(), full.height()]);
-        let composite = match (&ret.outcome, ret.layer, c.group) {
-            (Ok(_), Some(layer), Some(group)) => match composite(doc, group, layer, c.area)? {
+        let composite = match (&ret.outcome, ret.variation, c.group) {
+            (Ok(_), Some(variation), Some(group)) => match composite(doc, group, variation, c.area)? {
                 Some(png) => {
                     let name = format!("{prefix}composite-{n}.png");
                     files.push((name.clone(), png));
@@ -180,7 +180,7 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
             "placed": ret.outcome.as_ref().ok(),
             "colourMatching": ret.outcome.as_ref().ok().map(|n| if n.colour.skipped() { "skipped" } else { "ran" }),
             "refused": ret.outcome.as_ref().err(),
-            "layer": ret.layer.map(|l| l.0),
+            "variation": ret.variation,
             "composite": composite,
         }));
     }
@@ -197,27 +197,22 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
         "instructionSent": request.prompt,
         "instructionNote": "PhotoCraft sends the prompt above (or, for an empty prompt, its fixed instruction to continue the picture) with the picture and the mask. The shared AI layer's adapter for the service may wrap it in an instruction of its own (Gemini's does); PhotoCraft doesn't see that text.",
         "crop": "the area as rendered from the visible layers in sRGB at the request size, before the selection was cleared (not sent)",
-        "composite": "each placed variation shown alone in its generative layer, rendered from the document as it is now over the area sent",
+        "composite": "the generative layer showing each placed variation in turn, rendered from the document as it is now over the area sent",
         "variations": variations,
         "failure": c.failure,
     });
     Ok((files, summary))
 }
 
-/// The area `area` of `doc` with variation `layer` alone showing in generative layer `group`, as
+/// The area `area` of `doc` with generative layer `layer` showing its variation `variation`, as
 /// PNG; `None` when either has gone (undone, deleted).
-fn composite(doc: &Document, group: LayerId, layer: LayerId, area: Rect) -> Result<Option<Vec<u8>>> {
+fn composite(doc: &Document, layer: LayerId, variation: usize, area: Rect) -> Result<Option<Vec<u8>>> {
     let mut doc = doc.clone();
-    let Some(children) = doc.layer_mut(group).and_then(Layer::children_mut) else { return Ok(None) };
-    if !children.iter().any(|l| l.id == layer) {
-        return Ok(None);
-    }
-    for l in children.iter_mut() {
-        l.visible = l.id == layer;
-    }
-    if let Some(g) = doc.layer_mut(group) {
-        g.visible = true;
-    }
+    let Some(l) = doc.layer_mut(layer) else { return Ok(None) };
+    let Some(shown) = l.generative.as_ref().and_then(|g| g.variations.get(variation)).cloned() else { return Ok(None) };
+    let Some(pixels) = l.surface_mut() else { return Ok(None) };
+    *pixels = shown;
+    l.visible = true;
     let image = pixels::srgb_composite(&doc, area)?;
     let rgba = image.convert(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8, true)).to_interleaved(area);
     pixels::encode_rgba(rgba, area.width(), area.height()).map(Some)

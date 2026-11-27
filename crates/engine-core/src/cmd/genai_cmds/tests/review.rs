@@ -40,8 +40,8 @@ fn whether_colour_matching_ran_is_kept_for_each_variation() {
     let (s, _, r) = filled(Some(1));
     assert_eq!(r["matching"][0]["colour"]["state"], "tooDifferent", "{r}");
     assert_eq!(r["matching"][0]["framing"]["state"], "same");
-    let id = photocraft_doc::LayerId(r["variations"][0].as_u64().unwrap());
-    let note = s.generative_variation_note(id).unwrap();
+    let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+    let note = s.generative_variation_note(id, 0).unwrap();
     assert!(note.colour.skipped());
     assert!(matches!(note.colour, ColourMatch::TooDifferent { limit, .. } if limit == 0.25));
     // A relit copy of the picture is matched.
@@ -50,8 +50,8 @@ fn whether_colour_matching_ran_is_kept_for_each_variation() {
     install(&mut s, Fake { echo: Some(-40), ..fake([0, 0, 0]) });
     let r = s.execute(FILL, json!({"variations": 1})).unwrap();
     assert_eq!(r["matching"][0]["colour"]["state"], "matched", "{r}");
-    let id = photocraft_doc::LayerId(r["variations"][0].as_u64().unwrap());
-    assert!(!s.generative_variation_note(id).unwrap().colour.skipped());
+    let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+    assert!(!s.generative_variation_note(id, 0).unwrap().colour.skipped());
 }
 
 /// A 160² canvas, white with a black band down the left and a red one down the right, the
@@ -187,7 +187,7 @@ fn generate_more_takes_the_layer_asked_for_whatever_is_active() {
     assert_eq!(s.generative_layer(), None);
     let more = s.execute(MORE, json!({"layer": id, "count": 1})).unwrap();
     assert_eq!(more["layer"], id);
-    assert_eq!(group(&s, id).children().unwrap().len(), 2);
+    assert_eq!(generative(&s, id).variations.len(), 2);
     assert_eq!(f.sent.lock().unwrap().len(), 2);
     // Without `layer`, the active one decides, and it isn't one.
     assert!(s.execute(MORE, json!({"count": 1})).is_err());
@@ -199,24 +199,20 @@ fn what_a_generative_layer_was_made_from_is_let_go_once_nothing_can_bring_it_bac
     install(&mut s, fake([0, 0, 255]));
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
     let layer = |r: &Value| photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
-    let variation = |r: &Value| photocraft_doc::LayerId(r["variations"][0].as_u64().unwrap());
     let first = s.execute(FILL, json!({"prompt": "first", "variations": 1})).unwrap();
     // Undone, redo can bring it back.
     assert!(s.undo());
-    assert_eq!(s.generative_prompt(layer(&first)), Some("first"));
+    assert!(s.generative_variation_note(layer(&first), 0).is_some());
     // A new step drops the redo state: nothing holds the first layer now.
     let second = s.execute(FILL, json!({"prompt": "second", "variations": 1})).unwrap();
-    assert_eq!(s.generative_prompt(layer(&first)), None);
-    assert!(s.generative_variation_note(variation(&first)).is_none());
+    assert!(s.generative_variation_note(layer(&first), 0).is_none());
     // Deleted, undo can bring it back: kept.
     s.execute("layer.delete", json!({"layer": layer(&second).0})).unwrap();
     s.execute(FILL, json!({"prompt": "third", "variations": 1})).unwrap();
-    assert_eq!(s.generative_prompt(layer(&second)), Some("second"));
-    assert!(s.generative_variation_note(variation(&second)).is_some());
+    assert!(s.generative_variation_note(layer(&second), 0).is_some());
     // Closed, nothing is kept.
     s.close(0);
-    assert_eq!(s.generative_prompt(layer(&second)), None);
-    assert!(s.generative_variation_note(variation(&second)).is_none());
+    assert!(s.generative_variation_note(layer(&second), 0).is_none());
 }
 
 #[test]

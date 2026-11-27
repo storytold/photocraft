@@ -7,7 +7,7 @@
 use craft_cms::{Builtin, Intent, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CodecSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Layer};
+use photocraft_doc::Document;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde::Serialize;
@@ -544,11 +544,48 @@ pub(super) fn place(bytes: &[u8], area: Rect, reference: &Reference) -> std::res
     Ok(Placed { surface: placed, framing, colour })
 }
 
-/// A variation layer named `Variation n` holding `pixels` in the document's mode and depth.
-pub(super) fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {
+/// How far the generative layer's mask reaches past the selection, in pixels. Measured in the
+/// reference application: a 100 × 100 px rectangular selection gets a 120 × 120 px mask.
+pub(super) const MASK_GROW: i32 = 10;
+
+/// How far the generated pixels reach past the selection on each side, as a part of the
+/// selection's longer side. The same measurement gave 162 × 162 px of content for the 100 × 100
+/// selection: (162 − 100) / 2 = 31 px a side, 0.31 of its 100 px. So the content runs on under the
+/// mask's edge, past the area the mask shows.
+pub(super) const CONTENT_REACH: f64 = 0.31;
+
+/// The area a variation's pixels cover: the selection's bounds `selected` grown by
+/// [`CONTENT_REACH`] of their longer side, inside the area sent (`area`, which holds the result).
+pub(super) fn content_area(selected: Rect, area: Rect) -> Rect {
+    let side = selected.width().max(selected.height());
+    let reach = (f64::from(side) * CONTENT_REACH).round() as i32;
+    Rect::new(selected.x0.saturating_sub(reach), selected.y0.saturating_sub(reach), selected.x1.saturating_add(reach), selected.y1.saturating_add(reach))
+        .intersect(&area)
+}
+
+/// The generative layer's mask: the selection `sel` (bounds `bounds`) grown by [`MASK_GROW`]
+/// pixels, keeping its soft edge, inside `canvas`.
+pub(super) fn grown_mask(sel: &Surface, bounds: Rect, canvas: Rect) -> Surface {
+    let g = MASK_GROW + 1;
+    let r = Rect::new(bounds.x0 - g, bounds.y0 - g, bounds.x1.saturating_add(g), bounds.y1.saturating_add(g)).intersect(&canvas);
+    if r.is_empty() {
+        return sel.clone();
+    }
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    let grown = photocraft_algo::selection::expand(&sel.read_region(r), w, h, MASK_GROW as f32);
+    if grown.len() != w * h {
+        return sel.clone();
+    }
+    let mut out = sel.clone();
+    out.write_region(r, &grown);
+    out
+}
+
+/// A variation's pixels: `pixels` (the placed result, over the area sent) in the document's mode
+/// and depth, kept only over `content`.
+pub(super) fn variation(doc: &Document, pixels: &Surface, content: Rect) -> Result<Surface> {
     let converted = to_document(doc, pixels)?;
-    let mut layer = Layer::raster(format!("Variation {n}"), converted.format());
-    *layer.surface_mut().ok_or_else(|| other("could not create the layer"))? = converted;
-    layer.visible = visible;
-    Ok(layer)
+    let mut v = Surface::new(converted.format());
+    v.write_region(content, &converted.read_region(content));
+    Ok(v)
 }
