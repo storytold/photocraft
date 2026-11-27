@@ -956,7 +956,10 @@ fn same_folder_quick_export_asks_before_replacing_the_documents_own_file() {
     app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
     app.session.active_mut().unwrap().path = Some(own.clone());
     let ctx = egui::Context::default();
-    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    let quick_export = "file.export.quickExportAsPng";
+    let label = |app: &PhotocraftApp| menus::row(&menus::menu_rows(app), quick_export).unwrap().label.clone();
+    assert_eq!(label(&app), "Quick Export as PNG…");
+    menus::invoke(&mut app, &ctx, quick_export, Value::Null).unwrap();
     assert_eq!(files.open(), 1, "the save dialog asks");
     assert_eq!(std::fs::read(&own).unwrap(), b"original", "nothing written before the answer");
     answer(&files, chose(&own));
@@ -966,9 +969,26 @@ fn same_folder_quick_export_asks_before_replacing_the_documents_own_file() {
     // Beside a PSD, Same Folder still writes without a prompt.
     app.session.active_mut().unwrap().path = Some(dir.join("photo.psd").to_string_lossy().into_owned());
     std::fs::write(&own, b"earlier export").unwrap();
-    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    assert_eq!(label(&app), "Quick Export as PNG");
+    menus::invoke(&mut app, &ctx, quick_export, Value::Null).unwrap();
     assert_eq!(files.requests().len(), 1, "no second dialog");
     assert!(std::fs::read(&own).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    let same_folder = menus::facts::key(&app);
+    app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "ask"})).unwrap();
+    assert_ne!(menus::facts::key(&app), same_folder, "the menu refreshes when the destination preference changes");
+    assert_eq!(label(&app), "Quick Export as PNG…");
+    menus::invoke(&mut app, &ctx, quick_export, Value::Null).unwrap();
+    assert_eq!(files.requests().len(), 2, "Ask opens a dialog even beside a PSD");
+    cancel(&files);
+    app.poll_file_dialog();
+
+    // Without a source file, Same Folder still has to ask.
+    app.session.active_mut().unwrap().path = None;
+    app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
+    assert_eq!(label(&app), "Quick Export as PNG…");
+    menus::invoke(&mut app, &ctx, quick_export, Value::Null).unwrap();
+    assert_eq!(files.requests().len(), 3, "an untitled document opens a dialog");
     std::fs::remove_dir_all(&dir).ok();
 }
 

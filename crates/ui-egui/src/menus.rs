@@ -204,20 +204,18 @@ mod quick_export_label_tests {
 
     #[test]
     fn file_quick_export_menu_reflects_selected_format_without_renaming_layer_export() {
-        if !crate::i18n::needs_catalogs() {
-            return;
-        }
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let de = crate::i18n::fixture_lang("de", "@id\tfile.export.quickExportAsPng\tSchnellexport als PNG\n");
         for (value, expected) in [("png", "PNG"), ("jpg", "JPG"), ("gif", "GIF"), ("webp", "WebP"), ("exr", "EXR")] {
             app.run("prefs.set", json!({"values": {"export.quickExportFormat": value}})).unwrap();
             let rows = menu_rows(&app);
             let quick: Vec<_> = rows.iter().filter(|r| r.command.id == "file.export.quickExportAsPng").collect();
             assert_eq!(quick.len(), 1, "the catalogue and UI command must not create duplicate items");
             let shown_format = if cfg!(target_arch = "wasm32") { "PNG" } else { expected };
-            assert_eq!(quick[0].label, format!("Quick Export as {shown_format}"));
-            let id = crate::i18n::Lang::from_code("id").unwrap();
-            let localized = translated_menu_label(id, &quick[0].command.id, &quick[0].label);
-            assert_eq!(localized, crate::i18n::tr_id(id, "file.export.quickExportAsPng", "Quick Export as PNG").replace("PNG", shown_format));
+            let ellipsis = if cfg!(target_arch = "wasm32") { "" } else { "…" };
+            assert_eq!(quick[0].label, format!("Quick Export as {shown_format}{ellipsis}"));
+            let localized = translated_menu_label(de, &quick[0].command.id, &quick[0].label);
+            assert_eq!(localized, format!("Schnellexport als {shown_format}{ellipsis}"));
             let layer = row(&rows, "layer.quickExportAsPng").unwrap();
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }
