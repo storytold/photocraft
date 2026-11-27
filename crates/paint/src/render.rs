@@ -282,7 +282,7 @@ impl BrushContext {
             d.radius * std::f32::consts::SQRT_2
         } else if aliased {
             d.radius
-        } else if let Some(fraction) = self.brush.tip_boundary.filter(|f| !dual && *f > 0.0 && *f <= 1.0) {
+        } else if let Some(fraction) = self.brush.tip_boundary.filter(|f| !dual && *f > 0.0 && *f <= crate::MAX_TIP_BOUNDARY) {
             d.radius * fraction
         } else {
             crate::tip_reach(d.radius, hardness).max(d.radius)

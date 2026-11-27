@@ -91,7 +91,8 @@ pub(crate) fn soft_tip_boundary(app: &PhotocraftApp, tool: Tool) -> Option<f32> 
     if !is_plain(brush) {
         return Some(photocraft_paint::half_coverage_radius(1.0, brush.hardness));
     }
-    Some((normal_round_radius(brush) / (brush.size / 2.0).max(0.5)).min(1.0))
+    // A tiny dab still needs to reach the cursor's 1 px minimum Normal radius.
+    Some(normal_round_radius(brush) / (brush.size / 2.0).max(0.5))
 }
 
 fn normal_round_radius(brush: &BrushSettings) -> f32 {

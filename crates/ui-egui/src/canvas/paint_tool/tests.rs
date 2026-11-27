@@ -370,6 +370,29 @@ fn soft_brush_click_stays_inside_the_selected_cursor_outline() {
 }
 
 #[test]
+fn one_pixel_soft_normal_brush_marks_the_pixel_corner_inside_its_outline() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 32, "height": 32, "background": "transparent"})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 1, "hardness": 0.0}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    assert_eq!(app.session.prefs().cursors.painting, photocraft_engine::prefs::PaintingCursor::NormalTip);
+
+    let check = |doc: &Document| {
+        let surface = doc.layers[0].surface().unwrap();
+        for y in 14..18 {
+            for x in 14..18 {
+                // The click straddles four pixel centres inside the cursor's 1 px radius.
+                assert_eq!(surface.rgba(x, y)[3] > 0.0, (15..=16).contains(&x) && (15..=16).contains(&y), "pixel ({x}, {y})");
+            }
+        }
+    };
+    tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, M);
+    check(&display_doc(&mut app, 0).0);
+    tool_event(&mut app, ToolEvent::Up { x: 16.0, y: 16.0 }, M);
+    check(&app.session.active().unwrap().doc);
+}
+
+#[test]
 fn brush_drag_shows_the_real_stroke_and_commits_it() {
     // The drag shows the real soft stroke, not a hard flat stand-in.
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

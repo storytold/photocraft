@@ -480,8 +480,9 @@ fn stroke_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
     let cmd = "paint.stroke";
     let mut brush = with_blend_mode(resolve_brush(s, p, cmd)?, p);
     if let Some(boundary) = p.get("tipBoundary") {
-        let fraction = boundary.as_f64().map(|v| v as f32).filter(|v| *v > 0.0 && *v <= 1.0);
-        brush.tip_boundary = Some(fraction.ok_or_else(|| bad(cmd, "tipBoundary must be greater than 0 and at most 1"))?);
+        let max = photocraft_paint::MAX_TIP_BOUNDARY;
+        let fraction = boundary.as_f64().filter(|v| *v <= f64::from(max)).map(|v| v as f32).filter(|v| *v > 0.0);
+        brush.tip_boundary = Some(fraction.ok_or_else(|| bad(cmd, format!("tipBoundary must be greater than 0 and at most {max}")))?);
     }
     Ok(brush)
 }

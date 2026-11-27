@@ -169,6 +169,9 @@ pub fn tip_shape(radius: f32, hardness: f32) -> (f32, f32) {
     ((r0 * radius).min(radius - edge).max(0.0), (s * radius).max(edge).max(1e-3))
 }
 
+/// The 1 px minimum Normal outline can be twice the minimum 0.5 px dab radius.
+pub const MAX_TIP_BOUNDARY: f32 = 2.0;
+
 /// Dab-invariant round-tip geometry, shared by all pixels and subpixel samples.
 #[derive(Clone, Copy)]
 pub(crate) struct TipProfile {
@@ -187,7 +190,7 @@ impl TipProfile {
 
     pub(crate) fn with_boundary(radius: f32, hardness: f32, fraction: Option<f32>) -> Self {
         let mut tip = Self::new(radius, hardness);
-        if let Some(fraction) = fraction.filter(|f| *f > 0.0 && *f <= 1.0) {
+        if let Some(fraction) = fraction.filter(|f| *f > 0.0 && *f <= MAX_TIP_BOUNDARY) {
             // Scale the solid core with the footprint, then taper the remaining width to zero.
             tip.reach = radius * fraction;
             tip.core *= fraction;

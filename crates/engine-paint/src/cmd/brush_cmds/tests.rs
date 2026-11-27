@@ -56,9 +56,11 @@ fn soft_round_stroke_fades_to_zero_at_its_tip_boundary() {
         }
     }
     let mut s = session(96, 96);
-    let p = json!({"points": [[48.5, 48.5]], "size": 60, "tipBoundary": "invalid"});
-    assert!(LiveStroke::begin(&s, &p).is_err());
-    assert!(s.execute("paint.stroke", p).is_err());
+    for invalid in [json!("invalid"), json!(2.000_000_01)] {
+        let p = json!({"points": [[48.5, 48.5]], "size": 60, "tipBoundary": invalid});
+        assert!(LiveStroke::begin(&s, &p).is_err());
+        assert!(s.execute("paint.stroke", p).is_err());
+    }
 }
 
 #[test]
