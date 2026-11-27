@@ -161,6 +161,19 @@ fn bounded_subpixel_soft_tip_paints_when_the_dab_sits_between_supersamples() {
 }
 
 #[test]
+fn bounded_subpixel_soft_tip_changes_smoothly_as_a_sample_enters_its_reach() {
+    let outline = 0.25 * crate::half_coverage_radius(1.0, 0.0);
+    let brush = BrushSettings { hardness: 0.0, tip_boundary: Some(outline / 0.5), ..brush() };
+    // At this offset the nearest sample, at (0.125, ±0.125), lies exactly on the tip edge.
+    let crossing = 0.125 - f64::from(outline * outline - 0.125 * 0.125).sqrt();
+    let coverage = |offset| at(&raster(&brush, &Dab::round(Point::new(50.5 + offset, 50.5), 0.5, 1.0)), 50, 50);
+    let before = coverage(crossing - 0.0005);
+    let after = coverage(crossing + 0.0005);
+    assert!(before > 0.0 && after > 0.0);
+    assert!((before - after).abs() < 0.01, "coverage jumps from {before} to {after}");
+}
+
+#[test]
 fn sampled_tip_is_scaled_and_oriented() {
     // Tip: left half painted.
     let tip = GrayTile::from_fn(16, 16, |x, _| if x < 8 { 1.0 } else { 0.0 });

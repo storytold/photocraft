@@ -1651,8 +1651,8 @@ impl GeneralTip<'_> {
                         }
                     }
                     let distance = d2.sqrt();
-                    let average = sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32;
-                    (profile.cap_supersampled_coverage(distance, average), distance / rm)
+                    let sample_count = (SUBPIXEL.len() * SUBPIXEL.len()) as f32;
+                    (profile.supersampled_coverage(distance, sum, sample_count), distance / rm)
                 }
                 None => {
                     let d2 = (u * ro).powi(2) + v * v;
