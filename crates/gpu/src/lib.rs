@@ -129,6 +129,8 @@ pub struct Compositor {
     external: HashMap<LayerId, stamp::External>,
     /// The dab stamping pipelines, built when the first dabs are stamped.
     stamper: Option<stamp::Stamper>,
+    /// The tiles under each external mask's smoothing tail, saved ([`Compositor::stamp_tail`]).
+    tails: HashMap<LayerId, stamp::TailSave>,
 }
 use W::{F, I, U};
 

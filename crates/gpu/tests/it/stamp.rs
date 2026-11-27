@@ -388,3 +388,74 @@ fn request_all_goes_past_the_in_flight_cap() {
     assert_eq!(readback.in_flight(), 0);
     g.comp.clear_external_mask(layer);
 }
+
+/// A smoothing tail stamped over the settled coverage (`stamp_tail`) is taken back exactly
+/// (`restore_tail`, or the next `stamp_tail`): the mask is then the settled stamps alone, bit for
+/// bit, in both precisions, across page cells, and over cells the settled stamps never made.
+#[test]
+fn a_stamped_tail_is_taken_back_exactly() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut g) = gpu() else { return };
+    let brush = BrushSettings { size: 40.0, hardness: 0.3, flow: 0.6, spacing: 0.1, ..BrushSettings::default() };
+    let ctx = BrushContext::new(&brush);
+    let dab_at = |x: f64, y: f64| {
+        let d = Dab::round(photocraft_geom::Point { x, y }, 20.0, 0.6);
+        gpu_dab(&ctx.tip_geometry(&d).expect("plain"))
+    };
+    let tail = |g: &mut Gpu, layer: LayerId, dabs: &[GpuDab]| {
+        let mut encoder = g.device.create_command_encoder(&Default::default());
+        let saved = g.comp.stamp_tail(&g.device, &g.queue, &mut encoder, layer, dabs).expect("stamping a tail");
+        g.queue.submit([encoder.finish()]);
+        saved
+    };
+    for precision in precisions(&g) {
+        let (doc, layer) = document(1.0);
+        g.comp.begin_external_mask(&g.device, doc.id, layer, doc.bounds(), Some(precision));
+        let (dabs, _) = cpu_stroke(&brush, &path(30));
+        let settled: Vec<GpuDab> = dabs.iter().filter_map(|d| ctx.tip_geometry(d)).map(|t| gpu_dab(&t)).collect();
+        stamp(&mut g, layer, &settled);
+        let before = mask_of(&g, layer);
+        assert!(before.iter().any(|v| *v > 0.0), "the settled stroke is there");
+
+        // Over the corner of four 256 px cells, then moved: each changes the mask, and the second
+        // replaces the first.
+        let first = tail(&mut g, layer, &[dab_at(240.0, 240.0), dab_at(256.0, 256.0), dab_at(280.0, 270.0)]);
+        let with_first = mask_of(&g, layer);
+        assert!(first >= 4, "the tail's tiles were saved ({first})");
+        assert!(with_first != before, "{precision:?}: the tail is in the mask");
+        let second = tail(&mut g, layer, &[dab_at(300.0, 200.0), dab_at(250.0, 300.0)]);
+        let with_second = mask_of(&g, layer);
+        assert!(second > 0 && with_second != before && with_second != with_first, "{precision:?}: the moved tail replaces the first");
+        // A tail over cells the settled stamps never reached (the corner of the canvas), then the
+        // first one's place again: nothing of the earlier tails stays.
+        tail(&mut g, layer, &[dab_at(620.0, 460.0)]);
+        tail(&mut g, layer, &[dab_at(240.0, 240.0), dab_at(256.0, 256.0), dab_at(280.0, 270.0)]);
+        assert!(mask_of(&g, layer) == with_first, "{precision:?}: the same tail gives the same mask whatever came before");
+
+        let mut encoder = g.device.create_command_encoder(&Default::default());
+        g.comp.restore_tail(&mut encoder, layer);
+        g.queue.submit([encoder.finish()]);
+        assert!(mask_of(&g, layer) == before, "{precision:?}: the mask is the settled stamps alone after the tail is taken back");
+        // Nothing left to take back: a second restore, and a tail with no dabs, change nothing.
+        let mut encoder = g.device.create_command_encoder(&Default::default());
+        g.comp.restore_tail(&mut encoder, layer);
+        g.queue.submit([encoder.finish()]);
+        assert_eq!(tail(&mut g, layer, &[]), 0);
+        assert!(mask_of(&g, layer) == before, "{precision:?}: restoring twice changes nothing");
+
+        // Stamps after a restore land on the settled coverage as if there had been no tail.
+        tail(&mut g, layer, &[dab_at(250.0, 250.0)]);
+        let mut encoder = g.device.create_command_encoder(&Default::default());
+        g.comp.restore_tail(&mut encoder, layer);
+        g.queue.submit([encoder.finish()]);
+        stamp(&mut g, layer, &[dab_at(260.0, 262.0)]);
+        let after = mask_of(&g, layer);
+        let (plain, plain_layer) = document(1.0);
+        g.comp.begin_external_mask(&g.device, plain.id, plain_layer, plain.bounds(), Some(precision));
+        stamp(&mut g, plain_layer, &settled);
+        stamp(&mut g, plain_layer, &[dab_at(260.0, 262.0)]);
+        assert!(after == mask_of(&g, plain_layer), "{precision:?}: a stamp after a restored tail is a stamp without one");
+        g.comp.clear_external_mask(layer);
+        g.comp.clear_external_mask(plain_layer);
+    }
+}

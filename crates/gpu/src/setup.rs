@@ -174,6 +174,7 @@ impl Compositor {
             timer: None,
             external: HashMap::new(),
             stamper: None,
+            tails: HashMap::new(),
         }
         .with_texture_limit(device_max)
     }

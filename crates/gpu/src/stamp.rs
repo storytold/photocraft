@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use super::consts::STRIDE;
 use super::paging::{cell_rect, first_error};
 use super::textures::{Cell, Resident, TexKind};
+use super::tile_readback::TILE;
 use super::{Compositor, DocId, HashMap, LayerId, PixelFormat, Rect, Role, Unsupported};
 
 /// The precision an external mask is stored in.
@@ -118,6 +119,27 @@ pub(crate) struct External {
     /// The canvas rounded out to tiles: cells are created over it only.
     canvas: Rect,
     kind: TexKind,
+}
+
+/// Tiles per row of a tail backup atlas.
+const TAIL_COLS: u32 = 32;
+
+/// One tile of an external mask saved under a smoothing tail.
+#[derive(Clone, Copy, Debug)]
+struct SavedTile {
+    cell: Cell,
+    /// The tile's top left corner in document pixels.
+    x: i32,
+    y: i32,
+    /// Its slot in the atlas.
+    slot: u32,
+}
+
+/// The tiles of a layer's external mask that its smoothing tail covers, as they were before the
+/// tail was stamped ([`Compositor::stamp_tail`]): an atlas of tile slots in the mask's format.
+pub(crate) struct TailSave {
+    atlas: Option<(wgpu::Texture, u32)>,
+    saved: Vec<SavedTile>,
 }
 
 /// The stamping shader and the pipelines built from it, one per mask format.
@@ -239,6 +261,7 @@ impl Compositor {
     }
 
     fn drop_external_cells(&mut self, layer: LayerId) {
+        self.tails.remove(&layer);
         self.residents.retain(|k, _| !(k.0 == layer && k.1 == Role::Mask));
     }
 
@@ -266,6 +289,126 @@ impl Compositor {
             if let Some(root) = doc.path_of(*layer).and_then(|p| p.first().copied()) {
                 self.prefix.invalidate_from(root);
             }
+        }
+    }
+
+    /// Stamp a smoothing tail, `dabs`, on top of what `layer`'s external mask holds, as a preview
+    /// that [`restore_tail`](Self::restore_tail) takes back. The previous tail is restored first;
+    /// then every 64-px tile the new dabs reach is saved (a texture copy, into an atlas that grows
+    /// as needed) and the dabs stamped ([`stamp_dabs`](Self::stamp_dabs)). The mask outside the
+    /// tail's tiles is not touched, so what a tail costs follows its size. Everything is recorded
+    /// into `encoder`, in this order; copies are bit copies, so restoring gives the mask exactly as
+    /// it was. Returns the number of tiles saved.
+    pub fn stamp_tail(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        layer: LayerId,
+        dabs: &[GpuDab],
+    ) -> Result<usize, Unsupported> {
+        self.restore_tail(encoder, layer);
+        let Some(ext) = self.external.get(&layer).copied() else {
+            return Err(Unsupported("the layer has no external mask (begin_external_mask)".into()));
+        };
+        let (page, tile) = (self.page as i32, TILE);
+        let mut tiles = std::collections::BTreeSet::new();
+        for d in dabs {
+            let r = d.rect.intersect(&ext.canvas);
+            if r.is_empty() {
+                continue;
+            }
+            for ty in r.y0.div_euclid(tile)..=(r.y1 - 1).div_euclid(tile) {
+                for tx in r.x0.div_euclid(tile)..=(r.x1 - 1).div_euclid(tile) {
+                    tiles.insert((tx, ty));
+                }
+            }
+        }
+        if tiles.is_empty() {
+            return Ok(0);
+        }
+        let slots = tiles.len() as u32;
+        let have = self.tails.get(&layer).and_then(|t| t.atlas.as_ref()).map_or(0, |(_, n)| *n);
+        if have < slots {
+            // Nothing is saved at this point (restored above): a bigger atlas starts empty.
+            let rows = slots.div_ceil(TAIL_COLS).next_power_of_two();
+            let (w, h) = (TAIL_COLS * tile as u32, rows * tile as u32);
+            if h > device.limits().max_texture_dimension_2d {
+                return Err(Unsupported(format!("the smoothing tail reaches {slots} tiles: more than the backup texture holds")));
+            }
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("pc_tail_backup"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: ext.kind.format(),
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.tails.insert(layer, TailSave { atlas: Some((texture, rows * TAIL_COLS)), saved: Vec::new() });
+        }
+        let mut saved = Vec::with_capacity(tiles.len());
+        for (slot, (tx, ty)) in tiles.into_iter().enumerate() {
+            let (x, y) = (tx * tile, ty * tile);
+            let cell = (x.div_euclid(page), y.div_euclid(page));
+            let region = cell_rect(cell, self.page).intersect(&ext.canvas);
+            if let std::collections::hash_map::Entry::Vacant(v) = self.residents.entry((layer, Role::Mask, cell)) {
+                // The tail's stamps would make the cell; making it now lets its tiles be saved as
+                // the zeros they are.
+                v.insert(external_cell(device, &ext, region));
+            }
+            saved.push(SavedTile { cell, x, y, slot: slot as u32 });
+        }
+        if let Some(save) = self.tails.get_mut(&layer) {
+            for t in &saved {
+                let (Some(resident), Some((texture, _))) = (self.residents.get(&(layer, Role::Mask, t.cell)), save.atlas.as_ref()) else { continue };
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &resident.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: (t.x - resident.region.x0) as u32, y: (t.y - resident.region.y0) as u32, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: (t.slot % TAIL_COLS) * tile as u32, y: (t.slot / TAIL_COLS) * tile as u32, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d { width: tile as u32, height: tile as u32, depth_or_array_layers: 1 },
+                );
+            }
+            save.saved = saved;
+        }
+        let count = self.tails.get(&layer).map_or(0, |t| t.saved.len());
+        self.stamp_dabs(device, queue, encoder, layer, dabs)?;
+        Ok(count)
+    }
+
+    /// Take back the tail [`stamp_tail`](Self::stamp_tail) stamped: its tiles get the values they
+    /// had before it, and it is forgotten (a no-op without a tail). Recorded into `encoder`.
+    pub fn restore_tail(&mut self, encoder: &mut wgpu::CommandEncoder, layer: LayerId) {
+        let Some(save) = self.tails.get_mut(&layer) else { return };
+        let Some((atlas, _)) = save.atlas.as_ref() else { return };
+        let tile = TILE as u32;
+        for t in std::mem::take(&mut save.saved) {
+            let Some(resident) = self.residents.get(&(layer, Role::Mask, t.cell)) else { continue };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: atlas,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: (t.slot % TAIL_COLS) * tile, y: (t.slot / TAIL_COLS) * tile, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &resident.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: (t.x - resident.region.x0) as u32, y: (t.y - resident.region.y0) as u32, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d { width: tile, height: tile, depth_or_array_layers: 1 },
+            );
         }
     }
 
