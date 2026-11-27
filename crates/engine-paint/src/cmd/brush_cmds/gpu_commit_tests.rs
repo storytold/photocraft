@@ -201,7 +201,8 @@ fn a_feed_older_than_a_touch_does_not_count() {
 /// holds it. `finish_dabs` then makes the same dabs for real.
 #[test]
 fn a_smoothed_gpu_strokes_tail_is_what_finishing_makes_and_touches_nothing() {
-    let mut p = brush(json!({"smoothing": 0.7}));
+    // The smoothing tail is there only with `catchUpOnEnd`.
+    let mut p = brush(json!({"smoothing": 0.7, "brush": {"size": 22, "hardness": 0.3, "flow": 0.6, "smoothing": {"catchUpOnEnd": true}}}));
     let s = scene(8, &|_| ());
     p["points"] = json!([PTS[0]]);
     let (mut gpu, _) = LiveStroke::begin_gpu(&s, "paint.stroke", &p).unwrap();

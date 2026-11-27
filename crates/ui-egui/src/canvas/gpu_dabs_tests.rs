@@ -246,16 +246,18 @@ fn canvas_texels(app: &PhotocraftApp) -> Vec<[f32; 4]> {
     app.gpu.as_ref().unwrap().read_texels(id).expect("the canvas texture").2
 }
 
-/// A smoothed stroke (the default 10 % and a stronger one) takes the GPU path, shows the same live
-/// document as the CPU overlay, tail included, and commits what `paint.stroke` writes.
+/// A smoothed stroke (the default 10 %, a stronger one, and one that catches up to the pen at the
+/// end, which has a tail to show mid-stroke) takes the GPU path, shows the same live document as
+/// the CPU overlay, tail included, and commits what `paint.stroke` writes.
 #[test]
 fn a_smoothed_brush_stroke_takes_the_gpu_path_and_looks_and_commits_like_the_cpu_overlay() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
-    for amount in [0.1, 0.6] {
-        let what = format!("smoothing {amount}");
-        let mut app = app_on_gpu(rs.clone(), amount);
-        let mut cpu_app = app_with(None, amount, json!({}));
+    for (amount, catch_up) in [(0.1, false), (0.6, false), (0.6, true), (0.9, true)] {
+        let what = format!("smoothing {amount}, catching up at the end: {catch_up}");
+        let extra = json!({"smoothing": {"amount": amount, "catchUpOnEnd": catch_up}});
+        let mut app = app_with(Some(rs.clone()), amount, extra.clone());
+        let mut cpu_app = app_with(None, amount, extra);
         let pts = path();
         // Mid-stroke, the pen well ahead of the smoothed brush.
         drag(&mut app, &pts[..21]);
@@ -263,7 +265,7 @@ fn a_smoothed_brush_stroke_takes_the_gpu_path_and_looks_and_commits_like_the_cpu
         let live = app.live_stroke.as_ref().unwrap_or_else(|| panic!("{what}: a live stroke"));
         let ui = live.gpu.as_ref().unwrap_or_else(|| panic!("{what}: the GPU draws the smoothed stroke"));
         let (saved, stamped) = ui.tail_stats();
-        assert!(stamped > 0 && saved > 0, "{what}: the stroke's tail was stamped ({stamped} tails, {saved} tiles saved)");
+        assert!(!(catch_up && amount > 0.8) || (stamped > 1 && saved > 0), "{what}: the stroke's tail was stamped ({stamped} tails, {saved} tiles saved)");
         assert!(cpu_app.live_stroke.as_ref().is_some_and(|l| l.gpu.is_none()), "{what}: the reference is the CPU overlay");
 
         let want = photocraft_compose::flatten(cpu_app.live_stroke.as_ref().unwrap().doc());

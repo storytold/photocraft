@@ -2,7 +2,7 @@
 //! (`LiveStroke::begin_overlay`), with the commit's composite on the UI thread (`sync`, as #17082
 //! left it) or on the stroke's paint thread (`async`, the canvas's `PendingStroke`).
 //!
-//! `cargo run --release -p photocraft-automation --features gpu --example bench_pen_up -- <sync|async|cpu-live|gpu-live> <size> <hardness> <dabs> [--pace-ms MS] [--smoothing PERCENT]`
+//! `cargo run --release -p photocraft-automation --features gpu --example bench_pen_up -- <sync|async|cpu-live|gpu-live> <size> <hardness> <dabs> [--pace-ms MS] [--smoothing PERCENT] [--catch-up]`
 //!
 //! The document, stroke and display sink are `bench_live_stroke_gpu`'s: 4928x3280, a white
 //! background under a pixel layer of non-uniform content, the zigzag at spacing 0.25. The stroke
@@ -420,9 +420,12 @@ fn live_run(
     let (mut sent, mut stepped) = (0usize, 0usize);
     let mut frames = Vec::new();
     let (mut t_work, mut t_render) = (0.0, 0.0);
-    for p in &pts[1..] {
+    for (i, p) in pts.iter().enumerate().skip(1) {
         let frame = Instant::now();
-        tx.send(Down::Points(vec![StrokePoint::new(p[0], p[1], p[2] as f32)]))?;
+        // Timed as the canvas's points are (smoothing lags by time): a point a frame apart.
+        let mut point = StrokePoint::new(p[0], p[1], p[2] as f32);
+        point.time = i as f64 * pace.as_secs_f64() * 1e3;
+        tx.send(Down::Points(vec![point]))?;
         sent += 1;
         let mut damage = Rect::EMPTY;
         let mut waited = false;
@@ -473,7 +476,9 @@ fn live_run(
     }
 
     // Pen-up: the release frame serves the thread's last work and waits for the commit as the canvas does.
-    params["points"] = json!(pts);
+    // The points carry the times they were sent with, as the canvas's do (index 6).
+    let timed: Vec<[f64; 7]> = pts.iter().enumerate().map(|(i, p)| [p[0], p[1], p[2], 0.0, 0.0, 0.0, i as f64 * pace.as_secs_f64() * 1e3]).collect();
+    params["points"] = json!(timed);
     params["seed"] = json!(seed);
     let pen_up = Instant::now();
     tx.send(Down::Finish)?;
@@ -586,6 +591,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let mut params = json!({"size": size, "hardness": hardness, "spacing": 0.25, "color": "#ff0000", "smoothing": smoothing / 100.0, "target": "pixels"});
+    // The smoothing tail (what ending the stroke adds) exists only with the catch-up at the end.
+    if args.iter().any(|a| a == "--catch-up") {
+        params["brush"] = json!({"smoothing": {"catchUpOnEnd": true}});
+    }
     let (w, h) = (f64::from(W), f64::from(H));
     let step = size * 0.25;
     let margin = size;
