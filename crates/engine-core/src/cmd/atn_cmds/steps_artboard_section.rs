@@ -17,11 +17,9 @@ use super::{D, Descriptor, ReferenceItem, Value, json};
 pub(super) const NEW: &str = "layer.new.artboard";
 /// Layer › New › Artboard from Layers.
 pub(super) const FROM_LAYERS: &str = "layer.new.artboardFromLayers";
-/// The recorded descriptor, kept when it differs from the one [`to`] would write (session ids,
-/// key order, classes), so a load and save keeps the step unchanged.
-const SOURCE: &str = "_atnArtboardSectionDescriptor";
-/// The most bytes a recorded descriptor may take to be kept in [`SOURCE`]: far above any measured
-/// step (a few keys and a name), so a stored value is never parsed at any size on save.
+/// The recorded descriptor, kept for exact re-export and to identify the recorded name at playback.
+pub(super) const SOURCE: &str = "_atnArtboardSectionDescriptor";
+/// The most bytes of a recording to keep or parse, far above a measured step (a few keys and a name).
 const MAX_SOURCE_BYTES: usize = 64 * 1024;
 /// The rectangle's edges in the order the step records them, with the `[x, y, w, h]` slot each
 /// one comes from.
@@ -36,8 +34,7 @@ enum Section {
     FromLayers,
 }
 
-/// The settings a step holds: what it makes and the board's name (`None`: no `Nm  `, so the
-/// board takes the next free "Artboard N").
+/// The board settings held by a step, including any name stored in its descriptor.
 #[derive(Debug, PartialEq)]
 struct Settings {
     section: Section,
@@ -136,9 +133,9 @@ pub(super) fn from(d: &Descriptor) -> Mapped {
     if let Some(name) = &settings.name {
         p["name"] = name.as_str().into();
     }
-    // Bytes, not descriptor equality: that takes an edge of -0.0 for 0.0, which would save
-    // another value than the one recorded.
-    if bytes != canonical(&settings).to_bytes() {
+    // Keep named recordings even in canonical form so playback can identify their name. Compare
+    // bytes for unnamed recordings because descriptor equality equates -0.0 and 0.0.
+    if settings.name.is_some() || bytes != canonical(&settings).to_bytes() {
         p[SOURCE] = photocraft_paint::tile::b64_encode(&bytes).into();
     }
     step(id, p)
@@ -207,16 +204,38 @@ fn native(id: &str, p: &Value) -> Option<Settings> {
     Some(Settings { section, name })
 }
 
-/// Save the recorded descriptor while the step still makes the same board, otherwise the
-/// canonical form of the step's settings.
-pub(super) fn to(id: &str, p: &Value) -> Option<Descriptor> {
-    let settings = native(id, p)?;
-    // Only a value no larger than a kept recording is decoded and parsed at all.
-    let source = jstr(p, SOURCE)
+fn source_descriptor(p: &Value) -> Option<Descriptor> {
+    jstr(p, SOURCE)
         .filter(|text| text.len() <= MAX_SOURCE_BYTES.div_ceil(3) * 4)
         .and_then(photocraft_paint::tile::b64_decode)
         .filter(|bytes| bytes.len() <= MAX_SOURCE_BYTES)
         .and_then(|bytes| Descriptor::from_bytes(&bytes).ok())
+}
+
+/// Imported steps use the next free artboard name (#13011). Keep the descriptor and its name in
+/// the stored step for Save Actions, and honor explicit names on native or renamed steps.
+pub(crate) fn omit_recorded_artboard_name(id: &str, p: &mut Value) {
+    if !matches!(id, NEW | FROM_LAYERS) {
+        return;
+    }
+    let recorded_name = jstr(p, "name").is_some_and(|name| {
+        source_descriptor(p).as_ref().and_then(recorded).is_some_and(|settings| {
+            matches!((id, settings.section), (NEW, Section::Board(_)) | (FROM_LAYERS, Section::FromLayers)) && settings.name.as_deref() == Some(name)
+        })
+    });
+    if let Some(params) = p.as_object_mut() {
+        params.remove(SOURCE);
+        if recorded_name {
+            params.remove("name");
+        }
+    }
+}
+
+/// Save the recorded descriptor while the step still makes the same board, otherwise the
+/// canonical form of the step's settings.
+pub(super) fn to(id: &str, p: &Value) -> Option<Descriptor> {
+    let settings = native(id, p)?;
+    let source = source_descriptor(p)
         .filter(|d| recorded(d).is_some_and(|r| r.section == settings.section && r.name.as_deref().unwrap_or("") == settings.name.as_deref().unwrap_or("")));
     Some(source.unwrap_or_else(|| canonical(&settings)))
 }

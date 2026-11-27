@@ -1,15 +1,12 @@
 //! #10723: Layer › New › Artboard and Layer › New › Artboard from Layers, recorded as a Make of
 //! class `artboardSection` (`docs/atn.md`, "Recorded through the menus").
 
+use super::steps_artboard_section::{FROM_LAYERS, NEW, SOURCE};
 use super::*;
 use crate::actions_cmds::ActionStep;
 use crate::actions_cmds::ActionsExt;
 use photocraft_doc::{Layer, LayerId};
 use photocraft_geom::Rect;
-
-const NEW: &str = "layer.new.artboard";
-const FROM_LAYERS: &str = "layer.new.artboardFromLayers";
-const SOURCE: &str = "_atnArtboardSectionDescriptor";
 
 /// `artboardRect` with its edges in the recorded order, built here independently of the
 /// converter.
@@ -131,14 +128,16 @@ fn recorded_steps_load_and_save_back_unchanged() {
     }
 }
 
-/// A loaded New Artboard step makes the recorded board, as one undoable edit.
+/// A loaded New Artboard step uses the recorded bounds and an automatic name, as one undoable edit.
 #[test]
 fn a_loaded_artboard_step_plays_and_undoes() {
-    let (mut s, _) = load(vec![make_item(new_board("Hero", [20.0, 10.0, 70.0, 110.0]))]);
+    let d = new_board("Hero", [20.0, 10.0, 70.0, 110.0]);
+    let (mut s, _) = load(vec![make_item(d.clone())]);
     s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
-    assert_eq!(boards(&s), vec![("Hero".to_string(), Rect::new(10, 20, 110, 70))]);
+    assert_eq!(boards(&s), vec![("Artboard 1".to_string(), Rect::new(10, 20, 110, 70))]);
+    assert_eq!(saved(&mut s)[0].descriptor.as_ref().map(Descriptor::to_bytes), Some(d.to_bytes()));
     s.execute("history.undo", json!({})).unwrap();
     assert_eq!(boards(&s), vec![]);
 }
@@ -147,7 +146,8 @@ fn a_loaded_artboard_step_plays_and_undoes() {
 /// one undoable edit.
 #[test]
 fn a_loaded_artboard_from_layers_step_plays_and_undoes() {
-    let (mut s, _) = load(vec![make_item(from_layers("Cards"))]);
+    let d = from_layers("Cards");
+    let (mut s, _) = load(vec![make_item(d.clone())]);
     s.execute("file.new", json!({"width": 100, "height": 80})).unwrap();
     let square = s
         .edit("square", |doc, active| {
@@ -161,17 +161,39 @@ fn a_loaded_artboard_from_layers_step_plays_and_undoes() {
         .unwrap();
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
-    assert_eq!(boards(&s), vec![("Cards".to_string(), Rect::new(10, 15, 30, 45))]);
+    assert_eq!(boards(&s), vec![("Artboard 1".to_string(), Rect::new(10, 15, 30, 45))]);
     let doc = &s.active().unwrap().doc;
     let board: LayerId = doc.artboards()[0].0;
     assert_eq!(doc.artboard_of(square), Some(board));
+    assert_eq!(saved(&mut s)[0].descriptor.as_ref().map(Descriptor::to_bytes), Some(d.to_bytes()));
     s.execute("history.undo", json!({})).unwrap();
     assert_eq!(boards(&s), vec![]);
     assert_eq!(s.active().unwrap().doc.artboard_of(square), None);
 }
 
+#[test]
+fn imported_artboards_fill_a_gap_in_numbering_and_native_actions_keep_their_name() {
+    let mut d = new_board("Artboard 3", [20.0, 10.0, 70.0, 110.0]);
+    d.items.retain(|(k, _)| !k.is("layerSectionStart") && !k.is("layerSectionEnd"));
+    let (mut s, _) = load(vec![make_item(d.clone())]);
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute(NEW, json!({"name": "Artboard 1", "rect": [0, 0, 10, 10]})).unwrap();
+    s.execute("actions.record", json!({"name": "Native"})).unwrap();
+    s.execute(NEW, json!({"name": "Artboard 3", "rect": [0, 10, 10, 10]})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("history.undo", json!({})).unwrap();
+
+    let played = s.execute("actions.play", json!({"action": "Native"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    assert!(boards(&s).contains(&("Artboard 3".into(), Rect::new(0, 10, 10, 20))));
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    assert!(boards(&s).contains(&("Artboard 2".into(), Rect::new(10, 20, 110, 70))));
+    assert_eq!(saved(&mut s)[0].descriptor.as_ref().map(Descriptor::to_bytes), Some(d.to_bytes()));
+}
+
 /// A step recorded in PhotoCraft writes the measured keys without the session ids, `Nm  ` only
-/// for a name of its own, and loads back to the same settings.
+/// for a name of its own. Loading retains any recorded name for exact re-export.
 #[test]
 fn native_steps_save_the_measured_keys() {
     let no_ids = |mut d: Descriptor| {
@@ -198,10 +220,11 @@ fn native_steps_save_the_measured_keys() {
     ];
     for (id, p, d) in cases {
         assert_eq!(exported(id, &p).as_ref(), Some(&d), "{id} {p}");
+        let has_name = d.get("Nm  ").is_some();
         let (s, _) = load(vec![make_item(d)]);
         let ActionStep { command: got, params: back } = &s.actions().list.actions()[0].steps[0];
         assert_eq!(got, id);
-        assert!(back.get(SOURCE).is_none(), "{back}");
+        assert_eq!(back.get(SOURCE).is_some(), has_name, "{back}");
         assert_eq!(exported(id, back).map(|d| d.to_bytes()), exported(id, &p).map(|d| d.to_bytes()), "{back}");
     }
 }
@@ -294,8 +317,14 @@ fn changed_or_damaged_steps_save_their_settings() {
     small.items.retain(|(k, _)| !k.is("layerSectionStart") && !k.is("layerSectionEnd"));
     assert_eq!(exported(NEW, &board), Some(small.clone()));
     assert_eq!(exported(FROM_LAYERS, &cards), Some(unnamed));
+    let playback_params = |p: &Value| crate::actions_cmds::playback_params(&s, NEW, p).unwrap();
+    assert_eq!(playback_params(&board), json!({"rect": [0, 0, 10, 10]}));
+    board["name"] = json!("Edited");
+    assert_eq!(playback_params(&board), json!({"rect": [0, 0, 10, 10], "name": "Edited"}));
+    board["name"] = json!("Hero");
     board[SOURCE] = json!("not base64!");
     assert_eq!(exported(NEW, &board), Some(small));
+    assert_eq!(playback_params(&board), json!({"rect": [0, 0, 10, 10], "name": "Hero"}));
 }
 
 /// A recording too large to keep whole stays a kept step, and a stored recording past that size
@@ -312,4 +341,5 @@ fn oversized_recordings_are_not_kept_or_parsed() {
     let mut canonical = huge;
     canonical.items.retain(|(k, _)| !k.is("layerSectionStart") && !k.is("layerSectionEnd"));
     assert_eq!(exported(NEW, &p), Some(canonical));
+    assert_eq!(crate::actions_cmds::playback_params(&s, NEW, &p).unwrap(), json!({"rect": [10, 20, 100, 50], "name": long}));
 }

@@ -1079,6 +1079,10 @@ fn every_mapped_command_exports_and_imports_back() {
                     // The imported step retains the original descriptor alongside its playable path.
                     back.as_object_mut().unwrap().remove(super::steps_path::SOURCE).unwrap();
                 }
+                if matches!(*id, super::steps_artboard_section::NEW | super::steps_artboard_section::FROM_LAYERS) {
+                    let source = back.as_object_mut().unwrap().remove(super::steps_artboard_section::SOURCE);
+                    assert_eq!(source, Some(json!(photocraft_paint::tile::b64_encode(&descriptor.to_bytes()))), "{id}: recorded descriptor");
+                }
                 if *id == "edit.perspectiveWarp" {
                     back.as_object_mut().unwrap().remove("__atnPerspectiveWarp");
                 }
