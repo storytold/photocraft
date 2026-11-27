@@ -144,12 +144,20 @@ fn history_mark(s: &Session) -> (Option<u64>, usize) {
 /// Undo back to the state `start` was current at, and drop the steps a failed run took from the
 /// journal, so a recording action does not get them (a failed command is never journaled itself).
 fn take_back(s: &mut Session, n: usize, (start, redo): (Option<u64>, usize), journal: usize) {
-    // In non-linear history the first step also moved the `redo` states onto the undo side, so the
-    // state before the run is up to that many undos further back than the `n` steps.
-    for _ in 0..n + redo {
-        let current = s.active().and_then(|st| st.history.row_id(st.history.past_len()));
-        if current == start || !s.undo() {
-            break;
+    // The state limit can drop the state before the run for the one step a run takes, when that
+    // step moved the redo states of non-linear history onto the undo side. No undo reaches it
+    // then; a rollback brings it back, though without the step to redo.
+    let dropped = n == 1 && start.is_some_and(|id| s.active().is_some_and(|st| st.history.row_of(id).is_none()));
+    if dropped {
+        s.rollback();
+    } else {
+        // In non-linear history the first step also moved the `redo` states onto the undo side, so
+        // the state before the run is up to that many undos further back than the `n` steps.
+        for _ in 0..n + redo {
+            let current = s.active().and_then(|st| st.history.row_id(st.history.past_len()));
+            if current == start || !s.undo() {
+                break;
+            }
         }
     }
     s.journal.truncate(journal);

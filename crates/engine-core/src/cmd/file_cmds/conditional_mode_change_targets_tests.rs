@@ -169,6 +169,24 @@ fn bad_target_options_with_non_linear_history_go_back_to_the_state_before_the_ru
     assert_eq!(now, [redo.iter().map(String::as_str).collect::<Vec<_>>(), vec!["Mode Change"]].concat());
 }
 
+/// With the state limit full, the Grayscale step moves three redo states onto the undo side and
+/// the limit drops the state before the run: a failed target still brings that state back, with
+/// the history list and the redo states as before the run.
+#[test]
+fn bad_target_options_bring_back_the_state_the_limit_dropped() {
+    let mut s = measured(8);
+    let h = &mut s.active_mut().unwrap().history;
+    (h.non_linear, h.max_states) = (true, 3);
+    for id in ["select.all", "select.deselect", "select.all"] {
+        s.execute(id, json!({})).unwrap();
+    }
+    assert!(s.undo() && s.undo() && s.undo());
+    let redo = |s: &Session| s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+    let before = (history(&s), redo(&s), shape(&s), doc(&s).selection.is_some());
+    assert!(s.execute(CMD, json!({"to": "bitmap", "method": "zigzag"})).is_err());
+    assert_eq!((history(&s), redo(&s), shape(&s), doc(&s).selection.is_some()), before);
+}
+
 /// Routes Photoshop was not measured on are refused, not guessed; an unticked source still
 /// leaves the document without an error.
 #[test]
