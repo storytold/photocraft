@@ -1,4 +1,4 @@
-//! Session state the engine crates share: plain data held in [`Session`] fields, read by core's
+//! Session state the engine crates share: plain data held in [`Session`](crate::Session) fields, read by core's
 //! pipeline or by more than one crate. The commands that use each type live in the module its
 //! section names, which re-exports it.
 
@@ -301,6 +301,8 @@ pub struct LiveCommit {
     pub points: Vec<StrokePoint>,
     pub surface: Surface,
     pub bounds: Rect,
+    pub layer: Option<LayerId>,
+    pub colors: Option<ColorChannels>,
 }
 
 impl LiveCommit {
@@ -318,6 +320,8 @@ impl LiveCommit {
     pub fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
         let base = s.active().map(|st| (st.doc.id, st.revision));
         self.cmd == cmd
+            && self.colors == crate::channel_cmds::color_restriction(s, cmd, p).map(|r| r.colors)
+            && self.layer == if crate::channel_cmds::is_channel_target(p) { None } else { crate::commands::layer_param(s, p).ok() }
             && base == Some(self.base)
             && p.get("seed").and_then(Value::as_u64) == self.seed
             && self.points == pts

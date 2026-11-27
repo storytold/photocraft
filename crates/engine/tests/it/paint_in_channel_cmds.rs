@@ -615,6 +615,7 @@ mod tests {
         s.execute("layer.new.layer", json!({})).unwrap();
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
         s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        s.execute("view.layerMask", json!({"mode":"overlay"})).unwrap();
         for name in ["red", "green", "blue"] {
             s.execute("channel.setVisible", json!({"channel": name, "visible": false})).unwrap();
         }
@@ -1092,6 +1093,77 @@ mod tests {
             s.undo();
             assert!(near(&px(&s, 5, 5), &left), "one undoable step");
         }
+    }
+
+    /// #6068: with one colour channel targeted, the Move tool moves that channel of the active
+    /// layer; the other channels, the transparency and the layer's position stay. Where the channel
+    /// moved away from takes the background colour's value for it, as Clear does (#2720).
+    #[test]
+    fn move_with_a_colour_channel_targeted_moves_only_that_channel() {
+        let mut s = session();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+        rect(&mut s, 0, 0, 4, 4, "replace");
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let gray = px(&s, 20, 10);
+        let red_block = px(&s, 1, 1);
+        let bounds = |s: &Session| {
+            let d = s.active().unwrap();
+            d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
+        };
+        let before_bounds = bounds(&s);
+        let steps = s.active().unwrap().history.entries().len();
+        s.tools.background = [0.0, 0.0, 0.0, 1.0];
+        s.execute("channel.target", json!({"channel": "red"})).unwrap();
+        s.execute("layer.translate", json!({"dx": 10, "dy": 5})).unwrap();
+        // The block's red moved to (11, 6); its green and blue stayed where they were.
+        assert_eq!(px(&s, 11, 6), vec![red_block[0], gray[1], gray[2], 1.0]);
+        // Where the red came from it is the background colour's red (black: 0); green and blue stay.
+        assert_eq!(px(&s, 1, 1), vec![0.0, red_block[1], red_block[2], 1.0]);
+        // Elsewhere the red is the gray's, moved along from (10, 5).
+        assert_eq!(px(&s, 20, 10), gray);
+        assert_eq!(bounds(&s), before_bounds.union(&before_bounds.translate(10, 5)), "shifted colour samples extend the native bounds");
+        assert_eq!(px(&s, 49, 24), vec![gray[0], 0.0, 0.0, 0.0], "off-canvas red survives while transparency and other components stay put");
+        let entries = s.active().unwrap().history.entries();
+        assert_eq!(entries.len(), steps + 1);
+        assert!(entries.last().unwrap().to_string().contains("Move"), "{entries:?}");
+        // One undo puts the channel back.
+        s.undo();
+        assert_eq!(bounds(&s), before_bounds);
+        assert_eq!(px(&s, 49, 24), vec![0.0; 4]);
+        assert_eq!(px(&s, 1, 1), red_block);
+        assert_eq!(px(&s, 11, 6), gray);
+        // With the composite targeted the Move tool moves the layer again.
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        s.execute("layer.translate", json!({"dx": 10, "dy": 5})).unwrap();
+        assert_eq!(px(&s, 11, 6), red_block);
+        assert_ne!(bounds(&s), before_bounds);
+    }
+
+    #[test]
+    fn move_channel_target_precedence_and_bad_input() {
+        let mut s = session();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color":"#804020"})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.execute("channel.target", json!({"channel":"red"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        for target in [json!({"color":99}), json!({"color":"red"})] {
+            assert!(s.execute("layer.translate", json!({"dx":1,"target":target})).is_err());
+            assert_eq!(*s.active().unwrap().doc, *before);
+        }
+        // An explicit channel beats the Channels panel; an explicit layer alone moves all pixels.
+        s.execute("layer.translate", json!({"dx":1,"target":{"color":1}})).unwrap();
+        assert_eq!(px(&s, 1, 0)[0], before.layer(id).unwrap().surface().unwrap().sample_channel(1, 0, 0));
+        s.undo();
+        s.execute("layer.translate", json!({"dx":1,"layer":null})).unwrap();
+        assert_eq!(px(&s, 0, 0)[1], before.layer(id).unwrap().surface().unwrap().sample_channel(0, 0, 1));
+        assert_ne!(px(&s, 0, 0)[0], before.layer(id).unwrap().surface().unwrap().sample_channel(0, 0, 0));
+        s.undo();
+        s.execute("layer.translate", json!({"dx":1,"layer":id.0})).unwrap();
+        let after = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+        assert_eq!(after.pixel(1, 0), before.layer(id).unwrap().surface().unwrap().pixel(0, 0));
     }
 
     #[test]

@@ -61,6 +61,9 @@ fn framed_layers(app: &PhotocraftApp, pressed: bool) -> Vec<&photocraft_doc::Lay
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
+    if crate::move_ui::color_target(app).is_some() {
+        return st.active_layer.and_then(|id| st.doc.layer(id)).into_iter().collect();
+    }
     let selected = st.selected_layers();
     let several = selected.len() > 1;
     selected.iter().filter_map(|&id| st.doc.layer(id)).filter(|l| several || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
@@ -75,6 +78,14 @@ pub(crate) fn frame(app: &PhotocraftApp) -> Option<kurbo::Rect> {
 fn framed(app: &PhotocraftApp, pressed: bool) -> Option<kurbo::Rect> {
     let st = app.session.active()?;
     let layers = framed_layers(app, pressed);
+    if layers.is_empty() {
+        return None;
+    }
+    if crate::move_ui::color_target(app).is_some() {
+        let params = photocraft_engine::channel_transform::params(&app.session, &serde_json::json!({})).ok()?;
+        let b = photocraft_engine::channel_transform::source_bounds(&st.doc, st.active_layer, &params).ok()??;
+        return Some(kurbo::Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)));
+    }
     let b = layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?;
     // Floating selected pixels are framed by their outline, as their ants are (#7538), not by the
     // selection they were cut with; a frame round other selected layers too keeps them all.
@@ -110,7 +121,8 @@ pub(crate) fn begin_controls(app: &mut PhotocraftApp, ctx: &egui::Context) -> Co
     if framed(app, true).is_none() {
         return ControlsPress::Missed;
     }
-    let background = app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, st.selected_layers()).is_some());
+    let background = crate::move_ui::color_target(app).is_none()
+        && app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, st.selected_layers()).is_some());
     if background {
         // PLAN: assumed `dialogs::alerts::alert(app: &mut PhotocraftApp, message: &str)` (dialogs-w21).
         crate::dialogs::alerts::alert(app, tl!(CONTROLS_LOCKED));

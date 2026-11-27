@@ -70,6 +70,12 @@ impl Session {
             self.documents_generation = self.documents_generation.wrapping_add(1);
         }
     }
+    /// Release an interactive channel target, including after its document was switched/closed.
+    pub fn clear_channel_transforms(&mut self) {
+        for st in self.docs.iter_mut().filter(|st| st.channel_transform.is_some()) {
+            st.channel_transform = None;
+        }
+    }
 
     /// The open document with this id, active or not.
     pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {

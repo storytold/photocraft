@@ -166,6 +166,8 @@ fn drop_canvas(app: &mut PhotocraftApp, fault: &photocraft_gpu::Fault) -> bool {
     let Some(gpu) = app.gpu.take() else { return false };
     // The GPU canvas is gone (that's this error); the switch to the CPU is `render_path`'s line.
     log::error!("{fault}; GPU canvas dropped");
+    app.move_gpu_preview = None;
+    crate::channel_transform_preview::release_gpu(app);
     gpu.release();
     app.gpu_fault = Some(fault.clone());
     // Canvas caches pointed at GPU textures: rebuild them as egui textures.

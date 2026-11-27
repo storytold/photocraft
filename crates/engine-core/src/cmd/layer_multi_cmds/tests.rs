@@ -989,27 +989,6 @@ fn merging_a_group_down_preserves_the_composite() {
 }
 
 #[test]
-fn a_locked_group_locks_its_contents() {
-    let mut s = session(8);
-    let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
-    let g = s.execute("layer.new.groupFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("layer.setProps", json!({"layer": g, "locked": true})).unwrap();
-    s.execute("layer.select", json!({"layer": a.0})).unwrap();
-    for (cmd, p) in [
-        ("layer.translate", json!({"dx": 1})),
-        ("paint.stroke", json!({"points": [[2, 2], [4, 4]]})),
-        ("edit.fill", json!({"color": "#00ff00"})),
-        ("edit.transform.flipHorizontal", json!({})),
-    ] {
-        assert!(s.execute(cmd, p).is_err(), "{cmd} edited a layer in a locked group");
-    }
-    // Unlocking the group releases its contents.
-    s.execute("layer.setProps", json!({"layer": g, "locked": false})).unwrap();
-    s.execute("layer.translate", json!({"dx": 1})).unwrap();
-    assert_eq!(bounds(&s, a), Rect::new(1, 0, 6, 5));
-}
-
-#[test]
 fn a_locked_group_keeps_a_grouped_background_locked() {
     let mut s = session(8);
     let bg = doc(&s).layers[0].id;

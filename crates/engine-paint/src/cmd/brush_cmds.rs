@@ -705,6 +705,8 @@ impl LiveStroke {
             points: self.points,
             surface: surf.clone(),
             bounds,
+            layer: self.layer,
+            colors: self.colors,
         })
     }
 
@@ -735,7 +737,7 @@ impl LiveStroke {
         check_coords(pts, &self.cmd)?;
         self.points.extend_from_slice(pts);
         let cmyk = self.cmyk.clone();
-        let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
+        let damage = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
             self.renderer.push(pts);
             if let Some(symmetry) = &self.symmetry {
                 for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -765,25 +767,23 @@ impl LiveStroke {
                 dmg = dmg.union(&StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock));
                 self.tail = old.union(&live.bounds());
                 self.union_live = Some((live, passes));
-                if let Some(colors) = self.colors {
-                    crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
-                }
                 return Ok(dmg);
             }
             let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
             let (dmg, tail) = self.renderer.composite_live(old, &self.pre, surf, self.sel.as_ref(), self.lock);
             self.tail = tail;
-            if let Some(colors) = self.colors {
-                crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
-            }
             Ok(dmg)
         })?;
         // The preview shows the pixels the commit keeps (see `stroke_with`).
         if let Some(table) = paint_color_table(&self.doc, &self.params) {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            keep_in_color_table(&table, &self.pre, surf, dmg);
+            keep_in_color_table(&table, &self.pre, surf, damage);
         }
-        Ok(dmg)
+        if let Some(colors) = self.colors {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            crate::color_channels::restrict_region(&self.pre, surf, colors, damage)?;
+        }
+        Ok(damage)
     }
 }
 

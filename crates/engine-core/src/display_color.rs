@@ -69,6 +69,34 @@ impl CanvasDisplay {
         img
     }
 
+    /// CPU channel views have straight-alpha composite values in the document's display source
+    /// profile. Encode linear sources before quantizing, then convert to this monitor.
+    pub fn composite_pixels_to_rgba8(&self, source: &[[f32; 4]]) -> Vec<[u8; 4]> {
+        let mut pixels = vec![[0; 4]; source.len()];
+        let quantize = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        if self.encode_srgb {
+            let table = encode_table();
+            par_pixels(&mut pixels, source, |out, src| {
+                for (pixel, value) in out.iter_mut().zip(src) {
+                    for i in 0..3 {
+                        pixel[i] = table[(value[i].clamp(0.0, 1.0) * 65535.0 + 0.5) as usize];
+                    }
+                    pixel[3] = quantize(value[3]);
+                }
+            });
+        } else {
+            par_pixels(&mut pixels, source, |out, src| {
+                for (pixel, value) in out.iter_mut().zip(src) {
+                    *pixel = value.map(quantize);
+                }
+            });
+        }
+        if let Some(t) = &self.transform {
+            apply_u8(t, pixels.as_flattened_mut());
+        }
+        pixels
+    }
+
     /// GPU canvas: a CPU composite as the texture stores it (sRGB-encoded for linear
     /// composites; the display LUT does the rest). Values above 1.0 are encoded too (the sRGB
     /// curve extended), for the float canvas texture of 32-bit documents.

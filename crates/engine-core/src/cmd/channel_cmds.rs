@@ -149,6 +149,7 @@ pub(crate) use targeting::{
     channel_surface_for_filter, clear_channel, clear_color_channel, filter_mask_layer, invert_region, is_spot_target, mask_target_enabled, routed,
     targeted_channel,
 };
+pub use targeting::{color_move_destination, move_color_channel, move_color_channels, move_color_channels_wrapping};
 pub use tone_target::{ToneTarget, resolve_tone_target};
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 pub(crate) use view::{fix_view, restore_view_after_undo};

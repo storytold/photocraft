@@ -15,6 +15,7 @@ pub mod brush_defs;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
+pub mod channel_transform;
 mod clip_group;
 pub mod color_channels;
 pub mod content_sampling;

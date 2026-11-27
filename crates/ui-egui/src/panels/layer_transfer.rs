@@ -105,6 +105,9 @@ fn layer_drag(app: &PhotocraftApp) -> Option<MoveLayerDrag> {
 /// A Move-tool drag of whole layers (not a selection or a floating piece) under way: the document
 /// point it grabbed.
 fn move_drag(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[f64; 2]> {
+    if crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) {
+        return None;
+    }
     let d = layer_drag(app)?;
     let st = app.session.active()?;
     let canvas = CanvasHost::primary(app, app.session.active_index()?).canvas_id();

@@ -29,7 +29,7 @@ fn composite_bands_keep_the_downsample_grid() {
                 })
             })
             .collect();
-        assert_eq!(composite(doc, rect, factor), expected, "factor {factor}");
+        assert_eq!(composite(doc, rect, factor, 0), expected, "factor {factor}");
     }
 }
 
@@ -284,11 +284,16 @@ fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
     m.execute("layer.new.layer", json!({})).unwrap();
     m.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     m.execute("layer.layerMask.hideAll", json!({})).unwrap();
-    m.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+    m.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+    let st = m.active().unwrap();
+    assert_eq!(st.channel_view.visible_colors(3), 3, "an undisplayed mask cannot prevent empty-view recovery");
+    assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).is_none(), "the plain composite needs no mask overlay");
+    m.execute("view.layerMask", json!({"mode":"overlay"})).unwrap();
+    m.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
     let st = m.active().unwrap();
     assert_eq!(st.channel_view.visible_colors(3), 0);
     let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
-    assert_eq!(px[0], Color32::BLACK, "the hidden mask reads black, not the red layer");
+    assert_eq!(px[0], Color32::BLACK, "a mask with its eye on can be shown alone");
 }
 
 /// A CMYK channel shows the document's ink, not the composite separated again from RGB: rich
@@ -345,7 +350,7 @@ fn cmyk_inks_from_the_proxy_match_the_document() {
     let doc = &s.active().unwrap().doc;
     assert!(proxy(doc, doc.bounds(), 2).is_some());
     let full = ink_samples(doc, &(0..9).step_by(2).collect::<Vec<_>>(), &(0..7).step_by(2).collect::<Vec<_>>());
-    assert_eq!(inks(doc, doc.bounds(), 2), full);
+    assert_eq!(inks(doc, doc.bounds(), 2, 0), full);
     assert_eq!(full[0], [1.0, 1.0, 1.0, 0.0]);
     assert_eq!(full[4], [0.0; 4]);
 }
@@ -380,7 +385,7 @@ fn spot_eyes_overprint_the_composite() {
                     v.set_alpha_visible(0, true);
                     v.set_alpha_visible(1, true);
                     let px = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
-                    let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1) };
+                    let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1, 0) };
                     photocraft_compose::multichannel::overprint(&mut want, &doc, |_| true);
                     for (x, (got, w)) in px.iter().zip(&want.px).enumerate() {
                         assert_eq!(got.a(), 255, "{mode:?} {depth:?}: opaque");
@@ -390,7 +395,7 @@ fn spot_eyes_overprint_the_composite() {
                     // Only the visible ink prints; where it has none the canvas shows through.
                     v.set_alpha_visible(1, false);
                     let one = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
-                    let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1) };
+                    let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1, 0) };
                     photocraft_compose::multichannel::overprint(&mut want, &doc, |i| i == 0);
                     let (solid, bare) = if swapped { (2, 0) } else { (0, 2) };
                     let w = want.px[solid];
@@ -452,7 +457,7 @@ fn sparse_inks_composite_only_their_bounding_box() {
         v.set_alpha_visible(1, true);
         let b = doc.bounds();
         let got = render(&doc, &v, b, factor, Look::default(), None).unwrap();
-        let whole = composite_sampled(&doc, b, factor);
+        let whole = composite_sampled(&doc, b, factor, 0);
         let ink = photocraft_compose::multichannel::Ink::of(&doc, &doc.channels[0]);
         let w = 60usize.div_ceil(factor as usize);
         let f = factor as usize;
@@ -503,7 +508,7 @@ fn printed_inks_follow_the_display_transform() {
     let plain = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
     let t = craft::cms::transform::cached(Builtin::Srgb.profile(), Builtin::DisplayP3.profile(), TransformOptions::default()).unwrap();
     let screen = Screen { encode_srgb: false, transform: Some(t.clone()) };
-    let shown = render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { screen: &screen }).unwrap();
+    let shown = render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { display: None, band_rows: 0, screen: &screen }).unwrap();
     // x 0: solid teal; x 2: no ink of channel 0, so transparent either way.
     let mut teal = [0.0f32, 0.6, 0.65, 1.0];
     t.apply(&mut teal, 4).unwrap();
@@ -522,7 +527,8 @@ fn printed_inks_keep_their_colour_in_a_linear_document() {
     let mut v = ChannelView::default();
     v.set_alpha_visible(0, true);
     let encoded = Screen { encode_srgb: true, transform: None };
-    let shown = render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { screen: &encoded }).unwrap();
+    let shown =
+        render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { display: None, band_rows: 0, screen: &encoded }).unwrap();
     let (got, want) = ([shown[0].r(), shown[0].g(), shown[0].b()], [0, q(0.6), q(0.65)]);
     assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "{got:?} vs the stored {want:?}");
 }
@@ -582,7 +588,7 @@ fn proxy_composite_matches_the_full_resolution_one() {
                 }
                 assert!(proxy_matches(&doc));
                 let b = doc.bounds();
-                let (proxy, full) = (composite(&doc, b, factor), composite_sampled(&doc, b, factor));
+                let (proxy, full) = (composite(&doc, b, factor, 0), composite_sampled(&doc, b, factor, 0));
                 assert_eq!(proxy.len(), full.len());
                 for (i, (p, f)) in proxy.iter().zip(&full).enumerate() {
                     assert!(p.iter().zip(f).all(|(p, f)| (p - f).abs() < 1e-4), "{mode:?} {depth:?} /{factor} px {i}: {p:?} != {f:?}");
@@ -708,3 +714,6 @@ fn solo_spot_wins_over_an_unrelated_layer_mask() {
         assert_eq!(px[7], Color32::BLACK, "{mode}: uninked half shows the spot, not the mask");
     }
 }
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;

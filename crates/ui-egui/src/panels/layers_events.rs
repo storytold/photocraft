@@ -164,6 +164,13 @@ fn thumb_click_actions(doc: &photocraft_doc::Document, id: LayerId, part: LayerP
 }
 
 fn map_event(app: &mut PhotocraftApp, ctx: &egui::Context, event: LayersEvent<LayerId>, actions: &mut Vec<Action>) {
+    // Selecting a row also changes shell targets (frame, path, Properties and smart-filter picks)
+    // before its engine actions run. Refuse the event before any of those side effects.
+    if photocraft_engine::channel_transform::locked(&app.session) && matches!(event, LayersEvent::Select(_) | LayersEvent::Activate { .. }) {
+        app.ui.status = photocraft_engine::channel_transform::LOCKED.into();
+        app.ui.status_error = true;
+        return;
+    }
     let Some(st) = app.session.active() else { return };
     let doc = st.doc.clone();
     let active = st.active_layer;
@@ -610,6 +617,17 @@ fn select_param_ids(p: &Value) -> Vec<u64> {
 /// Runs the actions in order: a type session commits before a select, the mask targets switch,
 /// `Value::Null` params (and the fill layers that open a dialog) run as the menu item does.
 pub(crate) fn run_actions(app: &mut PhotocraftApp, ctx: &egui::Context, actions: Vec<Action>) {
+    // A thumbnail click must not partially switch shell targets after the engine refuses selection.
+    if photocraft_engine::channel_transform::locked(&app.session)
+        && actions
+            .iter()
+            .any(|(id, _)| id.starts_with("layer.select") || matches!(id.as_str(), "ui.maskTarget" | "ui.vectorMaskTarget" | "ui.filterMaskTarget"))
+    {
+        app.ui.status = photocraft_engine::channel_transform::LOCKED.into();
+        app.ui.status_error = true;
+        return;
+    }
+
     for (id, p) in actions {
         // A row click commits even when it selects the layer already being edited (#5584); a
         // multi-row selection that leaves the edited layer out is a layer switch (#6483).

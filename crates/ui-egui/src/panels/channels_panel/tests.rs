@@ -367,3 +367,6 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
     assert!(enabled(&app, ChannelsCommands::MergeChannels), "three are");
 }
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;

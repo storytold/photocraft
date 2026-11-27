@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::transform::{Interp, bicubic};
 
-/// Grid cell size (source px) used to approximate the map.
+/// Grid cell size (source or destination px) used to approximate the map.
 const CELL: f64 = 4.0;
 /// Most cells along one axis (bounds memory and time on huge layers).
 const MAX_CELLS: usize = 512;
@@ -48,6 +48,15 @@ impl Fold<'_> {
 const MAX_SS: f64 = 8.0;
 /// Bounding-box pixels scanned per destination pixel of a tile, across all its triangles.
 const MAX_SCAN_PER_PIXEL: usize = 256;
+
+/// Bounded grid shared by CPU resampling and accelerated previews. Using different
+/// triangles for a curved map changes the sampled pixels even with identical interpolation.
+pub fn mesh_grid(src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -> (usize, usize) {
+    // A thin source stretched far needs enough cells to reproduce its destination curve.
+    let (lu, lv) = mapped_lengths(src_rect, f);
+    let cells = |s: f64, d: f64| ((s.max(d) / CELL).ceil() as usize).clamp(1, MAX_CELLS);
+    (cells(f64::from(src_rect.width()), lu), cells(f64::from(src_rect.height()), lv))
+}
 
 /// Places a smart object's source image (`src`, its pixels in `src_rect`) in the document:
 /// through `warp` (source space) and then the affine `t` (source → document) in one resampling
@@ -163,11 +172,7 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
     }
     let (sw, sh) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
-    // Cells are a few pixels across on both sides of the map: a thin source stretched far (a
-    // 3 px column scaled into a wide band, then bent) needs many cells, or it comes out straight.
-    let (lu, lv) = mapped_lengths(src_rect, f);
-    let cells = |s: f64, d: f64| ((s.max(d) / CELL).ceil() as usize).clamp(1, MAX_CELLS);
-    let (nx, ny) = (cells(sw, lu), cells(sh, lv));
+    let (nx, ny) = mesh_grid(src_rect, f);
     // Forward-mapped vertices (and their source positions).
     let mut verts = Vec::with_capacity((nx + 1) * (ny + 1));
     for j in 0..=ny {
@@ -393,6 +398,14 @@ struct Win {
     px: Vec<f32>,
     foot: Rect,
     fw: usize,
+}
+
+/// Use unclamped alpha so bicubic overshoot does not lighten the colour (#6203), and keep
+/// HDR values in float surfaces while integer surfaces stay in their normalized range.
+#[inline]
+fn straight_sample(color: f64, alpha: f64, sample: photocraft_color::SampleType) -> f32 {
+    let value = color / alpha;
+    if sample == photocraft_color::SampleType::F32 { value as f32 } else { value.clamp(0.0, 1.0) as f32 }
 }
 
 /// `stack`: the picture can fold over itself, and gives each triangle's rank in the order a fold
@@ -832,8 +845,7 @@ fn triangles(
             any = true;
             let b = o * n;
             for c in 0..a {
-                // The unclamped alpha, so a bicubic overshoot past 1 doesn't lighten the colour (#6203).
-                outp[b + c] = (acc[c] / acc[a]).clamp(0.0, 1.0) as f32;
+                outp[b + c] = straight_sample(acc[c], acc[a], fmt.sample);
             }
             outp[b + a] = al as f32;
         }

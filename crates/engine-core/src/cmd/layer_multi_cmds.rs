@@ -24,8 +24,11 @@ use moves::link_groups;
 pub use moves::shift_surface;
 #[cfg(test)]
 pub(crate) use moves::with_links;
-pub use moves::{move_targets, move_to, moved, moved_target, moved_wrapping, moves_mask_alone, preview_move, translate, wrapped_delta};
-pub(crate) use moves::{wrap_path, wrap_surface, wraps_linked_masks};
+pub(crate) use moves::{bounded_move_selection, wrap_path, wrap_surface, wraps_linked_masks};
+pub use moves::{
+    move_targets, move_to, moved, moved_target, moved_wrapping, moves_mask_alone, preview_move, translate, viewed_mask_is_target, wrapped_delta,
+    wrapped_selection,
+};
 pub use selection::targets;
 pub use selection::top_level;
 use selection::{doc_state, find_layers, select_all_layers, select_linked};

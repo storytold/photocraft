@@ -209,6 +209,10 @@ fn a_targeted_vector_mask_yields_to_alpha_quick_mask_and_explicit_targets() {
     let target = |app: &PhotocraftApp, p: serde_json::Value| app.with_mask_target("edit.transform.flipHorizontal", p);
     assert_eq!(target(&app, json!({}))["target"], "vectorMask");
     assert_eq!(target(&app, json!({"target": "pixels"}))["target"], "pixels", "an explicit target wins");
+    assert_eq!(target(&app, json!({"target":{"color":0}}))["target"], json!({"color":0}));
+    assert!(target(&app, json!({"layer":masked})).get("target").is_none(), "a named layer keeps whole-layer routing");
+    assert!(target(&app, json!({"layers":[masked]})).get("target").is_none(), "named layers keep whole-layer routing");
+    assert_eq!(target(&app, json!({"layer":null}))["target"], "vectorMask", "null does not name a layer");
     let before = layer(&app, masked).vector_mask.unwrap().path;
 
     // Photoshop targets a new alpha channel on its own; the panel still says vector mask.

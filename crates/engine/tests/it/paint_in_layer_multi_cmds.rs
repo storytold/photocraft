@@ -6,6 +6,34 @@ mod tests {
     use photocraft_geom::Rect;
     use serde_json::json;
 
+    #[test]
+    fn a_locked_group_locks_its_contents() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":16,"height":16})).unwrap();
+        let a = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("select.rect", json!({"x":0,"y":0,"width":5,"height":5})).unwrap();
+        s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let g = s.execute("layer.new.groupFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setProps", json!({"layer": g, "locked": true})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        for (cmd, p) in [
+            ("layer.translate", json!({"dx": 1})),
+            ("paint.stroke", json!({"points": [[2, 2], [4, 4]]})),
+            ("edit.fill", json!({"color": "#00ff00"})),
+            ("edit.transform.flipHorizontal", json!({})),
+        ] {
+            let error = s.execute(cmd, p).unwrap_err().to_string();
+            assert!(error.contains("locked"), "{cmd}: {error}");
+        }
+        // Unlocking the group releases its contents.
+        s.execute("layer.setProps", json!({"layer": g, "locked": false})).unwrap();
+        s.execute("layer.translate", json!({"dx": 1})).unwrap();
+        let st = s.active().unwrap();
+        let bounds = st.doc.layer(a).unwrap().surface().unwrap().content_bounds();
+        assert_eq!(bounds, Rect::new(1, 0, 6, 5));
+    }
+
     /// #7538: `selection: true` moves the selection with the layers in the same step, as the Move
     /// tool does with several layers selected; without it the selection stays.
     #[test]

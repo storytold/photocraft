@@ -116,6 +116,7 @@ pub use canvas::scroll_all_windows;
 pub use canvas::select_mask_view;
 pub use canvas::snap_ui;
 pub use canvas::tool_feedback;
+pub(crate) use canvas::{channel_transform_gpu, channel_transform_preview};
 pub use dialogs::adjust_dialog;
 pub use dialogs::adjust_editors;
 pub use dialogs::adjust_preview;
@@ -368,6 +369,8 @@ pub struct PhotocraftApp {
     pub(crate) preset_art: panels::preset_browser::PresetArt,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
+    // Keep native captures off the large app/event-handler stack; allocate once per drag.
+    pub(crate) move_gpu_preview: Option<Box<move_ui::MoveGpuPreview>>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
     /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).

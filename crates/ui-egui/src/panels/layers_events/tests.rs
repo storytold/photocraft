@@ -662,3 +662,34 @@ fn a_select_commits_an_open_text_edit_before_changing_the_selection() {
         }
     }
 }
+
+#[test]
+fn channel_transform_refuses_layer_selection_before_shell_targets_change() {
+    let (session, masked, shape) = session();
+    let mut app = app_of(session);
+    let frame = app.run("layer.new.frame", json!({"x":0,"y":0,"width":10,"height":10})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.select", json!({"layer":masked})).unwrap();
+    app.run("channel.target", json!({"channel":"red"})).unwrap();
+    let ctx = app.ctx().clone();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    app.ui.properties_layer = Some(shape);
+    let source = app.session.active().unwrap().doc.clone();
+    let target = app.ui.transform.clone();
+    let frame_target = app.ui.frame_tool.clone();
+    let path = app.ui.selected_path.clone();
+    for event in [select(&[masked], Some(LayerPart::VectorMask)), select(&[masked], Some(LayerPart::LayerMask)), select(&[frame], Some(LayerPart::FrameShape))]
+    {
+        send(&mut app, vec![event]);
+        assert_eq!(app.ui.frame_tool, frame_target);
+        assert_eq!(app.ui.selected_path, path);
+        assert_eq!(app.ui.properties_layer, Some(shape));
+        assert!(!app.ui.mask_target && !app.ui.vector_mask_target);
+        assert_eq!(active(&app), Some(LayerId(masked)));
+        assert_eq!(app.ui.transform, target);
+        assert!(std::sync::Arc::ptr_eq(&source, &app.session.active().unwrap().doc));
+        assert!(photocraft_engine::channel_transform::locked(&app.session));
+    }
+    app.run("channel.setVisible", json!({"channel":"red","visible":false})).unwrap();
+    assert_eq!(app.ui.transform, target);
+    crate::transform_tool::cancel(&mut app);
+}

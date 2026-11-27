@@ -89,8 +89,8 @@ pub struct FreeTransform {
     pub layers: Vec<u64>,
     /// Select › Transform Selection: the box transforms the selection outline, not pixels.
     pub selection: bool,
-    /// `edit.transform`'s `"target"` when the box moves an unlinked layer mask, an alpha channel or
-    /// the Quick Mask by itself (`None`: the layer, with its linked masks).
+    /// `edit.transform`'s `"target"` when the box edits native colour components, a raster mask,
+    /// an alpha channel or Quick Mask alone (`None`: the layer, carrying its linked masks).
     pub target: Option<Value>,
     /// Free Transform Path: `path.transform`'s `name` (and `layer`) when the box moves a
     /// path's anchors and handles instead of pixels.

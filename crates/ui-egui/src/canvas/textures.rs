@@ -498,3 +498,8 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         app.proxy = None;
     }
 }
+
+/// The canvas sampler: native pixels remain sharp when magnified; reduced pixels stay filtered.
+pub(super) fn canvas_texture_options(factor: u32) -> egui::TextureOptions {
+    if factor > 1 { egui::TextureOptions::LINEAR } else { egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR } }
+}

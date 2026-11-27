@@ -260,3 +260,6 @@ fn overhanging_content_handles_start_transform_and_cancel() {
     }
     assert_eq!(app.session.active().unwrap().history.entries(), entries);
 }
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;

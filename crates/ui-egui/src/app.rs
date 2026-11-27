@@ -74,6 +74,7 @@ impl PhotocraftApp {
             dock_model: Default::default(),
             preset_art: Default::default(),
             move_preview: None,
+            move_gpu_preview: None,
             move_hover: None,
             move_distance: None,
             object_finder: None,

@@ -23,7 +23,10 @@ pub(crate) const KINDS: &[(&str, Opener)] = &[
     ("newDocument", |app, _, _| Ok(crate::new_doc_ui::open(app))),
     ("about", open_about),
     ("colorPicker", open_color_picker),
-    ("layerStyle", |app, _, p| crate::layer_style::open(app, p.get("effect").and_then(Value::as_str)).ok_or_else(|| "no active layer".to_string())),
+    ("layerStyle", |app, _, p| {
+        let why = if photocraft_engine::channel_transform::locked(&app.session) { photocraft_engine::channel_transform::LOCKED } else { "no active layer" };
+        crate::layer_style::open(app, p.get("effect").and_then(Value::as_str)).ok_or_else(|| why.to_string())
+    }),
     ("newCropPreset", |app, _, _| {
         crate::crop_presets::open_new(app).ok_or_else(|| "nothing to save: set W and H (W x H x Resolution) or a ratio first".to_string())
     }),

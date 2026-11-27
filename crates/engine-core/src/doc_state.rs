@@ -1,4 +1,5 @@
 use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, symmetry_cmds};
+use crate::channel_transform;
 
 /// Per-document editing state. Plain data: the session holds each in a `Tracked`, whose revision moves with every
 /// write, view state included.
@@ -31,6 +32,8 @@ pub struct DocState {
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
+    /// Interactive single-channel transform; never saved or included in pixel history.
+    pub channel_transform: Option<channel_transform::Guard>,
     /// The channel views undo brings back, by the step they belong to: the ids of the history
     /// states New Channel or Calculations started from and made (#14683). View state, not history.
     pub(crate) undo_channel_views: Vec<(u64, u64, channel_cmds::ChannelView)>,
@@ -147,6 +150,7 @@ impl DocState {
             damage_log: Default::default(),
             coalesce: None,
             channel_view,
+            channel_transform: None,
             undo_channel_views: Vec::new(),
             isolated_layers: Vec::new(),
             symmetry: None,

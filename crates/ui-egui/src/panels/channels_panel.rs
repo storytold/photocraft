@@ -289,6 +289,12 @@ fn report<T>(app: &mut PhotocraftApp, result: Result<T, String>) {
 
 /// A click on a row targets its channel; the mask row targets the layer mask, the composite and colour rows the pixels.
 fn target(app: &mut PhotocraftApp, key: Row, extend: bool) {
+    if photocraft_engine::channel_transform::locked(&app.session) {
+        app.ui.status = photocraft_engine::channel_transform::LOCKED.into();
+        app.ui.status_error = true;
+        return;
+    }
+
     let Some(mode) = app.session.active().map(|st| st.doc.pixel_format().mode) else { return };
     if key == Row::LayerMask {
         let _ = app.run("channel.target", json!({ "channel": "mask" }));
