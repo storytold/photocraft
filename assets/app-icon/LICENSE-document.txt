@@ -20,8 +20,8 @@ derived from it, must remove that mark from this artwork or replace it with its
 own, and must not present it as its own. A fork kept only to propose changes
 back to this repository may keep the mark unchanged.
 
-The lettering is outlined type (Geist, SIL Open Font License 1.1), converted to
-curves before export; the artwork embeds no font, no live text and no external
+The lettering is outlined type (Archivo ExtraBold by Omnibus-Type, SIL Open Font
+License 1.1), converted to curves before export; the artwork embeds no font, no live text and no external
 image. The ICO is packed from 16-256 px renders of this master with
 `cargo run -p xtask -- ico photocraft-document.ico <render.png>...`; the exact
 commands are in README.md, and the artwork and its provenance are recorded in

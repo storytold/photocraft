@@ -34,7 +34,7 @@ vectorised. License: see `LICENSE.txt`.
 - `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
 - `photocraft-document.svg`: Windows PSD file icon master: a page with a folded corner filled into
   a rounded flap, a blue (`#2f7bf5`) ring and the ArtCraft mark, a deep (`#001424`) field and
-  outlined `PSD` lettering; no font dependency.
+  outlined `PSD` lettering in Archivo ExtraBold; no font dependency.
 - `photocraft-document.ico`: Windows PSD file icon (16–256 px), embedded as resource 2.
 - `photocraft-pcraft-document.svg`: Windows `.pcraft` file icon master: the same page, palette
   and mark with a `PCRAFT` label; no font dependency.
@@ -58,10 +58,12 @@ storytold/pdfcraft#308: the page geometry, the fold and the mark placement are t
 filled into a rounded flap as on the shipped PdfCraft icon, the ring and the mark are PhotoCraft blue,
 the field is deep ink and the three letters are outlined type. The ArtCraft mark on it is the
 project's, used as a mark, not licensed for reuse; a fork that distributes a modified version must
-remove or replace it ([LICENSE-document.txt](LICENSE-document.txt)). The label is sized to match the
-PdfCraft PDF icon (186 × 70 at 512, against 203 × 76), so the two read as one family. The
-`.pcraft` label is 250 × 46 — 61 % of the page width, 66 % of the PSD cap height — on the same
-centre, which is how six letters sit in the band without reaching the frame.
+remove or replace it ([LICENSE-document.txt](LICENSE-document.txt)). The label is Archivo
+ExtraBold, outlined (never live text): the display face getartcraft.com sets its headings and the
+ArtCraft wordmark in, so the icons borrow the brand's own typeface instead of shipping a font. It
+is sized to match the PdfCraft PDF icon (192 × 67 at 512, against 209 × 72), so the two read as
+one family. The `.pcraft` label is 264 × 44 — 64 % of the page width, 66 % of the PSD cap height —
+on the same centre, which is how six letters sit in the band without reaching the frame.
 
 Every PNG and the `.ico` are rendered from the master; `packaging/icons.sh` is for the app tile and
 does not build this one. The document `.ico` is packed with `xtask`, which takes the output path and
