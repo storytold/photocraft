@@ -37,6 +37,7 @@ pub use photocraft_gpu::{DeviceHealth, Fault};
 mod budget;
 mod callback;
 mod compositor_build;
+mod dabs;
 mod doc_textures;
 mod pages;
 mod perf;

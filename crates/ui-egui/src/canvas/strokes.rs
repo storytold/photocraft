@@ -10,7 +10,8 @@ use egui::{Color32, ColorImage};
 
 use super::PhotocraftApp;
 use super::display::{canvas_display, display_image};
-use super::paint_thread::{Finishing, PaintThread, Step, Wait};
+use super::gpu_dabs::{self, GpuUi};
+use super::paint_thread::{Finishing, GpuMode, PaintThread, Step, Wait};
 use super::paint_tool::PaintStroke;
 use super::textures::shown_as_document;
 use crate::state::Tool;
@@ -324,9 +325,25 @@ pub(crate) struct LiveStroke {
     pub(super) damage: Vec<DRect>,
     /// Drag points rendered so far.
     fed: usize,
+    /// A stroke whose dabs the GPU draws (`gpu_dabs`): the canvas's side of it. It holds the
+    /// stroke's external mask in the compositor and clears it when dropped.
+    pub(super) gpu: Option<GpuUi>,
 }
 
 impl LiveStroke {
+    /// A GPU stroke the canvas no longer draws with the GPU compositor (see `gpu_dabs::drawn_on_gpu`).
+    fn gpu_lost(&self, gpu: Option<&crate::gpu_canvas::GpuCanvas>, path: &crate::render_path::RenderPath) -> bool {
+        self.gpu.is_some() && !gpu_dabs::drawn_on_gpu(gpu, path, self.doc)
+    }
+
+    /// A GPU stroke: do the work of the steps the canvas just took, which stamps their dabs and asks
+    /// for the tiles that went calm, before the canvas draws those steps. `Some(why)` when the GPU
+    /// couldn't.
+    fn run_gpu_work(&mut self) -> Option<String> {
+        let work = self.paint.take_gpu_work();
+        self.gpu.as_mut().and_then(|g| g.run(work, false).err())
+    }
+
     /// The document as the stroke last painted it.
     pub(super) fn doc(&self) -> &std::sync::Arc<photocraft_doc::Document> {
         &self.paint.shown().doc
@@ -427,11 +444,45 @@ pub(crate) struct PendingStroke {
     damage: Vec<DRect>,
     cmd: &'static str,
     params: serde_json::Value,
+    /// A GPU stroke's mask, which the live document the canvas keeps showing needs until the
+    /// commit lands (it is cleared when this is dropped).
+    gpu: Option<GpuUi>,
 }
+
+/// How long `PendingStroke::wait` sleeps between looks at the work a GPU stroke's thread hands
+/// the canvas at the release.
+const GPU_SERVE_SLICE: std::time::Duration = std::time::Duration::from_millis(1);
 
 impl PendingStroke {
     pub(super) fn doc(&self) -> &Arc<photocraft_doc::Document> {
         &self.shown
+    }
+
+    /// A GPU stroke at the release: do the work its thread handed over (the last stamps, the
+    /// requests for the tiles still unread), if it has, and tell it whether that worked. It
+    /// reads those tiles back and feeds them before it makes the commit.
+    fn serve_gpu(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let Some(work) = self.finishing.take_gpu_work() else { return };
+        let done = gpu.run(work, true);
+        if let Err(why) = &done {
+            log::warn!("GPU dabs stopped, the stroke is rendered on release: {why}");
+        }
+        self.finishing.gpu_served(done.is_ok());
+    }
+
+    /// Wait up to `budget` for the commit, doing a GPU stroke's work for its thread meanwhile.
+    fn wait(&mut self, budget: std::time::Duration) -> Wait<Settled> {
+        let deadline = web_time::Instant::now().checked_add(budget);
+        loop {
+            self.serve_gpu();
+            let left = deadline.map_or(std::time::Duration::MAX, |d| d.saturating_duration_since(web_time::Instant::now()));
+            let slice = if self.gpu.is_some() { left.min(GPU_SERVE_SLICE) } else { left };
+            match self.finishing.wait(slice) {
+                Wait::Pending if slice < left => {}
+                outcome => return outcome,
+            }
+        }
     }
 
     pub(super) fn display_key(&self) -> u64 {
@@ -457,7 +508,7 @@ pub(crate) fn pending_stroke(app: &PhotocraftApp, idx: usize) -> Option<&Pending
 pub(crate) fn settle_pending_stroke(app: &mut PhotocraftApp, wait: bool) {
     // Taken first: the commands it runs find nothing pending.
     let Some(mut pending) = app.pending_stroke.take() else { return };
-    let outcome = if wait { pending.finishing.wait_forever().map_or(Wait::Lost, Wait::Ready) } else { pending.finishing.poll() };
+    let outcome = pending.wait(if wait { std::time::Duration::MAX } else { std::time::Duration::ZERO });
     resolve_pending(app, pending, outcome);
 }
 
@@ -577,6 +628,8 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
 pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
+    // A Brush or Pencil stroke the GPU can draw: its dabs, not its pixels, are made on the thread.
+    let mut gpu = None;
     let stroke = if d.tool == Tool::MixerBrush {
         let points = app.stylus.stroke_points(&d.points);
         let p = stroke_params(app, d, points.get(..1)?);
@@ -622,21 +675,46 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<
         unsmoothed_line(&mut p, d.line);
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
-        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_overlay(&app.session, stroke_command(app, d.tool), &p).ok()?))
+        begin_brush_stroke(app, d, &mut gpu)?
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
+    let seed = stroke.seed();
+    let (paint, gpu) = start_paint(stroke, gpu)?;
     Some(LiveStroke {
-        seed: stroke.seed(),
-        paint: PaintThread::start(stroke),
+        seed,
+        paint,
         doc: st.doc.id,
         revision: st.revision,
         key: (1 << 44) | (n << 20),
         damage,
         fed: if d.tool == Tool::MixerBrush { 1 } else { d.points.len() },
         preview_failed: false,
+        gpu,
     })
+}
+
+/// The live stroke of a Brush, Pencil or Eraser drag: one whose dabs the GPU draws when the stroke
+/// and the canvas allow it (`gpu` then takes the canvas's and the thread's side of it), else the
+/// CPU overlay stroke, which gives the same pixels. `None` if neither can begin.
+fn begin_brush_stroke(app: &PhotocraftApp, d: &PaintStroke, gpu: &mut Option<(GpuUi, GpuMode)>) -> Option<EngineStroke> {
+    let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+    let cmd = stroke_command(app, d.tool);
+    if let Some(begun) = gpu_dabs::begin(app, cmd, &p) {
+        *gpu = Some((begun.ui, begun.mode));
+        return Some(EngineStroke::Brush(begun.live));
+    }
+    let live = photocraft_engine::brush_cmds::LiveStroke::begin_overlay(&app.session, cmd, &p).ok()?;
+    Some(EngineStroke::Brush(Box::new(live)))
+}
+
+/// Start `stroke` painting on its thread. A GPU stroke needs a thread of its own (its release waits
+/// for the canvas): without one there is no live stroke, and the commit renders it.
+fn start_paint(stroke: EngineStroke, gpu: Option<(GpuUi, GpuMode)>) -> Option<(PaintThread, Option<GpuUi>)> {
+    match gpu {
+        Some((ui, mode)) => Some((PaintThread::start_gpu(stroke, mode)?, Some(ui))),
+        None => Some((PaintThread::start(stroke), None)),
+    }
 }
 
 /// Render the points of `stroke` the live stroke hasn't seen yet, with the pen pressure, tilt and
@@ -652,6 +730,14 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp, stroke: &PaintStroke) {
 pub(super) fn feed_live_stroke_waiting(app: &mut PhotocraftApp, stroke: &PaintStroke, wait: std::time::Duration) {
     let Some(l) = app.live_stroke.as_mut() else { return };
     if l.preview_failed {
+        return;
+    }
+    // A GPU stroke shows only on the GPU canvas. When a frame drew the document some other way (a
+    // budget, a lost device: `render_path`), the canvas would show its live document with no
+    // stroke: the stroke stops here, keeping the last step it showed, and the release renders it
+    // from the points (`commit_brush_stroke`), as for a preview that failed.
+    if l.gpu_lost(app.gpu.as_ref(), &app.render_path) {
+        l.preview_failed = true;
         return;
     }
     let pose = &app.stylus.stroke;
@@ -671,7 +757,13 @@ pub(super) fn feed_live_stroke_waiting(app: &mut PhotocraftApp, stroke: &PaintSt
     let started = crate::gpu_canvas::now_ms();
     l.paint.push(pts);
     let steps = l.paint.catch_up(wait);
-    take_steps(app, stroke.tool, steps);
+    if let Some(why) = l.run_gpu_work() {
+        // As a failed step: the stroke is dropped (its mask with it) and the commit renders it.
+        log::warn!("GPU dabs stopped, the stroke is rendered on release: {why}");
+        app.live_stroke = None;
+    } else {
+        take_steps(app, stroke.tool, steps);
+    }
     app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
 }
 
@@ -903,7 +995,14 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
         .collect();
     // The stroke's thread paints what it was still painting, then those points, and makes the
     // commit; the canvas waits a little for it, then goes on with the stroke shown.
-    let LiveStroke { paint, doc, revision, key, damage, .. } = l;
+    let LiveStroke { paint, doc, revision, key, damage, gpu, preview_failed, .. } = l;
+    if preview_failed {
+        // A GPU stroke the canvas stopped feeding (it drew the document on the CPU): the command
+        // renders the whole stroke. Its mask goes with the stroke.
+        drop((paint, gpu));
+        let _ = app.run(stroke_command(app, d.tool), p);
+        return;
+    }
     let shown = paint.shown().doc.clone();
     let cmd = stroke_command(app, d.tool);
     let wake = {
@@ -911,17 +1010,19 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &PaintStroke) {
         move || ctx.request_repaint()
     };
     let finishing = paint.finish_with(rest, Settled::of, wake);
-    let mut pending = PendingStroke { finishing, shown, doc, revision, key, damage, cmd, params: p };
+    let mut pending = PendingStroke { finishing, shown, doc, revision, key, damage, cmd, params: p, gpu };
     // A click or key in the release's frame acts on the document next: land the stroke first.
     let release = |e: &egui::Event| matches!(e, egui::Event::PointerButton { pressed: false, .. });
     let after = app.ctx().input(|i| i.events.iter().any(|e| event_reaches_document(e) && !release(e)));
-    let outcome = pending.finishing.wait(if after { std::time::Duration::MAX } else { app.stroke_commit_wait });
+    let outcome = pending.wait(if after { std::time::Duration::MAX } else { app.stroke_commit_wait });
     resolve_pending(app, pending, outcome);
 }
 
 /// The old tail of the commit: the stroke's pixels are offered to the command, which takes them
 /// (`"fromLive"`), and the canvas refreshes only what it hadn't shown yet (`CommittedStroke`).
 fn land_pending_stroke(app: &mut PhotocraftApp, pending: PendingStroke, settled: Settled) {
+    // The GPU stroke's mask is cleared when `pending` is dropped, at the end of this function.
+    app.perf.gpu_dab_strokes += u64::from(pending.gpu.is_some());
     let PendingStroke { doc, key, mut damage, cmd, params, .. } = pending;
     // The live stroke can't show these points: the commit renders the stroke itself.
     let Some(steps) = settled.damage else {

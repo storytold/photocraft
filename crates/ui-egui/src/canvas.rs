@@ -36,6 +36,7 @@ pub(crate) mod document_windows;
 mod eyedropper_tool;
 pub(crate) mod filter_preview;
 pub mod gpu_canvas;
+mod gpu_dabs;
 mod gpu_picture;
 pub mod guide_select;
 pub mod layer_pick_ui;
@@ -262,6 +263,9 @@ mod move_readout_arrows_tests;
 
 #[cfg(test)]
 mod live_frame_tests;
+
+#[cfg(test)]
+mod gpu_dabs_tests;
 
 #[cfg(test)]
 #[path = "canvas/art_history_shift_click_tests.rs"]

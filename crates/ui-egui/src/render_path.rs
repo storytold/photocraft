@@ -159,6 +159,14 @@ impl RenderPath {
         }
     }
 
+    /// Does the wgpu compositor draw document `doc` on the canvas now? No reason keeps it off the
+    /// GPU: not for the window, the view or the document (a software adapter runs the GPU canvas).
+    /// A stroke whose dabs the GPU stamps shows only there: the CPU canvas would draw its live
+    /// document with an empty mask.
+    pub(crate) fn gpu_draws(&self, doc: u64) -> bool {
+        matches!(self.app_wide, None | Some(CpuReason::SoftwareAdapter)) && !self.views.contains(&doc) && !self.docs.contains_key(&doc)
+    }
+
     /// The changes, oldest first.
     pub fn history(&self) -> impl Iterator<Item = &Change> {
         self.history.iter()

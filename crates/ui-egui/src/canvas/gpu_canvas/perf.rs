@@ -73,6 +73,9 @@ pub struct Perf {
     /// This frame's stages, gathered as it runs (see `frame_stages`).
     #[serde(skip)]
     pub(crate) stage: crate::frame_stages::FrameStages,
+    /// Strokes whose dabs the GPU drew (`canvas::gpu_dabs`) that reached their commit.
+    #[serde(skip)]
+    pub(crate) gpu_dab_strokes: u64,
 }
 
 /// What the app renders with and why (Help › System Info, Preferences › Performance, the `perf`
