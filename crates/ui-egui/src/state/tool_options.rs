@@ -93,6 +93,9 @@ pub struct ToolOptions {
     pub pattern_stamp_angle: f32,
     /// current | currentAndBelow | all
     pub clone_sample: String,
+    /// Healing Brush › Mode: Replace, which copies the source without healing (#12101). Like the
+    /// painting tools' Clear flags it is tool-only: the stroke params carry it, not the brush.
+    pub healing_replace: bool,
     /// Spot Healing: contentAware | createTexture | proximityMatch
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -479,6 +482,7 @@ impl Default for ToolOptions {
             pattern_stamp_scale: 100.0,
             pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
+            healing_replace: false,
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
             patch_content_aware: false,

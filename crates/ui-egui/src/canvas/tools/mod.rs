@@ -367,6 +367,11 @@ impl CanvasTool for Preflight<'_, '_> {
                 return ToolAction::Done;
             }
             let at = [doc.x, doc.y];
+            // Paint Bucket ⇧-click on the pasteboard sets the pasteboard colour (#12534): a
+            // preference, so it runs before the painting refusals, as quick pick does.
+            if tool == Tool::PaintBucket && self.scope.with_app(|app| super::paint_tool::bucket_pasteboard_click(app, at, pointer.mods)) {
+                return ToolAction::Done;
+            }
             // Let the Eyedropper take an Alt press that samples the shape tool's Fill.
             if self.alt_stand_in && self.scope.with_app(|app| super::cursor_policy::shape_alt_samples(app, pointer.mods, at[0], at[1])) {
                 return ToolAction::Ignored;
