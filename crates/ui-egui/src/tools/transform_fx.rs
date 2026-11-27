@@ -137,7 +137,7 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
     let width = shown.width() as usize;
     let mut out = Buffer::transparent(shown);
     let backdrop =
-        if matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough) { Buffer::transparent(shown) } else { photocraft_compose::render(preview, shown) };
+        if matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough) { Buffer::transparent(shown) } else { scaled_backdrop(preview, shown, plan.scale) };
     bands(&mut out.px, width * BAND_ROWS, |i, px| {
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
@@ -149,6 +149,51 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
         }
     });
     Some(out)
+}
+
+/// Render the stationary document in document coordinates, then map it into the work-pixel
+/// coordinates used by the styled preview. Rendering `shown` directly would sample the wrong
+/// document pixels whenever the style budget lowers `plan.scale` below one.
+fn scaled_backdrop(doc: &Document, shown: Rect, scale: f64) -> Buffer {
+    let scale = scale.max(f64::EPSILON);
+    let source_rect = Rect::new(
+        (f64::from(shown.x0) / scale).floor() as i32,
+        (f64::from(shown.y0) / scale).floor() as i32,
+        (f64::from(shown.x1) / scale).ceil() as i32,
+        (f64::from(shown.y1) / scale).ceil() as i32,
+    );
+    let source = photocraft_compose::render(doc, source_rect);
+    let mut out = Buffer::transparent(shown);
+    let sw = source.rect.width().max(1) as usize;
+    for y in shown.y0..shown.y1 {
+        let sy = (f64::from(y) + 0.5) / scale - f64::from(source.rect.y0) - 0.5;
+        let y0 = sy.floor();
+        let fy = sy - y0;
+        for x in shown.x0..shown.x1 {
+            let sx = (f64::from(x) + 0.5) / scale - f64::from(source.rect.x0) - 0.5;
+            let x0 = sx.floor();
+            let fx = sx - x0;
+            let sample = |ix: f64, iy: f64| {
+                let ix = ix.clamp(0.0, f64::from(source.rect.width() - 1)) as usize;
+                let iy = iy.clamp(0.0, f64::from(source.rect.height() - 1)) as usize;
+                source.px[iy * sw + ix]
+            };
+            let a = sample(x0, y0);
+            let b = sample(x0 + 1.0, y0);
+            let c = sample(x0, y0 + 1.0);
+            let d = sample(x0 + 1.0, y0 + 1.0);
+            let mix = |i| {
+                let fx = fx as f32;
+                let fy = fy as f32;
+                let top = a[i] * (1.0 - fx) + b[i] * fx;
+                let bottom = c[i] * (1.0 - fx) + d[i] * fx;
+                top * (1.0 - fy) + bottom * fy
+            };
+            let index = (y - shown.y0) as usize * shown.width() as usize + (x - shown.x0) as usize;
+            out.px[index] = [mix(0), mix(1), mix(2), mix(3)];
+        }
+    }
+    out
 }
 
 /// Rows composited per parallel band.
@@ -322,6 +367,34 @@ mod tests {
         let (plan, content) = planned(&source, &texels, rect_quad([60.0, 60.0, 140.0, 140.0]), 1.0);
         let out = source.compose(&plan, &content).expect("composited");
         assert!(is(at(&out, &plan, 100.0, 100.0), [255, 255, 255]));
+    }
+
+    #[test]
+    fn a_scaled_backdrop_samples_document_coordinates() {
+        let mut doc = doc();
+        let mut backdrop = Layer::raster("backdrop", PixelFormat::RGBA8);
+        backdrop.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 100, 200), &photocraft_raster::from_rgba(&PixelFormat::RGBA8, [1.0, 0.0, 0.0, 1.0]));
+        backdrop.surface_mut().unwrap().fill_rect(Rect::new(100, 0, 200, 200), &photocraft_raster::from_rgba(&PixelFormat::RGBA8, [0.0, 0.0, 1.0, 1.0]));
+        doc.layers.push(backdrop);
+        let out = scaled_backdrop(&doc, Rect::new(0, 0, 100, 100), 0.5);
+        assert!(is(
+            Color32::from_rgba_premultiplied(
+                (out.px[25 * 100 + 25][0] * 255.0) as u8,
+                (out.px[25 * 100 + 25][1] * 255.0) as u8,
+                (out.px[25 * 100 + 25][2] * 255.0) as u8,
+                255
+            ),
+            [255, 0, 0]
+        ));
+        assert!(is(
+            Color32::from_rgba_premultiplied(
+                (out.px[25 * 100 + 75][0] * 255.0) as u8,
+                (out.px[25 * 100 + 75][1] * 255.0) as u8,
+                (out.px[25 * 100 + 75][2] * 255.0) as u8,
+                255
+            ),
+            [0, 0, 255]
+        ));
     }
 
     const RED: [u8; 3] = [255, 0, 0];
