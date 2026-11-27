@@ -54,7 +54,7 @@ fn new_rgb_documents_start_with_basic_xmp_without_tagging_untagged_content() {
             json!({"width": 3, "height": 2, "depth": depth, "background": "transparent"}),
             json!({"width": 3, "height": 2, "depth": depth, "artboard": true}),
         ] {
-            let mut s = Session::new();
+            let mut s = crate::session();
             let before = Local::now().timestamp();
             s.execute("file.new", params).unwrap();
             let after = Local::now().timestamp();
@@ -69,7 +69,7 @@ fn new_rgb_documents_start_with_basic_xmp_without_tagging_untagged_content() {
 fn tagged_new_and_preset_documents_write_all_seven_properties_from_their_profile() {
     for (profile, description) in [("srgb", "sRGB IEC61966-2.1"), ("display-p3", "Display P3")] {
         for preset in [false, true] {
-            let mut s = Session::new();
+            let mut s = crate::session();
             let settings = json!({"width": 3, "height": 2, "mode": "rgb", "depth": 16, "background": "white", "profile": profile});
             let params = if preset {
                 s.execute("document.presets.save", json!({"name": "Metadata profile", "settings": settings})).unwrap();
@@ -92,7 +92,7 @@ fn tagged_new_and_preset_documents_write_all_seven_properties_from_their_profile
 fn clipboard_and_paste_without_a_document_get_fresh_xmp_without_inheriting_metadata_or_tagging() {
     for depth in [8, 16, 32] {
         for paste_without_document in [false, true] {
-            let mut s = Session::new();
+            let mut s = crate::session();
             s.execute("file.new", json!({"width": 3, "height": 2, "depth": depth, "profile": "display-p3"})).unwrap();
             Arc::make_mut(s.active_mut().unwrap().doc_mut()).metadata.xmp = Some("<source-only-metadata/>".into());
             s.execute("select.all", json!({})).unwrap();
@@ -119,7 +119,7 @@ fn unmeasured_modes_omit_color_mode_and_untagged_profile_properties() {
     for (mode, depth, expected) in
         [("gray", 8, ColorMode::Grayscale), ("cmyk", 8, ColorMode::Cmyk), ("lab", 8, ColorMode::Lab), ("bitmap", 1, ColorMode::Bitmap)]
     {
-        let mut s = Session::new();
+        let mut s = crate::session();
         let before = Local::now().timestamp();
         s.execute("file.new", json!({"width": 3, "height": 2, "mode": mode, "depth": depth})).unwrap();
         let after = Local::now().timestamp();
@@ -131,7 +131,7 @@ fn unmeasured_modes_omit_color_mode_and_untagged_profile_properties() {
 
 #[test]
 fn file_info_ok_and_editing_descriptive_fields_preserve_the_starting_dates() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 3, "height": 2, "profile": "display-p3"})).unwrap();
     let original = packet(&s).to_string();
     let submitted = s.execute("file.fileInfo", json!({})).unwrap();
@@ -161,7 +161,7 @@ fn opening_files_keeps_their_own_packet_or_absence_of_a_packet() {
         } else {
             assert!(encoded.metadata.xmp.is_none());
         }
-        let mut s = Session::new();
+        let mut s = crate::session();
         open_bytes_as(&mut s, "imported.psd", &bytes, None, Some("imported.psd".into())).unwrap();
         assert_eq!(s.documents().len(), 1);
         assert_eq!(s.active().unwrap().doc.metadata.xmp, encoded.metadata.xmp, "opening must not seed or rewrite metadata");
@@ -170,7 +170,7 @@ fn opening_files_keeps_their_own_packet_or_absence_of_a_packet() {
 
 #[test]
 fn starting_xmp_remains_a_real_openraster_metadata_loss() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 3, "height": 2})).unwrap();
     assert!(s.active().unwrap().doc.metadata.xmp.is_some());
     assert!(!holds_at(&s.active().unwrap().doc, "new.ora"));
