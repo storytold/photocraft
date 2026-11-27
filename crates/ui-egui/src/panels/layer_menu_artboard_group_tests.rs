@@ -72,8 +72,8 @@ fn other_rows_keep_the_block_they_had() {
     }
 }
 
-/// The panel shows the entry with the Layer > New item's enabled rule: a nested group cannot become an
-/// artboard, so its row shows the entry greyed.
+/// The panel shows the entry with the Layer > New item's enabled rule: a nested group can become an
+/// artboard (#14559), but not one inside a hidden group, so that row shows the entry greyed.
 #[test]
 fn the_row_menu_greys_artboard_from_group_like_the_layer_menu() {
     let (mut app, group) = setup();
@@ -88,7 +88,11 @@ fn the_row_menu_greys_artboard_from_group_like_the_layer_menu() {
     app.run("layer.select", json!({"layer": top.0, "mode": "replace"})).unwrap();
     app.run("layer.groupLayers", json!({"name": "Inner"})).unwrap();
     let inner = active(&app).id;
-    assert!(!enabled(&app, inner), "a nested group cannot");
+    assert!(enabled(&app, inner), "a nested group can");
+    assert_eq!(enabled(&app, inner), crate::menus::is_enabled(&app, FROM_GROUP));
+    app.run("layer.hideLayers", json!({"layer": group.0})).unwrap();
+    app.run("layer.select", json!({"layer": inner.0, "mode": "replace"})).unwrap();
+    assert!(!enabled(&app, inner), "a group inside a hidden group cannot");
     assert_eq!(enabled(&app, inner), crate::menus::is_enabled(&app, FROM_GROUP));
 }
 
