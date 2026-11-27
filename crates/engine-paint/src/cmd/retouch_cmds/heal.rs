@@ -79,6 +79,7 @@ fn diffuse_texture(fmt: &PixelFormat, src: &Region, diffusion: u8) -> Region {
     let t = (f64::from(diffusion) - f64::from(DEFAULT_DIFFUSION)) * 0.5;
     let mut data = src.data.clone();
     for (px, bl) in data.chunks_exact_mut(ch).zip(blurred.chunks_exact(ch)) {
+        // Both sides of the zip span exactly `ch` channels, so `c` is always a channel index.
         for (c, v) in px.iter_mut().enumerate() {
             if Some(c) != alpha {
                 *v += (t * (f64::from(bl[c]) - f64::from(*v))) as f32;
@@ -105,6 +106,7 @@ fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> 
     for (i, m) in mask.iter().enumerate() {
         let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
         let (Some(want), Some(have)) = (dst.data.get(at..at + n), src.data.get(at..at + n)) else { continue };
+        // `want`, `have` and `sums` all hold one value per channel, so `c` is a channel index.
         for (c, v) in sums.iter_mut().enumerate() {
             *v += f64::from(want[c]) - f64::from(have[c]);
         }
@@ -118,6 +120,8 @@ fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> 
     for (i, m) in mask.iter().enumerate() {
         let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
         let (Some(tex), Some(want)) = (src.data.get(at..at + n), out.data.get_mut(at..at + n)) else { continue };
+        // `tex`, `want` and `shift` hold one value per channel, and `count` is past its zero
+        // guard above, so every index here is a channel index.
         for (c, v) in want.iter_mut().enumerate() {
             *v = if Some(c) == alpha { tex[c] } else { tex[c] + shift[c] };
         }
