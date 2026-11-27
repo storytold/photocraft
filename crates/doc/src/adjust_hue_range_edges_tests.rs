@@ -69,3 +69,11 @@ fn hard_edged_range_takes_hue_15_but_not_345() {
     assert_eq!(r.weight_8bit(hue([255, 0, 64])), 0.0);
     assert_eq!(r.weight_8bit(hue([255, 85, 0])), 0.0);
 }
+
+/// A range narrower than the 0.77° between the shifted fade-in and fade-out still takes its hues.
+#[test]
+fn a_range_narrower_than_the_fade_lags_still_takes_its_hues() {
+    let r = range([10.0, 10.0, 10.5, 10.5]);
+    assert!(r.weight_8bit(10.25) > 0.0, "{}", r.weight_8bit(10.25));
+    assert_eq!(r.weight_8bit(20.0), 0.0);
+}

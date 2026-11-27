@@ -201,6 +201,11 @@ impl HueRange {
         let b = rel(b);
         let c = rel(c).max(b);
         let d = rel(d).max(c);
+        // Narrower than the lag between fade-in and fade-out, the shifted edges would cross and
+        // take no hue at all; such a range (a dragged handle can make one) keeps the sliders' ramp.
+        if d < FADE_IN_LAG - FADE_OUT_LAG {
+            return self.weight(deg);
+        }
         let (up, down) = (rel(deg - FADE_IN_LAG), rel(deg - FADE_OUT_LAG));
         let rise = if up > d {
             0.0
