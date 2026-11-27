@@ -602,6 +602,30 @@ pub(super) fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
     crate::channels_panel::fit_thumb(cell, w, h)
 }
 
+/// The registered icon name matching Photoshop's adjustment layer glyph for `adj`.
+pub(crate) fn adjustment_icon(adj: &photocraft_doc::Adjustment) -> &'static str {
+    use photocraft_doc::Adjustment;
+    match adj {
+        Adjustment::BrightnessContrast { .. } => "brightness-contrast",
+        Adjustment::Levels { .. } => "levels",
+        Adjustment::Curves { .. } => "curves",
+        Adjustment::Exposure { .. } => "exposure",
+        Adjustment::Vibrance { .. } => "vibrance",
+        Adjustment::HueSaturation { .. } => "hue-saturation",
+        Adjustment::ColorBalance { .. } => "scale",
+        Adjustment::BlackWhite { .. } => "black-white",
+        Adjustment::PhotoFilter { .. } => "photo-filter",
+        Adjustment::ChannelMixer { .. } => "channel-mixer",
+        Adjustment::ColorLookup { .. } => "color-lookup",
+        Adjustment::Invert => "invert",
+        Adjustment::Posterize { .. } => "posterize",
+        Adjustment::Threshold { .. } => "threshold",
+        Adjustment::GradientMap { .. } => "gradient-map",
+        Adjustment::SelectiveColor { .. } => "selective-color",
+        Adjustment::Unsupported { .. } => "adjustment-layer",
+    }
+}
+
 fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
@@ -620,7 +644,11 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         return;
     }
     match &l.content {
-        LayerContent::Adjustment(_) | LayerContent::Group(_) => {
+        LayerContent::Adjustment(adj) => {
+            p.rect_filled(rect, 6.0, t.field);
+            icons::paint(ui, rect, adjustment_icon(adj), 18.0, t.icon);
+        }
+        LayerContent::Group(_) => {
             p.rect_filled(rect, 6.0, t.field);
             let icon = if l.is_group() { "folder" } else { "contrast" };
             icons::paint(ui, rect, icon, 18.0, t.icon);

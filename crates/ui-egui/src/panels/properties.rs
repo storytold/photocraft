@@ -217,22 +217,22 @@ pub(super) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tl!("Add an adjustment")).color(t.text_dim));
     ui.add_space(4.0);
     let items: [(&str, &str, &str); 16] = [
-        ("brightnessContrast", "sun", tl!("Brightness/Contrast")),
-        ("levels", "gauge", tl!("Levels")),
-        ("curves", "pen-tool", tl!("Curves")),
-        ("exposure", "scan", tl!("Exposure")),
-        ("vibrance", "sparkles", tl!("Vibrance")),
-        ("hueSaturation", "droplet", tl!("Hue/Saturation")),
-        ("colorBalance", "blend", tl!("Color Balance")),
-        ("blackWhite", "contrast", tl!("Black & White")),
-        ("photoFilter", "circle-dot", tl!("Photo Filter")),
-        ("channelMixer", "sliders-horizontal", tl!("Channel Mixer")),
-        ("invert", "squares-subtract", tl!("Invert")),
-        ("posterize", "layers", tl!("Posterize")),
-        ("threshold", "square", tl!("Threshold")),
-        ("gradientMap", "palette", tl!("Gradient Map")),
-        ("selectiveColor", "swatch-book", tl!("Selective Color")),
-        ("colorLookup", "grid-3x3", tl!("Color Lookup")),
+        ("brightnessContrast", "brightness-contrast", tl!("Brightness/Contrast")),
+        ("levels", "levels", tl!("Levels")),
+        ("curves", "curves", tl!("Curves")),
+        ("exposure", "exposure", tl!("Exposure")),
+        ("vibrance", "vibrance", tl!("Vibrance")),
+        ("hueSaturation", "hue-saturation", tl!("Hue/Saturation")),
+        ("colorBalance", "scale", tl!("Color Balance")),
+        ("blackWhite", "black-white", tl!("Black & White")),
+        ("photoFilter", "photo-filter", tl!("Photo Filter")),
+        ("channelMixer", "channel-mixer", tl!("Channel Mixer")),
+        ("invert", "invert", tl!("Invert")),
+        ("posterize", "posterize", tl!("Posterize")),
+        ("threshold", "threshold", tl!("Threshold")),
+        ("gradientMap", "gradient-map", tl!("Gradient Map")),
+        ("selectiveColor", "selective-color", tl!("Selective Color")),
+        ("colorLookup", "color-lookup", tl!("Color Lookup")),
     ];
     let mut run = None;
     ui.horizontal_wrapped(|ui| {

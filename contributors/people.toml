@@ -311,4 +311,6 @@ sync_github_name = false
 
 [people.davidvhk]
 real_name = "David Vanhoucke"
+
+[people.kobaltgit]
 sync_github_name = true

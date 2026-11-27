@@ -85,7 +85,7 @@ pub(crate) use info::{SamplerReadouts, sampler_readouts};
 use layer_drag::{background_drop_refused, layer_drop_payload};
 pub(crate) use layer_drag::{dropped_on, layer_drag_edge_scroll};
 #[cfg(test)]
-pub(crate) use layer_row::thumb_load_badge;
+pub(crate) use layer_row::{adjustment_icon, thumb_load_badge};
 #[cfg(test)]
 use layer_row::{layer_thumb_fit, paint_clipping_indicator};
 pub(crate) use layers::{blend_options, fx_button};
