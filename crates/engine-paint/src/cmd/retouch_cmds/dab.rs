@@ -123,12 +123,13 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: imp
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
 ///
-/// `airbrush` is the brush's Airbrush build-up, which the Dodge bar offers (#12682). With it on, a
-/// dab that lands where the previous dab landed - what a pointer held still keeps laying - is not
-/// bound by that cap: it tones the pixel as it now stands, so the lightening keeps building while
-/// the pointer is held, and stops at the tone curve's own limit. With build-up off the stroke is the
-/// capped one pass it always was, and Burn takes no `airbrush` at all (its toggle is #12665), so its
-/// path is the untouched one.
+/// `airbrush` is the brush's Airbrush build-up, which the Dodge bar offers (#12682). With it on a
+/// dab that finds the pixel already at the stroke's full coverage still deposits: it tones the pixel
+/// as it now stands, so the lightening keeps building while the pointer is held and stops at the
+/// tone curve's own limit. The cap itself is untouched - a pixel the stroke has not filled yet
+/// accumulates coverage exactly as before - so the only dabs that get a second pass are ones the cap
+/// would otherwise have thrown away. With build-up off the stroke is the capped one pass it always
+/// was, and Burn takes no `airbrush` at all (its toggle is #12665), so its path is the untouched one.
 fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
     /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
     /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
@@ -142,15 +143,11 @@ fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f3
     let mut cells: std::collections::HashMap<(i32, i32), Cell> = std::collections::HashMap::new();
     let a = alpha_index(&fmt);
     let n = fmt.channels();
-    // Where the previous dab of this stroke landed, to spot a held pointer's repeats.
-    let mut centre: Option<photocraft_geom::Point> = None;
     Box::new(move |work, fp| {
         let r = fp.rect.intersect(&work.rect);
         if r.is_empty() {
             return;
         }
-        let repeat = airbrush && centre == Some(fp.dab.center);
-        centre = Some(fp.dab.center);
         let mut enc = [0.0f32; 8];
         for cy in r.y0.div_euclid(CELL)..=(r.y1 - 1).div_euclid(CELL) {
             for cx in r.x0.div_euclid(CELL)..=(r.x1 - 1).div_euclid(CELL) {
@@ -175,10 +172,18 @@ fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f3
                             src.copy_from_slice(work.px(x, y));
                             *prev = 0.0;
                         }
-                        if repeat {
-                            // A fresh pass over what the pixel is now, mixed by this dab's coverage;
-                            // the pixel then counts as a full pass of that, so a later dab of the
-                            // same stroke doesn't take the build-up back to the original.
+                        // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
+                        // to full coverage; the tone is applied once, from the original.
+                        let k = *prev + k * (1.0 - *prev);
+                        if k <= *prev {
+                            // The stroke already has this pixel at full coverage, so this dab adds
+                            // nothing - unless the brush's Airbrush is on, and then it still
+                            // deposits: a fresh pass over the pixel as it now stands, which is the
+                            // held build-up that goes past the stroke's limit (#12682). Off, this
+                            // is the cap, exactly where it always stopped.
+                            if !airbrush {
+                                continue;
+                            }
                             let o = to_rgba(&fmt, work.px(x, y));
                             let t = toned([o[0], o[1], o[2]]);
                             let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
@@ -189,13 +194,6 @@ fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f3
                                     px[c] = enc[c];
                                 }
                             }
-                            *prev = 1.0;
-                            continue;
-                        }
-                        // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
-                        // to full coverage; the tone is applied once, from the original.
-                        let k = *prev + k * (1.0 - *prev);
-                        if k <= *prev {
                             continue;
                         }
                         *prev = k;
