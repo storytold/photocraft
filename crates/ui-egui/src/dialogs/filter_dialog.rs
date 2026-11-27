@@ -689,6 +689,15 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
             }
         }
     }
+    if command == "image.applyImage"
+        && let Some(index) = map
+            .get("sourceChannel")
+            .and_then(Value::as_str)
+            .and_then(|s| s.strip_prefix(crate::view_cmds::dialogs::APPLY_IMAGE_ALPHA_PREFIX))
+            .and_then(|s| s.parse::<u64>().ok())
+    {
+        map.insert("sourceChannel".into(), json!(index));
+    }
     // The exports to files take the JPEG quality only for a JPEG (a quality would make a WebP lossy).
     if matches!(command, "file.export.layersToFiles" | "file.export.layerCompsToFiles") && map.get("format").and_then(Value::as_str) != Some("jpg") {
         map.remove("quality");

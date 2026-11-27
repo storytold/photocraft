@@ -200,7 +200,20 @@ pub(crate) fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &V
         Err(Some(reason)) => return Err(reason),
         Err(None) => {}
     }
-    let dialog = open_step_editor(app, id, &values)?;
+    let dialog = if id == "image.applyImage"
+        && let Some(source) = values.get("sourceChannel").filter(|source| source.is_number())
+        && values.get("source").is_none()
+        && values.get("sourceDocument").is_none_or(Value::is_null)
+    {
+        use crate::view_cmds::dialogs::{APPLY_IMAGE_ALPHA_PREFIX, open_recorded_apply_image};
+        let unavailable = || tl!("The recorded source channel is unavailable.").to_owned();
+        let index = source.as_u64().and_then(|index| usize::try_from(index).ok()).ok_or_else(unavailable)?;
+        let dialog = open_recorded_apply_image(app, &label_of(id), index).ok_or_else(unavailable)?;
+        values["sourceChannel"] = json!(format!("{APPLY_IMAGE_ALPHA_PREFIX}{index}"));
+        dialog
+    } else {
+        open_step_editor(app, id, &values)?
+    };
     if !crate::sizing::is_sizing(id) {
         fill_editor(app, dialog, &values);
     }

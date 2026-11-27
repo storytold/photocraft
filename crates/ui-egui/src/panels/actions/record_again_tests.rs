@@ -113,6 +113,45 @@ fn seeded_editor_cancels_or_updates_only_the_original_step() {
     assert!(h.state().session.active().unwrap().doc.selection.is_none());
 }
 
+#[test]
+fn apply_image_reopens_a_recorded_alpha_source_by_index() {
+    let mut h = harness("image.applyImage", json!({"sourceChannel":1,"blending":"normal"}));
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "image.applyImage", json!({})).unwrap();
+    h.run_steps(3);
+    let menu_dialog = h.state().framework.dialogs.stack().top().unwrap();
+    assert_eq!(set_field(&mut h, menu_dialog, "opacity", json!(40.0))["ok"], true);
+    confirm(&mut h, menu_dialog).unwrap();
+
+    let app = h.state_mut();
+    app.run("edit.fill", json!({"color":"#000000"})).unwrap();
+    app.run("channel.new", json!({"name":"Red","fill":"black"})).unwrap();
+    app.run("channel.new", json!({"name":"Red","fill":"white"})).unwrap();
+    app.run("channel.target", json!({"channel":"composite"})).unwrap();
+
+    let dialog = open(&mut h);
+    let fields = h.state().framework.dialogs.open_dialogs().into_iter().find(|open| open.id == dialog).unwrap().fields.unwrap();
+    assert_eq!(fields["sourceChannel"], "@alpha:1");
+    confirm(&mut h, dialog).unwrap();
+    let app = h.state_mut();
+    let action = app.run("actions.get", json!({"action":0})).unwrap();
+    assert_eq!(action["steps"][0][1]["sourceChannel"], 1);
+    let st = app.session.active().unwrap();
+    let pixel = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(4, 4);
+    assert!(pixel[..3].iter().all(|value| *value > 0.95), "the saved white alpha supplied the pixels: {pixel:?}");
+}
+
+#[test]
+fn apply_image_refuses_a_recorded_alpha_source_that_is_missing() {
+    let mut h = harness("image.applyImage", json!({"sourceChannel":2}));
+    let app = h.state_mut();
+    let before = app.run("actions.get", json!({"action":0})).unwrap();
+    let error = super::record_again::open(app, 0, 0).unwrap_err();
+    assert!(error.contains("source channel"), "{error}");
+    assert!(!app.dialog_open());
+    assert_eq!(app.run("actions.get", json!({"action":0})).unwrap(), before);
+}
+
 /// Permit initial settings while denying a later edit even if the current gate is removed.
 fn limited_resize(id: &str, params: &Value) -> photocraft_engine::Result<()> {
     if id == "image.imageSize" && params.get("width").and_then(Value::as_f64).is_some_and(|w| w >= 10.0) {

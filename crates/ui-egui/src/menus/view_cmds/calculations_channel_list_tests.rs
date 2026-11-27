@@ -66,7 +66,7 @@ fn a_merged_source_without_a_background_keeps_the_list_of_today() {
 
 /// The rows of `command`'s form on the document `app` builds, in English.
 fn rows(app: &PhotocraftApp, command: &str) -> Vec<Param> {
-    crate::i18n::with_language(crate::i18n::Lang::EN, || channel_form(app, command).expect("the command has a form").0)
+    crate::i18n::with_language(crate::i18n::Lang::EN, || channel_form(app, command, None).expect("the command has a form").0)
 }
 
 fn row<'a>(rows: &'a [Param], key: &str) -> &'a Param {
