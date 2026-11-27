@@ -550,9 +550,9 @@ fn hard_mix_shapeless_at_16_and_32_bits_stays_on_the_cpu() {
 #[test]
 fn shapeless_special_blends_in_groups_and_clipping_groups_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    for pass in [false, true] {
-        for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
-            // A shapeless layer inside the group.
+    for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
+        // A shapeless layer inside the group.
+        for pass in [false, true] {
             let mut d = doc(SampleType::U8, true);
             d.layers.push(underlay(&d, 2));
             let mut inner = noise_layer("inner", d.pixel_format(), Rect::new(4, 4, 44, 36), 5, 0.3);
@@ -563,20 +563,19 @@ fn shapeless_special_blends_in_groups_and_clipping_groups_match_the_cpu() {
             let below = noise_layer("below", d.pixel_format(), Rect::new(0, 0, 30, 30), 6, 0.5);
             d.layers.push(group("group", pass, vec![below, inner]));
             check(&mut g, &d, &format!("inside a group, pass-through {pass}, opacity {opacity}, fill {fill}"));
-
-            // A shapeless group.
-            let mut d = doc(SampleType::U8, true);
-            d.layers.push(underlay(&d, 2));
-            let inner = noise_layer("inner", d.pixel_format(), Rect::new(4, 4, 44, 36), 5, 0.3);
-            let mut grp = group("group", pass, vec![inner]);
-            grp.blend = BlendMode::ColorDodge;
-            grp.opacity = opacity;
-            grp.fill_opacity = fill;
-            grp.advanced.transparency_shapes = false;
-            grp.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
-            d.layers.push(grp);
-            check(&mut g, &d, &format!("shapeless group, pass-through {pass}, opacity {opacity}, fill {fill}"));
         }
+        // A shapeless group; its own blend mode makes it isolated.
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let inner = noise_layer("inner", d.pixel_format(), Rect::new(4, 4, 44, 36), 5, 0.3);
+        let mut grp = group("group", false, vec![inner]);
+        grp.blend = BlendMode::ColorDodge;
+        grp.opacity = opacity;
+        grp.fill_opacity = fill;
+        grp.advanced.transparency_shapes = false;
+        grp.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+        d.layers.push(grp);
+        check(&mut g, &d, &format!("shapeless group, opacity {opacity}, fill {fill}"));
     }
     // A shapeless base with layers clipped to it: the clips composite onto the base's content,
     // which the mask then splits.
