@@ -1,4 +1,4 @@
-use craft::behavior::canvas::ZoomLadder;
+use craft::behavior::canvas::ZoomScheme;
 use craft::ui::docking::{ArrangeCommands, ArrangeSpace, Arranged, arrange as run_arrange};
 use photocraft_doc::DocId;
 
@@ -137,7 +137,7 @@ fn match_views(app: &mut PhotocraftApp, zoom: bool, loc: bool, rot: bool) -> Res
         if zoom {
             let [w, h] = sizes.get(d).copied().unwrap_or(v.doc_size);
             v.request_zoom_animation(animated_zoom);
-            v.zoom = ZoomLadder::clamp(f64::from(src.zoom), craft::behavior::kurbo::Size::new(f64::from(w), f64::from(h))) as f32;
+            v.zoom = ZoomScheme::PHOTOSHOP.clamp(f64::from(src.zoom), craft::behavior::kurbo::Size::new(f64::from(w), f64::from(h))) as f32;
         }
         if loc {
             v.center = src.center;

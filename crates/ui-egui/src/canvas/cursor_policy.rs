@@ -2,7 +2,7 @@
 //! which let ⌥ sample or load paint, the Pencil's tip shape, and the pointers of the tools whose
 //! cursor is no brush tip.
 
-use craft::behavior::{Cursor, PaintedCursor, PointerGlyph};
+use craft::behavior::{Cursor, CursorBadge, PaintedCursor, PointerGlyph};
 use craft::keymap::Mods;
 use photocraft_engine::prefs::PaintingCursor as PaintingPref;
 
@@ -33,6 +33,14 @@ pub(crate) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
         return option || show_crosshair;
     }
     show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::ColorReplacement | Tool::Remove)
+}
+
+/// The mark at the centre of Quick Selection's ring with `mods` held: a "−" while ⌥ would subtract
+/// from a selection (#16822). ⇧ alone and no selection keep the plain ring, as in the reference;
+/// ⇧⌥, Control+⌥ (the brush-resize drag) and the options bar's mode were not measured and keep it
+/// too. `None` for any other tool.
+pub(crate) fn quick_selection_badge(app: &PhotocraftApp, mods: Mods) -> Option<CursorBadge> {
+    (app.ui.tool == Tool::QuickSelection && mods.alt && !mods.shift && !mods.ctrl && super::tool_feedback::has_selection(app)).then_some(CursorBadge::Subtract)
 }
 
 /// Whether the brush cursor is the reference's fixed sample target (a small circle with a cross
@@ -94,11 +102,11 @@ pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
 
 /// Shape tools whose Alt Eyedropper also updates the tool's Fill.
 pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
-    matches!(tool, Tool::Triangle | Tool::CustomShape)
+    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon)
 }
 
-/// Whether an Alt or Shift+Alt press samples the Triangle or Custom Shape foreground and Fill
-/// (#13364, #15856). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
+/// Whether an Alt or Shift+Alt press samples the foreground and Fill for the Triangle, Custom Shape,
+/// Rectangle, Ellipse and Polygon tools (#13364, #15856, #13333, #13224, #13317). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
 /// Control+Alt is excluded here, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
@@ -158,6 +166,22 @@ mod healing_alt_cursor_tests;
 #[cfg(test)]
 #[path = "paint_bucket_cursor_tests.rs"]
 mod paint_bucket_cursor_tests;
+
+#[cfg(test)]
+#[path = "quick_selection_cursor_tests.rs"]
+mod quick_selection_cursor_tests;
+
+#[cfg(test)]
+#[path = "rectangle_alt_eyedropper_tests.rs"]
+mod rectangle_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "ellipse_alt_eyedropper_tests.rs"]
+mod ellipse_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "polygon_alt_eyedropper_tests.rs"]
+mod polygon_alt_eyedropper_tests;
 
 #[cfg(test)]
 #[path = "triangle_alt_eyedropper_tests.rs"]

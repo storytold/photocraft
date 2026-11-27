@@ -503,6 +503,9 @@ fn targeted(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
 mod tests;
 
 #[cfg(test)]
+mod nudge_history_tests;
+
+#[cfg(test)]
 mod convert_point_history_tests;
 
 #[cfg(test)]

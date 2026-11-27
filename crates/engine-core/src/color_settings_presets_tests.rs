@@ -114,14 +114,15 @@ fn fresh_settings_are_custom() {
 #[test]
 fn a_scripted_setup_is_stored_and_reported() {
     let mut s = crate::session();
-    // Blend Text Colors Using Gamma off: a scripted setup turns it back on at 1.45.
-    s.color_mut().settings.blend_text_gamma = 1.0;
+    // Blend Text Colors Using Gamma off at 1.8: a scripted setup turns it back on at 1.45.
+    s.color_mut().settings.blend_text_gamma = 1.8;
+    s.color_mut().settings.blend_text_gamma_on = false;
     let r = s.execute(CMD, json!({"preset": "North America Prepress 2"})).unwrap();
     assert_eq!(r["preset"], "North America Prepress 2");
     let c = &s.color().settings;
     assert_eq!(c.preset, "North America Prepress 2");
     assert_eq!((c.working_rgb.as_str(), c.policy_rgb, c.ask_on_missing), ("adobe-rgb-compat", Policy::Preserve, true));
-    assert_eq!(c.blend_text_gamma, photocraft_compose::psblend::TEXT_GAMMA);
+    assert_eq!((c.blend_text_gamma, c.blend_text_gamma_on), (photocraft_compose::psblend::TEXT_GAMMA, true));
     // Reading the settings again keeps the name.
     assert_eq!(s.execute(CMD, json!({})).unwrap()["preset"], "North America Prepress 2");
     // So does setting a value to what it already is, and changing the monitor profile.
