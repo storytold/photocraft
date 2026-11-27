@@ -64,30 +64,20 @@ fn diffusion_param(p: &Value, cmd: &str) -> Result<u8> {
 /// Use Legacy (#12103): the older Healing Brush blend. The source texture keeps its own pixels and
 /// takes the destination's average colour over the healed area, instead of the gradient-domain
 /// solve of [`heal_region`] - so the dab keeps its edge rather than melting into its surroundings.
-/// That average is matched in CIE L\*a\*b\* (`photocraft_color::convert`, the same conversion the
-/// Color Picker and the Lab document mode use): transferring a neutral texture onto a coloured
-/// ground channel by channel costs the reds and blues the ticket's measured legacy row keeps. An
-/// Grayscale, CMYK or Lab document, where the ticket measured nothing, takes the mean channel by
-/// channel as it always has.
+/// This is our engine's own blend: the reference application's legacy algorithm is a different one
+/// and its output numbers are not something this repository may tune to, so nothing here is fitted
+/// to a measured table. What the tests pin is that Use Legacy gives its own blend of the same
+/// click, inside the same tip.
 fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> Region {
     let n = src.ch;
     let alpha = super::alpha_index(fmt);
-    let lab = fmt.mode == photocraft_color::ColorMode::Rgb && n >= 3;
-    // One value per channel, in the space the mean is taken in. Both regions cover the same rect
-    // and the mask is dense over it.
-    let space = |px: &[f32]| {
-        let mut v = px.to_vec();
-        if lab {
-            v[0..3].copy_from_slice(&photocraft_color::convert::srgb_to_lab([px[0], px[1], px[2]]));
-        }
-        v
-    };
+    // The mean colour difference between destination and source over the healed area: the level
+    // the texture is brought to. Both regions cover the same rect, and the mask is dense over it.
     let mut sums = vec![0.0f64; n];
     let mut count = 0usize;
     for (i, m) in mask.iter().enumerate() {
         let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
         let (Some(want), Some(have)) = (dst.data.get(at..at + n), src.data.get(at..at + n)) else { continue };
-        let (want, have) = (space(want), space(have));
         // `want`, `have` and `sums` all hold one value per channel, so `c` is a channel index.
         for (c, v) in sums.iter_mut().enumerate() {
             *v += f64::from(want[c]) - f64::from(have[c]);
@@ -101,21 +91,12 @@ fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> 
     let shift: Vec<f32> = sums.into_iter().map(|v| (v / count as f64) as f32).collect();
     for (i, m) in mask.iter().enumerate() {
         let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
-        let (Some(tex), Some(slot)) = (src.data.get(at..at + n), out.data.get_mut(at..at + n)) else { continue };
-        // `tex`, `slot` and `shift` hold one value per channel, and `count` is past its zero guard
-        // above, so every index here is a channel index. The alpha channel marks whether a source
-        // pixel exists at all, so it comes over unshifted.
-        let mut px = space(tex);
-        for (c, v) in px.iter_mut().enumerate() {
-            if Some(c) != alpha {
-                *v += shift[c];
-            }
+        let (Some(tex), Some(want)) = (src.data.get(at..at + n), out.data.get_mut(at..at + n)) else { continue };
+        // `tex`, `want` and `shift` hold one value per channel, and `count` is past its zero guard
+        // above, so every index here is a channel index.
+        for (c, v) in want.iter_mut().enumerate() {
+            *v = if Some(c) == alpha { tex[c] } else { tex[c] + shift[c] };
         }
-        if lab {
-            let rgb = photocraft_color::convert::lab_to_srgb([px[0], px[1], px[2]]);
-            px[0..3].copy_from_slice(&rgb);
-        }
-        slot.copy_from_slice(&px);
     }
     clamp_samples(fmt, &mut out.data);
     out

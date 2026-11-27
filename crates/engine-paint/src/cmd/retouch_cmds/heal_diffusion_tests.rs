@@ -7,9 +7,10 @@
 //!
 //! The reference application's pixels for the Diffusion values other than 5 are not measured, so
 //! the field is accepted, validated and stored while every value keeps today's stroke; measuring
-//! that row is the standing question on the ticket. Use Legacy on is the older blend, the source
-//! texture taken to the healed area's average colour in L*a*b*, and it lands the ticket's measured
-//! row on the ticket's own document within the +/-6 the "Done when" list asks for.
+//! that row is the standing question on the ticket. Use Legacy is this engine's own older blend -
+//! the source texture taken to the healed area's mean colour - and nothing in it is fitted to
+//! another application's output numbers: what is pinned here is that the flag gives a different
+//! blend of the same click, inside the same tip, and that its own result stays that result.
 
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::Size;
@@ -100,68 +101,6 @@ fn use_legacy_blends_otherwise_on_the_same_click() {
     let mut off = document();
     off.execute("paint.healingBrush", stroke(Some(("legacy", json!(false))))).unwrap();
     assert_eq!(read(&off), m, "legacy false is the absent key");
-}
-
-#[test]
-fn use_legacy_on_the_measured_document_lands_its_measured_row() {
-    // The ticket's own document: 800 x 600 RGB/8, an 80 x 80 checker at 100,100 with 10 px cells
-    // alternating 60,60,60 / 200,200,200, plain green 40,160,60 from x 400 to 800; a 40 px hard
-    // round tip, the source point 140,140 and one single click at 600,450. Its measured row y 450
-    // with Use Legacy on: dark cells 0,78..89,0, light cells 127..131,229..239,136..141, and a
-    // darker rim at x 620 of 32,152,52 - the issue's table, within +/-6 per channel as its
-    // "Done when" row says.
-    let on = measured(true);
-    let within = |at: (i32, i32), want: [(i32, i32); 3]| {
-        let got = levels(&on, at.0, at.1);
-        for (c, (lo, hi)) in want.into_iter().enumerate() {
-            assert!(got[c] >= lo - 6 && got[c] <= hi + 6, "({} , {}) channel {c}: {got:?} outside {lo}..{hi} plus six: {:?}", at.0, at.1, got);
-        }
-    };
-    // One pixel in the first dark cell, two light cells, and the rim the ticket names.
-    within((585, 450), [(0, 0), (78, 89), (0, 0)]);
-    within((595, 450), [(127, 131), (229, 239), (136, 141)]);
-    within((614, 450), [(127, 131), (229, 239), (136, 141)]);
-    within((620, 450), [(32, 32), (152, 152), (52, 52)]);
-    // The same click with Use Legacy off stays the ticket's other row: dark 0,79..94,0 and light
-    // 112..114,232..234,132..134.
-    let off = measured(false);
-    for at in [(585, 450), (605, 450)] {
-        let got = levels(&off, at.0, at.1);
-        assert_eq!((got[0], got[2]), (0, 0), "Modern at ({}, {}): {got:?}", at.0, at.1);
-        assert!(got[1] >= 79 && got[1] <= 94, "Modern dark green at ({}, {}): {got:?}", at.0, at.1);
-    }
-    for at in [(595, 450), (614, 450)] {
-        let got = levels(&off, at.0, at.1);
-        for (c, (lo, hi)) in [(112, 114), (232, 234), (132, 134)].into_iter().enumerate() {
-            assert!(got[c] >= lo - 6 && got[c] <= hi + 6, "Modern at ({}, {}) channel {c}: {got:?}", at.0, at.1);
-        }
-    }
-    assert_ne!(levels(&off, 614, 450), levels(&on, 614, 450), "the two blends differ on the ticket's own click");
-}
-
-/// The ticket's measured document with one Healing Brush click: an 800 x 600 RGB/8 image, white,
-/// green 40,160,60 from x 400 to 800, an 80 x 80 checker at 100,100 with 10 px cells alternating
-/// 60,60,60 / 200,200,200; the source point 140,140 and a single click at 600,450 with a 40 px
-/// hard round tip. `legacy` turns Use Legacy on.
-fn measured(legacy: bool) -> Session {
-    let mut s = crate::session();
-    s.add_document(Document::with_background("m", Size::new(800, 600), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);
-    s.execute("select.rect", json!({"x": 400, "y": 0, "width": 400, "height": 600})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#28a03c"})).unwrap();
-    for cx in 0..8 {
-        for cy in 0..8 {
-            let color = if (cx + cy) % 2 == 0 { "#3c3c3c" } else { "#c8c8c8" };
-            s.execute("select.rect", json!({"x": 100 + 10 * cx, "y": 100 + 10 * cy, "width": 10, "height": 10})).unwrap();
-            s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
-        }
-    }
-    s.execute("select.deselect", json!({})).unwrap();
-    let mut p = json!({"points": [[600, 450]], "source": [140, 140], "size": 40, "hardness": 100});
-    if legacy {
-        p["legacy"] = json!(true);
-    }
-    s.execute("paint.healingBrush", p).unwrap();
-    s
 }
 
 #[test]
