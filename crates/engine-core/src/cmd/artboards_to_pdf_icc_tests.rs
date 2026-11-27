@@ -106,6 +106,15 @@ fn rgb_header_only() -> Arc<Vec<u8>> {
     Arc::new(bytes)
 }
 
+/// sRGB relabelled as an RGB device link: readable and RGB, but not a colour space.
+fn rgb_device_link() -> Arc<Vec<u8>> {
+    let mut bytes = Builtin::Srgb.profile().to_bytes().to_vec();
+    bytes[12..16].copy_from_slice(b"link");
+    let link = craft_cms::Profile::parse(&bytes).expect("a readable device link");
+    assert!(link.class == craft_cms::ProfileClass::DeviceLink && link.color_space == craft_cms::ColorSpace::Rgb);
+    Arc::new(bytes)
+}
+
 #[test]
 fn a_profile_that_is_not_rgb_or_unreadable_is_left_out() {
     let gray = Builtin::SGray.profile().to_bytes();
@@ -115,6 +124,7 @@ fn a_profile_that_is_not_rgb_or_unreadable_is_left_out() {
         ("cmyk", Some(cmyk)),
         ("short", Some(Arc::new(b"RGB junk".to_vec()))),
         ("rgb header only", Some(rgb_header_only())),
+        ("rgb device link", Some(rgb_device_link())),
         ("none", None),
     ] {
         let mut s = session(profile);
