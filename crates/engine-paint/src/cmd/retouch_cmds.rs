@@ -159,6 +159,14 @@ pub fn stroke_brush(base: &BrushSettings, p: &Value) -> BrushSettings {
 /// Parse the shared brush params into a stroke on a layer (`None` when an alpha channel or the
 /// Quick Mask is targeted).
 fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<LayerId>)> {
+    parse_brush_timed(s, p, cmd, false)
+}
+
+/// [`parse_brush`], and with `timed` each point's time as well: the `timeMs` element of the
+/// `[x, y, pressure, tiltX, tiltY, rotation, timeMs]` shape `paint.stroke` documents. Only a Dodge
+/// stroke with Airbrush build-up on takes it (#12682) - every other retouching stroke is laid by
+/// distance along its path, without a timestamp, as it has always been.
+fn parse_brush_timed(s: &Session, p: &Value, cmd: &str, timed: bool) -> Result<(Stroke, Option<LayerId>)> {
     let pts: Vec<StrokePoint> = p
         .get("points")
         .and_then(Value::as_array)
@@ -166,7 +174,11 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
         .iter()
         .filter_map(|v| {
             let a = v.as_array()?;
-            Some(StrokePoint::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2).and_then(Value::as_f64).unwrap_or(1.0) as f32))
+            let mut sp = StrokePoint::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2).and_then(Value::as_f64).unwrap_or(1.0) as f32);
+            if timed {
+                sp.time = a.get(6).and_then(Value::as_f64).unwrap_or(0.0);
+            }
+            Some(sp)
         })
         .collect();
     if pts.is_empty() {
@@ -368,7 +380,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Dodge",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","range":"shadows|midtones|highlights"="midtones","exposure":1..100=50,"protectTones":bool=true"#),
+            params: brush_params!(
+                r#","range":"shadows|midtones|highlights"="midtones","exposure":1..100=50,"protectTones":bool=true (with the bar's Airbrush on, points may carry a time as `paint.stroke` does: `[x,y,pressure,tiltX,tiltY,rotation,timeMs]`)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.dodge"),
             journal: true,
@@ -463,3 +477,6 @@ mod patch_history_names_tests;
 
 #[cfg(test)]
 mod remove_history_name_tests;
+
+#[cfg(test)]
+mod dodge_airbrush_tests;

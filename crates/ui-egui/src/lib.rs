@@ -741,6 +741,8 @@ mod burn_bar_angle_pressure_tests;
 #[cfg(test)]
 mod cam_no_pixels_alert_tests;
 #[cfg(test)]
+mod dodge_airbrush_bar_tests;
+#[cfg(test)]
 mod dodge_bar_angle_pressure_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;

@@ -264,12 +264,14 @@ pub(super) enum EngineStroke {
 
 impl EngineStroke {
     /// The brush engine's strokes can change while the pointer is held still (see
-    /// `LiveStroke::wants_time`); the retouch strokes don't.
+    /// `LiveStroke::wants_time`); the retouch strokes can't, except a Dodge stroke with the brush's
+    /// Airbrush build-up on, which keeps laying dabs while the pointer is held (#12682).
     pub(super) fn wants_time(&self) -> bool {
         match self {
             EngineStroke::Brush(l) => l.wants_time(),
             EngineStroke::Mixer(l) => l.wants_time(),
-            EngineStroke::Retouch(_) | EngineStroke::Dab(_) => false,
+            EngineStroke::Dab(l) => l.wants_time(),
+            EngineStroke::Retouch(_) => false,
         }
     }
 
@@ -478,7 +480,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
         crate::retouch_ui::alt_finger_painting(d.tool, d.modifiers.alt, &mut p);
-        p["points"] = json!(d.points);
+        p["points"] = crate::retouch_ui::dab_points(app, d.tool, &d.points);
         p["target"] = paint_target(app);
         unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?))
