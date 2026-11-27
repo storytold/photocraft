@@ -281,7 +281,7 @@ mod tests {
                 Hidden::Home => app.ui.chrome.home = Some(app.session.documents().len()),
                 Hidden::Card => {
                     let job = photocraft_engine::jobs::JobId(9);
-                    app.jobs.opens.push(crate::jobs_ui::OpenTab { job, name: "opening.psd".into(), path: None, slot: None, order: None });
+                    app.jobs.opens.push(crate::jobs_ui::OpenTab { job, name: "opening.psd".into(), path: None, error_source: None, slot: None, order: None });
                     app.jobs.focus = Some(job);
                 }
             }

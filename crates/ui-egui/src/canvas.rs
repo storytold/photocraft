@@ -177,6 +177,10 @@ pub fn canvas_view(
     primary: bool,
 ) -> (View, craft::ui::canvas::CanvasOutput) {
     let ctx = ui.ctx().clone();
+    // What the canvas shows follows the pointer (the tool's cursor, the rulers' marks, the Info panel and status bar
+    // readouts), so every pointer move over it runs a pass; elsewhere a move that changes nothing runs none (#17148).
+    let on_screen = ctx.layer_transform_to_global(ui.layer_id()).map_or(rect, |to_screen| to_screen * rect);
+    craft::ui::runtime::pointer::follows_pointer(&ctx, on_screen);
     let idx = host.idx;
     // The primary canvas keeps its view in `app.ui.views`: the pass starts from the stored view and stores the one it
     // ends with, unless something stored another view while the pass ran (a tool's commit that moved it), which then
