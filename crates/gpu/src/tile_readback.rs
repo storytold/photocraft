@@ -138,11 +138,11 @@ impl MaskReadback {
                     for (i, key) in flight.keys.iter().enumerate() {
                         let tile = &view[i * TILE_BYTES as usize..(i + 1) * TILE_BYTES as usize];
                         let mut values = Vec::with_capacity((TILE * TILE) as usize);
-                        for row in tile.chunks_exact(256) {
+                        for row in tile.as_chunks::<256>().0 {
                             if flight.half {
-                                values.extend(row.chunks_exact(2).take(TILE as usize).map(|b| super::f16_to_f32(u16::from_le_bytes([b[0], b[1]]))));
+                                values.extend(row.as_chunks::<2>().0.iter().take(TILE as usize).map(|b| super::f16_to_f32(u16::from_le_bytes(*b))));
                             } else {
-                                values.extend(row.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])));
+                                values.extend(row.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)));
                             }
                         }
                         out.push((*key, values));
