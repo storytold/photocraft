@@ -64,6 +64,23 @@ fn soft_round_stroke_fades_to_zero_at_its_tip_boundary() {
 }
 
 #[test]
+fn a_bounded_soft_stroke_warns_when_spacing_leaves_the_path_past_its_reach() {
+    // #8389: the first dab's reach, not the nominal radius, decides whether the path was covered.
+    let mut s = session(200, 80);
+    let r = s
+        .execute(
+            "paint.stroke",
+            json!({"points": [[40, 40], [70, 40]], "size": 80, "hardness": 0, "spacing": 1, "tipBoundary": 0.55, "color": "#000000"}),
+        )
+        .unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(80.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("30.0 px path"), "{r}");
+    assert_eq!(rgba(&s, 70, 40)[3], 0.0, "the endpoint is past the 22 px reach");
+}
+
+#[test]
 fn a_stroke_from_far_off_the_canvas_paints_only_what_reaches_it() {
     // Dabs that cannot reach the canvas are not rasterized (their coverage is never read).
     let mut s = session(80, 80);

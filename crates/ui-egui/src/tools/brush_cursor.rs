@@ -89,7 +89,8 @@ pub(crate) fn soft_tip_boundary(app: &PhotocraftApp, tool: Tool) -> Option<f32> 
         PaintingPref::NormalTip if is_plain(brush) => normal_round_radius(brush),
         PaintingPref::NormalTip => radius * photocraft_paint::half_coverage_radius(1.0, brush.hardness),
         PaintingPref::FullSizeTip => radius,
-        PaintingPref::Standard | PaintingPref::Precise => return Some(1.0),
+        // These cursors have no tip outline to match; keep the unbounded soft falloff.
+        PaintingPref::Standard | PaintingPref::Precise => return None,
     };
     // The outline uses the selected size, while the renderer uses at least a half-pixel dab radius.
     Some(outline_radius / radius.max(0.5))
