@@ -224,7 +224,10 @@ fn set_params(app: &mut PhotocraftApp, id: DialogId, params: &Value, change: Cha
     let read = if retargeted && open.unresolved { None } else { values::from_params(&open.kind, params, &shown.cx).ok() };
     let taken = read.is_some();
     match read {
-        Some(value) if change == Change::Edit => *dialog.value_mut() = DialogValue { value, ..shown },
+        Some(value) if change == Change::Edit => {
+            *dialog.value_mut() = DialogValue { value, ..shown };
+            open.curve_drag = None;
+        }
         Some(value) => dialog.seed(DialogValue { value, ..shown }),
         // The address is the dialog's context, not a setting: a refused value keeps the retarget.
         None if retargeted => dialog.seed(shown),
