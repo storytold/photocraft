@@ -380,8 +380,9 @@ impl BrushContext {
     /// describes them, or `Ok` when it can. Only a plain computed round tip qualifies: nothing
     /// that changes a dab's value per pixel beyond its tip profile (a sampled tip, Dual Brush,
     /// texture, noise, Wet Edges), nothing that makes a pixel's colour or its ceiling vary (colour
-    /// dynamics, Transfer, pressure opacity), no mode but Normal over the target, no smoothing
-    /// tail and no airbrush build-up (neither is a dab list a push ends with).
+    /// dynamics, Transfer, pressure opacity), no mode but Normal over the target, no
+    /// airbrush build-up (not a dab list a push ends with). Smoothing is stampable: its catch-up
+    /// tail is [`StrokeRenderer::gpu_tail_dabs`].
     pub fn gpu_stampable(brush: &BrushSettings) -> Result<(), &'static str> {
         if !matches!(*brush.tip, TipShape::Round) {
             return Err("a sampled tip");
@@ -400,7 +401,6 @@ impl BrushContext {
             (brush.behind, "Behind mode"),
             (brush.mode != BlendMode::Normal, "a blend mode other than Normal"),
             (brush.build_up, "Build-up"),
-            (brush.smoothing.enabled && brush.smoothing.amount > 0.0, "smoothing"),
         ];
         match checks.iter().find(|(on, _)| *on) {
             Some((_, what)) => Err(what),
@@ -1435,6 +1435,17 @@ impl StrokeRenderer {
         let mut generator = self.generator.clone();
         let (mut dabs, mut duals) = (Vec::new(), Vec::new());
         generator.finish(&mut dabs, &mut duals);
+        dabs
+    }
+
+    /// The dabs finishing the stroke now would add, as [`finish_dabs`](Self::finish_dabs) would
+    /// return them (the ones that reach the clip and fit the area budget), for a GPU to stamp as
+    /// a preview on top of the settled coverage. Touches no tile and grows no bounds: the stroke
+    /// is as it was.
+    pub fn gpu_tail_dabs(&self) -> Vec<Dab> {
+        let (mut left, mut refused) = (self.area_left, self.refused);
+        let mut dabs = self.tail_dabs();
+        dabs.retain(|d| admit(self.clip, &mut left, &mut refused, self.ctx.dab_rect(d, false)));
         dabs
     }
 

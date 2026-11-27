@@ -273,6 +273,9 @@ fn a_dab_generator_makes_the_renderers_dabs() {
 fn only_plain_computed_brushes_are_stampable() {
     assert!(BrushContext::gpu_stampable(&BrushSettings::default()).is_ok());
     let plain = BrushSettings::default();
+    // Smoothing is stampable: its tail is a dab list of its own (`gpu_tail_dabs`).
+    let smooth = BrushSettings { smoothing: crate::Smoothing { amount: 0.5, ..plain.smoothing.clone() }, ..plain.clone() };
+    assert!(BrushContext::gpu_stampable(&smooth).is_ok());
     for brush in [
         BrushSettings { wet_edges: true, ..plain.clone() },
         BrushSettings { noise: true, ..plain.clone() },
@@ -280,7 +283,7 @@ fn only_plain_computed_brushes_are_stampable() {
         BrushSettings { aliased: true, ..plain.clone() },
         BrushSettings { pressure_opacity: true, ..plain.clone() },
         BrushSettings { mode: BlendMode::Multiply, ..plain.clone() },
-        BrushSettings { smoothing: crate::Smoothing { amount: 0.5, ..plain.smoothing.clone() }, ..plain.clone() },
+        BrushSettings { build_up: true, ..plain.clone() },
     ] {
         assert!(BrushContext::gpu_stampable(&brush).is_err());
         assert!(BrushContext::new(&brush).tip_geometry(&Dab::round(photocraft_geom::Point { x: 5.0, y: 5.0 }, 4.0, 1.0)).is_none());

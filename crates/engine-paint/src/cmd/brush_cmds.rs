@@ -943,6 +943,19 @@ impl LiveStroke {
         self.geometry(&dabs)
     }
 
+    /// The dabs that ending the stroke now would add (the smoothing catch-up tail from the
+    /// smoothed point to the pen, or a lone first dab), for the GPU to stamp over the stroke's
+    /// coverage as a preview, and the rectangle to redraw: where the previous tail was and where
+    /// this one is. The stroke stays as it was: no tile counts as touched, the coverage bounds do
+    /// not grow (the tail is only in [`bounds`](Self::bounds), as the CPU overlay's is), and
+    /// [`finish_dabs`](Self::finish_dabs) still makes the real ones.
+    pub fn tail_dabs(&mut self) -> (Vec<photocraft_paint::TipGeometry>, Rect) {
+        let dabs = self.geometry(&self.renderer.gpu_tail_dabs());
+        let tail = dabs.iter().fold(Rect::EMPTY, |r, d| r.union(&d.rect));
+        let redraw = std::mem::replace(&mut self.tail, tail).union(&tail);
+        (dabs, redraw)
+    }
+
     fn geometry(&self, dabs: &[photocraft_paint::Dab]) -> Vec<photocraft_paint::TipGeometry> {
         dabs.iter().filter_map(|d| self.renderer.ctx.tip_geometry(d)).collect()
     }

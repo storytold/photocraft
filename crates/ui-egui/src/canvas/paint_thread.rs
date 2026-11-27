@@ -8,7 +8,7 @@
 //!
 //! A stroke whose dabs the GPU draws (`gpu_dabs`) makes only the dabs here: each step is the
 //! rectangle they reach, and the thread lists what the canvas has to do with them, in order, as
-//! [`GpuWork`]: stamp these dabs, then ask for the coverage tiles that went calm. Only the UI
+//! [`GpuWork`]: stamp these dabs, ask for the coverage tiles that went calm, show the smoothing tail. Only the UI
 //! thread reaches the compositor, so the canvas takes that work with the steps (`catch_up`,
 //! `take_gpu_work`) and does it before it draws them. The thread itself polls the read-backs and
 //! feeds the stroke what arrived, and at the release hands the canvas the rest of the work and
@@ -62,6 +62,10 @@ pub(super) enum GpuWork {
     Dabs(Vec<GpuDab>),
     /// Ask for these coverage tiles, as of this epoch (the stroke's push count).
     Read(Vec<(i32, i32)>, u64),
+    /// Show this smoothing tail (what ending the stroke now would add) over the coverage, in place
+    /// of the previous one; empty: no tail. It follows its step's `Read`, so no read-back records
+    /// it, and is taken back before the next step's dabs (`GpuUi::run`).
+    Tail(Vec<GpuDab>),
 }
 
 /// A stroke whose dabs the GPU draws.
@@ -160,13 +164,17 @@ fn gpu_step(live: &mut photocraft_engine::brush_cmds::LiveStroke, pts: &[StrokeP
         Ok(dabs) => dabs.iter().map(gpu_dab).collect::<Vec<GpuDab>>(),
         Err(e) => return (Err(e), Vec::new()),
     };
-    let damage = dabs.iter().fold(Rect::EMPTY, |r, d| r.union(&d.rect)).intersect(&live.doc.bounds());
-    // After this push's dabs: the request is queued behind their stamps.
+    // The tail is redrawn on every step, so the step's damage has the old tail and the new one too.
+    let (tail, redraw) = live.tail_dabs();
+    let tail: Vec<GpuDab> = tail.iter().map(gpu_dab).collect();
+    let damage = dabs.iter().fold(redraw, |r, d| r.union(&d.rect)).intersect(&live.doc.bounds());
+    // After this push's dabs: the request is queued behind their stamps, and ahead of the tail's.
     let (keys, epoch) = live.calm_keys(CALM_PUSHES);
     let mut work = vec![GpuWork::Dabs(dabs)];
     if !keys.is_empty() {
         work.push(GpuWork::Read(keys, epoch));
     }
+    work.push(GpuWork::Tail(tail));
     (Ok(damage), work)
 }
 
@@ -258,6 +266,8 @@ impl Shared {
     /// renders it instead).
     fn finish_gpu(&self, mut stroke: EngineStroke, mut work: Vec<GpuWork>, wake: &(dyn Fn() + Send + Sync)) -> EngineStroke {
         if let (Some(gpu), EngineStroke::Brush(live)) = (self.gpu.as_ref(), &mut stroke) {
+            // The canvas takes the shown tail back as it stamps these (`GpuUi::run`): the real
+            // dabs land on the settled coverage, and every read-back follows them.
             let last: Vec<GpuDab> = live.finish_dabs().iter().map(gpu_dab).collect();
             let (keys, epoch) = live.unfed_keys();
             work.push(GpuWork::Dabs(last));
@@ -803,7 +813,7 @@ mod tests {
             assert!(Arc::ptr_eq(&thread.shown().doc, &doc), "every step shows that document");
         }
         assert!(steps.len() == 40 && steps.iter().all(Result::is_ok), "a step per push");
-        let (mut dabs_items, mut reads, mut offset) = (0i64, 0usize, None);
+        let (mut dabs_items, mut reads, mut tails, mut offset) = (0i64, 0usize, 0usize, None);
         for item in &work {
             match item {
                 GpuWork::Dabs(_) => dabs_items += 1,
@@ -815,9 +825,15 @@ mod tests {
                     assert_eq!(*offset.get_or_insert(o), o, "epochs follow the dabs they were asked after");
                     reads += 1;
                 }
+                GpuWork::Tail(_) => {
+                    // The tail follows its step's request: nothing a read-back records is under it.
+                    assert_eq!(tails as i64 + 1, dabs_items, "a tail after the dabs of its step, and one per step");
+                    tails += 1;
+                }
             }
         }
         assert_eq!(dabs_items, 40, "the dabs of every step come out, step by step");
+        assert_eq!(tails, 40, "every step sets its tail, empty or not");
         assert!(reads > 0, "tiles that went calm are asked for during the stroke");
         assert!(thread.take_gpu_work().is_empty(), "work comes out once");
     }

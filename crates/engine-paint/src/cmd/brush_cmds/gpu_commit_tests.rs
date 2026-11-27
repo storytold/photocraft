@@ -195,3 +195,27 @@ fn a_feed_older_than_a_touch_does_not_count() {
     feed(&mut gpu, &cpu, &now, late);
     assert!(gpu.unfed_keys().0.is_empty(), "a read-back as of after it makes it current");
 }
+
+/// A smoothed GPU stroke's tail is what ending it makes, as a preview: it touches no coverage tile
+/// and grows no coverage bounds (so no read-back is ever asked for it), and the `redraw` rectangle
+/// holds it. `finish_dabs` then makes the same dabs for real.
+#[test]
+fn a_smoothed_gpu_strokes_tail_is_what_finishing_makes_and_touches_nothing() {
+    let mut p = brush(json!({"smoothing": 0.7}));
+    let s = scene(8, &|_| ());
+    p["points"] = json!([PTS[0]]);
+    let (mut gpu, _) = LiveStroke::begin_gpu(&s, "paint.stroke", &p).unwrap();
+    for c in PTS[1..].chunks(2) {
+        gpu.push_dabs(&points(c)).unwrap();
+    }
+    let (touched, bounds) = (gpu.touched_keys(), gpu.renderer.bounds());
+    let (tail, redraw) = gpu.tail_dabs();
+    assert!(!tail.is_empty(), "a smoothed stroke lags its pen");
+    assert_eq!((gpu.touched_keys(), gpu.renderer.bounds()), (touched, bounds), "the preview tail changes nothing of the stroke");
+    assert!(tail.iter().all(|d| d.rect.intersect(&redraw) == d.rect), "the redraw rectangle holds the tail");
+    // The next tail's redraw also covers this one's.
+    let (_, next) = gpu.tail_dabs();
+    assert!(tail.iter().all(|d| d.rect.intersect(&next) == d.rect), "the old tail is redrawn too");
+    let finish = gpu.finish_dabs();
+    assert_eq!(tail.iter().map(|d| d.rect).collect::<Vec<_>>(), finish.iter().map(|d| d.rect).collect::<Vec<_>>(), "finishing makes the tail's dabs");
+}

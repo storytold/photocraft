@@ -72,6 +72,29 @@ impl GpuCanvas {
         stamped.unwrap_or_else(|| Err("the GPU compositor is not available".into()))
     }
 
+    /// Stamp the smoothing tail `dabs` over `layer`'s external mask as a preview, after taking back
+    /// the previous tail (`Compositor::stamp_tail`); returns the tiles it saved. Submitted ahead
+    /// of everything submitted later, like the stamps.
+    pub(crate) fn stamp_tail(&self, layer: LayerId, dabs: &[GpuDab]) -> Result<usize, String> {
+        let done = self.with_compositor(|comp, device, queue| -> Result<usize, String> {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_stamp_tail") });
+            let saved = comp.stamp_tail(device, queue, &mut encoder, layer, dabs).map_err(|e| e.0)?;
+            queue.submit([encoder.finish()]);
+            Ok(saved)
+        });
+        done.unwrap_or_else(|| Err("the GPU compositor is not available".into()))
+    }
+
+    /// Take back `layer`'s smoothing tail (`Compositor::restore_tail`), submitted like a stamp.
+    pub(crate) fn restore_tail(&self, layer: LayerId) -> Result<(), String> {
+        let done = self.with_compositor(|comp, device, queue| {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_restore_tail") });
+            comp.restore_tail(&mut encoder, layer);
+            queue.submit([encoder.finish()]);
+        });
+        done.ok_or_else(|| "the GPU compositor is not available".to_string())
+    }
+
     /// Ask `readback` for coverage tiles of `layer`'s external mask as of the stamps submitted so
     /// far (`MaskReadback::request`, or `request_all` with `all`, which has no cap on what is in
     /// flight). Returns how many of `keys` it took, from the front; `None` without a compositor.
