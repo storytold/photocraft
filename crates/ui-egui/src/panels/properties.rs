@@ -120,6 +120,8 @@ fn document_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: usize) {
 
 /// The controls of the active layer by kind. A frame comes before the kind sections.
 fn layer_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+    // A generative layer's variations, above its own sections.
+    crate::genai_ui::variations_section(app, ui);
     if let LayerContent::Adjustment(adj) = &layer.content {
         adjustment_controls(app, ui, layer.id, adj);
     } else if layer.artboard().is_some() {

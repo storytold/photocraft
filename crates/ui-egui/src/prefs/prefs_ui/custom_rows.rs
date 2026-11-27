@@ -104,6 +104,7 @@ impl CustomSettings<PrefPages> for PrefsCustom {
     fn page(&mut self, ui: &mut egui::Ui, page: &str, draft: &mut SettingsDraft) -> bool {
         if page == AGENTS_PAGE {
             craft::automation::ui::agents::AgentsPage::new(AGENTS_PAGE, draft, &self.agent_status).mcp_flag(self.mcp_flag).show(ui);
+            generative_fill_rows(ui, draft);
         }
         false
     }
@@ -111,6 +112,22 @@ impl CustomSettings<PrefPages> for PrefsCustom {
     fn nested_open(&self) -> bool {
         self.picker_open
     }
+}
+
+/// Integrations › Generative AI: the opt-in for the options bar's Generative Fill… button
+/// (`genai_ui::options_bar_button`). The models and connections are set up in Edit › Generative
+/// Fill's Set Up Generative AI…, since they are the Craft suite's, not PhotoCraft's preferences.
+#[cfg(not(target_arch = "wasm32"))]
+fn generative_fill_rows(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
+    const KEY: &str = "integrations.alwaysShowGenerativeFillButton";
+    let mut on: bool = draft.get(KEY).unwrap_or(false);
+    ui.add_space(8.0);
+    Section::new(tl!("Generative AI")).show(ui, |ui, _| {
+        if Checkbox::new(Bind::bound(&mut on)).label(tl!("Always show the Generative Fill… button in the options bar")).show(ui).events.committed().is_some()
+        {
+            draft.set(KEY, &on);
+        }
+    });
 }
 
 /// The GPU memory budget lines of Performance › Graphics.

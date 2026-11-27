@@ -39,6 +39,7 @@ mod build_flavor;
 mod caps_lock;
 mod crash_guard;
 mod cursor;
+mod genai;
 mod gpu_startup;
 mod launch_args;
 mod launch_profile;

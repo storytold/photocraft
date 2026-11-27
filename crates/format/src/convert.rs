@@ -233,6 +233,11 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
         xmp: l.xmp.as_deref().map(str::to_string),
+        generative: l.generative.as_ref().map(|g| crate::manifest::GenerativeM {
+            prompt: g.prompt.clone(),
+            variations: g.variations.iter().map(|v| surface_m(v, sink)).collect(),
+            selected: g.selected,
+        }),
     }
 }
 
@@ -365,6 +370,14 @@ impl Loader<'_> {
         }
         let original_frames = m.original_frames.as_ref().map(|source| source.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()).transpose()?;
         Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
+    }
+
+    fn generative(&mut self, m: &crate::manifest::GenerativeM) -> Result<Box<photocraft_doc::Generative>> {
+        let variations = m.variations.iter().map(|v| self.surface(v)).collect::<Result<Vec<_>>>()?;
+        if m.selected >= variations.len() {
+            return Err(FormatError::corrupt("a generative layer selects a variation it doesn't have"));
+        }
+        Ok(Box::new(photocraft_doc::Generative { prompt: m.prompt.clone(), variations, selected: m.selected }))
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {
@@ -621,6 +634,7 @@ impl Loader<'_> {
             advanced: m.advanced,
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
             xmp: m.xmp.as_deref().map(Arc::from),
+            generative: m.generative.as_ref().map(|g| self.generative(g)).transpose()?,
         })
     }
 

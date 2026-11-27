@@ -191,6 +191,7 @@ fn marquee(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     constraint_fields(app, ui, matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee));
     divider(ui);
     select_and_mask(ui);
+    crate::genai_ui::options_bar_button(app, ui);
 }
 
 /// A faint hint after the members.
@@ -211,6 +212,7 @@ fn lasso(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
         divider(ui);
     }
     select_and_mask(ui);
+    crate::genai_ui::options_bar_button(app, ui);
     let enter = crate::shortcuts::pretty("Enter");
     // The framework's selection tools own the open outline the hints follow.
     if tool == Tool::MagneticLasso {
@@ -296,6 +298,7 @@ fn wand(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::retouch_ui::report_smart_result(app, result, tl!("No subject found — try Object Selection or the Lasso"));
     }
     select_and_mask(ui);
+    crate::genai_ui::options_bar_button(app, ui);
 }
 
 /// Shows the members of `tool`'s bar; false for a tool without selection members.

@@ -35,6 +35,7 @@ pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
+pub mod genai_ui;
 pub mod gpu_memo;
 pub mod gpu_status;
 mod history_keys;
@@ -674,6 +675,8 @@ pub struct PhotocraftApp {
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// Generative Fill's shell state (see `genai_ui`).
+    pub(crate) genai: genai_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// A save parked behind a format's options prompt (TIFF, Targa, JPEG, DDS), run when the

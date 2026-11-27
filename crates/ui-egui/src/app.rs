@@ -209,6 +209,7 @@ impl PhotocraftApp {
             slow_frames: Default::default(),
             prefs_rt: Default::default(),
             updates_rt: Default::default(),
+            genai: Default::default(),
             discard: None,
             parked_save: None,
             save_dirs: HashMap::new(),
@@ -241,6 +242,9 @@ impl PhotocraftApp {
         photocraft_raster::spill::use_test_volume_space();
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        // Generative Fill's link to the shared AI layer (no network, no key read).
+        let ai = app.services.genai.clone();
+        app.session.set_generative_ai(ai);
         // The workspace set reads the loaded preferences (and moves the earlier saves into it).
         crate::workspace_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);

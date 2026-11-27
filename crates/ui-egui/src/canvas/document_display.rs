@@ -509,6 +509,12 @@ fn canvas_controls(
 ) -> Option<(photocraft_doc::LayerId, photocraft_doc::Fill)> {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let now = ui.input(|i| i.time);
+    // Generative Fills still generating shimmer over their areas, under the tools' controls.
+    if host.is_primary(app)
+        && let Some(view) = active_view(app)
+    {
+        crate::genai_ui::paint_pending(app, ui, rect, view);
+    }
     crate::distort_ui::show_in_canvas(app, ui, rect);
     crate::blur_pins::overlay(app, ui, rect);
     let doc = app.session.documents()[host.idx].doc.id;

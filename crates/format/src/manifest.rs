@@ -180,6 +180,14 @@ pub struct VideoDataM {
     pub show_altered: bool,
 }
 
+/// A generative layer's variations (Edit › Generative Fill), beside the pixels the layer shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerativeM {
+    pub prompt: String,
+    pub variations: Vec<SurfaceM>,
+    pub selected: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaskM {
     pub surface: SurfaceM,
@@ -244,6 +252,10 @@ pub struct LayerM {
     /// The layer's own XMP packet (missing in older files = none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xmp: Option<String>,
+    /// A generative layer's variations (missing in older files and on other layers = none; older
+    /// versions read the layer as the pixel layer it shows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generative: Option<GenerativeM>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

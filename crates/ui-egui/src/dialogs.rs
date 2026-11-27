@@ -66,6 +66,8 @@ pub(crate) mod params {
 
     /// Every family of parameter dialogs, first match wins; the generic filter family owns what is left.
     pub(crate) const PARAM_FAMILIES: &[ParamFamily] = &[
+        // Before the generic form families, which would take its command keys for their own.
+        crate::genai_ui::FAMILY,
         ParamFamily { check: Some(fill_ui::check), ..ParamFamily::new(fill_ui::owns, fill_ui::run) },
         ParamFamily { check: Some(stroke_ui::check), ..ParamFamily::new(stroke_ui::owns, stroke_ui::run) },
         ParamFamily {
@@ -509,6 +511,7 @@ pub fn run(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::filter_dialog::reconcile_match_color(app);
     filter_preview_ui::feed(app, ui.ctx());
     crate::prefs_ui::feed(app);
+    crate::genai_ui::feed(app, ui.ctx());
     app.framework.dialogs.run(ui);
     take_results(app, &ui.ctx().clone());
 }

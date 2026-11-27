@@ -62,6 +62,7 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+pub mod genai_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod history_cmds;

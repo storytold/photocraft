@@ -192,6 +192,10 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
         return Some(r);
     }
 
+    // Edit › Generative Fill asks for its prompt.
+    if let Some(r) = crate::genai_ui::menu(app, id, params) {
+        return Some(r);
+    }
     // Filter › Plug-ins (installed WebAssembly plug-ins, Install Plug-in…).
     if let Some(r) = crate::plugin_ui::menu(app, id, params) {
         return Some(r);

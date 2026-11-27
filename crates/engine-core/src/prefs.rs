@@ -1276,6 +1276,10 @@ pub struct Integrations {
     /// Port ([`migrate_integrations`]); not in the dialog. With the flag the ArtCraft Launcher's
     /// switch decides instead.
     pub connect_agents: bool,
+    /// Show the Generative Fill… button in the selection tools' options bar even while no model
+    /// is set up for it (it then opens the setup). Off: the button is there only once Generative
+    /// Fill can run, so an app with no AI set up has no AI in its options bar.
+    pub always_show_generative_fill_button: bool,
 }
 
 choice!(

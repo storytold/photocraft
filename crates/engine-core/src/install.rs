@@ -84,6 +84,7 @@ const TABLES: &[Table] = &[
     ("warp_cmds", crate::warp_cmds::specs),
     ("artboard_cmds", crate::artboard_cmds::specs),
     ("distort_cmds", crate::distort_cmds::specs),
+    ("genai_cmds", crate::genai_cmds::specs),
     ("analysis_cmds", crate::analysis_cmds::specs),
     ("font_library_cmds", crate::font_library_cmds::specs),
     ("history_cmds", crate::history_cmds::specs),

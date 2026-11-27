@@ -66,7 +66,7 @@ architecture and the PSD writer are the serial parts.
 | Panels | 10% | 30 / 35 Window-menu panels | 86% | measured (`view_cmds.rs`, panel modules) |
 | Filters and adjustments | 10% | every Filter and Image › Adjustments item live; Filter Gallery 47 looks | 100% | measured (menu catalog) |
 | File formats (usage-weighted) | 15% | 13 of 31 Photoshop formats supported in Photoshop's directions, 4 partial; the common ones (PSD/PSB, TIFF, JPEG, PNG, WebP) all present | ~80% (48% by count) | measured list, estimated weights ([file-format-parity.md](file-format-parity.md)) |
-| AI / generative | 10% | classical Select Subject/Sky, Remove tool, Content-Aware; no Generative Fill/Expand, Neural Filters, Sky Replacement, Super Zoom | ~15% | estimated |
+| AI / generative | 10% | classical Select Subject/Sky, Remove tool, Content-Aware; Generative Fill through the Craft suite's shared AI layer (#41); no Generative Expand, Neural Filters, Sky Replacement, Super Zoom | ~15% | estimated |
 | Ecosystem (plug-ins, scripting, libraries) | 10% | WebAssembly plug-ins, CLI, MCP, actions, `.atn` load/save (112 events); no .8BF, UXP/ExtendScript, Libraries | ~20% | estimated |
 | **Weighted** | 100% | | **~76%** | |
 

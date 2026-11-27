@@ -820,6 +820,15 @@ edit.puppetWarp
 layer.smartObjects.puppetWarp
 edit.perspectiveWarp
 layer.smartObjects.perspectiveWarp
+edit.generativeFill
+layer.generative.selectVariation
+layer.generative.more
+layer.generative.retry
+layer.generative.agree
+layer.generative.discard
+layer.generative.fills
+layer.generative.saveDiagnostics
+layer.generative.areas
 image.analysis.setMeasurementScale
 image.analysis.selectDataPoints
 image.analysis.recordMeasurements

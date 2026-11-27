@@ -356,6 +356,10 @@ pub fn menu_rows(app: &PhotocraftApp) -> Vec<Row> {
     let background = app.session.active().is_none_or(|st| st.doc.background().is_some());
     let other = if background { "layer.new.backgroundFromLayer" } else { "layer.new.layerFromBackground" };
     rows.retain(|r| r.command.id != other);
+    // Edit › Generative Fill exists only where generative AI can (the desktop app, #41).
+    if !crate::genai_ui::menu_visible(app) {
+        rows.retain(|r| r.command.id != photocraft_engine::genai_cmds::FILL);
+    }
     let prefs = app.session.prefs();
     let hidden = prefs.menus.hidden.iter().filter(|id| photocraft_engine::prefs::MenuCustomization::hideable(id)).cloned();
     let colors = if prefs.interface.show_menu_colors {
