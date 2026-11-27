@@ -559,7 +559,9 @@ fn dropped_files_open_with_path_and_recent() {
     assert_eq!(app.session.documents()[1].path, None);
     assert_eq!(*app.ui.recent_files, vec![abs_s]);
     assert!(app.ui.status_error);
-    assert_eq!(app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).count(), 2);
+    assert_eq!(open_error_messages(&app), ["Couldn't open gone.psd: couldn't read the file", "Couldn't open dropped: not an image"]);
+    assert!(app.ui.notices.is_empty(), "open failures use modal alerts, not corner notices");
+    assert_eq!(app.ui.status, "Couldn't open dropped: not an image");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
