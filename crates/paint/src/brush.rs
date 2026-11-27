@@ -686,10 +686,6 @@ impl BrushSettings {
 /// A named brush preset (session tool state; serde round-trips).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BrushPreset {
-    /// Stable identity of this preset occurrence. Names and hierarchy locations are mutable and
-    /// therefore must never be used as the browser or command identity.
-    #[serde(default = "new_brush_preset_id")]
-    pub id: String,
     pub name: String,
     pub brush: BrushSettings,
     /// Shipped with PhotoCraft (built-ins can be deleted from a session but are regenerated on reset).
@@ -706,51 +702,6 @@ pub struct BrushPreset {
     /// dialog's boxes.
     #[serde(default, skip_serializing_if = "PresetCaptures::is_default")]
     pub captures: PresetCaptures,
-}
-
-fn new_brush_preset_id() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-#[cfg(test)]
-mod brush_preset_identity_tests {
-    use super::BrushPreset;
-
-    #[test]
-    fn preset_identity_survives_clone_and_serde_round_trip() {
-        let preset = BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "Stable".into(),
-            brush: Default::default(),
-            builtin: false,
-            group: "Group".into(),
-            folder: vec!["Folder".into()],
-            captures: Default::default(),
-        };
-        let clone = preset.clone();
-        assert_eq!(clone.id, preset.id);
-
-        let encoded = serde_json::to_string(&preset).unwrap();
-        let decoded: BrushPreset = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded.id, preset.id);
-    }
-
-    #[test]
-    fn legacy_preset_without_identity_gets_an_identity() {
-        let mut encoded = serde_json::to_value(BrushPreset {
-            id: String::new(),
-            name: "Legacy".into(),
-            brush: Default::default(),
-            builtin: false,
-            group: String::new(),
-            folder: Vec::new(),
-            captures: Default::default(),
-        })
-        .unwrap();
-        encoded.as_object_mut().unwrap().remove("id");
-        let decoded: BrushPreset = serde_json::from_value(encoded).unwrap();
-        assert!(!decoded.id.is_empty());
-    }
 }
 
 /// The New Brush Preset dialog's boxes, kept with the preset. The default is a preset made

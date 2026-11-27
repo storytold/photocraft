@@ -179,7 +179,6 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     let taken: Vec<String> = s.tools.presets.iter().map(|x| x.name.clone()).collect();
     let name = unique(&name, &taken);
     s.tools.presets.push(photocraft_paint::BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(),
         name: name.clone(),
         brush: brush.clone(),
         builtin: false,

@@ -44,10 +44,8 @@ fn tip16(w: u32, h: u32, seed: u32) -> GrayTile {
 }
 
 fn sampled(name: &str, group: &str, tip: GrayTile) -> BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(),
     let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip), ..Default::default() };
-    BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(), name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
+    BrushPreset { name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
 }
 
 fn user(s: &Session) -> Vec<BrushPreset> {
@@ -60,58 +58,6 @@ fn sessions_have_no_store_by_default() {
     assert!(s.preset_store.is_none(), "headless sessions must stay hermetic");
     s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
     assert!(s.preset_store.is_none());
-}
-
-#[test]
-fn legacy_index_without_hierarchy_still_loads() {
-    let legacy = json!({ "version": 1, "groups": [], "hiddenBuiltins": [], "order": [] });
-    let index: IndexFile = serde_json::from_value(legacy).unwrap();
-    assert!(index.hierarchy.is_empty());
-}
-
-#[test]
-fn mixed_root_order_with_an_empty_group_round_trips_in_the_index() {
-    let backend = MemBackend::default();
-    let mut s = Session::new();
-    s.tools.presets.clear();
-    s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
-        groups: vec!["Empty".into()],
-        folders: Vec::new(),
-        root_order: vec![
-            crate::BrushPresetRootEntry::Preset("Root A".into()),
-            crate::BrushPresetRootEntry::Group("Empty".into()),
-            crate::BrushPresetRootEntry::Preset("Root B".into()),
-        ],
-    };
-    for name in ["Root A", "Root B"] {
-        s.tools.presets.push(BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.into(),
-            brush: Default::default(),
-            builtin: false,
-            group: String::new(),
-            folder: Vec::new(),
-            captures: Default::default(),
-        });
-    }
-    s.attach_preset_store(open(Box::new(backend.clone())));
-    s.brush_presets_changed();
-    s.sync_preset_store();
-
-    let index: IndexFile = serde_json::from_slice(&backend.read(INDEX_FILE, MAX_INDEX_BYTES).unwrap()).unwrap();
-    assert_eq!(
-        index.hierarchy.root_order,
-        [
-            crate::BrushPresetRootEntry::Preset("Root A".into()),
-            crate::BrushPresetRootEntry::Group("Empty".into()),
-            crate::BrushPresetRootEntry::Preset("Root B".into()),
-        ]
-    );
-
-    let mut reopened = Session::new();
-    reopened.tools.presets.clear();
-    reopened.attach_preset_store(open(Box::new(backend)));
-    assert_eq!(reopened.tools.preset_hierarchy.root_order, index.hierarchy.root_order);
 }
 
 #[test]
@@ -741,79 +687,6 @@ fn a_group_file_that_failed_to_load_is_not_overwritten() {
     s.execute("brush.presets.save", json!({"name": "New"})).unwrap();
     assert_eq!(mem.files.lock().unwrap().get(&file), Some(&newer), "a file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
-}
-
-#[test]
-fn empty_groups_and_nested_folders_round_trip_and_remain_commandable() {
-    let dir = TempDir::new("empty-hierarchy");
-    let (mut s, warnings) = session(&dir);
-    assert!(warnings.is_empty(), "{warnings:?}");
-    s.execute("brush.presets.createGroup", json!({"group": "Empty Library"})).unwrap();
-    s.execute("brush.presets.createFolder", json!({"group": "Empty Library", "folder": ["Unused"]})).unwrap();
-    s.execute("brush.presets.createFolder", json!({"group": "Empty Library", "folder": ["Unused", "Nested"]})).unwrap();
-
-    let (mut reloaded, warnings) = session(&dir);
-    assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(reloaded.tools.preset_hierarchy.groups, ["Empty Library"]);
-    assert_eq!(
-        reloaded.tools.preset_hierarchy.folders,
-        [
-            crate::BrushPresetFolder { group: "Empty Library".into(), path: vec!["Unused".into()], before_item: None },
-            crate::BrushPresetFolder { group: "Empty Library".into(), path: vec!["Unused".into(), "Nested".into()], before_item: None },
-        ]
-    );
-
-    reloaded.execute("brush.presets.renameGroup", json!({"group": "Empty Library", "folder": ["Unused", "Nested"], "newName": "Renamed"})).unwrap();
-    assert!(reloaded.tools.preset_hierarchy.folders.iter().any(|f| f.path == ["Unused", "Renamed"]));
-    reloaded.execute("brush.presets.deleteGroup", json!({"group": "Empty Library", "folder": ["Unused"]})).unwrap();
-    assert!(reloaded.tools.preset_hierarchy.folders.is_empty());
-    reloaded.execute("brush.presets.deleteGroup", json!({"group": "Empty Library"})).unwrap();
-    assert!(reloaded.tools.preset_hierarchy.groups.is_empty());
-    let (after_delete, warnings) = session(&dir);
-    assert!(warnings.is_empty(), "{warnings:?}");
-    assert!(after_delete.tools.preset_hierarchy.is_empty());
-}
-
-#[test]
-fn empty_folder_order_round_trips_alongside_populated_folders() {
-    let dir = TempDir::new("mixed-folder-order");
-    let (mut s, warnings) = session(&dir);
-    assert!(warnings.is_empty(), "{warnings:?}");
-    let mut preset = sampled("In filled folder", "Mixed", tip8(4, 4, 9));
-    preset.folder = vec!["Filled".into()];
-    s.tools.presets.push(preset);
-    s.tools.presets.push(sampled("Anchor card", "Mixed", tip8(4, 4, 10)));
-    s.brush_presets_changed();
-    s.sync_preset_store();
-    s.execute("brush.presets.createFolder", json!({"group": "Mixed", "folder": ["Empty"]})).unwrap();
-    s.execute("brush.presets.moveGroup", json!({"group": "Mixed", "folder": ["Empty"], "index": 0})).unwrap();
-    s.tools.preset_hierarchy.folders.iter_mut().find(|folder| folder.group == "Mixed" && folder.path == ["Empty"]).unwrap().before_item =
-        Some("Anchor card".into());
-    s.brush_presets_changed();
-    s.sync_preset_store();
-
-    let (mut reloaded, warnings) = session(&dir);
-    assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(
-        reloaded.tools.preset_hierarchy.folders.iter().filter(|folder| folder.group == "Mixed").map(|folder| folder.path.clone()).collect::<Vec<_>>(),
-        [vec![String::from("Empty")], vec![String::from("Filled")]],
-    );
-    assert_eq!(
-        reloaded.tools.preset_hierarchy.folders.iter().find(|folder| folder.group == "Mixed" && folder.path == ["Empty"]).unwrap().before_item.as_deref(),
-        Some("Anchor card")
-    );
-
-    let mut inside = sampled("Inside empty folder", "Mixed", tip8(4, 4, 11));
-    inside.folder = vec!["Empty".into()];
-    reloaded.tools.presets.push(inside);
-    reloaded.brush_presets_changed();
-    reloaded.sync_preset_store();
-    let (reloaded_again, warnings) = session(&dir);
-    assert!(warnings.is_empty(), "{warnings:?}");
-    let anchored_folder =
-        reloaded_again.tools.preset_hierarchy.folders.iter().filter(|folder| folder.group == "Mixed" && folder.path == ["Empty"]).collect::<Vec<_>>();
-    assert_eq!(anchored_folder.len(), 1, "completing a populated folder must not duplicate its stored metadata");
-    assert_eq!(anchored_folder[0].before_item.as_deref(), Some("Anchor card"));
 }
 
 #[test]

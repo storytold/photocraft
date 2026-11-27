@@ -11,7 +11,7 @@
 //!   the tip came from 8-bit data and 16 bits otherwise. Renaming or re-grouping a preset only
 //!   rewrites a small JSON file; a tip no group references any more is deleted;
 //! - `index.json`: group order, the order of every preset (built-ins included, so drag and drop
-//!   in the Brushes panel persists), deleted built-ins, and explicitly-created empty groups/folders.
+//!   in the Brushes panel persists) and the built-in presets the user deleted.
 //!
 //! Full tips load on demand (#1843): a stored preset's bitmaps are [`StoredTile`]s holding only a
 //! preview ([`GrayTile::preview`], at most [`PREVIEW_SIDE`] px), which the Brushes panel and the
@@ -325,9 +325,6 @@ impl TipRefs {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredPreset {
-    /// Stable identity for this preset occurrence; absent in stores predating browser IDs.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    id: String,
     name: String,
     brush: BrushSettings,
     #[serde(default)]
@@ -374,10 +371,6 @@ struct IndexFile {
     hidden_builtins: Vec<String>,
     /// Every preset's name in library (panel) order; empty when it is the default order.
     order: Vec<String>,
-    /// Explicit group/folder nodes, including empty containers. Older versions ignore this
-    /// optional extension and continue to load every brush preset normally.
-    #[serde(default, skip_serializing_if = "crate::BrushPresetHierarchy::is_empty")]
-    hierarchy: crate::BrushPresetHierarchy,
 }
 
 /// The group's file name: a readable, sanitised prefix plus a hash of the exact name, so
@@ -465,148 +458,6 @@ fn join_tips(mut b: BrushSettings, refs: &TipRefs, tiles: &HashMap<String, Store
 /// build an absurd tree.
 fn sanitize_folder(folder: Vec<String>) -> Vec<String> {
     folder.into_iter().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).take(crate::brush_preset_cmds::MAX_FOLDER_DEPTH).collect()
-}
-
-fn sanitize_hierarchy(input: &crate::BrushPresetHierarchy) -> crate::BrushPresetHierarchy {
-    let valid_name = |name: &str| !name.trim().is_empty() && name.trim().chars().count() <= crate::brush_preset_cmds::MAX_NAME;
-    let mut out = crate::BrushPresetHierarchy::default();
-    for group in &input.groups {
-        let group = group.trim();
-        if valid_name(group) && !out.groups.iter().any(|existing| existing == group) {
-            out.groups.push(group.to_string());
-        }
-    }
-    for folder in &input.folders {
-        let group = folder.group.trim();
-        let path = sanitize_folder(folder.path.clone());
-        if !valid_name(group) || path.is_empty() || path.len() != folder.path.len() || !path.iter().all(|part| valid_name(part)) {
-            continue;
-        }
-        if !out.groups.iter().any(|existing| existing == group) {
-            out.groups.push(group.to_string());
-        }
-        for depth in 1..=path.len() {
-            let node_path = path[..depth].to_vec();
-            let anchor = (depth == path.len()).then(|| folder.before_item.clone()).flatten();
-            if let Some(existing) = out.folders.iter_mut().find(|node| node.group == group && node.path == node_path) {
-                if anchor.is_some() {
-                    existing.before_item = anchor;
-                }
-            } else {
-                out.folders.push(crate::BrushPresetFolder { group: group.to_string(), path: node_path, before_item: anchor });
-            }
-        }
-    }
-    for entry in &input.root_order {
-        match entry {
-            crate::BrushPresetRootEntry::Group(group) => {
-                let group = group.trim();
-                if valid_name(group) {
-                    let entry = crate::BrushPresetRootEntry::Group(group.to_string());
-                    if !out.root_order.contains(&entry) {
-                        out.root_order.push(entry);
-                    }
-                }
-            }
-            crate::BrushPresetRootEntry::Preset(name) => {
-                let name = name.trim();
-                if valid_name(name) {
-                    let entry = crate::BrushPresetRootEntry::Preset(name.to_string());
-                    if !out.root_order.contains(&entry) {
-                        out.root_order.push(entry);
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Complete the optional index hierarchy with paths from the flat preset vector. This migrates
-/// older indexes (which have no hierarchy field) while retaining the order of a complete newer
-/// hierarchy, including empty nodes interleaved with populated ones.
-fn complete_hierarchy(presets: &[BrushPreset], input: &crate::BrushPresetHierarchy) -> crate::BrushPresetHierarchy {
-    let stored = sanitize_hierarchy(input);
-    let mut derived = crate::BrushPresetHierarchy::default();
-    for preset in presets.iter().filter(|preset| !preset.builtin) {
-        if !preset.group.is_empty() && !derived.groups.contains(&preset.group) {
-            derived.groups.push(preset.group.clone());
-        }
-        for depth in 1..=preset.folder.len().min(crate::brush_preset_cmds::MAX_FOLDER_DEPTH) {
-            let folder = crate::BrushPresetFolder { group: preset.group.clone(), path: preset.folder[..depth].to_vec(), before_item: None };
-            if !derived.folders.contains(&folder) {
-                derived.folders.push(folder);
-            }
-        }
-    }
-    let mut out = crate::BrushPresetHierarchy::default();
-    if derived.groups.iter().all(|group| stored.groups.contains(group)) {
-        out.groups = stored.groups.clone();
-    } else {
-        out.groups = derived.groups.clone();
-        for group in &stored.groups {
-            if !out.groups.contains(group) {
-                out.groups.push(group.clone());
-            }
-        }
-    }
-    if derived.folders.iter().all(|folder| stored.folders.iter().any(|stored| stored.group == folder.group && stored.path == folder.path)) {
-        out.folders = stored.folders.clone();
-    } else {
-        out.folders = derived.folders;
-        for folder in &stored.folders {
-            if let Some(existing) = out.folders.iter_mut().find(|existing| existing.group == folder.group && existing.path == folder.path) {
-                if folder.before_item.is_some() {
-                    existing.before_item = folder.before_item.clone();
-                }
-            } else {
-                out.folders.push(folder.clone());
-            }
-        }
-    }
-    let mut derived_root = Vec::new();
-    let mut seen_groups = std::collections::BTreeSet::new();
-    for preset in presets {
-        if preset.group.is_empty() && preset.folder.is_empty() {
-            let entry = crate::BrushPresetRootEntry::Preset(preset.name.clone());
-            if !derived_root.contains(&entry) {
-                derived_root.push(entry);
-            }
-        } else if !preset.group.is_empty() && seen_groups.insert(preset.group.clone()) {
-            derived_root.push(crate::BrushPresetRootEntry::Group(preset.group.clone()));
-        }
-    }
-    for group in &stored.groups {
-        if seen_groups.insert(group.clone()) {
-            derived_root.push(crate::BrushPresetRootEntry::Group(group.clone()));
-        }
-    }
-    let valid_presets: HashSet<String> =
-        presets.iter().filter(|preset| preset.group.is_empty() && preset.folder.is_empty()).map(|preset| preset.name.clone()).collect();
-    let valid_groups: HashSet<String> =
-        presets.iter().filter(|preset| !preset.group.is_empty()).map(|preset| preset.group.clone()).chain(stored.groups.iter().cloned()).collect();
-    let stored_root: Vec<_> = stored
-        .root_order
-        .iter()
-        .filter(|entry| match entry {
-            crate::BrushPresetRootEntry::Group(group) => valid_groups.contains(group),
-            crate::BrushPresetRootEntry::Preset(name) => valid_presets.contains(name),
-        })
-        .cloned()
-        .collect();
-    if presets.iter().any(|preset| !preset.builtin) || !stored.groups.is_empty() {
-        if stored_root.is_empty() {
-            out.root_order = derived_root;
-        } else {
-            out.root_order = stored_root;
-            for entry in derived_root {
-                if !out.root_order.contains(&entry) {
-                    out.root_order.push(entry);
-                }
-            }
-        }
-    }
-    out
 }
 
 fn tip_file(hash: &str) -> String {
@@ -713,8 +564,6 @@ pub struct Opened {
     pub hidden_builtins: Vec<String>,
     /// The saved library order (preset names), empty when none was saved.
     pub order: Vec<String>,
-    /// Explicit empty groups/folders saved in the index.
-    pub hierarchy: crate::BrushPresetHierarchy,
     /// Files that were skipped (corrupt, oversized, missing tips).
     pub warnings: Vec<String>,
     /// Recorded actions (`actions.json`). Empty when the file is missing or unreadable.
@@ -814,7 +663,6 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         let mut missing = 0;
         let mut stale = false;
         for sp in g.presets {
-            stale |= sp.id.is_empty();
             match join_tips(sp.brush, &sp.tips, &tiles) {
                 Some(brush) => {
                     for h in sp.tips.hashes() {
@@ -825,7 +673,6 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
                         }
                     }
                     items.push(BrushPreset {
-                        id: if sp.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { sp.id },
                         name: sp.name,
                         brush,
                         builtin: false,
@@ -853,7 +700,6 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         store.groups.insert(file, Synced { presets: items, tips: hashes, bytes: size, stale });
     }
     store.skipped = skipped;
-    crate::presets::collisions::make_flat_item_names_unique(&mut presets);
     // Tip files nothing references are garbage (e.g. left by a crash), unless a group failed to
     // load: its tips must survive so a fixed file still works.
     if !failed {
@@ -863,9 +709,8 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
     }
     let hidden_builtins = index.as_ref().map(|i| i.hidden_builtins.clone()).unwrap_or_default();
     let order = index.as_ref().map(|i| i.order.clone()).unwrap_or_default();
-    let hierarchy = complete_hierarchy(&presets, &index.as_ref().map(|i| &i.hierarchy).cloned().unwrap_or_default());
     store.index = index;
-    Opened { store, presets, hidden_builtins, order, hierarchy, warnings, actions }
+    Opened { store, presets, hidden_builtins, order, warnings, actions }
 }
 
 /// `actions.json`: a missing file is an empty list. Anything else unreadable is a warning.
@@ -1031,8 +876,7 @@ impl PresetStore {
     /// Bring the files in line with `presets` (built-ins skipped): write changed groups, delete
     /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
     /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
-    pub fn sync(&mut self, presets: &mut [BrushPreset], hierarchy: &mut crate::BrushPresetHierarchy) {
-        *hierarchy = complete_hierarchy(presets, hierarchy);
+    pub fn sync(&mut self, presets: &mut [BrushPreset]) {
         // User presets by group, in first-appearance order.
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
@@ -1098,25 +942,14 @@ impl PresetStore {
             .is_some()
         };
         let order = if builtins_in_order && order == default_order { Vec::new() } else { order };
-        // Preset paths remain the source of truth for populated nodes. The index supplements
-        // them only with explicitly-created empty containers, without changing group-file format.
-        let want = IndexFile { version: 1, groups, hidden_builtins: hidden, order, hierarchy: hierarchy.clone() };
-        let same = self
-            .index
-            .as_ref()
-            .is_some_and(|i| i.groups == want.groups && i.hidden_builtins == want.hidden_builtins && i.order == want.order && i.hierarchy == want.hierarchy);
+        let want = IndexFile { version: 1, groups, hidden_builtins: hidden, order };
+        let same = self.index.as_ref().is_some_and(|i| i.groups == want.groups && i.hidden_builtins == want.hidden_builtins && i.order == want.order);
         if !same {
-            let empty = want.groups.is_empty() && want.hidden_builtins.is_empty() && want.order.is_empty() && want.hierarchy.is_empty();
+            let empty = want.groups.is_empty() && want.hidden_builtins.is_empty() && want.order.is_empty();
             let r = if empty && self.index.is_none() {
                 Ok(())
             } else {
-                serde_json::to_vec_pretty(&want).map_err(|e| e.to_string()).and_then(|b| {
-                    if b.len() as u64 > MAX_INDEX_BYTES {
-                        Err(format!("the index is too large ({} MB limit)", MAX_INDEX_BYTES >> 20))
-                    } else {
-                        self.backend.write(INDEX_FILE, &b)
-                    }
-                })
+                serde_json::to_vec_pretty(&want).map_err(|e| e.to_string()).and_then(|b| self.backend.write(INDEX_FILE, &b))
             };
             match r {
                 Ok(()) => self.index = Some(want),
@@ -1184,7 +1017,6 @@ impl PresetStore {
             let key = |r: &Option<StoredTile>| r.as_ref().map(|t| t.key.clone());
             let tips = TipRefs { tip: key(&refs[0]), dual_tip: key(&refs[1]), texture: key(&refs[2]) };
             stored.push(StoredPreset {
-                id: p.id.clone(),
                 name: p.name.clone(),
                 brush: settings_only(&mut p.brush),
                 tips,
@@ -1259,7 +1091,7 @@ impl Session {
     /// built-in of the same name; presets created before the store finished loading win), hide
     /// deleted built-ins, then sync. Returns the load warnings.
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
-        let Opened { store, presets, hidden_builtins, order, hierarchy, mut warnings, actions: disk } = opened;
+        let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk } = opened;
         let lib = &mut self.tools.presets;
         lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
         for p in presets {
@@ -1274,25 +1106,6 @@ impl Session {
             let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
             lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
         }
-        // Disk order is authoritative for loaded nodes; append containers created while the
-        // asynchronous store load was in flight.
-        let mut merged_hierarchy = hierarchy;
-        for group in &self.tools.preset_hierarchy.groups {
-            if !merged_hierarchy.groups.contains(group) {
-                merged_hierarchy.groups.push(group.clone());
-            }
-        }
-        for folder in &self.tools.preset_hierarchy.folders {
-            if !merged_hierarchy.folders.contains(folder) {
-                merged_hierarchy.folders.push(folder.clone());
-            }
-        }
-        for entry in &self.tools.preset_hierarchy.root_order {
-            if !merged_hierarchy.root_order.contains(entry) {
-                merged_hierarchy.root_order.push(entry.clone());
-            }
-        }
-        self.tools.preset_hierarchy = merged_hierarchy;
         self.preset_store = Some(store);
         // In-memory actions (created before the store finished loading) win on name. Disk-only
         // names are appended. An empty session takes the disk list and does not rewrite it.
@@ -1329,7 +1142,7 @@ impl Session {
         let actions_rev = self.actions.rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(&mut self.tools.presets, &mut self.tools.preset_hierarchy);
+                st.sync(&mut self.tools.presets);
                 st.synced_rev = Some(rev);
                 if link_stored_tips(st, &mut self.tools.brush) {
                     // An embedded tip became a store reference: what the last-brush

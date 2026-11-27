@@ -759,41 +759,9 @@ fn name_param(p: &Value, cmd: &str) -> Result<String> {
 
 /// Replace the preset of that name, or append it at the end of the list.
 fn upsert(s: &mut Session, preset: BrushPreset) {
-    let existing_index = s.tools.presets.iter().position(|x| x.name.eq_ignore_ascii_case(&preset.name));
-    let previous = existing_index.and_then(|index| s.tools.presets.get(index).cloned());
-    let mut root_order = s.tools.preset_hierarchy.root_order.clone();
-    let root_position =
-        previous.as_ref().and_then(|previous| root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Preset(previous.name.clone())));
-    match existing_index {
-        Some(index) => {
-            let mut preset = preset.clone();
-            preset.id = s.tools.presets[index].id.clone();
-            s.tools.presets[index] = preset;
-        }
-        None => s.tools.presets.push(preset.clone()),
-    }
-    if !root_order.is_empty() {
-        if let Some(previous) = &previous {
-            if previous.group.is_empty() && previous.folder.is_empty() && (preset.group != "" || !preset.folder.is_empty()) {
-                root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Preset(previous.name.clone()));
-            }
-            if !previous.group.is_empty()
-                && !s.tools.presets.iter().any(|remaining| remaining.group == previous.group)
-                && !s.tools.preset_hierarchy.groups.contains(&previous.group)
-            {
-                root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(previous.group.clone()));
-            }
-        }
-        if preset.group.is_empty() && preset.folder.is_empty() {
-            if !root_order.contains(&crate::BrushPresetRootEntry::Preset(preset.name.clone())) {
-                let at = root_position.unwrap_or(root_order.len()).min(root_order.len());
-                root_order.insert(at, crate::BrushPresetRootEntry::Preset(preset.name.clone()));
-            }
-        } else if !preset.group.is_empty() && !root_order.contains(&crate::BrushPresetRootEntry::Group(preset.group.clone())) {
-            let at = root_position.unwrap_or(root_order.len()).min(root_order.len());
-            root_order.insert(at, crate::BrushPresetRootEntry::Group(preset.group.clone()));
-        }
-        s.tools.preset_hierarchy.root_order = root_order;
+    match s.tools.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
+        Some(x) => *x = preset,
+        None => s.tools.presets.push(preset),
     }
     s.brush_presets_changed();
 }
@@ -810,8 +778,7 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
     if captures.color {
         brush.color = s.tools.foreground;
     }
-    upsert(s, BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(), name: name.clone(), brush, builtin: false, group: String::new(), folder: Vec::new(), captures });
+    upsert(s, BrushPreset { name: name.clone(), brush, builtin: false, group: String::new(), folder: Vec::new(), captures });
     // The saved brush is the current brush now (Photoshop selects the brush it just saved).
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
@@ -822,63 +789,9 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.delete";
     let name = name_param(p, cmd)?;
     let before = s.tools.presets.len();
-    let group = match p.get("group") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(group)) => Some(group.as_str()),
-        Some(_) => return Err(bad(cmd, "`group` must be a string")),
-    };
-    let folder = match p.get("folder") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(parts)) => Some(
-            parts
-                .iter()
-                .map(|part| part.as_str().map(str::to_owned).ok_or_else(|| bad(cmd, "`folder` must contain only strings")))
-                .collect::<Result<Vec<_>>>()?,
-        ),
-        Some(_) => return Err(bad(cmd, "`folder` must be an array of strings")),
-    };
-    if folder.is_some() && group.is_none() {
-        return Err(bad(cmd, "`group` is required when `folder` is supplied"));
-    }
-    let removed: Vec<_> = s
-        .tools
-        .presets
-        .iter()
-        .filter(|preset| {
-            let same_occurrence = preset.name.eq_ignore_ascii_case(&name)
-                && group.is_none_or(|group| preset.group == group)
-                && folder.as_ref().is_none_or(|folder| &preset.folder == folder);
-            same_occurrence
-        })
-        .cloned()
-        .collect();
-    s.tools
-        .presets
-        .retain(|preset| !removed.iter().any(|deleted| preset.name == deleted.name && preset.group == deleted.group && preset.folder == deleted.folder));
+    s.tools.presets.retain(|x| !x.name.eq_ignore_ascii_case(&name));
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
-    }
-    for preset in &removed {
-        if preset.group.is_empty() && preset.folder.is_empty() {
-            s.tools.preset_hierarchy.root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Preset(preset.name.clone()));
-        } else if !preset.group.is_empty() && !s.tools.presets.iter().any(|remaining| remaining.group == preset.group) {
-            let has_empty_folders = s.tools.preset_hierarchy.folders.iter().any(|folder| folder.group == preset.group);
-            if has_empty_folders {
-                // Keep the now-empty group addressable so its explicitly-created/imported folders
-                // remain visible after its last brush is deleted.
-                if !s.tools.preset_hierarchy.groups.contains(&preset.group) {
-                    s.tools.preset_hierarchy.groups.push(preset.group.clone());
-                }
-                if !s.tools.preset_hierarchy.root_order.iter().any(|entry| *entry == crate::BrushPresetRootEntry::Group(preset.group.clone())) {
-                    s.tools.preset_hierarchy.root_order.push(crate::BrushPresetRootEntry::Group(preset.group.clone()));
-                }
-            } else if !s.tools.preset_hierarchy.groups.contains(&preset.group) {
-                s.tools.preset_hierarchy.root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(preset.group.clone()));
-            }
-        }
-    }
-    if !s.tools.presets.iter().any(|preset| !preset.builtin) && s.tools.preset_hierarchy.groups.is_empty() {
-        s.tools.preset_hierarchy.root_order.clear();
     }
     forget_deleted_preset(s, &name);
     Ok(json!({ "count": s.tools.presets.len() }))
@@ -974,8 +887,7 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
-    upsert(s, BrushPreset {
-            id: uuid::Uuid::new_v4().to_string(), name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
+    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
     s.tools.brush = brush;
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
@@ -1020,12 +932,7 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let mut b = s.tools.brush.clone();
     let mut picked = None;
     let mut picked_color = None;
-    if let Some(preset_id) = p.get("presetId").and_then(Value::as_str) {
-        let preset = s.tools.presets.iter().find(|preset| preset.id == preset_id).ok_or_else(|| bad(cmd, "no brush preset with that ID"))?;
-        b = preset.picked_over(&s.tools.brush);
-        picked_color = preset.captures.color.then_some(preset.brush.color);
-        picked = Some(preset.name.clone());
-    } else if let Some(name) = p.get("preset").and_then(Value::as_str) {
+    if let Some(name) = p.get("preset").and_then(Value::as_str) {
         let preset = find_preset(s, name, cmd)?;
         b = preset.picked_over(&s.tools.brush);
         picked_color = preset.captures.color.then_some(preset.brush.color);
@@ -1037,7 +944,7 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut patch = p.clone();
     if let Some(o) = patch.as_object_mut() {
-        for k in ["preset", "presetId", "reset", "coalesce"] {
+        for k in ["preset", "reset", "coalesce"] {
             o.remove(k);
         }
         if let Some(inner) = o.remove("brush") {
@@ -1258,14 +1165,7 @@ pub fn specs() -> Vec<CommandSpec> {
             presets_update,
             true
         ),
-        spec!(
-            "brush.presets.delete",
-            "Delete Brush Preset",
-            r##"{"name":string,"group":string?,"folder":[string]? (requires group; exact folder path)}"##,
-            always,
-            presets_delete,
-            true
-        ),
+        spec!("brush.presets.delete", "Delete Brush Preset", r##"{"name":string}"##, always, presets_delete, true),
         spec!("brush.presets.setCurrent", "Set Current Brush Preset", r##"{"name":string}"##, always, presets_set_current, true),
         spec!("brush.defineFromSelection", "Define Brush Preset…", r##"{"name":string}"##, has_selection_and_pixels, define_from_selection, true),
         spec!("brush.get", "Get Brush", "{}", always, |s, _| Ok(brush_json(&s.tools.brush)), false),

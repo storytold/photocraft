@@ -316,9 +316,6 @@ pub struct ToolState {
     pub brush: photocraft_paint::BrushSettings,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
     pub presets: Vec<photocraft_paint::BrushPreset>,
-    /// Explicit brush groups/folders, including empty containers. Populated paths are also
-    /// represented by `BrushPreset::group` and `folder`; this list preserves empty branches.
-    pub preset_hierarchy: BrushPresetHierarchy,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -349,41 +346,6 @@ pub struct ToolState {
     /// the inks the person picked (#4196). Matched by colour, so it follows a swap, a reset or a
     /// mask pair without bookkeeping.
     pub cmyk_picks: Vec<([f32; 3], [f32; 4])>,
-}
-
-/// Persistent hierarchy nodes which cannot be inferred from brush presets alone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct BrushPresetHierarchy {
-    /// Named root groups, in display order (the empty string is reserved for ungrouped brushes).
-    pub groups: Vec<String>,
-    /// Nested folder paths, in their owning group's display order.
-    pub folders: Vec<BrushPresetFolder>,
-    /// Mixed root sibling order, including root cards and empty groups.
-    pub root_order: Vec<BrushPresetRootEntry>,
-}
-
-impl BrushPresetHierarchy {
-    pub fn is_empty(&self) -> bool {
-        self.groups.is_empty() && self.folders.is_empty() && self.root_order.is_empty()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "name")]
-pub enum BrushPresetRootEntry {
-    Group(String),
-    Preset(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrushPresetFolder {
-    pub group: String,
-    pub path: Vec<String>,
-    /// Optional direct preset anchor for an empty folder's position among sibling cards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_item: Option<String>,
 }
 
 impl ToolState {
@@ -442,7 +404,6 @@ impl Default for ToolState {
                 ..Default::default()
             },
             presets: photocraft_paint::presets::builtin(),
-            preset_hierarchy: BrushPresetHierarchy::default(),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,

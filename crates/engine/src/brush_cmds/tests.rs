@@ -237,64 +237,6 @@ fn presets_save_load_delete_round_trip() {
     assert!(s.execute("brush.presets.save", json!({})).is_err());
 }
 
-#[test]
-fn scoped_preset_delete_removes_only_the_selected_duplicate_occurrence() {
-    let mut s = Session::new();
-    let mut first = s.tools.presets[0].clone();
-    first.name = "Shared name".into();
-    first.group = "First group".into();
-    first.folder = vec!["Folder".into()];
-    let mut second = first.clone();
-    second.group = "Second group".into();
-    second.folder.clear();
-    s.tools.presets = vec![first, second];
-
-    s.execute("brush.presets.delete", json!({"name": "Shared name", "group": "First group", "folder": ["Folder"]})).unwrap();
-
-    assert_eq!(s.tools.presets.len(), 1);
-    assert_eq!(s.tools.presets[0].name, "Shared name");
-    assert_eq!(s.tools.presets[0].group, "Second group");
-    assert!(s.execute("brush.presets.delete", json!({"name": "Shared name", "folder": []})).is_err());
-}
-
-#[test]
-fn deleting_the_last_brush_in_a_folder_preserves_the_empty_folder() {
-    let mut s = Session::new();
-    let mut preset = s.tools.presets[0].clone();
-    preset.name = "Only brush".into();
-    preset.builtin = false;
-    preset.group = "Kit".into();
-    preset.folder = vec!["Textures".into()];
-    s.tools.presets = vec![preset];
-    s.tools.preset_hierarchy.groups.clear();
-    s.tools.preset_hierarchy.folders = vec![crate::BrushPresetFolder { group: "Kit".into(), path: vec!["Textures".into()], before_item: None }];
-    s.tools.preset_hierarchy.root_order = vec![crate::BrushPresetRootEntry::Group("Kit".into())];
-
-    s.execute("brush.presets.delete", json!({"name": "Only brush", "group": "Kit", "folder": ["Textures"]})).unwrap();
-
-    assert!(s.tools.presets.is_empty());
-    assert!(s.tools.preset_hierarchy.groups.contains(&"Kit".to_owned()));
-    assert!(s.tools.preset_hierarchy.folders.iter().any(|folder| folder.group == "Kit" && folder.path == ["Textures"]));
-    assert!(s.tools.preset_hierarchy.root_order.contains(&crate::BrushPresetRootEntry::Group("Kit".into())));
-}
-
-#[test]
-fn deleting_all_brushes_from_an_appended_default_group_preserves_the_group() {
-    let mut s = Session::new();
-    s.execute("brush.presets.appendDefault", json!({})).unwrap();
-    let group = photocraft_paint::presets::GROUPS[0];
-    let names = s.tools.presets.iter().filter(|preset| preset.group == group).map(|preset| preset.name.clone()).collect::<Vec<_>>();
-    assert!(!names.is_empty());
-
-    for name in names {
-        s.execute("brush.presets.delete", json!({"name": name, "group": group})).unwrap();
-    }
-
-    assert!(!s.tools.presets.iter().any(|preset| preset.group == group));
-    assert!(s.tools.preset_hierarchy.groups.iter().any(|candidate| candidate == group));
-    assert!(s.tools.preset_hierarchy.root_order.iter().any(|entry| *entry == crate::BrushPresetRootEntry::Group(group.into())));
-}
-
 /// The New Brush Preset dialog's boxes (#4490): a preset saved without Capture Brush Size or
 /// Include Tool Settings leaves the tool's size, mode, opacity, flow and pressure buttons as they
 /// are when picked; one saved with Include Color brings its colour back as the foreground. A preset
