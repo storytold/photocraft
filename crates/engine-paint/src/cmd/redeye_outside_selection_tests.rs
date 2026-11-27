@@ -62,7 +62,7 @@ fn a_press_outside_the_selection_changes_nothing_and_adds_no_state() {
 #[test]
 fn an_outside_press_is_silent_at_every_depth() {
     for depth in [8, 16, 32] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 64, "height": 64, "mode": "rgb", "depth": depth})).unwrap();
         s.execute("edit.fill", json!({"color": "#d22828"})).unwrap();
         s.execute("select.rect", json!({"x": 40, "y": 40, "width": 10, "height": 10})).unwrap();
