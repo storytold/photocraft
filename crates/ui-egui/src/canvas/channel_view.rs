@@ -16,6 +16,7 @@ use egui::Color32;
 use photocraft_color::PixelFormat;
 use photocraft_doc::{AlphaChannel, ColorMode, Document};
 use photocraft_engine::channel_cmds::{ChannelView, color_count};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::mask_view_cmds::MaskViewMode;
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba, to_rgba};
@@ -81,7 +82,7 @@ pub struct Screen {
 impl Screen {
     /// How the canvas shows `doc` on `display` (`None`: the main window's).
     pub fn of(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> Screen {
-        let color = &app.session.color;
+        let color = app.session.color();
         let display = display.or(color.main_display);
         let Ok(d) = color.canvas_display_for(doc, display) else { return Screen::default() };
         let proof = color.proof_ref(doc.id).is_some_and(|p| p.enabled);
@@ -91,7 +92,7 @@ impl Screen {
 
     /// A key that changes with [`Screen::of`].
     pub fn key(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> u64 {
-        let color = &app.session.color;
+        let color = app.session.color();
         color.display_signature_for(doc, display.or(color.main_display))
     }
 
@@ -471,7 +472,7 @@ fn render_with_source(
 
 /// `r` of a one-channel surface sampled every `factor` px, mapped to colours row by row (in
 /// parallel off the web).
-fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + Sync) -> Vec<Color32> {
+pub(crate) fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + Sync) -> Vec<Color32> {
     let (w, h) = (r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize);
     let mut px = vec![Color32::TRANSPARENT; w * h];
     let row = |y: usize, out: &mut [Color32]| {

@@ -11,6 +11,7 @@ use craft::host::{PickRequest, Picked};
 use craft::ui::dialog::{PromptAnswer, PromptChoice};
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::words::CommonWords;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -36,7 +37,7 @@ struct Asked {
 impl Asked {
     fn now(app: &PhotocraftApp) -> Self {
         let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
-        Asked { revision: app.session.actions.list.revision(), gate, automated: app.automation_input || gate.is_some() }
+        Asked { revision: app.session.actions().list.revision(), gate, automated: app.automation_input || gate.is_some() }
     }
 
     /// The asking authorization and the current one both allow `command` with `params`.
@@ -73,7 +74,7 @@ pub(crate) fn idle(app: &PhotocraftApp, command: &str) -> Result<(), String> {
     let paused = &app.paused_playbacks.paused;
     let editor = paused.values().any(|p| p.menu_editor.is_some());
     let spelling = app.ui.type_panels.spell.as_ref().and_then(|spell| spell.resume).is_some_and(|token| paused.contains_key(&token));
-    if app.session.actions.recording.is_some() || app.session.actions.playing > 0 || super::playback::pending(app) || editor || spelling {
+    if app.session.recording.target.is_some() || app.session.recording.playing > 0 || super::playback::pending(app) || editor || spelling {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }
     Ok(())
@@ -110,7 +111,7 @@ pub(super) fn replace(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     app.ask_file(request, move |app, picked| {
         idle(app, REPLACE)?;
-        if app.session.actions.list.revision() != asked.revision {
+        if app.session.actions().list.revision() != asked.revision {
             return Err(tl!("The actions changed. Request Replace Actions again.").into());
         }
         let (name, bytes, path) = match picked {
@@ -124,6 +125,7 @@ pub(super) fn replace(app: &mut PhotocraftApp) -> Result<Value, String> {
                 let (name, bytes) = files.into_iter().next().ok_or(crate::file_dialog::CANCELLED)?;
                 (name, bytes, None)
             }
+            Picked::Saved { .. } => return Err(crate::file_dialog::UNEXPECTED.into()),
             Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
             Picked::Unavailable(why) | Picked::Failed(why) => return Err(why),
         };
@@ -167,7 +169,7 @@ pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut
 fn confirm(app: &mut PhotocraftApp, held: Held, append: bool) -> Result<Value, String> {
     let command = command(&held.prompt);
     idle(app, command)?;
-    if app.session.actions.list.revision() != held.asked.revision {
+    if app.session.actions().list.revision() != held.asked.revision {
         return Err(tl!("The Actions library changed. Choose the command again.").into());
     }
     let params = match (&held.prompt, held.data) {

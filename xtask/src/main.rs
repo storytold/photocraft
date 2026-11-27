@@ -333,6 +333,8 @@ struct CiOptions {
     selection: Selection,
     /// Workspace packages left out of the test build and the doctests ($PHOTOCRAFT_CI_EXCLUDE).
     exclude: Vec<String>,
+    /// Build the real-file corpus tests in ($PHOTOCRAFT_CORPUS_TESTS=1, the gate): see CORPUS_FEATURES.
+    corpus: bool,
 }
 
 /// The archives `ci archive` writes.
@@ -405,8 +407,22 @@ fn gate_args(exclude: &[String]) -> Vec<String> {
 }
 
 /// The test build every test step shares: the gate's packages and features, TEST_TARGETS.
-fn test_build_args(exclude: &[String]) -> Vec<String> {
+/// Packages whose real-file corpus tests (`feature = "corpus"`) the gate builds in with
+/// PHOTOCRAFT_CORPUS_TESTS=1. Those tests fail when the corpus is missing, so the gate's shards
+/// fetch it first (scripts/ci-test-shard.sh); a local `ci tests` leaves them out.
+const CORPUS_FEATURES: [&str; 2] = ["photocraft-io/corpus", "photocraft-engine/corpus"];
+
+fn test_build_args(exclude: &[String], corpus: bool) -> Vec<String> {
     let mut args = gate_args(exclude);
+    if corpus {
+        // `--features pkg/feature` names a package `--exclude` removed from the build: leave it out.
+        let extra: Vec<&str> = CORPUS_FEATURES.iter().copied().filter(|f| !exclude.iter().any(|e| f.split('/').next() == Some(e.as_str()))).collect();
+        if let Some(i) = args.iter().position(|a| a == "--features")
+            && !extra.is_empty()
+        {
+            args[i + 1] = format!("{},{}", args[i + 1], extra.join(","));
+        }
+    }
     args.extend(TEST_TARGETS[1..].iter().map(|a| a.to_string()));
     args
 }
@@ -462,7 +478,7 @@ fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>, shard: Optio
             path(root()),
         ]);
     } else {
-        args.extend(test_build_args(&o.exclude));
+        args.extend(test_build_args(&o.exclude, o.corpus));
     }
     if let Some(partition) = &o.partition {
         args.extend(["--partition".to_string(), partition.clone()]);
@@ -504,7 +520,7 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
             c.args(["test", "-p", "photocraft-engine", "--locked", "--features", "photocraft-io/heif", "--test", "panic_hunt", "--", "--ignored"]);
         } else {
             eprintln!("note: cargo-nextest is not installed, running cargo test (cargo install cargo-nextest --locked)");
-            c.arg("test").args(test_build_args(&o.exclude));
+            c.arg("test").args(test_build_args(&o.exclude, o.corpus));
         }
     } else {
         let gpu = if o.selection == Selection::All { None } else { Some(read_gpu_filter()?) };
@@ -533,14 +549,14 @@ fn build_tests(o: &CiOptions) -> Result<(), String> {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{}: {e}", plan.display())),
                 _ => {}
             }
-            c.args(["nextest", "archive", "--profile", "ci"]).args(test_build_args(&o.exclude)).arg("--archive-file").arg(file);
+            c.args(["nextest", "archive", "--profile", "ci"]).args(test_build_args(&o.exclude, o.corpus)).arg("--archive-file").arg(file);
             if recording {
                 c.args(["--cargo-message-format", "json-render-diagnostics"]);
             }
         }
         Some(Archive::Shards { dir, name, shards, gpu_shard }) => return build_shard_archives(o, dir, name, *shards, *gpu_shard),
         None => {
-            c.args(["test", "--no-run"]).args(test_build_args(&o.exclude));
+            c.args(["test", "--no-run"]).args(test_build_args(&o.exclude, o.corpus));
             if recording {
                 c.args(["--message-format", "json-render-diagnostics"]);
             }
@@ -553,7 +569,7 @@ fn build_tests(o: &CiOptions) -> Result<(), String> {
 /// `cargo nextest list --profile ci --message-format json` of the test build, with `args`.
 fn nextest_list(o: &CiOptions, args: &[&str], record: bool) -> Result<serde_json::Value, String> {
     let mut c = cargo();
-    c.args(["nextest", "list", "--profile", "ci", "--message-format", "json"]).args(test_build_args(&o.exclude)).args(args);
+    c.args(["nextest", "list", "--profile", "ci", "--message-format", "json"]).args(test_build_args(&o.exclude, o.corpus)).args(args);
     let record = record.then(cache_units::file).flatten();
     if record.is_some() {
         c.args(["--cargo-message-format", "json-render-diagnostics"]);
@@ -605,7 +621,7 @@ fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gp
         std::fs::create_dir_all(dir.join((k + 1).to_string())).map_err(|e| format!("{}: {e}", dir.display()))?;
         let mut c = cargo();
         c.args(["nextest", "archive", "--profile", "ci"])
-            .args(test_build_args(&o.exclude))
+            .args(test_build_args(&o.exclude, o.corpus))
             .arg("-E")
             .arg(shard.archive_filter())
             .arg("--archive-file")
@@ -659,7 +675,16 @@ fn ci_exclude() -> Vec<String> {
 /// The steps `cargo xtask ci <args>` runs, and how: no argument runs every step; a part (`lint`,
 /// `build`, `tests`) runs the steps of one gate job; a step's name runs that step.
 fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOptions), String> {
-    let mut options = CiOptions { build_only: false, partition: None, archive: None, from: None, shard: None, selection: Selection::All, exclude };
+    let mut options = CiOptions {
+        build_only: false,
+        partition: None,
+        archive: None,
+        from: None,
+        shard: None,
+        selection: Selection::All,
+        exclude,
+        corpus: std::env::var_os("PHOTOCRAFT_CORPUS_TESTS").is_some_and(|v| v == "1"),
+    };
     let mut gpu_shard = false;
     let mut what = None;
     let mut it = args.iter();
@@ -819,6 +844,7 @@ mod ci_tests {
             partition: Some("hash:2/3".into()),
             selection: Selection::NoGpu,
             exclude: vec!["photocraft-web".into()],
+            corpus: false,
         };
         let build = "--workspace --locked --features heif --exclude photocraft-web --lib --bins --tests";
         let args = nextest_args(&options, false, Some("package(g)"), None).join(" ");
@@ -830,7 +856,14 @@ mod ci_tests {
         // The whole run keeps nextest's default: a panic hunt that matches nothing fails.
         let here = CiOptions { partition: None, selection: Selection::All, ..options };
         assert!(!nextest_args(&here, true, None, None).join(" ").contains("--no-tests"));
-        assert_eq!(test_build_args(&here.exclude).join(" "), build);
+        assert_eq!(test_build_args(&here.exclude, false).join(" "), build);
+        assert_eq!(
+            test_build_args(&here.exclude, true).join(" "),
+            "--workspace --locked --features heif,photocraft-io/corpus,photocraft-engine/corpus --exclude photocraft-web --lib --bins --tests"
+        );
+        // A package the build leaves out cannot get a feature.
+        let args = test_build_args(&["photocraft-io".to_string()], true).join(" ");
+        assert!(args.contains("--features heif,photocraft-engine/corpus ") && !args.contains("photocraft-io/corpus"), "{args}");
     }
 
     #[test]

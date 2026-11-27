@@ -759,7 +759,7 @@ fn subset_remove_uses_the_existing_layer_without_losing_the_saved_new_layer_opti
     assert_eq!(app.session.active().unwrap().doc.walk().len(), layers);
     assert!(app.ui.tool_options.remove_new_layer);
     app.run("channel.target", json!({"channel":"composite"})).unwrap();
-    assert_eq!(remove_params(&app.ui.tool_options, true)["newLayer"], json!(true));
+    assert_eq!(remove_params(&app.ui.tool_options, true, false)["newLayer"], json!(true));
 }
 
 #[test]

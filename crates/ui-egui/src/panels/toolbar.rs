@@ -1,7 +1,7 @@
-use super::{PhotocraftApp, Tool, json, vec2};
+use super::{PhotocraftApp, Tool, json};
 use craft::behavior::overlay::Side;
 use craft::color_ui::ui::{PairWell, SwatchPair, Well};
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
+use craft::ui::contract::{Bind, Gap, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::rails::{
@@ -17,6 +17,9 @@ use super::tool_commands;
 #[cfg(test)]
 #[path = "toolbar_docking_tests.rs"]
 mod toolbar_docking_tests;
+#[cfg(test)]
+#[path = "toolbar_flyout_mark_tests.rs"]
+mod toolbar_flyout_mark_tests;
 #[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
@@ -48,6 +51,7 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
         &[Tool::Gradient, Tool::PaintBucket],
         &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
+        &[Tool::AdjustmentBrush],
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
     &[
@@ -180,17 +184,37 @@ fn rail<'a>(
     if editing { rail.editing() } else { rail }
 }
 
-/// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons.
+/// The footer's view: the app it reads, which its version stands for, and the rail's columns, which lay its buttons
+/// out side by side or stacked.
+#[derive(MemoProps)]
+struct FooterProps<'a> {
+    version: u64,
+    columns: usize,
+    #[memo_props(covered_by = "version", reason = "the footer's version holds everything the footer shows of the app")]
+    app: &'a mut PhotocraftApp,
+}
+
+/// The rail's footer, a memoized view: it replays while [`region_versions::toolbar_footer`](super::region_versions::toolbar_footer)
+/// holds and no input reaches it. The rail replays its tool buttons but calls its footer every pass, and running the
+/// chips and the two buttons was more than half of the toolbar's time in a frame whose pointer only moved over the
+/// canvas (#15493).
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
-    let column = ui.available_width();
-    color_chips(app, ui, column);
+    let version = super::region_versions::toolbar_footer(app);
+    let props = FooterProps { version, columns: rail.columns, app };
+    let _ =
+        MemoView::new("photocraft.toolbar_footer", props, |props: &mut FooterProps<'_>, ui: &mut egui::Ui| footer_now(props.app, ui, props.columns)).show(ui);
+}
+
+/// The footer's content: the colour chips, then the Quick Mask and Screen Mode buttons.
+fn footer_now(app: &mut PhotocraftApp, ui: &mut egui::Ui, columns: usize) {
+    color_chips(app, ui);
     let modes = |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
         quick_mask_button(app, ui);
         ScreenModeButton::new(app.ui.view.screen_mode).show(ui);
     };
     // The two buttons sit centred in the rail's columns, side by side in two columns.
     Row::new().fill_width().align(RowAlign::Center).gap(Gap::Tight).show(ui, |ui, _| {
-        if rail.columns > 1 {
+        if columns > 1 {
             modes(ui, app);
         } else {
             Stack::new().gap(Gap::Tight).show(ui, |ui, _| modes(ui, app));
@@ -368,10 +392,9 @@ fn chip_pair<'a>(app: &PhotocraftApp, active: &'a mut Well) -> SwatchPair<'a> {
 }
 
 /// The colour chips: a click on a chip opens the Color Picker for that colour (Photoshop).
-pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, column: f32) {
+pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut active = Well::Primary;
-    let layout = egui::Layout::top_down(egui::Align::Center);
-    let out = ui.allocate_ui_with_layout(vec2(column, 0.0), layout, |ui| chip_pair(app, &mut active).show(ui)).inner;
+    let Some(out) = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| chip_pair(app, &mut active).show(ui)).inner else { return };
     match out.clicked {
         Some(Well::Secondary) => {
             crate::color_picker_ui::open(app, "background");

@@ -23,7 +23,7 @@ use crate::perf;
 
 pub const OUT: &str = "docs/scorecard.md";
 const CORPUS_RS: &str = "crates/io/tests/it/corpus.rs";
-const PREFS_RS: &str = "crates/engine/src/prefs.rs";
+const PREFS_RS: &str = "crates/engine-core/src/prefs.rs";
 
 // ---- checklists ------------------------------------------------------------------------------
 
@@ -107,6 +107,7 @@ fn load_checklists(root: &Path) -> Result<Vec<Checklist>, String> {
 #[derive(Debug, Default, PartialEq)]
 pub struct Corpus {
     pub label: String,
+    /// Directory under `corpus/`, as the corpus tests and `corpus_pins` name it.
     pub dir: String,
     pub files: Option<u32>,
     pub pass_floor: Option<u32>,
@@ -376,7 +377,7 @@ fn audit_sources(root: &Path) -> Vec<(PathBuf, String)> {
     walk(&root.join("apps"), &mut files);
     files.sort();
     let model = root.join(PREFS_RS);
-    let prefs_dir = root.join("crates/engine/src/prefs");
+    let prefs_dir = root.join("crates/engine-core/src/prefs");
     files
         .into_iter()
         .filter(|p| *p != model && !p.starts_with(&prefs_dir))
@@ -488,7 +489,7 @@ pub struct Inputs {
 /// the number its doc comment in `corpus.rs` gives; other corpora keep the doc comment's count.
 fn pinned_file_counts(corpora: &mut [Corpus], root: &Path) -> Result<(), String> {
     for corpus in corpora {
-        let Some(pinned) = crate::corpus_pins::ALL.iter().find(|p| corpus.dir == format!("corpus/{}", p.dest)) else { continue };
+        let Some(pinned) = crate::corpus_pins::ALL.iter().find(|p| corpus.dir == p.dest) else { continue };
         let manifest = std::fs::read_to_string(root.join(pinned.manifest)).map_err(|e| format!("read {}: {e}", pinned.manifest))?;
         corpus.files = Some(
             u32::try_from(manifest.lines().filter(|line| !line.trim().is_empty()).count())
@@ -635,7 +636,7 @@ code doesn't meet yet: they are reported, and only their regressions fail.\n\n",
                 s.push_str("Corpus floors (`crates/io/tests/it/corpus.rs`): the enforced minimums; the corpus tests (cargo feature `corpus`, `cargo xtask test-corpus`, always run in CI) fail below them.\n\n| Corpus | Directory | Files | Oracle pass floor | Round-trip floor |\n|---|---|---:|---:|---:|\n");
                 for k in &inp.corpora {
                     let n = |v: Option<u32>| v.map_or_else(|| "–".into(), |x| x.to_string());
-                    s.push_str(&format!("| {} | `{}` | {} | {} | {} |\n", k.label, k.dir, n(k.files), n(k.pass_floor), n(k.roundtrip_floor)));
+                    s.push_str(&format!("| {} | `corpus/{}` | {} | {} | {} |\n", k.label, k.dir, n(k.files), n(k.pass_floor), n(k.roundtrip_floor)));
                 }
                 s.push('\n');
             }
@@ -813,24 +814,24 @@ pub struct Preferences {
     fn corpus_floors_parse() {
         let src = r#"
 /// Hand-picked mix in `corpus/psd` (170 files: 121 vs the merged image + 12 vs the thumbnail).
-const MIXED: Source = Source { label: "io corpus", env: "PHOTOCRAFT_CORPUS", default_dir: "corpus/psd", pass_floor: 133, roundtrip_floor: 169 };
+const MIXED: Source = Source { label: "io corpus", env: "PHOTOCRAFT_CORPUS", default_dir: "psd", pass_floor: 133, roundtrip_floor: 169 };
 
 /// The full psd-tools test set (309 files at the pinned commit):
 /// 202 vs the merged image.
 const PSD_TOOLS: Source =
-    Source { label: "psd-tools corpus", env: "X", default_dir: "corpus/psd-tools", pass_floor: 212, roundtrip_floor: 307, extra: 5 };
+    Source { label: "psd-tools corpus", env: "X", default_dir: "psd-tools", pass_floor: 212, roundtrip_floor: 307, extra: 5 };
 
 /// Ours (256 files; https://github.com/storytold/photocraft-corpus), grouped by feature.
-const PHOTOSHOP: Source = Source { label: "photoshop oracles", dir: "corpus/photoshop", group_depth: 2, pass_floor: 74, roundtrip_floor: 256 };
+const PHOTOSHOP: Source = Source { label: "photoshop oracles", dir: "photoshop", group_depth: 2, pass_floor: 74, roundtrip_floor: 256 };
 "#;
         let c = parse_corpus(src);
         assert_eq!(c.len(), 3);
         assert_eq!(
             (c[0].label.as_str(), c[0].dir.as_str(), c[0].files, c[0].pass_floor, c[0].roundtrip_floor),
-            ("io corpus", "corpus/psd", Some(170), Some(133), Some(169))
+            ("io corpus", "psd", Some(170), Some(133), Some(169))
         );
         assert_eq!((c[1].files, c[1].pass_floor, c[1].roundtrip_floor), (Some(309), Some(212), Some(307)));
-        assert_eq!((c[2].dir.as_str(), c[2].files, c[2].pass_floor, c[2].roundtrip_floor), ("corpus/photoshop", Some(256), Some(74), Some(256)));
+        assert_eq!((c[2].dir.as_str(), c[2].files, c[2].pass_floor, c[2].roundtrip_floor), ("photoshop", Some(256), Some(74), Some(256)));
         assert!(parse_corpus("const X: u32 = 1;").is_empty());
     }
 
@@ -852,8 +853,8 @@ cc  c.psd
         )
         .unwrap();
         let mut corpora = vec![
-            Corpus { label: "pinned".into(), dir: format!("corpus/{}", pin.dest), files: Some(999), ..Default::default() },
-            Corpus { label: "other".into(), dir: "corpus/not-pinned".into(), files: Some(7), ..Default::default() },
+            Corpus { label: "pinned".into(), dir: pin.dest.to_string(), files: Some(999), ..Default::default() },
+            Corpus { label: "other".into(), dir: "not-pinned".into(), files: Some(7), ..Default::default() },
         ];
         let r = pinned_file_counts(&mut corpora, &root);
         let _ = std::fs::remove_dir_all(&root);
@@ -868,7 +869,7 @@ cc  c.psd
         let inp = gather(&root).unwrap();
         let rendered = render(&inp);
         for corpus in &inp.corpora {
-            let pinned = crate::corpus_pins::ALL.iter().find(|p| corpus.dir == format!("corpus/{}", p.dest)).unwrap();
+            let pinned = crate::corpus_pins::ALL.iter().find(|p| corpus.dir == p.dest).unwrap();
             let manifest = std::fs::read_to_string(root.join(pinned.manifest)).unwrap();
             let files = manifest.lines().filter(|line| !line.trim().is_empty()).count();
             assert!(
@@ -882,7 +883,7 @@ cc  c.psd
                 corpus.label,
                 pinned.manifest
             );
-            assert!(rendered.contains(&format!("| {} | `{}` | {files} |", corpus.label, corpus.dir)));
+            assert!(rendered.contains(&format!("| {} | `corpus/{}` | {files} |", corpus.label, corpus.dir)));
         }
     }
 
