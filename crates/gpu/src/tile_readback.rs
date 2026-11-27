@@ -30,6 +30,7 @@ const FAILED: u8 = 2;
 struct Flight {
     buffer: wgpu::Buffer,
     keys: Vec<(i32, i32)>,
+    tag: u64,
     half: bool,
     state: Arc<AtomicU8>,
 }
@@ -39,7 +40,7 @@ struct State {
     pool: Vec<wgpu::Buffer>,
     flights: VecDeque<Flight>,
     /// Tiles no texture holds (nothing was stamped there): zeros, no copy needed.
-    zeros: Vec<(i32, i32)>,
+    zeros: Vec<((i32, i32), u64)>,
     bytes: u64,
 }
 
@@ -70,10 +71,13 @@ impl MaskReadback {
     }
 
     /// Ask for the coverage tiles `keys` (`(x / 64, y / 64)`) of `layer`'s external mask as they
-    /// are after the stamps submitted so far. Takes the leading keys that fit one staging buffer
+    /// are after the stamps submitted so far (the copies go on the queue after them, so they see
+    /// every stamp submitted before this call and none submitted after it). `tag` comes back
+    /// with the tiles from [`poll`](Self::poll): the caller's note of when it asked (a stroke's
+    /// push epoch). Takes the leading keys that fit one staging buffer
     /// while fewer than [`MAX_IN_FLIGHT`] are out, and returns how many that is (the caller asks
     /// for the rest later). A tile with no texture behind it reads as zeros.
-    pub fn request(&self, comp: &Compositor, device: &wgpu::Device, queue: &wgpu::Queue, layer: LayerId, keys: &[(i32, i32)]) -> usize {
+    pub fn request(&self, comp: &Compositor, device: &wgpu::Device, queue: &wgpu::Queue, layer: LayerId, keys: &[(i32, i32)], tag: u64) -> usize {
         let mut state = self.state();
         if state.flights.len() >= MAX_IN_FLIGHT {
             return 0;
@@ -85,7 +89,7 @@ impl MaskReadback {
             let (x, y) = (key.0 * TILE, key.1 * TILE);
             match cells.iter().find(|(r, _)| r.x0 <= x && x + TILE <= r.x1 && r.y0 <= y && y + TILE <= r.y1) {
                 Some((r, t)) => copies.push((key, *t, (x - r.x0) as u32, (y - r.y0) as u32)),
-                None => state.zeros.push(key),
+                None => state.zeros.push((key, tag)),
             }
         }
         let Some(half) = copies.first().map(|(_, t, _, _)| t.format() == wgpu::TextureFormat::R16Float) else { return take };
@@ -115,17 +119,19 @@ impl MaskReadback {
         let flag = state_flag.clone();
         buffer.slice(0..size).map_async(wgpu::MapMode::Read, move |r| flag.store(if r.is_ok() { MAPPED } else { FAILED }, Ordering::Release));
         state.bytes += size;
-        state.flights.push_back(Flight { buffer, keys: copies.iter().map(|c| c.0).collect(), half, state: state_flag });
+        state.flights.push_back(Flight { buffer, keys: copies.iter().map(|c| c.0).collect(), tag, half, state: state_flag });
         take
     }
 
-    /// The tiles whose read-back finished, oldest request first, as `COV_TILE`² values. With
+    /// The tiles whose read-back finished, oldest request first, as `COV_TILE`² values with the
+    /// tag of their request. With
     /// `block`, waits for everything requested. A read-back the device failed is dropped (its
     /// tiles never arrive).
-    pub fn poll(&self, device: &wgpu::Device, block: bool) -> Vec<((i32, i32), Vec<f32>)> {
+    pub fn poll(&self, device: &wgpu::Device, block: bool) -> Vec<((i32, i32), Vec<f32>, u64)> {
         let _ = device.poll(if block { wgpu::PollType::Wait { submission_index: None, timeout: None } } else { wgpu::PollType::Poll });
         let mut state = self.state();
-        let mut out: Vec<((i32, i32), Vec<f32>)> = std::mem::take(&mut state.zeros).into_iter().map(|k| (k, vec![0.0; (TILE * TILE) as usize])).collect();
+        let mut out: Vec<((i32, i32), Vec<f32>, u64)> =
+            std::mem::take(&mut state.zeros).into_iter().map(|(k, tag)| (k, vec![0.0; (TILE * TILE) as usize], tag)).collect();
         while let Some(front) = state.flights.front() {
             let flag = front.state.load(Ordering::Acquire);
             if flag == PENDING {
@@ -145,7 +151,7 @@ impl MaskReadback {
                                 values.extend(row.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)));
                             }
                         }
-                        out.push((*key, values));
+                        out.push((*key, values, flight.tag));
                     }
                 }
                 flight.buffer.unmap();
