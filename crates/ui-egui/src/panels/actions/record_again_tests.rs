@@ -277,3 +277,22 @@ fn conditional_mode_change_target_dialog_answers_for_the_step() {
     assert_eq!((&step.params["to"], &step.params["method"]), (&json!("bitmap"), &json!("threshold")), "{}", step.params);
     assert_eq!(h.state().session.active().unwrap().doc.mode, photocraft_color::ColorMode::Bitmap);
 }
+
+/// #13678: Record Again of a Conditional Mode Change step to Bitmap opens the Bitmap dialog with the step's own options:
+/// the conditional dialog's rows take only `from` and `to`, and the step's `method` would otherwise give way to the
+/// Bitmap dialog's default.
+#[test]
+fn conditional_mode_change_target_dialog_opens_with_the_steps_options() {
+    let mut h = harness("file.automate.conditionalModeChange", json!({"from": "any", "to": "bitmap", "method": "threshold"}));
+    let parent = open(&mut h);
+    confirm(&mut h, parent).unwrap();
+    let child = h.state().framework.dialogs.stack().top().expect("the Bitmap dialog opened");
+    assert_ne!(child, parent);
+    let method = |h: &Harness<'static, Box<PhotocraftApp>>| {
+        h.state().framework.dialogs.open_dialogs().into_iter().find(|d| d.id == child).and_then(|d| d.fields?.get("method").cloned())
+    };
+    assert_eq!(method(&h), Some(json!("threshold")), "the step's method, not the dialog's default");
+    confirm(&mut h, child).unwrap();
+    let step = &h.state().session.actions().list.action(0).unwrap().steps[0];
+    assert_eq!(step.params["method"], json!("threshold"), "{}", step.params);
+}

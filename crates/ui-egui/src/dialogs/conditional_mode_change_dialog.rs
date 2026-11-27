@@ -108,6 +108,15 @@ fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::
 /// values its OK passes on.
 const PENDING: &str = "conditionalModeChange";
 
+/// The captured value of this dialog as a recorded step's editor: `{"recorded": params}`, the step's params.
+const RECORDED: &str = "recorded";
+
+/// This dialog opened for a recorded step keeps the step's params: its rows take only `from` and `to`, and the target
+/// mode's dialog it opens takes the step's options for that mode (`method`, `resolution`, …).
+pub(crate) fn keep_recorded(app: &mut PhotocraftApp, params: &Value) {
+    app.framework.captured.insert(COMMAND.to_owned(), json!({RECORDED: params}));
+}
+
 /// The targets whose own dialog (as from Image › Mode) asks for the options first (#13678).
 pub(crate) fn target_dialog(to: &str) -> Option<&'static str> {
     match to {
@@ -148,6 +157,11 @@ fn open_target_dialog(app: &mut PhotocraftApp, result: &ParamResult) -> bool {
         return false;
     }
     let Ok(id) = crate::filter_dialog::open(app, command) else { return false };
+    // A recorded step's options apply while its target is still the one chosen.
+    let recorded = crate::dialogs::params::captured(app, COMMAND).get(RECORDED).cloned();
+    if let Some(recorded) = recorded.filter(|p| p.get("to").and_then(Value::as_str).map(norm).as_deref() == Some(to.as_str())) {
+        crate::actions::fill_editor(app, id, &recorded);
+    }
     let from = if from.is_null() { json!("any") } else { from };
     app.framework.captured.insert(command.to_owned(), json!({PENDING: {"from": from, "to": to}}));
     // A playing action continues after this dialog's OK.

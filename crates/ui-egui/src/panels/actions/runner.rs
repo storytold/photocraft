@@ -213,13 +213,16 @@ pub(crate) fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &V
     if !crate::sizing::is_sizing(id) {
         fill_editor(app, dialog, &values);
     }
+    if id == crate::dialogs::conditional_mode_change_dialog::COMMAND {
+        crate::dialogs::conditional_mode_change_dialog::keep_recorded(app, &values);
+    }
     Ok(dialog)
 }
 
 /// Put a recorded step's values into the open editor `dialog`, field by field, as `ui.dialog.set`
 /// does. A field the editor refuses is not one of its values and stays out, as the editor's own
 /// fields are the only ones its confirmation reads.
-fn fill_editor(app: &mut PhotocraftApp, dialog: DialogId, values: &Value) {
+pub(crate) fn fill_editor(app: &mut PhotocraftApp, dialog: DialogId, values: &Value) {
     let Some(object) = values.as_object() else { return };
     let ctx = app.ctx().clone();
     for (key, value) in object {
