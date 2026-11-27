@@ -1,7 +1,7 @@
-use super::{PhotocraftApp, Tool, json, vec2};
+use super::{PhotocraftApp, Tool, json};
 use craft::behavior::overlay::Side;
 use craft::color_ui::ui::{PairWell, SwatchPair, Well};
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Gap, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::rails::{
@@ -15,8 +15,18 @@ use photocraft_engine::prefs::ToolbarCustomization;
 use super::tool_commands;
 
 #[cfg(test)]
+#[path = "toolbar_docking_tests.rs"]
+mod toolbar_docking_tests;
+#[cfg(test)]
+#[path = "toolbar_flyout_mark_tests.rs"]
+mod toolbar_flyout_mark_tests;
+#[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
+
+#[cfg(test)]
+#[path = "toolbar_measure_tests.rs"]
+mod toolbar_measure_tests;
 
 // ----------------------------------------------------------------------------- toolbar
 
@@ -41,6 +51,7 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
         &[Tool::Gradient, Tool::PaintBucket],
         &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
+        &[Tool::AdjustmentBrush],
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
     &[
@@ -140,7 +151,7 @@ fn last_used(slots: &[ToolSlot<Tool>], group_tools: &[Tool]) -> LastUsed<Tool> {
 /// The cells of the toolbar's grid: its visible slots and the Edit Toolbar button. The dock column's width in steps goes
 /// up to this many content columns.
 pub(crate) fn cells(app: &PhotocraftApp) -> usize {
-    visible_slots(&tool_commands::slots(&app.session.prefs().toolbar), &[]).len() + 1
+    visible_slots(&app.toolbar_slots.get(&app.session.prefs), &[]).len() + 1
 }
 
 /// The Edit in Quick Mask Mode command, which the rail's footer shows as a rail button.
@@ -154,24 +165,56 @@ fn quick_mask_button(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let _ = FlyoutButton::new(&tools, &0).id_salt("quick-mask").selected(on).show(ui);
 }
 
-/// The rail over `slots`, its flyouts and drawer opening on `opens`, the side of the canvas.
-fn rail<'a>(slots: &'a [ToolSlot<Tool>], current: &'a Tool, remembered: &'a LastUsed<Tool>, opens: Side, editing: bool) -> ToolRail<'a, Tool> {
+/// The side of the toolbar its tool flyouts, "…" flyout and Edit Toolbar drawer open on: the end (the right in a
+/// left-to-right layout) wherever the toolbar is docked or floats, as in the reference application, which opens them
+/// to the right even when the toolbar sits on the right between the dock's columns. The overlay flips them to the
+/// other side only when they would leave the window.
+const FLYOUTS_OPEN: Side = Side::End;
+
+/// The rail over `slots`, its flyouts and drawer opening on `opens`.
+fn rail<'a>(
+    slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
+    current: &'a Tool,
+    remembered: &'a Tracked<LastUsed<Tool>>,
+    opens: Side,
+    editing: bool,
+) -> ToolRail<'a, Tool> {
     let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens).edit_toolbar(tl!("Edit Toolbar…").to_string());
     // The drawer's open flag is the one source of "editing".
     if editing { rail.editing() } else { rail }
 }
 
-/// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons.
+/// The footer's view: the app it reads, which its version stands for, and the rail's columns, which lay its buttons
+/// out side by side or stacked.
+#[derive(MemoProps)]
+struct FooterProps<'a> {
+    version: u64,
+    columns: usize,
+    #[memo_props(covered_by = "version", reason = "the footer's version holds everything the footer shows of the app")]
+    app: &'a mut PhotocraftApp,
+}
+
+/// The rail's footer, a memoized view: it replays while [`region_versions::toolbar_footer`](super::region_versions::toolbar_footer)
+/// holds and no input reaches it. The rail replays its tool buttons but calls its footer every pass, and running the
+/// chips and the two buttons was more than half of the toolbar's time in a frame whose pointer only moved over the
+/// canvas (#15493).
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
-    let column = ui.available_width();
-    color_chips(app, ui, column);
+    let version = super::region_versions::toolbar_footer(app);
+    let props = FooterProps { version, columns: rail.columns, app };
+    let _ =
+        MemoView::new("photocraft.toolbar_footer", props, |props: &mut FooterProps<'_>, ui: &mut egui::Ui| footer_now(props.app, ui, props.columns)).show(ui);
+}
+
+/// The footer's content: the colour chips, then the Quick Mask and Screen Mode buttons.
+fn footer_now(app: &mut PhotocraftApp, ui: &mut egui::Ui, columns: usize) {
+    color_chips(app, ui);
     let modes = |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
         quick_mask_button(app, ui);
         ScreenModeButton::new(app.ui.view.screen_mode).show(ui);
     };
     // The two buttons sit centred in the rail's columns, side by side in two columns.
     Row::new().fill_width().align(RowAlign::Center).gap(Gap::Tight).show(ui, |ui, _| {
-        if rail.columns > 1 {
+        if columns > 1 {
             modes(ui, app);
         } else {
             Stack::new().gap(Gap::Tight).show(ui, |ui, _| modes(ui, app));
@@ -179,12 +222,68 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
     });
 }
 
+/// What the rail's measured height depends on: the width and room it is laid out in, the slots (the same `Arc` while
+/// the preferences are the same), where its flyouts open, the Edit Toolbar drawer, and the scale, direction and resolved
+/// tokens (theme, density, text size) it is drawn with. The current and remembered tools change which icon a button
+/// shows, not its size, and the footer's buttons keep their sizes whatever they show.
+#[derive(Clone)]
+struct MeasureKey {
+    width: u32,
+    room: [u32; 2],
+    slots: super::tool_commands::RailSlots,
+    opens: Side,
+    editing: bool,
+    pixels_per_point: u32,
+    rtl: bool,
+    tokens: std::sync::Arc<craft::ui::style::UiTokens>,
+}
+
+impl PartialEq for MeasureKey {
+    fn eq(&self, other: &Self) -> bool {
+        (self.width, self.room, self.opens, self.editing, self.pixels_per_point, self.rtl)
+            == (other.width, other.room, other.opens, other.editing, other.pixels_per_point, other.rtl)
+            && std::sync::Arc::ptr_eq(&self.slots, &other.slots)
+            && std::sync::Arc::ptr_eq(&self.tokens, &other.tokens)
+    }
+}
+
 /// The height of the toolbar's rail laid out `width` wide: as many tool columns as `width` holds, with the footer.
+///
+/// The dock asks for it on every frame before it shows the rail, and a measuring run of the rail (every tool button
+/// and the footer, each resolving its command) was the largest part of the UI pass (#15493). The last height is kept
+/// with what it depends on ([`MeasureKey`]) and measured again only when one of them changes.
 pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
-    let remembered = last_used(&slots, &app.ui.group_tools);
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<(MeasureKey, f32)>> = const { std::cell::RefCell::new(None) };
+    }
+    let slots = app.toolbar_slots.get(&app.session.prefs);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
+    let env = craft::ui::runtime::env::Env::of(ui);
+    let room = ui.available_size();
+    let key = MeasureKey {
+        width: width.to_bits(),
+        room: [room.x.to_bits(), room.y.to_bits()],
+        slots: std::sync::Arc::clone(&slots),
+        opens,
+        editing,
+        pixels_per_point: ui.ctx().pixels_per_point().to_bits(),
+        rtl: env.direction.is_rtl(),
+        tokens: std::sync::Arc::clone(&env.tokens),
+    };
+    if let Some(height) = LAST.with(|last| last.borrow().as_ref().filter(|(kept, _)| *kept == key).map(|(_, height)| *height)) {
+        return height;
+    }
+    let height = measure_now(app, ui, width);
+    LAST.with(|last| *last.borrow_mut() = Some((key, height)));
+    height
+}
+
+/// [`measure`] without the kept height: a measuring run of the rail.
+fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
+    let slots = app.toolbar_slots.get(&app.session.prefs);
+    let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
 }
 
@@ -196,10 +295,10 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
 /// remembered tools are read again at the start of each pass, so a second pass applies only its own input.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
-    let remembered = last_used(&slots, &app.ui.group_tools);
+    let slots = app.toolbar_slots.get(&app.session.prefs);
+    let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
 
     if let Some(tool) = out.select {
@@ -217,7 +316,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         _ => {}
     }
     if let Some(next) = &out.last_used {
-        for slot in &slots {
+        for slot in slots.iter() {
             if let Some(tool) = next.get(slot.id)
                 && remembered.get(slot.id) != Some(tool)
             {
@@ -293,10 +392,9 @@ fn chip_pair<'a>(app: &PhotocraftApp, active: &'a mut Well) -> SwatchPair<'a> {
 }
 
 /// The colour chips: a click on a chip opens the Color Picker for that colour (Photoshop).
-pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, column: f32) {
+pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut active = Well::Primary;
-    let layout = egui::Layout::top_down(egui::Align::Center);
-    let out = ui.allocate_ui_with_layout(vec2(column, 0.0), layout, |ui| chip_pair(app, &mut active).show(ui)).inner;
+    let Some(out) = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| chip_pair(app, &mut active).show(ui)).inner else { return };
     match out.clicked {
         Some(Well::Secondary) => {
             crate::color_picker_ui::open(app, "background");

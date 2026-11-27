@@ -8,6 +8,7 @@
 //! [`note_alerts`].
 
 use craft::behavior::Selection;
+use photocraft_engine::color_cmds::ColorExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -48,8 +49,8 @@ mod count_group_name_tests;
 mod count_size_alert_tests;
 
 /// The registry ids of the two panels the menu items toggle.
-const MEASUREMENT_LOG: &str = "measurementLog";
-const NOTES: &str = "notes";
+pub(crate) const MEASUREMENT_LOG: &str = "measurementLog";
+pub(crate) const NOTES: &str = "notes";
 
 /// The Count tool options bar's number (#11764): with one group (or none), its markers; with two
 /// or more, the markers of the visible groups, then the current group's in brackets (0 while it
@@ -75,6 +76,9 @@ pub struct AnalysisUi {
     pub log_selected: Selection<u64>,
     /// Notes panel: the note shown (index).
     pub note_selected: Option<usize>,
+    /// A note was just made with a click: the panel's text field takes the keyboard when it next shows the note.
+    #[serde(skip)]
+    pub focus_note_text: bool,
     /// Note tool options: author of new notes.
     pub note_author: String,
     /// Note tool options: colour of new notes.
@@ -88,6 +92,7 @@ impl Default for AnalysisUi {
         Self {
             log_selected: Selection::default(),
             note_selected: None,
+            focus_note_text: false,
             note_author: String::new(),
             note_color: photocraft_engine::notes_cmds::DEFAULT_NOTE_COLOR,
             use_measurement_scale: false,
@@ -114,7 +119,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
             // A check item with no document too: an item's kind never changes (native menus).
             let kind = id.strip_prefix("view.proofSetup.").and_then(photocraft_engine::proof_sim::ProofKind::from_id)?;
             let Some(d) = app.session.active() else { return Some(false) };
-            let pv = app.session.color.proof(d.doc.id);
+            let pv = app.session.color().proof(d.doc.id);
             Some(pv.enabled && pv.setup.kind == kind)
         }
     }
@@ -172,9 +177,14 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             Ok(doc) => app.pick_file_bytes(move |app, name, bytes| {
                 app.refocus(doc)?;
                 let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
-                if r.is_ok() {
-                    let _ = crate::panel_docking::show_panel(app, NOTES, Some(true));
+                if let Ok(v) = &r {
+                    // The imported notes show on the canvas; the Notes panel keeps its state (#13918).
+                    app.ui.view.show.notes = true;
                     app.sync_views();
+                    // Notes whose icon landed off the canvas stay there; the alert says so (#13914).
+                    if v["outside"] == json!(true) {
+                        crate::dialogs::alerts::alert(app, tl!("Some notes are placed outside the canvas."));
+                    }
                 }
                 r
             }),
@@ -205,6 +215,7 @@ pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Val
     let params = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": a.note_color});
     let result = app.run("notes.add", params)?;
     app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
+    app.ui.analysis.focus_note_text = app.ui.analysis.note_selected.is_some();
     let _ = crate::panel_docking::show_panel(app, NOTES, Some(true));
     app.ui.view.show.notes = true;
     Ok(result)

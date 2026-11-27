@@ -84,6 +84,12 @@ pub fn grabcut_with(img: &RgbImage, trimap: &mut [u8], iters: usize, ctl: &Inter
     Ok(models)
 }
 
+/// Pass cap for [`object_select`]. Only the ring outside the rectangle seeds the background
+/// model, so on a backdrop lit brighter towards the subject each pass gives up just the next
+/// brightness band of it; a cap of 8 stopped half way and selected a straight-edged patch of
+/// backdrop (#6975). Cuts that settle earlier stop at `grabcut_with`'s change check.
+const OBJECT_SELECT_ITERS: usize = 30;
+
 /// Object Selection (rectangle mode): GrabCut initialised from `rect` (outside = background,
 /// inside = probable foreground). Runs on a working copy of about `work_px` pixels, then re-cuts
 /// the boundary at full resolution. `canvas` bounds the analysis.
@@ -124,7 +130,7 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
             }
         }
     }
-    let (fg, bg) = grabcut(&img, &mut trimap, 8)?;
+    let (fg, bg) = grabcut(&img, &mut trimap, OBJECT_SELECT_ITERS)?;
     let low: Vec<bool> = trimap.iter().map(|t| is_fg(*t)).collect();
     let low = super::clean_mask(&low, lw, lh, 0.1, 0.0);
     // Every enclosed hole, however small, fills only when it looks like the object, so background seen through it stays open.
@@ -135,6 +141,14 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
 /// Working-resolution budget (pixels) for [`object_at`]: small enough to run while the pointer
 /// hovers.
 pub const OBJECT_AT_WORK_PX: usize = 60_000;
+
+const OBJECT_ALPHA_THRESHOLD: f32 = 0.5;
+
+/// Whether the pixel at `(x, y)` in the selected sampler can seed Object Finder.
+/// Read at full resolution: a coarse pixel can hide a small transparent gap (#13070).
+pub fn can_seed_object(sampler: &dyn Sampler, canvas: Rect, x: i32, y: i32) -> bool {
+    canvas.contains(x, y) && sampler.rgba(Rect::from_xywh(x, y, 1, 1)).first().is_some_and(|pixel| pixel[3] >= OBJECT_ALPHA_THRESHOLD)
+}
 
 /// Object Selection's Object Finder (hover / click): the object under document point `(x, y)`.
 ///
@@ -155,7 +169,7 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
         return None;
     }
     let (px, py) = (x.floor() as i32, y.floor() as i32);
-    if !canvas.contains(px, py) {
+    if !can_seed_object(sampler, canvas, px, py) {
         return None;
     }
     let work_px = work_px.max(1024);
@@ -189,7 +203,7 @@ fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize)
     if w < 2 || h < 2 || rgba.len() < w * h {
         return None;
     }
-    let opaque: Vec<bool> = rgba.iter().take(w * h).map(|p| p[3] >= 0.5).collect();
+    let opaque: Vec<bool> = rgba.iter().take(w * h).map(|p| p[3] >= OBJECT_ALPHA_THRESHOLD).collect();
     let img = RgbImage::from_rgba(&rgba, w, h);
     // Lightly smoothed, so noise and texture don't stop the growth; edges survive.
     let lab: Vec<[f32; 3]> = box3(&box3(&img.px, w, h), w, h).iter().map(|c| super::slic::rgb_to_lab(*c)).collect();

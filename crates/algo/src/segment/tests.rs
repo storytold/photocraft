@@ -380,6 +380,71 @@ fn object_select_downsampled_with_band_refinement() {
     assert!(far_wrong < 300, "{far_wrong} pixels wrong away from the edge");
 }
 
+/// A standing figure on a grey studio backdrop whose light falls off towards the corners
+/// (0.61 in the centre, 0.55 at the edge midpoints, 0.49 in the corners). Laid out on a
+/// 2000 x 3000 reference frame and scaled to `w` x `h`. Returns (image, truth).
+fn backdrop_falloff_scene(w: usize, h: usize, noise: f32, seed: u64) -> (RgbImage, Vec<bool>) {
+    let mut rng = Rng::new(seed);
+    let mut truth = vec![false; w * h];
+    let (sx, sy) = (w as f32 / 2000.0, h as f32 / 3000.0);
+    let img = RgbImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (x as f32 / sx, y as f32 / sy);
+        let n = noise * rng.normal();
+        let e = |cx: f32, cy: f32, rx: f32, ry: f32| ((fx - cx) / rx).powi(2) + ((fy - cy) / ry).powi(2) <= 1.0;
+        let hair = e(1000.0, 760.0, 125.0, 150.0);
+        let face = e(1000.0, 820.0, 100.0, 130.0);
+        let neck = (960.0..1040.0).contains(&fx) && (930.0..1000.0).contains(&fy);
+        let half = 170.0 + (fy - 1000.0).max(0.0) * 0.1;
+        let torso = (1000.0..2100.0).contains(&fy) && (fx - 1000.0).abs() <= half;
+        let arm = (1000.0..1750.0).contains(&fy)
+            && ((760.0..820.0).contains(&(fx - (fy - 1000.0) * 0.02)) || (1180.0..1240.0).contains(&(fx + (fy - 1000.0) * 0.02)));
+        let leg = (2100.0..2750.0).contains(&fy) && ((900.0..970.0).contains(&fx) || (1030.0..1100.0).contains(&fx));
+        let tex = ((fx * 0.15).sin() * (fy * 0.11).cos()) * 0.04;
+        let c = if face || neck {
+            [0.86, 0.66, 0.56]
+        } else if hair {
+            [0.20, 0.14, 0.10]
+        } else if arm || leg {
+            [0.82, 0.62, 0.52]
+        } else if torso {
+            [0.10 + tex, 0.10 + tex, 0.12 + tex]
+        } else {
+            let (dx, dy) = ((fx - 1000.0) / 1000.0, (fy - 1500.0) / 1500.0);
+            let g = 0.55 + 0.06 * (1.0 - dx * dx - dy * dy);
+            [g, g, g * 0.99]
+        };
+        truth[y * w + x] = face || neck || hair || arm || leg || torso;
+        c.map(|v| (v + n).clamp(0.0, 1.0))
+    });
+    (img, truth)
+}
+
+/// Backdrop pixels Object Selection takes with a loose rectangle (the central 80 % of the frame).
+fn loose_rect_backdrop_px(w: usize, h: usize, work_px: usize) -> usize {
+    let (img, truth) = backdrop_falloff_scene(w, h, 0.003, 7);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let canvas = Rect::new(0, 0, w as i32, h as i32);
+    let rect = Rect::new((w / 10) as i32, (h / 10) as i32, (w * 9 / 10) as i32, (h * 9 / 10) as i32);
+    let reg = grabcut::object_select(&s, canvas, rect, work_px).unwrap();
+    (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| reg.at(x as i32, y as i32) >= 0.5 && !truth[y * w + x]).count()
+}
+
+#[test]
+fn object_select_loose_rect_on_a_backdrop_with_light_falloff_leaves_the_backdrop_out() {
+    // #6975: only the ring outside the rectangle seeds the background model, and it is darker
+    // than the lit backdrop beside the figure, so each pass gives up just the next brightness
+    // band. Stopping after 8 passes selected 21041 backdrop pixels here (the figure is 14209).
+    let backdrop = loose_rect_backdrop_px(286, 429, 1_000_000);
+    assert!(backdrop < 200, "{backdrop} backdrop pixels selected");
+}
+
+#[test]
+fn object_select_loose_rect_on_a_lit_backdrop_downsampled_leaves_the_backdrop_out() {
+    // The same at step 2 with the full-resolution band re-cut: 81534 backdrop pixels at 8 passes.
+    let backdrop = loose_rect_backdrop_px(572, 858, 160_000);
+    assert!(backdrop < 800, "{backdrop} backdrop pixels selected");
+}
+
 // ---------- Quick selection ----------
 
 /// Left: textured warm region; right: cool region; strong vertical edge at x = 60.
@@ -851,6 +916,25 @@ fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     assert!(grabcut::object_at(&s, canvas, -5.0, 10.0, 20_000).is_none());
     assert!(grabcut::object_at(&s, canvas, f32::NAN, 10.0, 20_000).is_none());
     assert!(grabcut::object_at(&s, canvas, 400.0, 10.0, 0).is_none());
+}
+
+#[test]
+fn object_at_samples_a_transparent_seed_before_the_coarse_pass() {
+    struct TransparentSeed;
+
+    impl Sampler for TransparentSeed {
+        fn rgba(&self, rect: Rect) -> Vec<[f32; 4]> {
+            assert_eq!(rect, Rect::from_xywh(242, 217, 1, 1));
+            vec![[0.0; 4]]
+        }
+
+        fn rgba_scaled(&self, _: Rect, _: usize) -> Vec<[f32; 4]> {
+            panic!("a transparent seed must skip the working-resolution pass");
+        }
+    }
+
+    let canvas = Rect::new(0, 0, 800, 600);
+    assert!(grabcut::object_at(&TransparentSeed, canvas, 242.7, 217.3, grabcut::OBJECT_AT_WORK_PX).is_none());
 }
 
 /// #6576: a 24 px object in a 4000×3000 document is found (a 1000×800 one still is).

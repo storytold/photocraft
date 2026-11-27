@@ -15,6 +15,7 @@
 //! going back to a state drawn a moment ago (⌥-click on an eye and again, an undo and its redo)
 //! uploads those blocks instead of compositing every layer again.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -232,7 +233,7 @@ impl KeptComposites {
 /// application setting, not part of the document. Read from the session's settings, which the
 /// engine keeps in step with the process-wide value compose reads (`psblend::set_text_gamma`).
 fn text_gamma(app: &PhotocraftApp) -> u32 {
-    app.session.color.settings.blend_text_gamma.to_bits()
+    app.session.color().settings.text_gamma().to_bits()
 }
 
 /// Bytes kept composites of document `doc` may hold: what Memory Usage leaves beside its pixels
@@ -416,9 +417,9 @@ fn collect(r: &mut Redraw, p: Piece) {
 }
 
 /// The active document's redraw as the status bar shows it: "Redrawing" and how much is done.
-pub(crate) fn progress(app: &PhotocraftApp) -> Option<craft::ui::bars::StatusProgress> {
+pub(crate) fn progress(app: &PhotocraftApp) -> Option<crate::panels::status_bar::Progress> {
     let r = app.session.active().and_then(|st| app.redraws.get(&st.doc.id))?;
-    Some(craft::ui::bars::StatusProgress::new(tl!("Redrawing"), Some(r.fraction())))
+    Some(crate::panels::status_bar::Progress { label: tl!("Redrawing").to_owned(), fraction: Some(r.fraction()), cancel: None, refused: None })
 }
 
 /// Stop document `doc`'s redraw (its canvas was redrawn some other way, or is gone).
@@ -584,5 +585,7 @@ fn draw(
     }
 }
 
+#[cfg(test)]
+mod gpu_tests;
 #[cfg(test)]
 mod tests;

@@ -296,8 +296,30 @@ pub fn merge(w: usize, h: usize, imgs: &[&[[f32; 4]]], opts: &MergeOptions) -> M
             let m = s / sw;
             ((s2 / sw - m * m).max(0.0)).sqrt() as f32
         });
+        // A frame whose radiance can't agree with the base's is a ghost too, also where the frames
+        // are clipped or black and so carry no weight above (#14020): each value bounds the log
+        // radiance (an interval; one-sided where it is clipped), and a pixel is a ghost when some
+        // frame's interval misses the base's by more than a factor of two in any channel.
+        let clash: Vec<bool> = crate::photo_util::par_map(w * h, |i| {
+            let bounds = |j: usize, c: usize| -> (f64, f64) {
+                let v = imgs[j][i][c].clamp(0.0, 1.0);
+                let l = g_at(&response[c], v) - log_dt[j];
+                match v {
+                    _ if v >= 0.98 => (l, f64::INFINITY),
+                    _ if v <= 0.02 => (f64::NEG_INFINITY, l),
+                    _ => (l, l),
+                }
+            };
+            (0..3).any(|c| {
+                let (blo, bhi) = bounds(base, c);
+                (0..p).filter(|&j| j != base).any(|j| {
+                    let (lo, hi) = bounds(j, c);
+                    lo - bhi > std::f64::consts::LN_2 || blo - hi > std::f64::consts::LN_2
+                })
+            })
+        });
         for i in 0..w * h {
-            ghost[i] = if score[i] > 0.35 { 1.0 } else { 0.0 };
+            ghost[i] = if score[i] > 0.35 || clash[i] { 1.0 } else { 0.0 };
         }
         // Grow and feather the mask.
         let r = (w.max(h) as f32 / 200.0).max(2.0);
@@ -363,7 +385,8 @@ pub fn tone_map(px: &mut [[f32; 4]], w: usize, h: usize, method: &ToneMethod) {
                     q[c] *= k;
                 }
             }
-            crate::tone::hdr_toning(px, w, h, p);
+            // Today's merge radiance keeps the mean-anchored map until #14023 moves it (#14723).
+            crate::tone::hdr_toning_mean_anchored(px, w, h, p);
             for q in px.iter_mut() {
                 for c in 0..3 {
                     q[c] = linear_to_srgb(q[c].clamp(0.0, 1.0));
@@ -539,3 +562,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "hdr_ghost_clipped_tests.rs"]
+mod hdr_ghost_clipped_tests;
