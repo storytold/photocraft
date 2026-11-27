@@ -98,7 +98,7 @@ fn type_and_tab(h: &mut H, text: &str) {
         h.run_steps(1);
     }
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.event(egui::Event::Text(local(text).into()));
+    h.event(egui::Event::Text(local(text)));
     h.run_steps(1);
     h.key_press(egui::Key::Tab);
     h.run_steps(4);
