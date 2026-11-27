@@ -24,6 +24,8 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 #[cfg(test)]
+mod convert_profile_fogra39_tests;
+#[cfg(test)]
 mod convert_profile_same_tests;
 mod profile_dither;
 
@@ -111,7 +113,7 @@ impl Policy {
 /// Honoured when files are opened ([`ColorExt::open_document`](crate::color_cmds::ColorExt::open_document)), by Image › Mode conversions
 /// and by "working" profile specs (Convert to Profile, Proof Setup).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", remote = "Self")]
 pub struct ColorSettings {
     /// Working spaces: built-in profile ids (see `edit.profileInfo`) or `.icc` paths.
     pub working_rgb: String,
@@ -129,9 +131,13 @@ pub struct ColorSettings {
     pub intent: String,
     pub bpc: bool,
     pub dither: bool,
-    /// Advanced › "Blend Text Colors Using Gamma" (1 = off; Photoshop's default 1.45): type
-    /// layers mix anti-aliased edges in this gamma (`photocraft_compose::psblend::set_text_gamma`).
+    /// Advanced › "Blend Text Colors Using Gamma": the field's value, 1.00 to 3.00 (Photoshop's
+    /// default 1.45). While [`blend_text_gamma_on`](Self::blend_text_gamma_on) is set, type layers
+    /// mix anti-aliased edges in this gamma ([`text_gamma`](Self::text_gamma),
+    /// `photocraft_compose::psblend::set_text_gamma`); the field keeps it while the box is off.
     pub blend_text_gamma: f32,
+    /// Advanced › the "Blend Text Colors Using Gamma" checkbox (on by default).
+    pub blend_text_gamma_on: bool,
     /// Working Spaces › Spot: the dot gain, in percent at a 50 % dot, that previews of spot
     /// channels add (Photoshop's default Dot Gain 20 %; its menu offers 10–30 % and custom
     /// values). Lives in the compositor too (`photocraft_compose::multichannel::set_spot_dot_gain`).
@@ -139,6 +145,9 @@ pub struct ColorSettings {
     /// Monitor profile the canvas is displayed in: `auto` (the main display's profile when the
     /// platform supplies it, else sRGB), a built-in RGB profile id or an `.icc` path.
     pub monitor_profile: String,
+    /// The Settings menu: the named setup these values come from (one of
+    /// [`COLOR_SETTINGS_PRESETS`]), or [`CUSTOM_SETTINGS`] once anything differs (#14229).
+    pub preset: String,
 }
 
 impl Default for ColorSettings {
@@ -158,13 +167,179 @@ impl Default for ColorSettings {
             bpc: true,
             dither: true,
             blend_text_gamma: photocraft_compose::psblend::TEXT_GAMMA,
+            blend_text_gamma_on: true,
             spot_dot_gain: photocraft_compose::multichannel::SPOT_DOT_GAIN,
             monitor_profile: "auto".into(),
+            // PhotoCraft's defaults match none of the named setups.
+            preset: CUSTOM_SETTINGS.into(),
         }
     }
 }
 
+/// The Settings menu's entry for values that match no named setup.
+pub const CUSTOM_SETTINGS: &str = "Custom";
+
+/// The named setups of Color Settings' Settings menu, in menu order (#14229).
+pub const COLOR_SETTINGS_PRESETS: [&str; 13] = [
+    "Europe General Purpose 3",
+    "Europe Prepress 3",
+    "Europe Web/Internet 2",
+    "Monitor Color",
+    "Japan Color for Newspaper",
+    "Japan General Purpose 2",
+    "Japan Magazine Advertisement Color",
+    "Japan Prepress 2",
+    "Japan Web/Internet",
+    "North America General Purpose 2",
+    "North America Newspaper",
+    "North America Prepress 2",
+    "North America Web/Internet",
+];
+
+/// The named setup whose working RGB follows the monitor profile.
+const MONITOR_COLOR: &str = "Monitor Color";
+
+/// The RGB entry of "Monitor Color": the monitor profile (see [`ColorState::monitor_rgb_for`]).
+const MONITOR_RGB: &str = "monitor";
+
+/// What one named setup sets. Spaces PhotoCraft doesn't ship stand in for the closest built-in:
+/// the wide-gamut RGB is `adobe-rgb-compat`; Coated FOGRA39 is `coated-fogra39`, every other
+/// press (SWOP, Japan Color, Japan Web Coated (Ad), US Newsprint) the generic `coated-cmyk`
+/// (#3499); Dot Gain 15 % and 25 % gray the Dot Gain 20 %-compatible gray. Spot dot gains are exact.
+struct SettingsPreset {
+    name: &'static str,
+    rgb: &'static str,
+    cmyk: &'static str,
+    gray: &'static str,
+    spot: f32,
+    /// RGB, CMYK, Gray.
+    policies: [Policy; 3],
+    /// Ask When Opening (mismatch), Ask When Pasting, Missing Profiles: Ask When Opening.
+    ask: [bool; 3],
+    intent: Intent,
+}
+
+/// A row of [`SETTINGS_PRESETS`], in the table's column order.
+#[allow(clippy::too_many_arguments)]
+const fn preset(
+    name: &'static str,
+    rgb: &'static str,
+    cmyk: &'static str,
+    gray: &'static str,
+    spot: f32,
+    policies: [Policy; 3],
+    ask: [bool; 3],
+    intent: Intent,
+) -> SettingsPreset {
+    SettingsPreset { name, rgb, cmyk, gray, spot, policies, ask, intent }
+}
+
+const SETTINGS_PRESETS: [SettingsPreset; 13] = {
+    use Intent::{Perceptual as PER, RelativeColorimetric as REL};
+    use Policy::{Convert as C, Off, Preserve as P};
+    const SRGB: &str = "srgb";
+    const WIDE: &str = "adobe-rgb-compat";
+    const FOGRA39: &str = "coated-fogra39";
+    const COATED: &str = "coated-cmyk";
+    const DOT_GAIN: &str = "dot-gain-20-compat";
+    const GAMMA_22: &str = "gray-gamma-2.2";
+    [
+        preset("Europe General Purpose 3", SRGB, FOGRA39, DOT_GAIN, 15.0, [P, P, P], [false, false, false], REL),
+        preset("Europe Prepress 3", WIDE, FOGRA39, DOT_GAIN, 15.0, [P, P, P], [true, true, true], REL),
+        preset("Europe Web/Internet 2", SRGB, FOGRA39, GAMMA_22, 15.0, [C, P, P], [true, true, false], REL),
+        preset("Monitor Color", MONITOR_RGB, COATED, GAMMA_22, 20.0, [Off, Off, Off], [true, false, false], REL),
+        preset("Japan Color for Newspaper", WIDE, COATED, DOT_GAIN, 25.0, [P, P, P], [true, true, true], PER),
+        preset("Japan General Purpose 2", SRGB, COATED, DOT_GAIN, 15.0, [P, P, P], [false, false, false], PER),
+        preset("Japan Magazine Advertisement Color", WIDE, COATED, DOT_GAIN, 15.0, [P, P, P], [true, true, true], PER),
+        preset("Japan Prepress 2", WIDE, COATED, DOT_GAIN, 15.0, [P, P, P], [true, true, true], PER),
+        preset("Japan Web/Internet", SRGB, COATED, GAMMA_22, 15.0, [C, P, P], [true, true, false], PER),
+        preset("North America General Purpose 2", SRGB, COATED, DOT_GAIN, 20.0, [P, P, P], [false, false, false], REL),
+        preset("North America Newspaper", WIDE, COATED, DOT_GAIN, 25.0, [P, P, P], [true, true, true], PER),
+        preset("North America Prepress 2", WIDE, COATED, DOT_GAIN, 20.0, [P, P, P], [true, true, true], REL),
+        preset("North America Web/Internet", SRGB, COATED, GAMMA_22, 20.0, [C, P, P], [true, true, false], REL),
+    ]
+};
+
+/// `from` with the named setup `name` applied (#14229): its working spaces, policies, Ask
+/// boxes, intent, and Black Point Compensation and Dither on; Blend Text Colors Using Gamma on
+/// at 1.45, as a scripted preset sets it. "Monitor Color" takes `monitor_rgb` as its working RGB.
+/// `None` for a name that isn't one of [`COLOR_SETTINGS_PRESETS`].
+pub fn preset_setup(from: &ColorSettings, name: &str, monitor_rgb: &str) -> Option<ColorSettings> {
+    let p = SETTINGS_PRESETS.iter().find(|p| p.name == name)?;
+    let rgb = if p.rgb == MONITOR_RGB { monitor_rgb } else { p.rgb };
+    let [policy_rgb, policy_cmyk, policy_gray] = p.policies;
+    let [ask_on_mismatch, ask_on_paste, ask_on_missing] = p.ask;
+    Some(ColorSettings {
+        working_rgb: rgb.into(),
+        working_cmyk: p.cmyk.into(),
+        working_gray: p.gray.into(),
+        policy_rgb,
+        policy_cmyk,
+        policy_gray,
+        ask_on_mismatch,
+        ask_on_paste,
+        ask_on_missing,
+        intent: p.intent.id().into(),
+        bpc: true,
+        dither: true,
+        blend_text_gamma: photocraft_compose::psblend::TEXT_GAMMA,
+        blend_text_gamma_on: true,
+        spot_dot_gain: p.spot,
+        preset: p.name.into(),
+        // The rest (the monitor profile) is not part of a setup. A setting a setup does
+        // set belongs above, and in `same_setup`.
+        ..from.clone()
+    })
+}
+
+/// Is `name` an entry of the Settings menu (a named setup or Custom)?
+pub fn is_settings_preset(name: &str) -> bool {
+    name == CUSTOM_SETTINGS || COLOR_SETTINGS_PRESETS.contains(&name)
+}
+
+/// Do `a` and `b` agree on everything a named setup sets? (Blend Text Colors Using Gamma and the
+/// monitor profile are not part of it.)
+fn same_setup(a: &ColorSettings, b: &ColorSettings) -> bool {
+    (&a.working_rgb, &a.working_cmyk, &a.working_gray, a.spot_dot_gain.to_bits())
+        == (&b.working_rgb, &b.working_cmyk, &b.working_gray, b.spot_dot_gain.to_bits())
+        && (a.policy_rgb, a.policy_cmyk, a.policy_gray) == (b.policy_rgb, b.policy_cmyk, b.policy_gray)
+        && (a.ask_on_mismatch, a.ask_on_paste, a.ask_on_missing) == (b.ask_on_mismatch, b.ask_on_paste, b.ask_on_missing)
+        && (&a.intent, a.bpc, a.dither) == (&b.intent, b.bpc, b.dither)
+}
+
+/// The lowest text blending gamma the field takes; 1 also mixes the encoded values, as the box off does.
+pub const MIN_TEXT_GAMMA: f32 = 1.0;
+
+impl serde::Serialize for ColorSettings {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        ColorSettings::serialize(self, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ColorSettings {
+    /// Reads the settings, and settings saved before the checkbox (#14243): those held one number,
+    /// `blendTextGamma`, with 1 meaning off. A 1 there loads as the box off with 1.45 in the
+    /// field, any other number as the box on with that number (one out of range is then reported
+    /// by the saved-preferences check, as in the new format).
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let raw = Value::deserialize(deserializer)?;
+        let legacy = raw.as_object().is_some_and(|m| m.contains_key("blendTextGamma") && !m.contains_key("blendTextGammaOn"));
+        let mut settings = ColorSettings::deserialize(raw).map_err(serde::de::Error::custom)?;
+        if legacy && settings.blend_text_gamma == MIN_TEXT_GAMMA {
+            settings.blend_text_gamma = photocraft_compose::psblend::TEXT_GAMMA;
+            settings.blend_text_gamma_on = false;
+        }
+        Ok(settings)
+    }
+}
+
 impl ColorSettings {
+    /// The gamma type layers blend their colours in: the field's value while the box is on, else 1
+    /// (a mix of the encoded values).
+    pub fn text_gamma(&self) -> f32 {
+        if self.blend_text_gamma_on { self.blend_text_gamma } else { 1.0 }
+    }
+
     pub fn intent(&self) -> Intent {
         Intent::parse(&self.intent).unwrap_or(Intent::RelativeColorimetric)
     }
@@ -190,6 +365,10 @@ impl ColorSettings {
 /// Check that each working space resolves to the right colour space and RGB can be both a
 /// source and editing destination for the configured rendering intent.
 pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
+    let g = c.blend_text_gamma;
+    if !(g.is_finite() && (MIN_TEXT_GAMMA..=photocraft_compose::psblend::MAX_TEXT_GAMMA).contains(&g)) {
+        return Err(format!("`blendTextGamma` {g} is not in {MIN_TEXT_GAMMA:.2}..{:.2}", photocraft_compose::psblend::MAX_TEXT_GAMMA));
+    }
     for (space, spec) in [(ColorSpace::Rgb, &c.working_rgb), (ColorSpace::Cmyk, &c.working_cmyk), (ColorSpace::Gray, &c.working_gray)] {
         let p = resolve_profile(spec, None, space_mode(space)).map_err(|e| e.to_string())?;
         if p.color_space != space {
@@ -212,6 +391,9 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
     }
     if !(c.spot_dot_gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&c.spot_dot_gain)) {
         return Err(format!("spot dot gain must be 0..{} %", photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN));
+    }
+    if !is_settings_preset(&c.preset) {
+        return Err(format!("unknown preset `{}` ({CUSTOM_SETTINGS}, {})", c.preset, COLOR_SETTINGS_PRESETS.join(", ")));
     }
     Ok(())
 }
@@ -249,6 +431,30 @@ impl ColorState {
                     && (space != ColorSpace::Rgb || (p.pcs_to_device(self.settings.intent()).is_ok() && p.device_to_pcs(self.settings.intent()).is_ok()))
             })
             .unwrap_or_else(|| working_profile(mode))
+    }
+
+    /// The working RGB "Monitor Color" sets, with Monitor Profile at `monitor_profile`: that
+    /// profile when it names one; for `auto`, the built-in matching the main display's profile,
+    /// sRGB when none does (a display profile is only bytes here, so it can't be a working
+    /// space spec).
+    pub fn monitor_rgb_for(&self, monitor_profile: &str) -> String {
+        if !(monitor_profile.is_empty() || monitor_profile == "auto") {
+            return monitor_profile.to_string();
+        }
+        let display = self.main_display.and_then(|id| self.displays.iter().find(|d| d.id == id)).or(self.displays.first());
+        let description = display.and_then(|d| d.icc.as_deref()).and_then(|b| Profile::parse(b).ok()).map(|p| p.description);
+        description
+            .and_then(|n| Builtin::from_profile_name(&n))
+            .filter(|b| b.profile().color_space == ColorSpace::Rgb)
+            .unwrap_or(Builtin::Srgb)
+            .id()
+            .to_string()
+    }
+
+    /// `from` with the named setup `name` applied (see [`preset_setup`]), its Monitor RGB that
+    /// of `from`'s Monitor Profile ([`ColorState::monitor_rgb_for`]).
+    pub fn preset_settings(&self, from: &ColorSettings, name: &str) -> Option<ColorSettings> {
+        preset_setup(from, name, &self.monitor_rgb_for(&from.monitor_profile))
     }
 
     /// Resolve a profile spec, reading "working…" specs from Color Settings.
@@ -1265,6 +1471,32 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("reset").and_then(Value::as_bool) == Some(true) {
         next = ColorSettings::default();
     }
+    // Settings menu (#14229): a named setup loads its values; the params below then change
+    // them, and the name stays only while they still match the setup.
+    let preset = match p.get("preset") {
+        None => None,
+        Some(Value::String(name)) if is_settings_preset(name) => Some(name.as_str()),
+        Some(v) => {
+            return Err(EngineError::BadParams {
+                cmd: cmd.into(),
+                msg: format!("`preset` must be {CUSTOM_SETTINGS} or one of: {} (got {v})", COLOR_SETTINGS_PRESETS.join(", ")),
+            });
+        }
+    };
+    let setup = match preset {
+        Some(name) if name != CUSTOM_SETTINGS => {
+            // "Monitor Color" follows a Monitor Profile changed in the same call.
+            let mut from = next.clone();
+            if let Some(m) = p.get("monitorProfile").and_then(Value::as_str) {
+                from.monitor_profile = m.to_string();
+            }
+            s.color().preset_settings(&from, name)
+        }
+        _ => None,
+    };
+    if let Some(setup) = &setup {
+        next = setup.clone();
+    }
     let str_of = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_string);
     if let Some(v) = str_of("workingRgb") {
         next.working_rgb = v;
@@ -1297,16 +1529,26 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = str_of("intent") {
         next.intent = Intent::parse(&v).map(|i| i.id().to_string()).unwrap_or(v);
     }
+    // A bool is the checkbox alone (the field keeps its value); a number in range is the field's
+    // value and checks the box, as typing into the field does. `blendTextGammaOn` sets the box
+    // after that, so the dialog can send a value with the box off.
+    let max = f64::from(photocraft_compose::psblend::MAX_TEXT_GAMMA);
     match p.get("blendTextGamma") {
-        Some(Value::Bool(false)) => next.blend_text_gamma = 1.0,
-        Some(Value::Bool(true)) => next.blend_text_gamma = photocraft_compose::psblend::TEXT_GAMMA,
+        Some(Value::Bool(on)) => next.blend_text_gamma_on = *on,
         Some(v) => {
             let g = v
                 .as_f64()
-                .filter(|g| (1.0..=2.2).contains(g))
-                .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`blendTextGamma` must be 1.0..2.2 or a bool".into() })?;
-            next.blend_text_gamma = g as f32;
+                .filter(|g| (f64::from(MIN_TEXT_GAMMA)..=max).contains(g))
+                .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`blendTextGamma` must be {MIN_TEXT_GAMMA:.2}..{max:.2} or a bool") })?;
+            // Two decimals, as the field shows it.
+            next.blend_text_gamma = ((g * 100.0).round() / 100.0) as f32;
+            next.blend_text_gamma_on = true;
         }
+        None => {}
+    }
+    match p.get("blendTextGammaOn") {
+        Some(Value::Bool(on)) => next.blend_text_gamma_on = *on,
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "`blendTextGammaOn` must be a bool".into() }),
         None => {}
     }
     if let Some(v) = p.get("spotDotGain") {
@@ -1317,9 +1559,22 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
             .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`spotDotGain` must be a dot gain of 0..{max} %") })?;
         next.spot_dot_gain = g as f32;
     }
+    next.preset = match (preset, &setup) {
+        (_, Some(setup)) if same_setup(&next, setup) => setup.preset.clone(),
+        (Some(_), _) => CUSTOM_SETTINGS.into(),
+        // No preset given: any change but the monitor profile makes the values Custom.
+        (None, _) => {
+            let old = &s.color().settings;
+            let unchanged = ColorSettings { monitor_profile: old.monitor_profile.clone(), preset: old.preset.clone(), ..next.clone() } == *old;
+            // "Monitor Color" takes its working RGB from the monitor profile, so a new monitor
+            // profile keeps the name only while the setup still is what it would set now.
+            let still_monitor_color = old.preset != MONITOR_COLOR || s.color().preset_settings(&next, MONITOR_COLOR).is_some_and(|m| same_setup(&next, &m));
+            if unchanged && still_monitor_color && is_settings_preset(&old.preset) { old.preset.clone() } else { CUSTOM_SETTINGS.into() }
+        }
+    };
     validate_settings(&next).map_err(|msg| EngineError::BadParams { cmd: cmd.into(), msg })?;
     if next != s.color().settings {
-        photocraft_compose::psblend::set_text_gamma(next.blend_text_gamma);
+        photocraft_compose::psblend::set_text_gamma(next.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(next.spot_dot_gain);
         s.color_mut().settings = next;
         // Persisted with the preferences.
@@ -1329,6 +1584,7 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     let desc = |m: ColorMode| s.color().working(m).description.clone();
     Ok(json!({
         "settings": c,
+        "preset": c.preset,
         "working": {"rgb": desc(ColorMode::Rgb), "cmyk": desc(ColorMode::Cmyk), "gray": desc(ColorMode::Grayscale)},
         "monitor": s.color().monitor().description,
         "monitorDetected": !s.color().displays.is_empty(),
@@ -1432,7 +1688,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.colorSettings",
             "Color Settings…",
             ["Edit"],
-            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"spotDotGain":0..49=20,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (spotDotGain = the Spot working space: the dot gain, in % at a 50 % dot, that spot channel previews add, as Photoshop's Spot menu (Dot Gain 10–30 %, or a custom value); working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
+            r##"{"preset":"Custom|Europe General Purpose 3|Europe Prepress 3|Europe Web/Internet 2|Monitor Color|Japan Color for Newspaper|Japan General Purpose 2|Japan Magazine Advertisement Color|Japan Prepress 2|Japan Web/Internet|North America General Purpose 2|North America Newspaper|North America Prepress 2|North America Web/Internet","workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk|coated-fogra39","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..3.0|bool=1.45,"blendTextGammaOn":bool=true,"spotDotGain":0..49=20,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (preset = the Settings menu: a named setup sets the working spaces, policies, Ask boxes and intent, Black Point Compensation and Dither on and Blend Text Colors Using Gamma 1.45, then the other params change those values; the reply's `preset` is that name while the values still match it, else Custom, as after any change made without `preset`; spotDotGain = the Spot working space: the dot gain, in % at a 50 % dot, that spot channel previews add, as Photoshop's Spot menu (Dot Gain 10–30 %, or a custom value); working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
             always,
             color_settings,
             true,
@@ -1735,6 +1991,10 @@ mod tests {
 #[cfg(test)]
 #[path = "assign_profile_enabled_modes_tests.rs"]
 mod assign_profile_enabled_modes_tests;
+
+#[cfg(test)]
+#[path = "../color_settings_presets_tests.rs"]
+mod color_settings_presets_tests;
 
 #[cfg(test)]
 mod settings_tests {

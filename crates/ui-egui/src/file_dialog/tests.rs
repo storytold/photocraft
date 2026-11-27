@@ -9,6 +9,9 @@ use craft::automation::actions::ActionStep;
 use craft::host::{FileFilter, ScriptedFiles};
 use craft::ui::dialog::DialogId;
 
+#[path = "tests/save_a_copy_format_list_tests.rs"]
+mod save_a_copy_format_list_tests;
+
 /// The paths the app's writer was given.
 type Written = Rc<RefCell<Vec<String>>>;
 
@@ -776,7 +779,7 @@ fn place_embedded_uses_the_single_file_picker_and_accepts_contents() {
 
     // Cancel leaves the document alone and does not report an error.
     menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
-    assert_eq!(last_request(&files).kind, PickKind::Open);
+    assert_eq!(last_request(&files).kind, PickKind::OpenMany);
     cancel(&files);
     app.poll_file_dialog();
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before);
@@ -1598,7 +1601,7 @@ fn every_open_format_has_its_own_filter() {
 
 /// The save types of a Save dialog suggesting `suggested`: (name, extensions).
 fn save_types(suggested: &str) -> Vec<(String, Vec<String>)> {
-    save_request("document", suggested).filters.into_iter().map(|f| (f.name, f.extensions)).collect()
+    save_request("document", suggested, None).filters.into_iter().map(|f| (f.name, f.extensions)).collect()
 }
 
 /// Every flat format Save As offers is one PhotoCraft writes, and ICO is among them (#4357).
@@ -1620,12 +1623,12 @@ fn save_as_offers_only_writable_formats_including_ico() {
     let netpbm = save_types("Untitled").into_iter().find(|(name, _)| name == "Netpbm").map(|(_, exts)| exts);
     assert_eq!(netpbm, Some(vec!["pnm".to_string()]));
     // The suggested name itself becomes .pnm, as macOS keeps it (CodeRabbit on #9775).
-    let named = |suggested: &str| save_request("document", suggested).file_name;
+    let named = |suggested: &str| save_request("document", suggested, None).file_name;
     assert_eq!(named("scans/image.pgm").as_deref(), Some("image.pnm"));
     assert_eq!(named("image.PFM").as_deref(), Some("image.pnm"));
     assert_eq!(named("image.png").as_deref(), Some("image.png"));
     assert_eq!(named("Untitled-1").as_deref(), Some("Untitled-1"));
-    assert_eq!(save_request("document", "scans/image.pgm").directory.as_deref(), Some(Path::new("scans")));
+    assert_eq!(save_request("document", "scans/image.pgm", None).directory.as_deref(), Some(Path::new("scans")));
     // Also when Save As starts from a subtype's name: no filter offers that subtype again.
     for name in ["image.pbm", "image.pgm", "image.ppm", "image.pam", "image.pfm"] {
         let types = save_types(name);

@@ -194,7 +194,7 @@ fn make_shape_with_the_pen_in_an_indexed_document_alerts_and_changes_nothing() {
 // ---------------------------------------------------------------------------------------------
 // Done when 3: Path mode still works in an Indexed Color document
 
-/// Drawing the path in Path mode is not refused: one Work Path, one History step, no alert.
+/// Drawing the path in Path mode is not refused: the Work Path with one subpath, one step per click, no alert.
 #[test]
 fn the_pen_still_draws_a_work_path_in_an_indexed_document() {
     let mut h = indexed_bar(Tool::Pen);
@@ -204,7 +204,8 @@ fn the_pen_still_draws_a_work_path_in_an_indexed_document() {
     assert_eq!(drawn.subpaths.len(), 1);
     assert_eq!(drawn.subpaths[0].knots.len(), 4);
     assert!(drawn.subpaths[0].closed, "the click back on the first anchor closed it");
-    assert_eq!(steps(&h), before + 1, "one History step");
+    // #12890: the square's four corners and its closing click are five steps, not one for the finished path.
+    assert_eq!(steps(&h), before + 5, "one History step per click");
     assert!(alerts(h.state()).is_empty(), "no alert for drawing a path");
     assert_eq!(h.state().ui.tool_options.vector_mode, VectorMode::Path);
 }

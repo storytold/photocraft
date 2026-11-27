@@ -18,6 +18,7 @@
 
 use std::collections::HashSet;
 
+use photocraft_color::ColorMode;
 use photocraft_doc::Pattern;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -46,6 +47,10 @@ pub(super) struct Entry {
     pub width: u32,
     #[serde(default)]
     pub height: u32,
+    /// The colour mode a defined pattern came from (`Pattern::source_mode`). A pattern file is a
+    /// Photoshop `.pat`, which records no source, so the index names it (older files: none).
+    #[serde(default)]
+    pub source_mode: Option<ColorMode>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -116,7 +121,7 @@ fn preview(p: &Pattern) -> Pattern {
     }
     let mut surface = Surface::new(fmt);
     surface.write_region(Rect::new(0, 0, pw as i32, ph as i32), &data);
-    Pattern { id: p.id.clone(), name: p.name.clone(), width: pw, height: ph, surface }
+    Pattern { id: p.id.clone(), name: p.name.clone(), width: pw, height: ph, source_mode: p.source_mode, surface }
 }
 
 fn read_one(backend: &dyn PresetBackend, file: &str) -> Result<Pattern, String> {
@@ -129,6 +134,7 @@ pub(super) fn load_full(backend: &dyn PresetBackend, entry: &Entry) -> Result<Pa
     let mut p = read_one(backend, &entry.file)?;
     p.id = entry.id.clone();
     p.name = entry.name.clone();
+    p.source_mode = entry.source_mode;
     Ok(p)
 }
 
@@ -179,6 +185,7 @@ pub(super) fn load(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> (
                 Ok(mut p) => {
                     p.id = e.id.clone();
                     p.name = e.name.clone();
+                    p.source_mode = e.source_mode;
                     Ok(Loaded { pattern: p, full: Some((e.width, e.height)) })
                 }
                 Err(_) => load_full(backend, &e).map(|p| Loaded { pattern: preview(&p), full: Some((p.width, p.height)) }),
@@ -220,7 +227,7 @@ pub(super) fn sync(backend: &dyn PresetBackend, files: &mut PatternFiles, librar
         .filter(|p| !crate::pattern_cmds::is_pristine_builtin(p, &builtins))
         .map(|p| {
             let (width, height) = library.stored.get(&p.id).copied().unwrap_or((p.width, p.height));
-            Entry { id: p.id.clone(), name: p.name.clone(), file: file_name(&p.id), width, height }
+            Entry { id: p.id.clone(), name: p.name.clone(), file: file_name(&p.id), width, height, source_mode: p.source_mode }
         })
         .collect();
     // Unreadable files stay listed (at the end) until the library takes their pattern back.
@@ -334,8 +341,10 @@ fn migrate_legacy(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> (V
         return (patterns.into_iter().map(|pattern| Loaded { pattern, full: None }).collect(), files);
     }
     let migration = (|| -> Result<(), String> {
-        let entries: Vec<Entry> =
-            patterns.iter().map(|p| Entry { id: p.id.clone(), name: p.name.clone(), file: file_name(&p.id), width: p.width, height: p.height }).collect();
+        let entries: Vec<Entry> = patterns
+            .iter()
+            .map(|p| Entry { id: p.id.clone(), name: p.name.clone(), file: file_name(&p.id), width: p.width, height: p.height, source_mode: p.source_mode })
+            .collect();
         let index = serde_json::to_vec_pretty(&IndexFile { version: 1, patterns: entries.clone() }).map_err(|e| e.to_string())?;
         if index.len() as u64 > MAX_PATTERN_INDEX_BYTES {
             return Err("index exceeds size limit".into());

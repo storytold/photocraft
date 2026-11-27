@@ -111,6 +111,32 @@ pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Group from Layers is greyed while the Background is among the selected layers, as in the
+/// menus (#14709).
+pub(super) fn can_group_from_layers(s: &Session) -> std::result::Result<(), String> {
+    super::has_layer(s)?;
+    let d = s.active().ok_or("no document open")?;
+    if d.selected_layers().iter().any(|id| d.doc.is_background(*id)) {
+        return Err("the Background layer can't go into a group".into());
+    }
+    Ok(())
+}
+
+/// Group from Layers: [`group_layers`], refused with the Background among the layers it would
+/// move, also when the `layer` param names it (#14709). Group Layers (⌘G) is not measured and
+/// keeps grouping it.
+pub(super) fn group_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => vec![id],
+        None => selected(s),
+    };
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    if ids.iter().any(|id| doc.is_background(*id)) {
+        return Err(EngineError::Other("the Background layer can't go into a group".into()));
+    }
+    group_layers(s, p)
+}
+
 /// Group Layers (⌘G) / Group from Layers: the explicit layer, or every selected layer, moves
 /// into a new, collapsed group placed where the top-most of them was. Bottom-to-top order is
 /// preserved. The New Group dialog's colour, mode and opacity are set in the same history step.
@@ -220,7 +246,7 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
 
 /// Next visible layer row below the deleted target, then rows above in reverse order.
 /// Group headers precede their children in the UI, unlike Document::walk's storage order.
-pub(crate) fn deletion_neighbours(doc: &Document, target: LayerId) -> Vec<LayerId> {
+pub fn deletion_neighbours(doc: &Document, target: LayerId) -> Vec<LayerId> {
     let rows = |expand_all: bool| {
         let mut stack: Vec<&Layer> = doc.layers.iter().collect();
         let mut order = Vec::new();
