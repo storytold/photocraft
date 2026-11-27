@@ -96,6 +96,12 @@ pub struct ToolOptions {
     /// Healing Brush › Mode: Replace, which copies the source without healing (#12101). Like the
     /// painting tools' Clear flags it is tool-only: the stroke params carry it, not the brush.
     pub healing_replace: bool,
+    /// Healing Brush › Use Legacy: the older blend instead of the healing solve, off by default
+    /// (#12103). Tool-only like the Replace flag, and the Clone Stamp's bar never shows it.
+    pub healing_legacy: bool,
+    /// Healing Brush › Diffusion, 1..7 whole, 5 by default (#12103). The bar hides the field while
+    /// Use Legacy is on; the value stays and comes back with it.
+    pub healing_diffusion: f32,
     /// Spot Healing: contentAware | createTexture | proximityMatch
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -483,6 +489,8 @@ impl Default for ToolOptions {
             pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
             healing_replace: false,
+            healing_legacy: false,
+            healing_diffusion: 5.0,
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
             patch_content_aware: false,

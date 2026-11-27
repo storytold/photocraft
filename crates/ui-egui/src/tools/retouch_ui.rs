@@ -53,6 +53,14 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     if app.ui.tool == Tool::Healing && o.healing_replace {
         p["mode"] = json!("replace");
     }
+    // Use Legacy and Diffusion (#12103), the Healing Brush's own cells: the field's value rides the
+    // params whether or not the field is showing, and the check box only when it is on.
+    if app.ui.tool == Tool::Healing {
+        p["diffusion"] = json!(o.healing_diffusion);
+        if o.healing_legacy {
+            p["legacy"] = json!(true);
+        }
+    }
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
