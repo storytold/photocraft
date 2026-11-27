@@ -11,12 +11,14 @@
 //! * [`take`] acts on what the workspace reported: a stroke paints the planes, a lasso edit or a reset re-plans,
 //!   Apply and OK run `edit.contentAwareFill`, the overlay colour opens a colour picker.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use craft::behavior::kurbo;
-use craft::imaging::ui::fill::{ContentAwareFillWorkspace, FillCommand, FillPreviewRequest, FillSession, FillSource, SamplingPlane, SamplingStroke};
+use craft::imaging::ui::fill::{
+    ContentAwareFillWorkspace, FillCommand, FillPreviewRequest, FillSession, FillSource, SamplingMode, SamplingPlane, SamplingStroke,
+};
 use craft::imaging::ui::select_mask::EditMode;
 use craft::imaging::ui::wide_angle::PreviewDone;
 use craft::ui::canvas::RasterSource;
@@ -38,7 +40,7 @@ mod preview;
 
 pub use lifecycle::open;
 pub(crate) use lifecycle::{describe, take};
-use preview::{Base, compute_preview, plan_params};
+use preview::{Base, NOTHING_TO_SAMPLE, compute_preview, custom_without_added_strokes, plan_params};
 
 /// Longest side of the document proxy shown in the view (px).
 const PROXY_SIDE: usize = 1600;
@@ -47,6 +49,8 @@ const REMEMBERED: SaveKey = SaveKey::new("photocraft.edit.contentAwareFill.works
 const CMD: &str = "edit.contentAwareFill";
 /// What a preview job that was superseded answers.
 const CANCELLED: &str = "cancelled";
+/// The hint while Custom has nothing to sample yet (#10621).
+const CUSTOM_HINT: &str = "Paint with the Sampling Brush to add a sampling area.";
 
 /// The hosted workspace as the dialog host stores it.
 pub(crate) type Hosted = HostedWorkspace<ContentAwareFillWorkspace>;
@@ -91,6 +95,9 @@ pub(crate) struct CafApp {
     preview_error: Arc<Mutex<Option<String>>>,
     /// How many preview jobs started.
     preview_runs: Arc<AtomicUsize>,
+    /// The last preview found Custom with nothing to sample (nothing painted yet, or everything painted erased or
+    /// inside the fill area): the image shows unfilled, with the hint instead of an error (#10621).
+    unfilled: Arc<AtomicBool>,
 }
 
 impl CafApp {
@@ -176,6 +183,7 @@ impl CafApp {
             preview: Arc::clone(&self.picture),
             preview_error: Arc::clone(&self.preview_error),
             preview_runs: Arc::clone(&self.preview_runs),
+            unfilled: Arc::clone(&self.unfilled),
             sampling: plane(&self.mask),
             fill_area: plane(&self.hole_px),
             window: kurbo::Rect::new(f64::from(w.x0), f64::from(w.y0), f64::from(w.x1), f64::from(w.y1)),
@@ -193,6 +201,7 @@ pub(crate) struct PcFillSource {
     preview: Arc<SharedPicture>,
     preview_error: Arc<Mutex<Option<String>>>,
     preview_runs: Arc<AtomicUsize>,
+    unfilled: Arc<AtomicBool>,
     sampling: SamplingPlane,
     fill_area: SamplingPlane,
     window: kurbo::Rect,
@@ -216,32 +225,48 @@ impl FillSource for PcFillSource {
     }
 
     fn preview(&self) -> Option<&dyn RasterSource> {
-        self.preview.is_ready().then_some(&*self.preview as &dyn RasterSource)
+        (self.preview.is_ready() && !self.unfilled.load(Ordering::Relaxed)).then_some(&*self.preview as &dyn RasterSource)
     }
 
     fn preview_job(&self, request: &FillPreviewRequest) -> Job<PreviewDone, String> {
         let (doc, layer, limit) = (Arc::clone(&self.doc), self.layer, self.texture_limit);
-        let params = plan_params(&FillCommand::new(&request.session, &request.settings), layer);
-        let (picture, shown_error, runs) = (Arc::clone(&self.preview), Arc::clone(&self.preview_error), Arc::clone(&self.preview_runs));
+        let command = FillCommand::new(&request.session, &request.settings);
+        let params = plan_params(&command, layer);
+        // Custom with nothing to sample is how Photoshop starts it, not a failure: the image shows unfilled and the
+        // facts carry the Sampling Brush hint (#10621). With no added stroke the plan isn't run at all.
+        let custom = command.sampling == SamplingMode::Custom;
+        let unpainted = custom_without_added_strokes(&command);
+        let (picture, shown_error, runs, unfilled) =
+            (Arc::clone(&self.preview), Arc::clone(&self.preview_error), Arc::clone(&self.preview_runs), Arc::clone(&self.unfilled));
         Job::new(move |progress, cancel| {
             runs.fetch_add(1, Ordering::Relaxed);
             let started = Instant::now();
             let is_cancelled = || cancel.is_cancelled();
             let report = |fraction: f32| progress.report(fraction);
             let interrupt = Interrupt::new(&is_cancelled, &report);
-            let filled = compute_preview(&doc, layer, &params, &interrupt, limit);
+            let filled = if unpainted { Err(NOTHING_TO_SAMPLE.to_string()) } else { compute_preview(&doc, layer, &params, &interrupt, limit) };
             // A superseded job leaves the picture and the error of the request that replaced it.
             if cancel.is_cancelled() {
                 return Err(CANCELLED.to_string());
             }
             let mut shown = shown_error.lock().unwrap_or_else(PoisonError::into_inner);
             match filled {
+                // A finished preview, not a failed one: `preview()` gives no picture while `unfilled` is set, so the
+                // pane shows the image unfilled, and the framework draws no "Preview failed" notice over it.
+                // `previewHint` still tells scripts what to do (FredApps on #10624).
+                Err(e) if custom && e == NOTHING_TO_SAMPLE => {
+                    unfilled.store(true, Ordering::Relaxed);
+                    *shown = None;
+                    Ok(PreviewDone::new(started.elapsed()))
+                }
                 Ok((rect, image, factor)) => {
                     picture.replace_at([rect.x0, rect.y0], image, factor);
+                    unfilled.store(false, Ordering::Relaxed);
                     *shown = None;
                     Ok(PreviewDone::new(started.elapsed()))
                 }
                 Err(e) => {
+                    unfilled.store(false, Ordering::Relaxed);
                     *shown = Some(e.clone());
                     Err(e)
                 }

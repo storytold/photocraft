@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use craft::behavior::PixelSize;
@@ -9,8 +9,8 @@ use photocraft_engine::edit_menu_cmds::{MAX_CAF_EDITS, MAX_CAF_POINTS};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
-use super::preview::{Base, compute_base, plan_params};
-use super::{CMD, CafApp, Hosted, PROXY_SIDE, PhotocraftApp, REMEMBERED};
+use super::preview::{Base, compute_base, custom_has_nothing_to_sample, plan_params};
+use super::{CMD, CUSTOM_HINT, CafApp, Hosted, PROXY_SIDE, PhotocraftApp, REMEMBERED};
 use crate::dialogs::shared_picture::SharedPicture;
 
 /// Opens the workspace on the active layer and its selection.
@@ -57,6 +57,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
         picture: SharedPicture::new(picture_size),
         preview_error: Arc::new(Mutex::new(None)),
         preview_runs: Arc::new(AtomicUsize::new(0)),
+        unfilled: Arc::new(AtomicBool::new(false)),
     };
     if let Some(image) = composite(app, pw, ph) {
         caf.image.replace(image, k as u32);
@@ -105,10 +106,11 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Option<Value> {
         "sampledProxyPixels": sampled,
         "proxyScale": c.k,
         "settings": serde_json::to_value(workspace.settings()).unwrap_or(Value::Null),
-        "previewReady": c.picture.is_ready(),
+        "previewReady": c.picture.is_ready() && !c.unfilled.load(Ordering::Relaxed),
+        "previewHint": c.unfilled.load(Ordering::Relaxed).then_some(CUSTOM_HINT),
         "previewRevision": craft::ui::canvas::RasterSource::revision(&*c.picture).get(),
         "previewError": c.preview_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
-        "previewRuns": c.preview_runs.load(std::sync::atomic::Ordering::Relaxed),
+        "previewRuns": c.preview_runs.load(Ordering::Relaxed),
         "error": c.error,
     });
     if let (Some(Value::Object(fields)), Some(map)) = (crate::distort_ui::workspace_fields(app, CMD), d.as_object_mut()) {
@@ -128,9 +130,21 @@ fn report(app: &mut PhotocraftApp, e: &str) {
     app.ui.status_error = true;
 }
 
-/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported.
+/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported. Custom with nothing
+/// to sample doesn't run the fill and isn't an error: the status bar shows the hint, not in the error colour, and the
+/// panel keeps no error of its own (#10621).
 pub(super) fn apply(app: &mut PhotocraftApp, command: &FillCommand) -> Result<(), String> {
-    let layer = app.caf.as_ref().ok_or("Content-Aware Fill is not open")?.layer;
+    let c = app.caf.as_ref().ok_or("Content-Aware Fill is not open")?;
+    let layer = c.layer;
+    if custom_has_nothing_to_sample(&c.doc, layer, command) {
+        let hint = tl!(CUSTOM_HINT).to_string();
+        if let Some(c) = app.caf.as_mut() {
+            c.error = None;
+        }
+        app.ui.status = hint.clone();
+        app.ui.status_error = false;
+        return Err(hint);
+    }
     match app.run(CMD, plan_params(command, layer)) {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -138,6 +152,11 @@ pub(super) fn apply(app: &mut PhotocraftApp, command: &FillCommand) -> Result<()
             Err(e)
         }
     }
+}
+
+/// The refusal a failed Apply or OK left as the panel's error; none for Custom's hint, which isn't an error.
+fn refusal(app: &PhotocraftApp) -> Option<String> {
+    app.caf.as_ref().and_then(|c| c.error.clone())
 }
 
 fn host(app: &mut PhotocraftApp, id: DialogId) -> Option<&mut Hosted> {
@@ -204,8 +223,8 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut refused = None;
     for command in applies {
         let answer = apply(app, &command);
-        if let Err(e) = &answer {
-            refused = Some(e.clone());
+        if answer.is_err() {
+            refused = refusal(app);
         }
         if let Some(h) = host(app, id) {
             h.workspace_mut().answer_apply(answer);
@@ -213,8 +232,8 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if let Some(command) = ok {
         let answer = apply(app, &command);
-        if let Err(e) = &answer {
-            refused = Some(e.clone());
+        if answer.is_err() {
+            refused = refusal(app);
         }
         let answer = answer.map_err(Label::from);
         if let Some(h) = host(app, id) {
