@@ -1,4 +1,5 @@
-//! Edit › Auto-Align Layers and Auto-Blend Layers, on the selected pixel layers.
+//! Edit › Auto-Align Layers and Auto-Blend Layers, on the selected pixel layers; Auto-Blend also
+//! takes the pixels a selected group lends it (#14206).
 //!
 //! Both share Photomerge's registration and blending ([`photocraft_algo::panorama`] via
 //! `photo_cmds`). Auto-Align matches Harris / steered-BRIEF features between every pair of
@@ -72,7 +73,56 @@ fn blend_enabled(s: &Session) -> std::result::Result<(), String> {
     if has_type_or_smart_object(s) {
         return Err(BLEND_UNAVAILABLE.into());
     }
-    two_layers(s)
+    s.active().ok_or("no document open")?;
+    // Auto-Blend counts what [`blend_layers`] collects, which is more than `two_layers` sees when a
+    // group is selected (#14206).
+    if blend_layers(s).0.len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
+}
+
+/// The layers Auto-Blend works on, and the entry the layers it adds sit above.
+///
+/// The selected pixel layers, plus the pixels of a selected group (#14206): with a group and a
+/// pixel layer selected, the reference application blends the group's pixels in and masks them to
+/// their side of the seam, while the group itself takes no mask. A group lends its pixels only
+/// when it is the only group in the selection, sits at the top level of the stack and holds exactly
+/// one pixel layer - the measured case. A group holding several layers or none that is a pixel
+/// layer, a group inside another group and a second selected group were not measured and contribute
+/// nothing, as they do today; so does a group whose own pixel layer is selected next to it.
+/// The anchor is the top entry that took part, so a selected group keeps the merged layer beside it
+/// instead of gaining one inside; for a selection of pixel layers that is the top blended layer.
+fn blend_layers(s: &Session) -> (Vec<LayerId>, Option<LayerId>) {
+    let Some(st) = s.active() else { return (Vec::new(), None) };
+    let selected = st.selected_layers();
+    let groups: Vec<LayerId> = selected.iter().copied().filter(|id| st.doc.layer(*id).is_some_and(Layer::is_group)).collect();
+    let donor = match groups.as_slice() {
+        [g] if st.doc.layers.index().depth(*g) == Some(0)
+            && st.doc.layer(*g).is_some_and(|l| matches!(l.children(), Some([c]) if matches!(c.content, LayerContent::Raster(_)))) =>
+        {
+            Some(*g)
+        }
+        _ => None,
+    };
+    let mut ids: Vec<LayerId> = Vec::with_capacity(selected.len());
+    let mut top: Option<LayerId> = None;
+    for id in selected {
+        let Some(l) = st.doc.layer(*id) else { continue };
+        match &l.content {
+            LayerContent::Raster(_) => {
+                ids.push(*id);
+                top = Some(*id);
+            }
+            LayerContent::Group(_) if Some(*id) == donor => {
+                if let Some([child]) = l.children() {
+                    if !ids.contains(&child.id) {
+                        ids.push(child.id);
+                    }
+                }
+                top = Some(*id);
+            }
+            _ => {}
+        }
+    }
+    (ids, top)
 }
 
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
@@ -205,7 +255,7 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     if has_type_or_smart_object(s) {
         return Err(EngineError::Other(BLEND_UNAVAILABLE.into()));
     }
-    let ids = selected_pixel_layers(s);
+    let (ids, added_above) = blend_layers(s);
     if ids.len() < 2 {
         return Err(bad(cmd, "select two or more pixel layers"));
     }
@@ -329,7 +379,9 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out
     });
-    let top = *ids.last().ok_or_else(|| EngineError::Other("Auto-Blend needs two or more layers".into()))?;
+    // The merged and Depth layers go above the top entry that took part: above a selected group
+    // rather than inside it (#14206); with pixel layers only, that entry is the top blended layer.
+    let top = added_above.ok_or_else(|| EngineError::Other("Auto-Blend needs two or more layers".into()))?;
     let label = "Auto-Blend Layers";
     // The Background can't have a mask. In a two-layer panorama Photoshop leaves it the
     // Background, unmasked under the other layer (#14214); otherwise (not measured yet) it
@@ -478,3 +530,6 @@ mod auto_blend_background_tests;
 
 #[cfg(test)]
 mod auto_blend_stack_bottom_mask_tests;
+
+#[cfg(test)]
+mod auto_blend_group_tests;
