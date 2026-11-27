@@ -27,7 +27,7 @@ fn missing_paths(paths: &[String]) -> Vec<String> {
 }
 
 fn apply(app: &mut PhotocraftApp, checked: &[String], missing: &[String]) {
-    if app.ui.recent_files != checked {
+    if *app.ui.recent_files != checked {
         return;
     }
     for path in missing {
@@ -49,11 +49,11 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let rt = &mut app.prefs_rt.recent_files;
     let now = Instant::now();
-    if rt.checked == app.ui.recent_files && rt.next_check.is_some_and(|next| now < next) {
+    if rt.checked == *app.ui.recent_files && rt.next_check.is_some_and(|next| now < next) {
         ctx.request_repaint_after(Duration::from_secs(30));
         return;
     }
-    rt.checked = app.ui.recent_files.clone();
+    rt.checked = (*app.ui.recent_files).clone();
     rt.next_check = Some(now + Duration::from_secs(30));
     if rt.checked.is_empty() {
         return;
@@ -90,7 +90,7 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.push_recent(kept.to_str().unwrap());
         app.push_recent(deleted.to_str().unwrap());
-        let checked = app.ui.recent_files.clone();
+        let checked = (*app.ui.recent_files).clone();
         std::fs::remove_file(&deleted).unwrap();
         let ctx = egui::Context::default();
         tick(&mut app, &ctx);
@@ -99,8 +99,8 @@ mod tests {
         let missing = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(missing, vec![deleted.to_string_lossy().to_string()]);
         apply(&mut app, &checked, &missing);
-        assert_eq!(app.ui.recent_files, vec![kept.to_string_lossy().to_string()]);
-        assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files);
+        assert_eq!(*app.ui.recent_files, vec![kept.to_string_lossy().to_string()]);
+        assert_eq!(app.session.prefs().file_handling.recent_files, *app.ui.recent_files);
         std::fs::remove_file(kept).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }
@@ -109,11 +109,11 @@ mod tests {
     fn stale_recent_check_does_not_remove_a_newer_list() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.push_recent("missing.psd");
-        let checked = app.ui.recent_files.clone();
+        let checked = (*app.ui.recent_files).clone();
         app.push_recent("new.png");
-        let before = app.ui.recent_files.clone();
+        let before = (*app.ui.recent_files).clone();
         apply(&mut app, &checked, &checked);
-        assert_eq!(app.ui.recent_files, before);
+        assert_eq!(*app.ui.recent_files, before);
     }
 
     #[test]
