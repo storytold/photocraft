@@ -239,6 +239,102 @@ fn view(app: &PhotocraftApp) -> Option<[u64; 5]> {
         .map(|view| [view.zoom.to_bits(), view.center.x.to_bits(), view.center.y.to_bits(), view.rotation.to_bits(), u64::from(view.flip_x)])
 }
 
+/// The document area's props: the app it reads, which [`canvas`] stands for.
+#[derive(MemoProps)]
+struct CanvasSlot<'a> {
+    version: u64,
+    #[memo_props(covered_by = "version", reason = "the canvas version holds everything the document area shows of the app")]
+    app: &'a mut PhotocraftApp,
+    #[memo_props(covered_by = "version", reason = "the document area's one drawing function, the same in every pass")]
+    show: fn(&mut PhotocraftApp, &mut egui::Ui),
+}
+
+/// The document area's tabs and documents in `ui`, replaying while [`canvas`] holds. `show` draws them; the per-pass
+/// work around them runs before, outside the view (`canvas::document_area`).
+pub(crate) fn show_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, show: fn(&mut PhotocraftApp, &mut egui::Ui)) {
+    let version = canvas(app);
+    let _ = MemoView::new("photocraft.canvas", CanvasSlot { version, app, show }, |slot: &mut CanvasSlot<'_>, ui: &mut egui::Ui| (slot.show)(slot.app, ui))
+        .show(ui);
+}
+
+/// The version of the document area, which keys its view and, through `DockPanels::content`, the docked tree it sits
+/// in. It holds what the tabs and every shown canvas draw that can change while no input reaches the area and its run
+/// asked for no pass: what every slot holds ([`version`]); each document's revision and unsaved mark (the tabs, the
+/// arranged panes); each view as stored, with the view commands queued for its next pass and a zoom ease asked; the
+/// document windows, the arrangement and its dividers; the View menu's options and the panels shown (the scroll bars
+/// go with the screen mode); the tool options and the on-canvas state of the tools (a transform box, a crop frame and whether its crop is pending, a pen draft, the
+/// type caret, a picked guide, the samplers, slices, frames and artboards), whose drags and keys change them without a
+/// command; whether a dialog is open (it holds back the tools and the task bars); the Layers panel's hovered layer, which the Move tool outlines; the previews a dialog or a panel drag shows
+/// on the canvas (an adjustment's live values, a filter's or Levels' preview, Color Range's mask); the opening files
+/// and their progress; the display the window is on; and the blocks a background redraw has landed
+/// (`background_redraw::poll`). A run that waits for work of its own (a preview worker, a tile stream) asks for its
+/// next pass through the framework, which runs the view then.
+pub(crate) fn canvas(app: &PhotocraftApp) -> u64 {
+    let ui = &app.ui;
+    let documents: Vec<(u64, u64, bool)> = app.session.documents().iter().map(|st| (st.doc.id.0, st.revision, st.is_dirty())).collect();
+    let views: Vec<_> = ui.views.iter().chain(ui.window_views.values()).map(view_key).collect();
+    let windows = serialized(&(&ui.view, &ui.panels, &ui.windows, &ui.document_windows, &ui.split_at));
+    let tools = serialized(&(
+        &ui.tool_options,
+        &ui.brush_tool,
+        &ui.cam_transform,
+        &ui.transform,
+        &ui.symmetry_transform,
+        &ui.layer_picker,
+        (&ui.clone_source, &ui.clone_offset, &ui.pattern_stamp_phase),
+        &ui.canvas_tool_menu,
+        &ui.selected_guide,
+        &ui.direct_selection,
+        &ui.hidden_work_path,
+        (&ui.analysis, &ui.slices, &ui.frame_tool, &ui.artboard_tool),
+    ));
+    let sessions =
+        (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
+    let crop = app.canvas_tools.crop.tool.frame().map(|frame| [frame.rect.x0, frame.rect.y0, frame.rect.x1, frame.rect.y1, frame.angle].map(f64::to_bits));
+    let task_bars = (
+        crate::transform_task_bar::eligible(app),
+        crate::crop_task_bar::eligible(app),
+        crate::crop_ui::pending(app),
+        app.canvas_tools.crop.tool.straighten_armed(),
+    );
+    let editing = (text_target(app), ui.pen.as_ref().map(|p| p.draft.knots.len()), crate::canvas::tools::in_gesture(app), crop, task_bars);
+    let previews = (
+        adjustment_preview(app),
+        crate::canvas::filter_preview::canvas_key(app),
+        crate::levels_clipping::canvas_key(app),
+        crate::color_range_ui::canvas_key(app),
+    );
+    let opening: Vec<_> = crate::jobs_ui::open_tabs(app).into_iter().map(|(job, _, fraction)| (job, fraction.map(f32::to_bits))).collect();
+    let display = crate::monitor_status::view_display(app, app.ctx());
+    version(
+        app,
+        (
+            documents,
+            views,
+            (windows, tools),
+            sessions,
+            editing,
+            previews,
+            (app.hover_layer, app.dialog_open(), app.jobs.focus, opening, display, app.redraw_landed),
+        ),
+    )
+}
+
+/// A view as its canvas shows it next: the camera, the document size it last showed, how many view commands wait for
+/// its next pass (only that pass drains them) and a zoom ease asked.
+fn view_key(view: &crate::state::View) -> impl Hash + '_ {
+    let bits = |[x, y]: [f32; 2]| [x.to_bits(), y.to_bits()];
+    (
+        [view.zoom.to_bits(), view.rotation.to_bits()],
+        bits(view.center),
+        view.doc_size,
+        view.pending.len(),
+        view.zoom_animating,
+        view.zoom_anchor.map(|(doc, screen)| (doc.map(f64::to_bits), bits(screen))),
+        view.zoom_from.map(|(zoom, center)| (zoom.to_bits(), bits(center))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

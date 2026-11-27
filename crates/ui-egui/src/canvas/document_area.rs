@@ -22,7 +22,8 @@ use super::textures::retain_gpu_documents;
 use super::{PhotocraftApp, canvas_view};
 
 /// The canvas panel with the tab strip and the document, or the Home screen; then drops layers dragged onto another
-/// document (`layer_transfer`).
+/// document (`layer_transfer`). The tabs and documents are a memoized view keyed by `region_versions::canvas`: the app
+/// work every pass needs whether or not it replays ([`each_pass`]) runs before it, outside it.
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Files the OS drops on the main window outside the tab strip: the Home screen has no other target (#16588).
     let dropped = super::window_drop::take(ui, ui.max_rect());
@@ -34,7 +35,15 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else {
         crate::distort_ui::drop_foreign(app, ui.ctx());
         crate::layer_transfer::prepare(app, ui.ctx());
-        documents(app, ui);
+        each_pass(app, ui.ctx());
+        if app.home_screen_up() {
+            // The Home screen hides the tabs: a floating window dropped on it docks nowhere (#16415).
+            app.dock_drop_rect = None;
+            app.drop_canvas_rect = None;
+            start_screen(app, ui);
+        } else {
+            crate::panels::region_versions::show_canvas(app, ui, documents);
+        }
         crate::layer_transfer::finish(app, ui.ctx());
         // The Shift+Alt+right-click HUD Color Picker (#6098), while its gesture is held.
         crate::color_hud::show(app, ui);
@@ -42,6 +51,27 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(files) = dropped {
         super::window_drop::open(app, ui.ctx(), files);
     }
+}
+
+/// The document area's work of every pass, before its view: the GPU canvas's documents and their texture budget, a
+/// Content-Aware Scale step, the blocks background redraws landed, the tablet settings, and what a tool switch or a
+/// layer switch leaves behind (a pending crop, a Properties eyedropper). A replayed view runs none of its own code, so
+/// none of this lives in it.
+fn each_pass(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    retain_gpu_documents(app);
+    publish_shown(app);
+    crate::cas_transform::tick(app, ctx);
+    crate::background_redraw::poll_all(app);
+    // Pen pressure/tilt for the tools' events (mouse = 1.0), unless Preferences › Tools › Use Tablet Pressure is off;
+    // the pen's eraser end selects the Eraser.
+    app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
+    let curve = app.session.prefs().tools.pressure_curve.clone();
+    app.stylus.set_pressure_curve(&curve);
+    crate::stylus::Stylus::sync_eraser_tool(app);
+    // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
+    crate::layer_picker::prune(app);
+    // A crop left pending when another tool was picked is applied or dropped.
+    crate::crop_ui::each_pass(app);
 }
 
 /// Where each pane of Window › Arrange's n-up or Tile arrangement is in `rect`, with the document it shows: pane `i` is
@@ -150,15 +180,6 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // band of a tab's height at the top of the area, where the strip would be.
     let area = ui.max_rect();
     app.dock_drop_rect = Some(Rect::from_min_size(area.min, egui::vec2(area.width(), DOCK_BAND.min(area.height()))));
-    retain_gpu_documents(app);
-    publish_shown(app);
-    crate::cas_transform::tick(app, ui.ctx());
-    if app.home_screen_up() {
-        // The Home screen hides the tabs: a floating window dropped on it docks nowhere (#16415).
-        app.dock_drop_rect = None;
-        start_screen(app, ui);
-        return;
-    }
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
     // The tabs region and the document run one after the other inside `show`, each with the app to itself.

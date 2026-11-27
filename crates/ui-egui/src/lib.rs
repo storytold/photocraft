@@ -499,6 +499,9 @@ pub struct PhotocraftApp {
     filter_preview_worker: crate::dialogs::filter_preview_worker::Worker,
     /// Full CPU canvas redraws running in the background, by document (#4024).
     pub(crate) redraws: std::collections::HashMap<photocraft_doc::DocId, background_redraw::Redraw>,
+    /// How many redraw blocks have landed (`background_redraw::poll`): they reach the GPU canvas between the document
+    /// area's runs, so the area's version holds the count (`region_versions::canvas`).
+    pub(crate) redraw_landed: u64,
     /// The last finished background redraws, for going back to a state drawn a moment ago (#6528).
     pub(crate) kept: background_redraw::KeptComposites,
     /// Select › Color Range dialog preview (proxy document + mask / image textures).

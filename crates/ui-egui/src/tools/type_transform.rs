@@ -184,7 +184,7 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<Frame> {
     let layer = app.session.active()?.doc.layer(id)?;
     // Only the whole-box pass (⌘/Ctrl held, or a capture begun so - the early return above) asks the pointer
     // frame; the move-reach pass without the modifier keeps a mask session frameless, as before.
-    let mask_frame = mask_session && craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd;
+    let mask_frame = mask_session && craft::ui::runtime::pointer::mods(app.ctx()).cmd;
     if layer.locks.all || layer.locks.position || (!layer.visible && !mask_frame) {
         return None;
     }

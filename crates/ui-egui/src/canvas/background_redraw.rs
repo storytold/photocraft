@@ -355,11 +355,22 @@ pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCan
 /// Upload the blocks document `doc`'s redraw has finished since the last frame. When the last one
 /// lands, the redraw is recorded like the synchronous refresh it replaces (and explained once if
 /// it was slow).
+/// Lands every running redraw's finished blocks: the document area's host work (`canvas::document_area`), run every
+/// pass before the area's view, so blocks land while the view replays.
+pub(crate) fn poll_all(app: &mut PhotocraftApp) {
+    let Some(gpu) = app.gpu.clone() else { return };
+    let docs: Vec<DocId> = app.redraws.keys().copied().collect();
+    for doc in docs {
+        poll(app, &gpu, doc);
+    }
+}
+
 pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
     let gamma = text_gamma(app);
     let Some(r) = app.redraws.get_mut(&doc) else { return };
     r.forget_if_gamma_changed(gamma);
-    loop {
+    let mut landed = 0;
+    let finished = loop {
         match r.rx.try_recv() {
             Ok(p) => {
                 let b = r.blocks[p.block];
@@ -368,11 +379,16 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
                     r.left -= 1;
                     r.drawn += b.width() as u64 * b.height() as u64;
                     collect(r, p);
+                    landed += 1;
                 }
             }
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => break false,
+            Err(TryRecvError::Disconnected) => break true,
         }
+    };
+    app.redraw_landed += landed;
+    if !finished {
+        return;
     }
     let Some(mut r) = app.redraws.remove(&doc) else { return };
     if r.left > 0 {

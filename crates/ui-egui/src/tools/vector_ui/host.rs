@@ -96,7 +96,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             // ⌘ makes the pointer Direct Selection: the draft is drawn and keeps its keys, but takes no presses.
             // A refused draft of another document waits for its explicit retry: no press adds to it (`cancel_stale`).
             let stale = pen.is_some_and(|p| p.commit_failed && p.owner.as_ref().is_some_and(|o| !o.valid(app)));
-            let sensing = !craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd && !stale;
+            let sensing = !craft::ui::runtime::pointer::mods(app.ctx()).cmd && !stale;
             let idle = pen.is_none_or(|p| p.draft.knots.is_empty());
             let carry = if curvature && idle { pen::carry_on(app) } else { None };
             state
@@ -156,7 +156,7 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     for event in state.shapes.take_events() {
         match event {
             ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => {
-                let mods = craft::ui::runtime::pointer::frame(app.ctx()).mods;
+                let mods = craft::ui::runtime::pointer::mods(app.ctx());
                 super::shapes::finish_drag(app, state.shapes.kind(), &after, mods);
             }
             ShapeDragEvent::Click { at, kind, .. } => {

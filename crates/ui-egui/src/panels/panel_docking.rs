@@ -221,8 +221,7 @@ struct Panels<'a> {
 }
 
 impl DockPanels<String> for Panels<'_> {
-    /// A panel body is a memoized view keyed by its version (#16118); the canvas shows state that changes without a
-    /// command (the view, redraw progress, animation and job overlays), so it runs every pass.
+    /// A panel body is a memoized view keyed by its version (#16118).
     fn body(&mut self, panel: &String, ui: &mut egui::Ui, _: &mut BodyCx<'_>) {
         if panel == CANVAS {
             body(self.app, ui, panel);
@@ -231,12 +230,11 @@ impl DockPanels<String> for Panels<'_> {
         }
     }
 
-    /// The version of what the dock shows for a panel, which keys its column: the canvas shows state that changes
-    /// without a command (the view, redraw progress, animation and job overlays) and has none, so the docked tree it
-    /// sits in runs every pass while the columns beside it replay.
+    /// The version of what the dock shows for a panel, which keys its column and the docked tree: the canvas's is the
+    /// document area's, which also keys the area's own view (`region_versions::canvas`).
     fn content(&self, panel: &String) -> Option<u64> {
         match panel.as_str() {
-            CANVAS => None,
+            CANVAS => Some(super::region_versions::canvas(self.app)),
             TOOLBAR => Some(super::region_versions::toolbar(self.app)),
             id => Some(super::region_versions::panel(self.app, id)),
         }

@@ -132,7 +132,7 @@ fn plan(app: &PhotocraftApp, doc: DocId, mods: Mods) -> (BezierTool, Vec<(PathRe
 /// its report with the path of each `EditPath`. `None` when no path shows; the editing state is
 /// then told so (`edits::not_shown`).
 pub(crate) fn show_paths(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect, doc: DocId) -> Option<BezierShown> {
-    let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+    let mods = craft::ui::runtime::pointer::mods(ui.ctx());
     let (tool, shown) = plan(app, doc, mods);
     if shown.is_empty() {
         crate::direct_select::edits::not_shown(app);

@@ -337,8 +337,8 @@ pub struct UiState {
     /// Frame tool (see `frame_tool`).
     #[serde(default)]
     pub frame_tool: crate::frame_tool::FrameToolUi,
-    /// The contextual task bar as drawn in the last frame: its screen rect `[x0, y0, x1, y1]` in
-    /// points, `None` while no bar shows (`ui.inspect` › `taskBar`).
+    /// The contextual crop task bar as the last canvas run drew it: its screen rect `[x0, y0, x1, y1]`
+    /// in points, `None` while no bar shows (`ui.inspect` › `taskBar`).
     #[serde(skip)]
     pub task_bar_shown: Option<[f32; 4]>,
     /// Artboard tool (see `artboard_tool`).

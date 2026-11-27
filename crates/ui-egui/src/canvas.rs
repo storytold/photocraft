@@ -206,14 +206,6 @@ pub fn canvas_view(
         // A document switched while a button is down ends the gesture of the document it began on.
         tools::end_foreign_gesture(app, &ctx, doc.id.0);
     }
-    // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools › Use Tablet Pressure
-    // is off; the pen's eraser end selects the Eraser.
-    app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
-    let curve = app.session.prefs().tools.pressure_curve.clone();
-    app.stylus.set_pressure_curve(&curve);
-    crate::stylus::Stylus::sync_eraser_tool(app);
-    // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
-    crate::layer_picker::prune(app);
     let flip = app.ui.view.flip_horizontal;
     let pass = document_display::CanvasPass { ctx: &ctx, host, doc: &doc, output, rect, ppp, flip, aspect };
     let shown = document_display::show(app, ui, &mut view, &pass);
@@ -240,6 +232,9 @@ mod pattern_drag_tests;
 
 #[cfg(test)]
 mod tabs_tests;
+
+#[cfg(test)]
+mod canvas_settle_trials;
 
 #[cfg(test)]
 mod doc_window_dialog_tests;
