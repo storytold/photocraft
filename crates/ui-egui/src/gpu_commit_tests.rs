@@ -154,7 +154,7 @@ fn a_gpu_stroke_commits_paint_strokes_pixels() {
             };
             let (a, b) = (layer(&s).read_region(Rect::new(0, 0, W, H)), layer(&plain).read_region(Rect::new(0, 0, W, H)));
             let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-            let differing = a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(x, y)| x != y).count();
+            let differing = a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).filter(|(x, y)| x != y).count();
             let limit = if used == MaskPrecision::Full { 1.0 / 255.0 } else { 3.0 / 255.0 };
             eprintln!("GPU commit vs paint.stroke, size {size} hardness {hardness} {used:?}: worst {:.2}/255, {differing} pixels differ", worst * 255.0);
             assert!(
