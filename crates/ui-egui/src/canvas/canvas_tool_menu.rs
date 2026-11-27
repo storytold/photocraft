@@ -153,7 +153,17 @@ pub fn transform_app_rows() -> [Entry<String>; 2] {
 /// Photoshop's pasteboard menu (right-click outside the image): the pasteboard colour, the choice
 /// Preferences › Interface also offers. The ids are this menu's own: [`choose`] turns them into
 /// `prefs.set` (`pasteboard.<CanvasColor name>`) or opens the Color Picker.
-pub const PASTEBOARD_MENU: &[Row] = &[
+pub const PASTEBOARD_MENU: &[Row] = PASTEBOARD_MOVE_MENU.split_at(2).1;
+
+/// The Window item the Move tool's pasteboard menu toggles the contextual task bar with (#16757).
+pub const PASTEBOARD_TASK_BAR: &str = "window.panel.contextualTaskBar";
+
+/// The Move tool's pasteboard menu, as measured (#16757): Hide Contextual Task Bar (Show… while the
+/// bar is off, [`row_label`]) and a separator above the colour rows. Other tools weren't measured and
+/// keep [`PASTEBOARD_MENU`].
+pub const PASTEBOARD_MOVE_MENU: &[Row] = &[
+    Some(("Hide Contextual Task Bar", PASTEBOARD_TASK_BAR)),
+    None,
     Some(("Default", "pasteboard.default")),
     Some(("Black", "pasteboard.black")),
     Some(("Dark Gray", "pasteboard.darkGray")),
@@ -903,6 +913,9 @@ pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
     if menu.tool == Tool::AddAnchorPoint {
         return add_anchor_row_label(app, menu, label, command);
     }
+    if command == PASTEBOARD_TASK_BAR && !app.ui.panels.context_task_bar {
+        return "Show Contextual Task Bar";
+    }
     if command != "path.transform" || !matches!(menu.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         return label;
     }
@@ -1189,6 +1202,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     match &menu.kind {
         MenuKind::Crop { .. } | MenuKind::Layers { .. } | MenuKind::BrushMode { .. } => &[],
         MenuKind::Guide => GUIDE_MENU,
+        MenuKind::Pasteboard if menu.tool == Tool::Move => PASTEBOARD_MOVE_MENU,
         MenuKind::Pasteboard => PASTEBOARD_MENU,
         MenuKind::View => {
             if menu.tool == Tool::Hand {
@@ -1428,8 +1442,13 @@ fn choose_guide(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result
     crate::menus::invoke(app, ctx, command, json!({})).map(|_| ())
 }
 
-/// A pasteboard row: set the colour, or open the Color Picker on the custom one.
+/// A pasteboard row: set the colour, open the Color Picker on the custom one, or run the Window
+/// item that hides or shows the contextual task bar.
 fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    if command == PASTEBOARD_TASK_BAR {
+        let ctx = app.ctx().clone();
+        return crate::menus::invoke(app, &ctx, command, json!({})).map(|_| ());
+    }
     if command == PASTEBOARD_PICK {
         let rgb = prefs::parse_hex(&app.session.prefs().interface.canvas_custom_color).map_or([0.5; 3], |c| c.map(|v| f32::from(v) / 255.0));
         crate::color_picker_ui::open_for_target(app, "pasteboard", "Color Picker (Custom Canvas Color)", rgb)?;
@@ -1448,7 +1467,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
                 _ => GUIDE_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command),
             };
         }
-        MenuKind::Pasteboard => return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command),
+        MenuKind::Pasteboard => return rows(menu).iter().flatten().any(|(_, id)| *id == command),
         MenuKind::View if command == "view.fillScreen" => return app.session.active().is_some(),
         MenuKind::View => return crate::menus::is_enabled(app, command),
         MenuKind::TypeEdit { .. } => {
@@ -1935,6 +1954,8 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
             "Duplicate Layers…" => tl!("Duplicate Layers…"),
             "Delete Layers" => tl!("Delete Layers"),
             "Rasterize Layers" => tl!("Rasterize Layers"),
+            "Hide Contextual Task Bar" => tl!("Hide Contextual Task Bar"),
+            "Show Contextual Task Bar" => tl!("Show Contextual Task Bar"),
             key => tl!(key),
         };
         out.push(Entry::new(command.to_string(), text.to_string()).enabled(entry_enabled(app, menu, command)).checked(mode_checked(app, menu, command)));
@@ -2016,6 +2037,10 @@ pub(crate) fn run(
 mod cam_menu_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "../task_bar_pasteboard_entry_tests.rs"]
+mod task_bar_pasteboard_entry_tests;
 
 #[cfg(test)]
 pub(crate) mod count_tests;

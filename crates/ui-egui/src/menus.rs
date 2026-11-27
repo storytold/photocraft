@@ -119,6 +119,9 @@ mod open_recent_position_tests;
 mod export_submenu_separator_tests;
 
 #[cfg(test)]
+mod arrange_menu_order_tests;
+
+#[cfg(test)]
 mod bar_cursor_tests;
 
 #[cfg(test)]
