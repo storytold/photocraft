@@ -633,6 +633,8 @@ pub struct LiveStroke {
     /// Set when the doc shows the stroke as a masked colour layer instead of blended pixels (see
     /// [`overlay_path`]).
     overlay: Option<Overlay>,
+    /// The coverage comes from a GPU ([`LiveStroke::begin_gpu`]): the stroke only generates dabs.
+    gpu: bool,
 }
 
 /// Where a live stroke that is shown as a masked layer keeps its mask.
@@ -787,7 +789,7 @@ impl LiveStroke {
     /// Start a live stroke of `cmd`: `paint.stroke` (the Brush and Eraser) or `paint.pencil`.
     /// Committing `cmd` with the same params and `"seed": live.seed` gives the same pixels.
     pub fn begin_with(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
-        Self::begin_mode(s, cmd, p, false)
+        Self::begin_mode(s, cmd, p, false, false)
     }
 
     /// [`begin_with`](Self::begin_with) where the doc shows the stroke as a masked colour layer
@@ -797,10 +799,27 @@ impl LiveStroke {
     /// [`into_commit`](Self::into_commit) still gives the pixels `paint.stroke` writes. A stroke
     /// that cannot be an overlay is [`begin_with`](Self::begin_with)'s.
     pub fn begin_overlay(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
-        Self::begin_mode(s, cmd, p, true)
+        Self::begin_mode(s, cmd, p, true, false)
     }
 
-    fn begin_mode(s: &Session, cmd: &str, p: &Value, overlay: bool) -> Result<Self> {
+    /// [`begin_overlay`](Self::begin_overlay) for a stroke whose coverage a GPU draws (the
+    /// prototype of #17133): nothing is rasterised here. The stroke generates its dabs
+    /// ([`push_dabs`](Self::push_dabs)), the caller stamps them, and at the end hands back the
+    /// coverage of every tile they touched ([`touched_keys`](Self::touched_keys),
+    /// [`feed_coverage`](Self::feed_coverage)); [`into_commit`](Self::into_commit) then
+    /// composites it with the code a CPU stroke's coverage goes through, so only the coverage
+    /// values differ from `paint.stroke`'s. Returns the first points' dabs too. A stroke
+    /// [`gpu_preview`](Self::gpu_preview) refuses is an `Err` with the reason: the caller then
+    /// uses the CPU path.
+    pub fn begin_gpu(s: &Session, cmd: &str, p: &Value) -> Result<(Self, Vec<photocraft_paint::TipGeometry>)> {
+        let mut live = Self::begin_mode(s, cmd, p, true, true)?;
+        let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
+        let pts = parse_points(&captured, cmd)?;
+        let dabs = live.push_dabs(&pts)?;
+        Ok((live, dabs))
+    }
+
+    fn begin_mode(s: &Session, cmd: &str, p: &Value, overlay: bool, gpu: bool) -> Result<Self> {
         let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
         let p = &captured;
         has_paintable(s).map_err(EngineError::Other)?;
@@ -829,6 +848,7 @@ impl LiveStroke {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background, bg_inks);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
+        let renderer = if gpu { renderer.gpu_coverage() } else { renderer };
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
         let mirrors: Vec<_> =
             (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip)).collect();
@@ -857,9 +877,15 @@ impl LiveStroke {
             points: Vec::new(),
             base,
             overlay: None,
+            gpu: false,
         };
         if let Some(path) = overlay_at {
             live.enter_overlay(&path, paint, erase, fmt);
+        }
+        if gpu {
+            live.gpu_preview().map_err(|why| bad(cmd, format!("a GPU stroke is not possible: {why}")))?;
+            live.gpu = true;
+            return Ok(live);
         }
         live.push(&pts)?;
         Ok(live)
@@ -867,7 +893,20 @@ impl LiveStroke {
 
     /// The stroke as its commit would take it over (see [`LiveCommit`]).
     pub fn into_commit(mut self) -> Result<LiveCommit> {
-        let (surface, bounds) = if self.overlay.is_some() {
+        let (surface, bounds) = if self.gpu {
+            // The coverage came from the GPU: every touched tile must have been fed.
+            let unfed = self.renderer.unfed_count();
+            if unfed > 0 {
+                return Err(EngineError::Other(format!("the GPU stroke has {unfed} coverage tiles that were not read back")));
+            }
+            let mut surf = self.pre.clone();
+            let cmyk = self.cmyk.clone();
+            let (renderer, pre, sel, lock) = (&mut self.renderer, &self.pre, self.sel.as_ref(), self.lock);
+            photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+                renderer.composite(pre, &mut surf, sel, lock, true);
+            });
+            (surf, self.bounds())
+        } else if self.overlay.is_some() {
             // The doc holds no stroke pixels: blend the stroke into the pre-stroke ones as
             // `paint.stroke` does: one composite of every tile of the finished stroke.
             let mut surf = self.pre.clone();
@@ -884,6 +923,40 @@ impl LiveStroke {
             (surf.clone(), bounds)
         };
         Ok(LiveCommit { mixer: None, cmd: self.cmd, base: self.base, params: self.params, seed: Some(self.seed), points: self.points, surface, bounds })
+    }
+
+    /// The dabs `pts` make, as the GPU's stamper takes them ([`begin_gpu`](Self::begin_gpu)).
+    pub fn push_dabs(&mut self, pts: &[StrokePoint]) -> Result<Vec<photocraft_paint::TipGeometry>> {
+        if !self.gpu {
+            return Err(EngineError::Other("the stroke's coverage is not the GPU's".into()));
+        }
+        check_coords(pts, &self.cmd)?;
+        self.points.extend_from_slice(pts);
+        let dabs = self.renderer.push_dabs(pts);
+        Ok(self.geometry(&dabs))
+    }
+
+    /// The dabs that ending the stroke makes (a lone first dab), to stamp before the last
+    /// read-back.
+    pub fn finish_dabs(&mut self) -> Vec<photocraft_paint::TipGeometry> {
+        let dabs = self.renderer.finish_dabs();
+        self.geometry(&dabs)
+    }
+
+    fn geometry(&self, dabs: &[photocraft_paint::Dab]) -> Vec<photocraft_paint::TipGeometry> {
+        dabs.iter().filter_map(|d| self.renderer.ctx.tip_geometry(d)).collect()
+    }
+
+    /// The 64-pixel coverage tiles (keys `(x / 64, y / 64)`) the stroke's dabs touched: what to
+    /// read back from the GPU and [`feed_coverage`](Self::feed_coverage).
+    pub fn touched_keys(&self) -> Vec<(i32, i32)> {
+        self.renderer.touched_keys()
+    }
+
+    /// The GPU's coverage of tile `key` (`COV_TILE`² values), see
+    /// [`StrokeRenderer::feed_coverage`].
+    pub fn feed_coverage(&mut self, key: (i32, i32), values: &[f32]) {
+        self.renderer.feed_coverage(key, values);
     }
 
     /// Whether the doc shows the stroke as a masked colour layer ([`begin_overlay`](Self::begin_overlay))
@@ -1900,6 +1973,9 @@ mod tests;
 
 #[cfg(test)]
 mod overlay_tests;
+
+#[cfg(test)]
+mod gpu_commit_tests;
 
 #[cfg(test)]
 #[path = "color_replacement_modes_tests.rs"]

@@ -945,6 +945,16 @@ pub struct StrokeRenderer {
     dual_area_left: u64,
     /// A dab was left out for want of budget.
     refused: bool,
+    /// GPU coverage mode ([`gpu_coverage`](StrokeRenderer::gpu_coverage)): the coverage tiles the
+    /// dabs touched, and those whose coverage the GPU has handed back.
+    gpu: Option<GpuTiles>,
+}
+
+/// The coverage tiles of a stroke whose coverage a GPU draws.
+#[derive(Clone, Debug, Default)]
+struct GpuTiles {
+    touched: HashSet<(i32, i32)>,
+    fed: HashSet<(i32, i32)>,
 }
 
 /// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
@@ -1101,6 +1111,7 @@ impl StrokeRenderer {
                         area_left: p.area_left,
                         dual_area_left: p.dual_area_left,
                         refused: p.refused,
+                        gpu: None,
                     })
                 }
                 Some(m) => {
@@ -1157,6 +1168,7 @@ impl StrokeRenderer {
             area_left: MAX_STROKE_DAB_AREA,
             dual_area_left: MAX_STROKE_DAB_AREA,
             refused: false,
+            gpu: None,
         }
     }
 
@@ -1241,6 +1253,88 @@ impl StrokeRenderer {
         self.dual_buf = duals;
     }
 
+    /// Take the coverage from a GPU: the renderer only generates dabs
+    /// ([`push_dabs`](Self::push_dabs), [`finish_dabs`](Self::finish_dabs)) and never rasterises
+    /// them. The tiles they touch ([`touched_keys`](Self::touched_keys)) come back from the GPU
+    /// ([`feed_coverage`](Self::feed_coverage)), and [`composite`](Self::composite) then writes
+    /// the stroke's pixels as it does for a CPU-drawn stroke's. Do not mix with
+    /// [`push`](Self::push).
+    pub fn gpu_coverage(mut self) -> Self {
+        self.gpu = Some(GpuTiles::default());
+        self
+    }
+
+    /// [`push`](Self::push) without rasterising: the dabs `pts` make that the stroke paints (the
+    /// ones [`push`](Self::push) would rasterise, after the clip and the area budget), for the GPU
+    /// to stamp. The coverage tiles they reach are noted as touched and the stroke's bounds grow
+    /// by their rectangles.
+    pub fn push_dabs(&mut self, pts: &[StrokePoint]) -> Vec<Dab> {
+        self.generator.push(pts, &mut self.dab_buf, &mut self.dual_buf);
+        self.take_gpu_dabs()
+    }
+
+    /// [`finish`](Self::finish) without rasterising: the dabs that ending the stroke makes (a lone
+    /// first dab).
+    pub fn finish_dabs(&mut self) -> Vec<Dab> {
+        self.generator.finish(&mut self.dab_buf, &mut self.dual_buf);
+        self.take_gpu_dabs()
+    }
+
+    fn take_gpu_dabs(&mut self) -> Vec<Dab> {
+        let mut dabs = std::mem::take(&mut self.dab_buf);
+        self.dual_buf.clear();
+        let mut painted = Vec::with_capacity(dabs.len());
+        for d in &dabs {
+            let rect = self.ctx.dab_rect(d, false);
+            if !admit(self.clip, &mut self.area_left, &mut self.refused, rect) {
+                continue;
+            }
+            self.cov.bounds = self.cov.bounds.union(&rect);
+            if let Some(gpu) = self.gpu.as_mut() {
+                for ty in rect.y0.div_euclid(COV_TILE)..=(rect.y1 - 1).div_euclid(COV_TILE) {
+                    for tx in rect.x0.div_euclid(COV_TILE)..=(rect.x1 - 1).div_euclid(COV_TILE) {
+                        gpu.touched.insert((tx, ty));
+                    }
+                }
+            }
+            painted.push(*d);
+        }
+        self.dabs_done += dabs.len();
+        if let Some(all) = self.all_dabs.as_mut() {
+            all.extend_from_slice(&painted);
+        }
+        dabs.clear();
+        self.dab_buf = dabs;
+        painted
+    }
+
+    /// Every coverage tile (keys `(x / COV_TILE, y / COV_TILE)`) a dab touched, sorted: what the
+    /// GPU's coverage must be read back for.
+    pub fn touched_keys(&self) -> Vec<(i32, i32)> {
+        let mut keys: Vec<_> = self.gpu.iter().flat_map(|g| g.touched.iter().copied()).collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// How many touched coverage tiles still lack the GPU's coverage.
+    pub fn unfed_count(&self) -> usize {
+        self.gpu.as_ref().map_or(0, |g| g.touched.iter().filter(|k| !g.fed.contains(*k)).count())
+    }
+
+    /// Put the GPU's coverage of tile `key` (`COV_TILE`² values, row-major) in the stroke, to be
+    /// composited with the rest. Feeding a tile again replaces it.
+    pub fn feed_coverage(&mut self, key: (i32, i32), values: &[f32]) {
+        if values.len() != (COV_TILE * COV_TILE) as usize {
+            return;
+        }
+        let mut tile = CovTile::new();
+        tile.cov.copy_from_slice(values);
+        self.cov.tiles.insert(tile_key(key), tile);
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.fed.insert(key);
+        }
+    }
+
     /// See [`DabGenerator::wants_time`].
     pub fn wants_time(&self) -> bool {
         self.generator.wants_time()
@@ -1319,6 +1413,7 @@ impl StrokeRenderer {
             area_left: self.area_left,
             dual_area_left: self.dual_area_left,
             refused: self.refused,
+            gpu: None,
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
