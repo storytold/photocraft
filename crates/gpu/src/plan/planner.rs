@@ -116,14 +116,14 @@ pub const F_ADD_DIFF: u32 = 16384;
 /// backdrop becomes the knockout target B inside the layer's shape C); `p0.y` set keeps A's alpha
 /// from growing (clipped layers); `p0.z` set is `compose::advanced::composite_clipped_individually_with`:
 /// B is kept where C's coverage reaches 1 (values above 1 survive) and elsewhere the clamped mix
-/// applies, also at coverage 0. `p0.x` set: C is an `F_COVER` record, whose R says whether the
-/// coverage is full.
+/// applies, also at coverage 0. `p0.x` set: C is an `F_COVER` record, which already holds the
+/// coverage times its opacity (the mix's `opacity` is 1).
 pub const F_MIX_C: u32 = 4_194_304;
 
-/// `Content`: the pass writes a coverage record instead of pixels. A is alpha × mask; R is 1
-/// where that is 1 or more and G is 1 where it is 0 or less, both tested before the value is
-/// stored (a half-float slot rounds a near-opaque alpha to 1); B is 0. Only the `F_MIX_C` mix
-/// reads such a slot.
+/// `Content`: the pass writes a coverage record instead of pixels, of k = alpha × mask × the
+/// pass's `opacity`. R is 1 where k is 1 or more and G is 1 where it is 0 or less, both tested
+/// before the value is stored; A is k × 1024 and B is (1 − k) × 1024, so that a half-float slot
+/// keeps a k near either end. Only the `F_MIX_C` mix reads such a slot.
 pub const F_COVER: u32 = 16_777_216;
 
 /// `Lerp`: B mixed back towards A (the backdrop) by the layer's Blend If weight
@@ -541,6 +541,7 @@ impl<'a> Planner<'a> {
         }
         let floor = if clipped.iter().any(|c| c.visible && c.advanced.knockout == Knockout::Shallow) { Some(self.retain(backdrop)) } else { None };
         let mut b = self.layer(layer, &[], backdrop, ko)?;
+        let opacity = layer.opacity.clamp(0.0, 1.0);
         let clip = if single {
             let mut p = self.content_pass(layer)?;
             // Half floats round an alpha near 1 to 1: the record reads a full-precision copy.
@@ -548,11 +549,11 @@ impl<'a> Planner<'a> {
                 t.role = Role::Coverage;
             }
             p.flags |= F_COVER;
+            p.opacity = opacity;
             self.emit(p)
         } else {
             self.content(layer)?
         };
-        let opacity = layer.opacity.clamp(0.0, 1.0);
         for c in clipped.iter().filter(|c| c.visible) {
             let before = self.retain(b);
             let t = self.knockout_target(c, floor)?;
@@ -563,7 +564,8 @@ impl<'a> Planner<'a> {
             p.c = Some(self.retain(clip));
             p.flags = F_MIX_C;
             p.params[0] = [if single { 1.0 } else { 0.0 }, 0.0, 1.0, 0.0];
-            p.opacity = opacity;
+            // An `F_COVER` record already holds the base's opacity.
+            p.opacity = if single { 1.0 } else { opacity };
             b = self.emit(p);
         }
         self.release(clip);

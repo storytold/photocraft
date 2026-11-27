@@ -503,6 +503,65 @@ fn individually_clipped_multi_pass_bases_stay_on_the_cpu_at_32_bits() {
     }
 }
 
+/// The base's coverage is its alpha × opacity: where that reaches 1 (a 32-bit alpha above 1) the
+/// clipped values above 1 survive, whatever the opacity.
+#[test]
+fn individually_clipped_layers_keep_hdr_where_alpha_times_opacity_reaches_one() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    let mut d = doc(SampleType::F32, true);
+    d.layers.push(underlay(&d, 2));
+    let mut base = Layer::raster("base", d.pixel_format());
+    base.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 40, 34), &[0.3, 0.5, 0.2, 2.0]);
+    base.opacity = 0.5;
+    base.advanced.blend_clipped = false;
+    let mut c = Layer::raster("hdr clip", d.pixel_format());
+    let crect = Rect::new(8, 8, 38, 30);
+    c.surface_mut().unwrap().fill_rect(crect, &[2.0, 0.4, 0.6, 1.0]);
+    c.clipped = true;
+    d.layers.extend([base, c]);
+    let what = "HDR clipped layer, base alpha 2 at opacity 0.5";
+    let kept = |px: &[[f32; 4]], backend: &str| {
+        for y in crect.y0..crect.y1 {
+            for x in crect.x0..crect.x1 {
+                let red = px[(y * d.bounds().width() as i32 + x) as usize][0];
+                assert!(red > 1.0, "{what}, {backend} at ({x},{y}): red {red}");
+            }
+        }
+    };
+    kept(&photocraft_compose::render(&d, d.bounds()).px, "CPU");
+    check(&mut g, &d, what);
+    kept(&photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).expect(what), "GPU");
+    kept(&check_with(&g, &mut half, &d, 3.0 / 255.0, what), "half-float GPU");
+}
+
+/// A half-float accumulator rounds a coverage just below 1 to 1: the record also keeps the
+/// uncovered part, so the mix still weighs it, which shows over a 32-bit backdrop far above 1.
+#[test]
+fn individually_clipped_near_full_coverage_keeps_its_weight_on_half_floats() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    let mut d = doc(SampleType::F32, false);
+    let rect = Rect::new(4, 4, 40, 34);
+    let mut base = Layer::raster("base", d.pixel_format());
+    base.surface_mut().unwrap().fill_rect(rect, &[2000.0, 2000.0, 2000.0, 1.0]);
+    let mut m = LayerMask::reveal_all();
+    m.surface = Surface::with_default(PixelFormat { sample: SampleType::F32, ..PixelFormat::GRAY8 }, &[1.0]);
+    let values: Vec<f32> = (0..rect.width() * rect.height()).map(|i| if i % 3 == 0 { 1.0 - 2f32.powi(-13) } else { 1.0 }).collect();
+    m.surface.write_region(rect, &values);
+    base.mask = Some(m);
+    base.advanced.blend_clipped = false;
+    let mut c = Layer::raster("black clip", d.pixel_format());
+    c.surface_mut().unwrap().fill_rect(rect, &[0.0, 0.0, 0.0, 1.0]);
+    c.clipped = true;
+    d.layers.extend([base, c]);
+    let what = "near-full clip base coverage over HDR";
+    let cpu = photocraft_compose::render(&d, d.bounds());
+    assert!(cpu.px.iter().any(|p| p[0] > 0.2), "{what}: the uncovered part of the base must show");
+    check(&mut g, &d, what);
+    check_with(&g, &mut half, &d, 3.0 / 255.0, what);
+}
+
 /// A 16-bit, vector or feathered mask uploads as half floats, which can't tell near-full coverage
 /// from full: a 32-bit base wearing one keeps Blend Clipped Layers as Group off on the CPU; at 8
 /// bits it renders on the GPU.
