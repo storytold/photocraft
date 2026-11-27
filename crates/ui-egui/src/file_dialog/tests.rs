@@ -1582,7 +1582,14 @@ fn a_picked_path_that_is_not_valid_unicode_is_an_error() {
 #[test]
 fn every_open_format_has_its_own_filter() {
     let types = open_filters(PickRequest::open("document"), &[]).filters;
-    assert_eq!(types[0], FileFilter::new("All Formats", filters::OPEN_EXTS), "All Formats comes first");
+    // A build with the AVIF decoder adds it to All Formats and gets its own type; one without must
+    // not advertise a format File > Open then refuses.
+    let reads_avif = photocraft_codecs::Format::Avif.caps().read;
+    let mut all_formats = filters::OPEN_EXTS.to_vec();
+    if reads_avif {
+        all_formats.push("avif");
+    }
+    assert_eq!(types[0], FileFilter::new("All Formats", &all_formats), "All Formats comes first");
     let mut named: Vec<&str> = filters::OPEN_FILTERS.iter().flat_map(|(_, exts)| exts.iter().copied()).collect();
     let total = named.len();
     named.sort_unstable();
@@ -1595,6 +1602,7 @@ fn every_open_format_has_its_own_filter() {
     for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
         assert!(names.contains(&name), "{name}");
     }
+    assert_eq!(names.contains(&"AVIF"), reads_avif, "the AVIF type follows the decoder feature");
     // A command's own list replaces them all.
     assert_eq!(open_filters(PickRequest::open("file"), &["cube"]).filters, [FileFilter::new("Supported Files", &["cube"])]);
 }

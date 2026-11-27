@@ -33,7 +33,7 @@ nightly_init() {
 
 # Compile only: macOS runs the version query after signing (packaging/macos/nightly-verify.sh).
 nightly_compile_gui() {
-  (cd "$ROOT" && PHOTOCRAFT_OVERRIDE_VERSION="$VERSION" cargo build --release --locked -p photocraft --features heif --target "$NIGHTLY_RUST_TARGET")
+  (cd "$ROOT" && PHOTOCRAFT_OVERRIDE_VERSION="$VERSION" cargo build --release --locked -p photocraft --features heif,avif,avif-decode --target "$NIGHTLY_RUST_TARGET")
   NIGHTLY_GUI="$CARGO_TARGET_DIR/$NIGHTLY_RUST_TARGET/release/photocraft"
   [[ -f "$NIGHTLY_GUI" && ! -L "$NIGHTLY_GUI" ]] || nightly_die 'the owned GUI build did not produce a regular executable'
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$PHOTOCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the build'

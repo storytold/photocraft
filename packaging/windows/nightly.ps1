@@ -84,7 +84,7 @@ try {
   $env:PHOTOCRAFT_OVERRIDE_VERSION = $Version
   $env:PHOTOCRAFT_REQUIRE_WINRES = '1'
   $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static'
-  cargo build --release --locked -p photocraft --features heif --target $Target
+  cargo build --release --locked -p photocraft --features heif,avif,avif-decode --target $Target
   if ($LASTEXITCODE -ne 0) { throw "nightly cargo build failed: $LASTEXITCODE" }
 } finally {
   $env:PHOTOCRAFT_BUILD_CHANNEL = $oldChannel

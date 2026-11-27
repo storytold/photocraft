@@ -129,6 +129,11 @@ impl SaveCopyFormats {
     }
 
     fn lists_extension(self, ext: &str) -> bool {
+        // AVIF is the one Save As type a build's codec features decide (added in `save_filters`), so
+        // Save a Copy has to recognise a typed `.avif` here as well as in its own list.
+        if ext.eq_ignore_ascii_case("avif") && self.includes(ext) && photocraft_codecs::from_extension(ext).is_some_and(|format| format.caps().write) {
+            return true;
+        }
         SAVE_FILTERS.iter().any(|(_, exts)| self.includes(exts[0]) && exts.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed)))
     }
 
@@ -153,7 +158,18 @@ pub(super) fn open_filters(req: PickRequest, extensions: &[&str]) -> PickRequest
     if !extensions.is_empty() {
         return req.filter("Supported Files", extensions);
     }
-    OPEN_FILTERS.iter().fold(req.filter("All Formats", OPEN_EXTS), |req, (name, exts)| req.filter(*name, exts))
+    // AVIF is a build-time codec choice, as HEIF's decoder is: a build without `avif-decode` must
+    // not advertise a format File > Open then refuses.
+    let reads_avif = photocraft_codecs::from_extension("avif").is_some_and(|format| format.caps().read);
+    let mut all: Vec<&str> = OPEN_EXTS.to_vec();
+    if reads_avif {
+        all.push("avif");
+    }
+    let req = OPEN_FILTERS.iter().fold(req.filter("All Formats", &all), |req, (name, exts)| req.filter(*name, exts));
+    if reads_avif {
+        return req.filter("AVIF", &["avif"]);
+    }
+    req
 }
 
 /// `suggested` with a Netpbm subtype's extension (an opened .pgm) as the neutral .pnm, the name
@@ -179,6 +195,16 @@ fn save_filters(suggested: &Path, copy: Option<SaveCopyFormats>) -> Vec<(String,
         .filter(|(_, exts)| copy.is_none_or(|formats| formats.includes(exts[0])))
         .map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect()))
         .collect();
+    // Offered only when this build encodes AVIF, as in `open_filters`, and only where Save a Copy
+    // keeps the samples AVIF can hold. It goes with the other format names, after the three
+    // document types the list leads with.
+    if copy.is_none_or(|formats| formats.includes("avif"))
+        && photocraft_codecs::from_extension("avif").is_some_and(|format| format.caps().write)
+        && !v.iter().any(|(_, listed)| listed.iter().any(|e| e == "avif"))
+    {
+        let at = v.iter().skip(3).position(|(name, _)| name.to_ascii_lowercase().as_str() > "avif").map_or(v.len(), |i| i + 3);
+        v.insert(at, ("AVIF".to_string(), vec!["avif".to_string()]));
+    }
     // The type the extension is first for (`.psb` starts on PSB, not on PSD's second extension),
     // else any type that lists it.
     let own = v.iter().position(|(_, exts)| exts.first() == Some(&ext));
