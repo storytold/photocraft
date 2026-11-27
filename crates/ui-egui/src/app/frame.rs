@@ -162,7 +162,11 @@ impl PhotocraftApp {
         // A software adapter or CPU mode chosen at startup is every document's reason.
         crate::render_path::frame(self);
         // Every frame that started its stage record closes it, whichever way `ui_body` returns.
+        // Controls and panels write their values back on every pass; only the writes that change an option move its
+        // revision, which the options bar's version holds, so a pass that changed nothing leaves the bar settled.
+        let options = self.ui.tool_options.checkpoint();
         self.ui_body(ui);
+        self.ui.tool_options.settle(options);
         // What an injected step changed is the target of the rest of its request: only a change
         // between passes withdraws queued input (`withdraw_stale_input`).
         #[cfg(not(target_arch = "wasm32"))]

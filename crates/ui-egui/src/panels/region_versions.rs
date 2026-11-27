@@ -76,7 +76,7 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
-    let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
+    let shown = (app.ui.tool_options.revision(), super::options_bar::edit_key(app), text_target(app));
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
     let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
@@ -166,25 +166,6 @@ fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
     (app.ui.mask_target, app.ui.vector_mask_target, app.ui.filter_mask_target, &app.ui.selected_path).hash(&mut hasher);
     app.ui.tool.hash(&mut hasher);
     extra.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// A hash of `value` through its serialized form, which holds every stored field: for app state whose type has no
-/// `Hash` (floats, framework types).
-fn serialized(value: &impl serde::Serialize) -> u64 {
-    struct HashWriter<'a>(&'a mut std::collections::hash_map::DefaultHasher);
-    impl std::io::Write for HashWriter<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.write(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    // Writing to a hasher cannot fail, and every tool option serializes (they are saved).
-    let _ = serde_json::to_writer(HashWriter(&mut hasher), value);
     hasher.finish()
 }
 

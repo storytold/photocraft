@@ -98,7 +98,7 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
 fn reset_all(app: &mut PhotocraftApp) {
     crate::frame_tool::clear(app);
     app.ui.frame_tool = Default::default();
-    app.ui.tool_options = ToolOptions::default();
+    *app.ui.tool_options = ToolOptions::default();
     app.ui.artboard_tool = Default::default();
     app.ui.selection_mode = 0;
     reset_session_brush(app);
@@ -381,7 +381,7 @@ mod tests {
 
         let dialog = crate::menus::invoke(&mut app, &ctx, RESET_ALL, json!({})).unwrap()["dialog"].as_str().unwrap().to_string();
         assert_eq!(answer_dialog(&mut app, &ctx, "ui.dialog.confirm", &dialog)["ok"], true);
-        assert_eq!(app.ui.tool_options, ToolOptions::default());
+        assert_eq!(*app.ui.tool_options, ToolOptions::default());
         assert!(!app.dialog_open());
     }
 

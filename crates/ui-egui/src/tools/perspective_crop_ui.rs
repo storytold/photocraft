@@ -204,7 +204,7 @@ pub fn committed(app: &mut PhotocraftApp, out: &BarOutput) {
 /// range alert once.
 pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let document = document(app).unwrap_or_else(|| CropDocument::new(CropDocKey::new(0), Size::ZERO, 72.0));
-    let options = &mut app.ui.tool_options;
+    let options = &mut *app.ui.tool_options;
     let shown = PerspectiveCropBar::new(&mut options.perspective_crop, &document, Bind::bound(&mut options.perspective_crop_grid)).show(ui);
     if let Some(alert) = shown.out_of_range {
         crate::option_cells::range_alert(app, ui, &alert);

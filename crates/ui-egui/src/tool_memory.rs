@@ -98,10 +98,10 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     persist_colors(app, ctx);
     persist_group_tools(app, ctx, tool);
     persist_brushes(app);
-    if app.prefs_rt.tool_options.as_ref() == Some(&app.ui.tool_options) {
+    if app.prefs_rt.tool_options.as_ref() == Some(&*app.ui.tool_options) {
         return;
     }
-    app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
+    app.prefs_rt.tool_options = Some((*app.ui.tool_options).clone());
     let now = changed(&app.ui.tool_options);
     if app.session.prefs().tool_options != now {
         app.session.prefs.remember(|p| p.tool_options = now);
@@ -422,12 +422,12 @@ pub fn restore(app: &mut PhotocraftApp) {
         }
         if let Ok(mut o) = serde_json::from_value(Value::Object(cur)) {
             sanitize(&mut o);
-            app.ui.tool_options = o;
+            *app.ui.tool_options = o;
         }
     } else if !saved.is_null() {
         log::warn!("Preferences: the remembered tool options are not an object; using the defaults");
     }
-    app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
+    app.prefs_rt.tool_options = Some((*app.ui.tool_options).clone());
     restore_colors(app);
     restore_brushes(app);
 }

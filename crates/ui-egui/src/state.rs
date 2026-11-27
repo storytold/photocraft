@@ -422,7 +422,7 @@ pub struct UiState {
     #[serde(default)]
     pub selection_mode: u8,
     #[serde(default)]
-    pub tool_options: ToolOptions,
+    pub tool_options: Tracked<ToolOptions>,
     /// The shape Fill / Stroke swatches' recently used gradients, newest first (the Gradient
     /// tab's Recent row).
     #[serde(default)]
@@ -546,7 +546,7 @@ impl Default for UiState {
             brush_curves_open: BTreeSet::new(),
             brushes_panel: brushes_list(),
             selection_mode: 0,
-            tool_options: ToolOptions::default(),
+            tool_options: Tracked::new(ToolOptions::default()),
             recent_gradients: Vec::new(),
             next_id: 1,
             status: String::new(),
