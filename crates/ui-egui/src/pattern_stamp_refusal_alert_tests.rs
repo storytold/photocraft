@@ -55,6 +55,24 @@ fn a_hidden_target_layer() {
     refused(&mut app, "Could not use the pattern stamp because the target layer is hidden.");
 }
 
+/// The hidden-layer alert was measured on a layer's pixels only: a hidden mask keeps the status bar.
+#[test]
+fn a_hidden_layer_with_its_mask_targeted_keeps_the_status_bar() {
+    let mut app = app();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+    let id = active(&app);
+    app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    let before = steps(&app);
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 32.0 }, Modifiers::NONE);
+    assert!(alerts(&app).is_empty(), "{:?}", alerts(&app));
+    assert_eq!(steps(&app), before);
+    assert!(app.ui.status_error && app.ui.status.contains("target layer is hidden"), "{:?}", app.ui.status);
+}
+
 /// Layer refusals keep their priority when the colour mode also refuses the stroke.
 #[test]
 fn an_indexed_hidden_target_still_reports_the_hidden_layer() {

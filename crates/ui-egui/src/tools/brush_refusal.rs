@@ -71,6 +71,11 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
     // The Pattern Stamp's colour-mode alert depends on its pattern too (#12887), but a layer refusal
     // is the more specific reason the press cannot paint.
     if tool == Tool::PatternStamp {
+        // The hidden-layer modal was measured on a layer's pixels only: a hidden mask keeps the
+        // status bar, without replacing it with the Indexed Color message.
+        if hidden && !pixels_target(&crate::canvas::paint_target(app)) {
+            return None;
+        }
         let template = if hidden { Some(HIDDEN) } else { layer_refusal(app, tool) };
         if let Some(template) = template {
             return Some(crate::i18n::fmt(tl!(template), &[("tool", tl!("pattern stamp"))]));
