@@ -482,6 +482,13 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     Some(early.args)
 }
 
+/// The allocator on Windows: mimalloc instead of the system heap. The UI builds and frees many small values every
+/// frame, and the system heap's alloc and free took about 14 % of the UI thread (#15493). Linux keeps glibc, which
+/// `malloc_tuning` tunes to give closed documents' memory back (#8743); macOS keeps its system allocator.
+#[cfg(windows)]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> eframe::Result {
     let Some(arguments) = prepare_launch() else { return Ok(()) };
 

@@ -127,7 +127,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "typeTransform": crate::type_transform::inspect(app),
         "camTransform": app.ui.cam_transform,
         "layerMenu": menu.zip(kind).and_then(|(menu, kind)| match kind {
-            MenuKind::Layers { layers } => Some(json!({
+            MenuKind::Layers { layers, .. } => Some(json!({
                 "pos": menu.pos,
                 "layers": layers.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
             })),
