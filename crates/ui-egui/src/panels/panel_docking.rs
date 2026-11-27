@@ -231,6 +231,17 @@ impl DockPanels<String> for Panels<'_> {
         }
     }
 
+    /// The version of what the dock shows for a panel, which keys its column: the canvas shows state that changes
+    /// without a command (the view, redraw progress, animation and job overlays) and has none, so the docked tree it
+    /// sits in runs every pass while the columns beside it replay.
+    fn content(&self, panel: &String) -> Option<u64> {
+        match panel.as_str() {
+            CANVAS => None,
+            TOOLBAR => Some(super::region_versions::toolbar(self.app)),
+            id => Some(super::region_versions::panel(self.app, id)),
+        }
+    }
+
     /// The canvas group is the document area: it draws its own tabs and documents in the group's rect. The toolbar's
     /// group is its rail, which takes the group's full rect and measures its height at a width.
     fn group_view(&mut self, panels: &[String], _: usize, ui: &mut egui::Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {

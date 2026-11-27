@@ -91,6 +91,13 @@ pub(crate) fn toolbar_footer(app: &PhotocraftApp) -> u64 {
     version(app, (colours(app), quick_mask, app.ui.view.screen_mode))
 }
 
+/// The version of the toolbar's group view, which the dock keys the toolbar's column by: the rail's slots (in the
+/// preferences, which [`version`] holds with the tool), the tools its groups remember, whether the Edit Toolbar drawer
+/// is open, and what the footer shows ([`toolbar_footer`]).
+pub(crate) fn toolbar(app: &PhotocraftApp) -> u64 {
+    version(app, (toolbar_footer(app), &app.ui.group_tools, app.ui.toolbar_drawer))
+}
+
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
 /// its menu titles are in, whether the menus are in the bar (not in the macOS menu bar) and whether the bar takes the
 /// menu keys (F10, Alt, Alt+letter), which a dialog or the shortcut recorder holds back: a dialog closed with Escape
