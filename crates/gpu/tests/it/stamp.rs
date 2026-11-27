@@ -335,7 +335,7 @@ fn requested_tiles_come_back_with_the_stamped_values() {
         let mut pending = keys.clone();
         let mut tiles = Vec::new();
         while tiles.len() < keys.len() {
-            let taken = readback.request(&g.comp, &g.device, &g.queue, layer, &pending);
+            let taken = readback.request(&g.comp, &g.device, &g.queue, layer, &pending, 7);
             pending.drain(..taken);
             assert!(readback.in_flight() <= photocraft_gpu::MAX_IN_FLIGHT + 1);
             tiles.extend(readback.poll(&g.device, true));
@@ -343,7 +343,8 @@ fn requested_tiles_come_back_with_the_stamped_values() {
         assert_eq!(tiles.len(), keys.len());
         assert!(readback.bytes_requested() > 0);
         let mut seen = 0;
-        for ((tx, ty), values) in tiles {
+        for ((tx, ty), values, tag) in tiles {
+            assert_eq!(tag, 7, "the tag of the request comes back");
             assert_eq!(values.len(), 64 * 64);
             if tx == 500 {
                 assert!(values.iter().all(|v| *v == 0.0), "no texture, no coverage");
