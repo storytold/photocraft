@@ -2,7 +2,7 @@
 //! (`LiveStroke::begin_overlay`), with the commit's composite on the UI thread (`sync`, as #17082
 //! left it) or on the stroke's paint thread (`async`, the canvas's `PendingStroke`).
 //!
-//! `cargo run --release -p photocraft-automation --features gpu --example bench_pen_up -- <sync|async|cpu-live|gpu-live> <size> <hardness> <dabs> [--pace-ms MS]`
+//! `cargo run --release -p photocraft-automation --features gpu --example bench_pen_up -- <sync|async|cpu-live|gpu-live> <size> <hardness> <dabs> [--pace-ms MS] [--smoothing PERCENT]`
 //!
 //! The document, stroke and display sink are `bench_live_stroke_gpu`'s: 4928x3280, a white
 //! background under a pixel layer of non-uniform content, the zigzag at spacing 0.25. The stroke
@@ -145,6 +145,8 @@ type Asked = (Vec<(i32, i32)>, u64);
 enum Work {
     Dabs(Vec<GpuDab>),
     Read(Asked),
+    /// The smoothing tail to show over the coverage (empty: none).
+    Tail(Vec<GpuDab>),
 }
 
 /// A step the paint thread made: the points it painted, the rectangle it changed, the document it
@@ -214,12 +216,15 @@ fn paint_thread(mut live: LiveStroke, read: Option<Read>, from_ui: Receiver<Down
                 let step = if read.is_some() {
                     let Ok(dabs) = live.push_dabs(&points) else { return };
                     let dabs: Vec<GpuDab> = dabs.iter().map(gpu_dab).collect();
-                    let damage = dabs.iter().fold(Rect::EMPTY, |r, d| r.union(&d.rect)).intersect(&canvas);
+                    let (tail, redraw) = live.tail_dabs();
+                    let tail: Vec<GpuDab> = tail.iter().map(gpu_dab).collect();
+                    let damage = dabs.iter().fold(redraw, |r, d| r.union(&d.rect)).intersect(&canvas);
                     let (keys, epoch) = live.calm_keys(CALM_PUSHES);
                     let mut work = vec![Work::Dabs(dabs)];
                     if !keys.is_empty() {
                         work.push(Work::Read((keys, epoch)));
                     }
+                    work.push(Work::Tail(tail));
                     Step { points: points.len(), damage, doc: None, work }
                 } else {
                     let Ok(damage) = live.push(&points) else { return };
@@ -266,42 +271,104 @@ struct Ui {
     layer: photocraft_doc::LayerId,
     readback: MaskReadback,
     backlog: VecDeque<Asked>,
+    /// The 64 px tiles under the tail shown now.
+    tail_tiles: std::collections::HashSet<(i32, i32)>,
+    /// Tail tiles saved, and tails stamped, so far.
+    tail_saved: usize,
+    tails: usize,
 }
 
 impl Ui {
     /// Stamp the dabs and queue the requests, in order; the requests go to the read-back as far as it
     /// has room, all of them with `all`.
     fn run(&mut self, g: &mut Gpu<'_>, work: Vec<Work>, all: bool) -> Result<(), Box<dyn std::error::Error>> {
-        for item in work {
+        // As the canvas's `GpuUi::run`: dabs take the tail back first, a request is asked for as it
+        // comes (before the step's tail), a tail replaced in the same batch is not stamped.
+        let last_stamp = work.iter().rposition(|w| matches!(w, Work::Dabs(_) | Work::Tail(_)));
+        for (i, item) in work.into_iter().enumerate() {
             match item {
-                Work::Dabs(dabs) if dabs.is_empty() => {}
                 Work::Dabs(dabs) => {
-                    let mut enc = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_stamp") });
-                    g.comp.stamp_dabs(g.device, g.queue, &mut enc, self.layer, &dabs)?;
-                    g.queue.submit([enc.finish()]);
+                    self.take_tail_back(g);
+                    if !dabs.is_empty() {
+                        let mut enc = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_stamp") });
+                        g.comp.stamp_dabs(g.device, g.queue, &mut enc, self.layer, &dabs)?;
+                        g.queue.submit([enc.finish()]);
+                    }
                 }
                 Work::Read(asked) => {
                     if !asked.0.is_empty() {
                         self.backlog.push_back(asked);
                     }
+                    self.ask(g, all);
+                }
+                Work::Tail(dabs) if Some(i) == last_stamp => self.show_tail(g, &dabs)?,
+                Work::Tail(_) => {}
+            }
+        }
+        self.ask(g, all);
+        Ok(())
+    }
+
+    fn take_tail_back(&mut self, g: &mut Gpu<'_>) {
+        if self.tail_tiles.is_empty() {
+            return;
+        }
+        self.tail_tiles.clear();
+        let mut enc = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_restore_tail") });
+        g.comp.restore_tail(&mut enc, self.layer);
+        g.queue.submit([enc.finish()]);
+    }
+
+    fn show_tail(&mut self, g: &mut Gpu<'_>, dabs: &[GpuDab]) -> Result<(), Box<dyn std::error::Error>> {
+        if dabs.is_empty() {
+            self.take_tail_back(g);
+            return Ok(());
+        }
+        self.tail_tiles.clear();
+        for d in dabs {
+            for ty in d.rect.y0.div_euclid(64)..=(d.rect.y1 - 1).div_euclid(64) {
+                for tx in d.rect.x0.div_euclid(64)..=(d.rect.x1 - 1).div_euclid(64) {
+                    self.tail_tiles.insert((tx, ty));
                 }
             }
         }
-        while let Some((keys, epoch)) = self.backlog.front_mut() {
+        let mut enc = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_stamp_tail") });
+        self.tail_saved += g.comp.stamp_tail(g.device, g.queue, &mut enc, self.layer, dabs)?;
+        self.tails += 1;
+        g.queue.submit([enc.finish()]);
+        Ok(())
+    }
+
+    /// Requests go to the read-back as far as it has room, the oldest first, all of them with `all`;
+    /// the tiles under the tail shown wait.
+    fn ask(&mut self, g: &mut Gpu<'_>, all: bool) {
+        let mut kept = VecDeque::new();
+        let mut full = false;
+        while let Some((keys, epoch)) = self.backlog.pop_front() {
+            if full {
+                kept.push_back((keys, epoch));
+                continue;
+            }
+            let (held, mut now): (Vec<_>, Vec<_>) = keys.into_iter().partition(|k| self.tail_tiles.contains(k));
+            if !held.is_empty() {
+                kept.push_back((held, epoch));
+            }
+            if now.is_empty() {
+                continue;
+            }
             let taken = if all {
-                self.readback.request_all(g.comp, g.device, g.queue, self.layer, keys, *epoch);
-                keys.len()
+                self.readback.request_all(g.comp, g.device, g.queue, self.layer, &now, epoch);
+                now.len()
             } else {
-                self.readback.request(g.comp, g.device, g.queue, self.layer, keys, *epoch)
+                self.readback.request(g.comp, g.device, g.queue, self.layer, &now, epoch)
             };
-            keys.drain(..taken);
-            if keys.is_empty() {
-                self.backlog.pop_front();
-            } else {
-                break;
+            now.drain(..taken);
+            if !now.is_empty() {
+                kept.push_back((now, epoch));
+                full = true;
             }
         }
-        Ok(())
+        self.backlog = kept;
     }
 }
 
@@ -328,8 +395,11 @@ fn live_run(
         let preview = live.gpu_preview().map_err(|why| format!("the stroke is not a GPU stroke: {why}"))?;
         let precision = g.comp.begin_external_mask(g.device, preview.doc.id, preview.layer, preview.doc.bounds(), None);
         println!("mask_precision={precision:?}");
-        let mut state = Ui { layer: preview.layer, readback: MaskReadback::new(), backlog: VecDeque::new() };
-        state.run(g, vec![Work::Dabs(first.iter().map(gpu_dab).collect())], false)?;
+        let mut state =
+            Ui { layer: preview.layer, readback: MaskReadback::new(), backlog: VecDeque::new(), tail_tiles: Default::default(), tail_saved: 0, tails: 0 };
+        let mut live = live;
+        let tail = live.tail_dabs().0.iter().map(gpu_dab).collect();
+        state.run(g, vec![Work::Dabs(first.iter().map(gpu_dab).collect()), Work::Tail(tail)], false)?;
         ui = Some(state);
         (live, preview.doc)
     } else {
@@ -443,6 +513,7 @@ fn live_run(
     }
     let (commit, overlay) = commit.ok_or("no commit")?;
     let (landing, mb) = land(s, commit, params, overlay, (&mut *g.comp, g.device, g.queue, &mut display))?;
+    let (tail_per_step, tails) = ui.as_ref().map_or((0.0, 0), |u| (u.tail_saved as f64 / u.tails.max(1) as f64, u.tails));
     if let Some(ui) = ui.as_ref() {
         g.comp.clear_external_mask(ui.layer);
     }
@@ -457,7 +528,8 @@ fn live_run(
          frame_ms mean={:.3} p95={:.3} max={:.3} (stamps+requests {t_work:.1} total, render+wait {t_render:.1} total)\n\
          release_frame_ms={release:.2}\n\
          landing_frame_ms={landing:.2} (uploads {mb:.1} MB)\n\
-         pen_up_to_committed_ms={committed:.1}",
+         pen_up_to_committed_ms={committed:.1}\n\
+         tail_tiles_saved_per_step={tail_per_step:.1} (tails stamped {tails})",
         if gpu_dabs { "gpu-live" } else { "cpu-live" },
         total / n as f64,
         pct(0.95),
@@ -475,6 +547,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !matches!(mode.as_str(), "sync" | "async" | "cpu-live" | "gpu-live") {
         return Err("mode is sync, async, cpu-live or gpu-live".into());
     }
+    let smoothing: f64 = args.iter().position(|a| a == "--smoothing").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let pace_ms: f64 = args.iter().position(|a| a == "--pace-ms").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(8.0);
 
     let adapter = pollster::block_on(
@@ -512,7 +585,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    let mut params = json!({"size": size, "hardness": hardness, "spacing": 0.25, "color": "#ff0000", "smoothing": 0.0, "target": "pixels"});
+    let mut params = json!({"size": size, "hardness": hardness, "spacing": 0.25, "color": "#ff0000", "smoothing": smoothing / 100.0, "target": "pixels"});
     let (w, h) = (f64::from(W), f64::from(H));
     let step = size * 0.25;
     let margin = size;
