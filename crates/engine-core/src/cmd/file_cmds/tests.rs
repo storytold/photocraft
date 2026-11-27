@@ -3231,17 +3231,17 @@ fn color_lookup_table_bakes_the_adjustment_stack() {
     let mut s = session(8, 8, 8);
     assert!(!s.is_enabled("file.export.colorLookupTables"));
     s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
-    let r = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
+    let r = s.execute("file.export.colorLookupTables", json!({"size": 7})).unwrap();
     let cube = r["cube"].as_str().unwrap();
-    assert!(cube.contains("LUT_3D_SIZE 3"));
+    assert!(cube.contains("LUT_3D_SIZE 7"));
     let rows: Vec<Vec<f32>> =
         cube.lines().filter(|l| l.chars().next().is_some_and(|c| c.is_ascii_digit())).map(|l| l.split(' ').map(|v| v.parse().unwrap()).collect()).collect();
-    assert_eq!(rows.len(), 27);
-    // First entry (0,0,0) → white; second (r = 0.5) → 0.5; last (1,1,1) → black.
+    assert_eq!(rows.len(), 343);
+    // First entry (0,0,0) → white; second (r = 1/6) → 5/6; last (1,1,1) → black.
     assert!(rows[0].iter().all(|v| (v - 1.0).abs() < 1e-3), "{:?}", rows[0]);
-    assert!((rows[1][0] - 0.5).abs() < 0.01 && (rows[1][1] - 1.0).abs() < 1e-3);
-    assert!(rows[2][0].abs() < 1e-3 && (rows[2][2] - 1.0).abs() < 1e-3, "red fastest");
-    assert!(rows[26].iter().all(|v| v.abs() < 1e-3));
+    assert!((rows[1][0] - 5.0 / 6.0).abs() < 0.01 && (rows[1][1] - 1.0).abs() < 1e-3);
+    assert!((rows[2][0] - 4.0 / 6.0).abs() < 0.01 && (rows[2][2] - 1.0).abs() < 1e-3, "red fastest");
+    assert!(rows[342].iter().all(|v| v.abs() < 1e-3));
     let dir = tmp("lut");
     let path = join(&dir, "invert.cube");
     s.execute("file.export.colorLookupTables", json!({"path": path, "size": 17})).unwrap();
@@ -3253,29 +3253,29 @@ fn cube_export_uses_only_selected_adjustments_in_document_order() {
     let mut s = session(8, 8, 8);
     let first = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let second = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
-    let both = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
+    let both = s.execute("file.export.colorLookupTables", json!({"size": 7})).unwrap();
     let all = craft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
     assert_eq!(both["layerCount"], 2);
     assert!(all.data[0] < 0.001, "two Invert adjustments produce identity");
 
     // Selection comes from the Layers panel rather than the active layer alone.
     s.execute("layer.select", json!({"layer": first})).unwrap();
-    let selected = s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
+    let selected = s.execute("file.export.colorLookupTables", json!({"size": 7, "scope": "selected"})).unwrap();
     let one = craft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
     assert_eq!(selected["layerCount"], 1);
     assert!(one.data[0] > 0.999, "one invert maps black to white");
     assert_eq!(all.size, one.size);
-    assert_eq!(s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [first]})).unwrap()["cube"], selected["cube"]);
+    assert_eq!(s.execute("file.export.colorLookupTables", json!({"size": 7, "layers": [first]})).unwrap()["cube"], selected["cube"]);
 
     // Reversing the caller's ID list must not reverse document stack order.
-    let normal = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [first, second]})).unwrap();
-    let reversed = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [second, first]})).unwrap();
+    let normal = s.execute("file.export.colorLookupTables", json!({"size": 7, "layers": [first, second]})).unwrap();
+    let reversed = s.execute("file.export.colorLookupTables", json!({"size": 7, "layers": [second, first]})).unwrap();
     assert_eq!(normal["cube"], reversed["cube"]);
     assert_eq!(normal["cube"], both["cube"]);
 
     // Additional non-adjustment layers must not affect the LUT export.
     s.execute("layer.new.layer", json!({"name": "Raster"})).unwrap();
-    assert_eq!(s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap()["cube"], both["cube"]);
+    assert_eq!(s.execute("file.export.colorLookupTables", json!({"size": 7})).unwrap()["cube"], both["cube"]);
 }
 
 #[test]
@@ -3285,11 +3285,11 @@ fn selected_cube_validation_is_explicit_and_never_mutates_the_document() {
     let raster = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     let rev = s.active().unwrap().revision;
     let history = s.active().unwrap().history.past_len();
-    let valid = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [a]})).unwrap();
+    let valid = s.execute("file.export.colorLookupTables", json!({"size": 7, "layers": [a]})).unwrap();
     assert_eq!(valid["layerCount"], 1);
     for params in [
         json!({"size": 1}),
-        json!({"size": 130}),
+        json!({"size": 257}),
         json!({"size": 1.5}),
         json!({"size": -3}),
         json!({"scope": "unknown"}),
@@ -3307,7 +3307,7 @@ fn selected_cube_validation_is_explicit_and_never_mutates_the_document() {
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
     s.execute("layer.select", json!({"layer": raster})).unwrap();
-    assert!(s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).is_err());
+    assert!(s.execute("file.export.colorLookupTables", json!({"size": 7, "scope": "selected"})).is_err());
 }
 
 #[test]

@@ -154,10 +154,10 @@ fn explicit_layers_and_the_selection_keep_the_adjustment_only_table() {
         let l = green(d, 1.0);
         d.layers.push(l);
     });
-    let r = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [invert.0]})).unwrap();
+    let r = s.execute("file.export.colorLookupTables", json!({"size": 7, "layers": [invert.0]})).unwrap();
     assert_eq!(r["layerCount"], 1);
     assert!(r["cube"].as_str().unwrap().contains("1.000000 1.000000 1.000000"), "the Invert alone, as before");
-    let r = s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"}));
+    let r = s.execute("file.export.colorLookupTables", json!({"size": 7, "scope": "selected"}));
     assert!(r.is_ok() || r.unwrap_err().to_string().contains("adjustment"), "the selection path is unchanged");
 }
 

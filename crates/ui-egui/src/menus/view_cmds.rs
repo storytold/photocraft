@@ -212,5 +212,9 @@ mod tests;
 mod fit_image_sticky_tests;
 
 #[cfg(test)]
+#[path = "view_cmds/clut_grid_field_tests.rs"]
+mod clut_grid_field_tests;
+
+#[cfg(test)]
 #[path = "view_cmds/save_a_copy_name_tests.rs"]
 mod save_a_copy_name_tests;

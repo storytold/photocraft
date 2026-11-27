@@ -593,7 +593,7 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     let id = open_form(&mut app, &ctx, "file.export.colorLookupTables");
     let shown = fields(&app, id);
     assert_eq!(shown["scope"], "selected");
-    assert_eq!(shown["size"], 33);
+    assert_eq!(shown["size"], 32);
     assert_eq!(choice_ids(&mut app, "file.export.colorLookupTables", "scope"), ["all", "selected"]);
     cancel(&mut app, &ctx, id);
 
@@ -603,9 +603,9 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     cancel(&mut app, &ctx, id);
 
     app.run("layer.select", json!({"layer": current})).unwrap();
-    let direct = app.run("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
+    let direct = app.run("file.export.colorLookupTables", json!({"size": 7, "scope": "selected"})).unwrap();
     assert_eq!(direct["layerCount"], 1);
-    assert!(direct["cube"].as_str().unwrap().contains("LUT_3D_SIZE 3"));
+    assert!(direct["cube"].as_str().unwrap().contains("LUT_3D_SIZE 7"));
 }
 
 /// Batch and Image Processor carry Photoshop's "Include All Subfolders" checkbox (AUTO-219-5,

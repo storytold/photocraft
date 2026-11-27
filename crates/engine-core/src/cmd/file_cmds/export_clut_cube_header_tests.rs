@@ -24,7 +24,7 @@ fn values(cube: &str) -> Vec<String> {
 #[test]
 fn header_follows_the_reference_comment_layout() {
     let mut s = session(8);
-    let text = cube(&mut s, 3);
+    let text = cube(&mut s, 7);
     let head: Vec<&str> = text.lines().take(12).collect();
     assert_eq!(
         head,
@@ -33,7 +33,7 @@ fn header_follows_the_reference_comment_layout() {
             "TITLE \"My Look\"",
             "",
             "#LUT size",
-            "LUT_3D_SIZE 3",
+            "LUT_3D_SIZE 7",
             "",
             "#data domain",
             "DOMAIN_MIN 0.0 0.0 0.0",
@@ -43,7 +43,7 @@ fn header_follows_the_reference_comment_layout() {
             data_lines(&text)[0],
         ]
     );
-    assert_eq!(text.lines().count(), 11 + 27);
+    assert_eq!(text.lines().count(), 11 + 343);
 }
 
 #[test]
@@ -78,9 +78,9 @@ fn thirty_two_bit_values_are_not_quantised() {
 fn exported_text_parses_back_with_the_same_values() {
     for depth in [8, 32] {
         let mut s = session(depth);
-        let text = cube(&mut s, 5);
+        let text = cube(&mut s, 8);
         let lut = craft_cms::lutfile::parse_cube(&text).unwrap();
-        assert_eq!(lut.size, 5);
+        assert_eq!(lut.size, 8);
         assert_eq!(lut.title, "My Look");
         let written: Vec<f32> = values(&text).iter().map(|x| x.parse().unwrap()).collect();
         assert_eq!(lut.data.len(), written.len());
@@ -94,20 +94,22 @@ fn exported_text_parses_back_with_the_same_values() {
 fn shared_writer_keeps_empty_and_quoted_titles_and_red_fastest_order() {
     let mut s = session(32);
     for (title, escaped) in [("", ""), ("A \"look\"", "A 'look'")] {
-        let result = s.execute("file.export.colorLookupTables", json!({"size": 2, "title": title})).unwrap();
+        let result = s.execute("file.export.colorLookupTables", json!({"size": 7, "title": title})).unwrap();
         let text = result["cube"].as_str().unwrap();
         assert_eq!(text.lines().nth(1).unwrap(), format!("TITLE \"{escaped}\""));
+        // The Invert of a 7-point lattice, red changing fastest: the first seven rows walk red from
+        // 1 down to 0 in 1/6 steps with green and blue held, and row eight is where green steps.
         assert_eq!(
-            data_lines(text),
+            &data_lines(text)[..8],
             [
                 "1.000000 1.000000 1.000000",
+                "0.833333 1.000000 1.000000",
+                "0.666667 1.000000 1.000000",
+                "0.500000 1.000000 1.000000",
+                "0.333333 1.000000 1.000000",
+                "0.166667 1.000000 1.000000",
                 "0.000000 1.000000 1.000000",
-                "1.000000 0.000000 1.000000",
-                "0.000000 0.000000 1.000000",
-                "1.000000 1.000000 0.000000",
-                "0.000000 1.000000 0.000000",
-                "1.000000 0.000000 0.000000",
-                "0.000000 0.000000 0.000000",
+                "1.000000 0.833333 1.000000",
             ]
         );
     }
