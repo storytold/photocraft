@@ -624,6 +624,19 @@ pub fn layer_change_bounds(doc: &Document, id: photocraft_doc::LayerId) -> Optio
     Some(if r.is_empty() { r } else { r.inflate(reach).intersect(&canvas) })
 }
 
+/// Where a layer with effects can change anything: its pixels (a group's children with their own
+/// effects; a shapeless stroke-only layer's stroke reach) grown by `effects::margin`, past the
+/// canvas too. `None` when it can reach anywhere (its content isn't transparent outside its
+/// bounds). A CPU render tile outside it skips the layer.
+pub fn effects_reach(layer: &Layer) -> Option<Rect> {
+    if !transparent_outside(layer) {
+        return None;
+    }
+    let everywhere = Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4);
+    let bounds = shapeless_stroke_bounds(layer).unwrap_or_else(|| effect_source_bounds(layer, everywhere));
+    Some(bounds.inflate(effects::margin(layer)))
+}
+
 /// Whether the layer's content is transparent outside its bounds (every surface it draws from
 /// has a transparent default pixel), so its effects can't change pixels beyond its bounds grown
 /// by their reach.

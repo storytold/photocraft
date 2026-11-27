@@ -1341,6 +1341,31 @@ fn fully_hiding_mask_keeps_hdr_values_across_cpu_render_tiles() {
     }
 }
 
+/// A partly hiding mask changes nothing beyond the layer's reach, so 32-bit values above 1 stay
+/// there on both compositors.
+#[test]
+fn partly_hiding_mask_keeps_hdr_values_beyond_the_effects_reach() {
+    let Some(mut g) = gpu() else { return };
+    let w = photocraft_compose::RENDER_TILE * 2 + 88;
+    let mut d = Document::new("wide", Size::new(w as u32, 64), ColorMode::Rgb, SampleType::F32);
+    let mut bottom = Layer::raster("hdr", d.pixel_format());
+    let px: Vec<f32> = (0..w * 64).flat_map(|_| [2.0, 1.5, 1.25, 1.0]).collect();
+    bottom.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, w as u32, 64), &px);
+    d.layers.push(bottom);
+    let mut l = noise_layer("fx", d.pixel_format(), Rect::new(100, 16, 140, 48), 3, 0.5);
+    l.effects.items.push(Effect::default_drop_shadow());
+    l.mask = Some(LayerMask { surface: Surface::with_default(PixelFormat::GRAY8, &[0.5]), ..LayerMask::reveal_all() });
+    l.advanced.layer_mask_hides_effects = true;
+    d.layers.push(l);
+    check(&mut g, &d, "HDR under a partly hiding mask");
+    let out = photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).expect("render");
+    let at = |x: i32, y: i32| out[(y * w + x) as usize];
+    for (x, y, what) in [(w - 20, 30, "far from the layer"), (200, 30, "beyond the layer in its first tile")] {
+        assert!(at(x, y)[..3].iter().all(|&v| v > 1.0), "{what}: HDR value clamped, got {:?}", at(x, y));
+    }
+    assert!(at(120, 30)[..3].iter().all(|&v| v <= 1.0), "under the layer the partial mix clamps, got {:?}", at(120, 30));
+}
+
 /// A fill layer whose vector mask hides its effects is laid out as the CPU lays it out, from the
 /// layer without that mask: the canvas, not the revealed middle half the mask would otherwise
 /// give as its frame.

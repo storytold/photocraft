@@ -1116,7 +1116,8 @@ impl<'a> Planner<'a> {
     /// backdrop by them (`advanced::apply_hiding_mask`: `mix(before, after, k)`, B untouched where
     /// `k >= 1` and A where `k <= 0`, so HDR values survive: `p0.z` and `p0.w`). `k` comes as an
     /// `F_COVER` record (`p0.x`), so a half-float slot can't make partial coverage full or none.
-    /// Drawn atop a clipping base the same mix works on the base's own alpha, which both sides
+    /// The mix runs only within the layer's reach (`photocraft_compose::effects_reach`), as on the
+    /// CPU. Drawn atop a clipping base the same mix works on the base's own alpha, which both sides
     /// share: the CPU's opaque copies of the base give the same colours. Consumes `backdrop`.
     fn effects_hiding(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
         if !photocraft_compose::advanced::hides_effects(layer) {
@@ -1131,6 +1132,10 @@ impl<'a> Planner<'a> {
             self.release(before);
             return Ok(after);
         };
+        // Outside the layer's reach the CPU leaves the backdrop alone, however partial the mask is
+        // there (`advanced::apply_hiding_mask`): the mix runs only within it.
+        let reach = photocraft_compose::effects_reach(layer).filter(|r| !r.contains_rect(&self.cx.canvas));
+        let outside = reach.map(|r| (self.retain(before), r));
         let mut p = Pass::new(Kernel::Content, 0);
         p.color = [1.0; 4];
         p.mask = Some(hide);
@@ -1143,7 +1148,12 @@ impl<'a> Planner<'a> {
         p.flags = F_MIX_C;
         p.params[0] = [1.0, 0.0, 1.0, 1.0];
         p.opacity = 1.0;
-        Ok(self.emit(p))
+        p.clip = reach;
+        let mixed = self.emit(p);
+        Ok(match outside {
+            Some((backdrop, r)) => self.write_back(backdrop, mixed, r),
+            None => mixed,
+        })
     }
 
     /// Plans enabled layer effects in the same phase order as the CPU compositor.

@@ -1,6 +1,6 @@
 use super::content::{channel_weights, empty_in, render_content_with, restore_channels, surface_to_buffer_with};
 use super::ctx::Ctx;
-use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
+use super::extents::{effects_frame, effects_reach, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps_with;
 use super::{BlendMode, Buffer, BufferAlloc, Fill, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
 
@@ -526,7 +526,7 @@ fn composite_layer_plain_with<A: BufferAlloc>(
         let before = if hide.is_some() { Some(alloc.clone(backdrop)?) } else { None };
         composite_layer_effects_with(&src, clipped, backdrop, cx, alloc)?;
         if let (Some(m), Some(b)) = (&hide, &before) {
-            advanced::apply_hiding_mask(backdrop, b, m);
+            advanced::apply_hiding_mask(backdrop, b, m, effects_reach(layer));
         }
         recycle_mask(hide);
         return Ok(());
@@ -685,6 +685,7 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
         // The full-region effect maps already capture their neighbourhoods.
         // A mask that hides the effects applies to the finished result instead.
         let hide = advanced::hiding_mask(layer, rect, cx);
+        let reach = effects_reach(layer);
         let src = advanced::effects_source(layer);
         let layer = src.as_ref();
         let (content, parts) = match split_parts_with(layer, rect, cx, alloc)? {
@@ -712,7 +713,7 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
             for p in &mut plain.px {
                 p[3] = 1.0;
             }
-            advanced::apply_hiding_mask(&mut opaque, &plain, m);
+            advanced::apply_hiding_mask(&mut opaque, &plain, m, reach);
         }
         recycle_mask(hide);
         for (p, o) in base.px.iter_mut().zip(&opaque.px) {

@@ -1,6 +1,6 @@
 use super::composite::{adjustment_quantum, blend_into};
 use super::ctx::Ctx;
-use super::extents::{effect_shape, effect_source_bounds, mask_vals, recycle_mask, shapeless_stroke_bounds, transparent_outside};
+use super::extents::{effect_shape, effects_reach, mask_vals, recycle_mask};
 use super::fx_cache::effect_maps;
 use super::{
     BlendMode, Buffer, BufferAlloc, Document, Fill, InfallibleBufferAlloc, Layer, LayerContent, Pattern, Rect, Surface, bounds, effects, gradient_fill,
@@ -208,12 +208,8 @@ pub(crate) fn render_fill(f: &Fill, rect: Rect, canvas: Rect, patterns: &pattern
 /// vanish with it.
 pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {
     if effects::has_effects(layer) {
-        // Effects reach at most `margin` beyond the layer's pixels (when it is transparent
-        // outside them; a group's from its children with their effects): render tiles away from a
-        // small text layer skip it entirely.
-        let canvas = Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4);
-        let bounds = shapeless_stroke_bounds(layer).unwrap_or_else(|| effect_source_bounds(layer, canvas));
-        return transparent_outside(layer) && bounds.inflate(effects::margin(layer)).intersect(&rect).is_empty();
+        // Render tiles away from a small text layer and its effects skip it entirely.
+        return effects_reach(layer).is_some_and(|r| r.intersect(&rect).is_empty());
     }
     match &layer.content {
         LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => match layer.surface() {

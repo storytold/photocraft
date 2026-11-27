@@ -487,6 +487,31 @@ fn fully_hiding_mask_keeps_hdr_backdrop_in_every_tile() {
     }
 }
 
+/// A partly hiding mask mixes, and so clamps, only within reach of the layer and its effects:
+/// HDR values farther out stay, whether or not a render tile reaches the layer.
+#[test]
+fn partly_hiding_mask_keeps_hdr_backdrop_beyond_the_effects_reach() {
+    let mut d = Document::new("t", Size::new(600, 64), ColorMode::Rgb, SampleType::F32);
+    let mut hdr = Layer::raster("hdr", d.pixel_format());
+    let px: Vec<f32> = (0..600 * 64).flat_map(|_| [2.0, 1.5, 1.25, 1.0]).collect();
+    hdr.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 600, 64), &px);
+    d.layers.push(hdr);
+    let mut l = solid(&d, "fx", Rect::new(100, 16, 140, 48), BLUE);
+    l.effects.items.push(Effect::default_drop_shadow());
+    l.mask = Some(LayerMask { surface: photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.5]), ..LayerMask::reveal_all() });
+    l.advanced.layer_mask_hides_effects = true;
+    d.layers.push(l);
+    let a = render_tiled(&d, d.bounds(), 256);
+    let b = render_tiled(&d, d.bounds(), 64);
+    assert!(a.px.iter().zip(&b.px).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1e-5)), "tile size changes the result");
+    for (x, y, what) in [(560, 30, "far from the layer"), (200, 30, "beyond the layer in its first tile")] {
+        let got = a.px[y * 600 + x];
+        assert!(got[..3].iter().all(|&v| v > 1.0), "{what}: HDR value clamped, got {got:?}");
+    }
+    let under = a.px[30 * 600 + 120];
+    assert!(under[..3].iter().all(|&v| v <= 1.0), "under the layer the partial mix clamps, got {under:?}");
+}
+
 #[test]
 fn vector_mask_hides_effects() {
     use photocraft_doc::{Path, Subpath, VectorMask};
