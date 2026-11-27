@@ -139,12 +139,15 @@ fn compose(preview: &Document, doc: &Document, work: &Layer, plan: &StylePlan, c
     bands(&mut out.px, width * BAND_ROWS, |i, px| {
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
-        let mut over = if matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough) {
-            Buffer::transparent(band)
-        } else {
-            scaled_backdrop(preview, band, plan.scale)
-        };
+        let blended = !matches!(work.blend, BlendMode::Normal | BlendMode::PassThrough);
+        let mut over = if !blended { Buffer::transparent(band) } else { scaled_backdrop(preview, band, plan.scale) };
+        let backdrop = blended.then(|| over.clone());
         effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns);
+        if let Some(backdrop) = backdrop.as_ref() {
+            for (result, backdrop) in over.px.iter_mut().zip(&backdrop.px) {
+                *result = overlay_without_backdrop(*result, *backdrop);
+            }
+        }
         // Copied, not moved out, so `over` hands its band back to the scratch pool on drop.
         for (o, p) in px.iter_mut().zip(over.px.iter().copied()) {
             *o = p;
@@ -209,15 +212,43 @@ fn scaled_backdrop_tile(doc: &Document, shown: Rect, scale: f64) -> Buffer {
             let mix = |i| {
                 let fx = fx as f32;
                 let fy = fy as f32;
-                let top = a[i] * (1.0 - fx) + b[i] * fx;
-                let bottom = c[i] * (1.0 - fx) + d[i] * fx;
-                top * (1.0 - fy) + bottom * fy
+                let alpha = a[3] * (1.0 - fx) * (1.0 - fy) + b[3] * fx * (1.0 - fy) + c[3] * (1.0 - fx) * fy + d[3] * fx * fy;
+                if alpha <= 0.0 {
+                    return 0.0;
+                }
+                let premul = a[i] * a[3] * (1.0 - fx) * (1.0 - fy) + b[i] * b[3] * fx * (1.0 - fy) + c[i] * c[3] * (1.0 - fx) * fy + d[i] * d[3] * fx * fy;
+                premul / alpha
             };
             let index = (y - shown.y0) as usize * shown.width() as usize + (x - shown.x0) as usize;
-            out.px[index] = [mix(0), mix(1), mix(2), mix(3)];
+            let alpha = a[3] * (1.0 - fx as f32) * (1.0 - fy as f32)
+                + b[3] * fx as f32 * (1.0 - fy as f32)
+                + c[3] * (1.0 - fx as f32) * fy as f32
+                + d[3] * fx as f32 * fy as f32;
+            out.px[index] = [mix(0), mix(1), mix(2), alpha];
         }
     }
     out
+}
+
+/// Keep only the moving layer's contribution: the document backdrop is already painted behind
+/// the styled texture by the canvas. Pixels where the blend result equals the backdrop become
+/// transparent, avoiding a second source-over of translucent backdrop pixels.
+fn overlay_without_backdrop(result: [f32; 4], backdrop: [f32; 4]) -> [f32; 4] {
+    const EPS: f32 = 1.0e-5;
+    let result_premul = [result[0] * result[3], result[1] * result[3], result[2] * result[3]];
+    let backdrop_premul = [backdrop[0] * backdrop[3], backdrop[1] * backdrop[3], backdrop[2] * backdrop[3]];
+    let alpha = if backdrop[3] < 1.0 - EPS {
+        ((result[3] - backdrop[3]) / (1.0 - backdrop[3])).clamp(0.0, 1.0)
+    } else if result[3] <= EPS || result_premul.iter().zip(backdrop_premul).all(|(a, b)| (a - b).abs() <= EPS) {
+        0.0
+    } else {
+        1.0
+    };
+    if alpha <= EPS {
+        return [0.0; 4];
+    }
+    let rgb = [0, 1, 2].map(|i| (result_premul[i] - backdrop_premul[i] * (1.0 - alpha)) / alpha);
+    [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0), alpha]
 }
 
 fn copy_into(dst: &mut Buffer, src: &Buffer) {
@@ -405,7 +436,9 @@ mod tests {
         let texels = ColorImage::new([20, 20], vec![Color32::BLACK; 400]);
         let (plan, content) = planned(&source, &texels, rect_quad([60.0, 60.0, 140.0, 140.0]), 1.0);
         let out = source.compose(&plan, &content).expect("composited");
-        assert!(is(at(&out, &plan, 100.0, 100.0), [255, 255, 255]));
+        // Screen black over an opaque white backdrop contributes no overlay pixels: the canvas
+        // already paints that backdrop underneath the styled texture.
+        assert_eq!(at(&out, &plan, 100.0, 100.0).a(), 0);
     }
 
     #[test]
