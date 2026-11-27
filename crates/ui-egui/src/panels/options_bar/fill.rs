@@ -1,14 +1,16 @@
 //! The Paint Bucket's members of the options bar, and the Mode list of the Paint Bucket and the stamp tools.
 
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, bind_tracked};
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::pickers::Select;
 use photocraft_doc::BlendMode;
 
+use super::labelled;
 use super::paint::PaintMode;
-use super::{check, labelled, number_field};
 use crate::PhotocraftApp;
 use crate::state::Tool;
+use crate::tools::option_cells::number;
 
 /// The text of a Mode entry.
 fn label_of(mode: PaintMode) -> String {
@@ -80,34 +82,66 @@ pub(crate) fn mode_select<'a>(mode: Bind<'a, PaintMode>, entries: &'a [Entry<Pai
     Select::new(tl!("Mode").to_owned(), mode, entries)
 }
 
-/// The Paint Bucket's members: Fill source, Mode, Opacity, Tolerance, Anti-alias, Contiguous and All Layers.
+/// The reference's alert for a Paint Bucket Opacity typed past 1..100 % (#12533). The framework's
+/// whole-number alert would write "1 %" with a space; the reference writes "1%".
+pub(crate) const PAINT_BUCKET_OPACITY_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
+
+/// The reference's alert for a Paint Bucket Tolerance typed past 0..255 or as a fraction (#12533),
+/// the framework's wording of a whole-number range without a unit.
+pub(crate) const PAINT_BUCKET_TOLERANCE_ALERT: &str = "An integer between 0 and 255 is required. Closest value inserted.";
+
+/// The Paint Bucket's members: Fill source, Mode, Opacity, Tolerance, Anti-alias, Contiguous and All Layers. Opacity
+/// takes whole percents 1..100 and Tolerance whole numbers 0..255; a value typed past either range becomes the
+/// closest one with the reference's alert, as does a fraction typed in Tolerance; a fraction typed in Opacity rounds
+/// without one (#12533).
 pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.tool != Tool::PaintBucket {
         return;
     }
     let entries = mode_entries(Tool::PaintBucket, true, false);
     let sources = [Entry::new(false, tl!("Foreground").to_owned()), Entry::new(true, tl!("Pattern").to_owned())];
-    let o = &mut app.ui.tool_options;
-    labelled(ui, tl!("Fill"), |ui| Select::new(tl!("Source").to_owned(), Bind::bound(&mut o.bucket_fill_pattern), &sources).show(ui));
-    let mut mode = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
-    labelled(ui, tl!("Mode"), |ui| mode_select(Bind::bound(&mut mode), &entries).show(ui));
-    match mode {
-        PaintMode::Clear => o.bucket_clear = true,
-        PaintMode::Blend(blend) => {
-            o.bucket_clear = false;
-            o.bucket_blend_mode = blend;
+    // The Source dropdown stands alone, without a caption, as in the reference.
+    Select::new(tl!("Source").to_owned(), bind_tracked!(app.ui.tool_options => bucket_fill_pattern), &sources)
+        .tooltip(tl!("Set source for fill area").to_owned())
+        .show(ui);
+    let o = &app.ui.tool_options;
+    let shown = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
+    let mut mode = shown;
+    labelled(ui, tl!("Mode"), |ui| mode_select(Bind::bound(&mut mode), &entries).tooltip(tl!("Fill Mode").to_owned()).show(ui));
+    if mode != shown {
+        let o = &mut app.ui.tool_options;
+        match mode {
+            PaintMode::Clear => o.bucket_clear = true,
+            PaintMode::Blend(blend) => {
+                o.bucket_clear = false;
+                o.bucket_blend_mode = blend;
+            }
+            PaintMode::Behind => {}
+            // Replace belongs to the Healing Brush's list, never the Paint Bucket's.
+            PaintMode::HealingReplace => {}
         }
-        PaintMode::Behind => {}
-        // Replace belongs to the Healing Brush's list, never the Paint Bucket's.
-        PaintMode::HealingReplace => {}
     }
-    if let Some(opacity) = number_field(ui, tl!("Opacity"), o.fill_opacity, 1.0..=100.0, "%").landed() {
-        o.fill_opacity = *opacity;
+    let opacity = number(tl!("Opacity"), bind_tracked!(app.ui.tool_options => fill_opacity), 1.0..=100.0)
+        .whole()
+        .unit("%")
+        .tooltip(tl!("Set opacity for fill"))
+        .show(ui)
+        .out_of_range;
+    let tolerance = number(tl!("Tolerance"), bind_tracked!(app.ui.tool_options => tolerance), 0.0..=255.0)
+        .whole_alerting_fractions()
+        .tooltip(tl!("Range of colors to fill"))
+        .show(ui);
+    let (anti_alias, contiguous, all_layers) = bind_tracked!(app.ui.tool_options => anti_alias, contiguous, sample_all.paint_bucket);
+    Checkbox::new(anti_alias).label(tl!("Anti-alias").to_owned()).tooltip(tl!("Smoothes edge transition").to_owned()).show(ui);
+    Checkbox::new(contiguous).label(tl!("Contiguous").to_owned()).tooltip(tl!("Fill only contiguous pixels").to_owned()).show(ui);
+    Checkbox::new(all_layers).label(tl!("All Layers").to_owned()).tooltip(tl!("Fill composite image").to_owned()).show(ui);
+    if opacity.is_some() {
+        let _ = crate::dialogs::alerts::alert(app, tl!(PAINT_BUCKET_OPACITY_ALERT));
+    } else if let Some(alert) = tolerance.out_of_range {
+        // The framework words a whole-number field without a unit as the reference does:
+        // "An integer between 0 and 255 is required. Closest value inserted."
+        crate::tools::option_cells::range_alert(app, ui, &alert);
+    } else if tolerance.rounded {
+        let _ = crate::dialogs::alerts::alert(app, tl!(PAINT_BUCKET_TOLERANCE_ALERT));
     }
-    if let Some(tolerance) = number_field(ui, tl!("Tolerance"), o.tolerance, 0.0..=255.0, "").landed() {
-        o.tolerance = *tolerance;
-    }
-    check(ui, tl!("Anti-alias"), &mut o.anti_alias);
-    check(ui, tl!("Contiguous"), &mut o.contiguous);
-    check(ui, tl!("All Layers"), &mut o.sample_all.paint_bucket);
 }

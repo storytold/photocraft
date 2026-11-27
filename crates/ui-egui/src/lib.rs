@@ -461,12 +461,10 @@ pub struct PhotocraftApp {
     /// The Properties panel's adjustment edit in progress, with the tone editor's shown channel
     /// (`adjust_editors::PropertiesAdjust`).
     pub(crate) adjust_session: Option<adjust_editors::PropertiesAdjust>,
-    /// Twice the passes the Properties panel was not in front or ran without showing the Reset session's layer: the
+    /// Twice the passes the Properties panel was not in front or ran showing no adjustment layer's controls: the
     /// session (`adjust_editors`) takes a layer's settings anew after the panel stopped showing it. A pass count would
     /// also move while the panel replays its memoized body, which is still showing it.
     pub(crate) properties_hidden: u64,
-    /// Whether the Properties panel's run showed the Reset session's layer (`properties_hidden`).
-    pub(crate) properties_tracked: bool,
     /// The Color Picker dialog asking for a screen sample: the dialog and the field that took it.
     pub(crate) dialog_dropper: Option<(craft::ui::dialog::DialogId, String)>,
     /// The child dialog (colour picker or contour editor) the open Layer Style dialog has, with that dialog's id.
@@ -499,6 +497,9 @@ pub struct PhotocraftApp {
     filter_preview_worker: crate::dialogs::filter_preview_worker::Worker,
     /// Full CPU canvas redraws running in the background, by document (#4024).
     pub(crate) redraws: std::collections::HashMap<photocraft_doc::DocId, background_redraw::Redraw>,
+    /// How many redraw blocks have landed (`background_redraw::poll`): they reach the GPU canvas between the document
+    /// area's runs, so the area's version holds the count (`region_versions::canvas`).
+    pub(crate) redraw_landed: u64,
     /// The last finished background redraws, for going back to a state drawn a moment ago (#6528).
     pub(crate) kept: background_redraw::KeptComposites,
     /// Select › Color Range dialog preview (proxy document + mask / image textures).
@@ -746,6 +747,8 @@ mod dodge_bar_angle_pressure_tests;
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;
+#[cfg(test)]
+mod paint_bucket_options_fields_tests;
 #[cfg(test)]
 mod patch_rasterize_prompt_tests;
 #[cfg(test)]

@@ -174,6 +174,8 @@ pub struct AdjustOut {
     pub ask: Option<AdjustAsk>,
     /// The pass's edit events of the value, in order, with their gesture ids and phases.
     pub edit: EditEvents<AdjustValue>,
+    /// The tone Color Balance shows after the pass, for a host that keeps it; `None` for the other kinds.
+    pub tone: Option<ColorBalanceTone>,
 }
 
 /// What the editor function reads, built once when the adjustment opens.
@@ -189,7 +191,8 @@ pub struct EditorSetup {
     pub gradients: Vec<GradientGroup>,
     /// The current foreground and background colours ([`swatches`]), for the host's colour requests.
     pub swatches: [[f32; 3]; 2],
-    /// The tone Color Balance shows first; `None` keeps the editor's default (Midtones).
+    /// The tone Color Balance shows, for a host that keeps it (it stores [`AdjustOut::tone`]); `None` leaves the
+    /// tone to the editor (Midtones at first).
     pub tone: Option<ColorBalanceTone>,
     /// The Smart Filter the dialog edits is not reachable from the active document: the editor shows no controls.
     pub stale: bool,
@@ -215,7 +218,7 @@ impl Default for EditorSetup {
 
 /// The edit events of one editor lifted onto the value.
 fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOut {
-    AdjustOut { ask: None, edit: events.map(wrap) }
+    AdjustOut { ask: None, edit: events.map(wrap), tone: None }
 }
 
 fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: bool) -> BrightnessContrast {
@@ -288,7 +291,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 *curves = converted.clone();
                 edit.push(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: converted }, Arc::from("Curves Mode"), None));
             }
-            AdjustOut { ask: None, edit }
+            AdjustOut { ask: None, edit, tone: None }
         }
         ("exposure", AdjustValue::Exposure { values }) => {
             let fields = AdjustField::exposure(&Env::of(ui).words::<AdjustWords>());
@@ -315,16 +318,16 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 editor = editor.tone(tone);
             }
             let out = editor.show(ui);
-            lifted(out.edit.events, |value| AdjustValue::ColorBalance { value })
+            AdjustOut { tone: Some(out.tone), ..lifted(out.edit.events, |value| AdjustValue::ColorBalance { value }) }
         }
         ("blackWhite", AdjustValue::BlackWhite { value }) => {
             let out = BlackWhiteEditor::new("Black & White", Bind::bound(value)).context(context).show(ui);
             let ask = if out.auto { Some(AdjustAsk::Auto) } else { out.pick_color.map(AdjustAsk::PickColor) };
-            AdjustOut { ask, edit: out.edit.events.map(|value| AdjustValue::BlackWhite { value }) }
+            AdjustOut { ask, edit: out.edit.events.map(|value| AdjustValue::BlackWhite { value }), tone: None }
         }
         ("photoFilter", AdjustValue::PhotoFilter { value }) => {
             let out = PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).context(context).show(ui);
-            AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }) }
+            AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }), tone: None }
         }
         ("channelMixer", AdjustValue::ChannelMixer { value }) => {
             let out = ChannelMixerEditor::new("Channel Mixer", Bind::bound(value)).context(context).show(ui);
@@ -358,7 +361,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                     AdjustAsk::PickColor(request)
                 })
             };
-            AdjustOut { ask, edit }
+            AdjustOut { ask, edit, tone: None }
         }
         ("selectiveColor", AdjustValue::SelectiveColor { value }) => {
             let out = SelectiveColorEditor::new("Selective Color", Bind::bound(value)).context(context).show(ui);
