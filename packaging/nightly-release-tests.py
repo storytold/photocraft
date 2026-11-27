@@ -182,6 +182,95 @@ def producer_platforms(source):
     return platforms
 
 
+# The pinned nightly-apps.json PhotoCraft row has Windows, Linux and macOS targets.
+# These are the corresponding names from the pinned nightly_signer_settings.py.
+NIGHTLY_SIGNER_SECRETS = {
+    "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_ID", "APPLE_PASSWORD",
+    "APPLE_TEAM_ID", "KEYCHAIN_PASSWORD", "LINUX_SIGNING_KEY", "AZURE_CERT_PROFILE",
+    "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_SIGNING_ACCOUNT",
+    "AZURE_SIGNING_ENDPOINT", "AZURE_TENANT_ID",
+}
+
+
+def assert_nightly_caller_secrets(source, signer):
+    """Check the callers' plain block layout without adding a YAML dependency to CI.
+
+    This is a narrow source guard, not a YAML parser. Noncanonical job/key syntax
+    fails closed; the shared signer preflight separately parses YAML.
+    """
+    lines = [line for line in source.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    roots = [line for line in lines if line == line.lstrip()]
+    if (not roots or roots[-1] != "jobs:" or
+            any(not re.fullmatch(r"(?:name|on|permissions|concurrency):(?: .*)?", line)
+                for line in roots[:-1])):
+        raise ValueError("expected one plain root jobs block")
+    job = "release" if signer else "unsigned"
+    start = lines.index("jobs:")
+    if any(re.search(r"\bsecrets\b", line, re.IGNORECASE) for line in lines[:start]):
+        raise ValueError("no secret references outside the signer mapping")
+    if lines[start + 1:start + 2] != [f"  {job}:"]:
+        raise ValueError(f"expected one plain {job} job")
+    keys, mapping = set(), {}
+    field = None
+    for line in lines[start + 2:]:
+        if not line.startswith("      "):
+            match = re.fullmatch(r"    (if|permissions|uses|with|secrets):(?: .+)?", line)
+            if match is None or match[1] in keys:
+                raise ValueError("expected unique plain caller job keys and no environment binding")
+            field = match[1]
+            keys.add(field)
+            if field == "secrets" and (not signer or line != "    secrets:"):
+                raise ValueError("only the signer may declare a plain secrets mapping")
+        elif field == "secrets":
+            match = re.fullmatch(r"      ([A-Z][A-Z0-9_]*): \$\{\{ secrets\.([A-Z][A-Z0-9_]*) \}\}", line)
+            if match is None or match[1] in mapping:
+                raise ValueError("expected unique literal secret references")
+            mapping[match[1]] = match[2]
+            continue
+        if field != "secrets" and re.search(r"\bsecrets\b", line, re.IGNORECASE):
+            raise ValueError("no secret references outside the signer mapping")
+    if signer and mapping != {name: name for name in NIGHTLY_SIGNER_SECRETS}:
+        raise ValueError("the signer must forward exactly the target-specific same-name references")
+
+
+class NightlyCallerSecrets(unittest.TestCase):
+    SIGNER = ROOT / ".github/workflows/nightly-sign.yml"
+    UNSIGNED = ROOT / ".github/workflows/nightly.yml"
+
+    def test_signer_forwards_exactly_the_target_specific_secret_names(self):
+        assert_nightly_caller_secrets(self.SIGNER.read_text(), signer=True)
+
+    def test_unsigned_caller_has_no_secret_inputs(self):
+        assert_nightly_caller_secrets(self.UNSIGNED.read_text(), signer=False)
+
+    def test_signer_refuses_noncanonical_or_mismatched_forwarding(self):
+        source = self.SIGNER.read_text()
+        start = "    secrets:\n"
+        key = "      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}\n"
+        self.assertIn(start, source)
+        self.assertIn(key, source)
+        for case, bad in {
+            "missing": source.replace(key, ""),
+            "extra": source.replace(key, key + "      UNUSED: ${{ secrets.UNUSED }}\n"),
+            "different name": source.replace(key, key.replace("secrets.LINUX_SIGNING_KEY", "secrets.APPLE_ID")),
+            "duplicate name": source.replace(key, key + key),
+            "duplicate map": source.replace(start, start + start),
+            "inherit": source.replace(start, "    secrets: inherit\n"),
+            "YAML anchor": source.replace(start, "    secrets: &forwarded\n"),
+            "YAML alias": source.replace(key, key.replace("${{ secrets.LINUX_SIGNING_KEY }}", "*forwarded")),
+            "environment binding": source.replace(start, "    environment: release\n" + start),
+        }.items():
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                assert_nightly_caller_secrets(bad, signer=True)
+
+    def test_unsigned_refuses_a_secret_map_or_reference(self):
+        source = self.UNSIGNED.read_text()
+        for extra in ("    secrets: inherit\n", "    secrets: {}\n", "    'secrets': {}\n",
+                      "      unintended: ${{ secrets['UNUSED'] }}\n"):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                assert_nightly_caller_secrets(source + extra, signer=False)
+
+
 class Response:
     status = 204
 
@@ -467,8 +556,10 @@ class TrustedSourcePreparation(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
-                self.assertNotIn("secrets.", executable)
+                self.assertNotRegex(executable, r"(?im)^\s*environment:")
+                if name != "nightly-sign.yml":
+                    self.assertNotRegex(executable, r"(?im)^\s*secrets:")
+                    self.assertNotIn("secrets.", executable)
 
 
 class NightlyTrustAnchors(unittest.TestCase):
