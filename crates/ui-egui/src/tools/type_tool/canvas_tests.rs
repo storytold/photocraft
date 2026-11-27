@@ -921,7 +921,7 @@ fn command_mods() -> Mods {
 
 /// The modifiers held in the harness's last pass: the real keys plus the shell's latch (tp.T15).
 fn held(h: &Harness<'static, Box<PhotocraftApp>>) -> Mods {
-    craft::ui::runtime::pointer::frame(&h.ctx).mods
+    craft::ui::runtime::pointer::mods(&h.ctx)
 }
 
 fn hold(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: Modifiers) {

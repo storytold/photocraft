@@ -146,9 +146,9 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     apply_pen(app, events);
     // A live shape layer takes the draft's anchors once a press is over (a release, or a key that changed the draft):
     // a drag's updates make no History steps of their own (#12909).
-    let pointer = craft::ui::runtime::pointer::frame(app.ctx());
+    let presses = craft::ui::runtime::pointer::press_state(app.ctx());
     let changed = app.ui.pen.as_ref().map(|p| &p.draft) != before.as_ref();
-    if pointer.buttons.is_empty() && (changed || pointer.release.is_some()) {
+    if presses.buttons.is_empty() && (changed || presses.release.is_some()) {
         pen::sync_live_layer_from_draft(app);
         pen::sync_live_path_from_draft(app);
     }

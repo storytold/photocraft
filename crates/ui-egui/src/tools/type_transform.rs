@@ -289,8 +289,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
         return;
     }
     let ctx = ui.ctx().clone();
-    let pointer = craft::ui::runtime::pointer::frame(&ctx);
-    if whole_box(app, pointer.mods) != drawn {
+    let mods = craft::ui::runtime::pointer::mods(&ctx);
+    let press = craft::ui::runtime::pointer::press_state(&ctx).press;
+    if whole_box(app, mods) != drawn {
         return;
     }
     let Some(frame) = frame(app) else { return };
@@ -307,11 +308,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
     let out = TransformOverlay::new(Label::from(&*tl!("Type transform")), session, &settings)
         .reach(reach)
         .rotate_zone(RotateZone::border(ROTATE_REACH_PT))
-        .mods(Some(pointer.mods))
+        .mods(Some(mods))
         .id_salt("type transform")
         .show_at(ui, canvas);
     // The press that went down on the box in this pass, or the box's first edit, starts the capture.
-    let pressed = out.held.is_some() && pointer.press.is_some();
+    let pressed = out.held.is_some() && press.is_some();
     if app.ui.type_transform.is_none() && !pressed && out.edits.is_empty() && out.apply.is_none() && !out.discard {
         return;
     }

@@ -69,8 +69,10 @@ fn a_pointer_over_a_panel_replays_the_document_area() {
     for step in 1..=3 {
         h.event(Event::PointerMoved(beside + vec2(0.0, step as f32)));
         h.run_steps(1);
-        // Held back: a pointer move over the docked panels still runs the document area (FW-365 F4 report, finding 3:
-        // cause open). Turn these on with its fix.
+        // Held back: a pointer move over the docked panels still runs the document area. Two reads in the canvas
+        // note the pointer on every run: craft-ui-canvas's `ToolHost::run` (`pointer::frame`, for the tools' hover
+        // position) and `Canvas::autoscroll` (`pointer::frame`, for a press or the pointer leaving during a middle-button
+        // run). Turn these on once neither notes the pointer while it is away from the canvas.
         // assert_eq!(area(&h).0, 0, "hover step {step}: the document area replays");
         // assert_eq!(part_runs(&h), [], "hover step {step}: no canvas part runs");
         let _ = (area(&h), part_runs(&h));
