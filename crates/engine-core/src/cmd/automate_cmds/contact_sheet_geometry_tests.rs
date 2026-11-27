@@ -120,3 +120,18 @@ fn unmeasured_sizes_keep_every_image_and_caption_apart_on_the_page() {
         }
     }
 }
+
+/// A vertical spacing wider than a cell leaves room for the caption: each caption stays in its cell, the last row's on
+/// the page (a 20 px cell with a 17.6 px caption strip).
+#[test]
+fn a_wide_vertical_spacing_keeps_the_captions_in_their_cells() {
+    let dir = tmp("geometry-wide-vertical");
+    images(&dir, 10, 40, 40);
+    let p = json!({"units": "pixels", "width": 400, "height": 100, "resolution": 72, "columns": 2, "rows": 5, "autoSpacing": false, "vertical": 20, "fontSize": 16});
+    let d = sheet(&dir, p);
+    for k in 0..10 {
+        let b = bounds(&d, &format!("img{k}"), true);
+        let bottom = (k / 2 + 1) * 20;
+        assert!(!b.is_empty() && b.y1 <= bottom, "img{k} caption {b:?}, cell bottom {bottom}");
+    }
+}

@@ -573,11 +573,12 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let (cell_w, cell_h) = (cell(pw, cols, 0.0), cell(ph, rows, caption_px));
     // Each image box is inset by half the spacing on every side; auto-spacing uses 1 % of the shorter cell side.
     let auto_inset = cell_w.min(cell_h) * 0.01;
-    let inset = |key: &str, cell: f64| {
+    // The inset leaves the box at least 1 px above `below`, so a wide spacing cannot push the caption out of the cell.
+    let inset = |key: &str, cell: f64, below: f64| {
         let manual = if auto { None } else { p.get(key).and_then(Value::as_f64).map(|v| units_px(v, unit, res) / 2.0) };
-        manual.unwrap_or(auto_inset).clamp(0.0, (cell - 1.0) / 2.0)
+        manual.unwrap_or(auto_inset).clamp(0.0, ((cell - below - 1.0) / 2.0).max(0.0))
     };
-    let (ix, iy) = (inset("horizontal", cell_w), inset("vertical", cell_h));
+    let (ix, iy) = (inset("horizontal", cell_w, 0.0), inset("vertical", cell_h, caption_px));
     let box_w = (cell_w - 2.0 * ix).max(1.0);
     let box_h = (cell_h - 2.0 * iy - caption_px).max(1.0);
     let per_page = (cols * rows) as usize;
