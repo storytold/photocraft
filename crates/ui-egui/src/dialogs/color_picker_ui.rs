@@ -2,7 +2,7 @@
 //!
 //! Every opener builds the dialog, opens it on the dialog host and records what it is for in
 //! `app.color_targets` ([`PickTarget`]). [`take`] runs once per pass from `dialogs::TAKERS`: it
-//! serves the dialog's screen pick, Add to Swatches and canvas eyedropper, previews the picked
+//! serves the dialog's Add to Swatches and canvas eyedropper, previews the picked
 //! colour in its parent ([`live_preview`]) and commits an OK to the target ([`commit`]). A hosted
 //! dialog's colour row opens a child with [`open_for_request`] and pulls the answer with
 //! [`answer_for`]; a window the app holds itself opens one with [`open_for_window`] and pulls the
@@ -12,8 +12,10 @@ use craft::cms::convert::CmykConverter;
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult, PickedColor};
 use craft::theme::{ModelValues, Srgba};
 use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog};
 use craft::ui::runtime::requests::ColorRequest;
 use photocraft_doc::{DocId, LayerId};
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::{Value, json};
 use std::hash::Hash;
 
@@ -164,12 +166,13 @@ pub(crate) fn same_inks(a: [f32; 4], b: [f32; 4]) -> bool {
 
 /// The CMYK converter of the document colour settings; the built-in coated one when the profile is unusable.
 fn converter(app: &PhotocraftApp) -> CmykConverter {
-    CmykConverter::new(app.session.color.working(photocraft_doc::ColorMode::Cmyk)).ok().unwrap_or_else(|| CmykConverter::coated().clone())
+    CmykConverter::new(app.session.color().working(photocraft_doc::ColorMode::Cmyk)).ok().unwrap_or_else(|| CmykConverter::coated().clone())
 }
 
-/// Opens `dialog` for `target` with the app's picker features, under `parent` when it has one.
+/// Opens `dialog` for `target` with the app's picker features, under `parent` when it has one. No screen eyedropper
+/// button: the reference application's picker has none and samples by a click on the canvas (#17017).
 fn launch(app: &mut PhotocraftApp, dialog: ColorPickerDialog, parent: Option<DialogId>, target: PickTarget) -> DialogId {
-    let mut dialog = dialog.cmyk(&converter(app)).canvas_samples(true).eyedropper(true).add_to_swatches(true).instance(target.identity());
+    let mut dialog = dialog.cmyk(&converter(app)).canvas_samples(true).eyedropper(false).add_to_swatches(true).instance(target.identity());
     if let Some(idx) = app.session.active_index() {
         dialog = dialog.canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     }
@@ -190,7 +193,7 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> DialogId {
     let color = Srgba::from_rgb_array(rgb);
     let mut dialog = if background { ColorPickerDialog::background(color) } else { ColorPickerDialog::foreground(color) };
     // A colour that was picked as CMYK shows the inks it was picked as, not what its sRGB stand-in converts to (#4196).
-    if let Some(inks) = app.session.tools.picked_cmyk(rgb) {
+    if let Some(inks) = app.session.tools.picked_role_cmyk(usize::from(background)) {
         dialog = dialog.kept(inks_model(inks));
     }
     launch(app, dialog, None, if background { PickTarget::Background } else { PickTarget::Foreground })
@@ -236,10 +239,32 @@ fn titled(request: ColorRequest) -> ColorRequest {
     }
 }
 
+/// Ink metadata lives beside its swatch so Reset restores both as one selection.
+pub(crate) fn ink_field(key: &str) -> String {
+    format!("{key}Cmyk")
+}
+
+pub(crate) fn ink_value(color: Srgba, inks: Option<[f32; 4]>) -> FieldValue {
+    FieldValue::Text(inks.map(|inks| json!([rgb_hex(color), inks]).to_string()).unwrap_or_default())
+}
+
+pub(crate) fn request_inks(fields: &DialogFields, key: &str, color: Srgba) -> Option<[f32; 4]> {
+    let (rgb, inks): (String, [f32; 4]) = serde_json::from_str(fields.text(&ink_field(key))?).ok()?;
+    (rgb == rgb_hex(color) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(inks)
+}
+
 /// Opens the colour child of `parent`'s `request`; its OK waits for [`answer_for`].
 pub(crate) fn open_for_request(app: &mut PhotocraftApp, parent: DialogId, request: ColorRequest) -> DialogId {
     let target = PickTarget::Request { parent, key: request.key.clone() };
-    launch(app, ColorPickerDialog::from_request(titled(request)), Some(parent), target)
+    let inks = request.color.and_then(|color| {
+        let dialog = app.framework.dialogs.get_by_id::<HostedParamDialog>(parent)?;
+        request_inks(dialog.fields(), &request.key, color)
+    });
+    let mut dialog = ColorPickerDialog::from_request(titled(request));
+    if let Some(inks) = inks {
+        dialog = dialog.kept(inks_model(inks));
+    }
+    launch(app, dialog, Some(parent), target)
 }
 
 /// The confirmed colour of the child opened for `parent`, once, with the request's key. The first answer
@@ -275,6 +300,20 @@ pub(crate) fn window_picker_open(app: &PhotocraftApp, window: PickWindow) -> boo
         .any(|(id, t)| matches!(t, PickTarget::Window { window: w, .. } if *w == window) && app.framework.dialogs.get_by_id::<ColorPickerDialog>(*id).is_some())
 }
 
+/// What `window` shows of its picker, for the content version of the region that holds it: the colour its open
+/// picker shows (`None` while none is open) and how many of its answers wait. A settled region runs again when either
+/// changes, so it previews the picker's colour and takes its answer without input of its own.
+pub(crate) fn window_picker_state(app: &PhotocraftApp, window: PickWindow) -> (Option<Option<[u32; 4]>>, usize) {
+    let shown = find(app, |t| matches!(t, PickTarget::Window { window: w, .. } if *w == window)).map(|(id, _)| {
+        app.framework.dialogs.get_by_id::<ColorPickerDialog>(id).and_then(ColorPickerDialog::current).map(|picked| {
+            let c = picked.color;
+            [c.r, c.g, c.b, c.a].map(f32::to_bits)
+        })
+    });
+    let waiting = app.color_answers.iter().filter(|(parent, ..)| *parent == window.answers()).count();
+    (shown, waiting)
+}
+
 /// The Color Picker, when it is the top dialog (another dialog opened over it takes the input).
 pub(crate) fn top(app: &PhotocraftApp) -> Option<DialogId> {
     let id = app.framework.dialogs.stack().top()?;
@@ -297,31 +336,18 @@ pub(crate) fn find(app: &PhotocraftApp, matches: impl Fn(&PickTarget) -> bool) -
         .last()
 }
 
-/// Once per pass: serves each open picker's screen pick, Add to Swatches and canvas eyedropper request,
+/// Once per pass: serves each open picker's Add to Swatches and canvas eyedropper request,
 /// previews the picked colours in their parents, and commits the pickers that finished. A second pass in
 /// one frame finds nothing new: every request is taken from the dialog once.
-pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     if app.color_targets.is_empty() {
         return;
     }
     let ids: Vec<DialogId> = app.color_targets.keys().copied().collect();
-    // PLAN: assumed `screen_picker::busy(app: &PhotocraftApp) -> bool` and `hold(app, ctx, id, gesture)` (dialogs-w39).
-    let busy = crate::screen_picker::busy(app);
     for &id in &ids {
         let Some(d) = app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(id) else { continue };
-        d.screen_busy(busy);
-        let gesture = d.take_screen_pick();
         let swatch = d.take_add_to_swatches();
         let dropper = d.requests().take_eyedropper();
-        if let Some(gesture) = gesture {
-            crate::screen_picker::hold(app, ctx, id, gesture);
-        }
-        // PLAN: assumed `screen_picker::take(app, id) -> Option<Srgba>` (dialogs-w39).
-        if let Some(color) = crate::screen_picker::take(app, id)
-            && let Some(d) = app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(id)
-        {
-            d.set_color(PickedColor::rgb(color));
-        }
         if let Some(picked) = swatch {
             crate::swatches_ui::add_from_picker(app, picked);
         }
@@ -362,7 +388,7 @@ fn close(app: &mut PhotocraftApp, id: DialogId, picked: Option<PickedColor>) {
 }
 
 fn set_tool_color(app: &mut PhotocraftApp, which: &str, picked: &PickedColor) -> Result<Value, String> {
-    let mut params = json!({ which: rgb_hex(picked.color) });
+    let mut params = json!({ which: picked.color.to_rgb_array() });
     // The CMYK values the person entered stay the colour's inks: a CMYK document is filled with them (#4196).
     if let Some(inks) = inks_of(picked) {
         params[format!("{which}Cmyk")] = json!(inks);
@@ -395,6 +421,9 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         PickTarget::SolidFill { document, layer } => crate::solid_fill_ui::confirm(app, *document, *layer, picked),
         PickTarget::NewSolidFill { document } => crate::solid_fill_ui::confirm_new(app, *document, picked),
         PickTarget::Request { parent, key } => {
+            if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(*parent) {
+                dialog.set_field(ink_field(key), ink_value(picked.color, inks_of(picked)));
+            }
             app.color_answers.push((*parent, key.clone(), picked.color));
             Ok(json!({ "color": color }))
         }
@@ -447,42 +476,8 @@ pub(crate) mod live_preview;
 mod tests;
 
 #[cfg(test)]
-mod screen_integration_tests {
-    use super::*;
-    use craft::color_ui::ui::StillCapture;
-    use egui::vec2;
-    use egui_kittest::{Harness, kittest::Queryable};
+mod screen_button_tests;
 
-    #[test]
-    fn text_swatch_opens_full_dialog_and_screen_pick_waits_for_ok() {
-        let mut session = photocraft_engine::Session::new();
-        session.execute("file.new", json!({"width":160,"height":120})).unwrap();
-        let id = session.execute("type.create", json!({"text":"Hello world","color":"#000000","size":24,"x":10,"y":60})).unwrap()["layer"].as_u64().unwrap();
-        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, Default::default());
-            app.ui.tool = crate::state::Tool::Type;
-            app.services.screen_capture = Some(std::sync::Arc::new(|| Box::new(StillCapture::color(Srgba::rgb(1.0, 136.0 / 255.0, 0.0)))));
-            app
-        });
-        h.run_steps(8);
-        let before = h.state().session.active().unwrap().history.entries().len();
-        let fg = h.state().session.tools.foreground;
-        h.get_all_by_role_and_label(egui::accesskit::Role::ColorWell, "Text color").next().expect("the text swatch").click();
-        h.run_steps(6);
-        let picker = top(h.state()).expect("the text swatch opens the Color Picker");
-        assert!(matches!(target(h.state(), picker), Some(PickTarget::Command { command, .. }) if command == "type.setStyle"));
-        h.get_by_label("Sample color from the screen").click();
-        h.run_steps(6);
-        assert_eq!(rgb_hex(testing::current(h.state(), picker).unwrap().color), "#ff8800");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before, "sampling only changes the picker's colour");
-        assert_eq!(h.state().session.tools.foreground, fg);
-        h.get_by_label("OK").click();
-        h.run_steps(4);
-        let doc = &h.state().session.active().unwrap().doc;
-        let layer = doc.layer(photocraft_doc::LayerId(id)).unwrap();
-        let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("not text") };
-        assert_eq!(text.color.to_rgba8(), [255, 136, 0, 255]);
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1);
-    }
-}
+#[cfg(test)]
+#[path = "color_picker_swatch_name_tests.rs"]
+mod swatch_name_tests;

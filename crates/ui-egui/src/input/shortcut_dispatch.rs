@@ -10,6 +10,7 @@
 //! shortcut whose command is disabled in the current state reports why on the status bar instead
 //! of doing nothing silently, as the greyed menu item shows.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::HashMap;
 
 use rustc_hash::FxHashMap;
@@ -320,7 +321,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         push_row(&mut rows, &mut index, def);
     }
     // Recorded actions run on their own key (the user's assignment is an override).
-    for action in app.session.actions.list.actions() {
+    for action in app.session.actions().list.actions() {
         let id = crate::actions::shortcut_id(&action.name);
         push_row(&mut rows, &mut index, app_row(&id, &action.name).with_path(vec!["Actions".into(), action.name.clone()]));
     }
@@ -583,7 +584,9 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
     // Artboard, Slice and panel commands) change what a settled region shows without going through `invoke`. A key's
     // repeats change only what has a revision or a tool option (brush size, a nudge, a mode step), so a held key
     // doesn't run every region at the repeat rate.
-    if fired.iter().any(|f| f.target.is_none() && f.phase != FirePhase::Repeat) {
+    // A view command (the canvas runs it) changes only what the view's regions hold in their versions.
+    let counts = |f: &&Fired| bridge_of(&f.command).is_none_or(|(id, _)| !crate::panels::region_versions::changes_only_the_view(app, id));
+    if fired.iter().filter(|f| f.target.is_none() && f.phase != FirePhase::Repeat).any(|f| counts(&f)) {
         app.commands_run += 1;
         ctx.request_repaint();
     }
@@ -709,21 +712,24 @@ fn run_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Fired) {
     // The Delete key is Edit › Clear, or deletes the layers when nothing is selected (`delete_key_command`).
     let id = if id == EditCommands::Delete.id() { "edit.clear" } else { id };
     let id = clip_key_command(app, delete_key_command(app, id.to_string()));
-    dispatch_as(app, ctx, &id, f.alt_variant);
+    // A key that runs another command (Delete, the clip keys) runs it without the fired command's parameters.
+    let command = if id == f.command.id { f.command.clone() } else { CommandRef::new(id) };
+    dispatch_as(app, ctx, &command, f.alt_variant);
 }
 
 /// Run a shortcut's command like its menu item (dialogs included), or say why it can't run.
 pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
-    dispatch_as(app, ctx, id, false);
+    dispatch_as(app, ctx, &CommandRef::new(id), false);
 }
 
-/// [`dispatch`]; with `last`, an adjustment dialog opens at its last confirmed settings and New Layer makes the
-/// layer without its dialog.
-fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool) {
+/// [`dispatch`] of a fired command, its parameters included (an Appearance or Language row's choice); with `last`, an
+/// adjustment dialog opens at its last confirmed settings and New Layer makes the layer without its dialog.
+fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef, last: bool) {
+    let id = command.id.as_str();
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
     // A key saved for an action that was since deleted or renamed names no action.
-    let missing = action.is_some_and(|name| !app.session.actions.list.actions().iter().any(|a| a.name == name));
+    let missing = action.is_some_and(|name| !app.session.actions().list.actions().iter().any(|a| a.name == name));
     let outcome = if missing || !crate::menus::is_enabled(app, command_id) {
         let why = if missing { "The Action no longer exists".into() } else { disabled_reason(app, command_id) };
         let template = "{label} is not available: {reason}";
@@ -748,7 +754,8 @@ fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: boo
             let opened = if last { crate::adjust_dialog::open_last(app, id) } else { crate::adjust_dialog::open(app, id) };
             opened.map(|_| serde_json::Value::Null)
         } else {
-            crate::menus::invoke(app, ctx, id, json!({}))
+            let params = if command.params.is_null() { json!({}) } else { command.params.clone() };
+            crate::menus::invoke(app, ctx, id, params)
         };
         match r {
             Ok(_) => Outcome::Ran,

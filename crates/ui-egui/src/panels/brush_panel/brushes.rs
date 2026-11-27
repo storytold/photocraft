@@ -3,20 +3,21 @@
 //! mapping from preset events to `brush.presets.*` and `tools.setBrush`.
 
 use std::hash::Hash;
+use std::sync::Arc;
 
-use craft::behavior::{EditEvent, GesturePhase};
+use craft::behavior::{EditEvent, EditEvents, GesturePhase};
 use craft::draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushRowPaint, BrushesPanel, brush_row};
 use craft::keymap::Mods;
-use craft::ui::contract::{Bind, ReorderMove};
-use craft::ui::patterns::presets::{PresetEvent, PresetRow, PresetView};
-use craft::ui::primitives::ContentPainterCx;
+use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, PlainData, ReorderMove, Tracked, bind_tracked};
+use craft::ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetView};
 use craft::ui::primitives::textures::TextureCache;
+use craft::ui::primitives::{ContentPainterCx, FacePaint};
 use craft::ui::runtime::env::Env;
 use egui::{ColorImage, Pos2, Rect, pos2};
 use photocraft_engine::BrushSettings;
 use photocraft_engine::brush_key_cmds::panel_layout;
 use photocraft_engine::brush_preset_cmds::MAX_FOLDER_DEPTH;
-use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
+use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -28,7 +29,7 @@ use crate::theme::Tokens;
 /// What a row of the brush lists is: a preset, or a group (`folder` empty) or a folder of a group.
 /// One type serves all three because their names can be equal. `group` is the group's name as the
 /// engine stores it on its presets (empty for the ungrouped).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MemoProps, PlainData)]
 pub(crate) enum BrushKey {
     /// A preset, by name.
     Preset(String),
@@ -83,35 +84,44 @@ fn picture(cx: &ContentPainterCx, rect: Rect, key: impl Hash + 'static, image: i
     cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
 }
 
-/// How one preset paints its tip and its stroke; the framework texture store caches both by signature. A signature
-/// is taken when the row paints: rows built and never painted (the closed Brush Preset chip's, a measuring run's,
-/// rows out of view) take none.
+/// How one preset paints its tip and its stroke; the framework texture store caches both by signature. Both
+/// signatures are taken here, once per build of the rows, so a paint only reads them.
 fn paint_of(b: &BrushSettings) -> BrushRowPaint {
     let brush = b.clone();
-    BrushRowPaint::new(tip_paint(b), move |cx, rect| {
+    let stroke_sig = brush_preview::preview_sig(b);
+    let stroke = FacePaint::new(stroke_sig, move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
         let size = [rect.width().round().clamp(1.0, 1024.0) as usize, rect.height().round().clamp(1.0, 1024.0) as usize];
-        let stroke_sig = brush_preview::preview_sig(&brush);
         picture(cx, rect, ("brushes-stroke", stroke_sig, size, color), || brush_preview::stroke_image(&brush, size, color));
+    });
+    BrushRowPaint::new(tip_paint(&b.tip, (b.hardness, b.angle, b.roundness)), stroke)
+}
+
+/// How the engine draws `tip` with the falloff, angle and roundness `shape` (a sampled tip's shape) in the theme's text
+/// colour: a preset's thumbnail and the Brush Preset chip's current tip.
+pub(crate) fn tip_paint(tip: &TipShape, shape: (f32, f32, f32)) -> FacePaint {
+    let tip = tip.clone();
+    let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
+    FacePaint::new(tip_key, move |cx, rect| {
+        let color = Tokens::get(cx.painter.ctx()).text;
+        picture(cx, rect, ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
     })
 }
 
-/// How the engine draws `b`'s tip (its falloff, angle and roundness, a sampled tip's shape) in the theme's text
-/// colour: a preset's thumbnail and the Brush Preset chip's current tip.
-pub(crate) fn tip_paint(b: &BrushSettings) -> impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static {
-    let tip = b.tip.clone();
-    let shape = (b.hardness, b.angle, b.roundness);
-    move |cx, rect| {
-        let color = Tokens::get(cx.painter.ctx()).text;
-        let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
-        picture(cx, rect, ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
-    }
+/// The presets of the brush lists: every preset of `presets` in the engine's panel order, each row showing the card
+/// `parts`. The rows are built once per presets revision and parts.
+pub(crate) fn brush_source(presets: &Tracked<Arc<Vec<BrushPreset>>>, parts: BrushCardParts) -> PresetSource<'_, BrushKey> {
+    PresetSource::new((presets, parts), PresetFns::new(brush_rows))
+}
+
+/// The rows of [`brush_source`].
+fn brush_rows(input: &(&Tracked<Arc<Vec<BrushPreset>>>, BrushCardParts), env: &Env) -> Vec<PresetRow<BrushKey>> {
+    preset_rows(input.0.as_slice(), env, input.1)
 }
 
 /// The rows of every preset in the engine's panel order (the order `,` and `.` step through): a
 /// group row before the first preset of each group and each folder, with its count.
-pub(crate) fn preset_rows(app: &PhotocraftApp, env: &Env, parts: BrushCardParts) -> Vec<PresetRow<BrushKey>> {
-    let presets = app.session.tools.presets.as_ref();
+pub(crate) fn preset_rows(presets: &[BrushPreset], env: &Env, parts: BrushCardParts) -> Vec<PresetRow<BrushKey>> {
     let mut counts: std::collections::HashMap<(&str, &[String]), usize> = std::collections::HashMap::new();
     for p in presets {
         let path = path_of(p);
@@ -145,31 +155,75 @@ pub(crate) fn preset_rows(app: &PhotocraftApp, env: &Env, parts: BrushCardParts)
     rows
 }
 
-/// The `brushes` registry body: the Size field over the presets, in a list or a grid.
+/// The current preset's row: only while a preset of that name exists, so a deleted preset does not stay picked.
+pub(crate) fn current_key(tools: &photocraft_engine::ToolState) -> Option<BrushKey> {
+    let name = tools.current_preset.as_deref()?;
+    tools.presets.iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| BrushKey::Preset(p.name.clone()))
+}
+
+/// Every input of the Brushes panel's view: the presets and the brush size it shows, and its own list state.
+#[derive(MemoProps)]
+struct BrushesProps<'a> {
+    presets: &'a Tracked<Arc<Vec<BrushPreset>>>,
+    current: Option<BrushKey>,
+    diameter: f64,
+    state: &'a mut Tracked<PresetState<BrushKey>>,
+    out: Outbox<'a, BrushesEvent>,
+}
+
+/// What a run of the Brushes panel's view reports.
+enum BrushesEvent {
+    /// The Size field's edits.
+    Size(EditEvents<f64>),
+    /// The picks, with every row's key in list order (a reorder is placed by them).
+    Picks(Vec<BrushPick<BrushKey>>, Vec<BrushKey>),
+}
+
+/// The `brushes` registry body: the Size field over the presets, in a list or a grid. A memoized view: it runs when the
+/// presets, the current preset, the size or its list state change, or when input reaches it.
 pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let env = Env::of(ui);
-    let rows = preset_rows(app, &env, parts_of(app.ui.brushes_panel.view));
-    let keys: Vec<BrushKey> = rows.iter().map(|row| row.key.clone()).collect();
-    let current = app.session.tools.current_preset.as_deref().and_then(|c| app.session.tools.presets.iter().find(|p| p.name.eq_ignore_ascii_case(c)));
-    let current = current.map(|p| BrushKey::Preset(p.name.clone()));
-    let mut diameter = f64::from(app.session.tools.brush.size);
+    let mut sent = Vec::new();
+    let props = BrushesProps {
+        presets: &app.session.tools.presets,
+        current: current_key(&app.session.tools),
+        diameter: f64::from(app.session.tools.brush.size),
+        state: &mut app.ui.brushes_panel,
+        out: Outbox::new(&mut sent),
+    };
+    let _ = MemoView::new("brushes", props, show_panel).show(ui);
+    for event in sent {
+        match event {
+            BrushesEvent::Size(events) => {
+                for event in &events {
+                    set_size(app, event);
+                }
+            }
+            BrushesEvent::Picks(picks, keys) => run_picks(app, picks, &keys),
+        }
+    }
+}
+
+/// The Brushes panel's view.
+fn show_panel(props: &mut BrushesProps<'_>, ui: &mut egui::Ui) {
+    let source = brush_source(props.presets, parts_of(props.state.view));
     let mut panel =
-        BrushesPanel::new(tl!("Brushes"), &rows, Bind::bound(&mut app.ui.brushes_panel), Bind::bound(&mut diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
-    if let Some(current) = current {
+        BrushesPanel::new(tl!("Brushes"), &source, bind_tracked!(props.state), Bind::bound(&mut props.diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
+    if let Some(current) = props.current.clone() {
         panel = panel.selected(current);
     }
     let out = panel.show(ui);
-    for event in &out.diameter.events {
-        set_size(app, event);
+    props.out.send(BrushesEvent::Size(out.diameter.events));
+    if !out.picks.is_empty() {
+        let keys = source.rows(ui.ctx(), &Env::of(ui)).iter().map(|row| row.key.clone()).collect();
+        props.out.send(BrushesEvent::Picks(out.picks, keys));
     }
-    run_picks(app, out.picks, &keys);
 }
 
 /// One edit event of the Size field as a `tools.setBrush`: a gesture's events share a journal key,
 /// a `Set` is a step of its own, `Begin` changes nothing.
 fn set_size(app: &mut PhotocraftApp, event: &EditEvent<f64>) {
     let Some(&size) = event.landed() else { return };
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut after = before.clone();
     after.size = size as f32;
     commit_keyed(app, &before, &after, crate::history_keys::coalesce("brush", event));
