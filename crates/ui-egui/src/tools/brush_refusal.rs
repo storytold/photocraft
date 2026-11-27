@@ -39,7 +39,7 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
 /// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Burn tool (#12672), the Healing Brush (#12111), the Art History Brush
-/// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
+/// (#12638), the Paint Bucket (#12537) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
@@ -53,6 +53,8 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Burn => Some(tl!("burn tool")),
         Tool::Healing => Some(tl!("healing brush")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
+        // The Paint Bucket's click (#12537).
+        Tool::PaintBucket => Some(tl!("paint bucket")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
     }
@@ -132,11 +134,13 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge, Smudge and Burn tools and the
-/// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
-/// behaviour there).
+/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge, Smudge and Burn tools, the
+/// Art History Brush, the Magic Eraser and the Paint Bucket (#12537) Lock Image Pixels as well
+/// (measured for them; the Brush keeps today's behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::Burn | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
+    locks.all
+        || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::Burn | Tool::ArtHistoryBrush | Tool::MagicEraser | Tool::PaintBucket)
+            && locks.pixels)
 }
 
 /// A Spot Healing press on an empty pixel layer with Sample All Layers off (#12581): when that layer is hidden, the
@@ -186,3 +190,7 @@ mod burn_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../healing_refusal_alert_tests.rs"]
 mod healing_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../paint_bucket_refusal_alerts_tests.rs"]
+mod paint_bucket_refusal_alerts_tests;
