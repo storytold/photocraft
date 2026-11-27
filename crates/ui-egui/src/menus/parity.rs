@@ -203,6 +203,18 @@ pub fn compute() -> Parity {
 mod tests {
     use super::*;
 
+    // TEMPORARY (removed before review): prints the regenerated docs/parity-checklist.md in CI,
+    // because the box can't build ui-egui right now.
+    #[test]
+    fn temp_print_regenerated_checklist() {
+        let doc = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/parity-checklist.md")).unwrap_or_default();
+        let want = compute().to_markdown();
+        if doc != want {
+            println!("=====BEGIN PARITY DOC=====\n{want}=====END PARITY DOC=====");
+            panic!("docs/parity-checklist.md is stale (temporary check)");
+        }
+    }
+
     #[test]
     fn parity_does_not_regress() {
         let p = compute();
