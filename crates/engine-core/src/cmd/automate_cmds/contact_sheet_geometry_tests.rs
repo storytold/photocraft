@@ -130,7 +130,7 @@ fn a_wide_vertical_spacing_keeps_the_captions_in_their_cells() {
     let p = json!({"units": "pixels", "width": 400, "height": 100, "resolution": 72, "columns": 2, "rows": 5, "autoSpacing": false, "vertical": 20, "fontSize": 16});
     let d = sheet(&dir, p);
     for k in 0..10 {
-        let b = bounds(&d, &format!("img{k}"), true);
+        let b = bounds(&d, &format!("img{k}.png"), true);
         let bottom = (k / 2 + 1) * 20;
         assert!(!b.is_empty() && b.y1 <= bottom, "img{k} caption {b:?}, cell bottom {bottom}");
     }
