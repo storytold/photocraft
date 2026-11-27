@@ -159,8 +159,10 @@ fn to_row(t: &[f32]) -> [f32; 4096] {
 /// and a CMYK document on its inks (`cmyk_channel_adjustment`), which only the CPU does.
 pub fn adjustment_on_gpu(adj: &Adjustment, mode: photocraft_color::ColorMode) -> bool {
     use photocraft_compose::adjust::{cmyk_channel_adjustment, lab_channel_adjustment};
+    // A CMYK Channel Mixer mixes inks, in any document.
     let tone_in_space =
-        matches!(adj, Adjustment::Levels { space: ToneSpace::Cmyk | ToneSpace::Lab, .. } | Adjustment::Curves { space: ToneSpace::Cmyk | ToneSpace::Lab, .. });
+        matches!(adj, Adjustment::Levels { space: ToneSpace::Cmyk | ToneSpace::Lab, .. } | Adjustment::Curves { space: ToneSpace::Cmyk | ToneSpace::Lab, .. })
+            || photocraft_compose::adjust::cmyk_mixer(adj);
     let own_channels = match mode {
         photocraft_color::ColorMode::Lab => lab_channel_adjustment(adj),
         photocraft_color::ColorMode::Cmyk => cmyk_channel_adjustment(adj),
@@ -257,7 +259,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             p[2] = [b[4], b[5], b[6], 0.0];
             (9, p, None)
         }
-        Adjustment::ChannelMixer { matrix, monochrome } => {
+        Adjustment::ChannelMixer { matrix, monochrome, .. } => {
             // compose::adjust: 32-bit documents cut each percentage to 1/1024, count 255/512 of
             // the constant and don't clip (the shader checks F_HDR).
             let hdr = depth == photocraft_color::SampleType::F32;
@@ -287,7 +289,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
             (12, p, None)
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             p[0][0] = if *reverse { 1.0 } else { 0.0 };
             p[0][1] = if *dither { 1.0 } else { 0.0 };
             let s4: Vec<(f32, [f32; 4])> = stops.iter().map(|(t, c)| (*t, [c[0], c[1], c[2], 1.0])).collect();

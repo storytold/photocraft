@@ -126,7 +126,7 @@ fn gradient_map_reverse_and_dither_keep_the_stops_block() {
     let original = grdm_with((2, [65535, 65535, 65535, 0]), (7, [10000, 0, 0, 0]));
     let Adjustment::GradientMap { stops, .. } = parse(b"grdm", &original, None, Channels::Cmyk) else { panic!() };
     let mut data = original.clone();
-    let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true };
+    let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true, source: None };
     assert!(retarget_gradient_map(&mut data, &target, Channels::Cmyk));
     assert_eq!(&data[2..4], &[1, 1]);
     assert_eq!(data[4..], original[4..], "the stops keep their colour spaces");
@@ -135,7 +135,7 @@ fn gradient_map_reverse_and_dither_keep_the_stops_block() {
     let mut edited = stops;
     edited[0].1 = [0.5; 3];
     let mut data2 = original.clone();
-    let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false };
+    let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false, source: None };
     assert!(!retarget_gradient_map(&mut data2, &target, Channels::Cmyk));
     assert_eq!(data2, original);
     assert!(!retarget_gradient_map(&mut [], &target, Channels::Cmyk));
@@ -203,8 +203,13 @@ fn roundtrips() {
     let b = write(&inkl);
     assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), inkl);
     rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3].into() });
-    rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false });
-    rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true });
+    rt(Adjustment::GradientMap {
+        stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])],
+        reverse: true,
+        dither: false,
+        source: None,
+    });
+    rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true, source: None });
     rt(Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -100.0, 100.0]) });
     rt(Adjustment::SelectiveColor { relative: false, adjustments: [[0.0; 4]; 9] });
     rt(Adjustment::Vibrance { vibrance: 35.0, saturation: -12.0 });
@@ -216,10 +221,10 @@ fn roundtrips() {
     let q = |v: u16| f32::from(v) / 65535.0;
     rt(Adjustment::PhotoFilter { color: [q(60000), q(30000), q(0)], density: 0.25, preserve_luminosity: true });
     rt(Adjustment::PhotoFilter { color: [q(0), q(40000), q(65535)], density: 1.0, preserve_luminosity: false });
-    rt(Adjustment::ChannelMixer { matrix: [[0.5, 0.3, 0.2, 0.0], [0.1, 0.8, 0.1, 0.05], [0.0, 0.2, 0.9, -0.05]], monochrome: false });
-    rt(Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.1], [0.0, 1.0, 0.0, 0.0], [-2.0, 0.0, 2.0, 0.0]], monochrome: true });
-    let id = photocraft_cms::lutfile::LutFile::identity(5);
-    let cube = photocraft_cms::lutfile::write_cube(&id).into_bytes();
+    rt(Adjustment::ChannelMixer { matrix: [[0.5, 0.3, 0.2, 0.0], [0.1, 0.8, 0.1, 0.05], [0.0, 0.2, 0.9, -0.05]], monochrome: false, cmyk: None });
+    rt(Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.1], [0.0, 1.0, 0.0, 0.0], [-2.0, 0.0, 2.0, 0.0]], monochrome: true, cmyk: None });
+    let id = craft_cms::lutfile::LutFile::identity(5).unwrap();
+    let cube = craft_cms::lutfile::write_cube(&id).into_bytes();
     let source = Some(LutSource { format: LutFormat::Cube, bytes: std::sync::Arc::new(cube) });
     rt(Adjustment::ColorLookup { name: "Look.cube".into(), lut: Some(std::sync::Arc::new(id.data)), size: 5, tetrahedral: false, dither: true, source });
 }
@@ -263,14 +268,14 @@ fn inverting_3dl() -> Vec<u8> {
 
 /// A 2³ SpeedGrade `.look` holding the identity.
 fn identity_look() -> Vec<u8> {
-    let hex: String = photocraft_cms::lutfile::LutFile::identity(2).data.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02X}")).collect();
+    let hex: String = craft_cms::lutfile::LutFile::identity(2).unwrap().data.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02X}")).collect();
     format!("<?xml version=\"1.0\"?>\n<look><LUT><size>\"2\"</size><data>\"{hex}\"</data></LUT></look>\n").into_bytes()
 }
 
 /// A `clrL` block as Photoshop writes one for a loaded LUT file.
 fn clrl_block(format: &str, bytes: &[u8], name: &str) -> Vec<u8> {
-    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
-    let text = |t: &str| Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul(t));
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: craft_psd::descriptor::Id::new(t), value: craft_psd::descriptor::Id::new(val) };
+    let text = |t: &str| Value::Text(craft_psd::descriptor::UnicodeString::new_nul(t));
     let desc = Descriptor::new("null")
         .with("lookupType", en("colorLookupType", "3DLUT"))
         .with("NM  ", text(name))
@@ -319,12 +324,12 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
     let a = parse(b"clrL", &clrl_block("LUTFormat3DL", &inverting_3dl(), "Invert.3DL"), None, Channels::Rgb);
     let Adjustment::ColorLookup { name, size, tetrahedral, dither, source, .. } = a else { panic!("{a:?}") };
     // The table no longer matches the stored file (changed in PhotoCraft): the bytes are stale.
-    let id = photocraft_cms::lutfile::LutFile::identity(2).data;
+    let id = craft_cms::lutfile::LutFile::identity(2).unwrap().data;
     let edited = Adjustment::ColorLookup { name, lut: Some(std::sync::Arc::new(id.clone())), size, tetrahedral, dither, source };
     let d = written_clrl(&edited);
     assert_eq!(desc_enum(&d, "LUTFormat"), Some(&b"LUTFormatCUBE"[..]));
     assert_eq!(desc_text(&d, "LUT3DFileName").as_deref(), Some("Invert.cube"));
-    assert_eq!(photocraft_cms::lutfile::parse("x.cube", raw(&d, "LUT3DFileData")).unwrap().data, id);
+    assert_eq!(craft_cms::lutfile::parse("x.cube", raw(&d, "LUT3DFileData")).unwrap().data, id);
     // A table made in PhotoCraft (no file) named like another format is also renamed.
     let made =
         Adjustment::ColorLookup { name: "Grade.look".into(), lut: Some(std::sync::Arc::new(id)), size: 2, tetrahedral: false, dither: false, source: None };
@@ -335,7 +340,7 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
     // An unreadable stored file falls back the same way instead of failing the save.
     let junk = Adjustment::ColorLookup {
         name: "Junk.3dl".into(),
-        lut: Some(std::sync::Arc::new(photocraft_cms::lutfile::LutFile::identity(2).data)),
+        lut: Some(std::sync::Arc::new(craft_cms::lutfile::LutFile::identity(2).unwrap().data)),
         size: 2,
         tetrahedral: false,
         dither: false,
@@ -350,10 +355,10 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
 #[test]
 fn color_lookup_synthetic_block() {
     let cube = b"TITLE \"t\"\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
-    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: craft_psd::descriptor::Id::new(t), value: craft_psd::descriptor::Id::new(val) };
     let desc = Descriptor::new("null")
         .with("lookupType", en("colorLookupType", "3DLUT"))
-        .with("NM  ", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("Id")))
+        .with("NM  ", Value::Text(craft_psd::descriptor::UnicodeString::new_nul("Id")))
         .with("Dthr", Value::Boolean(true))
         .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
         .with("LUT3DFileData", Value::RawData(cube.to_vec()));
@@ -384,10 +389,10 @@ fn color_lookup_synthetic_block() {
 }
 
 fn cube_lookup_block(cube: &[u8]) -> Vec<u8> {
-    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: craft_psd::descriptor::Id::new(t), value: craft_psd::descriptor::Id::new(val) };
     let desc = Descriptor::new("null")
         .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
-        .with("LUT3DFileName", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("domain.cube")))
+        .with("LUT3DFileName", Value::Text(craft_psd::descriptor::UnicodeString::new_nul("domain.cube")))
         .with("LUT3DFileData", Value::RawData(cube.to_vec()));
     let mut block = vec![0, 1];
     block.extend(VersionedDescriptor::new(desc).to_bytes());
@@ -447,17 +452,35 @@ fn malformed_adjustments_are_unsupported() {
 }
 
 fn malformed_channel_mixers_are_unsupported() {
+    // A CMYK mixer (black source used) maps to ink outputs in CMYK documents and stays raw
+    // in modes without inks; our own RGB layout maps there.
     let mut cmyk = i16s(&[1, 0]);
     for r in 0..4 {
         cmyk.extend(i16s(&std::array::from_fn::<i16, 5, _>(|k| if k == r { 100 } else { 0 })));
     }
-    for channels in [Channels::Cmyk, Channels::Other] {
-        assert!(matches!(parse(b"mixr", &cmyk, None, channels), Adjustment::Unsupported { .. }));
-    }
-    let ours = write(&Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false });
-    for channels in [Channels::Cmyk, Channels::Other] {
-        assert!(matches!(parse(b"mixr", &ours[0].1, None, channels), Adjustment::ChannelMixer { .. }));
-    }
+    assert!(
+        matches!(parse(b"mixr", &cmyk, None, Channels::Cmyk), Adjustment::ChannelMixer { cmyk: Some(rows), .. } if rows == photocraft_doc::adjust::CMYK_MIXER_IDENTITY)
+    );
+    assert!(matches!(parse(b"mixr", &cmyk, None, Channels::Other), Adjustment::Unsupported { .. }));
+    // Truncated CMYK blocks stay raw (a monochrome one may carry its first record alone).
+    assert!(matches!(parse(b"mixr", &cmyk[..4 + 3 * 10], None, Channels::Cmyk), Adjustment::Unsupported { .. }));
+    assert!(matches!(parse(b"mixr", &[0, 1, 0, 1, 0, 100], None, Channels::Cmyk), Adjustment::Unsupported { .. }));
+    let mut mono = i16s(&[1, 1]);
+    mono.extend(i16s(&[30, 30, 30, 100, 0]));
+    assert!(
+        matches!(parse(b"mixr", &mono, None, Channels::Cmyk), Adjustment::ChannelMixer { cmyk: Some(rows), monochrome: true, .. } if rows[0] == [0.3, 0.3, 0.3, 1.0, 0.0])
+    );
+    let ours = write(&Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false, cmyk: None });
+    assert!(matches!(parse(b"mixr", &ours[0].1, None, Channels::Other), Adjustment::ChannelMixer { .. }));
+    // Our RGB layout in a CMYK document (written before CMYK mixers were read: its fourth record
+    // repeats the red row) keeps its RGB reading: read as ink rows, the black ink became the cyan mix.
+    let legacy = [[0.8, 0.2, 0.0, 0.05], [0.1, 0.9, 0.0, 0.0], [0.0, 0.3, 0.7, 0.0]];
+    let block = write(&Adjustment::ChannelMixer { matrix: legacy, monochrome: false, cmyk: None });
+    assert!(
+        matches!(parse(b"mixr", &block[0].1, None, Channels::Cmyk), Adjustment::ChannelMixer { cmyk: None, matrix, .. } if matrix == legacy),
+        "{:?}",
+        parse(b"mixr", &block[0].1, None, Channels::Cmyk)
+    );
     assert!(matches!(parse(b"mixr", &[0, 1, 0, 0, 0, 100], None, Channels::Rgb), Adjustment::Unsupported { .. }));
 }
 
@@ -603,7 +626,7 @@ fn channel_mixer_golden_blocks() {
     let mut d = i16s(&[1, 0]);
     d.extend(i16s(&[100, 0, 0, 0, 20, 50, 50, 0, 0, 0, 0, -50, 150, 0, -10]));
     let a = parse(b"mixr", &d, None, Channels::Rgb);
-    assert_eq!(a, Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.2], [0.5, 0.5, 0.0, 0.0], [0.0, -0.5, 1.5, -0.1]], monochrome: false });
+    assert_eq!(a, Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.2], [0.5, 0.5, 0.0, 0.0], [0.0, -0.5, 1.5, -0.1]], monochrome: false, cmyk: None });
     // Written with the trailing gray record (a copy of the first row).
     let w = write(&a);
     assert_eq!(w[0].1[..d.len()], d[..]);
@@ -611,8 +634,74 @@ fn channel_mixer_golden_blocks() {
     // Monochrome with only the gray record: 30/59/11.
     let mut m = i16s(&[1, 1]);
     m.extend(i16s(&[30, 59, 11, 0, 0]));
-    let Adjustment::ChannelMixer { matrix, monochrome: true } = parse(b"mixr", &m, None, Channels::Rgb) else { panic!() };
+    let Adjustment::ChannelMixer { matrix, monochrome: true, .. } = parse(b"mixr", &m, None, Channels::Rgb) else { panic!() };
     assert_eq!(matrix[0], [0.3, 0.59, 0.11, 0.0]);
+}
+
+/// CMYK `mixr` blocks hold four ink records (cyan, magenta, yellow, black), each C, M, Y, K and
+/// constant, and are written back in Photoshop's own 44-byte layout (photoshop corpus cmyk8 and
+/// cmyk16 channel-mixer.psd), monochrome or not.
+#[test]
+fn cmyk_channel_mixer_blocks_round_trip_with_four_ink_outputs() {
+    // Cyan = 100 % C + 20 % K - 10 % const; magenta = 50 % M + 50 % Y; yellow = 100 % Y;
+    // black = 30 % C + 30 % M + 30 % Y + 100 % K.
+    let rows = [[1.0, 0.0, 0.0, 0.2, -0.1], [0.0, 0.5, 0.5, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [0.3, 0.3, 0.3, 1.0, 0.0]];
+    let mut d = i16s(&[1, 0]);
+    d.extend(i16s(&[100, 0, 0, 20, -10, 0, 50, 50, 0, 0, 0, 0, 100, 0, 0, 30, 30, 30, 100, 0]));
+    let a = parse(b"mixr", &d, None, Channels::Cmyk);
+    let Adjustment::ChannelMixer { cmyk: Some(got), monochrome: false, .. } = &a else { panic!("{a:?}") };
+    assert_eq!(*got, rows);
+    // Written as the same four ink records, and read back.
+    let w = write(&a);
+    assert_eq!(w[0].0, *b"mixr");
+    assert_eq!(w[0].1, d);
+    assert_eq!(parse(b"mixr", &w[0].1, None, Channels::Cmyk), a);
+    // Photoshop's block (photoshop corpus cmyk8 channel-mixer.psd, set to cyan 80/30/-10,
+    // magenta 10/90/0 +5, yellow 0/20/70 and no black record): read as four ink rows, the black
+    // one empty (the file's merged image has no black ink), and written back byte for byte.
+    let mut ps = i16s(&[1, 0]);
+    ps.extend(i16s(&[80, 30, -10, 0, 0, 10, 90, 0, 0, 5, 0, 20, 70, 0, 0, 0, 0, 0, 0, 0]));
+    assert_eq!(ps.len(), 44);
+    let a = parse(b"mixr", &ps, None, Channels::Cmyk);
+    let Adjustment::ChannelMixer { cmyk: Some(got), monochrome: false, .. } = &a else { panic!("{a:?}") };
+    assert_eq!(*got, [[0.8, 0.3, -0.1, 0.0, 0.0], [0.1, 0.9, 0.0, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0, 0.0], [0.0; 5]]);
+    assert_eq!(write(&a)[0].1, ps);
+    for mono in [false, true] {
+        let m = Adjustment::ChannelMixer {
+            matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+            monochrome: mono,
+            cmyk: Some([[0.3, 0.3, 0.3, 1.0, 0.05], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [-2.0, 0.0, 0.0, 2.0, 0.0]]),
+        };
+        let b = write(&m);
+        assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), m, "monochrome {mono}");
+    }
+}
+
+/// A mixer whose outputs don't match the document's mode is reshaped to the mode's own before it
+/// is written, so the reopened `mixr` block reads back as what was saved (no black output
+/// borrowed from the gray record, no CMYK block kept raw in an RGB file).
+#[test]
+fn channel_mixers_are_reshaped_to_the_document_mode() {
+    let rgb = Adjustment::ChannelMixer { matrix: [[0.0, 1.0, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, -0.2]], monochrome: false, cmyk: None };
+    let Some(ink) = mixer_for(&rgb, Channels::Cmyk) else { panic!("an RGB mixer in CMYK is reshaped") };
+    let Adjustment::ChannelMixer { cmyk: Some(rows), .. } = &ink else { panic!("{ink:?}") };
+    // Ink = 1 - light, so each constant becomes 1 - sources - constant.
+    assert_eq!(*rows, [[0.0, 1.0, 0.0, 0.0, -0.1], [1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.2], [0.0, 0.0, 0.0, 1.0, 0.0]]);
+    let b = write(&ink);
+    assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), ink);
+    let cmyk = Adjustment::ChannelMixer {
+        matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+        monochrome: true,
+        cmyk: Some([[0.3, 0.3, 0.2, 1.0, 0.05], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0]]),
+    };
+    let Some(screen) = mixer_for(&cmyk, Channels::Rgb) else { panic!("a CMYK mixer in RGB is reshaped") };
+    assert_eq!(screen, Adjustment::ChannelMixer { matrix: [[0.3, 0.3, 0.2, 0.15], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: true, cmyk: None });
+    let b = write(&screen);
+    assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Rgb), screen);
+    // Matching shapes and other adjustments are left alone.
+    assert_eq!(mixer_for(&rgb, Channels::Rgb), None);
+    assert_eq!(mixer_for(&cmyk, Channels::Cmyk), None);
+    assert_eq!(mixer_for(&Adjustment::Invert, Channels::Cmyk), None);
 }
 
 fn vdesc(d: Descriptor) -> Vec<u8> {
@@ -658,7 +747,7 @@ fn degenerate_adjustments_still_get_an_encoding() {
     for (stops, want) in
         [(vec![], vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])]), (vec![(0.3, [0.2, 0.4, 0.6])], vec![(0.0, [0.2, 0.4, 0.6]), (1.0, [0.2, 0.4, 0.6])])]
     {
-        let b = write(&Adjustment::GradientMap { stops, reverse: true, dither: false });
+        let b = write(&Adjustment::GradientMap { stops, reverse: true, dither: false, source: None });
         let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
         let Adjustment::GradientMap { stops, reverse: true, .. } = back else { panic!("{back:?}") };
         assert_eq!(stops.len(), want.len());
@@ -672,7 +761,7 @@ fn degenerate_adjustments_still_get_an_encoding() {
         let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
         let Adjustment::ColorLookup { lut: Some(t), size: 2, dither: false, name, .. } = back else { panic!("{back:?}") };
         assert_eq!(name, "L");
-        assert_eq!(*t, photocraft_cms::lutfile::LutFile::identity(2).data);
+        assert_eq!(*t, craft_cms::lutfile::LutFile::identity(2).unwrap().data);
     }
     // Every kind except a malformed Unsupported key has an encoding.
     assert!(write(&Adjustment::Unsupported { psd_key: "abc".into(), raw: Vec::new().into() }).is_empty());
@@ -714,4 +803,26 @@ fn gray_uses_first_channel_record_for_all() {
 fn legacy_brit_without_cged() {
     let a = parse(b"brit", &[0, 10, 0xff, 0xf6, 0, 127, 0], None, Channels::Rgb);
     assert_eq!(a, Adjustment::BrightnessContrast { brightness: 10.0, contrast: -10.0, legacy: true });
+}
+
+/// #8351: a Photoshop gradient with Smoothness, midpoints and a method keeps its own stops
+/// next to the dense baked ones, and a save writes them back (not the baked stops).
+#[test]
+fn gradient_map_keeps_photoshops_stops_midpoints_and_smoothness() {
+    use photocraft_doc::adjust::GradientSource;
+    let src =
+        GradientSource { stops: vec![(0.0, [0.1, 0.2, 0.6]), (1.0, [1.0, 0.8, 0.2])], midpoints: vec![0.3], smoothness: 0.8, method: "perceptual".into() };
+    let block = write_grdm(&src.stops, &src.midpoints, src.smoothness, crate::gradient_bake::Method::Perceptual, false, true);
+    let a = parse(b"grdm", &block, None, Channels::Rgb);
+    let Adjustment::GradientMap { stops, dither: true, source: Some(kept), .. } = &a else { panic!("{a:?}") };
+    assert!(stops.len() > 2, "rendered from the baked stops");
+    assert_eq!(kept.stops.len(), 2);
+    assert!((kept.midpoints[0] - 0.3).abs() < 1e-6 && (kept.smoothness - 0.8).abs() < 1e-3 && kept.method == "perceptual", "{kept:?}");
+    assert_eq!(*stops, crate::gradient_bake::bake_source(kept), "the baked stops are the source baked");
+    // A save writes Photoshop's two stops back: reading it again gives the same map.
+    let written = write(&a);
+    let back = parse(&written[0].0, &written[0].1, None, Channels::Rgb);
+    assert_eq!(back, a);
+    let Adjustment::GradientMap { source: Some(again), .. } = &back else { panic!() };
+    assert_eq!(again.stops.len(), 2, "two stops in the file, not the baked ones");
 }

@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
-    AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+    AlphaChannel, ColorIndices, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask,
+    Metadata, NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::{
-    ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM, PatternM,
-    SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
+    ChannelM, ColorIndicesM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM,
+    PatternM, SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
 };
 use crate::{FormatError, Result};
 
@@ -80,8 +80,6 @@ pub(crate) fn unhex(s: &str) -> Result<Vec<u8>> {
 fn key4(s: &str) -> Result<[u8; 4]> {
     unhex(s)?.try_into().map_err(|_| FormatError::corrupt(format!("bad 4-byte key `{s}`")))
 }
-
-pub(crate) use craft_pcraft_format::is_valid_hash;
 
 /// Convert native-endian sample bytes to little-endian in place (and back:
 /// the swap is an involution).
@@ -157,14 +155,20 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
+            use_aligned_rendering: s.use_aligned_rendering,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
             live: match &s.live {
-                Some(photocraft_doc::LiveShape::ArrowLine { .. }) => None,
+                Some(photocraft_doc::LiveShape::ArrowLine { .. } | photocraft_doc::LiveShape::Triangle { .. }) => None,
                 other => other.clone(),
             },
             arrow_live: match &s.live {
                 Some(arrow @ photocraft_doc::LiveShape::ArrowLine { .. }) => Some(arrow.clone()),
+                _ => None,
+            },
+            // Likewise for a triangle: older builds cannot read the kind, so they open its path.
+            triangle_live: match &s.live {
+                Some(triangle @ photocraft_doc::LiveShape::Triangle { .. }) => Some(triangle.clone()),
                 _ => None,
             },
             density: s.density,
@@ -238,8 +242,11 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
-    DocM {
+/// Build native document manifest data, sending durable conversion provenance through the same bounded content sink as
+/// other stored data.
+pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+    let import_conversion = d.metadata.import_conversion.as_deref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
+    Ok(DocM {
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -253,6 +260,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
+            import_conversion,
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
@@ -268,9 +276,23 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         patterns: d
             .patterns
             .iter()
-            .map(|p| PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) })
+            .map(|p| PatternM {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                width: p.width,
+                height: p.height,
+                source_mode: p.source_mode,
+                surface: surface_m(&p.surface, sink),
+            })
             .collect(),
         color_table: d.color_table.clone(),
+        // Only while they hold for the layer saved here (and the document is Indexed Color): on
+        // open, identical tiles load as one, so loaded pixels can't show a change made since.
+        color_indices: d
+            .color_indices
+            .as_ref()
+            .filter(|c| d.color_table.is_some() && d.layer(c.layer).and_then(Layer::surface).is_some_and(|p| c.holds(c.layer, p)))
+            .map(|c| ColorIndicesM { layer: c.layer.0, indices: surface_m(&c.indices, sink) }),
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
@@ -282,7 +304,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
-    }
+    })
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -491,16 +513,24 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, density, feather } => LayerContent::Shape(ShapeLayer {
-                path: path.clone(),
-                fill: fill.clone(),
-                stroke: stroke.clone(),
-                live: arrow_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. })).cloned().or_else(|| live.clone()),
-                cache: self.opt_surface(cache)?,
-                psd_raw: self.opt_blob(psd_raw)?,
-                density: *density,
-                feather: *feather,
-            }),
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, live, arrow_live, triangle_live, density, feather } => {
+                LayerContent::Shape(ShapeLayer {
+                    path: path.clone(),
+                    fill: fill.clone(),
+                    stroke: stroke.clone(),
+                    use_aligned_rendering: *use_aligned_rendering,
+                    live: arrow_live
+                        .as_ref()
+                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                        .cloned()
+                        .or_else(|| live.clone()),
+                    cache: self.opt_surface(cache)?,
+                    psd_raw: self.opt_blob(psd_raw)?,
+                    density: *density,
+                    feather: *feather,
+                })
+            }
             ContentM::Smart {
                 contents_id,
                 source,
@@ -594,6 +624,8 @@ impl Loader<'_> {
         })
     }
 
+    /// Reconstruct checked native data while reserving/remapping IDs, validating resources and preserving references
+    /// plus opaque conversion provenance.
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
@@ -623,6 +655,7 @@ impl Loader<'_> {
         }
         let quick_mask = m.quick_mask.as_ref().map(|c| self.channel(c)).transpose()?;
         let mut md = Metadata {
+            import_conversion: m.metadata.import_conversion.as_ref().map(|report| crate::import_conversion::from_manifest(report, self.fetch)).transpose()?,
             xmp: m.metadata.xmp.as_deref().map(std::sync::Arc::from),
             exif: self.opt_blob(&m.metadata.exif)?,
             text: m.metadata.text.clone(),
@@ -650,7 +683,14 @@ impl Loader<'_> {
             if p.width > max || p.height > max {
                 return Err(FormatError::LimitExceeded(format!("pattern `{}` is {}×{} px (max {max} per side)", p.name, p.width, p.height)));
             }
-            patterns.push(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: self.surface(&p.surface)? });
+            patterns.push(Pattern {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                width: p.width,
+                height: p.height,
+                source_mode: p.source_mode,
+                surface: self.surface(&p.surface)?,
+            });
         }
         let layer_comps = m.layer_comps.iter().map(|c| self.comp(c)).collect::<Result<Vec<_>>>()?;
         let last_document_state = m.last_document_state.as_ref().map(|c| self.comp(c)).transpose()?;
@@ -675,7 +715,7 @@ impl Loader<'_> {
             }
         }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
-        Ok(Document {
+        let mut doc = Document {
             id,
             name: m.name.clone(),
             size: m.size,
@@ -683,7 +723,7 @@ impl Loader<'_> {
             mode: m.mode,
             depth: m.depth,
             icc_profile: self.opt_blob(&m.icc_profile)?,
-            layers,
+            layers: layers.into(),
             channels,
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,
@@ -697,6 +737,7 @@ impl Loader<'_> {
             quick_mask_unselected: m.quick_mask_unselected,
             patterns,
             color_table: m.color_table.clone(),
+            color_indices: None,
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
@@ -708,7 +749,16 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
-        })
+        };
+        // Saved only while they held for the layer as saved, so they pair with its pixels as
+        // loaded. Optional side data: indices of a layer the file doesn't hold, or damaged ones,
+        // are dropped (Color Table then maps by nearest colour) rather than failing the open.
+        doc.color_indices = m.color_indices.as_ref().and_then(|c| {
+            let layer = *self.id_map.get(&c.layer)?;
+            let pixels = doc.layer(layer)?.surface()?.clone();
+            Some(ColorIndices { layer, pixels, indices: self.surface(&c.indices).ok()? })
+        });
+        Ok(doc)
     }
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {

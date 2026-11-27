@@ -177,6 +177,32 @@ fn batch_rejects_too_many_steps() {
 }
 
 #[test]
+fn render_rejects_malformed_requests_and_keeps_missing_or_null_path_behavior() {
+    let h = session();
+    let mut g = h.lock().unwrap();
+    g.handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+    let before = g.inspect(None).unwrap();
+    for params in [json!([]), json!([0]), json!(123), json!(false), json!("out.png")] {
+        let error = g.handle("doc.render", params.clone()).unwrap_err();
+        assert!(matches!(&error, AutomationError::BadRequest(_)), "{params}: {error}");
+        assert!(error.to_string().contains("doc.render params must be an object"), "{params}: {error}");
+        assert_eq!(g.inspect(None).unwrap(), before, "invalid params {params} changed the document");
+    }
+    for path in [json!(123), json!(false), json!([]), json!({})] {
+        let error = g.handle("doc.render", json!({"path": path})).unwrap_err();
+        assert!(matches!(&error, AutomationError::BadRequest(_)), "{path}: {error}");
+        assert!(error.to_string().contains("`path` must be a string"), "{path}: {error}");
+        assert_eq!(g.inspect(None).unwrap(), before, "invalid path {path} changed the document");
+    }
+    for params in [Value::Null, json!({}), json!({"path": null})] {
+        let reply = g.handle("doc.render", params.clone()).unwrap();
+        assert_eq!(reply["mime"], "image/png", "{params}: {reply}");
+        let png = base64::engine::general_purpose::STANDARD.decode(reply["base64"].as_str().unwrap()).unwrap();
+        assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (8, 8));
+    }
+}
+
+#[test]
 fn render_to_file_and_base64() {
     let h = session();
     let mut g = h.lock().unwrap();
@@ -312,7 +338,7 @@ fn doc_save_takes_maximize_compatibility() {
     let mut h = Headless::trusted_local();
     h.handle("doc.new", json!({"width": 64, "height": 32})).unwrap();
     h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
-    let real_merged = |p: &std::path::Path| photocraft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |p: &std::path::Path| craft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
     for (name, maximize, real) in [("default.psd", json!(null), true), ("off.psd", json!(false), false), ("on.psd", json!(true), true)] {
         let path = dir.join(name);
         h.handle("doc.save", json!({"path": path.to_string_lossy(), "maximizeCompatibility": maximize})).unwrap();
@@ -413,7 +439,7 @@ fn doc_place_reads_through_the_read_root_and_never_outside_it() {
     let inspected = h.handle("doc.inspect", json!({})).unwrap();
     assert_eq!(inspected["layers"].as_array().map(Vec::len), Some(2), "the placed layer is in the document: {inspected}");
     // A path outside the read root is refused the way the ambient command is (#2810).
-    for (path, reason) in [("../outside/logo.png", "parent traversal"), (absolute.as_str(), "must be inside the automation root")] {
+    for (path, reason) in [("../outside/logo.png", "parent traversal"), (absolute.as_str(), "must be inside an automation read root")] {
         let refused = h.handle("doc.place", json!({"path": path})).unwrap_err().to_string();
         assert!(refused.contains(reason), "{refused}");
         let inspected = h.handle("doc.inspect", json!({})).unwrap();
@@ -513,7 +539,7 @@ fn doc_replace_smart_object_reads_through_the_read_root_and_never_outside_it() {
     // Outside the read root, a bad layer, a missing path or a file that is no image: refused, nothing changed.
     for (params, reason) in [
         (json!({"path": "../outside/red.png"}), "parent traversal"),
-        (json!({"path": absolute}), "must be inside the automation root"),
+        (json!({"path": absolute}), "must be inside an automation read root"),
         (json!({"path": "logo.png", "layer": 999_999}), "no such layer"),
         (json!({}), "needs `path`"),
     ] {
@@ -560,7 +586,7 @@ fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
         let reply: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(reply["id"], 8491);
         assert_eq!(reply["ok"], true, "{reply}");
-        assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0001_Background.png")]));
+        assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0002_Background.png")]));
         if !trusted {
             assert_eq!(reply["result"]["count"], 1);
         }
@@ -598,9 +624,12 @@ fn doc_export_layers_writes_only_beneath_the_write_root() {
     std::fs::create_dir_all(&root).unwrap();
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
     h.handle("doc.new", json!({"width": 12, "height": 8, "background": "white", "name": "card"})).unwrap();
-    h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Badge"}})).unwrap();
-
     let out = root.join("out");
+    let refused = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy()})).unwrap_err().to_string();
+    assert!(refused.contains("Layers to Files needs a document with multiple layers."), "{refused}");
+    assert!(!out.exists() || std::fs::read_dir(&out).unwrap().next().is_none(), "the refusal wrote no files");
+
+    h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Badge"}})).unwrap();
     let exported = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy(), "format": "png", "prefix": "card"})).unwrap();
     assert_eq!(exported["count"].as_u64(), Some(2), "{exported}");
     let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
@@ -660,7 +689,7 @@ fn doc_export_data_sets_refuse_collisions_and_import_reads_the_root() {
     assert_eq!(imported["imported"].as_u64(), Some(2), "{imported}");
     std::fs::write(base.join("outside.csv"), "Data Set,show\none,true\n").unwrap();
     let outside = h.handle("doc.importDataSets", json!({"path": base.join("outside.csv").to_string_lossy()})).unwrap_err().to_string();
-    assert!(outside.contains("must be inside the automation root"), "{outside}");
+    assert!(outside.contains("must be inside an automation read root"), "{outside}");
     // Release directory capabilities before cleanup on Windows.
     drop(h);
     std::fs::remove_dir_all(base).unwrap();
@@ -760,7 +789,7 @@ fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     // A trusted export embeds the linked file, as before.
@@ -792,7 +821,7 @@ fn allowed_filters_do_not_rerender_a_smart_object_from_its_linked_file() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("p.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
@@ -824,7 +853,7 @@ fn workspace_layer_exports_keep_linked_smart_objects_as_pixels() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
@@ -912,10 +941,10 @@ fn idle_tcp_daemon_releases_its_port_but_keeps_active_clients() {
         done_tx.send(result).unwrap();
     });
     let addr = ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let mut client = std::net::TcpStream::connect(addr).unwrap();
+    let client = std::net::TcpStream::connect(addr).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let mut reader = BufReader::new(client.try_clone().unwrap());
-    writeln!(client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    let mut reader = BufReader::new(&client);
+    writeln!(&client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let auth: Value = serde_json::from_str(&line).unwrap();
@@ -939,14 +968,14 @@ fn tcp_serves_loopback() {
         let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
     });
     let addr = rx.recv().unwrap();
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    writeln!(&s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let auth: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(auth["result"]["authenticated"], true);
-    writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -986,15 +1015,17 @@ fn tcp_connections_must_authenticate_before_the_deadline_whatever_they_send() {
     drop(slow);
 
     // Authenticates at once, then asks again 300 ms after the deadline.
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    let s = std::net::TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    writeln!(&s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    // On Windows a socket from `try_clone` is inherited by processes that other tests start,
+    // and the connection then stays open after `s` is dropped. Read and write through `&s`.
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"]["authenticated"], true);
     std::thread::sleep(Duration::from_millis(600));
-    writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], "a");
@@ -1018,11 +1049,11 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
         let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
     });
     let addr = rx.recv().unwrap();
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     for id in ["auth", "again"] {
-        writeln!(s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+        writeln!(&s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
     }
@@ -1030,7 +1061,7 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
     assert_eq!(again["id"], "again");
     assert_eq!(again["ok"], false);
     assert_eq!(again["error"], "already authenticated");
-    writeln!(s, r#"{{"id":"m","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"m","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -1155,7 +1186,7 @@ fn doc_place_forwards_high_memory_approval() {
     let gb = 1u64 << 30;
     let root = std::env::temp_dir().join(format!("pc-doc-place-approval-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let psd = photocraft_psd::testgen::small(photocraft_psd::Version::Psd, photocraft_psd::Compression::Zip).to_bytes().unwrap();
+    let psd = craft_psd::testgen::small(craft_psd::Version::Psd, craft_psd::Compression::Zip).to_bytes().unwrap();
     std::fs::write(root.join("high.psd"), &psd).unwrap();
     // Known 5 GiB RAM: S = 2.5 GiB, H = 3.75 GiB. A 3 GiB estimate charge lands in (S, H].
     let snap = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
@@ -1183,4 +1214,86 @@ fn doc_place_forwards_high_memory_approval() {
     trial(&mut t, &absolute);
     drop(t);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn doc_save_rejects_malformed_requests_without_writing_the_stored_path() {
+    let dir = std::env::temp_dir().join(format!("pc-rpc-save-path-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let workspace = crate::AuthorizedWorkspace::new(Some(&dir), Some(&dir)).unwrap();
+    let mut h = Headless::with_workspace(workspace);
+    h.handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+    h.handle("doc.save", json!({"path": "saved.pcraft"})).unwrap();
+    let path = dir.join("saved.pcraft");
+    let original = std::fs::read(&path).unwrap();
+    h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Unsaved"}})).unwrap();
+    let unsaved = h.inspect(None).unwrap();
+
+    for field in ["path", "format"] {
+        for value in [json!(123), json!(false), json!([]), json!({})] {
+            let mut params = json!({});
+            params[field] = value.clone();
+            let error = h.handle("doc.save", params).unwrap_err().to_string();
+            assert!(error.contains(field), "{field} {value}: {error}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "invalid {field} {value} wrote the stored file");
+            assert_eq!(h.inspect(None).unwrap(), unsaved, "invalid {field} {value} changed the document");
+        }
+    }
+    for params in [json!(123), json!(false), json!([]), json!("saved.pcraft")] {
+        let error = h.handle("doc.save", params.clone()).unwrap_err().to_string();
+        assert!(error.contains("object"), "{params}: {error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "invalid params {params} wrote the stored file");
+        assert_eq!(h.inspect(None).unwrap(), unsaved, "invalid params {params} changed the document");
+    }
+
+    let mut previous = original;
+    for params in [json!({}), json!({"path": null}), json!({"format": null}), Value::Null] {
+        h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
+        let saved = h.handle("doc.save", params).unwrap();
+        assert_eq!(saved["path"], "saved.pcraft");
+        let bytes = std::fs::read(&path).unwrap();
+        assert_ne!(bytes, previous, "an implicit save did not write the edited document");
+        previous = bytes;
+    }
+    let saved = h.handle("doc.save", json!({"path": "copy.pcraft", "format": "pcraft"})).unwrap();
+    assert_eq!(saved["path"], "copy.pcraft");
+    assert!(dir.join("copy.pcraft").is_file());
+    drop(h);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn doc_close_rejects_non_object_params_without_closing_documents() {
+    let h = session();
+    for _ in 0..2 {
+        assert_eq!(respond(&h, r#"{"method":"doc.new","params":{"width":8,"height":8}}"#)["ok"], true);
+    }
+    let before = h.lock().unwrap().session_list();
+    for params in [json!([]), json!([0]), json!(true), json!(false), json!(1), json!("0")] {
+        let reply = respond(&h, &json!({"method": "doc.close", "params": params}).to_string());
+        assert_eq!(reply["ok"], false, "{params}: {reply}");
+        assert!(reply["error"].as_str().unwrap().contains("doc.close params must be an object"), "{reply}");
+        assert_eq!(h.lock().unwrap().session_list(), before, "invalid params {params} changed the session");
+    }
+
+    // Missing/null params and indices close the active document; an explicit index selects its target.
+    for (params, remaining_index) in
+        [(None, 0), (Some(Value::Null), 0), (Some(json!({})), 0), (Some(json!({"index": null})), 0), (Some(json!({"index": 0})), 1)]
+    {
+        let h = session();
+        for width in [8, 16] {
+            let request = json!({"method": "doc.new", "params": {"width": width, "height": 8}});
+            assert_eq!(respond(&h, &request.to_string())["ok"], true);
+        }
+        let mut expected = h.lock().unwrap().session_list()["documents"][remaining_index].clone();
+        expected["index"] = json!(0);
+        let mut request = json!({"method": "doc.close"});
+        if let Some(params) = params {
+            request["params"] = params;
+        }
+        let reply = respond(&h, &request.to_string());
+        assert_eq!(reply["ok"], true, "{request}: {reply}");
+        assert_eq!(reply["result"]["documents"], json!([expected]), "{request}: {reply}");
+        assert_eq!(reply["result"]["active"], 0, "{reply}");
+    }
 }

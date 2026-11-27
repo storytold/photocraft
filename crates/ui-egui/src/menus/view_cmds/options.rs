@@ -1,46 +1,5 @@
 use super::{Map, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
 
-/// Whether the window was maximized when a screen mode took it full screen (egui temp data).
-pub(super) fn was_maximized_id() -> egui::Id {
-    egui::Id::unique("pc-full-screen-was-maximized")
-}
-
-/// The window commands for switching to screen mode `next`, and whether the window should be
-/// maximized again when it leaves full screen. With `keep_apart` (Windows), full screen and
-/// maximized never overlap: a maximized window is un-maximized before it goes full screen and
-/// maximized again after it leaves. Why: winit on Windows keeps the maximized style on a window
-/// that goes full screen from maximized, and the shell then draws the taskbar black instead of
-/// hiding it; on the way out the window stays maximized at the monitor's full size, over the
-/// taskbar (#3550, #4018, #4230). [OBSERVED 2026-10-12, Windows 11, eframe 0.36.2, winit 0.30.13,
-/// a minimal eframe window; un-maximizing first gave a clean full screen and a work-area maximize.]
-///
-/// WORKAROUND(winit#4756): remove `keep_apart` once the winit in Cargo.lock (0.30.13 today) has
-/// the fix; check first with https://gist.github.com/aweussom/3f80ffb82df7f0102341858afbbffd9b
-/// (`--max`, no `--fix`: full screen must have no WS_MAXIMIZE and hide the taskbar).
-pub(super) fn screen_mode_commands(
-    keep_apart: bool,
-    full_screen: bool,
-    maximized: bool,
-    was_maximized: bool,
-    next: &str,
-) -> (Vec<egui::ViewportCommand>, bool) {
-    let want = next != "standard";
-    let mut commands = Vec::new();
-    let mut remember = was_maximized;
-    if keep_apart && want && !full_screen && maximized {
-        commands.push(egui::ViewportCommand::Maximized(false));
-        remember = true;
-    }
-    commands.push(egui::ViewportCommand::Fullscreen(want));
-    if !want {
-        if keep_apart && full_screen && remember {
-            commands.push(egui::ViewportCommand::Maximized(true));
-        }
-        remember = false;
-    }
-    (commands, remember)
-}
-
 /// Pixel aspect ratio (width / height of a pixel) of a preset id.
 pub fn pixel_aspect_ratio(id: &str) -> f32 {
     // View › Pixel Aspect Ratio › Custom: `custom:<ratio>:<name>` (see `workspace_ui`).
@@ -193,41 +152,5 @@ pub fn restore(app: &mut PhotocraftApp) {
         if let (Some(slot), Some(on)) = (snap_slot(&mut app.ui.view.snap_to, k), v.as_bool()) {
             *slot = on;
         }
-    }
-}
-
-/// Window › <panel>: (panel, dock tab) for panels that live as tabs of a dock card.
-pub(super) fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, usize)> {
-    let pro = app.ui.theme.is_pro();
-    Some(match id {
-        "window.panel.info" => ("navigator", 2),
-        "window.panel.histogram" => ("navigator", 1),
-        "window.panel.navigator" => ("navigator", 0),
-        "window.panel.actions" => ("history", 1),
-        "window.panel.layerComps" => ("history", 2),
-        "window.panel.history" => ("history", 0),
-        "window.panel.channels" => ("layers", 1),
-        "window.panel.paths" => ("layers", 2),
-        "window.panel.layers" => ("layers", 0),
-        "window.panel.adjustments" => ("properties", 1),
-        "window.panel.properties" => ("properties", 0),
-        // Their own Character | Paragraph group, so Properties stays open (#150).
-        "window.panel.character" | "type.panels.character" => ("character", 0),
-        "window.panel.paragraph" | "type.panels.paragraph" => ("character", 1),
-        "window.panel.swatches" => ("color", usize::from(pro)),
-        "window.panel.color" => ("color", usize::from(!pro)),
-        _ => return None,
-    })
-}
-
-pub(super) fn panel_state<'a>(app: &'a mut PhotocraftApp, panel: &str) -> (&'a mut bool, &'a mut usize) {
-    let (p, t) = (&mut app.ui.panels, &mut app.ui.dock_tabs);
-    match panel {
-        "navigator" => (&mut p.navigator, &mut t.navigator),
-        "history" => (&mut p.history, &mut t.history),
-        "layers" => (&mut p.layers, &mut t.layers),
-        "color" => (&mut p.color, &mut t.color),
-        "character" => (&mut p.character, &mut t.character),
-        _ => (&mut p.properties, &mut t.properties),
     }
 }

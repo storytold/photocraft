@@ -1,16 +1,17 @@
 //! Move tool › Show Highlight on Rollover (Preferences › Tools, on by default): with Auto-Select
 //! on, or ⌘ held while it is off, hovering the canvas outlines the layer (or group, per the
 //! Auto-Select target) that a click there would pick. The hit test is the click's own
-//! (`pick_cmds::auto_select_target`), so a type layer is outlined anywhere inside its text, as it
+//! (`pick_cmds::move_auto_select_target`), so a type layer is outlined anywhere inside its text, as it
 //! is picked there (#2591). The answer is cached per document revision and pointer pixel: a
 //! pointer resting on the canvas costs nothing per frame.
 
-use egui::{Pos2, Stroke};
+use craft::behavior::kurbo;
+use craft::ui::canvas_controls::{HoverOutline, HoverShape};
+use craft::ui::contract::Show as _;
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
 use crate::state::Tool;
 
 /// The last answer: what a click at `at` on that revision of the document would outline.
@@ -25,15 +26,13 @@ pub(crate) struct Hover {
 
 /// The document-space bounds to outline with the pointer at `at` (document px), or `None` when
 /// nothing is highlighted: the preference is off, another tool is current, a click wouldn't
-/// Auto-Select (it's off without ⌘, or the selected pixels move instead), a button is down, or a
-/// drag or transform is under way.
+/// Auto-Select (it's off without ⌘, or the selected pixels move instead), a button is down (which
+/// covers every drag), or a transform is under way.
 pub(crate) fn target(app: &mut PhotocraftApp, at: Option<[f64; 2]>, command: bool, pressed: bool) -> Option<Rect> {
     if !app.session.prefs().tools.show_highlight_on_rollover
         || app.ui.tool != Tool::Move
         || !app.ui.tool_options.move_show_hover_bounds
         || pressed
-        || app.drag.is_some()
-        || app.guide_drag.is_some()
         || app.ui.transform.is_some()
         || app.ui.tool_options.move_auto_select == command
         || crate::move_ui::moves_selected_pixels_with(app, Tool::Move)
@@ -53,7 +52,7 @@ pub(crate) fn target(app: &mut PhotocraftApp, at: Option<[f64; 2]>, command: boo
         app.canvas_hover_layer = h.target_layer;
         return h.bounds;
     }
-    let target_layer = photocraft_engine::pick_cmds::auto_select_target(&st.doc, at[0], at[1], group);
+    let target_layer = photocraft_engine::pick_cmds::move_auto_select_target(&st.doc, at[0], at[1], group);
     let bounds = target_layer.and_then(|id| outline(&st.doc, id));
     let target_layer = if bounds.is_some() { target_layer } else { None };
     app.move_hover = Some(Hover { doc, revision, at, group, target_layer, bounds });
@@ -96,16 +95,10 @@ pub(crate) fn active_outline(app: &mut PhotocraftApp, at: Option<[f64; 2]>, comm
         app.canvas_hover_layer = None;
         return None;
     }
-    // A live rectangle's corner widget under the pointer (or being dragged) isn't a layer to pick.
-    if at.is_some_and(|p| crate::corner_radius::hovers(app, p)) {
-        app.canvas_hover_layer = None;
-        return None;
-    }
     // A layer hovered in the Layers panel takes precedence over canvas rollover.
     if let Some(id) = app.hover_layer
         && (app.ui.tool != Tool::Move || app.ui.tool_options.move_show_layers_hover_bounds)
-        && app.drag.is_none()
-        && app.guide_drag.is_none()
+        && !pressed
         && app.ui.transform.is_none()
         && let Some(st) = app.session.active()
     {
@@ -114,22 +107,19 @@ pub(crate) fn active_outline(app: &mut PhotocraftApp, at: Option<[f64; 2]>, comm
     target(app, at, command, pressed)
 }
 
-/// Draws the highlight on the active document's canvas, in the theme's accent colour.
-pub(crate) fn draw(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, idx: usize, hover: Option<Pos2>) {
-    if app.session.active_index() != Some(idx) {
-        return;
-    }
+/// Shows the highlight over the active document's canvas `canvas`; `pointer` is the screen hover
+/// position. The Layers panel reads `canvas_hover_layer`, so a change of it asks for a repaint.
+pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rect, pointer: Option<egui::Pos2>) {
     let prev_canvas_hover = app.canvas_hover_layer;
-    let (mods, pressed) = painter.ctx().input(|i| (i.modifiers, i.pointer.any_down()));
-    let command = crate::workspace_ui::sticky_mods(app, mods).command;
-    let at = hover.map(|p| xf.to_doc(p));
-    let outline_rect = active_outline(app, at, command, pressed);
+    let command = craft::ui::runtime::pointer::frame(ui.ctx()).mods.cmd;
+    let pressed = crate::canvas::tools::in_gesture(app);
+    let at = pointer.and_then(|p| crate::canvas::document_display::doc_point_at(app, p)).map(|p| [p.x, p.y]);
+    let outline = active_outline(app, at, command, pressed);
     if app.canvas_hover_layer != prev_canvas_hover {
-        painter.ctx().request_repaint();
+        ui.ctx().request_repaint();
     }
-    let Some(b) = outline_rect else { return };
-    let accent = crate::theme::Tokens::get(painter.ctx()).accent;
-    painter.rect_stroke(xf.doc_rect(b), 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Outside);
+    let shape = outline.map(|b| HoverShape::Rect(kurbo::Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1))));
+    HoverOutline::new(tl!("Layer rollover"), shape).show_at(ui, canvas);
 }
 
 #[cfg(test)]
@@ -155,6 +145,15 @@ mod tests {
         // The empty top layer is clicked through to the painted one; the Background isn't outlined.
         assert_eq!(target(&mut app, Some([10.5, 12.0]), false, false), Some(a));
         assert_eq!(target(&mut app, Some([40.0, 40.0]), false, false), None);
+        app.session
+            .edit("paint top", |doc, active| {
+                let top = doc.layer_mut(active.unwrap()).unwrap();
+                top.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 32, 32), &[0.0, 0.0, 1.0, 1.0]);
+                top.locks.position = true;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(target(&mut app, Some([10.5, 12.0]), false, false), Some(a), "the rollover skips the position-locked top layer");
         // Nothing while a button is down or a drag runs.
         assert_eq!(target(&mut app, Some([10.5, 12.0]), false, true), None);
         // Auto-Select off: only with ⌘ held.
@@ -186,10 +185,8 @@ mod tests {
         app.hover_layer = Some(target_layer);
         assert_eq!(active_outline(&mut app, None, false, false), Some(a));
 
-        // When a drag or transform is in progress, no outline:
-        app.guide_drag = Some(crate::rulers::GuideDrag { vertical: false, index: None, pos: 10.0, press: 10.0, over_ruler: false, flipped: false });
-        assert_eq!(active_outline(&mut app, None, false, false), None);
-        app.guide_drag = None;
+        // While a button is down (a drag), no outline:
+        assert_eq!(active_outline(&mut app, None, false, true), None);
 
         // When rollover preference is disabled, no outline:
         app.session.edit_prefs(|p| p.tools.show_highlight_on_rollover = false);

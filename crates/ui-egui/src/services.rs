@@ -1,7 +1,6 @@
-use super::{
-    CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
-    targa_options_ui, tiff_options_ui,
-};
+#[cfg(target_arch = "wasm32")]
+use super::FileDialogFn;
+use super::{Document, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, targa_options_ui, tiff_options_ui};
 
 /// The error a save gets while another save waits on its format prompt.
 pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
@@ -209,8 +208,54 @@ impl ExportSettings {
     }
 }
 
+/// Whether File › Save writes straight back to `path`, the flat file (JPEG, PNG, TIFF…) the
+/// document came from, as Photoshop's Save does (#5733): only while that file keeps everything,
+/// i.e. the document is one plain raster layer ([`plain_raster`]) with no extra channels, in RGB
+/// or Grayscale at a depth (and, for Grayscale, a gray layout) the format stores, and either the
+/// format keeps transparency or the layer is opaque (the Background, or a layer made from it with
+/// no pixels deleted, as checked in Photoshop, #2223). The file itself must have held only
+/// this one image (not an animation, a multi-page TIFF or a multi-size icon), and its encoder
+/// must not quantise (GIF's palette and on/off transparency); a JPEG is rewritten at its own
+/// quality (#4032). An embedded colour profile needs a format that keeps one. Anything else still
+/// goes through Save As, so the original is never overwritten with less than the document has.
+pub(crate) fn saves_flat_in_place(doc: &Document, path: &str) -> bool {
+    let Some(layer) = plain_raster(doc) else { return false };
+    let Some(format) = photocraft_engine::file_cmds::extension(path).and_then(|e| photocraft_formats::from_extension(&e)) else {
+        return false;
+    };
+    let Some(codec_format) = format.raster_codec() else { return false };
+    let caps = codec_format.caps();
+    // Transparency is kept where the format's plan writes alpha for this document: DPX has no
+    // gray + alpha, and float PNM (PFM) no alpha at all.
+    let keeps_alpha = caps.alpha
+        && !(format == photocraft_formats::Format::Dpx && doc.mode == photocraft_doc::ColorMode::Grayscale)
+        && !(format == photocraft_formats::Format::Pnm && doc.depth == photocraft_color::SampleType::F32);
+    !photocraft_engine::file_cmds::saves_in_place(path)
+        && doc.file_encoding.source_images.is_none()
+        && (!caps.lossy || format == photocraft_formats::Format::Jpeg)
+        && (doc.mode != photocraft_doc::ColorMode::Grayscale || caps.layouts.iter().any(|l| l.is_gray()))
+        && caps.write
+        && caps.depths.contains(&match doc.depth {
+            photocraft_color::SampleType::U8 => photocraft_codecs::SampleType::U8,
+            photocraft_color::SampleType::U16 => photocraft_codecs::SampleType::U16,
+            photocraft_color::SampleType::F32 => photocraft_codecs::SampleType::F32,
+        })
+        && (doc.icc_profile.is_none() || caps.icc)
+        && doc.channels.is_empty()
+        && matches!(doc.mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale)
+        // Last: it may read every tile.
+        && (keeps_alpha || doc.is_background(layer.id) || opaque_layer(doc, layer))
+}
+
+/// Whether `layer` is fully opaque over the canvas, so a format without transparency (JPEG)
+/// keeps all of it. Read from its tiles, stopping at the first transparent pixel (#2223).
+pub(crate) fn opaque_layer(doc: &Document, layer: &photocraft_doc::Layer) -> bool {
+    layer.surface().is_some_and(|s| !s.format().alpha || photocraft_io::opaque_surface(s, doc.bounds()))
+}
+
 /// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
-/// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234).
+/// opacity, in Normal mode, with no masks, effects, clipping, advanced blending, blending
+/// restrictions or video frames (#2234).
 pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
     match doc.layers.as_slice() {
         [layer]
@@ -224,7 +269,10 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
                 && layer.effects.psd_raw.is_none()
                 && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
                 && photocraft_compose::channel_weights(layer, doc.mode).is_none()
-                && !photocraft_compose::blend_if_active(layer, doc.mode) =>
+                && !photocraft_compose::blend_if_active(layer, doc.mode)
+                && !layer.clipped
+                && layer.advanced.is_default()
+                && layer.video.is_none() =>
         {
             Some(layer)
         }
@@ -272,8 +320,15 @@ pub(crate) enum SaveKind {
     Automation,
 }
 
-/// Read bytes through the desktop control session's authorized read root.
-pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
+/// Bytes and save provenance selected together by the automation read capability.
+pub struct AutomationReadResult {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    /// None means an explicit Save As is required, even for a layered document.
+    pub save_path: Option<String>,
+}
+/// Read bytes through the desktop control session's authorized read roots.
+pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<AutomationReadResult, String>>;
 
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
@@ -283,13 +338,38 @@ pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// caller falls back to the bytes path for the zip form.
 pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, Document)>, String>>;
 
+/// Where a path an automation read opened is on disk (absolute), for Open Recent: the person
+/// reopens it outside automation, where a root-relative request path names nothing. `None`
+/// when no read root holds it.
+pub type AutomationLocateFn = Box<dyn Fn(&str) -> Option<String>>;
+
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
+/// Same policy as [`AutomationCommandFn`] for each step a command runs (`actions.play`).
+pub type AutomationAuthorizeFn = fn(&str, &Value) -> photocraft_engine::Result<()>;
+
+/// The automation half of [`Services`]: what control and MCP requests may read, write and run.
+/// Replaced as a whole when the agent link starts, stops or its folders change
+/// ([`Services::set_automation`], `prefs_ui::agents::sync_agent_link`).
+#[derive(Default)]
+pub struct AutomationServices {
+    pub read: Option<AutomationReadFn>,
+    pub write: Option<AutomationWriteFn>,
+    pub open_pcraft: Option<AutomationOpenPcraftFn>,
+    pub locate: Option<AutomationLocateFn>,
+    pub save: Option<SaveFileFn>,
+    pub command: Option<AutomationCommandFn>,
+    pub authorize: Option<AutomationAuthorizeFn>,
+}
+
+/// What agent requests may read, write and run with the agent settings' folders, and why a folder
+/// is not used (`None`: every folder is). The app's policy, installed while the agent link runs
+/// (`prefs_ui::agents::sync_agent_link`).
+#[cfg(not(target_arch = "wasm32"))]
+pub type AgentAutomationFn = Box<dyn Fn(&craft::automation::agents::AgentSettings) -> (AutomationServices, Option<String>)>;
 
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
-
-pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
@@ -402,9 +482,6 @@ pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Requests from the operating system since the last call (see [`OsEvent`]).
 pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 
-/// Ends the app the platform's own way (see [`Services::quit`]).
-pub type QuitFn = Box<dyn FnMut()>;
-
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 
@@ -416,14 +493,19 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
 
-/// The caption buttons' current style ([`Services::caption_style`]).
-pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
+/// Whether the physical primary mouse button is down now, read from the OS. A move of a floating document window by
+/// its title bar runs in the OS (its hit test answers the caption), so the app never sees the press or the release;
+/// the button going up ends the move (#16415).
+pub type PrimaryDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
 pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
+
+/// Runs once when the app leaves ([`Services::at_exit`]).
+pub type AtExitFn = Box<dyn FnOnce()>;
 
 /// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
@@ -435,8 +517,16 @@ pub type TabletPollFn = Box<dyn FnMut(bool)>;
 pub struct Services {
     /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
     pub open_external_svg: Option<OpenExternalSvgFn>,
-    /// User-initiated desktop/browser pixel sampling.
-    pub screen_pick: Option<screen_picker::Service>,
+    /// A capture source for the screen picker; `None` uses the platform capture (`ScreenPick::tick`).
+    pub screen_capture: Option<std::sync::Arc<dyn Fn() -> Box<dyn craft::color_ui::ui::CaptureSource> + Send + Sync>>,
+    /// The file service the app's host answers file picks with (`HostBuilder::files`); `None` in tests that install none.
+    pub files: Option<std::sync::Arc<dyn craft::host::Files>>,
+    /// The main-thread side of the native file panels, pumped by the app.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub file_panels: Option<craft::dialogs::service::FilePanels>,
+    /// The opened settings store and what opening it reported; `None` in the web build.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub settings: Option<(craft::settings::SettingsStore<photocraft_engine::prefs::SavedPrefs>, craft::settings::LoadReport)>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
     pub import: Option<ImportFn>,
     /// Encode a document for a file name (format chosen by extension).
@@ -444,7 +534,9 @@ pub struct Services {
     /// Background save over the automation write authority (`app.save`, #2017): same worker
     /// contract as `save_file`, but the bytes go through the capability-scoped workspace.
     pub automation_save: Option<SaveFileFn>,
-    /// Show an Open or Save dialog without waiting for it (see `file_dialog`).
+    /// Show an Open or Save dialog without waiting for it (see `file_dialog`). The web build's file path until
+    /// the framework's web `Files` exists (FW-264).
+    #[cfg(target_arch = "wasm32")]
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
@@ -454,7 +546,7 @@ pub struct Services {
     /// Whether two paths name one entry in one folder (native): a save dialog's answer and the
     /// path the save writes to after Lowercase Extension, on a file system that ignores letter
     /// case. A hard link is another entry. A save asks before replacing an entry it finds
-    /// different (`replace_prompt`).
+    /// different (the save dialog's own replace question).
     pub same_file: Option<SameFileFn>,
     /// `write` only asks for the bytes to be kept (a browser download, which the user can
     /// cancel and which reports nothing back), so a save through it names the document but
@@ -468,13 +560,27 @@ pub struct Services {
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
+    /// Where an automation open's file is on disk, for Open Recent. Without it an automation
+    /// open is not listed there.
+    pub automation_locate: Option<AutomationLocateFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
     /// an automation-driven [`PhotocraftApp::run`] runs, so a local play of a recorded `file.*` step still works.
-    pub automation_authorize: Option<fn(&str, &serde_json::Value) -> photocraft_engine::Result<()>>,
-    /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
-    pub encode_png: Option<EncodePngFn>,
+    pub automation_authorize: Option<AutomationAuthorizeFn>,
+    /// The control server agents reach the open window through while the person lets them in
+    /// (Preferences › Integrations, or `--control` for the whole run). `None` on the web and in
+    /// tests that don't set it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub agent_link: Option<craft::automation::agents::AgentLink>,
+    /// The ArtCraft Launcher's agents switch behind the suite's `AI-MCP` flag, watched on its own
+    /// thread. `None` is no flag and no launcher (the web, tests that don't set it).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub agent_switch: Option<craft::automation::agents::AgentSwitch>,
+    /// What agent requests may use while the agent link runs ([`AgentAutomationFn`]); `None`: no
+    /// file access for them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub agent_automation: Option<AgentAutomationFn>,
     /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
     pub open_url: Option<OpenUrlFn>,
     /// Preferences ▸ General ▸ Beep When Done: the platform's default beep, played when a
@@ -484,8 +590,6 @@ pub struct Services {
     /// (Tab, Alt; see `zoom_field`). No platform sets it yet, so the alert falls back to
     /// [`Self::beep`].
     pub alert: Option<fn()>,
-    /// Starts a background check for published releases (desktop, outside Flatpak).
-    pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
@@ -504,7 +608,9 @@ pub struct Services {
     pub clipboard_unreadable: Option<ClipboardUnreadableFn>,
     /// Preferences persistence: the platform config directory on native, browser storage on
     /// the web (see `prefs_ui`).
+    #[cfg(target_arch = "wasm32")]
     pub load_prefs: Option<LoadTextFn>,
+    #[cfg(target_arch = "wasm32")]
     pub save_prefs: Option<SaveTextFn>,
     /// Load/save the bounded deterministic GPU compositor failure memo (native only).
     pub load_gpu_memo: Option<LoadTextFn>,
@@ -513,7 +619,6 @@ pub struct Services {
     pub shader_compiler: Option<String>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
-    pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -545,12 +650,10 @@ pub struct Services {
     /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
     /// decorated or the platform needs no fixing.
     pub window_frame: Option<WindowFrameFn>,
-    /// How the custom title bar's caption buttons look and where they sit (Linux: the desktop's
-    /// style and button layout). Read every frame, with the context to wake when it changes;
-    /// `None` keeps Windows' buttons at the right end.
-    pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// Physical primary mouse button currently down (Windows): ends an OS move of a floating document window.
+    pub primary_down: Option<PrimaryDownFn>,
     /// Which end of the pen is in use, where the platform reports it outside the stylus feed
     /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
     pub pen_end: Option<PenEndFn>,
@@ -564,10 +667,22 @@ pub struct Services {
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
     pub read_displays: Option<monitor_status::ReadDisplaysFn>,
     /// The macOS menu bar, when the desktop app installed one; the in-window menus are hidden then.
-    pub native_menu: Option<native_menu::NativeMenu>,
-    /// Ends the app once leaving is settled (nothing unsaved, or the prompt answered), instead of
-    /// letting eframe close the window. macOS: `-[NSApplication terminate:]`. Closing the window
-    /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
-    /// Without one, eframe closes the window and the app ends with it.
-    pub quit: Option<QuitFn>,
+    pub native_menu: Option<craft::menu::NativeMenu>,
+    /// The app binary's last step as the app leaves, run once at the end of `on_exit`. On macOS
+    /// every quit ends the process inside AppKit's terminate (`craft::quit`), after `on_exit`, so
+    /// code after `eframe::run_native` never runs there.
+    pub at_exit: Option<AtExitFn>,
+}
+
+impl Services {
+    /// Install the automation services (see [`AutomationServices`]).
+    pub fn set_automation(&mut self, a: AutomationServices) {
+        self.automation_read = a.read;
+        self.automation_write = a.write;
+        self.automation_open_pcraft = a.open_pcraft;
+        self.automation_locate = a.locate;
+        self.automation_save = a.save;
+        self.automation_command = a.command;
+        self.automation_authorize = a.authorize;
+    }
 }

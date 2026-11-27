@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9cd32fd3b0d418f70a3535174d06eccab73fdd2345cf51e50b53c9f2e006043e # shrinks to s = Spec { w: 2, h: 2, layers: [Group { children: [Pixels { kind: Solid, blend: Normal, fills: [(Rect { x0: 0, y0: 0, x1: 1, y1: 1 }, [0.0, 0.0, 0.54360455, 0.0, 1.0])], opacity: 1.0, fill: 1.0, clipped: false, visible: true, mask: None }, Pixels { kind: Adjust(Curves { channel: 2, points: [(0.4490113, 1.0), (1.0, 0.0)] }), blend: Normal, fills: [(Rect { x0: 0, y0: 0, x1: 1, y1: 1 }, [0.0, 0.0, 0.0, 0.0, 0.0])], opacity: 0.6871668, fill: 1.0, clipped: false, visible: true, mask: None }], pass_through: false, blend: Normal, opacity: 1.0, fill: 1.0, mask: None }] }

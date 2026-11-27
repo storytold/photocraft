@@ -18,8 +18,26 @@ impl B {
         // shadow_map
         let angle = if s.use_global_light { light.angle } else { s.angle };
         let (dx, dy) = offset(angle, s.distance);
-        let src = self.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
-        let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy);
+        // #14933: a Size 1 inner shadow with Choke 0. `blur_kernel(1.0)` is the identity, and the
+        // `× shape` step below would then remove the whole shadow, exactly as on the CPU. Both
+        // compositors expand the inverted shape by the ¼–½–¼ taps instead
+        // (`photocraft_compose::effects::size_one_kernel`, the kernel `shadow_map` applies).
+        // #14934: an Anti-aliased Inner Shadow takes the CPU's sub-pixel source offset, on the
+        // CPU's gate only (`fx::aa_shift`: the inner branch, the Gaussian contour, and a Size and
+        // Choke that leave the map a shift plus a blur that is not the identity). A Drop Shadow
+        // keeps today's map (#14881). At a Choke that dilates the CPU recomputes its dilation
+        // distance on the offset map while this builder shifts the whole-pixel field of the
+        // unshifted shape, and at a blur of width 1 the offset would be the whole map: both
+        // neighbours take no offset here — which covers the Size 1 case above —, which is what
+        // keeps them equal on both compositors
+        // (`anti_aliased_inner_shadow_gated_neighbours_match_the_cpu`).
+        let aa = fx::aa_shift(inner && s.anti_alias, &s.contour, s.size, s.spread);
+        let src = self.shift(In::Shape, dx + aa, dy + aa, if inner { 1.0 } else { 0.0 }, inner);
+        let m = if inner && s.size == 1.0 && s.spread == 0.0 {
+            self.conv(src, fx::size_one_kernel())
+        } else {
+            self.spread_blur(src, (s.size, s.spread), inner, dx, dy)
+        };
         self.finish(m, None, false, &s.contour, inner, 0);
         1
     }
@@ -46,6 +64,10 @@ impl B {
         // glow_map
         let center = inner && g.source == GlowSource::Center;
         let m = match g.technique {
+            GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
+                let src = self.shift(In::Shape, 0.0, 0.0, 0.0, true);
+                self.conv(src, fx::size_one_kernel())
+            }
             GlowTechnique::Precise => {
                 let d = self.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
                 let solid = g.size * g.spread;
@@ -58,7 +80,8 @@ impl B {
                 self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0)
             }
         };
-        self.finish_glow(m, fx::glow_lut(g), inner, center);
+        // The same transfer as the CPU's `glow_map`, reach cap included (#11361).
+        self.finish_glow(m, fx::glow_paint_lut(g, inner), inner, center);
         1
     }
 
@@ -66,10 +89,11 @@ impl B {
     pub(super) fn satin(&mut self, s: &Satin) -> usize {
         // satin_map
         let (dx, dy) = offset(s.angle, fx::satin_distance(s));
+        let kernel = if s.size == 1.0 { fx::size_one_kernel() } else { fx::tent_kernel(s.size) };
         let a = self.shift(In::Shape, dx, dy, 0.0, false);
-        let a = self.conv(a, fx::tent_kernel(s.size));
+        let a = self.conv(a, kernel.clone());
         let c = self.shift(In::Shape, -dx, -dy, 0.0, false);
-        let c = self.conv(c, fx::tent_kernel(s.size));
+        let c = self.conv(c, kernel);
         self.finish_lut(a, Some(c), s.invert, fx::satin_lut(&s.contour), true, 0);
         1
     }
