@@ -975,8 +975,10 @@ fn as_owner<R>(app: &mut PhotocraftApp, owner: &PenOwner, f: impl FnOnce(&mut Ph
         _ => None,
     };
     app.session.set_active_layer(owner.layer);
+    let inks: [_; 2] = std::array::from_fn(|role| app.session.tools.picked_role_cmyk(role));
     let foreground = std::mem::replace(&mut app.session.tools.foreground, owner.foreground);
     let background = std::mem::replace(&mut app.session.tools.background, owner.background);
+    set_role_inks(app, owner.inks);
     let channel = app.session.active().map(|st| st.channel_view.target);
     if let Some(st) = app.session.active_mut() {
         st.channel_view.target = if matches!(owner.target, super::PenTarget::VectorMask(_)) {
@@ -991,9 +993,20 @@ fn as_owner<R>(app: &mut PhotocraftApp, owner: &PenOwner, f: impl FnOnce(&mut Ph
     }
     app.session.tools.foreground = foreground;
     app.session.tools.background = background;
+    set_role_inks(app, inks);
     app.ui.tool_options = options;
     app.ui.vector_mask_target = vector_mask;
     result
+}
+
+fn set_role_inks(app: &mut PhotocraftApp, inks: [Option<[f32; 4]>; 2]) {
+    for (role, inks) in inks.into_iter().enumerate() {
+        if let Some(inks) = inks {
+            app.session.tools.remember_role_cmyk(role, inks);
+        } else {
+            app.session.tools.clear_role_cmyk(role);
+        }
+    }
 }
 
 /// Make Shape on a Pen draft (#10934), as one History step: a draft begun in Shape mode is
