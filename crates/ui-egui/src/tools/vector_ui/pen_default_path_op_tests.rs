@@ -6,10 +6,10 @@
 //! still loads and its picked operation still counts.
 
 use egui::accesskit::Toggled;
-use egui::{Modifiers, vec2};
+use egui::{Key, Modifiers, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use photocraft_doc::{LayerContent, Path, PathOp};
+use photocraft_doc::{LayerContent, LayerId, Path, PathOp};
 use serde_json::json;
 
 use super::pen::pen_path_op;
@@ -267,24 +267,110 @@ fn settings_saved_by_older_builds_still_load() {
 }
 
 /// Which Path Operations draw the Work Path live (#12890, measured after Reset Tool): Combine and
-/// the new Exclude default, and not the operations #12890 did not measure: with Subtract the first
-/// click is no step of its own and the Work Path appears only at the finish.
+/// the new Exclude default. The operations #12890 did not measure keep today's route: with Subtract
+/// or Intersect the first click is no step of its own and the Work Path appears only at the finish.
 #[test]
-fn subtract_keeps_the_draft_until_the_path_is_finished() {
+fn an_unmeasured_operation_keeps_the_draft_until_the_path_is_finished() {
     let steps = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+    for op in ["subtract", "intersect"] {
+        let mut app = app();
+        crate::path_components::set_op(&mut app, op).unwrap();
+        let before = steps(&app);
+        testing::click(&mut app, [20.0, 20.0], Modifiers::NONE);
+        assert_eq!(steps(&app), before, "{op}: the first click is no History step of its own");
+        assert!(app.session.active().unwrap().doc.work_path.is_none(), "{op}: no Work Path yet");
+    }
+    // The new Exclude default takes the live route that Combine had.
     let mut app = app();
-    crate::path_components::set_op(&mut app, "subtract").unwrap();
     let before = steps(&app);
     testing::click(&mut app, [20.0, 20.0], Modifiers::NONE);
-    assert_eq!(steps(&app), before, "Subtract: the first click is no History step of its own");
-    assert!(app.session.active().unwrap().doc.work_path.is_none(), "Subtract: no Work Path yet");
-    // The new Exclude default takes the live route that Combine had.
-    app.ui.pen = None;
-    app.ui.tool_options = ToolOptions::default();
-    let before = steps(&app);
-    testing::click(&mut app, [30.0, 30.0], Modifiers::NONE);
     assert_eq!(steps(&app), before + 1, "the Exclude default: the first click is its own step");
     assert!(app.session.active().unwrap().doc.work_path.is_some(), "and the Work Path exists at once");
+}
+
+/// The other live gate of #12890, the press on an open Work Path's endpoint: it runs for Exclude as
+/// it ran for Combine (the step "Pick-up Path"), and Subtract keeps today's route.
+#[test]
+fn the_pick_up_step_follows_the_same_two_operations() {
+    let names = |app: &PhotocraftApp| app.session.active().unwrap().history.entries();
+    let mut exclude = app();
+    let before = names(&exclude).len();
+    testing::click(&mut exclude, [20.0, 20.0], Modifiers::NONE);
+    testing::click(&mut exclude, [120.0, 20.0], Modifiers::NONE);
+    testing::key(&mut exclude, Key::Escape, Modifiers::NONE);
+    testing::click(&mut exclude, [120.0, 20.0], Modifiers::NONE);
+    assert_eq!(&names(&exclude)[before..], ["New Work Path", "New Anchor Point", "Pick-up Path"], "the Exclude default draws live and picks the endpoint up");
+    let mut subtract = app();
+    crate::path_components::set_op(&mut subtract, "subtract").unwrap();
+    let before = names(&subtract).len();
+    testing::click(&mut subtract, [20.0, 20.0], Modifiers::NONE);
+    testing::click(&mut subtract, [120.0, 20.0], Modifiers::NONE);
+    testing::key(&mut subtract, Key::Escape, Modifiers::NONE);
+    testing::click(&mut subtract, [120.0, 20.0], Modifiers::NONE);
+    assert_eq!(&names(&subtract)[before..], ["Work Path"], "Subtract: one step at the finish, and the endpoint press is no step of its own");
+}
+
+/// Reset Tool and a tool preset carry the shared Path-mode value for the Pen and the Curvature Pen,
+/// so after Reset Tool on either of them all three Pens read Exclude again. The Freeform Pen's line
+/// of `option_keys` is #17087's to change (it rewrites that exact row), so the key is not in it yet.
+#[test]
+fn the_path_mode_value_resets_for_the_pen_and_the_curvature_pen() {
+    for tool in [Tool::Pen, Tool::CurvaturePen] {
+        assert!(crate::tool_reset::option_keys(tool).contains(&"pen_path_mode_op"), "{tool:?} resets and stores the Path-mode value");
+    }
+    let mut app = app();
+    app.ui.tool = Tool::FreeformPen;
+    crate::path_components::set_op(&mut app, "combine").unwrap();
+    for reset_on in [Tool::Pen, Tool::CurvaturePen] {
+        crate::tool_reset::reset_options(&mut app.ui.tool_options, reset_on);
+        for tool in [Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen] {
+            app.ui.tool = tool;
+            assert_eq!(tool_path_op(&app), Some("exclude"), "Reset Tool on {reset_on:?} gives {tool:?} Exclude again");
+        }
+    }
+}
+
+/// An unknown value in the new Path-mode slot (an edited settings file) reads as the default and
+/// does not move the Shape-mode value.
+#[test]
+fn an_unknown_path_mode_value_reads_as_the_default() {
+    let o = ToolOptions { pen_path_mode_op: Some("melt".into()), ..ToolOptions::default() };
+    assert_eq!(pen_path_op(&o), Some("exclude"), "Path mode: the default, never a panic");
+    let o = ToolOptions { pen_path_mode_op: Some("melt".into()), vector_mode: VectorMode::Shape, ..ToolOptions::default() };
+    assert_eq!(pen_path_op(&o), None, "Shape mode still reads its own New Layer");
+}
+
+/// The new default reaches the other two places a Path-mode subpath is added: a targeted vector
+/// mask, and Make Shape of the path just drawn.
+#[test]
+fn the_new_default_reaches_a_targeted_vector_mask_and_make_shape() {
+    let mut masked = app();
+    let id = masked.session.active().unwrap().active_layer.unwrap().0;
+    masked
+        .run("layer.vectorMask.add", json!({"layer": id, "path": {"subpaths": [{"closed": true, "knots": [[0, 0], [190, 0], [190, 190], [0, 190]]}]}}))
+        .unwrap();
+    masked.ui.vector_mask_target = true;
+    // Clear of the mask's own segments, which the Pen's Auto Add/Delete would edit.
+    square(&mut masked, 60.0, 60.0, 60.0);
+    let mask = masked.session.active().unwrap().doc.layer(LayerId(id)).unwrap().vector_mask.clone().unwrap();
+    assert_eq!(ops(&mask.path), [PathOp::Combine, PathOp::Exclude], "the mask takes the Path-mode default for the new subpath");
+    let mut drawn = app();
+    square(&mut drawn, 20.0, 20.0, 100.0);
+    square(&mut drawn, 50.0, 50.0, 100.0);
+    super::make_shape(&mut drawn).unwrap();
+    let made = shape_path(&drawn);
+    assert_eq!(ops(&made), [PathOp::Combine, PathOp::Exclude], "Make Shape keeps the operations of the drawn path");
+    assert_eq!(covered(&made, 70, 70), 0.0, "and the shape it makes shows the exclusion");
+}
+
+/// The active layer's shape path.
+fn shape_path(app: &PhotocraftApp) -> Path {
+    let st = app.session.active().unwrap();
+    let id = st.active_layer.unwrap();
+    match &st.doc.layer(id).unwrap().content {
+        LayerContent::Shape(sh) => sh.path.clone(),
+        _ => panic!("the active layer is not a shape layer"),
+    }
 }
 
 /// The control channel's `penPathOp` (the reference's `shapeOperation`) picks that same one
@@ -301,13 +387,24 @@ fn the_control_channel_picks_the_same_path_mode_value() {
         app.ui.tool = tool;
         assert_eq!(tool_path_op(&app), Some("subtract"), "{tool:?} shows the pick made by script");
     }
-    // With a Shape tool active the setter keeps the route it had before #12905.
+    // `ui.inspect` reports the new slot, which is what the protocol documents.
+    let (req, _rx) = ControlRequest::new("ui.inspect", json!({}));
+    let Reply::Done(seen) = handle(&mut app, &ctx, &req) else { panic!("ui.inspect replies with the state") };
+    assert_eq!(seen["result"]["toolOptions"]["pen_path_mode_op"].as_str(), Some("subtract"), "ui.inspect reports pen_path_mode_op");
+    // A Shape tool active: the setter keeps the route it had before #12905.
     app.ui.tool = Tool::Rectangle;
     let (req, _rx) = ControlRequest::new("ui.set", json!({"penPathOp": "combine"}));
     assert!(matches!(handle(&mut app, &ctx, &req), Reply::Done(_)), "{}", app.ui.status);
     assert_eq!(app.ui.tool_options.pen_path_op, "combine", "the Shape tool route writes the Pens' Shape-mode value");
     assert_eq!(app.ui.tool_options.shape_path_op, "newLayer", "the Shape tools' own value stays at New Layer");
     assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("subtract"), "the Path-mode pick is untouched");
+    // The control channel accepts "newLayer", which the bar greys out in Path mode: it is stored as
+    // given and read as the Path-mode default, so nothing here decides that case on its own.
+    app.ui.tool = Tool::Pen;
+    let (req, _rx) = ControlRequest::new("ui.set", json!({"penMode": "path", "penPathOp": "newLayer"}));
+    assert!(matches!(handle(&mut app, &ctx, &req), Reply::Done(_)), "{}", app.ui.status);
+    assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("newLayer"), "stored as sent");
+    assert_eq!(pen_path_op(&app.ui.tool_options), Some("exclude"), "and read as Exclude Overlapping Shapes");
 }
 
 /// The Shape tools keep their own Path operations setting: the Pen's new default does not move it.
