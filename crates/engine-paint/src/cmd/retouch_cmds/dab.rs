@@ -2,8 +2,11 @@ use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
     Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
-    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
+    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush_timed, run_stroke, sponge, string, to_rgba,
 };
+// `smudge_mode_tests` builds a stroke through the entry point that takes no times.
+#[cfg(test)]
+use super::parse_brush;
 use photocraft_algo::retouch::sponge_rgb;
 use photocraft_color::{ColorMode, SampleType};
 
@@ -119,7 +122,15 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: imp
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
-fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
+///
+/// `airbrush` is the brush's Airbrush build-up, which the Dodge bar offers (#12682). With it on a
+/// dab that finds the pixel already at the stroke's full coverage still deposits: it tones the pixel
+/// as it now stands, so the lightening keeps building while the pointer is held and stops at the
+/// tone curve's own limit. The cap itself is untouched - a pixel the stroke has not filled yet
+/// accumulates coverage exactly as before - so the only dabs that get a second pass are ones the cap
+/// would otherwise have thrown away. With build-up off the stroke is the capped one pass it always
+/// was, and Burn takes no `airbrush` at all (its toggle is #12665), so its path is the untouched one.
+fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
     /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
     /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
     /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
@@ -165,6 +176,24 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + '
                         // to full coverage; the tone is applied once, from the original.
                         let k = *prev + k * (1.0 - *prev);
                         if k <= *prev {
+                            // The stroke already has this pixel at full coverage, so this dab adds
+                            // nothing - unless the brush's Airbrush is on, and then it still
+                            // deposits: a fresh pass over the pixel as it now stands, which is the
+                            // held build-up that goes past the stroke's limit (#12682). Off, this
+                            // is the cap, exactly where it always stopped.
+                            if !airbrush {
+                                continue;
+                            }
+                            let o = to_rgba(&fmt, work.px(x, y));
+                            let t = toned([o[0], o[1], o[2]]);
+                            let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
+                            from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
+                            let px = work.px_mut(x, y);
+                            for c in 0..n {
+                                if Some(c) != a {
+                                    px[c] = enc[c];
+                                }
+                            }
                             continue;
                         }
                         *prev = k;
@@ -301,11 +330,13 @@ impl DabTool {
         }
     }
 
-    /// The per-dab effect on a working copy in `fmt`, for a brush of `spacing`.
-    pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
+    /// The per-dab effect on a working copy in `fmt`, for a brush of `spacing`. `airbrush` is that
+    /// brush's Airbrush build-up, which only the Dodge tone path takes (#12682): with it on, the
+    /// dabs a pointer held still keeps laying are not bound by the stroke's coverage cap.
+    pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32, airbrush: bool) -> DabEffect {
         let sp = spacing;
         match self.clone() {
-            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
+            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, airbrush, move |c| dodge_burn(c, exposure, range, burn, protect)),
             // Flow is already in the dab's coverage. The reference RGB response applies to integer
             // RGB surfaces, including 16-bit. Float RGB and the other models use the legacy curve.
             Self::Sponge { saturate, vibrance } if fmt.mode == ColorMode::Rgb && fmt.sample != SampleType::F32 => {
@@ -389,11 +420,21 @@ fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
     Err(EngineError::Other(format!("Could not use the {tool} because {why}")))
 }
 
+/// Does a stroke of `cmd` with this brush keep laying dabs while the pointer is held still
+/// (#12682)? Only the Dodge tool, and only with the brush's Airbrush build-up on: the options bar's
+/// toggle writes that brush setting, so it travels with the tool's own brush like its tip does, and
+/// Reset Tool turns it off with the rest of that brush. Burn, Sponge, Blur, Sharpen and Smudge take
+/// none of it - Burn's toggle is #12665 - and their strokes stay as they are.
+fn airbrush_build_up(cmd: &str, brush: &BrushSettings) -> bool {
+    cmd == "paint.dodge" && brush.build_up
+}
+
 /// Dodge, Burn, Sponge, Blur, Sharpen and Smudge: each dab edits a working copy in order
 /// (`apply_dab_stroke`). Blur, Sharpen and Smudge can sample all layers.
 pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     mode_refusal(s, cmd)?;
-    let (stroke, id) = parse_brush(s, p, cmd)?;
+    let airbrush = airbrush_build_up(cmd, &s.tools.brush);
+    let (stroke, id) = parse_brush_timed(s, p, cmd, airbrush)?;
     let (tool, label) = DabTool::parse(s, cmd, p, &stroke)?;
     let all = matches!(tool, DabTool::Focus { .. } | DabTool::Smudge { .. }) && sample_all_layers(p);
     // The live stroke the canvas already drew for exactly this commit (`LiveDab::into_commit`):
@@ -406,7 +447,7 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             return Ok(l.bounds);
         }
         let fmt = surf.format();
-        let mut effect = tool.effect(fmt, stroke.brush.spacing);
+        let mut effect = tool.effect(fmt, stroke.brush.spacing, airbrush);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
         apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
@@ -539,6 +580,9 @@ pub struct LiveDab {
     base: Option<(photocraft_doc::DocId, u64)>,
     /// Every point rendered so far, in order.
     points: Vec<StrokePoint>,
+    /// The stroke keeps laying dabs while the pointer is held still (Dodge with Airbrush on,
+    /// #12682), so its points keep the time the canvas gave them.
+    airbrush: bool,
 }
 
 impl LiveDab {
@@ -549,11 +593,12 @@ impl LiveDab {
         if sample_all_layers(p) {
             return Err(bad(cmd, "Sample All Layers strokes aren't previewed live"));
         }
-        let (stroke, id) = parse_brush(s, p, cmd)?;
+        let airbrush = airbrush_build_up(cmd, &s.tools.brush);
+        let (stroke, id) = parse_brush_timed(s, p, cmd, airbrush)?;
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
         let (neighborhood, spacing, brush) = (tool.neighborhood(), stroke.brush.spacing, Box::new(stroke.brush.clone()));
         let effect = tool.clone();
-        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre| effect.effect(pre.format(), spacing))?;
+        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre| effect.effect(pre.format(), spacing, airbrush))?;
         live.tool = Some((tool, brush));
         Ok(live)
     }
@@ -652,6 +697,7 @@ impl LiveDab {
             tool: None,
             base: None,
             points: Vec::new(),
+            airbrush: airbrush_build_up(cmd, &stroke.brush),
         };
         live.push(&stroke.points)?;
         Ok(live)
@@ -676,6 +722,14 @@ impl LiveDab {
     /// Everything the stroke has touched so far.
     pub fn bounds(&self) -> Rect {
         self.bounds
+    }
+
+    /// Does the stroke keep changing while the pointer is held still? Only a Dodge stroke whose
+    /// brush has Airbrush build-up on: the canvas then repeats the held point and keeps the stroke's
+    /// clock running, as it does for the Brush (#12682). Every other retouching stroke is laid out
+    /// along its path and changes nothing while the pointer stands still.
+    pub fn wants_time(&self) -> bool {
+        self.airbrush
     }
 
     /// Run this batch's primary dabs in order, rasterizing each footprint exactly once.
@@ -711,7 +765,8 @@ impl LiveDab {
 
     /// Render more points; returns the rectangle that changed.
     /// Invalid coordinates reject the whole batch without changing the preview.
-    /// Only the position and pressure of `pts` are used: the commands take no tilt or times.
+    /// The position and pressure of `pts` are used, and - for a Dodge stroke with Airbrush build-up
+    /// on - their times; no stroke takes the tilt or rotation (#12682).
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         let damage = self.push_inner(pts)?;
         if let Some(colors) = self.colors {
@@ -723,7 +778,17 @@ impl LiveDab {
 
     fn push_inner(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
-        let pts: Vec<_> = pts.iter().map(|q| StrokePoint::new(q.x, q.y, q.pressure)).collect();
+        // A held pointer's repeats only reach a stroke that builds up in time, and their points are
+        // kept as its command parses them - with the time when it parses one, so the commit that
+        // takes these pixels matches the stroke it re-paints (#12682).
+        let pts: Vec<_> = pts
+            .iter()
+            .map(|q| {
+                let mut sp = StrokePoint::new(q.x, q.y, q.pressure);
+                sp.time = if self.airbrush { q.time } else { 0.0 };
+                sp
+            })
+            .collect();
         self.points.extend_from_slice(&pts);
         self.generator.push(&pts, &mut self.pending, &mut self.dual_pending);
         let dmg = self.run_new_dabs();
@@ -770,7 +835,7 @@ impl LiveDab {
         let (Some((tool, brush)), Some(base)) = (self.tool.take(), self.base) else {
             return Err(bad(&self.cmd, "this stroke's commit renders itself"));
         };
-        let (stroke, id) = parse_brush(s, &self.params, &self.cmd)?;
+        let (stroke, id) = parse_brush_timed(s, &self.params, &self.cmd, self.airbrush)?;
         let (now, _) = DabTool::parse(s, &self.cmd, &self.params, &stroke)?;
         if now != tool || stroke.brush != *brush || id != self.id {
             return Err(bad(&self.cmd, "the brush, tool options or layer changed during the stroke"));

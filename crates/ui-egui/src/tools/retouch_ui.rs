@@ -209,6 +209,15 @@ pub(crate) fn clone_stamp_without_source(app: &mut PhotocraftApp, tool: Tool) ->
     true
 }
 
+/// The `points` a sequential-dab stroke paints with: the drag's positions and pressures. A Dodge
+/// stroke whose brush has Airbrush build-up on carries each point's time as well, in the
+/// `[x, y, pressure, tiltX, tiltY, rotation, timeMs]` shape `paint.stroke` uses, so the dabs a
+/// pointer held still keeps laying are part of the stroke its command replays (#12682). The live
+/// preview is fed the same times, so its pixels and the command's agree.
+pub(crate) fn dab_points(app: &PhotocraftApp, tool: Tool, points: &[[f64; 3]]) -> Value {
+    if tool == Tool::Dodge && app.session.tools.brush.build_up { json!(app.stylus.stroke_points(points)) } else { json!(points) }
+}
+
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: Mods, line: bool) -> bool {
     finish_stroke_with(app, tool, points, mods, line, None)
@@ -217,7 +226,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 /// [`finish_stroke`], with a History Brush stroke's options as they were at the press.
 pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: Mods, line: bool, history: Option<Value>) -> bool {
     let o = app.ui.tool_options.clone();
-    let pts = json!(points);
+    let pts = dab_points(app, tool, points);
     // Which Remove stroke writes its fill to a new layer above a Smart Object (#12555), settled
     // before the run: the new layer is the active one afterwards.
     let remove_edits = tool == Tool::Remove && remove_on_smart_object(app);

@@ -42,13 +42,29 @@ pub(super) fn dodge_burn(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<R
         number(tl!("Exposure"), &mut o.exposure, 1.0..=100.0).whole().unit("%").popup_slider().tooltip(tl!("Set exposure for stroke")).show(ui).out_of_range;
     let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
+    let mut key = None;
+    // The reference application's Airbrush toggle, right after Exposure (#12682). It is the tool's
+    // brush's own Build-up - the setting the Brush bar's Airbrush button writes, and the route this
+    // bar's Angle and "Pressure for Size" cells already take - so Dodge's is Dodge's own and Reset
+    // Tool turns it off with the rest of the tool's brush. Burn's toggle is #12665.
+    if app.ui.tool == Tool::Dodge {
+        let airbrush = ToggleButton::new(tl!("Enable airbrush-style build-up effects"), Bind::given(brush.build_up))
+            .icon(IconId::new("sparkles"))
+            .icon_only()
+            .tooltip(tl!("Enable airbrush-style build-up effects"))
+            .show(ui);
+        if let Some(on) = airbrush.value().copied() {
+            brush.build_up = on;
+            key = airbrush.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event));
+        }
+    }
     let angle = number(tl!("Angle"), &mut brush.angle, -180.0..=180.0)
         .whole()
         .unit("°")
         .icon(IconSpec::svg(IconId::new("rotate_cw")))
         .tooltip(tl!("Set the brush angle"))
         .show(ui);
-    let mut key = angle.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event));
+    key = angle.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event)).or(key);
 
     check(ui, tl!("Protect Tones"), &mut o.protect_tones, true, Some(tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue")));
 

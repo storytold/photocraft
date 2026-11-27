@@ -264,12 +264,14 @@ pub(super) enum EngineStroke {
 
 impl EngineStroke {
     /// The brush engine's strokes can change while the pointer is held still (see
-    /// `LiveStroke::wants_time`); the retouch strokes don't.
+    /// `LiveStroke::wants_time`); the retouch strokes can't, except a Dodge stroke with the brush's
+    /// Airbrush build-up on, which keeps laying dabs while the pointer is held (#12682).
     pub(super) fn wants_time(&self) -> bool {
         match self {
             EngineStroke::Brush(l) => l.wants_time(),
             EngineStroke::Mixer(l) => l.wants_time(),
-            EngineStroke::Retouch(_) | EngineStroke::Dab(_) => false,
+            EngineStroke::Dab(l) => l.wants_time(),
+            EngineStroke::Retouch(_) => false,
         }
     }
 
@@ -478,7 +480,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
         crate::retouch_ui::alt_finger_painting(d.tool, d.modifiers.alt, &mut p);
-        p["points"] = json!(d.points);
+        p["points"] = crate::retouch_ui::dab_points(app, d.tool, &d.points);
         p["target"] = paint_target(app);
         unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?))
@@ -629,7 +631,23 @@ pub(super) fn offer_live_retouch(app: &mut PhotocraftApp, d: &PaintStroke) {
     if steps.iter().any(Result::is_err) {
         return;
     }
-    let rest: Vec<_> = d.points.get(fed..).unwrap_or_default().iter().map(|q| photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+    // The same times `feed_live_stroke` gave the points before them, so the points the live stroke
+    // rendered are the points the committing command parses from its params - the one point the
+    // release frame adds would otherwise be missing a time, and the command would render the stroke
+    // itself instead of taking these pixels.
+    let t0 = app.stylus.point_ms(0);
+    let rest: Vec<_> = d
+        .points
+        .get(fed..)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(k, q)| {
+            let mut sp = photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32);
+            sp.time = app.stylus.point_ms(fed + k) - t0;
+            sp
+        })
+        .collect();
     // A refused offer (the brush changed mid-stroke, say) leaves the commit to render the stroke.
     match stroke {
         EngineStroke::Retouch(live) if !dab => offer_retouch(app, live, &rest),

@@ -2408,7 +2408,7 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                 p["flow"] = json!(63);
                 let (stroke, _) = parse_brush(&s, &p, cmd).unwrap();
                 let (tool, _) = DabTool::parse(&s, cmd, &p, &stroke).unwrap();
-                let mut effect = tool.effect(pre.format(), stroke.brush.spacing);
+                let mut effect = tool.effect(pre.format(), stroke.brush.spacing, false);
                 let mut reference = StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
                 // A fixed region containing all dabs plus their read neighbourhoods.
                 let orig = Region::read(&pre, Rect::new(-128, -128, 384, 256));
