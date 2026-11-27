@@ -258,6 +258,51 @@ fn airbrush_off_leaves_a_moving_stroke_at_one_pass() {
     assert_eq!(dodged(false, &scrub, 50.0), dodged(false, &there, 50.0), "a scrub back over the spot stays one pass");
 }
 
+/// The params for a soft tip: the same fixture with Hardness 50 %, so a dab's own coverage falls
+/// from 1.0 inside 10 px to 0 at the 20 px edge.
+fn dodge_soft(points: &[Value], exposure: f64) -> Value {
+    json!({"points": points, "size": 40, "hardness": 50, "exposure": exposure, "range": "midtones", "protectTones": true})
+}
+
+#[test]
+fn a_soft_edge_redeposit_keeps_the_dab_s_own_strength() {
+    // One stroke, soft tip: press and hold at (30, 20), then the pointer moves to (44, 20) and holds
+    // again. The first spot's core is already at the stroke's full coverage, so the dabs of the
+    // second spot reach it only with their falloff - and a grazing dab has to deposit its falloff,
+    // not the full pass that pixel already carries. Otherwise the brush loses its strength wherever
+    // a stroke doubles back, and the edge of a soft tip turns into a step.
+    let hold = |x: f64, first: usize| -> Vec<Value> { (0..=2).map(|k| json!([x, 20.0, 1.0, 0.0, 0.0, 0.0, (first + k) as f64 * 100.0])).collect() };
+    // Pixels in the first spot's core that the second spot only grazes (24, 26, 28, 30 - the second
+    // press at 44 reaches them with 40 %, 60 %, 80 % and 100 % of its tip), and pixels out on the
+    // second spot's own edge that the first stroke never touched (54, 56, 58).
+    let probes = [24i32, 26, 28, 30, 54, 56, 58];
+    let profile = |points: Vec<Value>| -> Vec<i32> {
+        let mut s = grey();
+        airbrush(&mut s, true);
+        s.execute("paint.dodge", dodge_soft(&points, 10.0)).unwrap();
+        probes.iter().map(|&x| rgb_at(&s, x, 20)[0]).collect()
+    };
+    // The same stroke stopped after the first spot, and after the move to the second.
+    let (before, after) = (profile(hold(30.0, 0)), profile(hold(30.0, 0).into_iter().chain(hold(44.0, 3)).collect()));
+    let delta: Vec<i32> = (0..probes.len()).map(|i| after[i] - before[i]).collect();
+    assert!(delta.iter().all(|&d| d > 0), "the second spot's dabs still deposit over the first spot's core: {delta:?}");
+    for pair in delta[..4].windows(2) {
+        assert!(pair[1] > pair[0], "the closer to the second press, the more of that dab's own coverage lands: {delta:?} (before {before:?}, after {after:?})");
+    }
+    // The second disc keeps its own gradient: where its dab covers the pixel fully (54, inside its
+    // 10 px core and outside the first stroke's tip) it deposits more than at its faint edge
+    // (56, 58 out in the falloff), and that edge is a slope rather than a step.
+    assert!(delta[4] > delta[5] && delta[5] >= delta[6], "the second spot's own edge falls off with its coverage: {delta:?}");
+    assert!(after.iter().all(|&v| (0..=255).contains(&v)), "inside the tone curve: {after:?}");
+    // And a grey stays a grey across the whole overlapping stroke.
+    let mut s2 = grey();
+    airbrush(&mut s2, true);
+    let both: Vec<Value> = hold(30.0, 0).into_iter().chain(hold(44.0, 3)).collect();
+    s2.execute("paint.dodge", dodge_soft(&both, 10.0)).unwrap();
+    let last = rgb_at(&s2, 44, 20);
+    assert!(last[0] == last[1] && last[1] == last[2], "a grey stays a grey: {last:?}");
+}
+
 #[test]
 fn more_held_dabs_deposit_more_at_the_same_exposure() {
     // The build-up follows the dabs on the spot: a longer hold lightens more, and any hold goes

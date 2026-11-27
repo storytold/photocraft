@@ -125,11 +125,13 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: imp
 ///
 /// `airbrush` is the brush's Airbrush build-up, which the Dodge bar offers (#12682). With it on a
 /// dab that finds the pixel already at the stroke's full coverage still deposits: it tones the pixel
-/// as it now stands, so the lightening keeps building while the pointer is held and stops at the
-/// tone curve's own limit. The cap itself is untouched - a pixel the stroke has not filled yet
-/// accumulates coverage exactly as before - so the only dabs that get a second pass are ones the cap
-/// would otherwise have thrown away. With build-up off the stroke is the capped one pass it always
-/// was, and Burn takes no `airbrush` at all (its toggle is #12665), so its path is the untouched one.
+/// as it now stands, mixed by that dab's own coverage, so the lightening keeps building while the
+/// pointer is held and stops at the tone curve's own limit, and a dab that only grazes the pixel -
+/// the edge of a soft tip over a spot another stroke filled - deposits only that much. The cap
+/// itself is untouched - a pixel the stroke has not filled yet accumulates coverage exactly as
+/// before - so the only dabs that get a second pass are ones the cap would otherwise have thrown
+/// away. With build-up off the stroke is the capped one pass it always was, and Burn takes no
+/// `airbrush` at all (its toggle is #12665), so its path is the untouched one.
 fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
     /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
     /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
@@ -161,8 +163,8 @@ fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f3
                 let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
                 for y in part.y0..part.y1 {
                     for x in part.x0..part.x1 {
-                        let k = fp.at(x, y).clamp(0.0, 1.0);
-                        if k <= 0.0 {
+                        let add = fp.at(x, y).clamp(0.0, 1.0);
+                        if add <= 0.0 {
                             continue;
                         }
                         let i = ((y - cr.y0) * CELL + (x - cr.x0)) as usize;
@@ -173,20 +175,23 @@ fn tone_stroke(fmt: PixelFormat, airbrush: bool, toned: impl Fn([f32; 3]) -> [f3
                             *prev = 0.0;
                         }
                         // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
-                        // to full coverage; the tone is applied once, from the original.
-                        let k = *prev + k * (1.0 - *prev);
+                        // to full coverage; the tone is applied once, from the original. `add` stays
+                        // the dab's own coverage: a soft edge that lands on a pixel the stroke has
+                        // already filled is still only a soft edge.
+                        let k = *prev + add * (1.0 - *prev);
                         if k <= *prev {
                             // The stroke already has this pixel at full coverage, so this dab adds
                             // nothing - unless the brush's Airbrush is on, and then it still
-                            // deposits: a fresh pass over the pixel as it now stands, which is the
-                            // held build-up that goes past the stroke's limit (#12682). Off, this
-                            // is the cap, exactly where it always stopped.
+                            // deposits: a fresh pass over the pixel as it now stands, mixed by this
+                            // dab's own coverage, which is the held build-up that goes past the
+                            // stroke's limit (#12682). Off, this is the cap, exactly where it always
+                            // stopped.
                             if !airbrush {
                                 continue;
                             }
                             let o = to_rgba(&fmt, work.px(x, y));
                             let t = toned([o[0], o[1], o[2]]);
-                            let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
+                            let m = [o[0] + (t[0] - o[0]) * add, o[1] + (t[1] - o[1]) * add, o[2] + (t[2] - o[2]) * add];
                             from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
                             let px = work.px_mut(x, y);
                             for c in 0..n {
