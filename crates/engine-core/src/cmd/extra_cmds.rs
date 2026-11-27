@@ -550,7 +550,16 @@ pub fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_do
 
 fn toggle_mask(s: &mut Session, p: &Value, key: &str) -> Result<Value> {
     let id = layer_param(s, p)?;
-    let label = if key == "enabled" { "Enable/Disable Layer Mask" } else { "Link/Unlink Layer Mask" };
+    // A call that says the direction (the Layers panel's ⇧-click and chain) is named by it, as in Photoshop
+    // (#16786); a plain toggle (Layer › Layer Mask) keeps its two-way name.
+    let label = match (key, p.get(key).and_then(Value::as_bool)) {
+        ("enabled", Some(true)) => "Enable Layer Mask",
+        ("enabled", Some(false)) => "Disable Layer Mask",
+        ("enabled", None) => "Enable/Disable Layer Mask",
+        (_, Some(true)) => "Link Mask",
+        (_, Some(false)) => "Unlink Mask",
+        (_, None) => "Link/Unlink Layer Mask",
+    };
     let v = s.edit(label, |doc, _| {
         let m = doc.layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or(EngineError::Other("the layer has no layer mask".into()))?;
         let slot = if key == "enabled" { &mut m.enabled } else { &mut m.linked };
