@@ -225,7 +225,7 @@ fn the_component_modes_take_that_component_from_the_sharpened_value() {
 
 #[test]
 fn unmeasured_colour_modes_and_depths_keep_todays_sharpen() {
-    for (depth, colour) in [(16, "rgb"), (32, "rgb"), (8, "gray"), (8, "cmyk")] {
+    for (depth, colour) in [(16, "rgb"), (32, "rgb"), (8, "gray"), (8, "cmyk"), (8, "lab"), (16, "lab")] {
         let plain = image(&sharpened(depth, colour, RED, BLUE, None));
         assert_ne!(plain, image(&two_tone(depth, colour, RED, BLUE)), "{depth}-bit {colour}: sharpened");
         for mode in ["darken", "hue", "luminosity"] {
