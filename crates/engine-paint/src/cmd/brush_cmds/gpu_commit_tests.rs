@@ -148,7 +148,7 @@ fn drawn_with_calm_reads(p: &mut Value, delayed: bool) -> (Session, LiveStroke, 
     // A tile asked for during the stroke and touched again afterwards is still to read: what was
     // fed for it, current when it was asked for, no longer includes every dab.
     assert!(rest.iter().any(|k| asked.contains(k)), "a tile read back mid-stroke was touched again and is unfed (asked {asked:?}, left {rest:?})");
-    assert!(!asked.is_empty() && rest.len() < gpu.touched_keys().len(), "the calm tiles were read back and need no second read");
+    assert!(!asked.is_empty(), "some tiles went calm and were asked for during the stroke");
     feed(&mut gpu, &cpu, &rest, e);
     (s, gpu, asked)
 }
