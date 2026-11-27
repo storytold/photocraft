@@ -1,6 +1,8 @@
-//! Preferences › Cursors: the reference application's tooltips (#16833). The window draws a rule's help line
-//! under its control, and that same text joins the control's accessible description, so a trial reads the open
-//! window's painted frame: the whole measured sentence, in the row it belongs to.
+//! Preferences › Cursors: the reference application's tooltips (#16833). Each of the three rows whose reference row
+//! is one control carries that row's measured sentence; a trial reads the rule the window is built from and the open
+//! window's painted frame, so the sentence is pinned whole and the page's own rows are pinned unchanged. The review
+//! asks for the sentence as hover text rather than as a line under the row, which the shared pattern has to carry
+//! first - see the PR for the seam and for the trials that hover the control once it does.
 //!
 //! The measured table names a sentence for every row of the reference page. PhotoCraft's page has five rows
 //! today, and only the three whose reference row is one control have a sentence to show: the Painting and
@@ -60,56 +62,51 @@ fn at(texts: &[(String, egui::Rect)], name: &str) -> egui::Rect {
     texts.iter().find(|(text, _)| text == name).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("{name:?} is painted: {texts:?}"))
 }
 
-/// Show `sentence` in the window, and say how many times the frame painted it.
-fn count_shown(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>, sentence: &str) -> usize {
-    painted_texts(h).into_iter().filter(|(text, _)| text == sentence).count()
-}
-
 // --- the rows the page has today, one measured sentence each -----------------------------------------------------------------
+//
+// The review of this PR asks for these sentences as hover text on the control, with no line painted under the row.
+// The window can only paint a rule's help text as a line today, so these trials pin the sentence the row carries and
+// that the page's five rows keep their own order; the hover form (pointer on the control, nothing painted in a
+// resting frame) replaces them as soon as the shared pattern carries hover text.
 
-/// The reference page's "Show Crosshair in Brush Tip" tooltip, painted under its own row.
+/// The row for "Show Crosshair in Brush Tip" carries the measured sentence word for word.
 #[test]
-fn the_show_crosshair_in_brush_tip_row_shows_its_measured_tooltips_sentence() {
-    let (_, files) = app_with_store();
-    let h = prefs_open(&files, "cursors");
-    let sentence = "Always show crosshair in center of brush cursor";
-    assert_eq!(count_shown(&h, sentence), 1, "the row shows the measured sentence once");
-    let texts = painted_texts(&h);
-    let help = at(&texts, sentence);
-    let row = at(&texts, "Show crosshair in brush tip");
-    let next = at(&texts, "Show only crosshair while painting");
-    assert!(help.top() > row.top() && help.top() < next.top(), "under \"Show crosshair in brush tip\" and above the next row: {row:?} {help:?} {next:?}");
+fn the_show_crosshair_in_brush_tip_row_carries_its_measured_sentence() {
+    assert_rule_says("cursors.showCrosshairInBrushTip", "Always show crosshair in center of brush cursor");
 }
 
-/// The reference page's "Show Only Crosshair While Painting" tooltip, painted under its own row.
+/// The row for "Show Only Crosshair While Painting" carries the measured sentence word for word.
 #[test]
-fn the_show_only_crosshair_while_painting_row_shows_its_measured_tooltips_sentence() {
-    let (_, files) = app_with_store();
-    let h = prefs_open(&files, "cursors");
-    let sentence = "Switch to only a crosshair while painting to improve performance with large brushes";
-    assert_eq!(count_shown(&h, sentence), 1, "the row shows the measured sentence once");
-    let texts = painted_texts(&h);
-    let help = at(&texts, sentence);
-    let row = at(&texts, "Show only crosshair while painting");
-    let next = at(&texts, "Other");
-    assert!(
-        help.top() > row.top() && help.top() < next.top(),
-        "under \"Show only crosshair while painting\" and above the Other row: {row:?} {help:?} {next:?}"
-    );
+fn the_show_only_crosshair_while_painting_row_carries_its_measured_sentence() {
+    assert_rule_says("cursors.showOnlyCrosshairWhilePainting", "Switch to only a crosshair while painting to improve performance with large brushes");
 }
 
-/// The reference page's "Brush Preview Color" tooltip, painted under its own row.
+/// The row for "Brush Preview Color" carries the measured sentence word for word.
 #[test]
-fn the_brush_preview_color_row_shows_its_measured_tooltips_sentence() {
+fn the_brush_preview_color_row_carries_its_measured_sentence() {
+    assert_rule_says("cursors.brushPreviewColor", "Color to use for brush editing preview");
+}
+
+/// The rule of `key` carries `sentence` exactly, and the open window paints it once.
+fn assert_rule_says(key: &str, sentence: &str) {
+    let ctx = egui::Context::default();
+    let rule = rules(&ctx).into_iter().find(|rule| rule.key == key).unwrap_or_else(|| panic!("{key} has a rule"));
+    assert_eq!(rule.help.as_deref(), Some(sentence), "{key}: the measured sentence, word for word");
     let (_, files) = app_with_store();
     let h = prefs_open(&files, "cursors");
-    let sentence = "Color to use for brush editing preview";
-    assert_eq!(count_shown(&h, sentence), 1, "the row shows the measured sentence once");
+    let painted = painted_texts(&h).into_iter().filter(|(text, _)| text == sentence).count();
+    assert_eq!(painted, 1, "{key}: the sentence shows once in the open window");
+}
+
+/// The Cursors page keeps its five rows of today, in the reference application's order, and gains no other text.
+#[test]
+fn the_cursors_page_keeps_its_five_rows_in_order() {
+    let (_, files) = app_with_store();
+    let h = prefs_open(&files, "cursors");
     let texts = painted_texts(&h);
-    let help = at(&texts, sentence);
-    let row = at(&texts, "Brush preview color");
-    let above = at(&texts, "Other");
-    assert!(help.top() > row.top() && row.top() > above.top(), "under \"Brush preview color\", the page's last row: {above:?} {row:?} {help:?}");
+    let order = ["Painting", "Show crosshair in brush tip", "Show only crosshair while painting", "Other", "Brush preview color"];
+    let tops: Vec<f32> = order.iter().map(|name| at(&texts, name).top()).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "top to bottom {order:?}: {tops:?}");
 }
 
 // --- what the rows that have no measured sentence of their own keep ---------------------------------------------------------
