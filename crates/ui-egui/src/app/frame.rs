@@ -233,6 +233,8 @@ impl PhotocraftApp {
             .options_bar(options_bar && !home, |app| Some(panels::region_versions::options_bar(app)), |ui, _cx, app| panels::options_bar(app, ui))
             .status(status_bar && !home, |app| Some(panels::region_versions::status_bar(app)), |ui, _cx, app| panels::status_bar(app, ui))
             .body(|ui, cx, app| {
+                // The body runs every pass; the dock's columns and the document area replay while their versions hold.
+                canvas::document_area::each_pass(app, ui.ctx());
                 if home {
                     canvas::document_area(app, ui);
                 } else {

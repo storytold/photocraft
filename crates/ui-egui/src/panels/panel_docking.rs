@@ -231,11 +231,14 @@ impl DockPanels<String> for Panels<'_> {
     }
 
     /// The version of what the dock shows for a panel, which keys its column and the docked tree: the canvas's is the
-    /// document area's, which also keys the area's own view (`region_versions::canvas`).
+    /// document area's, which also keys the area's own view (`region_versions::canvas`). A panel whose body does not show
+    /// (a tab behind another, in a minimized group or an icon column without its flyout) shows only its title and icon,
+    /// which every version holds.
     fn content(&self, panel: &String) -> Option<u64> {
         match panel.as_str() {
             CANVAS => Some(super::region_versions::canvas(self.app)),
             TOOLBAR => Some(super::region_versions::toolbar(self.app)),
+            id if !is_front(self.app, id) => Some(super::region_versions::hidden_panel(self.app)),
             id => Some(super::region_versions::panel(self.app, id)),
         }
     }

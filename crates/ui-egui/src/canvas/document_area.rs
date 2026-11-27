@@ -22,8 +22,9 @@ use super::textures::retain_gpu_documents;
 use super::{PhotocraftApp, canvas_view};
 
 /// The canvas panel with the tab strip and the document, or the Home screen; then drops layers dragged onto another
-/// document (`layer_transfer`). The tabs and documents are a memoized view keyed by `region_versions::canvas`: the app
-/// work every pass needs whether or not it replays ([`each_pass`]) runs before it, outside it.
+/// document (`layer_transfer`). The tabs and documents are a memoized view keyed by `region_versions::canvas`, and the
+/// dock's column around the area replays with that version too: the app work every pass needs ([`each_pass`]) runs
+/// outside both, before the window's body.
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Files the OS drops on the main window outside the tab strip: the Home screen has no other target (#16588).
     let dropped = super::window_drop::take(ui, ui.max_rect());
@@ -32,14 +33,15 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.dock_drop_rect = None;
         // It replaces the canvas too: a file dropped where the canvas was opens, not into the hidden document.
         app.drop_canvas_rect = None;
+        app.ui.task_bar_shown = None;
     } else {
         crate::distort_ui::drop_foreign(app, ui.ctx());
         crate::layer_transfer::prepare(app, ui.ctx());
-        each_pass(app, ui.ctx());
         if app.home_screen_up() {
             // The Home screen hides the tabs: a floating window dropped on it docks nowhere (#16415).
             app.dock_drop_rect = None;
             app.drop_canvas_rect = None;
+            app.ui.task_bar_shown = None;
             start_screen(app, ui);
         } else {
             crate::panels::region_versions::show_canvas(app, ui, documents);
@@ -53,11 +55,15 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The document area's work of every pass, before its view: the GPU canvas's documents and their texture budget, a
-/// Content-Aware Scale step, the blocks background redraws landed, the tablet settings, and what a tool switch or a
-/// layer switch leaves behind (a pending crop, a Properties eyedropper). A replayed view runs none of its own code, so
-/// none of this lives in it.
-fn each_pass(app: &mut PhotocraftApp, ctx: &egui::Context) {
+/// The document area's work of every pass, which the window's body runs before the dock: the GPU canvas's documents
+/// and their texture budget, a Content-Aware Scale step, the blocks background redraws landed, the tablet settings, and
+/// what a tool switch or a layer switch leaves behind (a pending crop, a Properties eyedropper). A replayed view or dock
+/// column runs none of its own code, so none of this lives in them. A Batch preview in place of the documents
+/// ([`crate::jobs_ui::batch_preview`]) holds all of it back.
+pub(crate) fn each_pass(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if crate::jobs_ui::batch_preview_key(app).is_some() {
+        return;
+    }
     retain_gpu_documents(app);
     publish_shown(app);
     crate::cas_transform::tick(app, ctx);
@@ -176,6 +182,8 @@ const DOCK_BAND: f32 = 32.0;
 fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The web build's drop path reads where the canvas is (`file_open::target_at`); set again when one shows.
     app.drop_canvas_rect = None;
+    // A run that shows no canvas of the active document shows no crop task bar (`crop_task_bar::show` reports one).
+    app.ui.task_bar_shown = None;
     // A floating window's title bar docks on the tab strip (`tabs::strip` sets its rect); where no strip shows, on a
     // band of a tab's height at the top of the area, where the strip would be.
     let area = ui.max_rect();

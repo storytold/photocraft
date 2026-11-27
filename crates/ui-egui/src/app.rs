@@ -116,7 +116,6 @@ impl PhotocraftApp {
             adjust_open: None,
             adjust_session: None,
             properties_hidden: 0,
-            properties_tracked: false,
             dialog_dropper: None,
             layer_style_child: None,
             color_targets: HashMap::new(),

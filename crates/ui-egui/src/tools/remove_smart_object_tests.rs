@@ -125,13 +125,13 @@ fn stroke(h: &mut Harness<'static, Box<PhotocraftApp>>) {
 }
 
 /// Frames until the removal has landed: with background jobs on that is when the job's edit is
-/// applied, and the card can only be posted after it.
+/// applied, and the card can only be posted after it. The worker's time, not a frame count, decides
+/// when: a frame that changes nothing on screen takes well under a millisecond.
 fn wait_until_landed(h: &mut Harness<'static, Box<PhotocraftApp>>, layers_before: usize) {
-    for _ in 0..40 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while layers(h.state()).len() != layers_before + 1 && std::time::Instant::now() < deadline {
         h.step();
-        if layers(h.state()).len() == layers_before + 1 {
-            break;
-        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     h.run_steps(3);
 }

@@ -461,12 +461,10 @@ pub struct PhotocraftApp {
     /// The Properties panel's adjustment edit in progress, with the tone editor's shown channel
     /// (`adjust_editors::PropertiesAdjust`).
     pub(crate) adjust_session: Option<adjust_editors::PropertiesAdjust>,
-    /// Twice the passes the Properties panel was not in front or ran without showing the Reset session's layer: the
+    /// Twice the passes the Properties panel was not in front or ran showing no adjustment layer's controls: the
     /// session (`adjust_editors`) takes a layer's settings anew after the panel stopped showing it. A pass count would
     /// also move while the panel replays its memoized body, which is still showing it.
     pub(crate) properties_hidden: u64,
-    /// Whether the Properties panel's run showed the Reset session's layer (`properties_hidden`).
-    pub(crate) properties_tracked: bool,
     /// The Color Picker dialog asking for a screen sample: the dialog and the field that took it.
     pub(crate) dialog_dropper: Option<(craft::ui::dialog::DialogId, String)>,
     /// The child dialog (colour picker or contour editor) the open Layer Style dialog has, with that dialog's id.

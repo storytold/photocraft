@@ -38,15 +38,15 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 /// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
 /// Zoom and Rotate View tools' zoom and rotation ([`bar_view`]), an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
 /// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
-/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets, the
-/// colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
+/// a command, #15547), the Crop tool's frame state, the type members' caret or selection and the font families they
+/// list ([`families_key`](crate::type_tool::families_key)), the brush and its presets, the colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
 /// app hides (#12892), which a Pen drawing click by click changes with no History step (#12890). Which path is
 /// selected is already in [`version`]; the hidden path is held as its document's place, since its content can only
 /// change with the document's revision, which `version` holds too.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
-    let shown = (app.ui.tool_options.revision(), super::options_bar::edit_key(app), text_target(app));
+    let shown = (app.ui.tool_options.revision(), super::options_bar::edit_key(app), text_target(app), crate::type_tool::families_key());
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
     let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
@@ -105,7 +105,8 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
 /// colours, and so do Properties (a shape layer's fill and stroke swatches, a gradient fill's Foreground and
 /// Background stops, the adjustment editors' swatches) and Character (the colour of new type is the foreground).
 /// Character and Paragraph show the type defaults, and they and Properties the values at the caret or selection of the
-/// type being edited, which Glyphs inserts at. Every other panel shows only what every version holds.
+/// type being edited, which Glyphs inserts at; Character, Properties and Glyphs list the font families
+/// ([`families_key`](crate::type_tool::families_key)). Every other panel shows only what every version holds.
 pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     match id {
         "navigator" => version(app, (view(app), adjustment_preview(app))),
@@ -120,15 +121,23 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         }
         "cloneSource" => version(app, app.ui.presets_ui.clone_cursor.map(|(document, at)| (document, at.map(f64::to_bits)))),
         "modifierKeys" => version(app, app.ui.shell.latched),
-        "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app))),
+        "properties" => version(
+            app,
+            (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app), crate::type_tool::families_key()),
+        ),
         "brushSettings" | "brushes" => version(app, brush(app)),
         "histogram" => version(app, (adjustment_preview(app), histograms(app))),
-        "character" => version(app, (colours(app), type_defaults(app), text_target(app))),
+        "character" => version(app, (colours(app), type_defaults(app), text_target(app), crate::type_tool::families_key())),
         "paragraph" => version(app, (type_defaults(app), text_target(app))),
-        "glyphs" => version(app, text_target(app)),
+        "glyphs" => version(app, (text_target(app), crate::type_tool::families_key())),
         "color" | "swatches" | "gradients" | "gradientEditor" => version(app, colours(app)),
         _ => version(app, ()),
     }
+}
+
+/// The version of a panel in the dock whose body does not show: its title and icon, which every version holds.
+pub(crate) fn hidden_panel(app: &PhotocraftApp) -> u64 {
+    version(app, ())
 }
 
 /// What every slot may show, joined with `extra`: the commands run (any of them may change anything), the active
@@ -258,9 +267,9 @@ pub(crate) fn show_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, show: fn(&
 /// document windows, the arrangement and its dividers; the View menu's options and the panels shown (the scroll bars
 /// go with the screen mode); the tool options and the on-canvas state of the tools (a transform box, a crop frame and whether its crop is pending, a pen draft, the
 /// type caret, a picked guide, the samplers, slices, frames and artboards), whose drags and keys change them without a
-/// command; whether a dialog is open (it holds back the tools and the task bars); the Layers panel's hovered layer, which the Move tool outlines; the previews a dialog or a panel drag shows
+/// command; the canvas menu and where the Brush Preset picker is open; whether a dialog is open (it holds back the tools and the task bars); the Layers panel's hovered layer, which the Move tool outlines; the previews a dialog or a panel drag shows
 /// on the canvas (an adjustment's live values, a filter's or Levels' preview, Color Range's mask); the opening files
-/// and their progress; the display the window is on; and the blocks a background redraw has landed
+/// and their progress; the Batch input shown in place of the documents; the display the window is on; and the blocks a background redraw has landed
 /// (`background_redraw::poll`). A run that waits for work of its own (a preview worker, a tile stream) asks for its
 /// next pass through the framework, which runs the view then.
 pub(crate) fn canvas(app: &PhotocraftApp) -> u64 {
@@ -275,7 +284,7 @@ pub(crate) fn canvas(app: &PhotocraftApp) -> u64 {
         &ui.symmetry_transform,
         &ui.layer_picker,
         (&ui.clone_source, &ui.clone_offset, &ui.pattern_stamp_phase),
-        &ui.canvas_tool_menu,
+        (&ui.canvas_tool_menu, &ui.brush_picker),
         &ui.selected_guide,
         &ui.direct_selection,
         &ui.hidden_work_path,
@@ -299,16 +308,19 @@ pub(crate) fn canvas(app: &PhotocraftApp) -> u64 {
     );
     let opening: Vec<_> = crate::jobs_ui::open_tabs(app).into_iter().map(|(job, _, fraction)| (job, fraction.map(f32::to_bits))).collect();
     let display = crate::monitor_status::view_display(app, app.ctx());
+    // The open Brush Preset picker lists the presets and shows the brush.
+    let picker = ui.brush_picker.map(|_| brush(app));
+    let gpu = app.gpu.as_ref().map(|gpu| gpu.canvas_budget());
     version(
         app,
         (
             documents,
             views,
-            (windows, ui.tool_options.revision(), tools),
+            (windows, ui.tool_options.revision(), tools, picker),
             sessions,
             editing,
             previews,
-            (app.hover_layer, app.dialog_open(), app.jobs.focus, opening, display, app.redraw_landed),
+            (app.hover_layer, app.dialog_open(), app.jobs.focus, opening, crate::jobs_ui::batch_preview_key(app), display, gpu, app.redraw_landed),
         ),
     )
 }
