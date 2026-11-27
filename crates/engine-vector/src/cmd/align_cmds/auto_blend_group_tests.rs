@@ -140,11 +140,14 @@ fn a_group_selection_blends_like_the_same_two_pixel_layers() {
     assert_eq!(layer_count(&grouped), grouped_states + 1, "one new layer in the group run");
 }
 
+/// Builds one unmeasured case on the issue's document and returns the layers to select.
+type Build = fn(&mut Session, LayerId, LayerId) -> Vec<LayerId>;
+
 /// Cases the issue did not measure keep today's behaviour: the group contributes nothing, so
 /// Auto-Blend stays unavailable and changes neither the document nor the history.
 #[test]
 fn other_group_selections_keep_todays_refusal() {
-    let builds: [(&str, fn(&mut Session, LayerId, LayerId) -> Vec<LayerId>); 6] = [
+    let builds: [(&str, Build); 6] = [
         ("a group alone", |s, _, right| vec![group_of(s, right, "G")]),
         ("an empty group and a pixel layer", |s, left, _| {
             let r = s.execute("layer.new.group", json!({"name": "Empty"})).unwrap();

@@ -112,10 +112,10 @@ fn blend_layers(s: &Session) -> (Vec<LayerId>, Option<LayerId>) {
                 top = Some(*id);
             }
             LayerContent::Group(_) if Some(*id) == donor => {
-                if let Some([child]) = l.children() {
-                    if !ids.contains(&child.id) {
-                        ids.push(child.id);
-                    }
+                if let Some([child]) = l.children()
+                    && !ids.contains(&child.id)
+                {
+                    ids.push(child.id);
                 }
                 top = Some(*id);
             }
