@@ -126,7 +126,7 @@ pub fn gradient_stroke_layout(doc: &Document, layer: &Layer) -> Option<effects::
     if strokes.is_empty() {
         return None;
     }
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_doc(doc);
     let cx = Ctx::for_doc(doc, &patterns);
     let cmyk = crate::cmyk_space(doc);
     let maps = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
