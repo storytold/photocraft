@@ -839,6 +839,8 @@ pub(crate) mod testing {
 mod navigator_gpu_tests;
 
 #[cfg(test)]
+mod color_picker_drag_tests;
+#[cfg(test)]
 mod color_swatch_tests;
 #[cfg(test)]
 mod dialog_title_ellipsis_tests;
@@ -937,6 +939,8 @@ mod move_shift_click_tests;
 #[cfg(test)]
 mod move_target_default_tests;
 
+#[cfg(test)]
+mod paint_bucket_pasteboard_color_tests;
 #[cfg(test)]
 mod wand_press_inside_selection_tests;
 

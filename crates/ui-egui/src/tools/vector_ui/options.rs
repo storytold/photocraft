@@ -159,10 +159,9 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
         }
     }
     // Every shape tool's one Align Edges, at the bar's right end after the gear (#13346, #13370,
-    // #13326). Not the Star tool's, which the reference application doesn't have (its stars are the
-    // Polygon tool's). Only a shape layer has pixel edges to align: greyed in Path mode (and in a
-    // pixels mode).
-    if is_shape_tool(tool) && tool != Tool::Star {
+    // #13326, #16869 for the Star tool). Only a shape layer has pixel edges to align: greyed in Path
+    // mode (and in a pixels mode).
+    if is_shape_tool(tool) {
         Divider::vertical().show(ui);
         super::alignment::shape_tool_option(app, ui);
     }
@@ -604,6 +603,10 @@ mod line_arrow_concavity_field_tests;
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
 mod pen_make_mask_tests;
+
+#[cfg(test)]
+#[path = "custom_shape_path_make_tests.rs"]
+mod custom_shape_path_make_tests;
 
 #[cfg(test)]
 #[path = "triangle_path_make_tests.rs"]

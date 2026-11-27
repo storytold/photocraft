@@ -4,7 +4,7 @@ use std::sync::Arc;
 use photocraft_compose::effects::{self as fx, BevelGeom, BevelPaint, FieldKind};
 use photocraft_doc::{Bevel, BevelTechnique, BevelTexture, GlobalLight, Glow, GlowSource, GlowTechnique, Pattern, Satin, Shadow, StrokeFx};
 
-use super::{B, In, contour_lut, offset, stage};
+use super::{B, In, StrokeShape, contour_lut, offset, stage};
 use crate::plan::{Kernel, stroke_widths};
 
 /// A flag as the shaders read it: 1.0 or 0.0.
@@ -178,13 +178,13 @@ impl B {
     }
 
     /// Stroke stages, the outside band into map 0 and the inside band into map 1. Returns 2.
-    pub(super) fn stroke(&mut self, st: &StrokeFx, vector_shape: bool) -> usize {
+    pub(super) fn stroke(&mut self, st: &StrokeFx, shape: StrokeShape) -> usize {
         // Stroke bands: map 0 outside, map 1 inside.
         let (in_w, out_w) = stroke_widths(st);
         if out_w > 0.0 {
             // Narrow strokes keep the fitted chamfer, wide ones the exact transform (#3646);
             // the CPU picks the same field by the same width (`stroke_outside_exact`).
-            let kind = match (vector_shape, fx::stroke_outside_exact(out_w)) {
+            let kind = match (matches!(shape, StrokeShape::VectorOutline), fx::stroke_outside_exact(out_w)) {
                 (true, true) => FieldKind::StrokeOutsideVector,
                 (true, false) => FieldKind::StrokeOutsideVectorChamfer,
                 (false, true) => FieldKind::StrokeOutsideExact,
@@ -193,7 +193,8 @@ impl B {
             self.stroke_band(kind, out_w, 0);
         }
         if in_w > 0.0 {
-            self.stroke_band(FieldKind::StrokeInside, in_w, 1);
+            let kind = if matches!(shape, StrokeShape::Raster) { FieldKind::StrokeInsideRaster } else { FieldKind::StrokeInside };
+            self.stroke_band(kind, in_w, 1);
         }
         2
     }

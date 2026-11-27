@@ -11,7 +11,7 @@ use craft::ui::runtime::memory::SaveKey;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::dialogs::blend_options::{blending_params, blending_rows, forced_preserve_transparency, remember_blending};
+use crate::dialogs::blend_options::{blending_params, blending_rows, forced_preserve_transparency, opening_fields, remember_blending};
 use crate::dialogs::fill_ui::hex;
 use crate::dialogs::params::{captured, open_param};
 
@@ -45,7 +45,8 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let [r, g, b, _] = app.session.tools.foreground;
     let rows = rows(app, [r, g, b], preserve);
     let title = Label::from(tl!("Stroke"));
-    open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
+    let fields = opening_fields(app.ctx(), COMMAND);
+    open_param(app, COMMAND, fields, held, move |fields| {
         ParamDialog::new(COMMAND, title.clone(), Cow::Owned(rows.clone())).values(Bind::bound(fields)).remember(SaveKey::named(REMEMBER))
     })
 }

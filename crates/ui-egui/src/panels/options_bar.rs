@@ -262,27 +262,43 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     // Pattern Stamp's list has Behind, greyed on the Background.
     let entries = fill::mode_entries(tool, crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind), threshold);
     if !entries.is_empty() {
-        let current =
-            if tool == Tool::PatternStamp && brush.behind { PaintMode::Behind } else { PaintMode::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode)) };
+        let current = if tool == Tool::Healing && app.ui.tool_options.healing_replace {
+            PaintMode::HealingReplace
+        } else if tool == Tool::PatternStamp && brush.behind {
+            PaintMode::Behind
+        } else {
+            PaintMode::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode))
+        };
         let picked = labelled(ui, tl!("Mode"), |ui| {
             let select = fill::mode_select(Bind::given(current), &entries);
             let select = if tool == Tool::CloneStamp { select.tooltip(tl!("Painting Mode")) } else { select };
             select.show(ui)
         });
         if let Some(mode) = picked.and_then(|shown| shown.events.value().cloned()) {
-            let mut after = brush.clone();
-            match mode {
-                PaintMode::Blend(blend) => {
-                    after.mode = blend;
-                    if tool == Tool::PatternStamp {
-                        after.behind = false;
-                    }
+            if mode == PaintMode::HealingReplace {
+                // Replace (#12101): a tool option like the painting tools' Clear, with no brush
+                // value to write: the next stroke carries mode:"replace", and picking a Mode adds
+                // no History step.
+                app.ui.tool_options.healing_replace = true;
+            } else {
+                if tool == Tool::Healing {
+                    // Any of the seven blend modes leaves Replace (#12101).
+                    app.ui.tool_options.healing_replace = false;
                 }
-                PaintMode::Behind => after.behind = true,
-                PaintMode::Clear => {}
+                let mut after = brush.clone();
+                match mode {
+                    PaintMode::Blend(blend) => {
+                        after.mode = blend;
+                        if tool == Tool::PatternStamp {
+                            after.behind = false;
+                        }
+                    }
+                    PaintMode::Behind => after.behind = true,
+                    PaintMode::Clear | PaintMode::HealingReplace => {}
+                }
+                // A pick is one step of its own.
+                crate::brush_panel::commit_keyed(app, &brush, &after, None);
             }
-            // A pick is one step of its own.
-            crate::brush_panel::commit_keyed(app, &brush, &after, None);
         }
     }
     // Both stamps use whole percents. Only Clone Stamp alerts on an out-of-range commit (#12607).
@@ -417,3 +433,7 @@ mod clone_stamp_fields_tests;
 #[cfg(test)]
 #[path = "art_history_bar_controls_tests.rs"]
 mod art_history_bar_controls_tests;
+
+#[cfg(test)]
+#[path = "../healing_mode_menu_tests.rs"]
+mod healing_mode_menu_tests;
