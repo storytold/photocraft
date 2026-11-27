@@ -104,7 +104,7 @@ fn reset_all(app: &mut PhotocraftApp) {
     reset_session_brush(app);
     // Every other painting tool gets its own starting brush. Left without one, it would take the
     // live brush when picked (`sync_tool_brush`), and the tools' starting tips differ (#11810).
-    let (live, current) = (app.ui.brush_tool, app.session.tools.brush.clone());
+    let (live, current) = (app.ui.brush_tool, (*app.session.tools.brush).clone());
     app.ui.tool_brushes = Tool::ALL
         .iter()
         .filter(|t| **t != live && crate::paint_mouse::has_brush_picker(**t))
@@ -114,7 +114,7 @@ fn reset_all(app: &mut PhotocraftApp) {
 
 /// The live brush is `app.ui.brush_tool`'s: give it that tool's starting brush.
 fn reset_session_brush(app: &mut PhotocraftApp) {
-    app.session.tools.brush = crate::paint_mouse::fresh_brush(app.ui.brush_tool, &app.session.tools.brush);
+    *app.session.tools.brush = crate::paint_mouse::fresh_brush(app.ui.brush_tool, &app.session.tools.brush);
     app.session.tools.brush_gesture = None;
     app.session.tools.current_preset = None;
     app.session.tools.brush_changed();
@@ -182,10 +182,19 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
 /// (less [`kept_by_reset_tool`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
+    macro_rules! serialized_key {
+        // The one Align Edges checkbox goes by the reference application's script name.
+        (align_edges) => {
+            "useAlignedRendering"
+        };
+        ($f:ident) => {
+            stringify!($f)
+        };
+    }
     macro_rules! reset {
         ($($f:ident),* $(,)?) => {{
             let _ = |o: &ToolOptions| { $(let _ = &o.$f;)* };
-            &[$(stringify!($f)),*]
+            &[$(serialized_key!($f)),*]
         }};
     }
     match tool {
@@ -213,6 +222,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
         Tool::Eraser => reset!(eraser_mode, erase_to_history),
         Tool::Remove => reset!(remove_new_layer, remove_after_each_stroke),
+        Tool::AdjustmentBrush => reset!(adjustment_brush_kind, adjustment_brush_subtract, adjustment_brush_overlay),
         Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg, bg_tolerance_control),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
         Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
@@ -236,13 +246,14 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, sponge_flow, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, path_options),
-        Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
-        Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
+        Tool::Pen => reset!(vector_mode, align_edges, pen_path_op, pen_auto_add_delete, path_options),
+        Tool::CurvaturePen => reset!(vector_mode, align_edges, pen_path_op),
+        Tool::FreeformPen => reset!(vector_mode, align_edges, pen_path_op, curve_fit),
         Tool::Line => reset!(
             shape_mode,
             shape_path_op,
             shape_fill,
+            align_edges,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,
@@ -288,6 +299,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 corner_radius,
                 align_edges,
                 polygon_sides,
+                star_points,
+                polygon_corner_radius,
                 line_weight
             )
         }

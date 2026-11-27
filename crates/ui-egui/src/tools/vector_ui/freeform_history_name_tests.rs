@@ -116,6 +116,15 @@ fn pen_and_curvature_keep_default_history_names_even_with_freeform_selected_at_c
                 assert!(!app.ui.status_error, "{}", app.ui.status);
                 continue;
             }
+            if mode == VectorMode::Path && !curvature {
+                // #12890: the Pen draws live into the Work Path, one step per click, and the commit adds none; none of
+                // those steps takes the Freeform name either.
+                let h = &app.session.active().unwrap().history;
+                assert_eq!(h.past_len(), n + 3);
+                assert_eq!(h.undo_label(), Some("New Anchor Point"));
+                assert!(!app.ui.status_error, "{}", app.ui.status);
+                continue;
+            }
             assert_step(&app, n, if mode == VectorMode::Path { "Work Path" } else { "New Shape Layer" });
         }
     }
@@ -230,8 +239,11 @@ fn control_pointer_strokes_commit_only_on_release_with_the_freeform_label() {
             assert_step(&app, n, "Freeform Pen");
         }
         if mode == VectorMode::Path {
-            // A further stroke starting at the selected open path's endpoint has the same name.
+            // Select the endpoint through the temporary Direct Selection tool before continuing it.
             assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+            testing::click(&mut app, [110.0, 100.0], egui::Modifiers::COMMAND);
+            assert_eq!(app.ui.direct_selection.target, Some(crate::direct_select::PathRef::Work));
+            assert!(!app.ui.direct_selection.anchors.is_empty());
             let n = steps(&app);
             call(&mut app, json!({"events": [{"kind": "down", "x": 110, "y": 100}, {"kind": "move", "x": 150, "y": 150}]}));
             assert_eq!(steps(&app), n);
