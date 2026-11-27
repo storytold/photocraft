@@ -202,3 +202,27 @@ fn switching_document_during_a_gpu_stroke_clears_its_mask() {
     assert!(!has_mask(&app, layer), "the mask is gone");
     assert!(app.pending_stroke.is_none() && app.perf.gpu_dab_strokes == 0);
 }
+
+#[test]
+fn a_gpu_stroke_the_gpu_fails_to_stamp_is_dropped_and_rendered_by_its_command_on_release() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = app_on_gpu(rs, 0.0);
+    let pts = path();
+    drag(&mut app, &pts[..10]);
+    let layer = mask_layer(&app);
+    // The compositor loses the stroke's mask (as if it had been rebuilt): the next stamp is refused.
+    app.gpu.as_ref().unwrap().clear_external_mask(layer);
+    assert!(!has_mask(&app, layer));
+    tool_event(&mut app, ToolEvent::Move { x: pts[10][0], y: pts[10][1], pressure: 1.0 }, M);
+    assert!(app.live_stroke.is_none(), "the failed step drops the live stroke");
+    for p in &pts[11..] {
+        tool_event(&mut app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, M);
+    }
+    release(&mut app, pts[30]);
+    assert!(app.pending_stroke.is_none() && !has_mask(&app, layer));
+    assert!(app.committed_stroke.is_none(), "the command rendered the stroke itself");
+    assert_eq!(app.perf.gpu_dab_strokes, 0);
+    assert!(layer_pixels(&app).iter().any(|v| *v != 0.0), "the whole stroke is in the layer");
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+}
