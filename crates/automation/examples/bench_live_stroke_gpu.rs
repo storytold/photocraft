@@ -3,7 +3,7 @@
 //! `LiveStroke::begin_overlay`): per frame the stroke's `push`, the compositor's `render` of the
 //! live document over the step's damage, and the wait for the GPU; then the pen-up commit.
 //!
-//! `cargo run --release -p photocraft-automation --features gpu --example bench_live_stroke_gpu -- <old|new|gpu> <size> <hardness> <dabs> [--per-frame N] [--sanity] [--half] [--pace-ms MS]`
+//! `cargo run --release -p photocraft-automation --features gpu --example bench_live_stroke_gpu -- <old|new|gpu> <size> <hardness> <dabs> [--per-frame N] [--sanity] [--half] [--pace-ms MS] [--calm K]`
 //!
 //! `coverage <size> <hardness> <points> [--flow F] [--roundness R] [--angle DEG]` instead stamps a
 //! stroke on the GPU in R32F (where the device blends it) and in R16F and prints how far each is
@@ -27,6 +27,8 @@ use std::time::Instant;
 
 const W: i32 = 4928;
 const H: i32 = 3280;
+/// Pushes a coverage tile stays untouched before the gpu mode reads it back, unless `--calm` says otherwise.
+const CALM_PUSHES: u64 = 4;
 
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
@@ -169,7 +171,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     params["points"] = json!([pts[0]]);
     if mode == "gpu" {
-        let run = GpuRun { size, hardness, dabs, per_frame, sanity, precision: half.then_some(MaskPrecision::Half), measured, pace };
+        let run = GpuRun {
+            size,
+            hardness,
+            dabs,
+            per_frame,
+            sanity,
+            precision: half.then_some(MaskPrecision::Half),
+            measured,
+            pace,
+            calm: option("--calm", f64::from(CALM_PUSHES as u32)) as u64,
+        };
         let mut frames = Frames { gpu: Gpu { device: &device, queue: &queue }, comp: &mut comp, display: &mut display };
         return run_gpu(&run, &mut frames, &mut s, params, &pts);
     }
@@ -279,6 +291,8 @@ struct GpuRun {
     measured: bool,
     /// The time a frame takes at the pointer's pace (0: frames run back to back).
     pace: std::time::Duration,
+    /// Pushes a coverage tile must stay untouched before it is read back during the stroke.
+    calm: u64,
 }
 
 /// A device and its queue.
@@ -365,6 +379,11 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
     let (mut tiles, mut passes, mut quads, mut stamped) = (0usize, 0usize, 0usize, 0usize);
     let mut bounds = Rect::EMPTY;
     let mut pending: Vec<GpuDab> = first.iter().map(gpu_dab).collect();
+    let readback = MaskReadback::new();
+    // Calm tiles asked for but not yet taken by the readback queue, by the epoch they were asked at.
+    let mut backlog: std::collections::VecDeque<(Vec<(i32, i32)>, u64)> = std::collections::VecDeque::new();
+    let (mut t_feed_during, mut fed_during) = (0.0, 0usize);
+    let mut fed_keys = std::collections::HashSet::new();
     for chunk in pts[1..].chunks(run.per_frame) {
         let frame = Instant::now();
         let t = Instant::now();
@@ -383,6 +402,28 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
         let t = Instant::now();
         wait(device)?;
         let d = ms(t);
+        // Read back the tiles that went calm (after this frame's stamps, so the copies see them) and
+        // feed what has arrived, timed apart from the frame.
+        let (calm, epoch) = live.calm_keys(run.calm);
+        if !calm.is_empty() {
+            backlog.push_back((calm, epoch));
+        }
+        while let Some((keys, tag)) = backlog.front_mut() {
+            let taken = readback.request(&*g.comp, device, queue, layer, keys, *tag);
+            keys.drain(..taken);
+            if keys.is_empty() {
+                backlog.pop_front();
+            } else {
+                break;
+            }
+        }
+        let t = Instant::now();
+        for (key, values, tag) in readback.poll(device, false) {
+            live.feed_coverage(key, &values, tag);
+            fed_during += 1;
+            fed_keys.insert(key);
+        }
+        t_feed_during += ms(t);
         frames.push(ms(frame));
         if let Some(rest) = run.pace.checked_sub(frame.elapsed()) {
             std::thread::sleep(rest);
@@ -417,19 +458,29 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
     }
     let finish_stamp = ms(t);
     let t = Instant::now();
-    let readback = MaskReadback::new();
-    let keys = live.touched_keys();
-    let mut pending_keys = keys.clone();
-    let mut arrived = Vec::with_capacity(keys.len());
-    while arrived.len() < keys.len() {
-        let taken = readback.request(&*g.comp, device, queue, layer, &pending_keys);
-        pending_keys.drain(..taken);
+    let stroke_bytes = readback.bytes_requested();
+    let (keys, epoch) = live.unfed_keys();
+    let unread = keys.len();
+    let mut pending_keys = keys;
+    let mut arrived = Vec::new();
+    // Anything the stroke still has in flight arrives first, in request order.
+    while !pending_keys.is_empty() || readback.in_flight() > 0 || !backlog.is_empty() {
+        if let Some((mut keys, tag)) = backlog.pop_front() {
+            let taken = readback.request(&*g.comp, device, queue, layer, &keys, tag);
+            keys.drain(..taken);
+            if !keys.is_empty() {
+                backlog.push_front((keys, tag));
+            }
+        } else {
+            let taken = readback.request(&*g.comp, device, queue, layer, &pending_keys, epoch);
+            pending_keys.drain(..taken);
+        }
         arrived.extend(readback.poll(device, true));
     }
     let wait_readback = ms(t);
     let t = Instant::now();
-    for (key, values) in &arrived {
-        live.feed_coverage(*key, values);
+    for (key, values, tag) in &arrived {
+        live.feed_coverage(*key, values, *tag);
     }
     let feed = ms(t);
     params["points"] = json!(pts);
@@ -463,7 +514,7 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
          totals_ms gen={t_gen:.1} stamp_encode_submit={t_stamp:.1} render={t_render:.1} gpu_wait={t_wait:.1} frame_total={total:.1}\n\
          frame_ms mean={mean:.3} p95={:.3} max={:.3}\n\
          stamp_gpu_ms={stamp_gpu_ms:.2} over {stamp_gpu_n} of {n} frames (timing on={})\n\
-         readback_mb={:.1} tiles={}\n\
+         readback_mb stroke={:.1} pen_up={:.1}; tiles fed during={fed_during} (distinct {}, re-fed {}) at pen_up={unread} (arrived {}); feed_during_ms={t_feed_during:.1}\n\
          pen_up_ms total={pen_up:.1} (finish+stamp={finish_stamp:.1}, readback={wait_readback:.1}, feed={feed:.1}, offer(composite)={offer:.1}, commit={commit:.1}, render+wait={render_up:.1}; render uploads {} tiles {:.1} MB)\n\
          stroke_incl_pen_up_ms={:.1}\n\
          gpu_side_ms={gpu_ms:.1} over {gpu_n} of {n} frames (timing on={})\n\
@@ -475,7 +526,10 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
         pct(&sorted, 0.95),
         sorted[n - 1],
         stamp_timer.is_some(),
-        readback.bytes_requested() as f64 / 1e6,
+        stroke_bytes as f64 / 1e6,
+        (readback.bytes_requested() - stroke_bytes) as f64 / 1e6,
+        fed_keys.len(),
+        fed_during - fed_keys.len(),
         arrived.len(),
         stats.tiles_uploaded,
         stats.bytes_uploaded as f64 / 1e6,
