@@ -6,12 +6,13 @@
 //! A state source is kept by state, not by index ([`photocraft_ops::History::set_brush_source`]),
 //! so it stays on its state while older states fall off, and that state is kept when it would fall
 //! off the history itself. A snapshot source is kept by snapshot id ([`HistorySource::Snapshot`]),
-//! a separate namespace from the states. Once the source state or snapshot is deleted, or a redo
-//! state source is discarded by a new step, there is no source until one is set, and the History
-//! Brush refuses to paint without an explicit `state` or `snapshot`, as Photoshop does.
-//! (Photoshop keeps a source discarded by a new step in the list; that needs states outside the
-//! linear history, so here it is gone.) Edit › Purge › Histories keeps the snapshots (and a
-//! snapshot source) and resets a state source to the default.
+//! a separate namespace from the states. Once the source state or snapshot is deleted, there is no
+//! source until one is set, and the History Brush refuses to paint without an explicit `state` or
+//! `snapshot`, as Photoshop does. A new step that discards a later (redo) state source keeps that
+//! one state: it stays last in the list, drawn dimmed, and stays the source, so further clicks paint
+//! from it (#12844); it is not a state the document can step forward to. Choosing another source
+//! lets it go. Edit › Purge › Histories keeps the snapshots (and a snapshot source) and resets a
+//! state source to the default.
 //!
 //! Rows: `state` is a History panel row everywhere here (this command, `paint.historyBrush`, Fill
 //! › History and `historySource` in `doc_inspect`): the states (0 = oldest), the current one, then

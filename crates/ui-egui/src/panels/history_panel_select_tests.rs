@@ -118,6 +118,57 @@ fn rows_list_snapshots_then_states_then_redo_states() {
     assert!(!after[5].redo);
 }
 
+/// #12844: a History Brush stroke from a later (dimmed) state discards that state, except when it is
+/// the source: it stays the last row, still dimmed and still the source, and the next stroke paints
+/// its pixels again. A Fill (another step, not a brush stroke) keeps it the same way.
+#[test]
+fn the_kept_source_state_stays_the_last_dimmed_row_and_keeps_painting() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    // Step back onto the red Fill, so the green one is the later (dimmed) row, and make it the source.
+    app.run("history.selectState", json!({"state": 1})).unwrap();
+    let kept = app.session.active().unwrap().history.row_id(2).expect("the later state");
+    app.run("history.setSource", json!({"state": 2})).unwrap();
+    let pixel = |app: &PhotocraftApp| {
+        let px = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(32, 24);
+        [px[0], px[1], px[2]]
+    };
+    let last_row = |st: &photocraft_engine::DocState| st.history.past_len() + st.history.redo_labels().count();
+    app.run("paint.historyBrush", json!({"points": [[32, 24]], "size": 40, "hardness": 100})).unwrap();
+    assert_eq!(pixel(&app), [0.0, 1.0, 0.0], "the stroke paints the source: {:?}", pixel(&app));
+    let listed = rows(app.session.active().unwrap());
+    let last = listed.last().expect("a last row");
+    assert_eq!(last.key, HistoryKey::State(kept), "the source state is still listed, as the last row");
+    assert!(last.redo, "and drawn dimmed like the other later rows");
+    assert_eq!(last.label.as_str(), "Fill");
+    let st = app.session.active().unwrap();
+    assert_eq!(photocraft_engine::history_source_cmds::source(st), Some(HistorySource::State(last_row(st))), "and still the source");
+    // Paint over that pixel with another colour and stroke again: it comes back from the same source.
+    app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    assert_eq!(pixel(&app), [0.0, 0.0, 1.0], "{:?}", pixel(&app));
+    app.run("paint.historyBrush", json!({"points": [[32, 24]], "size": 40, "hardness": 100})).unwrap();
+    assert_eq!(pixel(&app), [0.0, 1.0, 0.0], "the same pixels as the first stroke: {:?}", pixel(&app));
+    // Fill › History is a step of its own: it uses the source and keeps it last.
+    app.run("edit.fill", json!({"contents": "history"})).unwrap();
+    assert_eq!(pixel(&app), [0.0, 1.0, 0.0], "the whole document from the source: {:?}", pixel(&app));
+    let listed = rows(app.session.active().unwrap());
+    assert_eq!(listed.last().expect("a last row").key, HistoryKey::State(kept), "still the last row after the Fill");
+    let st = app.session.active().unwrap();
+    assert_eq!(photocraft_engine::history_source_cmds::source(st), Some(HistorySource::State(last_row(st))));
+    // Undo of the Fill gives the state it replaced back as a redo row, and the kept source stays last.
+    app.run("edit.undo", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.redo_labels().count(), 2, "the undo is redoable, and the source is still kept");
+    assert_eq!(st.history.row_of(kept), Some(last_row(st)), "the source row is still the last one");
+    assert_eq!(rows(st).last().expect("a last row").key, HistoryKey::State(kept), "the panel still lists it last, dimmed");
+    assert!(rows(st).last().expect("a last row").redo, "dimmed like the other later rows");
+    app.run("edit.redo", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.row_of(kept), Some(last_row(st)), "Redo never lands on the kept source");
+}
+
 /// While Free Transform is open, clicking a History state leaves the document alone: the transform owns
 /// Undo. Without a transform the same click steps back as usual.
 #[test]

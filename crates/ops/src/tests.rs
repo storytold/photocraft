@@ -125,16 +125,20 @@ fn brush_source_follows_its_state() {
     edit(&mut h, &mut cur, "F", |d| d.name = "f".into());
     assert_eq!(h.entries(), ["A", "D", "E", "F"]);
     assert_eq!((h.brush_source(), h.row_doc(0, &cur).unwrap().name.as_str()), (Some(0), "a"));
-    // A redo state as the source, discarded by a new step: no source until one is set.
+    // A redo state as the source, and a new step that discards the later states: the source stays,
+    // as the last row, and stays the source, so the next click paints from it again (#12844).
     cur = h.undo(cur).unwrap().0;
     assert!(h.set_brush_source(3), "the greyed F row");
     assert_eq!((h.brush_source(), h.row_doc(3, &cur).unwrap().name.as_str()), (Some(3), "f"));
     assert!(h.row_doc(4, &cur).is_none() && h.row_id(4).is_none());
     edit(&mut h, &mut cur, "G", |d| d.name = "g".into());
-    assert_eq!(h.brush_source(), None);
+    assert_eq!(h.brush_source(), Some(4), "the source state is kept, as the last row");
+    assert_eq!(h.row_doc(4, &cur).unwrap().name, "f", "and is still the state it was");
+    assert!(!h.can_redo(), "the kept state is not a state the document can step forward to");
     // The current state as the source keeps it once it becomes a past state; once it is no
-    // longer the source, it falls off as usual.
+    // longer the source, it falls off as usual, and so does a state kept only as a source.
     assert!(h.set_brush_source(3));
+    assert_eq!(h.row_doc(4, &cur), None, "the state kept as the old source goes with that choice");
     edit(&mut h, &mut cur, "H", |d| d.name = "h".into());
     assert_eq!((h.brush_source(), h.row_doc(2, &cur).unwrap().name.as_str()), (Some(2), "g"));
     assert!(h.set_brush_source(1));

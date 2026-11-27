@@ -56,6 +56,8 @@ fn the_history_brush_and_fill_paint_from_the_set_source() {
 }
 
 /// The common Photoshop workflow: apply, step back, set the source on the greyed state, paint.
+/// A new step discards the other later states but keeps that source state, last in the list, and it
+/// stays the source, so the next stroke paints from it again (#12844).
 #[test]
 fn a_redo_state_can_be_the_source_until_a_new_step_discards_it() {
     let mut s = session();
@@ -63,12 +65,20 @@ fn a_redo_state_can_be_the_source_until_a_new_step_discards_it() {
     s.execute("history.setSource", json!({"state": 2})).unwrap();
     brush(&mut s, json!({}));
     assert!(close(rgb(&s), [0.0, 1.0, 0.0]), "the greyed green state: {:?}", rgb(&s));
-    // Painting was a new step, which discarded the green state: no source until one is set.
-    assert!(photocraft_engine::inspect::document(s.active().unwrap())["historySource"].is_null());
-    let before = rgb(&s);
-    assert!(s.execute("paint.historyBrush", json!({"points": [[4, 4]], "size": 40})).is_err());
-    assert!(s.execute("edit.fill", json!({"contents": "history"})).is_err());
-    assert!(close(rgb(&s), before), "nothing painted");
+    // Painting was a new step: the green state stays as the last row and stays the source.
+    let st = s.active().unwrap();
+    assert_eq!(
+        photocraft_engine::inspect::document(st)["historySource"],
+        json!({"state": st.history.past_len() + 1, "label": "Fill"}),
+        "kept, last, and still the source"
+    );
+    // Blue underneath and a stroke: the same source pixels come back, and Fill from history too.
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    assert!(close(rgb(&s), [0.0, 0.0, 1.0]), "{:?}", rgb(&s));
+    brush(&mut s, json!({}));
+    assert!(close(rgb(&s), [0.0, 1.0, 0.0]), "the kept source paints again: {:?}", rgb(&s));
+    s.execute("edit.fill", json!({"contents": "history"})).unwrap();
+    assert!(close(rgb(&s), [0.0, 1.0, 0.0]), "Fill > History uses it too: {:?}", rgb(&s));
     brush(&mut s, json!({"state": 0}));
     assert!(close(rgb(&s), [1.0, 1.0, 1.0]), "an explicit state still paints: {:?}", rgb(&s));
     s.execute("history.setSource", json!({"state": 0})).unwrap();
