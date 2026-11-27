@@ -27,7 +27,7 @@ pub(crate) fn apply(app: &PhotocraftApp, ctx: &Context, raw: &mut RawInput) {
 }
 
 fn pinch_id() -> egui::Id {
-    egui::Id::new("pc-ctrl-wheel-pinch")
+    egui::Id::unique("pc-ctrl-wheel-pinch")
 }
 
 /// The pointer this frame will use: the latest move in `raw`, else where it was last frame.
