@@ -487,9 +487,11 @@ pub(crate) fn event_reaches_document(event: &egui::Event) -> bool {
     )
 }
 
-/// Does this frame's input hold an event that [`event_reaches_document`]?
+/// Does this frame's input hold an event that [`event_reaches_document`]? A button release doesn't
+/// count: the press before it already landed the stroke, and a pass of the release's own frame
+/// (egui can run a frame twice) still holds the release that made the stroke pending.
 pub(crate) fn frame_input_reaches_document(ctx: &egui::Context) -> bool {
-    ctx.input(|i| i.events.iter().any(event_reaches_document))
+    ctx.input(|i| i.events.iter().any(|e| event_reaches_document(e) && !matches!(e, egui::Event::PointerButton { pressed: false, .. })))
 }
 
 /// How long a release waits for the stroke's commit before the canvas goes on without it. Tests
