@@ -185,7 +185,7 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
     }
     let resting = f.shown.is_none() && !missed && now - f.since < DEBOUNCE;
     if resting {
-        ctx.request_repaint_after(std::time::Duration::from_secs_f64(DEBOUNCE - (now - f.since)));
+        craft::ui::runtime::frame::request_repaint_after(ctx, DEBOUNCE - (now - f.since));
     }
     #[cfg(test)]
     let busy = f.job.is_some() || resting;

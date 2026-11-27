@@ -42,7 +42,7 @@ fn harness_tool(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
                 let env = craft::ui::runtime::env::Env::of(ui);
                 SECTION_GAP.with(|x| x.set(env.tokens.space.gap.section));
                 HANDLE_SIDE.with(|x| x.set(env.tokens.size.handle.md));
-                crate::canvas::document_area(app, ui);
+                crate::canvas::testing::document_area(app, ui);
             });
         },
         app,

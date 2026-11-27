@@ -186,7 +186,7 @@ fn the_web_opens_every_selected_file() {
     // Each good file is its own tab; the broken one is reported without stopping the rest.
     let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.as_str()).collect();
     assert_eq!(names, ["one.png", "two.jpg"]);
-    assert!(app.ui.notices.iter().any(|n| n.tone == craft::theme::variant::Tone::Bad && n.title.contains("broken.png")), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).iter().any(|message| message.contains("broken.png")), "{:?}", app.ui.notices);
 }
 
 /// #5749: the web shell reads dropped files itself, so it asks where they landed: image files
@@ -417,7 +417,7 @@ fn open_failures_are_errors_and_leave_no_document() {
     assert!(app.ui.recent_files.is_empty());
     assert!(app.ui.status_error);
     assert!(app.ui.status.starts_with("Couldn't open broken.psd"), "{}", app.ui.status);
-    assert!(app.ui.notices.last().is_some_and(|n| n.tone == craft::theme::variant::Tone::Bad));
+    assert_eq!(open_error_messages(&app).len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -430,8 +430,9 @@ fn a_picked_file_that_cannot_be_read_is_reported_like_any_open_failure() {
     answer(&mut app);
     assert!(app.session.documents().is_empty());
     assert!(app.ui.status_error);
-    let notice = app.ui.notices.last().unwrap();
-    assert!(notice.tone == craft::theme::variant::Tone::Bad && notice.title.starts_with("Couldn't open big.psb: "), "{}", notice.title);
+    let messages = open_error_messages(&app);
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].starts_with("Couldn't open big.psb: "), "{}", messages[0]);
     // Commands that read a picked file (scripts, notes, Place) fail with the file's name.
     app.ui.status_error = false;
     app.pick_file_bytes(|_, _, _| Err("read".into())).unwrap();
@@ -452,7 +453,8 @@ fn open_paths_reports_each_failure_without_panicking() {
     assert_eq!(n, 0);
     assert!(app.session.documents().is_empty());
     assert!(app.ui.status_error);
-    assert_eq!(app.ui.notices.len(), 4, "one notice per failure");
+    assert_eq!(open_error_messages(&app).len(), 4, "one modal alert per failure");
+    assert!(app.ui.notices.is_empty());
     // Bad control params error instead of panicking.
     let ctx = egui::Context::default();
     assert!(menus::invoke(&mut app, &ctx, "file.open", json!({ "path": "" })).is_err());
@@ -557,7 +559,9 @@ fn dropped_files_open_with_path_and_recent() {
     assert_eq!(app.session.documents()[1].path, None);
     assert_eq!(*app.ui.recent_files, vec![abs_s]);
     assert!(app.ui.status_error);
-    assert_eq!(app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).count(), 2);
+    assert_eq!(open_error_messages(&app), ["Couldn't open gone.psd: couldn't read the file", "Couldn't open dropped: not an image"]);
+    assert!(app.ui.notices.is_empty(), "open failures use modal alerts, not corner notices");
+    assert_eq!(app.ui.status, "Couldn't open dropped: not an image");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1397,7 +1401,14 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     let (mut app, _) = app_with(Vec::new());
     app.open_bytes("existing.psd", b"x").unwrap();
     let batch = jobs_ui::begin_batch(&mut app);
-    let tab = |seq: usize| OpenTab { job: JobId(100 + seq as u64), name: format!("f{seq}.psd"), path: None, slot: None, order: Some(OpenOrder { batch, seq }) };
+    let tab = |seq: usize| OpenTab {
+        job: JobId(100 + seq as u64),
+        name: format!("f{seq}.psd"),
+        path: None,
+        error_source: None,
+        slot: None,
+        order: Some(OpenOrder { batch, seq }),
+    };
     app.jobs.opens.extend((0..4).map(tab));
     // f1 opened at once (a preset file, say, or background jobs off for it).
     app.jobs.opens.remove(1);
@@ -1419,11 +1430,11 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     assert_eq!(app.ui.views.len(), 5, "views follow their documents");
     assert!(app.jobs.batches.is_empty(), "forgotten once every member opened");
     // A tab with a slot (dropped on the tabs) keeps it; one from a forgotten set goes to the end.
-    let dropped = OpenTab { job: JobId(200), name: "dropped.psd".into(), path: None, slot: Some(0), order: None };
+    let dropped = OpenTab { job: JobId(200), name: "dropped.psd".into(), path: None, error_source: None, slot: Some(0), order: None };
     let index = app.session.add_document(Document::new("dropped.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
     let id = app.session.documents()[index].doc.id;
     jobs_ui::finish_open_tab(&mut app, &dropped, &json!({"document": index, "docId": id.0})).unwrap();
-    let late = OpenTab { job: JobId(201), name: "late.psd".into(), path: None, slot: None, order: Some(OpenOrder { batch: 999, seq: 0 }) };
+    let late = OpenTab { job: JobId(201), name: "late.psd".into(), path: None, error_source: None, slot: None, order: Some(OpenOrder { batch: 999, seq: 0 }) };
     let index = app.session.add_document(Document::new("late.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
     let id = app.session.documents()[index].doc.id;
     jobs_ui::finish_open_tab(&mut app, &late, &json!({"document": index, "docId": id.0})).unwrap();
@@ -1691,7 +1702,17 @@ fn scratch(tag: &str) -> std::path::PathBuf {
 }
 
 fn error_titles(app: &PhotocraftApp) -> Vec<String> {
-    app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).map(|n| n.title.clone()).collect()
+    app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).map(|n| n.title.clone()).chain(open_error_messages(app)).collect()
+}
+
+fn open_error_messages(app: &PhotocraftApp) -> Vec<String> {
+    app.framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter(|d| d.key.as_deref() == Some("alert"))
+        .filter_map(|d| d.fields.and_then(|f| f.get("message").and_then(serde_json::Value::as_str).map(str::to_owned)))
+        .collect()
 }
 
 /// The Home screen (no document open) is where a first drop lands: every file opens as its own
@@ -1717,6 +1738,7 @@ fn files_dropped_with_no_document_open_all_open() {
     assert_eq!(doc_names(&app), names);
     assert!(app.drop_places.is_empty());
     assert!(error_titles(&app).is_empty(), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).is_empty(), "{:?}", app.framework.dialogs.open_dialogs());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1799,7 +1821,7 @@ fn several_files_dropped_on_the_canvas_are_queued_in_order() {
         })
         .collect();
     assert_eq!(queued, ["one.png", "two.jpg"]);
-    assert!(error_titles(&app).iter().any(|t| t.starts_with("Couldn't open set.abr: ")), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).iter().any(|t| t.starts_with("Couldn't open set.abr: ")), "{:?}", app.framework.dialogs.open_dialogs());
 }
 
 #[test]
@@ -1836,9 +1858,11 @@ fn open_as_smart_object_dialog_opens_one_document_per_selected_file() {
 
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(
-        app.ui.notices.iter().any(|n| n.tone == craft::theme::variant::Tone::Bad && n.title.starts_with("Couldn't open bad.png")),
-        "the unreadable file is reported"
+    assert_eq!(
+        open_error_messages(&app),
+        ["Could not open \"bad.png\" because PhotoCraft does not recognize this type of file."],
+        "the unreadable file has one exact modal alert; status: {}",
+        app.ui.status
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1861,9 +1885,11 @@ fn open_as_smart_object_opens_in_the_background_in_name_order() {
     tick_until(&mut app, &ctx, |app| app.jobs.opens.is_empty());
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(
-        app.ui.notices.iter().any(|n| n.tone == craft::theme::variant::Tone::Bad && n.title.starts_with("Couldn't open bad.png")),
-        "the unreadable file is reported"
+    assert_eq!(
+        open_error_messages(&app),
+        ["Could not open \"bad.png\" because PhotoCraft does not recognize this type of file."],
+        "the unreadable file has one exact modal alert; status: {}",
+        app.ui.status
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

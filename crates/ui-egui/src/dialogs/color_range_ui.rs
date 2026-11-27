@@ -170,6 +170,13 @@ pub fn params(value: &ColorRangeValue) -> Value {
     Value::Object(p)
 }
 
+/// What the canvas shows of the open Color Range dialog's Selection Preview, for the document area's version
+/// (`region_versions::canvas`): the preview mode and the fields, which change with no command.
+pub(crate) fn canvas_key(app: &PhotocraftApp) -> Option<(PreviewMode, String)> {
+    let dialog = app.framework.dialogs.get::<HostedColorRange>()?;
+    Some((dialog.preview_mode(), params(dialog.value()).to_string()))
+}
+
 /// Cached preview: the document proxy (per revision) and the pictures drawn from it.
 pub struct Preview {
     doc: DocId,

@@ -722,7 +722,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out:
                 response.view = Some(view);
             }
         }
-        ctx.request_repaint();
+        craft::ui::runtime::frame::request_repaint(&ctx);
     }
     match response.gesture {
         Some(GesturePhase::Begin) => tools.gesture_on = app.session.documents().get(host.idx).map(|state| (state.doc.id.0, host)),

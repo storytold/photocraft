@@ -55,7 +55,7 @@ fn harness(app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<Photoc
         .with_context(ctx)
         .with_step_dt(1.0 / 60.0)
         .with_size(egui::vec2(1000., 700.))
-        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::canvas::document_area(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::canvas::testing::document_area(app, ui), app);
 
     h.run_steps(4);
     h
