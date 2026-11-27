@@ -58,6 +58,9 @@ pub use budget::{
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
 use callback::CanvasCallback;
 #[cfg(test)]
+pub(crate) use callback::sampled_doc_rect;
+pub(crate) use callback::{GpuSampling, OpaqueTexels};
+#[cfg(test)]
 use callback::{filter_mode, map_doc_px, tile_screen_aabb};
 use doc_textures::init_buffer;
 #[cfg(test)]
@@ -189,6 +192,20 @@ pub fn supports_f16_canvas(adapter: &wgpu::Adapter) -> bool {
 }
 
 impl GpuCanvas {
+    /// Capture this resident texture set's grids without copying its pages each frame.
+    pub(crate) fn sampling(&self, key: u64, size: [u32; 2], physical_scale: f32, factor: u32, growth: [f32; 2]) -> GpuSampling {
+        let renderer = self.rs.renderer.read();
+        let grids = renderer
+            .callback_resources
+            .get::<Resources>()
+            .filter(|res| res.health.is_ok())
+            .and_then(|res| res.docs.get(&key))
+            .filter(|doc| doc.size == size)
+            .map(|doc| doc.sampling.clone())
+            .unwrap_or_default();
+        GpuSampling { grids, scale: physical_scale * factor as f32, factor, growth }
+    }
+
     /// Create pipelines and register resources with the egui renderer.
     pub fn new(rs: &RenderState) -> Self {
         Self::with_tile(rs, None)

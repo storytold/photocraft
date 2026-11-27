@@ -31,11 +31,11 @@ pub(super) fn to_text(aff: &Affine, x: f64, y: f64) -> (f32, f32) {
 /// the pointer never promises a path click that the press would turn into editing this layer.
 pub(crate) fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
     let slop = hit_slop(app);
+    let sampling = crate::canvas::document_display::picture_sampling(app);
     hit_candidates(app)?.into_iter().find(|id| {
-        // The pixels shown count too: a PSD's type keeps Photoshop's rendering until edited,
-        // which can sit off our layout when fonts are substituted (#123).
-        let shown = shown_bounds(app, *id, slop).is_some_and(|r| x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
-        // The hover calls this every frame: skip the layout when the pixels already answer.
+        // Retained PSD pixels can sit off our layout when fonts are substituted (#123).
+        let shown =
+            app.session.active().is_some_and(|st| sampling.any_region(x, y, |area| photocraft_engine::type_caret_cmds::cached_ink_in_rect(&st.doc, *id, area)));
         if shown {
             return true;
         }
@@ -65,20 +65,11 @@ fn hit_candidates(app: &PhotocraftApp) -> Option<Vec<LayerId>> {
     Some(ids)
 }
 
-/// The bounds of the pixels `id` shows, grown by `slop`, in document units; `None` with nothing shown.
-fn shown_bounds(app: &PhotocraftApp, id: LayerId, slop: f32) -> Option<kurbo::Rect> {
-    let r = text_layer(&app.session.active()?.doc, id)?.cache.as_ref()?.content_bounds();
-    let s = f64::from(slop);
-    (!r.is_empty()).then(|| kurbo::Rect::new(f64::from(r.x0) - s, f64::from(r.y0) - s, f64::from(r.x1) + s, f64::from(r.y1) + s))
-}
-
-/// The two areas [`hit_layer`] finds `id` in, as document quads: its shown pixels' bounds and its layout's bounds
-/// through its transform (`text_point_inside`), each grown by `slop`.
+/// Layout reach for next-pass canvas ownership. Cached ink is deliberately not a bounding quad: imported caches
+/// can have empty padding anywhere inside their bounds. The editor and move reach check their actual presses
+/// against `hit_layer` instead, preserving alpha-aware ownership without scanning cache pixels into polygons.
 fn hit_quads(app: &mut PhotocraftApp, id: LayerId, slop: f32) -> Vec<[kurbo::Point; 4]> {
     let mut quads = Vec::new();
-    if let Some(r) = shown_bounds(app, id, slop) {
-        quads.push([kurbo::Point::new(r.x0, r.y0), kurbo::Point::new(r.x1, r.y0), kurbo::Point::new(r.x1, r.y1), kurbo::Point::new(r.x0, r.y1)]);
-    }
     let laid = layout(app, id).and_then(|(l, aff, _)| Some((l.bounds()?, aff)));
     if let Some((b, aff)) = laid {
         let s = f64::from(slop);
@@ -88,14 +79,12 @@ fn hit_quads(app: &mut PhotocraftApp, id: LayerId, slop: f32) -> Vec<[kurbo::Poi
     quads
 }
 
-/// The areas where a plain press, with an edit open, is the Type tool's press that commits the edit rather than the
-/// edit's (its move reach, its caret, its box), in document units. Production's order of checks for that press
-/// (pc-prod-e76 tools/type_tool/pointer.rs:117-150, tools/type_transform.rs:185-196, 303-330): a handle of the
-/// edited paragraph box first (`box_handle_at`, pointer.rs:31-52), then a type layer other than the edited one that
-/// [`hit_layer`] finds topmost there (it commits, and is never the move reach), then the edited text or the inside of
-/// its box (the caret). So the areas are each other layer's hit areas, less the edited layer's where it lies above
-/// that layer, less the edited box and its handle squares. They are kept to the edited frame grown by the move reach:
-/// further out nothing of the edit takes a press, which is the tool's anyway.
+/// Layout areas where a plain press with an edit open belongs to the Type tool rather than the edited caret or
+/// move reach. Keep this next-pass geometry independent of the pointer: other layers' transformed layout bounds,
+/// less the edited layer's layout where it lies above them, less the edited paragraph box and handle squares.
+/// Imported cache alpha cannot be represented by its bounds; the editor and transform check their own actual
+/// presses against `hit_layer` before accepting a caret or move. Regions stay within the edited frame's move reach;
+/// further out the background press is the tool's already.
 pub(crate) fn claimed_regions(app: &mut PhotocraftApp) -> Vec<Vec<kurbo::Point>> {
     let Some(ed) = app.ui.text_edit.clone() else { return Vec::new() };
     if super::editing::edit_home(app, &ed) != app.session.active_index() {

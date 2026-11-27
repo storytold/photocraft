@@ -154,11 +154,17 @@ pub(super) struct DocTextures {
     pub(super) size: [u32; 2],
     pub(super) format: wgpu::TextureFormat,
     pub(super) tiles: Vec<Tile>,
+    /// Source grids shared by completed pictures; refreshed on residency or page-alpha changes.
+    pub(super) sampling: std::sync::Arc<[super::callback::SamplingGrid]>,
 }
 
 pub(super) struct Tile {
     /// Document-pixel rect: x, y, w, h.
     pub(super) rect: [u32; 4],
+    pub(super) core: photocraft_geom::Rect,
+    // One bit per resident page texel (1/32 of U8 texture bytes plus word rounding).
+    // Released with this tile, except for the currently painted snapshot's shared Arc.
+    pub(super) opaque: Option<super::callback::OpaqueTexels>,
     pub(super) texture: wgpu::Texture,
     pub(super) levels: Vec<wgpu::TextureView>,
     pub(super) bind_group: wgpu::BindGroup,
@@ -166,6 +172,22 @@ pub(super) struct Tile {
     /// A viewport page ([`GpuCanvas::upload_page`]): its id and reduction factor (document
     /// pixels per texel); `None` for a tile of a whole-document texture set.
     pub(super) page: Option<(u64, u32)>,
+}
+
+impl DocTextures {
+    pub(super) fn refresh_sampling(&mut self) {
+        self.sampling = self
+            .tiles
+            .iter()
+            .map(|tile| super::callback::SamplingGrid {
+                rect: tile.rect,
+                core: tile.core,
+                texels: [tile.texture.width(), tile.texture.height()],
+                levels: tile.texture.mip_level_count(),
+                opaque: tile.opaque.clone(),
+            })
+            .collect();
+    }
 }
 
 fn uniform_entry(binding: u32, size: u64, vis: wgpu::ShaderStages, dynamic: bool) -> wgpu::BindGroupLayoutEntry {

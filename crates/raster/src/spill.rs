@@ -5,8 +5,8 @@
 //! tile in use is never evicted; a spilled tile is read back (LZ4 + CRC-checked) by whoever
 //! touches it first.
 //!
-//! - **Accounting.** [`stats`] counts the bytes of every live tile that is resident, whether or
-//!   not a scratch disk is configured.
+//! - **Accounting.** [`stats`] counts resident pixel bytes and allocated alpha indexes of every
+//!   live tile, whether or not a scratch disk is configured. Spilling releases heap-backed indexes.
 //! - **Eviction** is the clock ("second chance") algorithm over a registry of weak cell
 //!   pointers: a tile touched since the hand last passed keeps its place once. A background
 //!   thread evicts down to 90 % of the budget; a thread that pushes memory past 125 % helps.
@@ -46,12 +46,23 @@ pub(crate) struct Cell {
     slot: Mutex<Option<(Arc<ScratchFile>, Extent)>>,
     /// Touched since the clock hand last passed.
     referenced: AtomicBool,
+    /// Exact derived coverage belongs to the backing, including the rare failed-read aliases.
+    /// Heap storage is charged to residency and released on spill; uniform indexes allocate none.
+    /// Writers and failed reads take `data` first, then invalidate this before publishing changes.
+    alpha: Mutex<Option<crate::alpha::AlphaIndex>>,
 }
 
 impl Cell {
     pub(crate) fn new(bytes: Vec<u8>) -> Arc<Cell> {
         let len = bytes.len();
-        let cell = Arc::new(Cell { data: RwLock::new(Some(bytes)), len, error: Mutex::new(None), slot: Mutex::new(None), referenced: AtomicBool::new(true) });
+        let cell = Arc::new(Cell {
+            data: RwLock::new(Some(bytes)),
+            len,
+            error: Mutex::new(None),
+            slot: Mutex::new(None),
+            referenced: AtomicBool::new(true),
+            alpha: Mutex::new(None),
+        });
         M.live.fetch_add(1, Ordering::Relaxed);
         M.resident.fetch_add(len, Ordering::Relaxed);
         M.register(&cell);
@@ -63,11 +74,55 @@ impl Cell {
         self.len
     }
 
+    pub(crate) fn has_positive_alpha(&self, format: photocraft_color::PixelFormat, area: photocraft_geom::Rect) -> bool {
+        {
+            let index = self.alpha.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(index) = index.as_ref().filter(|index| index.format == format) {
+                return index.contains(area);
+            }
+        }
+        // Never take the pixel lock while holding the index lock: writers lock in the opposite
+        // direction. Pin actual pixels before building, not TileBytes' scratch-error placeholder.
+        let pixels = self.read();
+        let Some(bytes) = pixels.as_deref() else { return false };
+        let mut index = self.alpha.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut allocated = 0;
+        if index.as_ref().is_none_or(|index| index.format != format) {
+            Self::discard_alpha(&mut index);
+            *index = crate::alpha::AlphaIndex::build(bytes, format);
+            allocated = index.as_ref().map_or(0, crate::alpha::AlphaIndex::allocated_bytes);
+            if allocated > 0 {
+                M.resident.fetch_add(allocated, Ordering::Relaxed);
+            }
+        }
+        let hit = index.as_ref().map_or_else(|| crate::alpha::scan(bytes, format, area), |index| index.contains(area));
+        drop(index);
+        drop(pixels);
+        if allocated > 0 {
+            // Indexing alone can cross the budget. Release both locks so this backing can spill too.
+            maybe_evict();
+        }
+        hit
+    }
+
+    fn discard_alpha(index: &mut Option<crate::alpha::AlphaIndex>) -> usize {
+        let allocated = index.take().map_or(0, |index| index.allocated_bytes());
+        if allocated > 0 {
+            M.resident.fetch_sub(allocated, Ordering::Relaxed);
+        }
+        allocated
+    }
+
     pub(crate) fn read_error(&self) -> Option<String> {
         self.error.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     fn set_error(&self, error: Option<String>) {
+        if error.is_some() {
+            // `load` holds the data write lock. Clear coverage before publishing poison, so no
+            // warm fast path can hide a known read failure, including allocation-free indexes.
+            Self::discard_alpha(&mut self.alpha.lock().unwrap_or_else(PoisonError::into_inner));
+        }
         let mut old = self.error.lock().unwrap_or_else(PoisonError::into_inner);
         match (old.is_some(), error.is_some()) {
             (false, true) => {
@@ -121,6 +176,7 @@ impl Cell {
     pub(crate) fn write(&self) -> RwLockWriteGuard<'_, Option<Vec<u8>>> {
         self.touch();
         let mut w = self.data.write().unwrap_or_else(PoisonError::into_inner);
+        Self::discard_alpha(&mut self.alpha.lock().unwrap_or_else(PoisonError::into_inner));
         let loaded = w.is_none();
         if self.load(&mut w).is_err() {
             // Keep the only original copy. The write guard's temporary placeholder is
@@ -183,15 +239,19 @@ impl Cell {
             *slot = Some((file.clone(), extent));
         }
         drop(slot);
+        let mut index = self.alpha.lock().unwrap_or_else(PoisonError::into_inner);
+        let derived = if index.as_ref().is_some_and(|index| index.allocated_bytes() > 0) { Self::discard_alpha(&mut index) } else { 0 };
+        drop(index);
         *w = None;
         M.resident.fetch_sub(self.len, Ordering::Relaxed);
         M.evictions.fetch_add(1, Ordering::Relaxed);
-        Ok(self.len)
+        Ok(self.len + derived)
     }
 }
 
 impl Drop for Cell {
     fn drop(&mut self) {
+        Self::discard_alpha(self.alpha.get_mut().unwrap_or_else(PoisonError::into_inner));
         if self.error.get_mut().unwrap_or_else(PoisonError::into_inner).is_some() {
             M.read_errors.fetch_add(1, Ordering::Release);
             M.failed.fetch_sub(1, Ordering::Release);
@@ -229,7 +289,7 @@ struct Manager {
     read_errors: AtomicU64,
     resident: AtomicUsize,
     live: AtomicUsize,
-    /// Pixel bytes to keep resident; 0 = spilling off or paused.
+    /// Pixel and derived index bytes to keep resident; 0 = spilling off or paused.
     budget: AtomicUsize,
     /// Spilling is paused after a write, create or free-space failure ([`Config::paused`]).
     paused: AtomicBool,
@@ -999,7 +1059,7 @@ pub fn retry_now_for_tests() {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpillStats {
-    /// Pixel bytes of live tiles in memory.
+    /// Pixel bytes and allocated alpha-index storage of live tiles in memory.
     pub resident_bytes: usize,
     pub live_tiles: usize,
     /// 0 = spilling off.
@@ -1399,43 +1459,56 @@ mod tests {
 
     #[test]
     fn failed_read_retains_backing_and_blocks_commit_until_repaired() {
-        let dir = std::env::temp_dir().join(format!("photocraft-read-failure-{}", std::process::id()));
-        let file = Arc::new(ScratchFile::create(&dir).unwrap());
-        let mut tile = crate::Tile { cell: Cell::new(vec![73; 1024]) };
-        let generation = read_error_generation();
-        assert_eq!(tile.cell.evict(&file).unwrap(), 1024);
-        let good = tile.cell.slot.lock().unwrap().as_ref().unwrap().1;
-        tile.cell.slot.lock().unwrap().as_mut().unwrap().1.crc32 ^= 1;
+        use photocraft_color::PixelFormat;
+        use photocraft_geom::Rect;
 
-        assert!(tile.try_bytes().is_err());
-        let failed_generation = read_error_generation();
-        assert!(tile.cell.data.read().unwrap().is_none(), "placeholder must never become stored pixels");
-        assert!(check_integrity().is_err());
-        assert!(tile.scratch_health().is_err(), "the tile reports its own failure");
-        assert!(crate::Tile::from_vec(vec![1; 16]).scratch_health().is_ok(), "other tiles stay healthy");
-        assert!(tile.try_bytes().is_err());
-        assert!(check_since(failed_generation).is_ok(), "re-reading a tile that already failed is not a new transition");
-        tile.bytes_mut()[0] = 9;
-        assert!(tile.cell.data.read().unwrap().is_none());
-        assert!(tile.cell.slot.lock().unwrap().is_some(), "a failed mutation must preserve the original extent");
-        let snapshot = tile.clone();
-        assert!(Arc::ptr_eq(&tile.cell, &snapshot.cell));
-        configure(None, 0).unwrap();
-        assert!(check_integrity().is_err(), "changing preferences must not clear unreadable pixels");
+        for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let dir = std::env::temp_dir().join(format!("photocraft-read-failure-{}-{:?}", std::process::id(), format.sample));
+            let file = Arc::new(ScratchFile::create(&dir).unwrap());
+            let len = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize * format.bytes_per_pixel();
+            let mut tile = crate::Tile { cell: Cell::new(vec![73; len]) };
+            let point = Rect::new(0, 0, 1, 1);
+            assert!(tile.cell.has_positive_alpha(format, point));
+            let generation = read_error_generation();
+            assert_eq!(tile.cell.evict(&file).unwrap(), len);
+            let good = tile.cell.slot.lock().unwrap().as_ref().unwrap().1;
+            tile.cell.slot.lock().unwrap().as_mut().unwrap().1.crc32 ^= 1;
 
-        tile.cell.slot.lock().unwrap().as_mut().unwrap().1 = good;
-        assert_eq!(&*tile.try_bytes().unwrap(), &[73; 1024]);
-        assert!(check_integrity().is_ok());
-        assert!(tile.scratch_health().is_ok());
-        assert!(check_since(generation).is_err(), "repairing or dropping a failed tile must not validate an earlier result");
-        assert!(check_since(failed_generation).is_err(), "recovery must reject a computation begun during the failure");
-        assert_eq!(tile.cell.evict(&file).unwrap(), 1024);
-        tile.cell.slot.lock().unwrap().as_mut().unwrap().1.crc32 ^= 1;
-        assert!(tile.try_bytes().is_err());
-        let dropped_generation = read_error_generation();
-        drop((snapshot, tile, file));
-        assert!(check_integrity().is_ok());
-        assert!(check_since(dropped_generation).is_err(), "dropping the failed tile must also reject its placeholder result");
-        let _ = std::fs::remove_dir(&dir);
+            assert!(tile.try_bytes().is_err());
+            let failed_generation = read_error_generation();
+            assert!(tile.cell.data.read().unwrap().is_none(), "placeholder must never become stored pixels");
+            assert!(check_integrity().is_err());
+            assert!(tile.scratch_health().is_err(), "the tile reports its own failure");
+            assert!(crate::Tile::from_vec(vec![1; 16]).scratch_health().is_ok(), "other tiles stay healthy");
+            assert!(tile.try_bytes().is_err());
+            assert!(check_since(failed_generation).is_ok(), "re-reading a tile that already failed is not a new transition");
+            tile.bytes_mut()[0] = 9;
+            assert!(tile.cell.data.read().unwrap().is_none());
+            assert!(tile.cell.slot.lock().unwrap().is_some(), "a failed mutation must preserve the original extent");
+            assert!(!tile.cell.has_positive_alpha(format, point), "failed reads must not index placeholder bytes");
+            let mut snapshot = tile.clone();
+            assert!(Arc::ptr_eq(&tile.cell, &snapshot.cell));
+            configure(None, 0).unwrap();
+            assert!(check_integrity().is_err(), "changing preferences must not clear unreadable pixels");
+
+            tile.cell.slot.lock().unwrap().as_mut().unwrap().1 = good;
+            assert_eq!(&*tile.try_bytes().unwrap(), &vec![73; len]);
+            assert!(tile.cell.has_positive_alpha(format, point), "recovery must not retain placeholder coverage");
+            assert!(snapshot.cell.has_positive_alpha(format, point));
+            snapshot.bytes_mut().fill(0);
+            assert!(!tile.cell.has_positive_alpha(format, point), "failed-read aliases must share invalidation after recovery");
+            assert!(check_integrity().is_ok());
+            assert!(tile.scratch_health().is_ok());
+            assert!(check_since(generation).is_err(), "repairing or dropping a failed tile must not validate an earlier result");
+            assert!(check_since(failed_generation).is_err(), "recovery must reject a computation begun during the failure");
+            assert_eq!(tile.cell.evict(&file).unwrap(), len);
+            tile.cell.slot.lock().unwrap().as_mut().unwrap().1.crc32 ^= 1;
+            assert!(tile.try_bytes().is_err());
+            let dropped_generation = read_error_generation();
+            drop((snapshot, tile, file));
+            assert!(check_integrity().is_ok());
+            assert!(check_since(dropped_generation).is_err(), "dropping the failed tile must also reject its placeholder result");
+            let _ = std::fs::remove_dir(&dir);
+        }
     }
 }

@@ -8,6 +8,14 @@ use super::texels::{texel_bytes, texels};
 use super::{GpuCanvas, Ordering, wgpu};
 use photocraft_geom::Rect as DRect;
 
+fn encoded_opacity(bytes: &[u8], format: wgpu::TextureFormat) -> impl Iterator<Item = bool> + '_ {
+    bytes.chunks_exact(texel_bytes(format) as usize).map(
+        |pixel| {
+            if pixel.len() == 4 { pixel.get(3) == Some(&255) } else { pixel.get(6..8) == Some(&[0, 60][..]) }
+        },
+    )
+}
+
 /// The largest page texture side [`GpuCanvas::upload_page`] accepts (a 512 px page and its apron).
 pub const MAX_PAGE_SIDE: u32 = 1024;
 
@@ -48,11 +56,10 @@ impl GpuCanvas {
         if !self.health.is_ok() || w == 0 || h == 0 || buf.px.len() as u64 != u64::from(w) * u64::from(h) {
             return false;
         }
-        let renderer = self.rs.renderer.read();
-        let Some(res) = renderer.callback_resources.get::<Resources>() else { return false };
-        let Some(tile) = res.docs.get(&key).and_then(|d| d.tiles.iter().find(|t| t.page.is_some_and(|(id, _)| id == page))) else {
-            return false;
-        };
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        let Some(doc) = res.docs.get_mut(&key) else { return false };
+        let Some(tile) = doc.tiles.iter_mut().find(|t| t.page.is_some_and(|(id, _)| id == page)) else { return false };
         let Some((_, factor)) = tile.page.filter(|(_, f)| *f > 0) else { return false };
         // The texture's first texel, at the page's reduction.
         let (ox, oy) = (i64::from(tile.rect[0] / factor), i64::from(tile.rect[1] / factor));
@@ -62,12 +69,17 @@ impl GpuCanvas {
             return false;
         }
         let format = texture.format();
+        let bytes = texels(format, &buf.px);
         self.rs.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
-            &texels(format, &buf.px),
+            &bytes,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes(format) as u32), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
+        if let Some(opaque) = tile.opaque.as_mut() {
+            opaque.update([x as u32, y as u32], w, encoded_opacity(&bytes, format));
+        }
+        doc.refresh_sampling();
         true
     }
 
@@ -99,7 +111,7 @@ impl GpuCanvas {
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
         let budget = res.canvas_budget.load(Ordering::Relaxed);
         if res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format || d.tiles.iter().any(|t| t.page.is_none())) {
-            res.docs.insert(key, DocTextures { size, format, tiles: Vec::new() });
+            res.docs.insert(key, DocTextures { size, format, tiles: Vec::new(), sampling: Default::default() });
         }
         let Some(d) = res.docs.get_mut(&key) else { return false };
         let replaced = d.tiles.iter().position(|t| t.page.is_some_and(|(id, _)| id == page));
@@ -111,6 +123,8 @@ impl GpuCanvas {
         // Room among the other documents: those no window shows give theirs up first.
         res.make_room(key, held + bytes);
         let rect = [x, y, dw, dh];
+        let bytes = texels(format, &buf.px);
+        let opaque = super::callback::OpaqueTexels::new(w, h, encoded_opacity(&bytes, format));
         // A page the GPU refuses (out of memory) fails alone: it falls back to the CPU canvas
         // instead of the uncaptured error disabling the GPU canvas for the session.
         let ((texture, view, uniform, bind_group), error) = catch_gpu_errors(device, || {
@@ -141,7 +155,7 @@ impl GpuCanvas {
             });
             queue.write_texture(
                 texture.as_image_copy(),
-                &texels(format, &buf.px),
+                &bytes,
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes(format) as u32), rows_per_image: Some(h) },
                 wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
@@ -155,10 +169,11 @@ impl GpuCanvas {
         if let Some(i) = replaced {
             d.tiles.remove(i);
         }
-        let tile = Tile { rect, texture, levels: vec![view], bind_group, _uniform: uniform, page: Some((page, factor)) };
+        let tile = Tile { rect, core, opaque, texture, levels: vec![view], bind_group, _uniform: uniform, page: Some((page, factor)) };
         // Coarser pages first: where pages of two zooms overlap, the finer one is drawn on top.
         let at = d.tiles.iter().position(|t| t.page.is_some_and(|(_, f)| f < factor)).unwrap_or(d.tiles.len());
         d.tiles.insert(at, tile);
+        d.refresh_sampling();
         true
     }
 
@@ -169,7 +184,11 @@ impl GpuCanvas {
         if live.is_empty() {
             res.docs.remove(&key);
         } else if let Some(d) = res.docs.get_mut(&key) {
+            let before = d.tiles.len();
             d.tiles.retain(|t| t.page.is_some_and(|(id, _)| live.contains(&id)));
+            if d.tiles.len() != before {
+                d.refresh_sampling();
+            }
         }
     }
 

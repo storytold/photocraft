@@ -20,6 +20,199 @@ pub(super) fn filter_mode(scale: f32) -> (f32, f32) {
     }
 }
 
+/// Source-pixel support for an unbounded, full-resolution texture. The sharp branch uses
+/// exactly the shader's positive weights; reduced views include the contributing mip blocks.
+/// `scale` is device pixels per document pixel.
+#[cfg(test)]
+pub(crate) fn sampled_doc_rect(x: f64, y: f64, scale: f32) -> photocraft_geom::Rect {
+    if !valid_sample(x, y, scale) {
+        return photocraft_geom::Rect::EMPTY;
+    }
+    let (mode, lod) = filter_mode(scale);
+    let axis = |v| {
+        if mode != 0.0 {
+            return weighted_axis(v, mode, f64::from(scale));
+        }
+        let level = f64::from(lod).ceil().min(31.0) as i32;
+        let block = 2.0_f64.powi(level);
+        let (lo, hi) = weighted_axis(v / block, 1.0, 1.0);
+        (lo * block, hi * block)
+    };
+    let (x0, x1) = axis(x);
+    let (y0, y1) = axis(y);
+    pixel_rect([x0, y0, x1, y1])
+}
+
+fn valid_sample(x: f64, y: f64, scale: f32) -> bool {
+    x.is_finite() && y.is_finite() && scale.is_finite() && scale > 0.0
+}
+
+/// Half-open texel indices whose bilinear weights are strictly positive. In sharp mode
+/// the shader compresses the ramp to one device pixel, leaving most neighbours at zero.
+fn weighted_axis(v: f64, mode: f32, scale: f64) -> (f64, f64) {
+    let t = v - 0.5;
+    let i = t.floor();
+    let f = if mode == 2.0 { ((t - i - 0.5) * scale + 0.5).clamp(0.0, 1.0) } else { t - i };
+    (i + if f == 1.0 { 1.0 } else { 0.0 }, i + if f > 0.0 { 2.0 } else { 1.0 })
+}
+
+fn pixel_rect([x0, y0, x1, y1]: [f64; 4]) -> photocraft_geom::Rect {
+    let bounded = |v: f64| v.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    photocraft_geom::Rect::new(bounded(x0.floor()), bounded(y0.floor()), bounded(x1.ceil()), bounded(y1.ceil()))
+}
+
+/// The source grid and drawn core of an actual resident texture, in picture coordinates.
+#[derive(Clone)]
+pub(super) struct SamplingGrid {
+    pub(super) rect: [u32; 4],
+    pub(super) core: photocraft_geom::Rect,
+    pub(super) texels: [u32; 2],
+    pub(super) levels: u32,
+    pub(super) opaque: Option<OpaqueTexels>,
+}
+
+/// Bounded per-texel opacity bits shared by GPU pages and uploaded CPU textures.
+/// Copy-on-write patches preserve the opacity of the picture the user actually pressed.
+#[derive(Clone)]
+pub(crate) struct OpaqueTexels {
+    bits: std::sync::Arc<Vec<u64>>,
+    width: u32,
+    height: u32,
+}
+
+impl OpaqueTexels {
+    pub(crate) fn new(width: u32, height: u32, samples: impl IntoIterator<Item = bool>) -> Option<Self> {
+        let count = u64::from(width) * u64::from(height);
+        if width == 0 || height == 0 || width > 16384 || height > 16384 {
+            return None;
+        }
+        let words = usize::try_from(count.div_ceil(64)).ok()?;
+        let mut out = Self { bits: std::sync::Arc::new(vec![0; words]), width, height };
+        out.update([0, 0], width, samples);
+        Some(out)
+    }
+
+    pub(crate) fn update(&mut self, [x, y]: [u32; 2], width: u32, samples: impl IntoIterator<Item = bool>) {
+        if width == 0 || x >= self.width || width > self.width - x {
+            return;
+        }
+        let bits = std::sync::Arc::make_mut(&mut self.bits);
+        let capacity = u64::from(self.width) * u64::from(self.height);
+        for (i, opaque) in samples.into_iter().enumerate() {
+            let index = (u64::from(y) + i as u64 / u64::from(width)) * u64::from(self.width) + u64::from(x) + i as u64 % u64::from(width);
+            if index >= capacity {
+                break;
+            }
+            if let Some(word) = bits.get_mut((index / 64) as usize) {
+                let mask = 1u64 << (index % 64);
+                if opaque {
+                    *word |= mask;
+                } else {
+                    *word &= !mask;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn all(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> bool {
+        if x0 >= x1 || y0 >= y1 || x1 > self.width || y1 > self.height {
+            return false;
+        }
+        (y0..y1).all(|y| {
+            (x0..x1).all(|x| {
+                let index = u64::from(y) * u64::from(self.width) + u64::from(x);
+                self.bits.get((index / 64) as usize).is_some_and(|word| word & (1u64 << (index % 64)) != 0)
+            })
+        })
+    }
+}
+
+/// Cheap snapshot of the source grids that a GPU picture actually draws. Page metadata is
+/// shared until residency changes; pointer queries never allocate or consult a later frame.
+#[derive(Clone)]
+pub(crate) struct GpuSampling {
+    pub(super) grids: std::sync::Arc<[SamplingGrid]>,
+    pub(super) scale: f32,
+    pub(super) factor: u32,
+    pub(super) growth: [f32; 2],
+}
+
+impl GpuSampling {
+    pub(crate) fn empty(scale: f32) -> Self {
+        Self { grids: Default::default(), scale, factor: 1, growth: [0.0; 2] }
+    }
+
+    pub(crate) fn any_region(&self, x: f64, y: f64, mut test: impl FnMut(photocraft_geom::Rect) -> bool) -> bool {
+        if !valid_sample(x, y, self.scale) || self.factor == 0 {
+            return false;
+        }
+        let factor = f64::from(self.factor);
+        let p = [x / factor + f64::from(self.growth[0]), y / factor + f64::from(self.growth[1])];
+        let (mode, lod) = filter_mode(self.scale);
+        // Reverse the callback's paint order: opaque finer pages hide earlier grids.
+        for grid in self.grids.iter().rev() {
+            let [tx, ty, w, h] = grid.rect.map(f64::from);
+            let core = grid.core;
+            if p[0] < tx
+                || p[1] < ty
+                || p[0] >= tx + w
+                || p[1] >= ty + h
+                || p[0] < f64::from(core.x0)
+                || p[1] < f64::from(core.y0)
+                || p[0] >= f64::from(core.x1)
+                || p[1] >= f64::from(core.y1)
+            {
+                continue;
+            }
+            let last = grid.levels.saturating_sub(1).min(31);
+            let lod = if mode == 0.0 { lod.clamp(0.0, last as f32) } else { 0.0 };
+            let mut all_levels_opaque = true;
+            for level in lod.floor() as u32..=lod.ceil() as u32 {
+                let axis = |v: f64, origin: f64, span: f64, n: u32| {
+                    let reduced = (n >> level).max(1);
+                    let q = (v - origin) / span * f64::from(reduced);
+                    let (lo, hi) = weighted_axis(q, mode, f64::from(self.scale) * span / f64::from(n));
+                    let clamp = |i: f64, size: u32| i.clamp(0.0, f64::from(size.saturating_sub(1)));
+                    let mut lo = clamp(lo, reduced);
+                    let mut hi = clamp(hi - 1.0, reduced);
+                    // Reverse the normalized bilinear mip taps. Endpoint bounds include all
+                    // source pixels, but may bridge gaps in odd-sized reduction kernels;
+                    // minification support remains conservative, unlike exact base/sharp taps.
+                    for child in (1..=level).rev() {
+                        let child_n = (n >> child).max(1);
+                        let parent_n = (n >> (child - 1)).max(1);
+                        let ratio = f64::from(parent_n) / f64::from(child_n);
+                        let (a, _) = weighted_axis((lo + 0.5) * ratio, 1.0, 1.0);
+                        let (_, b) = weighted_axis((hi + 0.5) * ratio, 1.0, 1.0);
+                        lo = clamp(a, parent_n);
+                        hi = clamp(b - 1.0, parent_n);
+                    }
+                    (lo, hi + 1.0)
+                };
+                let (x0, x1) = axis(p[0], tx, w, grid.texels[0]);
+                let (y0, y1) = axis(p[1], ty, h, grid.texels[1]);
+                all_levels_opaque &= grid.opaque.as_ref().is_some_and(|bits| bits.all(x0 as u32, y0 as u32, x1 as u32, y1 as u32));
+                let to_doc = |v: f64, origin: f64, span: f64, n: u32, growth: f32| (origin + v * span / f64::from(n) - f64::from(growth)) * factor;
+                let region = pixel_rect([
+                    to_doc(x0, tx, w, grid.texels[0], self.growth[0]),
+                    to_doc(y0, ty, h, grid.texels[1], self.growth[1]),
+                    to_doc(x1, tx, w, grid.texels[0], self.growth[0]),
+                    to_doc(y1, ty, h, grid.texels[1], self.growth[1]),
+                ]);
+                if !region.is_empty() && test(region) {
+                    return true;
+                }
+            }
+            // Every positive-weight mip of this grid is visible before it can occlude
+            // an earlier grid. One opaque mip alone does not make a trilinear sample opaque.
+            if all_levels_opaque {
+                return false;
+            }
+        }
+        false
+    }
+}
+
 pub(super) fn map_doc_px(origin: [f32; 2], scale: f32, center: [f32; 2], cos: f32, sin: f32, x: f32, y: f32) -> [f32; 2] {
     let dx = x - center[0];
     let dy = y - center[1];

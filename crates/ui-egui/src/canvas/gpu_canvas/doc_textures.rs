@@ -123,10 +123,13 @@ impl DocTextures {
                         wgpu::BindGroupEntry { binding: 1, resource: uniform.as_entire_binding() },
                     ],
                 });
-                tiles.push(Tile { rect: [tx, ty, w, h], texture, levels, bind_group, _uniform: uniform, page: None });
+                let core = photocraft_geom::Rect::from_xywh(tx as i32, ty as i32, w, h);
+                tiles.push(Tile { rect: [tx, ty, w, h], core, opaque: None, texture, levels, bind_group, _uniform: uniform, page: None });
             }
         }
-        Self { size, format, tiles }
+        let mut out = Self { size, format, tiles, sampling: Default::default() };
+        out.refresh_sampling();
+        out
     }
 
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride

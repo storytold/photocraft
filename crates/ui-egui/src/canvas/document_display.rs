@@ -24,6 +24,9 @@ use super::{Document, PhotocraftApp, View, tools};
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect as DRect;
 
+mod cpu_sampling;
+use cpu_sampling::{CpuSampling, CpuSource};
+
 impl View {
     /// This view as the framework's canvas view of `rect` at `ppp` device pixels per point, mirrored by View › Flip
     /// Horizontal and stretched by View › Pixel Aspect Ratio Correction.
@@ -101,6 +104,108 @@ pub(crate) fn shown_camera(ctx: &egui::Context, host: CanvasHost, view: &View, p
 pub fn active_view(app: &PhotocraftApp) -> Option<CanvasView> {
     let idx = app.session.active_index()?;
     ToolHost::shown_space(app.ctx(), CanvasHost::primary(app, idx).canvas_id()).map(|space| space.view)
+}
+
+/// Sampling of a painted picture, including the source grids that can still contribute through finer textures.
+#[derive(Clone)]
+pub(crate) enum PictureSampling {
+    Gpu(super::gpu_picture::GpuSampling),
+    Cpu(CpuSampling),
+    Exact,
+}
+
+impl PictureSampling {
+    /// Tests each visible grid; fully opaque finer samples hide earlier grids.
+    pub(crate) fn any_region(&self, x: f64, y: f64, test: impl FnMut(DRect) -> bool) -> bool {
+        match self {
+            Self::Gpu(sampling) => sampling.any_region(x, y, test),
+            Self::Cpu(sampling) => sampling.any_region(x, y, test),
+            Self::Exact => {
+                let mut test = test;
+                test(cpu_sampled_rect(x, y, PixelRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), 1, false))
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PaintedPicture {
+    document: photocraft_doc::DocId,
+    view: CanvasView,
+    sampling: PictureSampling,
+}
+
+fn painted_picture(app: &PhotocraftApp) -> Option<PaintedPicture> {
+    let idx = app.session.active_index()?;
+    let document = app.session.documents().get(idx)?.doc.id;
+    app.ctx()
+        .data(|data| data.get_temp::<PaintedPicture>(CanvasHost::primary(app, idx).canvas_id().with("sampling")))
+        .filter(|picture| picture.document == document)
+}
+
+/// The original screen point in the picture the user actually saw, not the next animated camera pass.
+pub(crate) fn painted_doc_point(app: &PhotocraftApp, screen: Pos2) -> Option<Point> {
+    painted_picture(app).map(|picture| picture.view.to_doc(screen))
+}
+
+/// Source sampling paired with that same painted camera; before the first picture, document picks stay exact.
+pub(crate) fn picture_sampling(app: &PhotocraftApp) -> PictureSampling {
+    painted_picture(app).map_or(PictureSampling::Exact, |picture| picture.sampling)
+}
+
+/// Follow the existing document-area visibility policy so hidden tabs cannot retain old image-sized metadata.
+fn picture_visible(app: &PhotocraftApp, host: CanvasHost) -> bool {
+    let Some(state) = app.session.documents().get(host.idx) else { return false };
+    let windows = &app.ui.document_windows;
+    let shown = |selected: Option<photocraft_doc::DocId>, first| selected.or(first) == Some(state.doc.id);
+    if let Some(id) = host.window {
+        windows.floating.iter().any(|(group, _)| group.id == id && shown(group.shown, group.documents.first().copied()))
+    } else if windows.arrangement.is_some() && windows.docked.len() >= 2 {
+        windows.docked.iter().any(|group| shown(group.shown, group.documents.first().copied()))
+    } else {
+        super::tabs::main_canvas_document(app) == Some(host.idx)
+    }
+}
+
+/// Publish the camera and source grids together only after their picture has been painted.
+fn publish_picture(app: &PhotocraftApp, ctx: &egui::Context, host: CanvasHost, picture: PaintedPicture) {
+    // One slot per host, not per historical document. Closed/reindexed hosts cannot retain old opacity masks/pages.
+    let registry = egui::Id::unique("pc-picture-sampling-hosts");
+    ctx.data_mut(|data| {
+        let mut hosts = std::mem::take(data.get_temp_mut_or_default::<Vec<CanvasHost>>(registry));
+        hosts.retain(|old| {
+            let exists = picture_visible(app, *old);
+            if !exists {
+                data.remove::<PaintedPicture>(old.canvas_id().with("sampling"));
+                data.remove::<cpu_sampling::DetailAlpha>(old.canvas_id().with("cpu-detail"));
+            }
+            exists
+        });
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+        *data.get_temp_mut_or_default::<Vec<CanvasHost>>(registry) = hosts;
+        data.insert_temp(host.canvas_id().with("sampling"), picture);
+    });
+}
+
+/// RasterDisplay uses linear minification, nearest magnification at full resolution, and always linear reduced
+/// textures. A reduced texel averages its whole factor-sized cell, counted from the texture region's own origin.
+fn cpu_sampled_rect(x: f64, y: f64, bounds: PixelRect, factor: u32, linear: bool) -> DRect {
+    if !x.is_finite() || !y.is_finite() || x < f64::from(bounds.x0) || x >= f64::from(bounds.x1) || y < f64::from(bounds.y0) || y >= f64::from(bounds.y1) {
+        return DRect::EMPTY;
+    }
+    let f = f64::from(factor.max(1));
+    let axis = |v: f64, start: i32, end: i32| {
+        let t = (v - f64::from(start)) / f;
+        let (lo, hi) = if linear { ((t - 0.5).floor(), (t - 0.5).ceil() + 1.0) } else { (t.floor(), t.floor() + 1.0) };
+        let lo = (f64::from(start) + lo * f).clamp(f64::from(start), f64::from(end));
+        let hi = (f64::from(start) + hi * f).clamp(f64::from(start), f64::from(end));
+        (lo as i32, hi as i32)
+    };
+    let (x0, x1) = axis(x, bounds.x0, bounds.x1);
+    let (y0, y1) = axis(y, bounds.y0, bounds.y1);
+    DRect::new(x0, y0, x1, y1)
 }
 
 /// The document point under the screen point `pos` of the active document's main canvas; `None` when `pos` is outside
@@ -410,10 +515,38 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         let frame = Frame { checker: checker.as_ref(), edge, mapping, pattern, region, region_fill };
         if let Some(picture) = &gpu {
             frame.apply(RasterDisplay::painted(label.clone(), size, picture.clone().into_paint())).picture().show_at(ui, body.rect);
+            // A nested measurement can prepare resources, but must not replace the picture a press saw.
+            if !craft::ui::runtime::measure::active(ctx) && !ui.is_sizing_pass() {
+                let sampling = PictureSampling::Gpu(picture.sampling(app, (space.view.zoom * f64::from(ppp)) as f32));
+                ctx.data_mut(|data| data.remove::<cpu_sampling::DetailAlpha>(id.with("cpu-detail")));
+                publish_picture(app, ctx, host, PaintedPicture { document: doc.id, view: space.view, sampling });
+            }
         } else if let Some(composite) = &composite {
             let started = crate::gpu_canvas::now_ms();
-            let out = frame.apply(RasterDisplay::new(label.clone(), composite as &dyn RasterSource)).picture().show_at(ui, body.rect);
+            let bounds = region.map_or(PixelRect::of_size(size), |region| region.union(&PixelRect::of_size(size)));
+            let side = craft::ui::primitives::texture_side(ctx);
+            let factor = craft::ui::primitives::texture_factor(bounds.size(), side);
+            let scale = (space.view.zoom.min(space.view.zoom_x()) * f64::from(ppp)) as f32;
+            let plan = mapping.is_none().then(|| craft::ui::canvas::DetailPlan::in_view(&space.view, bounds, side, ppp)).flatten();
+            let source = CpuSource::new(composite, ctx, id.with("cpu-detail"), bounds, factor, scale, plan);
+            let (out, sampling) = if let Some(source) = source {
+                let out = frame.apply(RasterDisplay::new(label.clone(), &source)).picture().show_at(ui, body.rect);
+                let sampling = source.finish(out.detail);
+                (out, sampling)
+            } else {
+                // If exact detail occlusion cannot be retained, really draw only the base (mapped displays have no
+                // detail). Do not guess which hidden base pixels a detail texture would have exposed.
+                let display = frame.apply(RasterDisplay::new(label.clone(), composite as &dyn RasterSource));
+                let out = display.mapped(mapping.unwrap_or_else(|| placement(doc.bounds())), 1).picture().show_at(ui, body.rect);
+                ctx.data_mut(|data| data.remove::<cpu_sampling::DetailAlpha>(id.with("cpu-detail")));
+                let bounds = PixelRect::of_size(size);
+                let factor = craft::ui::primitives::texture_factor(bounds.size(), side);
+                (out, CpuSampling::base(bounds, factor, scale))
+            };
             cpu_read = out.read.map(|read| (read, crate::gpu_canvas::now_ms() - started));
+            if !craft::ui::runtime::measure::active(ctx) && !ui.is_sizing_pass() {
+                publish_picture(app, ctx, host, PaintedPicture { document: doc.id, view: space.view, sampling: PictureSampling::Cpu(sampling) });
+            }
         }
         if let Some(overlay) = &overlay {
             let display = RasterDisplay::new(Label::Empty, overlay as &dyn RasterSource).id_salt("pc-channel-view").picture();

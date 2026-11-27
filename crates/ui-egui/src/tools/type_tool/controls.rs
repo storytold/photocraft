@@ -202,7 +202,7 @@ fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &craft::behavior::Ca
         (prefs.smart_quotes, prefs.use_esc_to_commit)
     };
     let mask = app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask);
-    let out = {
+    let (out, other_type_press) = {
         let mut host = LayerHost::new(app, id);
         let mut editor = TextEditor::new(Label::from(&*tl!("Type editor")), &mut host, Bind::bound(&mut selection))
             // A Type Mask commits on Escape whatever "Use ESC to commit" says; the options bar's Cancel still throws it away (#12070).
@@ -211,9 +211,19 @@ fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &craft::behavior::Ca
         if smart_quotes {
             editor = editor.smart_quotes(QuoteStyle::ENGLISH);
         }
-        editor.show_at(ui, rect)
+        let out = editor.show_at(ui, rect);
+        (out, host.other_type_press)
     };
     super::editing::take_editor_focus(ui.ctx());
+    if other_type_press {
+        // The arena's geometric caret/move regions cannot describe imported alpha. Check only a press the editor
+        // actually received, so a paragraph handle or another canvas control still has its normal priority.
+        let held = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+        let mods = egui::Modifiers { alt: held.alt, ctrl: held.ctrl, shift: held.shift, mac_cmd: false, command: held.cmd };
+        app.canvas_tools.type_tool.ended_edit_on_press();
+        commit_with(app, mods);
+        return;
+    }
     if let Some(ed) = app.ui.text_edit.as_mut() {
         (ed.anchor, ed.caret) = (selection.anchor, selection.caret);
     }
@@ -240,7 +250,7 @@ fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &craft::behavior::Ca
         // A Type Mask replaces the selection with ⇧ or ⌥ on the press that commits (#12073).
         Some(EditorEnd::Commit) => {
             if background_press {
-                app.canvas_tools.type_tool.began_with_session = true;
+                app.canvas_tools.type_tool.ended_edit_on_press();
             }
             commit_with(app, mods);
         }
