@@ -108,6 +108,9 @@ fn a_symmetric_stroke_is_refused() {
     assert!(cpu.gpu_preview().is_err(), "no GPU preview of a symmetric stroke");
 }
 
+/// A read-back asked for: the tiles' coverage as it was, and the epoch it was asked at.
+type AskedFor = (Vec<((i32, i32), Vec<f32>)>, u64);
+
 /// The strokes of `PTS` one point at a time with a small brush, so most tiles go calm while the
 /// stroke is still drawn; `deliver` decides when the calm tiles' coverage arrives. Returns the
 /// session, the GPU stroke after its last read-back and the tiles that were asked for mid-stroke.
@@ -118,7 +121,7 @@ fn drawn_with_calm_reads(p: &mut Value, delayed: bool) -> (Session, LiveStroke, 
     let mut cpu = LiveStroke::begin_overlay(&s, "paint.stroke", p).unwrap();
     let mut asked: Vec<(i32, i32)> = Vec::new();
     // Read-backs asked for and not yet delivered: the tiles' coverage as it was, and when.
-    let mut in_flight: Vec<(Vec<((i32, i32), Vec<f32>)>, u64)> = Vec::new();
+    let mut in_flight: Vec<AskedFor> = Vec::new();
     for c in PTS[1..].chunks(1) {
         gpu.push_dabs(&points(c)).unwrap();
         cpu.push(&points(c)).unwrap();
