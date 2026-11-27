@@ -205,6 +205,14 @@ fn query_key(app: &PhotocraftApp, params: &Value) -> u64 {
         (setup.profile.content_hash(), setup.intent, setup.bpc, setup.simulate_paper, setup.kind).hash(&mut key);
         (proof.enabled, proof.gamut_warning, proof.gamut_threshold.to_bits()).hash(&mut key);
     }
+    // Both fast paths judge colour in the space the session shows the document in (#14224): the
+    // sampled-colour box runs through the document's profile, and so does the gamut mask, which for
+    // an untagged RGB or Grayscale document is Color Settings' working space. Hash the setting
+    // rather than the resolved profile, for the same reason as the proof setup above.
+    let color = app.session.color();
+    for mode in [photocraft_doc::ColorMode::Rgb, photocraft_doc::ColorMode::Grayscale] {
+        color.working_space_spec(mode).hash(&mut key);
+    }
     key.finish().max(1)
 }
 
