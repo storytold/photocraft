@@ -112,6 +112,12 @@ fn the_grid_row_opens_at_32_and_outside_7_to_256_the_closest_value_is_inserted_o
     type_and_tab(&mut h, "64");
     assert_eq!(shown_points(&h), Some(64.0), "typed 64");
     assert!(alerts(&h).is_empty(), "64 raises no alert");
+    // Letters: today's number row restores what was there and raises nothing, the way #14649 pinned
+    // it for Opacity. The reference's "Invalid numeric value. Default value inserted." is that row's
+    // own wording, which photocraft cannot reach from this arm.
+    type_and_tab(&mut h, "abc");
+    assert_eq!(shown_points(&h), Some(64.0), "letters leave the value as it was");
+    assert!(alerts(&h).is_empty(), "letters raise no alert");
     // Back to the low end for the export that follows: the clamped field is what OK sends, and the
     // file holds that many points cubed.
     type_and_tab(&mut h, "3");
