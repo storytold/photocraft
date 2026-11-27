@@ -2,7 +2,7 @@
 //! which let ⌥ sample or load paint, the Pencil's tip shape, and the pointers of the tools whose
 //! cursor is no brush tip.
 
-use craft::behavior::{Cursor, PaintedCursor, PointerGlyph};
+use craft::behavior::{Cursor, CursorBadge, PaintedCursor, PointerGlyph};
 use craft::keymap::Mods;
 use photocraft_engine::prefs::PaintingCursor as PaintingPref;
 
@@ -35,6 +35,14 @@ pub(crate) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
     show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::ColorReplacement | Tool::Remove)
 }
 
+/// The mark at the centre of Quick Selection's ring with `mods` held: a "−" while ⌥ would subtract
+/// from a selection (#16822). ⇧ alone and no selection keep the plain ring, as in the reference;
+/// ⇧⌥, Control+⌥ (the brush-resize drag) and the options bar's mode were not measured and keep it
+/// too. `None` for any other tool.
+pub(crate) fn quick_selection_badge(app: &PhotocraftApp, mods: Mods) -> Option<CursorBadge> {
+    (app.ui.tool == Tool::QuickSelection && mods.alt && !mods.shift && !mods.ctrl && super::tool_feedback::has_selection(app)).then_some(CursorBadge::Subtract)
+}
+
 /// Whether the brush cursor is the reference's fixed sample target (a small circle with a cross
 /// through the hotspot) at any tip size: the Healing Brush's ⌥, the source point, with Painting
 /// Cursors = Normal Brush Tip (#12113). The other Painting Cursors settings were not measured and
@@ -50,16 +58,21 @@ pub(crate) fn sample_target() -> Cursor {
 
 /// The pointer of a painting tool that acts on a click and has no brush tip: the Paint Bucket's
 /// arrow with the bucket below right of it, the hotspot on the arrow's tip, so a click fills the
-/// pixel under the tip (#12539), and the Magic Eraser's crosshair. Precise Other Cursors (or Caps
-/// Lock, `precise`) gives the Paint Bucket the crosshair too (#3968). `None` for a tool that
-/// strokes with the brush.
+/// pixel under the tip (#12539), and the Magic Eraser's own icon with the hotspot on the eraser's
+/// end at the lower left (#12001). Precise Other Cursors (or Caps Lock, `precise`) gives both the
+/// crosshair (#3968). `None` for a tool that strokes with the brush.
 pub(crate) fn click_tool_cursor(tool: Tool, precise: bool) -> Option<Cursor> {
     match tool {
         Tool::PaintBucket if !precise => Some(Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Arrow, crate::icons::tool_icon(tool)))),
+        Tool::MagicEraser if !precise => Some(Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(tool), MAGIC_ERASER_HOTSPOT, None))),
         Tool::PaintBucket | Tool::MagicEraser => Some(Cursor::Painted(PaintedCursor::Crosshair)),
         _ => None,
     }
 }
+
+/// The Magic Eraser icon's point that sits on the pointer, in its 24-unit box: the middle of the eraser's end, which
+/// lies at the lower left of the `eraser_magic` glyph (#12001).
+pub(crate) const MAGIC_ERASER_HOTSPOT: egui::Vec2 = egui::vec2(4.6, 18.4);
 
 /// Path Selection's own pointer (#13295): the light arrow, and the solid one with ⌥ (without ⌘)
 /// where a press would land on a component (`path_components::over_component`). ⌘ keeps the light
@@ -82,21 +95,24 @@ pub(crate) fn alt_samples(tool: Tool, mods: craft::keymap::Mods) -> bool {
     mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
-/// Whether the Eyedropper is `tool`'s ⌥ stand-in: the tools ⌥ makes sample ([`alt_samples`]), and
-/// the Triangle, whose ⌥ press samples where [`shape_alt_samples`] holds (#13364).
+/// Whether the Eyedropper can be `tool`'s ⌥ stand-in.
 pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
-    alt_samples(tool, Mods::ALT) || tool == Tool::Triangle
+    alt_samples(tool, Mods::ALT) || shape_alt_sets_fill(tool)
 }
 
-/// Whether the Triangle tool's press at (x, y) with `mods` samples the colour there as the
-/// foreground and the tool's Fill instead of drawing (#13364): ⌥ (⇧⌥ too) held at the press, in
-/// Shape mode, with no shape layer active (with one, ⌥ subtracts from it). Path or Pixels mode and
-/// a press with nothing to sample (off the image, over transparency) were not measured and keep
-/// drawing from the centre; Control+⌥ stays the brush-resize drag, as in [`alt_samples`].
+/// Shape tools whose Alt Eyedropper also updates the tool's Fill.
+pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
+    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon | Tool::Star)
+}
+
+/// Whether an Alt press samples the foreground and Fill for a shape tool. Sampling requires Shape
+/// mode, no active shape layer, and a sampleable pixel. The Star keeps Shift+Alt for drawing a
+/// constrained shape from the centre. Control+Alt is excluded, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
         && !mods.ctrl
-        && app.ui.tool == Tool::Triangle
+        && (!mods.shift || app.ui.tool != Tool::Star)
+        && shape_alt_sets_fill(app.ui.tool)
         && app.ui.tool_options.shape_mode == craft::draw::ui::VectorMode::Shape
         && crate::vector_ui::active_shape_path(app).is_none()
         && super::sampling::eyedropper_color(app, [x, y]).is_some()
@@ -153,5 +169,29 @@ mod healing_alt_cursor_tests;
 mod paint_bucket_cursor_tests;
 
 #[cfg(test)]
+#[path = "quick_selection_cursor_tests.rs"]
+mod quick_selection_cursor_tests;
+
+#[cfg(test)]
+#[path = "rectangle_alt_eyedropper_tests.rs"]
+mod rectangle_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "ellipse_alt_eyedropper_tests.rs"]
+mod ellipse_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "polygon_alt_eyedropper_tests.rs"]
+mod polygon_alt_eyedropper_tests;
+
+#[cfg(test)]
 #[path = "triangle_alt_eyedropper_tests.rs"]
 mod triangle_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "custom_shape_alt_eyedropper_tests.rs"]
+mod custom_shape_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "magic_eraser_cursor_tests.rs"]
+mod magic_eraser_cursor_tests;

@@ -1,6 +1,7 @@
 //! A failed renderer-aware save must never replace the previous file, and closing a document
 //! must release its renderer caches.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::fs;
 use std::sync::{Arc, Mutex};
 

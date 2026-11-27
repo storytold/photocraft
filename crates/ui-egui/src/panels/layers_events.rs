@@ -188,7 +188,7 @@ fn map_event(app: &mut PhotocraftApp, ctx: &egui::Context, event: LayersEvent<La
                 SelectionChange::Set(ids) if ids.len() == 1 => ids.first().copied(),
                 _ => None,
             };
-            selection_actions(select.change, &selection, actions);
+            selection_actions(select.change, selection, actions);
             let Some(id) = single else { return };
             let Some(l) = layer(&id) else { return };
             target_on_click(app, l, active == Some(id), select.part, actions);
@@ -494,8 +494,12 @@ fn footer(app: &mut PhotocraftApp, picked: Option<crate::smart_ui::FilterDrag>, 
         LayersFooterAction::NewGroup { from_selection, ask, below, .. } => {
             let groups = from_selection && active.is_some();
             if ask {
-                // Null params go through the menu path, which opens the dialog.
-                let cmd = if groups { crate::new_group_ui::FROM_LAYERS } else { crate::new_group_ui::NEW_GROUP };
+                // Null params go through the menu path, which opens the dialog. Like Photoshop,
+                // ⌥-click asks for New Group from Layers also with one non-Background layer
+                // active, and OK puts that layer in the group (#14717). An artboard can't go into
+                // a group, so a lone artboard keeps New Group.
+                let one = active.is_some_and(|l| !doc.is_background(l.id) && l.artboard().is_none());
+                let cmd = if groups || one { crate::new_group_ui::FROM_LAYERS } else { crate::new_group_ui::NEW_GROUP };
                 actions.push((cmd.into(), Value::Null));
             } else if below {
                 actions.push(("layer.new.group".into(), json!({"position": "below"})));

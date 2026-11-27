@@ -33,7 +33,7 @@ fn cache_width(s: &Session) -> i32 {
 fn edit_smart_object(s: &mut Session, edit: impl FnOnce(&mut SmartObject)) {
     let st = s.active_mut().unwrap();
     let id = st.active_layer.unwrap();
-    let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().content else { panic!("not a smart object") };
+    let LayerContent::Smart(sm) = &mut Arc::make_mut(st.doc_mut()).layer_mut(id).unwrap().content else { panic!("not a smart object") };
     edit(sm);
 }
 
