@@ -435,12 +435,12 @@ fn layer_name(prompt: &str) -> String {
     }
 }
 
-/// What a generative layer was made from (what was sent, the prompt and where the result goes),
+/// What a generative layer was made from (what was sent and where the result goes; the prompt is
+/// the layer's own, [`Generative::prompt`]),
 /// so Generate More can ask again without re-rendering a document that now holds the earlier
 /// results. Kept in the session only: for a reopened file's generative layer, Generate More renders
 /// what it sends again ([`more`]).
 pub(crate) struct Source {
-    prompt: String,
     area: Rect,
     /// The selection's bounds (before the mask grew): where the variations' pixels reach from.
     selected: Rect,
@@ -695,7 +695,7 @@ fn land(s: &mut Session, id: u64, made: Made) -> Result<Value> {
         Ok(id)
     })?;
     let area = input.area;
-    s.genai_state.sources.insert(layer, Arc::new(Source { prompt: input.prompt.clone(), area, selected: input.selected, prepared }));
+    s.genai_state.sources.insert(layer, Arc::new(Source { area, selected: input.selected, prepared }));
     let matching = note_variations(s, layer, 0, &placed);
     keep_capture(s, capture, layer, 0);
     forget_gone(s);
