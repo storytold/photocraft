@@ -115,7 +115,7 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
         // Both sides are read as the session reads them: an untagged document, source or
         // destination, is taken in its working space (#14224), so the copies keep their look on
         // the destination's canvas instead of landing as raw numbers.
-        let untagged = s.color().untagged_profile(&copies);
+        let untagged = s.color().untagged_profile(copies);
         let profile = s.color().document_profile(dest);
         crate::color_cmds::convert_document_from(copies, &untagged, &profile, s.color().settings.intent(), s.color().settings.bpc)?;
     }
