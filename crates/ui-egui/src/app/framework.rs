@@ -37,7 +37,7 @@ use craft::window::system::NoWindows as Desktop;
 #[cfg(not(test))]
 use craft::window::system::SystemWindows as Desktop;
 use photocraft_engine::Session;
-use photocraft_engine::prefs::{AppearanceMode, Preferences};
+use photocraft_engine::prefs::{AppearanceMode, Preferences, UiDensity};
 use serde_json::Value;
 
 use super::PhotocraftApp;
@@ -182,25 +182,31 @@ impl ThemeUnavailable {
     }
 }
 
-/// The preferences that choose the theme: the appearance mode and the theme id of each slot.
+/// The preferences that choose the theme: the appearance mode, the theme id of each slot and the size.
 #[derive(Clone, Debug, PartialEq)]
 struct ThemePrefs {
     mode: AppearanceMode,
     dark: String,
     light: String,
+    size: UiDensity,
 }
 
 impl ThemePrefs {
     fn of(prefs: &Preferences) -> Self {
         let i = &prefs.interface;
-        ThemePrefs { mode: i.appearance_mode, dark: i.dark_theme.clone(), light: i.light_theme.clone() }
+        ThemePrefs { mode: i.appearance_mode, dark: i.dark_theme.clone(), light: i.light_theme.clone(), size: i.density }
     }
 
     /// What the suite shows: its chosen fields, else PhotoCraft's defaults.
     fn of_suite(choice: &SuiteChoice) -> Self {
         let defaults = defaults();
         let shown = choice.with_defaults(&defaults);
-        ThemePrefs { mode: app_mode(shown.mode), dark: shown.theme.dark.as_str().to_owned(), light: shown.theme.light.as_str().to_owned() }
+        ThemePrefs {
+            mode: app_mode(shown.mode),
+            dark: shown.theme.dark.as_str().to_owned(),
+            light: shown.theme.light.as_str().to_owned(),
+            size: app_density(shown.size),
+        }
     }
 
     /// The suite fields that differ between `self` and `before`.
@@ -210,6 +216,7 @@ impl ThemePrefs {
             theme_dark: (self.dark != before.dark).then(|| id(&self.dark)).flatten(),
             theme_light: (self.light != before.light).then(|| id(&self.light)).flatten(),
             mode: (self.mode != before.mode).then(|| mode_choice(self.mode)),
+            size: (self.size != before.size).then(|| suite_size(self.size)),
             ..SelectionChange::default()
         }
     }
@@ -228,6 +235,21 @@ fn mode_choice(mode: AppearanceMode) -> ModeChoice {
         AppearanceMode::Auto => ModeChoice::System,
         AppearanceMode::Dark => ModeChoice::Dark,
         AppearanceMode::Light => ModeChoice::Light,
+    }
+}
+
+fn app_density(size: Size) -> UiDensity {
+    match size {
+        Size::Comfortable => UiDensity::Comfortable,
+        _ => UiDensity::Compact,
+    }
+}
+
+/// The suite's size for PhotoCraft's density preference; the root resolves its tokens under it.
+fn suite_size(density: UiDensity) -> Size {
+    match density {
+        UiDensity::Compact => Size::Compact,
+        UiDensity::Comfortable => Size::Comfortable,
     }
 }
 
@@ -378,7 +400,8 @@ impl Framework {
         let mut root = root
             .mode(if theme.is_dark() { ModeChoice::Dark } else { ModeChoice::Light })
             .scale(Scale::new(crate::prefs_ui::interface_zoom(session.prefs().interface.ui_scale, ctx)))
-            .direction(if rtl { Direction::Rtl } else { Direction::Ltr });
+            .direction(if rtl { Direction::Rtl } else { Direction::Ltr })
+            .density(suite_size(session.prefs().interface.density));
         // Read each frame, so a preference change shows at once.
         root.canvas_pattern = session.prefs().interface.show_canvas_dots;
         root.values.set(craft::ui::canvas::ShowReadouts(session.prefs().tools.show_transformation_values));
@@ -450,6 +473,11 @@ impl Framework {
                     None if mine.mode != blank.mode => change.mode = Some(mode_choice(mine.mode)),
                     None => {}
                 }
+                match chosen.size {
+                    Some(size) => start.size = app_density(size),
+                    None if mine.size != blank.size => change.size = Some(suite_size(mine.size)),
+                    None => {}
+                }
                 self.suite.change(change);
                 start
             }
@@ -468,6 +496,7 @@ impl Framework {
                 p.interface.appearance_mode = agreed.mode;
                 p.interface.dark_theme = agreed.dark.clone();
                 p.interface.light_theme = agreed.light.clone();
+                p.interface.density = agreed.size;
             });
         }
         let changed = moved || previous.as_ref() != Some(&agreed);
