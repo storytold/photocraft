@@ -56,3 +56,17 @@ fn ok_creates_the_results_folder() {
     h.run_steps(4);
     assert!(dir.path().join("results").join("a.psd").exists(), "OK wrote into <folder>/results");
 }
+
+/// A script that sets the list and confirms in the same frame, with no pass between: OK still sends the `results`
+/// folder, so the batch doesn't refuse a missing `output`.
+#[test]
+fn ok_right_after_a_script_set_the_list_writes_into_results() {
+    let (mut h, id) = opened();
+    let dir = source_folder();
+    let ctx = h.ctx.clone();
+    let input = json!({"files": [dir.path().join("a.png")], "useFolder": false});
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "input", input).unwrap();
+    crate::dialogs::testing::confirm(h.state_mut(), id).expect("OK is accepted");
+    h.run_steps(4);
+    assert!(dir.path().join("results").join("a.psd").exists(), "OK wrote into <folder>/results");
+}

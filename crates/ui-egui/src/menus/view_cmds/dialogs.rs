@@ -79,6 +79,9 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
 /// form's builder runs at each): a row takes one `visible_when` condition, so a row shown by two values is shown by a
 /// shell key that combines them.
 fn derive(id: &str, fields: &mut DialogFields) {
+    if id == crate::dialogs::lens_batch_ui::COMMAND {
+        crate::dialogs::lens_batch_ui::derive(fields);
+    }
     if id == artboard_export_options::COMMAND {
         artboard_export_options::derive(fields);
     }
