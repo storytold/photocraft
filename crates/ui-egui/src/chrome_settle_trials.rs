@@ -58,8 +58,8 @@ fn tab_strip_runs(h: &H) -> Vec<(&'static str, u32)> {
     last_pass_runs(&h.ctx).into_iter().filter(|(ty, _)| ty.contains("TabStrip<'_, craft_ui_panels::docking::PanelKey>")).collect()
 }
 
-/// A hover over the canvas replays the dock's tab rows and column bars and the menu bar (memoized views) and runs no
-/// panel tab strip.
+/// A hover over the canvas replays the dock's tab rows and column bars (in the columns' views, which replay whole) and
+/// the menu bar (memoized views) and runs no panel tab strip.
 #[test]
 fn a_hover_over_the_canvas_replays_the_dock_chrome_and_the_menu_bar() {
     let mut h = harness();
@@ -70,9 +70,12 @@ fn a_hover_over_the_canvas_replays_the_dock_chrome_and_the_menu_bar() {
         h.run_steps(1);
         // The menu bar sits in the title bar's own view: while that replays, the menu bar replays with it.
         let title_replayed = views(&h, "TitleSlot<", MemoRun::Replayed) == 1;
+        let columns = (views_ran(&h, "area::ColumnView<"), views(&h, "area::ColumnView<", MemoRun::Replayed));
+        assert!(columns.0 == 0 && columns.1 >= 1, "hover step {step}: the dock's columns replay: {columns:?}");
         let views = chrome_views(&h);
         for kind in ["TabRow", "dock_column::bar::BarProps", "menu::bar::BarProps"] {
-            let shown = views.iter().any(|(name, _)| name.contains(kind)) || (kind == "menu::bar::BarProps" && title_replayed);
+            let replayed_with = if kind == "menu::bar::BarProps" { title_replayed } else { columns.1 >= 1 };
+            let shown = views.iter().any(|(name, _)| name.contains(kind)) || replayed_with;
             assert!(shown, "hover step {step}: the chrome shows a {kind} view: {views:?}");
         }
         let ran: Vec<_> = views.iter().filter(|(_, run)| *run != MemoRun::Replayed).collect();
@@ -81,8 +84,9 @@ fn a_hover_over_the_canvas_replays_the_dock_chrome_and_the_menu_bar() {
     }
 }
 
-/// A hover over the canvas replays the title bar, the options bar, the status bar (its own view) and every panel body: the
-/// panels read the modifiers, not the pointer frame (storytold/craft-libs#2812), so a pointer move runs none of them.
+/// A hover over the canvas replays the title bar, the options bar, the status bar (its own view) and every panel body
+/// (in the columns' views, which replay whole): the panels read the modifiers, not the pointer frame
+/// (storytold/craft-libs#2812), so a pointer move runs none of them.
 #[test]
 fn a_hover_over_the_canvas_replays_the_bars_and_the_panel_bodies() {
     let mut h = harness();
@@ -93,13 +97,17 @@ fn a_hover_over_the_canvas_replays_the_bars_and_the_panel_bodies() {
         for slot in ["TitleSlot<", "OptionsSlot<", "status_bar::StatusProps<"] {
             assert_eq!((views_ran(&h, slot), views(&h, slot, MemoRun::Replayed)), (0, 1), "hover step {step}: the {slot} view replays");
         }
-        let bodies = (views_ran(&h, "region_versions::PanelBody<"), views(&h, "region_versions::PanelBody<", MemoRun::Replayed));
-        assert!(bodies.0 == 0 && bodies.1 >= 2, "hover step {step}: every panel body replays: {bodies:?}");
+        let columns = (views_ran(&h, "area::ColumnView<"), views(&h, "area::ColumnView<", MemoRun::Replayed));
+        assert!(
+            views_ran(&h, "region_versions::PanelBody<") == 0 && columns == (0, columns.1) && columns.1 >= 2,
+            "hover step {step}: every panel body replays with its column: {columns:?}"
+        );
     }
 }
 
-/// A hover over the canvas replays the toolbar's footer (the colour chips, Quick Mask and Screen Mode): the rail replays
-/// its tool buttons but calls its footer every pass, so before it was a view of its own it ran on every frame (#15493).
+/// A hover over the canvas replays the toolbar's footer (the colour chips, Quick Mask and Screen Mode) with the toolbar's
+/// column: the rail replays its tool buttons but calls its footer every pass, so before it was a view of its own it ran
+/// on every frame (#15493).
 #[test]
 fn a_hover_over_the_canvas_replays_the_toolbar_footer() {
     let mut h = harness();
@@ -107,8 +115,8 @@ fn a_hover_over_the_canvas_replays_the_toolbar_footer() {
     for step in 1..=3 {
         h.event(Event::PointerMoved(at + vec2(step as f32, 0.0)));
         h.run_steps(1);
-        let footer = (views_ran(&h, "toolbar::FooterProps<"), views(&h, "toolbar::FooterProps<", MemoRun::Replayed));
-        assert_eq!(footer, (0, 1), "hover step {step}: the toolbar footer replays");
+        let columns = (views_ran(&h, "area::ColumnView<"), views(&h, "area::ColumnView<", MemoRun::Replayed));
+        assert!(views_ran(&h, "toolbar::FooterProps<") == 0 && columns.0 == 0 && columns.1 >= 1, "hover step {step}: the toolbar footer replays: {columns:?}");
     }
 }
 
@@ -134,8 +142,9 @@ fn a_zoom_runs_only_the_panels_that_show_the_view() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "view.zoomIn", json!({})).unwrap();
     h.run_steps(1);
-    let bodies = (views_ran(&h, "region_versions::PanelBody<"), views(&h, "region_versions::PanelBody<", MemoRun::Replayed));
-    assert!(bodies.0 <= 1 && bodies.1 >= 2, "only the Navigator's body may run, the others replay: {bodies:?}");
+    let columns = views(&h, "area::ColumnView<", MemoRun::Replayed);
+    let bodies = views_ran(&h, "region_versions::PanelBody<");
+    assert!(bodies <= 1 && columns >= 1, "only the Navigator's body may run, the other columns replay: {bodies} ran, {columns} columns replayed");
 }
 
 /// The footer runs again when a colour it shows changes without a command (the Color panel's sliders, a Color Picker

@@ -135,6 +135,7 @@ impl PhotocraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
             redraws: Default::default(),
+            redraw_landed: 0,
             kept: Default::default(),
             color_range: None,
             adjust_preview: None,

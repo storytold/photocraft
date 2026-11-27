@@ -472,7 +472,7 @@ fn path_on_screen(path: &photocraft_doc::vector::Path, view: &CanvasView) -> pho
 /// the commit. The accent outline over its halo is the framework tool's own paint.
 pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &CanvasView) {
     let Some((kind, geometry)) = super::host::shape_preview(app) else { return };
-    let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
+    let shift = craft::ui::runtime::pointer::mods(ui.ctx()).shift;
     let Some(mut shape) = preview_layer(app, kind, geometry, shift) else { return };
     // Align Edges fits the shape to document pixels, so it is applied here, in document space:
     // the preview then shows the committed layer's geometry at any zoom.

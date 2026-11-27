@@ -154,8 +154,6 @@ impl PhotocraftApp {
         // A pass whose input carries an injected step acts for the automation client.
         self.automation_input = WindowHost::of(&ctx).injected_pass();
         self.hover_layer = None;
-        // The contextual task bar reports itself again if this frame draws it (#10890).
-        self.ui.task_bar_shown = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         let t0 = gpu_canvas::now_ms();
         self.perf.stage.ui_start(t0, frame.info().cpu_usage);
