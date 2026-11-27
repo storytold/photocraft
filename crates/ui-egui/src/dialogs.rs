@@ -446,6 +446,7 @@ pub(crate) fn prompts_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The families that take their own results (one `take(app, ctx)` each), in order.
 pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     alerts::take,
+    crate::file_open::take_open_alerts,
     discard_ui::take,
     open_prompt::take,
     credits::take,
