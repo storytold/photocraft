@@ -3,6 +3,7 @@
 
 use super::tests::tmp;
 use super::*;
+use crate::color_cmds::ColorExt;
 
 const COLOURS: [(&str, [u8; 3]); 5] = [("red", [255, 0, 0]), ("green", [0, 255, 0]), ("blue", [0, 0, 255]), ("black", [0, 0, 0]), ("grey", [128, 128, 128])];
 

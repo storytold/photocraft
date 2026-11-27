@@ -13,6 +13,7 @@
 //! Close, Print and Export itself; the app shell fires Start, Open and Save.
 
 use crate::actions_cmds::ActionsExt;
+use crate::color_cmds::ColorExt;
 use crate::preset_store::PresetStoreExt;
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
@@ -739,9 +740,9 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         // working profile Image › Mode converts to (#13703).
         let to = match crate::color_cmds::mode_space(fmt.mode) {
             craft_cms::ColorSpace::Rgb => crate::color_cmds::document_profile(sheet),
-            _ => s.color.working(fmt.mode),
+            _ => s.color().working(fmt.mode),
         };
-        let opts = craft_cms::TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
+        let opts = craft_cms::TransformOptions { intent: s.color().settings.intent(), bpc: s.color().settings.bpc, ..Default::default() };
         for (k, path) in chunk.iter().enumerate() {
             let k = k as u32;
             let (c, r) = if across { (k % cols, k / cols) } else { (k / rows, k % rows) };
@@ -760,8 +761,8 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                     .as_ref()
                     .and_then(|b| crate::color_cmds::profile_from_bytes(b).ok())
                     .filter(|p| p.color_space == crate::color_cmds::mode_space(src.mode));
-                let off = s.color.settings.policy(src.mode) == crate::color_cmds::Policy::Off;
-                let working = s.color.working(src.mode);
+                let off = s.color().settings.policy(src.mode) == crate::color_cmds::Policy::Off;
+                let working = s.color().working(src.mode);
                 match own {
                     // Off discards a profile other than the working one; 32-bit linear files keep theirs.
                     Some(own) if off && !own.same_colors(&working) => {
