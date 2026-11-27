@@ -271,6 +271,10 @@ class NightlyCallerSecrets(unittest.TestCase):
                 assert_nightly_caller_secrets(source + extra, signer=False)
 
 
+def has_plain_environment_key(source):
+    return re.search(r"(?im)^[ \t]*environment[ \t]*:", source) is not None
+
+
 class Response:
     status = 204
 
@@ -556,10 +560,16 @@ class TrustedSourcePreparation(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                self.assertNotRegex(executable, r"(?im)^\s*environment:")
+                self.assertFalse(has_plain_environment_key(executable), "app callers must not bind an environment")
                 if name != "nightly-sign.yml":
                     self.assertNotRegex(executable, r"(?im)^\s*secrets:")
                     self.assertNotIn("secrets.", executable)
+
+
+    def test_generic_closure_recognizes_a_space_before_the_environment_colon(self):
+        source = "jobs:\n  synthetic:\n    runs-on: ubuntu-latest\n    environment : release\n"
+        self.assertTrue(has_plain_environment_key(source))
+        self.assertFalse(has_plain_environment_key(source.replace("environment :", "name:")))
 
 
 class NightlyTrustAnchors(unittest.TestCase):
