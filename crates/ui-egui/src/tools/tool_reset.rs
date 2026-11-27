@@ -301,6 +301,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 polygon_sides,
                 star_points,
                 polygon_corner_radius,
+                triangle_corner_radius,
                 line_weight
             )
         }
