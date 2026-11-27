@@ -262,7 +262,7 @@ impl StackDialog for OpenFailureAlert {
 
 /// Acknowledgements contain no command; drain every completed occurrence without reopening it.
 pub(crate) fn take_open_alerts(app: &mut PhotocraftApp, _ctx: &egui::Context) {
-    while app.framework.dialogs.take::<OpenFailureAlert>().is_some() {}
+    while app.framework.dialogs.take_keyed::<OpenFailureAlert>().is_some() {}
 }
 
 impl PhotocraftApp {

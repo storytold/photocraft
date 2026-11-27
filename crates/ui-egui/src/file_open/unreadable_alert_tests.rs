@@ -146,9 +146,21 @@ fn several_failed_files_each_get_one_alert_and_valid_files_still_open() {
     crate::dialogs::confirm(&mut app, &app_ctx, first).unwrap();
     assert_eq!(messages(&app), [expected("c.png")]);
     let second = error_dialogs(&app)[0].id;
-    crate::dialogs::confirm(&mut app, &app_ctx, second).unwrap();
+    assert_ne!(first, second, "each failed file has its own instance");
+    let (request, _rx) = ControlRequest::new("ui.dialog.confirm", json!({"dialog": second.value()}));
+    let Reply::Done(reply) = handle(&mut app, &app_ctx, &request) else { panic!("alert confirmation is immediate") };
+    assert_eq!(reply["ok"], true);
+    app_ctx.run_ui(Default::default(), |ui| crate::dialogs::run(&mut app, ui)).textures_delta.clear();
     assert!(messages(&app).is_empty());
     assert_eq!(app.session.documents().len(), 2);
+    assert!(app.framework.dialogs.take_keyed::<OpenFailureAlert>().is_none(), "the consumer drains both instance-bound acknowledgements");
+
+    // The per-file consumer owns only its wrapper, even though a plain alert also answers ().
+    let plain = app.framework.dialogs.open(HostedAlert::new(Alert::new("PhotoCraft", "unrelated alert")));
+    assert!(app.framework.dialogs.confirm_by_id(&app_ctx, plain));
+    take_open_alerts(&mut app, &app_ctx);
+    assert!(matches!(app.framework.dialogs.take::<HostedAlert>(), Some(DialogResult::Ok(()))));
+    assert!(app.framework.dialogs.take_keyed::<OpenFailureAlert>().is_none());
 }
 
 #[test]
