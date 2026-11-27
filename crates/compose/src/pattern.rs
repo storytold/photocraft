@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use photocraft_doc::{ColorMode, Pattern, PixelFormat, Rect, SampleType};
+use photocraft_doc::{ColorMode, Document, Pattern, PixelFormat, Rect, SampleType};
 
 /// What one rendering call may keep of its patterns' working copies: every pattern it paints with
 /// stays converted for the call (four of the largest 8-bit ones on desktop), so none is converted
@@ -49,8 +49,8 @@ struct OverBudget {
 pub(crate) struct PreparedPatterns<'a> {
     patterns: &'a [Pattern],
     budget: usize,
-    /// The colour mode the patterns are painted into (see [`pattern_rgba`]).
-    mode: ColorMode,
+    /// How the document the patterns are painted into takes their colours (see [`pattern_rgba`]).
+    space: PatternSpace,
     state: Mutex<PreparedState>,
     over_budget: OverBudget,
 }
@@ -60,15 +60,20 @@ impl<'a> PreparedPatterns<'a> {
         Self {
             patterns,
             budget,
-            mode: ColorMode::Rgb,
+            space: PatternSpace::Mode(ColorMode::Rgb),
             state: Mutex::new(PreparedState { slots: HashMap::new(), reserved_bytes: 0 }),
             over_budget: OverBudget::default(),
         }
     }
 
-    /// Patterns painted into a document of colour mode `mode`.
-    pub(crate) fn in_mode(mut self, mode: ColorMode) -> Self {
-        self.mode = mode;
+    /// Patterns painted into `doc` ([`PatternSpace::of`]).
+    pub(crate) fn in_doc(self, doc: &Document) -> Self {
+        self.in_space(PatternSpace::of(doc))
+    }
+
+    /// Patterns painted in `space`.
+    pub(crate) fn in_space(mut self, space: PatternSpace) -> Self {
+        self.space = space;
         self
     }
 
@@ -106,7 +111,7 @@ impl<'a> PreparedPatterns<'a> {
                 // Conversion must stay serial: Rayon work stealing can re-enter this slot
                 // while its initializer is running inside an effect-map OnceLock.
                 // Run on the requesting worker to preserve its active CMYK profile.
-                slot.get_or_init(|| Tile::new_in(p, self.mode).map(Arc::new)).clone()
+                slot.get_or_init(|| Tile::new_in(p, self.space).map(Arc::new)).clone()
             }
             // Uncached path: a pattern whose working copy would exceed an absolute cap is not
             // materialized at all. One past the call's budget is converted under one lock, and
@@ -137,7 +142,7 @@ impl<'a> PreparedPatterns<'a> {
                         );
                     }
                 }
-                let tile = Tile::new_in(p, self.mode).map(Arc::new)?;
+                let tile = Tile::new_in(p, self.space).map(Arc::new)?;
                 live.retain(|_, w| w.strong_count() > 0);
                 live.insert(key, Arc::downgrade(&tile));
                 Some(tile)
@@ -146,16 +151,103 @@ impl<'a> PreparedPatterns<'a> {
     }
 }
 
-/// A pattern's pixels (straight-alpha RGBA, row-major) as they look painted into a document of
-/// colour mode `mode`. A pattern keeps its own colours (an RGB pattern stays RGB, in the
-/// library and in the document), but in a Grayscale or CMYK document it paints that mode's
-/// colours: what Edit › Fill writes into the document's pixels, and what Photoshop shows (the
-/// pattern in colour in its picker, filled in grey). Empty for a pattern that isn't
+/// How a document takes the colours of the patterns painted into it. A [`ColorMode`] converts to
+/// [`PatternSpace::Mode`], so a caller that names a colour mode gets that mode's pixel-format
+/// conversion; a document's own space is [`PatternSpace::of`] it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PatternSpace {
+    /// As the pixel format of this colour mode converts them: the pattern's own colours in RGB
+    /// and Lab, the inks in CMYK, and in Grayscale the luma formula's grey.
+    Mode(ColorMode),
+    /// Grey through the grey profile (#14975): sRGB to sGray, relative colorimetric with black
+    /// point compensation, as the swatch colours convert (`swatch_in_doc` in the engine).
+    /// Measured in the reference application, an RGB pattern's blue, green and red paint grey
+    /// 69, 221 and 129 of 255 in an 8-bit Grayscale document.
+    ProfileGray,
+}
+
+impl From<ColorMode> for PatternSpace {
+    fn from(mode: ColorMode) -> Self {
+        PatternSpace::Mode(mode)
+    }
+}
+
+impl PatternSpace {
+    /// How `doc` takes the patterns the compositor paints into it (Pattern Overlay, pattern fill
+    /// layers, pattern strokes). An 8- or 16-bit Grayscale document in the default grey working
+    /// space takes them through the grey profile. What #14975 did not measure keeps the
+    /// pixel-format conversion of the document's colour mode: 32-bit Grayscale, Duotone and
+    /// Bitmap documents, and a Grayscale document tagged with another grey profile.
+    pub fn of(doc: &Document) -> Self {
+        if doc.mode == ColorMode::Grayscale && doc.depth != SampleType::F32 && in_default_gray_space(doc.icc_profile.as_ref()) {
+            PatternSpace::ProfileGray
+        } else {
+            PatternSpace::Mode(doc.pixel_format().mode)
+        }
+    }
+
+    /// The space of a tile whose pixels are written into `doc` in its pixel format (Edit › Fill,
+    /// the Paint Bucket, the pixels a file stores for a pattern fill layer): the grey profile's
+    /// greys where the compositor paints them ([`Self::of`]), so the written pixels are what a
+    /// pattern fill layer shows; everywhere else the pattern's own colours, which the pixel
+    /// format converts.
+    pub fn of_pixels(doc: &Document) -> Self {
+        match Self::of(doc) {
+            PatternSpace::ProfileGray => PatternSpace::ProfileGray,
+            PatternSpace::Mode(_) => PatternSpace::Mode(ColorMode::Rgb),
+        }
+    }
+
+    /// The colour mode of the painted pattern.
+    fn mode(self) -> ColorMode {
+        match self {
+            PatternSpace::Mode(mode) => mode,
+            PatternSpace::ProfileGray => ColorMode::Grayscale,
+        }
+    }
+}
+
+/// Whether a Grayscale document with the embedded profile `icc` is in the default grey working
+/// space (the engine's `swatch_in_doc` asks the same of the document): untagged, tagged with
+/// bytes that are no grey profile (the document's profile is then the default one), or tagged
+/// with the default grey profile itself. Cached by allocation, like
+/// `photocraft_color::convert::CmykSpace::for_profile`, so asking per render is cheap.
+fn in_default_gray_space(icc: Option<&Arc<Vec<u8>>>) -> bool {
+    type Cache = Mutex<Vec<(Weak<Vec<u8>>, bool)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let Some(bytes) = icc else { return true };
+    let cached = |c: &[(Weak<Vec<u8>>, bool)]| c.iter().find(|(w, _)| w.as_ptr() == Arc::as_ptr(bytes)).map(|(_, default)| *default);
+    let cache = CACHE.get_or_init(Default::default);
+    {
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+        c.retain(|(w, _)| w.strong_count() > 0);
+        if let Some(default) = cached(&c) {
+            return default;
+        }
+    }
+    let default = match craft_cms::Profile::parse(bytes) {
+        Ok(p) if p.color_space == craft_cms::ColorSpace::Gray => {
+            craft_cms::builtin::default_for(craft_cms::ColorSpace::Gray).is_some_and(|d| p.content_hash() == d.content_hash())
+        }
+        _ => true,
+    };
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cached(&c).is_none() {
+        c.push((Arc::downgrade(bytes), default));
+    }
+    default
+}
+
+/// A pattern's pixels (straight-alpha RGBA, row-major) as they look painted in `space` (a colour
+/// mode, or a document's [`PatternSpace`]). A pattern keeps its own colours (an RGB pattern stays
+/// RGB, in the library and in the document), but in a Grayscale or CMYK document it paints that
+/// mode's colours: what Edit › Fill writes into the document's pixels, and what Photoshop shows
+/// (the pattern in colour in its picker, filled in grey). Empty for a pattern that isn't
 /// [paintable](Pattern::is_paintable), or whose full RGBA32F copy exceeds the working
 /// budget. Compact paintable patterns can instead be consumed with [`pattern_rgba_bands`].
-pub fn pattern_rgba(p: &Pattern, mode: ColorMode) -> Vec<[f32; 4]> {
+pub fn pattern_rgba(p: &Pattern, space: impl Into<PatternSpace>) -> Vec<[f32; 4]> {
     let mut px = Vec::new();
-    if p.is_paintable() && pattern_rgba_rows(p, mode, 0, p.height, &mut px).is_none() {
+    if p.is_paintable() && pattern_rgba_rows(p, space, 0, p.height, &mut px).is_none() {
         px = Vec::new();
     }
     px
@@ -165,18 +257,24 @@ pub fn pattern_rgba(p: &Pattern, mode: ColorMode) -> Vec<[f32; 4]> {
 /// pattern is read a band at a time instead of as one copy at 16 bytes per pixel. `None` when the
 /// memory for the rows cannot be had (on the web a failed allocation aborts the tab, so it is
 /// asked for, not assumed).
-pub fn pattern_rgba_rows(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, out: &mut Vec<[f32; 4]>) -> Option<()> {
-    pattern_rgba_rows_in(p, mode, top, bottom, out, photocraft_doc::pattern::MAX_WORKING_BYTES)
+pub fn pattern_rgba_rows(p: &Pattern, space: impl Into<PatternSpace>, top: u32, bottom: u32, out: &mut Vec<[f32; 4]>) -> Option<()> {
+    pattern_rgba_rows_in(p, space, top, bottom, out, photocraft_doc::pattern::MAX_WORKING_BYTES)
 }
 
 /// Stream straight-alpha RGBA rows using at most `max_band_bytes` of pixel scratch.
 /// Paintability and a complete row fitting the budget are checked before the callback runs.
 /// A callback refusal or allocation failure stops consumption; callers must not publish
 /// partially prepared resources as complete.
-pub fn pattern_rgba_bands(p: &Pattern, mode: ColorMode, max_band_bytes: u64, mut consume: impl FnMut(u32, &[[f32; 4]]) -> Option<()>) -> Option<()> {
+pub fn pattern_rgba_bands(
+    p: &Pattern,
+    space: impl Into<PatternSpace>,
+    max_band_bytes: u64,
+    mut consume: impl FnMut(u32, &[[f32; 4]]) -> Option<()>,
+) -> Option<()> {
     if !p.is_paintable() {
         return None;
     }
+    let space = space.into();
     let budget = max_band_bytes.min(photocraft_doc::pattern::MAX_WORKING_BYTES);
     let row_bytes = u64::from(p.width).checked_mul(std::mem::size_of::<[f32; 4]>() as u64)?;
     let rows = u32::try_from((budget / row_bytes).min(u64::from(photocraft_doc::pattern::BAND_ROWS))).ok()?;
@@ -185,13 +283,13 @@ pub fn pattern_rgba_bands(p: &Pattern, mode: ColorMode, max_band_bytes: u64, mut
     }
     let mut band = Vec::new();
     for top in (0..p.height).step_by(rows as usize) {
-        pattern_rgba_rows_in(p, mode, top, top.saturating_add(rows), &mut band, budget)?;
+        pattern_rgba_rows_in(p, space, top, top.saturating_add(rows), &mut band, budget)?;
         consume(top, &band)?;
     }
     Some(())
 }
 
-fn pattern_rgba_rows_in(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, out: &mut Vec<[f32; 4]>, max_bytes: u64) -> Option<()> {
+fn pattern_rgba_rows_in(p: &Pattern, space: impl Into<PatternSpace>, top: u32, bottom: u32, out: &mut Vec<[f32; 4]>, max_bytes: u64) -> Option<()> {
     let bottom = bottom.min(p.height);
     let top = top.min(bottom);
     out.clear();
@@ -205,8 +303,22 @@ fn pattern_rgba_rows_in(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, out
     out.try_reserve_exact(pixels).ok()?;
     out.resize(pixels, [0.0f32; 4]);
     p.surface.read_rgba_into(Rect::new(0, top as i32, p.width as i32, bottom as i32), out);
+    let space = space.into();
+    let mode = space.mode();
     let paints_in = matches!(mode, ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Cmyk);
     if paints_in && p.surface.format().mode != mode {
+        if space == PatternSpace::ProfileGray
+            && let Some(t) = rgb_to_profile_gray()
+        {
+            for q in out.iter_mut() {
+                let mut g = [0.0f32; 16];
+                if t.eval(&[q[0], q[1], q[2]], &mut g).is_ok() && g[0].is_finite() {
+                    let g = g[0].clamp(0.0, 1.0);
+                    *q = [g, g, g, q[3]];
+                }
+            }
+            return Some(());
+        }
         let fmt = PixelFormat::new(mode, SampleType::F32, true);
         let mut v = [0.0f32; 5];
         for q in out.iter_mut() {
@@ -217,17 +329,25 @@ fn pattern_rgba_rows_in(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, out
     Some(())
 }
 
-/// The pixels of a paintable pattern as they paint in a document of colour mode `mode`, rounded
+/// The pattern colour (sRGB) to grey transform of [`PatternSpace::ProfileGray`]. `None` when the
+/// transform cannot be built, which keeps the luma conversion.
+fn rgb_to_profile_gray() -> Option<Arc<craft_cms::Transform>> {
+    let opts = craft_cms::TransformOptions { intent: craft_cms::Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    craft_cms::transform::cached(craft_cms::Builtin::Srgb.profile(), craft_cms::Builtin::SGray.profile(), opts).ok()
+}
+
+/// The pixels of a paintable pattern as they paint in `space` ([`pattern_rgba`]), rounded
 /// to the pattern's own sample grid by `quantize`, read a band of rows at a time: no full-size
 /// `f32` copy. A pattern with its own colours comes through exactly (its samples are on that
 /// grid); one converted to a grey or CMYK document is rounded to the grid it was drawn on. `None`
 /// when the memory cannot be had.
-fn quantized_rgba<T>(p: &Pattern, mode: ColorMode, quantize: impl Fn(f32) -> T) -> Option<Vec<[T; 4]>> {
+fn quantized_rgba<T>(p: &Pattern, space: impl Into<PatternSpace>, quantize: impl Fn(f32) -> T) -> Option<Vec<[T; 4]>> {
+    let space = space.into();
     let mut out = Vec::new();
     out.try_reserve_exact((p.width as usize).checked_mul(p.height as usize)?).ok()?;
     let mut band = Vec::new();
     for top in (0..p.height).step_by(photocraft_doc::pattern::BAND_ROWS as usize) {
-        pattern_rgba_rows(p, mode, top, top + photocraft_doc::pattern::BAND_ROWS, &mut band)?;
+        pattern_rgba_rows(p, space, top, top + photocraft_doc::pattern::BAND_ROWS, &mut band)?;
         out.extend(band.iter().map(|c| [quantize(c[0]), quantize(c[1]), quantize(c[2]), quantize(c[3])]));
     }
     Some(out)
@@ -267,24 +387,25 @@ impl Tile {
         Tile::new_in(p, ColorMode::Rgb)
     }
 
-    /// The tile of `p` painted into a document of colour mode `mode` (see [`pattern_rgba`]).
-    /// `None` when the pattern isn't [paintable](Pattern::is_paintable).
-    pub fn new_in(p: &Pattern, mode: ColorMode) -> Option<Tile> {
+    /// The tile of `p` painted in `space`: a colour mode, or a document's [`PatternSpace`] (see
+    /// [`pattern_rgba`]). `None` when the pattern isn't [paintable](Pattern::is_paintable).
+    pub fn new_in(p: &Pattern, space: impl Into<PatternSpace>) -> Option<Tile> {
         if !p.is_paintable() {
             return None;
         }
-        Tile::build(p, mode, p.pixel_count().saturating_mul(16) > photocraft_doc::pattern::MAX_WORKING_BYTES)
+        Tile::build(p, space, p.pixel_count().saturating_mul(16) > photocraft_doc::pattern::MAX_WORKING_BYTES)
     }
 
     /// [`Tile::new_in`], held at the pattern's own depth when `compact` and it has a smaller form.
-    fn build(p: &Pattern, mode: ColorMode, compact: bool) -> Option<Tile> {
+    fn build(p: &Pattern, space: impl Into<PatternSpace>, compact: bool) -> Option<Tile> {
+        let space = space.into();
         let (w, h) = (p.width as usize, p.height as usize);
         let texels = match p.surface.format().sample {
             // A large pattern is held at its own depth (`Pattern::working_bytes`).
-            SampleType::U8 if compact => Texels::Rgba8(quantized_rgba(p, mode, |v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)?),
-            SampleType::U16 if compact => Texels::Rgba16(quantized_rgba(p, mode, |v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16)?),
+            SampleType::U8 if compact => Texels::Rgba8(quantized_rgba(p, space, |v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)?),
+            SampleType::U16 if compact => Texels::Rgba16(quantized_rgba(p, space, |v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16)?),
             _ => {
-                let mut px = pattern_rgba(p, mode);
+                let mut px = pattern_rgba(p, space);
                 if px.len() as u64 != p.pixel_count() {
                     return None;
                 }
@@ -470,6 +591,10 @@ pub(crate) fn render_into(tile: &Tile, place: &Placement, rect: Rect, out: &mut 
 }
 
 #[cfg(test)]
+#[path = "pattern_grayscale_tests.rs"]
+mod grayscale_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use photocraft_doc::{PixelFormat, Surface};
@@ -481,7 +606,7 @@ mod tests {
             for y in 0..5 {
                 surface.fill_rect(Rect::new(0, y, 3, y + 1), &[y as f32 / 4., 0.25, 0.75, 0.5]);
             }
-            let p = Pattern { id: "bands".into(), name: "bands".into(), width: 3, height: 5, surface };
+            let p = Pattern { id: "bands".into(), name: "bands".into(), width: 3, height: 5, source_mode: None, surface };
             let budget = 3 * 2 * 16;
             let mut oversized = Vec::new();
             assert!(pattern_rgba_rows_in(&p, ColorMode::Rgb, 0, p.height, &mut oversized, budget).is_none());
@@ -513,7 +638,8 @@ mod tests {
     #[test]
     /// Reject dense paint expansion of a retained oversized pattern without materializing sparse source tiles.
     fn stored_900_megapixel_pattern_is_not_expanded_for_painting() {
-        let pattern = Pattern { id: "large".into(), name: "large".into(), width: 30_000, height: 30_000, surface: Surface::new(PixelFormat::RGBA8) };
+        let pattern =
+            Pattern { id: "large".into(), name: "large".into(), width: 30_000, height: 30_000, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         assert!(pattern_rgba(&pattern, ColorMode::Rgb).is_empty());
         let mut rows = Vec::new();
         assert!(pattern_rgba_rows(&pattern, ColorMode::Rgb, 0, pattern.height, &mut rows).is_none());
@@ -550,7 +676,7 @@ mod tests {
     #[test]
     fn patterns_too_large_to_paint_are_skipped_without_allocating() {
         // Only the size is declared (no tiles): a hostile file can claim any size.
-        let p = Pattern { id: "big".into(), name: "Big".into(), width: 9000, height: 8000, surface: Surface::new(PixelFormat::RGBA8) };
+        let p = Pattern { id: "big".into(), name: "Big".into(), width: 9000, height: 8000, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         assert!(!p.is_paintable());
         assert!(Tile::new(&p).is_none());
         assert!(pattern_rgba(&p, ColorMode::Rgb).is_empty());
@@ -568,6 +694,7 @@ mod tests {
             name: name.into(),
             width,
             height,
+            source_mode: None,
             surface: Surface::new(format),
         };
         let float = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
@@ -595,7 +722,14 @@ mod tests {
     /// does not fit is converted when asked for (correct, just not kept).
     #[test]
     fn two_large_patterns_are_each_converted_once_per_call() {
-        let sparse = |name: &str| Pattern { id: name.into(), name: name.into(), width: 5000, height: 5000, surface: Surface::new(PixelFormat::RGBA8) };
+        let sparse = |name: &str| Pattern {
+            id: name.into(),
+            name: name.into(),
+            width: 5000,
+            height: 5000,
+            source_mode: None,
+            surface: Surface::new(PixelFormat::RGBA8),
+        };
         let list = [sparse("a"), sparse("b"), sparse("c")];
         assert!(list.iter().all(|p| p.working_bytes() == 100_000_000));
         let prepared = PreparedPatterns::new(&list, 250_000_000);
@@ -655,13 +789,14 @@ mod tests {
     /// declared size past what any allocation could be) gives `None`, never an aborted allocation.
     #[test]
     fn rows_that_cannot_be_allocated_give_none() {
-        let huge = Pattern { id: "huge".into(), name: "huge".into(), width: u32::MAX, height: u32::MAX, surface: Surface::new(PixelFormat::RGBA8) };
+        let huge =
+            Pattern { id: "huge".into(), name: "huge".into(), width: u32::MAX, height: u32::MAX, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         let mut out = Vec::new();
         assert!(pattern_rgba_rows(&huge, ColorMode::Rgb, 0, u32::MAX, &mut out).is_none());
         assert!(quantized_rgba(&huge, ColorMode::Rgb, |v| v as u8).is_none());
         assert!(pattern_rgba(&huge, ColorMode::Rgb).is_empty());
         assert!(Tile::new(&huge).is_none());
-        let small = Pattern { id: "small".into(), name: "small".into(), width: 3, height: 2, surface: Surface::new(PixelFormat::RGBA8) };
+        let small = Pattern { id: "small".into(), name: "small".into(), width: 3, height: 2, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         assert_eq!(pattern_rgba_rows(&small, ColorMode::Rgb, 0, 2, &mut out), Some(()));
         assert_eq!(out.len(), 6);
     }

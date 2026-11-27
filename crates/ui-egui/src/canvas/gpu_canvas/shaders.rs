@@ -2,7 +2,7 @@ pub(super) const CANVAS_WGSL: &str = r#"
 struct View {
     a: vec4<f32>, // screen_w, screen_h, scale (device px per doc px), pixels_per_point
     b: vec4<f32>, // doc origin x, y (device px), doc w, h (doc px)
-    c: vec4<f32>, // filter mode, lod, unused, unused
+    c: vec4<f32>, // filter mode, lod, exact doc origin - snapped origin x, y (device px)
     d: vec4<f32>, // unused, unused, display (0 none, 1 LUT, 2 LUT + gamut, 3 matrix/shaper), output linear
     e: vec4<f32>, // unused rgb, gamut warning opacity
     f: vec4<f32>, // unused rgb, 32-bit preview gain (2^exposure; 0 = off)
@@ -92,8 +92,16 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
 
 @vertex
 fn vs_tile(@builtin(vertex_index) vi: u32) -> VOut {
-    let p = doc_to_px(tile.r.xy + tile.r.zw * corner(vi));
-    return VOut(px_to_clip(p));
+    // The texels are drawn from the snapped origin (crisp at 100 %), but the document's outer edge sits where the
+    // canvas draws the checkerboard and the edge, at the exact origin: there it shows the edge texels, never a line
+    // of checkerboard, and nothing past it (#17099). Inner tile edges stay put, so tiles still meet.
+    var q = clamp(tile.r.xy + tile.r.zw * corner(vi), vec2(0.0), view.b.zw);
+    let cs = view.h.xy;
+    let s = view.c.zw / view.a.z;
+    let shift = vec2(s.x * cs.x + s.y * cs.y, -s.x * cs.y + s.y * cs.x);
+    let outer = q <= vec2(0.0) | q >= view.b.zw;
+    q = select(q, q + shift, outer);
+    return VOut(px_to_clip(doc_to_px(q)));
 }
 
 @fragment
@@ -101,8 +109,11 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
     let scale = view.a.z;
     let d = px_to_doc(p);                  // document pixel coordinates
-    // A viewport page's apron is only sampled; its neighbour draws those pixels.
-    if (any(d < tile.core.xy) || any(d >= tile.core.zw)) { discard; }
+    // A viewport page's apron is only sampled; its neighbour draws those pixels. Past the document's own edge there
+    // is no neighbour: the half pixel the vertex stage adds there is this page's.
+    let lo = select(tile.core.xy, vec2(-1e30), tile.core.xy <= vec2(0.0));
+    let hi = select(tile.core.zw, vec2(1e30), tile.core.zw >= view.b.zw);
+    if (any(d < lo) || any(d >= hi)) { discard; }
     let size = tile.r.zw;
     let t = d - tile.r.xy;                 // texel coordinates within this tile
     let mode = view.c.x;

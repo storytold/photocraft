@@ -21,6 +21,7 @@
 
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
@@ -120,7 +121,7 @@ fn gaussian_recording_replays_the_direct_blur_pixels_and_radius() {
         let mut direct = edge_doc(depth);
         direct.execute("filter.blur.gaussianBlur", json!({"radius": 2.3})).unwrap();
         let mut s = edge_doc(depth);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action": "Blur2_3"})).unwrap()["ran"], 1);
         assert_eq!(
             photocraft_compose::flatten(&s.active().unwrap().doc).px,

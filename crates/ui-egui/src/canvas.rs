@@ -47,6 +47,10 @@ mod paint_thread;
 #[cfg(test)]
 mod paint_thread_tests;
 pub(crate) mod paint_tool;
+#[cfg(test)]
+mod pasteboard_menu_separator_tests;
+#[cfg(test)]
+mod pasteboard_menu_tools_tests;
 pub mod patch_preview;
 pub mod quick_pick;
 mod raster_source;
@@ -67,6 +71,7 @@ pub mod tool_feedback;
 pub(crate) mod tools;
 mod transform_controls;
 pub(crate) mod viewport_pages;
+mod window_drop;
 
 pub(crate) use cursor_policy::alt_samples;
 pub(crate) use display::GPU_OUTPUT;
@@ -240,6 +245,9 @@ mod tabs_tests;
 mod doc_window_dialog_tests;
 
 #[cfg(test)]
+mod document_window_title_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -247,6 +255,10 @@ mod transform_controls_tests;
 
 #[cfg(test)]
 mod layer_edges_tests;
+
+#[cfg(test)]
+#[path = "canvas/move_readout_arrows_tests.rs"]
+mod move_readout_arrows_tests;
 
 #[cfg(test)]
 mod live_frame_tests;
@@ -259,6 +271,7 @@ mod art_history_shift_click_tests;
 mod rotation_preview_isolation_tests {
     use craft::ui::dialog::DialogId;
     use photocraft_engine::channel_cmds::ChannelTarget;
+    use photocraft_engine::color_cmds::ColorExt;
 
     use super::*;
 
@@ -481,8 +494,8 @@ mod rotation_preview_isolation_tests {
     #[test]
     fn profile_dialogs_preview_through_the_profile_they_choose() {
         let mut session = photocraft_engine::Session::new();
-        session.color.settings.monitor_profile = "srgb".into();
-        session.color.settings.working_rgb = "display-p3".into();
+        session.color_mut().settings.monitor_profile = "srgb".into();
+        session.color_mut().settings.working_rgb = "display-p3".into();
         session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
         session.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
         session
