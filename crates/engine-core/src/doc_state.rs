@@ -16,6 +16,9 @@ pub struct DocState {
     /// revision the session holds the state in, which also moves with view state.
     pub revision: u64,
     pub saved_revision: u64,
+    /// [`photocraft_ops::History::current_id`] at the last save. Undo or redo that lands on this
+    /// id is clean again (#6867).
+    pub saved_history_id: u64,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
     pub view_revision: u64,
     /// Area changed since revision [`DocState::damage_from`] (None = assume everything changed):
@@ -138,6 +141,7 @@ impl DocState {
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
+            saved_history_id: 0,
             view_revision: 0,
             last_damage: None,
             damage_span: None,
@@ -310,6 +314,16 @@ impl DocState {
         if keep_clean {
             self.saved_revision = self.revision;
         }
+    }
+    /// Mark the current history step as the saved one. Sites that only assigned `saved_revision`
+    /// left `saved_history_id` on an older step, so a later undo could look clean.
+    pub fn mark_saved(&mut self) {
+        self.saved_revision = self.revision;
+        self.saved_history_id = self.history.current_id();
+    }
+    /// True when undo or redo has landed on the step last marked saved (#6867).
+    pub(crate) fn landed_on_save(&self) -> bool {
+        self.history.current_id() == self.saved_history_id
     }
     /// Move to the next revision for a change of the layer selection, which is not an edit:
     /// readers keyed on the revision follow it, a clean document stays clean, and no pixels need
