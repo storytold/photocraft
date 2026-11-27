@@ -183,6 +183,8 @@ pub struct JobsUi {
     /// The file being placed in the background, if any. One at a time: files dropped meanwhile
     /// wait in the app's drop queue.
     pub place: Option<PlaceJob>,
+    /// Content-Aware Fill settings waiting for their background fill: remembered when it is applied (#14254).
+    pub(crate) caf_settings: Vec<(JobId, Value)>,
 }
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
@@ -607,6 +609,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     }
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
+    crate::caf_ui::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }

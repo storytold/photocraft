@@ -410,6 +410,11 @@ pub fn from_layers_defaults(s: &Session) -> Option<(String, [i64; 2])> {
     Some((next_artboard_name(&d.doc), [w, h]))
 }
 
+/// The smallest width or height Artboard from Layers takes, in pixels (#14577).
+pub const FROM_LAYERS_MIN: i64 = 4;
+/// The largest width or height Artboard from Layers takes, in pixels (#14577).
+pub const FROM_LAYERS_MAX: i64 = 32_000;
+
 fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let sel = crate::layer_multi_cmds::selected(s);
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -422,8 +427,9 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the artboard width and height must not be negative"));
     }
     // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
-    // their bounds on that axis (#9087).
-    let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
+    // their bounds on that axis (#9087). As the dialog's fields do, a size outside 4..=32000 px
+    // is clamped to it (#14577).
+    let size = [int(p, "width"), int(p, "height")].map(|v| v.filter(|v| *v != 0).map(|v| v.clamp(FROM_LAYERS_MIN, FROM_LAYERS_MAX)));
     let (gid, rect, shift) = s.edit("New Artboard From Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
@@ -1421,7 +1427,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromLayers",
             "Artboard from Layers…",
             &["Layer", "New"],
-            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 0 keeps their bounds) → {layer, rect}"##,
+            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 4..32000 px, a size outside is clamped to it, 0 keeps their bounds) → {layer, rect}"##,
             has_free_layers,
             artboard_from_layers
         ),
@@ -1496,6 +1502,10 @@ mod include_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
 mod from_layers_history_name_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_size_range_tests.rs"]
+mod from_layers_size_range_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]

@@ -58,6 +58,10 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let which = sample_layers(p, CMD)?;
     let source = super::clone_sampling::resolve(s, p, CMD)?;
     let mode = blend_param(p, CMD)?;
+    // The options bar's Replace row (#12101): the stroke copies the source pixels without the
+    // healing solve, composited through `mode` (Normal). It is the command's word, not a blend
+    // mode; `blend_param` already accepted it for this command alone.
+    let replace = p.get("mode").and_then(Value::as_str) == Some("replace");
     let aligned = flag(p, "aligned", true);
     let map = clone_mapping(s, p, &stroke, CMD)?;
     let off = map.offset();
@@ -69,27 +73,34 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let (g, cov) = pad_coverage(bounds, &cov, 2);
         let fmt = source.sample_format(surf);
         let src = clone_sample(pre, id, surf, which, &source, g, &map, wrap, CMD)?;
-        // The destination the texture is fitted to: the layer itself, or what the user sees when
-        // sampling several layers (so healing onto an empty layer matches the composite).
-        let dst = if wrap {
-            periodic::sample(pre, id, surf, which, g, CMD)?
-        } else if which == SampleLayers::Current {
-            Region::read(surf, g)
-        } else {
-            composite_region(pre, id, which, g, surf.format())
-        };
-        let dst = if fmt.alpha && !surf.format().alpha { super::clone_sampling::opaque_alpha(dst, surf.format()) } else { dst };
         // The solver can reconstruct positive alpha from the destination boundary even where
         // no source pixel exists. Keep source availability separate from the solved channels.
         let alpha = super::alpha_index(&fmt);
         let has_source = |pixel: &[f32]| alpha.is_none_or(|a| pixel.get(a).is_some_and(|value| *value > 0.0));
-        let mask: Vec<bool> = cov.iter().zip(src.data.chunks_exact(fmt.channels())).map(|(c, pixel)| *c > 0.0 && has_source(pixel)).collect();
-        let mut healed = heal_region(&fmt, &src, &dst, &mask);
-        for (pixel, sample) in healed.data.chunks_exact_mut(fmt.channels()).zip(src.data.chunks_exact(fmt.channels())) {
-            if !has_source(sample) {
-                pixel.fill(0.0);
+        let healed = if replace {
+            // Replace (#12101): the sampled source as it stands, no solve against the
+            // destination. Pixels with no source stay transparent, as they do through the solver.
+            src
+        } else {
+            // The destination the texture is fitted to: the layer itself, or what the user sees when
+            // sampling several layers (so healing onto an empty layer matches the composite).
+            let dst = if wrap {
+                periodic::sample(pre, id, surf, which, g, CMD)?
+            } else if which == SampleLayers::Current {
+                Region::read(surf, g)
+            } else {
+                composite_region(pre, id, which, g, surf.format())
+            };
+            let dst = if fmt.alpha && !surf.format().alpha { super::clone_sampling::opaque_alpha(dst, surf.format()) } else { dst };
+            let mask: Vec<bool> = cov.iter().zip(src.data.chunks_exact(fmt.channels())).map(|(c, pixel)| *c > 0.0 && has_source(pixel)).collect();
+            let mut healed = heal_region(&fmt, &src, &dst, &mask);
+            for (pixel, sample) in healed.data.chunks_exact_mut(fmt.channels()).zip(src.data.chunks_exact(fmt.channels())) {
+                if !has_source(sample) {
+                    pixel.fill(0.0);
+                }
             }
-        }
+            healed
+        };
         if wrap {
             return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, fmt, |_, r| {
                 let part = healed.crop(r);
@@ -314,3 +325,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "heal_indexed_tests.rs"]
 mod heal_indexed_tests;
+
+#[cfg(test)]
+#[path = "heal_replace_tests.rs"]
+mod heal_replace_tests;

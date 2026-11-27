@@ -225,6 +225,29 @@ fn click_tool(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
     }
 }
 
+/// Paint Bucket ⇧-click on the pasteboard sets the pasteboard colour to the foreground colour, as
+/// in the reference application (#12534): the custom colour, and use it, as the pasteboard menu's
+/// Select Custom Color… does. It is a preference, so no history state and no document change.
+/// Only a plain ⇧ with no selection: other modifiers and an active selection were not measured and
+/// keep today's fill. True when it handled the click.
+pub(crate) fn bucket_pasteboard_click(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
+    let plain_shift = mods.shift && !mods.alt && !mods.ctrl && !mods.cmd;
+    let Some(st) = app.session.active() else { return false };
+    let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+    let (x, y) = (at[0], at[1]);
+    let outside = x.is_finite() && y.is_finite() && (x < 0.0 || y < 0.0 || x >= w || y >= h);
+    if !plain_shift || !outside || st.doc.selection.is_some() {
+        return false;
+    }
+    let [r, g, b, _] = app.session.tools.foreground;
+    let color = crate::color_picker_ui::hex([r, g, b]);
+    if let Err(e) = app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}})) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
 fn begin(app: &mut PhotocraftApp, state: &mut PaintState, pointer: &ToolPointer, at: [f64; 2], cx: &mut ToolContext<'_>) -> ToolAction {
     let tool = app.ui.tool;
     let (mods, button) = (pointer.mods, pointer.button);

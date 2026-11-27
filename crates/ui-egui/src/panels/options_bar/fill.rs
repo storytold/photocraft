@@ -16,6 +16,7 @@ fn label_of(mode: PaintMode) -> String {
         PaintMode::Blend(blend) => tl!(blend.label()).to_owned(),
         PaintMode::Behind => tl!("Behind").to_owned(),
         PaintMode::Clear => tl!("Clear").to_owned(),
+        PaintMode::HealingReplace => tl!("Replace").to_owned(),
     }
 }
 
@@ -26,6 +27,25 @@ fn label_of(mode: PaintMode) -> String {
 pub(crate) fn mode_entries(tool: Tool, behind_enabled: bool, threshold: bool) -> Vec<Entry<PaintMode>> {
     static CACHE: crate::i18n::LangCache<(Tool, bool, bool), Vec<Entry<PaintMode>>> = crate::i18n::LangCache::new();
     CACHE.get_or_build((tool, behind_enabled, threshold), || {
+        if tool == Tool::Healing {
+            // The Healing Brush's measured list (#12101): Normal, Replace, a rule, Multiply,
+            // Screen, Darken, Lighten, a rule, Color, Luminosity. Not the blend-group rules: the
+            // reference starts its groups elsewhere in this short list. Replace has no letter: the
+            // ⇧⌥ keys and the ⇧+ / ⇧− cycle keep the seven blend modes.
+            let blend = |b: BlendMode| Entry::new(PaintMode::Blend(b), label_of(PaintMode::Blend(b)));
+            return vec![
+                blend(BlendMode::Normal),
+                Entry::new(PaintMode::HealingReplace, label_of(PaintMode::HealingReplace)),
+                Entry::separator(),
+                blend(BlendMode::Multiply),
+                blend(BlendMode::Screen),
+                blend(BlendMode::Darken),
+                blend(BlendMode::Lighten),
+                Entry::separator(),
+                blend(BlendMode::Color),
+                blend(BlendMode::Luminosity),
+            ];
+        }
         let keyed: Vec<BlendKeyEntry<PaintMode>> = if tool == Tool::PatternStamp {
             crate::brush_mode_menu::pattern_stamp_choices()
                 .into_iter()
@@ -78,6 +98,8 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             o.bucket_blend_mode = blend;
         }
         PaintMode::Behind => {}
+        // Replace belongs to the Healing Brush's list, never the Paint Bucket's.
+        PaintMode::HealingReplace => {}
     }
     if let Some(opacity) = number_field(ui, tl!("Opacity"), o.fill_opacity, 1.0..=100.0, "%").landed() {
         o.fill_opacity = *opacity;
