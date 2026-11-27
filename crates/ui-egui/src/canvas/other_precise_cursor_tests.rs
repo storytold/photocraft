@@ -36,14 +36,14 @@ fn precise_eyedropper_draws_a_centred_target() {
     let [cx, cy] = bitmap.hotspot.map(usize::from);
     let mut light_on_black = false;
     let mut dark_on_white = false;
-    for (i, p) in bitmap.rgba.chunks_exact(4).enumerate() {
+    for (i, &[r, g, b, a]) in bitmap.rgba.as_chunks::<4>().0.iter().enumerate() {
         // Sample off both axes so the contrast check uses the ring, away from the centre cross.
         if (i % width).abs_diff(cx) <= 2 || (i / width).abs_diff(cy) <= 2 {
             continue;
         }
-        let alpha = f32::from(p[3]) / 255.0;
-        let lightest = f32::from(*p[..3].iter().max().unwrap());
-        let darkest = f32::from(*p[..3].iter().min().unwrap());
+        let alpha = f32::from(a) / 255.0;
+        let lightest = f32::from(r.max(g).max(b));
+        let darkest = f32::from(r.min(g).min(b));
         light_on_black |= darkest * alpha >= 100.0;
         dark_on_white |= lightest * alpha + 255.0 * (1.0 - alpha) <= 145.0;
     }
