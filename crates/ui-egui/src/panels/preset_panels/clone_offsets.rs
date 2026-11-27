@@ -97,15 +97,29 @@ pub(crate) fn clone_overlay_raw_keys(app: &mut PhotocraftApp, ctx: &egui::Contex
     {
         return;
     }
+    // Without Ctrl the platform also types the key's character ("<", "]"…) after a ⇧⌥ < / > / [ / ] press: it goes
+    // with the key, so it is dropped too, and no shortcut or control sees a "<" typed.
+    let mut typed_by_used_key = false;
     raw.events.retain(|event| {
+        if let egui::Event::Text(text) = event {
+            let drop = typed_by_used_key && text.chars().all(|c| "<>,.[]{}".contains(c));
+            typed_by_used_key = false;
+            return !drop;
+        }
         let egui::Event::Key { key, pressed, modifiers: m, .. } = event else { return true };
+        typed_by_used_key = false;
         let mods = craft::keymap::Mods { cmd: m.mac_cmd, ctrl: m.ctrl, alt: m.alt, shift: m.shift };
         if let Some(change) = TransformKey::of(*key) {
             // Ctrl (⌘ on the Mac) makes the step fine.
             if !(mods.shift && mods.alt) {
                 return true;
             }
-            return !*pressed || !clone_transform_key(app, change, mods.ctrl || mods.cmd);
+            if !*pressed {
+                return true;
+            }
+            let used = clone_transform_key(app, change, mods.ctrl || mods.cmd);
+            typed_by_used_key = used;
+            return !used;
         }
         let direction = match key {
             egui::Key::ArrowLeft => Some([-1.0, 0.0]),

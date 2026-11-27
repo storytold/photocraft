@@ -975,3 +975,20 @@ fn shift_alt_angle_brackets_turn_and_brackets_scale_the_clone_source_with_a_fine
     assert!(slot(&h).scale[0] < finer[0], "[ makes it smaller");
 }
 
+
+/// Without Ctrl, ⇧⌥< also types "<": the turn takes the key and the character it typed, so nothing else gets a "<".
+#[test]
+fn shift_alt_angle_bracket_takes_the_character_it_types_too() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::CloneStamp;
+    h.state_mut().run("cloneSource.set", json!({"source": [10, 10]})).unwrap();
+    h.run_steps(2);
+    let m = Modifiers::SHIFT | Modifiers::ALT;
+    let key = |pressed| egui::Event::Key { key: Key::Comma, physical_key: Some(Key::Comma), pressed, repeat: false, modifiers: m };
+    let mut raw = egui::RawInput { events: vec![key(true), egui::Event::Text("<".into()), egui::Event::Text("a".into()), key(false)], ..Default::default() };
+    let ctx = h.ctx.clone();
+    crate::preset_panels::clone_overlay_raw_keys(h.state_mut(), &ctx, &mut raw);
+    let typed: Vec<_> = raw.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t.as_str()) } else { None }).collect();
+    assert_eq!(typed, ["a"], "the \"<\" went with the key; later typing is kept: {:?}", raw.events);
+    assert!(!raw.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })), "the press was used");
+}
