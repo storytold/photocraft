@@ -7,6 +7,7 @@ use craft::ui::dialog::{DialogId, DialogResult};
 use photocraft_doc::Contour as DocContour;
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_engine::layer_style::{contour_from_param, contour_param, contour_to_shc};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::{Child, child_of, take_child};
@@ -55,28 +56,26 @@ pub(super) fn to_param(c: &Contour) -> Value {
 
 /// The user's contour library.
 pub(super) fn user_contours(app: &PhotocraftApp) -> Vec<Contour> {
-    app.session.presets.contours.iter().map(from_doc).collect()
+    app.session.presets().contours.iter().map(from_doc).collect()
 }
 
 /// The engine's interpolation of a contour's points (levels `0..=255` on both axes) as one output
 /// level per input level.
-pub(super) fn sampler() -> impl Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync + 'static {
-    |points| {
-        let points: Vec<CurvePoint> = points.iter().map(|p| CurvePoint { input: p[0] / LEVELS, output: p[1] / LEVELS }).collect();
-        let lut = photocraft_compose::adjust::contour_curve_lut(&points, &[]);
-        (0..=LEVELS as usize)
-            .map(|level| {
-                let at = (level as f32 / LEVELS * lut.len().saturating_sub(1) as f32).round() as usize;
-                lut.get(at).copied().unwrap_or(0.0) * LEVELS
-            })
-            .collect()
-    }
+pub(super) fn sampler(points: &[[f32; 2]]) -> Vec<f32> {
+    let points: Vec<CurvePoint> = points.iter().map(|p| CurvePoint { input: p[0] / LEVELS, output: p[1] / LEVELS }).collect();
+    let lut = photocraft_compose::adjust::contour_curve_lut(&points, &[]);
+    (0..=LEVELS as usize)
+        .map(|level| {
+            let at = (level as f32 / LEVELS * lut.len().saturating_sub(1) as f32).round() as usize;
+            lut.get(at).copied().unwrap_or(0.0) * LEVELS
+        })
+        .collect()
 }
 
 /// Opens the Contour Editor on `request` as a child of the Layer Style dialog `parent`.
 pub(super) fn open_editor(app: &mut PhotocraftApp, parent: DialogId, request: ContourRequest) {
     let (key, initial) = (request.key.clone(), request.contour.clone());
-    let id = app.framework.dialogs.open_child(ContourEditorDialog::new(request).sampler(sampler()), parent);
+    let id = app.framework.dialogs.open_child(ContourEditorDialog::new(request).sampler(sampler), parent);
     app.layer_style_child = Some((parent, Child::Editor { id, key, initial }));
 }
 
@@ -147,7 +146,7 @@ pub(super) fn library_action(app: &mut PhotocraftApp, action: ContourAction) {
                 Ok(json!({"path": path}))
             })
         }),
-        ContourAction::Delete(i) => match app.session.presets.contours.get(i).map(name_of) {
+        ContourAction::Delete(i) => match app.session.presets().contours.get(i).map(name_of) {
             Some(name) => app.run("layer.layerStyle.contours.delete", json!({"name": name})),
             None => Err("no such contour".into()),
         },

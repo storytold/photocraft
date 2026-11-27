@@ -1124,6 +1124,9 @@ impl GpuCanvas {
 }
 
 #[cfg(test)]
+mod edge_gpu_tests;
+
+#[cfg(test)]
 mod mip_gpu_tests;
 
 #[cfg(test)]

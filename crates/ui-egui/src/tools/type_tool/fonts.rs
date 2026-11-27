@@ -64,8 +64,11 @@ pub fn style_label(style: &str) -> String {
 }
 
 /// Starts scanning the installed fonts on a background thread (desktop start-up), so choosing
-/// the Type tool doesn't stall the UI while they are read (#3021). Does nothing on the web.
+/// the Type tool doesn't stall the UI while they are read (#3021), and follows fonts installed
+/// while the app runs (`installed_fonts`). Does nothing on the web.
 pub fn warm_fonts() {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::text::installed_fonts::start();
     photocraft_text::warm_shared();
 }
 
@@ -128,7 +131,7 @@ impl FontSourceState {
     /// The picker's source over this state.
     pub(crate) fn source(&mut self) -> FontPickerSource<'_> {
         let catalog = photocraft_text::fonts::catalog();
-        let mut source = FontPickerSource::new(catalog, Bind::bound(&mut self.settings), Bind::bound(&mut self.filters)).served(&self.served);
+        let mut source = FontPickerSource::new(catalog).settings(Bind::bound(&mut self.settings)).filters(Bind::bound(&mut self.filters)).served(&self.served);
         if let Some(text) = self.preview_text.as_deref() {
             source = source.preview_text(text);
         }
