@@ -393,6 +393,32 @@ fn one_pixel_soft_normal_brush_marks_the_pixel_corner_inside_its_outline() {
 }
 
 #[test]
+fn subpixel_soft_brush_uses_the_displayed_outline() {
+    // Full Size shows a 0.25 px radius for either outline. The traced Normal tip is smaller still.
+    for (mode, angle, inside, outside) in [("fullSizeTip", 0.0, 0.125, 0.375), ("fullSizeTip", 30.0, 0.125, 0.375), ("normalTip", 30.0, 0.125, 0.1875)] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 32, "height": 32, "background": "transparent", "depth": 32})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 0.5, "hardness": 0.0, "angle": angle}})).unwrap();
+        app.run("prefs.set", json!({"values": {"cursors.painting": mode}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        assert_eq!(app.session.tools.brush.size, 0.5);
+        for (y, distance, painted) in [(12, outside, false), (20, inside, true)] {
+            let x = 16.5 - distance;
+            let point_y = f64::from(y) + 0.5;
+            let check = |doc: &Document| {
+                let surface = doc.layers[0].surface().unwrap();
+                assert_eq!(surface.rgba(16, y)[3] > 0.0, painted, "{mode}, angle {angle}, distance {distance}");
+                assert_eq!(surface.rgba(15, y)[3], 0.0);
+            };
+            tool_event(&mut app, ToolEvent::Down { x, y: point_y, pressure: 1.0 }, M);
+            check(&display_doc(&mut app, 0).0);
+            tool_event(&mut app, ToolEvent::Up { x, y: point_y }, M);
+            check(&app.session.active().unwrap().doc);
+        }
+    }
+}
+
+#[test]
 fn brush_drag_shows_the_real_stroke_and_commits_it() {
     // The drag shows the real soft stroke, not a hard flat stand-in.
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

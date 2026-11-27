@@ -84,15 +84,15 @@ pub(crate) fn soft_tip_boundary(app: &PhotocraftApp, tool: Tool) -> Option<f32> 
     if !matches!(tool, Tool::Brush | Tool::Eraser) || aliased(app, tool).is_some() || brush.hardness >= 1.0 || !matches!(*brush.tip, TipShape::Round) {
         return None;
     }
-    if app.session.prefs().cursors.painting != PaintingPref::NormalTip {
-        return Some(1.0);
-    }
-    // Traced tips use the outline's radius units. The framework's round cursor uses document pixels.
-    if !is_plain(brush) {
-        return Some(photocraft_paint::half_coverage_radius(1.0, brush.hardness));
-    }
-    // A tiny dab still needs to reach the cursor's 1 px minimum Normal radius.
-    Some(normal_round_radius(brush) / (brush.size / 2.0).max(0.5))
+    let radius = brush.size / 2.0;
+    let outline_radius = match app.session.prefs().cursors.painting {
+        PaintingPref::NormalTip if is_plain(brush) => normal_round_radius(brush),
+        PaintingPref::NormalTip => radius * photocraft_paint::half_coverage_radius(1.0, brush.hardness),
+        PaintingPref::FullSizeTip => radius,
+        PaintingPref::Standard | PaintingPref::Precise => return Some(1.0),
+    };
+    // The outline uses the selected size, while the renderer uses at least a half-pixel dab radius.
+    Some(outline_radius / radius.max(0.5))
 }
 
 fn normal_round_radius(brush: &BrushSettings) -> f32 {
