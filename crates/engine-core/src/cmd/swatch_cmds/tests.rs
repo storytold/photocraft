@@ -33,7 +33,7 @@ fn add_from_foreground_and_explicit_models() {
     s.tools.foreground = [1.0, 0.5, 0.0, 1.0];
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!((r["name"].as_str(), r["group"].as_str()), (Some("Color Swatch 1"), Some("Grays")));
-    assert_eq!(s.presets().swatches[0].entries.last().unwrap().color, SwatchColor::Rgb([1.0, 0.5, 0.0]));
+    assert_eq!(s.presets().swatches[0].entries.last().unwrap().color(), Some(&SwatchColor::Rgb([1.0, 0.5, 0.0])));
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!(r["name"], "Color Swatch 2");
     // CMYK into a new group at the front, spot.
@@ -42,7 +42,7 @@ fn add_from_foreground_and_explicit_models() {
         .unwrap();
     assert_eq!(r["group"], "Print");
     let g = s.presets().swatches.last().unwrap();
-    assert_eq!(g.entries[0], SwatchEntry { name: "Ink".into(), color: SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]), kind: SwatchKind::Spot });
+    assert_eq!(g.entries[0], SwatchEntry { name: "Ink".into(), paint: SwatchPaint::Color(SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0])), kind: SwatchKind::Spot });
     // Names stay unique.
     let r = s.execute("swatches.add", json!({"name": "Ink"})).unwrap();
     assert_eq!(r["name"], "Ink 2");
@@ -163,8 +163,8 @@ fn aco_round_trip_keeps_16_bit_values_and_books() {
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("aco"), Some(6)));
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the colour book is reported");
     assert_eq!(s.presets().swatches.len(), 1);
-    assert_eq!(s.presets().swatches[0].entries[3].color, SwatchColor::Lab([53.21, -128.0, 127.0]));
-    assert_eq!(color_model(&s.presets().swatches[0].entries[4].color), "gray");
+    assert_eq!(s.presets().swatches[0].entries[3].color(), Some(&SwatchColor::Lab([53.21, -128.0, 127.0])));
+    assert_eq!(color_model(s.presets().swatches[0].entries[4].color().unwrap()), "gray");
     assert_eq!(export_bytes(&mut s, json!({"format": "aco"})), file, "byte-identical .aco");
     // On disk too, with the group taken from the file name.
     let dir = std::env::temp_dir().join(format!("pc-swatch-{}", std::process::id()));
@@ -196,7 +196,7 @@ fn act_round_trip_loads_a_photoshop_color_table() {
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "group": "Table", "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("act"), Some(256)));
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the transparent color is reported");
-    assert_eq!(s.presets().swatches[0].entries[0].color, SwatchColor::Rgb([1.0, 1.0, 1.0]));
+    assert_eq!(s.presets().swatches[0].entries[0].color(), Some(&SwatchColor::Rgb([1.0, 1.0, 1.0])));
     assert_eq!(s.presets().swatches[0].entries[1].name, "Swatch 2");
     // Sniffed by length without a format, and by extension from a path.
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "mode": "replace"})).unwrap();
@@ -265,8 +265,8 @@ fn ase_round_trip_keeps_groups_floats_and_kinds() {
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the unknown model is reported");
     let brand = s.presets().swatches.iter().find(|g| g.name == "Brand").unwrap();
     assert_eq!(brand.entries[0].kind, SwatchKind::Spot);
-    assert_eq!(brand.entries[1].color, SwatchColor::Lab([50.0, 20.0, -30.0]));
-    assert_eq!(brand.entries[2].color, SwatchColor::Gray(0.75));
+    assert_eq!(brand.entries[1].color(), Some(&SwatchColor::Lab([50.0, 20.0, -30.0])));
+    assert_eq!(brand.entries[2].color(), Some(&SwatchColor::Gray(0.75)));
     // Export both groups and read them back.
     let out = export_bytes(&mut s, json!({"format": "ase", "swatches": ["Loose", "Spot ink", "Global lab", "Gray"]}));
     let back = craft_psd::ase::parse(&out).unwrap();
@@ -455,4 +455,18 @@ fn values_beyond_f32_range_are_rejected_so_presets_survive_a_restart() {
     t.load_prefs_json(&s.prefs_to_json()).unwrap();
     assert_eq!(t.presets().swatches, s.presets().swatches, "user swatches survive a save and reload");
     assert!(names(&t).contains(&"Keep me".to_string()));
+}
+
+/// A swatch that holds no colour (a gradient one, from another app's library) lists without colour fields, and using
+/// it is refused.
+#[test]
+fn a_swatch_without_a_colour() {
+    let mut s = crate::session();
+    s.presets_mut().swatches[0].entries.push(SwatchEntry::with_paint("Fade", SwatchPaint::Gradient));
+    let r = s.execute("swatches.list", json!({})).unwrap();
+    let fade = r["groups"][0]["swatches"].as_array().unwrap().iter().find(|sw| sw["name"] == "Fade").unwrap().clone();
+    assert_eq!(fade, json!({"name": "Fade"}));
+    let before = s.tools.foreground;
+    assert!(s.execute("swatches.use", json!({"swatch": "Fade"})).is_err());
+    assert_eq!(s.tools.foreground, before);
 }

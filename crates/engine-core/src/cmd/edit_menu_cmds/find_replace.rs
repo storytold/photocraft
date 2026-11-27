@@ -55,9 +55,15 @@ fn start_index(doc: &Document, layers: &[LayerId], active: Option<LayerId>) -> u
     walk.iter().skip(active_walk + 1).find_map(|(_, _, l)| layers.iter().position(|id| *id == l.id)).unwrap_or(0)
 }
 
-pub(super) fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
+pub(super) fn can_find_replace(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    if type_layers(&d.doc).is_empty() { Err("the document has no type layers".into()) } else { Ok(()) }
+    // A document without type keeps the menu available. Documents with only locked type
+    // retain their existing refusal.
+    if type_layers(&d.doc).is_empty() && d.doc.walk().iter().any(|(_, _, layer)| matches!(layer.content, LayerContent::Text(_))) {
+        Err("the document has no type layers".into())
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
@@ -198,3 +204,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
         other => Err(bad(cmd, format!("unknown action `{other}` (find|change|changeFind|changeAll)"))),
     }
 }
+
+#[cfg(test)]
+#[path = "find_replace_enabled_tests.rs"]
+mod enabled_tests;

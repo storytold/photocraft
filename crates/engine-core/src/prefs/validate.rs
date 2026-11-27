@@ -2,8 +2,8 @@ use super::shortcuts::normalize_shortcut;
 use super::{
     AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, ExportLocation, ExportMetadata, FontPreview, GpuBackend,
     Interpolation, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PlaybackPerformance, PointSize, PressureCurve,
-    QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TabletInput, TextEngine, TypeUnit, UiFontSize,
-    UiScale, Unit, Value, WhenAppClosed,
+    QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TabletInput, TextEngine, TypeUnit, UiDensity,
+    UiFontSize, UiScale, Unit, Value, WhenAppClosed,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -70,6 +70,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "general.colorPicker" => ColorPicker::NAMES,
         "general.imageInterpolation" => Interpolation::NAMES,
         "interface.appearanceMode" => AppearanceMode::NAMES,
+        "interface.density" => UiDensity::NAMES,
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,

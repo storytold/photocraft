@@ -155,6 +155,13 @@ fn every_adjustment_layer_edits_through_properties() {
             assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "{kind} {mode}: the background and this kind's layer");
             let (_, before) = layer(&h);
             let steps = history_len(&h);
+            if kind == "channelMixer" && mode == "cmyk" {
+                // No framework editor for ink outputs yet (#8047): `cmyk_channel_mixer_is_kept_out_of_the_rgb_editor`.
+                let why = crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE;
+                assert!(label_rect(&h, why).is_some(), "{kind} {mode}: the Properties panel says why");
+                assert_ne!(h.state().ui.status, why, "{kind} {mode}: not in the status bar");
+                continue;
+            }
             let slider = sliders(&h).first().copied();
             if SLIDER_KINDS.contains(&kind) {
                 let r = slider.unwrap_or_else(|| panic!("{kind} {mode}: no slider in the Properties editor"));
@@ -172,6 +179,49 @@ fn every_adjustment_layer_edits_through_properties() {
             }
         }
     }
+}
+
+/// #8047: the framework Channel Mixer editor has red, green and blue outputs only, so a CMYK
+/// document's mixer (cyan, magenta, yellow and black outputs) is not opened in it. The Properties
+/// panel says why and edits nothing, the Image › Adjustments dialog refuses with the same reason,
+/// and the layer keeps its ink rows. RGB mixers still open.
+#[test]
+fn cmyk_channel_mixer_is_kept_out_of_the_rgb_editor() {
+    use crate::adjust_editors::values::{self, CMYK_MIXER_UNAVAILABLE, ValueCx};
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::adjust_params;
+
+    // The conversion refuses ink outputs: a CMYK mixer, an imported monochrome one, a CMYK document's defaults.
+    let ink = adjust_params::to_params(&adjust_params::default_for("channelMixer", ColorMode::Cmyk).unwrap());
+    let mut mono = ink.clone();
+    mono["monochrome"] = json!(true);
+    mono["gray"] = json!([30, 30, 30, 100, 0]);
+    for params in [&ink, &mono, &json!({})] {
+        let read = values::from_params("channelMixer", params, &ValueCx::new(ColorMode::Cmyk, params.clone()));
+        assert_eq!(read.err().as_deref(), Some(CMYK_MIXER_UNAVAILABLE), "{params}");
+    }
+    let rgb = json!({"red": [50, 50, 0, 0]});
+    let read = values::from_params("channelMixer", &rgb, &ValueCx::new(ColorMode::Rgb, rgb.clone()));
+    assert!(matches!(read, Ok(crate::adjust_editors::AdjustValue::ChannelMixer { .. })), "RGB mixers read: {read:?}");
+
+    // A CMYK document: the Properties panel shows no editor but a faint label saying why (not the status bar, which
+    // it would overwrite on every frame), the dialog refuses with the same reason, the mixer is unchanged.
+    let mut h = app_harness("channelMixer", "cmyk", 8);
+    let (_, before) = layer(&h);
+    assert!(matches!(&before, Adjustment::ChannelMixer { cmyk: Some(_), .. }), "{before:?}");
+    let steps = history_len(&h);
+    h.run_steps(4);
+    assert!(label_rect(&h, CMYK_MIXER_UNAVAILABLE).is_some(), "the Properties panel says why");
+    assert_ne!(h.state().ui.status, CMYK_MIXER_UNAVAILABLE, "the status bar is left alone");
+    let err = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").unwrap_err();
+    assert_eq!(err, CMYK_MIXER_UNAVAILABLE);
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, before, "the mixer is kept as it is");
+    assert_eq!(history_len(&h), steps, "nothing was edited");
+
+    // An RGB document's mixer still opens in the dialog.
+    let mut h = app_harness("channelMixer", "rgb", 8);
+    assert!(crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").is_ok(), "RGB mixers open");
 }
 
 /// #3264: wheel browsing previews without recording one edit per selected LUT.

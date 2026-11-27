@@ -18,8 +18,8 @@ use craft::color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft::draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMapOutput};
 use craft::imaging::ui::adjust::{
     AdjustDialogCx, AdjustField, AdjustSliders, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast, BrightnessContrastEditor, ChannelMixer,
-    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsPanel, PhotoFilter,
-    PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
+    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsPanel,
+    PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
@@ -193,9 +193,9 @@ pub struct EditorSetup {
     pub tone: Option<ColorBalanceTone>,
     /// The Smart Filter the dialog edits is not reachable from the active document: the editor shows no controls.
     pub stale: bool,
-    /// The clipping display the Levels editor reported on the pass before: the dialog's display changes when the editor's
-    /// report does (an Alt-held thumb), so a display set from outside (automation) stays until the editor next reports.
-    pub reported_clipping: std::cell::Cell<Option<craft::imaging::ui::adjust::LevelsClip>>,
+    /// The last clipping report from the Levels editor. This is shared across the per-pass setup clones so a
+    /// release report clears the overlay while an automation-set value remains until the editor reports a change.
+    pub reported_clipping: Arc<std::sync::Mutex<Option<LevelsClip>>>,
 }
 
 impl Default for EditorSetup {
@@ -208,7 +208,7 @@ impl Default for EditorSetup {
             swatches: [[0.0; 3], [1.0; 3]],
             tone: None,
             stale: false,
-            reported_clipping: Default::default(),
+            reported_clipping: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -218,13 +218,20 @@ fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOu
     AdjustOut { ask: None, edit: events.map(wrap) }
 }
 
+fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: bool) -> BrightnessContrast {
+    if reset && value.legacy != previous_legacy { BrightnessContrast::new(0.0, 0.0, value.legacy) } else { value }
+}
+
 /// Shows the editor of `kind` over `value` for one pass.
 fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>) -> AdjustOut {
     let context = cx.context;
     match (kind, value) {
         ("brightnessContrast", AdjustValue::BrightnessContrast { value }) => {
-            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(context).show(ui);
-            lifted(out.events, |value| AdjustValue::BrightnessContrast { value })
+            let legacy = value.legacy;
+            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(&mut *value)).context(context).show(ui);
+            let reset = context.is_dialog();
+            *value = reset_legacy_toggle(*value, legacy, reset);
+            lifted(out.events.map(|value| reset_legacy_toggle(value, legacy, reset)), |value| AdjustValue::BrightnessContrast { value })
         }
         ("levels", AdjustValue::Levels { levels }) => {
             let mut panel = LevelsPanel::new("Levels", Bind::bound(levels), setup.channels.clone())
@@ -239,7 +246,18 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 panel = panel.pickers_unavailable();
             }
             let out = panel.show(ui);
-            if setup.reported_clipping.replace(out.clipping) != out.clipping {
+            // The panel reports `Some` only while Alt-dragging an input end and `None` as
+            // soon as that gesture ends. Keep the previous report in shared setup state:
+            // setup is cloned for each pass, and a per-clone Cell loses the release edge.
+            let changed = setup.reported_clipping.lock().ok().map(|mut previous| {
+                if *previous == out.clipping {
+                    false
+                } else {
+                    *previous = out.clipping;
+                    true
+                }
+            });
+            if changed != Some(false) {
                 *cx.clipping = out.clipping;
             }
             lifted(out.edit, |levels| AdjustValue::Levels { levels })
@@ -482,6 +500,27 @@ mod tests {
         let mut map = from_params("gradientMap", &json!({}), &ValueCx::new(ColorMode::Rgb, json!({}))).unwrap();
         assert!(answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}1"), Srgba::rgb(0.0, 1.0, 0.0)));
         assert!(!answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}9"), Srgba::BLACK), "no such stop");
+    }
+
+    /// Toggling Use Legacy in the Brightness/Contrast dialog starts both sliders over at 0 in the
+    /// new mode; an edit that keeps the mode, and the Properties panel (no reset), keep the values.
+    #[test]
+    fn toggling_use_legacy_in_the_dialog_resets_brightness_and_contrast() {
+        for legacy in [false, true] {
+            let toggled = BrightnessContrast::new(40.0, -80.0, !legacy);
+            assert_eq!(reset_legacy_toggle(toggled, legacy, true), BrightnessContrast::new(0.0, 0.0, !legacy));
+            assert_eq!(reset_legacy_toggle(toggled, legacy, false), toggled, "the Properties panel keeps its values");
+            let kept = BrightnessContrast::new(40.0, -80.0, legacy);
+            assert_eq!(reset_legacy_toggle(kept, legacy, true), kept, "an edit in the same mode is kept");
+        }
+    }
+
+    #[test]
+    fn levels_clipping_report_survives_the_per_pass_setup_clone() {
+        let setup = EditorSetup::default();
+        let pass = setup.clone();
+        *setup.reported_clipping.lock().unwrap() = Some(LevelsClip::Shadows);
+        assert_eq!(*pass.reported_clipping.lock().unwrap(), Some(LevelsClip::Shadows));
     }
 }
 
