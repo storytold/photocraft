@@ -1418,7 +1418,42 @@ fn postscript_only_style_shows_actual_subfamily() {
     let _ = photocraft_text::shared();
     let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-SemiBold".into()), ..Default::default() };
     // PLAN: `values::character_values` reads `fonts::selected_style` for `CharacterValues.style`; no layer constructor sets only a PostScript name
-    assert_eq!(super::selected_style(&style), "SemiBold");
+    // Another test on another thread may hold the engine for a moment; the style doesn't wait for it.
+    assert!(font_engine_free_within(|| super::selected_style(&style) == "SemiBold"), "{}", super::selected_style(&style));
+}
+
+/// Whether `check` holds within a few seconds. The type panels don't wait for the shared font
+/// engine (`fonts::faces_unless_busy`), and under `cargo test` other tests' threads use it too.
+fn font_engine_free_within(mut check: impl FnMut() -> bool) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if check() {
+            return true;
+        }
+        if std::time::Instant::now() > until {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// While another thread holds the font engine (a background job laying out or re-rendering type), the Character
+/// panel and the axis sliders don't wait for it: the stored style name stands in, and the faces come once it is free.
+#[test]
+fn a_held_font_engine_does_not_hold_up_the_character_panel() {
+    let engine = photocraft_text::shared();
+    let style = photocraft_doc::text::CharStyle {
+        font_family: "Inter".into(),
+        font_style: "Bold".into(),
+        postscript_name: Some("Inter-SemiBold".into()),
+        ..Default::default()
+    };
+    let held = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(super::selected_style(&style), "Bold", "the stored name, without waiting");
+    assert!(super::fonts::faces_unless_busy("Inter").is_none());
+    drop(held);
+    assert!(font_engine_free_within(|| super::selected_style(&style) == "SemiBold"), "{}", super::selected_style(&style));
+    assert!(font_engine_free_within(|| super::fonts::faces_unless_busy("Inter").is_some_and(|faces| !faces.is_empty())));
 }
 
 /// A family's style list is the craft catalog's list for it, variable faces' named instances
