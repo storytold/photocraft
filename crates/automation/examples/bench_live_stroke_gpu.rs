@@ -280,6 +280,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Coverage tiles asked for at an epoch (a stroke's push count).
+type Asked = (Vec<(i32, i32)>, u64);
+
 /// The `gpu` mode's settings.
 struct GpuRun {
     size: f64,
@@ -381,7 +384,7 @@ fn run_gpu(run: &GpuRun, g: &mut Frames<'_>, s: &mut Session, mut params: serde_
     let mut pending: Vec<GpuDab> = first.iter().map(gpu_dab).collect();
     let readback = MaskReadback::new();
     // Calm tiles asked for but not yet taken by the readback queue, by the epoch they were asked at.
-    let mut backlog: std::collections::VecDeque<(Vec<(i32, i32)>, u64)> = std::collections::VecDeque::new();
+    let mut backlog: std::collections::VecDeque<Asked> = std::collections::VecDeque::new();
     let (mut t_feed_during, mut fed_during) = (0.0, 0usize);
     let mut fed_keys = std::collections::HashSet::new();
     for chunk in pts[1..].chunks(run.per_frame) {
