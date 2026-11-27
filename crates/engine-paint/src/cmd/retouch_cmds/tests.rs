@@ -433,14 +433,16 @@ fn dodge_brightens_midtones_more_than_shadows_and_burn_darkens() {
         assert!(mid > 2.0 * shadow.max(0.0), "depth {depth}: midtone +{mid} shadow +{shadow}");
         s.execute("paint.burn", json!({"points": [[5, 15], [35, 15]], "size": 6, "hardness": 100, "exposure": 80})).unwrap();
         assert!(rgba(&s, 20, 15)[0] < 0.45);
-        // Shadows range dodges the dark side more than the grey.
+        // Shadows range dodges the dark side more than the grey, relative to each tone: with
+        // Protect Tones the reference lifts 128 by 10 levels and a 20-level shadow by about 9.
         s.execute("paint.dodge", json!({"points": [[5, 3], [75, 3]], "size": 4, "hardness": 100, "range": "shadows"})).unwrap();
-        assert!(rgba(&s, 60, 3)[0] - 0.08 > rgba(&s, 20, 3)[0] - 0.5);
+        let (dark, grey) = (rgba(&s, 60, 3)[0], rgba(&s, 20, 3)[0]);
+        assert!((dark - 0.08) / 0.08 > 2.0 * (grey - 0.5) / 0.5, "depth {depth}: 0.08 -> {dark}, 0.5 -> {grey}");
     }
     // Grayscale document too.
     let mut s = session(20, 20, 8, "gray");
     s.execute("paint.burn", json!({"points": [[10, 10]], "size": 6, "hardness": 100, "range": "highlights"})).unwrap();
-    assert!(rgba(&s, 10, 10)[0] < 0.9);
+    assert!(rgba(&s, 10, 10)[0] < 0.95);
     assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
 }
 
@@ -458,6 +460,31 @@ fn dodge_does_not_compound_within_a_stroke() {
     assert!(single > 0.55 && (single - scrubbed).abs() < 1.0 / 255.0, "{single} {scrubbed}");
     s.execute("paint.dodge", json!({"points": [[5, 10], [75, 10]], "size": 10, "hardness": 100})).unwrap();
     assert!(rgba(&s, 40, 10)[0] > single + 0.02);
+}
+
+#[test]
+fn a_dodge_or_burn_stroke_matches_the_reference_measurements() {
+    // One stroke, hard 60 px brush, 8-bit RGB, measured in the reference application (#11533).
+    let cases = [
+        ("paint.dodge", "shadows", 50, true, [8u8, 8, 13], [12u8, 12, 19]),
+        ("paint.dodge", "shadows", 50, true, [26, 20, 20], [36, 28, 28]),
+        ("paint.dodge", "shadows", 50, true, [64, 64, 64], [81, 81, 81]),
+        ("paint.burn", "highlights", 100, true, [255, 255, 255], [204, 204, 204]),
+        ("paint.burn", "highlights", 100, true, [230, 200, 180], [184, 161, 146]),
+        ("paint.burn", "highlights", 100, false, [128, 128, 128], [73, 73, 73]),
+    ];
+    for (cmd, range, exposure, protect, input, want) in cases {
+        let mut s = session(160, 80, 8, "rgb");
+        let c = input.map(|v: u8| f32::from(v) / 255.0);
+        paint_layer(&mut s, |_, _| [c[0], c[1], c[2], 1.0]);
+        let p = json!({"points": [[20, 40], [140, 40]], "size": 60, "hardness": 100, "range": range, "exposure": exposure, "protectTones": protect});
+        s.execute(cmd, p).unwrap();
+        let got = rgba(&s, 80, 40);
+        for i in 0..3 {
+            let level = (got[i] * 255.0).round();
+            assert!((level - f32::from(want[i])).abs() <= 2.0, "{cmd} {range} {exposure}% protect={protect}: {input:?} -> {got:?}, reference {want:?}");
+        }
+    }
 }
 
 #[test]
@@ -2260,9 +2287,63 @@ fn live_dodge_matches_the_commit_across_cells() {
         }
     }
     assert!(changed);
-    // A soft tip's footprint spans more live cells, so sums land in a different order: within
-    // 2e-4 (a twentieth of an 8-bit level).
-    assert!(worst <= 2e-4, "live and commit differ by {worst}");
+    // A soft tip's footprint spans more live cells, so sums land in a different order. The gap is
+    // a fraction of each pixel's tone change, so it grows with the tone curve: within 3e-4 (under
+    // a tenth of an 8-bit level).
+    assert!(worst <= 3e-4, "live and commit differ by {worst}");
+}
+
+#[test]
+fn dodge_out_of_memory_is_an_error_and_leaves_the_layer() {
+    // CodeRabbit on #11533: the stroke's tone cache grows with the area it touches.
+    let mut s = session(200, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let (before, history) = (layer_pixels(&s), s.active().unwrap().history.past_len());
+    let opts = json!({"points": [[10, 40], [180, 40]], "size": 40, "hardness": 100});
+    crate::allocation::fail_next_for_test();
+    let result = s.execute("paint.dodge", opts.clone());
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    let err = result.expect_err("running out of memory is the stroke's error").to_string();
+    assert!(err.contains("Dodge or Burn stroke"), "{err}");
+    assert_eq!(layer_pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    s.execute("paint.dodge", opts).unwrap();
+    assert_ne!(layer_pixels(&s), before, "the next stroke has its memory back");
+}
+
+#[test]
+fn live_burn_out_of_memory_is_an_error_and_keeps_the_preview() {
+    let mut s = session(200, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let opts = json!({"points": [[10, 40], [90, 40]], "size": 40, "hardness": 100});
+    crate::allocation::fail_next_for_test();
+    let begun = LiveDab::begin(&s, "paint.burn", &opts);
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(begun.is_err_and(|e| e.to_string().contains("Dodge or Burn stroke")));
+
+    let mut live = LiveDab::begin(&s, "paint.burn", &opts).unwrap();
+    let shown = live.doc.clone();
+    crate::allocation::fail_next_for_test();
+    let pushed = live.push(&[StrokePoint::new(180.0, 40.0, 1.0)]);
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(pushed.is_err_and(|e| e.to_string().contains("Dodge or Burn stroke")));
+    assert_eq!(live.doc, shown, "the failed batch isn't shown");
+    assert!(live.push(&[StrokePoint::new(100.0, 70.0, 1.0)]).is_err(), "a failed stroke stays failed");
+    assert!(s.offer_live_dab(live).is_err(), "and isn't committed with dabs missing");
+}
+
+#[test]
+fn live_burn_out_of_memory_runs_no_more_dabs_in_the_batch() {
+    let mut s = session(600, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let opts = json!({"points": [[10, 40], [30, 40]], "size": 40, "hardness": 100});
+    let mut live = LiveDab::begin(&s, "paint.burn", &opts).unwrap();
+    let tiles = live.work_tiles();
+    crate::allocation::fail_next_for_test();
+    let pushed = live.push(&[StrokePoint::new(580.0, 40.0, 1.0)]);
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(pushed.is_err_and(|e| e.to_string().contains("Dodge or Burn stroke")));
+    assert_eq!(live.work_tiles(), tiles, "the dabs past the failure wrote no working tiles");
 }
 
 /// The sequential-dab tools' options for the live hand-off tests.
@@ -2408,7 +2489,7 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                 p["flow"] = json!(63);
                 let (stroke, _) = parse_brush(&s, &p, cmd).unwrap();
                 let (tool, _) = DabTool::parse(&s, cmd, &p, &stroke).unwrap();
-                let mut effect = tool.effect(pre.format(), stroke.brush.spacing);
+                let (mut effect, _) = tool.effect(pre.format(), stroke.brush.spacing);
                 let mut reference = StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
                 // A fixed region containing all dabs plus their read neighbourhoods.
                 let orig = Region::read(&pre, Rect::new(-128, -128, 384, 256));

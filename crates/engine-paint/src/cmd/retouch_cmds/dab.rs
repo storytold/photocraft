@@ -1,11 +1,13 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
-    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
-    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
+    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, bad, damage_json, dodge_burn, flag, from_rgba_into,
+    has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 use photocraft_algo::retouch::sponge_rgb;
 use photocraft_color::{ColorMode, SampleType};
+use photocraft_paint::retouch::apply_dab_stroke_until;
+use std::ops::ControlFlow;
 
 // ---------------------------------------------------------------------------------------------
 // Toning (Dodge / Burn / Sponge) and focus (Blur / Sharpen), Smudge
@@ -119,22 +121,43 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: imp
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
-fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
-    /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
-    /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
-    /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
-    /// large brushes over ten times slower.
+///
+/// The cells grow with the area the stroke touches, so each one is charged to the working-memory
+/// budget and allocated fallibly. A cell that can't be had stops the stroke and leaves its error
+/// in `fault`; the commit and the live stroke report it, and the document is left as it was.
+fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static, fault: DabFault) -> DabEffect {
+    /// Side of the cells that remember, per touched pixel, the coverage applied so far, the
+    /// original colour and its full-exposure tone (both worked out the first time a dab reaches
+    /// the pixel, so later dabs only mix). Dense cells rather than a map per pixel: a map lookup
+    /// per covered pixel made long strokes with large brushes over ten times slower.
     const CELL: i32 = 64;
+    const LEN: usize = (CELL * CELL) as usize;
+    const PURPOSE: &str = "the Dodge or Burn stroke";
     struct Cell {
         cov: Vec<f32>,
-        orig: Vec<f32>,
+        orig: Vec<[f32; 4]>,
+        tone: Vec<[f32; 3]>,
+        _budget: photocraft_raster::memory::Reservation,
+    }
+    impl Cell {
+        fn new() -> Result<Self> {
+            let bytes = LEN * (size_of::<f32>() + size_of::<[f32; 4]>() + size_of::<[f32; 3]>());
+            let budget = photocraft_raster::memory::try_reserve(bytes as u64).map_err(|e| crate::allocation::error(PURPOSE, &e))?;
+            Ok(Self {
+                cov: crate::allocation::filled(LEN, -1.0, PURPOSE)?,
+                orig: crate::allocation::filled(LEN, [0.0; 4], PURPOSE)?,
+                tone: crate::allocation::filled(LEN, [0.0; 3], PURPOSE)?,
+                _budget: budget,
+            })
+        }
     }
     let mut cells: std::collections::HashMap<(i32, i32), Cell> = std::collections::HashMap::new();
+    let mut failed = false;
     let a = alpha_index(&fmt);
     let n = fmt.channels();
     Box::new(move |work, fp| {
         let r = fp.rect.intersect(&work.rect);
-        if r.is_empty() {
+        if failed || r.is_empty() {
             return;
         }
         let mut enc = [0.0f32; 8];
@@ -145,9 +168,18 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + '
                 if part.is_empty() {
                     continue;
                 }
-                let len = (CELL * CELL) as usize;
-                // Coverage -1: not touched yet, so `orig` isn't filled in for that pixel.
-                let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
+                // Coverage -1: not touched yet, so `orig` and `tone` aren't filled in for that pixel.
+                let cell = match cells.entry((cx, cy)) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(e) => match Cell::new() {
+                        Ok(cell) => e.insert(cell),
+                        Err(err) => {
+                            failed = true;
+                            fault.set(err);
+                            return;
+                        }
+                    },
+                };
                 for y in part.y0..part.y1 {
                     for x in part.x0..part.x1 {
                         let k = fp.at(x, y).clamp(0.0, 1.0);
@@ -155,12 +187,14 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + '
                             continue;
                         }
                         let i = ((y - cr.y0) * CELL + (x - cr.x0)) as usize;
-                        let (Some(prev), Some(src)) = (cell.cov.get_mut(i), cell.orig.get_mut(i * n..i * n + n)) else { continue };
+                        let (Some(prev), Some(o), Some(t)) = (cell.cov.get_mut(i), cell.orig.get_mut(i), cell.tone.get_mut(i)) else { continue };
                         if *prev < 0.0 {
                             // First touch: the working pixel is still the original.
-                            src.copy_from_slice(work.px(x, y));
+                            *o = to_rgba(&fmt, work.px(x, y));
+                            *t = toned([o[0], o[1], o[2]]);
                             *prev = 0.0;
                         }
+                        let (o, t) = (*o, *t);
                         // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
                         // to full coverage; the tone is applied once, from the original.
                         let k = *prev + k * (1.0 - *prev);
@@ -168,8 +202,6 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + '
                             continue;
                         }
                         *prev = k;
-                        let o = to_rgba(&fmt, src);
-                        let t = toned([o[0], o[1], o[2]]);
                         let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
                         from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
                         let px = work.px_mut(x, y);
@@ -217,6 +249,29 @@ fn smudge_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
 
 /// One dab's edit of the working copy.
 pub(crate) type DabEffect = Box<dyn FnMut(&mut Region, &Footprint) + Send>;
+
+/// The error that stopped a stroke's [`DabEffect`], which has no error return of its own. It
+/// stays set, so a stroke that failed once can't be committed with its later dabs missing.
+#[derive(Clone, Default)]
+pub(super) struct DabFault(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+impl DabFault {
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn set(&self, e: EngineError) {
+        *self.slot() = Some(e.to_string());
+    }
+
+    fn check(&self) -> Result<()> {
+        self.slot().clone().map_or(Ok(()), |e| Err(EngineError::Other(e)))
+    }
+
+    fn is_set(&self) -> bool {
+        self.slot().is_some()
+    }
+}
 
 /// Pixels an effect reads beyond the dab it writes. Smudge's pickup is a fixed-size square,
 /// independent of pressure, roundness and the dab's current angle.
@@ -301,11 +356,13 @@ impl DabTool {
         }
     }
 
-    /// The per-dab effect on a working copy in `fmt`, for a brush of `spacing`.
-    pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
+    /// The per-dab effect on a working copy in `fmt`, for a brush of `spacing`, and where it
+    /// leaves the error that stopped it.
+    pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> (DabEffect, DabFault) {
         let sp = spacing;
-        match self.clone() {
-            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
+        let fault = DabFault::default();
+        let effect: DabEffect = match self.clone() {
+            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect), fault.clone()),
             // Flow is already in the dab's coverage. The reference RGB response applies to integer
             // RGB surfaces, including 16-bit. Float RGB and the other models use the legacy curve.
             Self::Sponge { saturate, vibrance } if fmt.mode == ColorMode::Rgb && fmt.sample != SampleType::F32 => {
@@ -363,7 +420,8 @@ impl DabTool {
                 let mut sm = Smudge::new(strength, finger_px, max_size).with_alpha(alpha_index(&fmt)).with_mode(mode);
                 Box::new(move |work, fp| sm.dab(work, fp))
             }
-        }
+        };
+        (effect, fault)
     }
 }
 
@@ -406,13 +464,18 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             return Ok(l.bounds);
         }
         let fmt = surf.format();
-        let mut effect = tool.effect(fmt, stroke.brush.spacing);
+        let (mut effect, fault) = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
-            Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
-            None => effect(work, fp),
+        let dmg = apply_dab_stroke_until(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| {
+            match &mut sampler {
+                Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
+                None => effect(work, fp),
+            }
+            if fault.is_set() { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
         })
-        .map_err(|e| bad(cmd, e.to_string()))
+        .map_err(|e| bad(cmd, e.to_string()))?;
+        fault.check()?;
+        Ok(dmg.unwrap_or(Rect::EMPTY))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
     if from_live {
@@ -513,6 +576,7 @@ pub struct LiveDab {
     dual_pending: Vec<photocraft_paint::Dab>,
     done: usize,
     effect: DabEffect,
+    fault: DabFault,
     neighborhood: DabNeighborhood,
     pre_surf: Surface,
     colors: Option<crate::color_channels::ColorChannels>,
@@ -569,7 +633,7 @@ impl LiveDab {
         halo: i32,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
+        Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), |pre| (effect(pre), DabFault::default()))
     }
 
     fn with_neighborhood(
@@ -579,7 +643,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface) -> (DabEffect, DabFault),
     ) -> Result<Self> {
         let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
         let p = &captured;
@@ -607,7 +671,7 @@ impl LiveDab {
         halo: i32,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
+        Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), |pre| (effect(pre), DabFault::default()))
     }
 
     fn with_neighborhood_on(
@@ -617,13 +681,13 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface) -> (DabEffect, DabFault),
     ) -> Result<Self> {
         let colors = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&doc))?;
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
-        let effect = effect(&pre_surf);
+        let (effect, fault) = effect(&pre_surf);
         // Generate the same dabs as `apply_dab_stroke` (zoom 1), without a StrokeRenderer:
         // its accumulated coverage isn't used here, and each effect rasterizes its own footprint.
         let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
@@ -637,6 +701,7 @@ impl LiveDab {
             dual_pending: Vec::new(),
             done: 0,
             effect,
+            fault,
             neighborhood,
             work: WorkTiles::new(pre_surf.channels()),
             pre_surf,
@@ -691,8 +756,15 @@ impl LiveDab {
             if r.is_empty() {
                 continue;
             }
+            if self.fault.is_set() {
+                break;
+            }
             let mut region = self.work.read(&self.pre_surf, self.neighborhood.read_rect(r, d));
             (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
+            // A failed stroke allocates no more working tiles.
+            if self.fault.is_set() {
+                break;
+            }
             self.work.write(&self.pre_surf, &region.crop(r));
             dmg = dmg.union(&r);
         }
@@ -700,6 +772,11 @@ impl LiveDab {
         new.clear();
         self.pending = new;
         dmg
+    }
+
+    #[cfg(test)]
+    pub(super) fn work_tiles(&self) -> usize {
+        self.work.tiles.len()
     }
 
     /// Mix the working pixels of `r` back over the original into the shown document.
@@ -727,6 +804,7 @@ impl LiveDab {
         self.points.extend_from_slice(&pts);
         self.generator.push(&pts, &mut self.pending, &mut self.dual_pending);
         let dmg = self.run_new_dabs();
+        self.fault.check()?;
         let ctx = &self.ctx;
         // The finishing dabs, run on a scratch copy of the working pixels.
         let mut tail = None;
@@ -777,6 +855,7 @@ impl LiveDab {
         }
         self.generator.finish(&mut self.pending, &mut self.dual_pending);
         let dmg = self.run_new_dabs();
+        self.fault.check()?;
         let shown = dmg.union(&self.tail);
         if !shown.is_empty() {
             let work = self.work.read(&self.pre_surf, shown);
@@ -828,3 +907,7 @@ mod smudge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
 mod smudge_mode_tests;
+
+#[cfg(test)]
+#[path = "live_fault_tests.rs"]
+mod live_fault_tests;
