@@ -6,7 +6,7 @@
 //! changing it never adds a history step. Every structural change below is one history step.
 
 use photocraft_color::PixelFormat;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, VideoData};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -14,26 +14,25 @@ use crate::commands::{CommandSpec, int_i32};
 use crate::{DocState, EngineError, Result, Session};
 
 mod align;
-mod damage;
 mod moves;
 mod selection;
 mod structure;
 
+pub use crate::damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use align::{align, distribute};
-pub(crate) use damage::grow_hint;
-#[cfg(any(test, debug_assertions))]
-pub(crate) use damage::{hint_misses, small_change_pct};
-pub use damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use moves::link_groups;
-pub(crate) use moves::shift_surface;
+pub use moves::shift_surface;
 #[cfg(test)]
 pub(crate) use moves::with_links;
 pub use moves::{move_targets, move_to, moved, moved_target, moved_wrapping, moves_mask_alone, preview_move, translate, wrapped_delta};
 pub(crate) use moves::{wrap_path, wrap_surface, wraps_linked_masks};
+pub use selection::targets;
+pub use selection::top_level;
 use selection::{doc_state, find_layers, select_all_layers, select_linked};
-pub(crate) use selection::{mask_targets, recorded_step, reselect, targets, top_level};
+pub(crate) use selection::{mask_targets, recorded_step, reselect};
 pub use selection::{select, selected, set_selection};
-pub(crate) use structure::{check_group_depth, deletion_neighbours, relink_copies};
+pub use structure::deletion_neighbours;
+pub(crate) use structure::{check_group_depth, relink_copies};
 pub use structure::{delete_selected, duplicate_selected, group_layers, set_visible_selected};
 use structure::{link_layers, lock_layers, merge_layers, rename_layer, reverse};
 

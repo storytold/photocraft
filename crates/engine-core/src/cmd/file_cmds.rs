@@ -42,29 +42,34 @@ pub use batch_run::{BatchInput, OutputClaims, encode_batch_error_log, list_image
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_files_tree};
 pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_save_point, process_files};
-pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
+pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with, layers_to_files_needs_more_layers};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
+pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
+pub use paths::join;
 pub(crate) use paths::openable_name;
+pub use paths::sanitize;
+pub use paths::stem;
 pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
     template_name, untitled_name,
 };
-pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
+pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, read_file, read_file_limited, write_file};
 pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
+pub use save::SaveOpts;
+pub(crate) use save::encode;
 use save::save_a_copy;
-pub(crate) use save::{SaveOpts, encode, save_doc};
+pub use save::save_doc;
 pub use save::{
     dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, pdf_spot_plates_param,
     tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
@@ -88,7 +93,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn native_doc(s: &Session) -> std::result::Result<(), String> {
+pub fn native_doc(s: &Session) -> std::result::Result<(), String> {
     native(s)?;
     has_doc(s)
 }
@@ -140,7 +145,7 @@ impl crate::DocState {
     }
 }
 
-pub(crate) fn str_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a str> {
+pub fn str_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a str> {
     p.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("missing \"{key}\"") })
 }
 
@@ -343,7 +348,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -429,7 +434,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layers to Files…",
             &["File", "Export"],
             None,
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it)} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"iccProfile":bool? (Include ICC Profile: false, no profile in any file; true, the document's profile, or its mode's working profile when it has none, PSD included, and none in a CMYK document's PNG; unset, as before),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it)} → {files}"##,
             native_doc,
             layers_to_files
         ),
@@ -457,6 +462,10 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+#[path = "file_cmds/place_selection_centre_tests.rs"]
+mod place_selection_centre_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
 
@@ -467,6 +476,10 @@ mod batch_log_format_tests;
 #[cfg(test)]
 #[path = "file_cmds/export_clut_cube_header_tests.rs"]
 mod export_clut_cube_header_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/layers_to_files_single_layer_tests.rs"]
+mod layers_to_files_single_layer_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/layers_to_files_png_names_tests.rs"]
@@ -563,3 +576,7 @@ mod aces_exr_tests {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/layers_to_files_icc_tests.rs"]
+mod layers_to_files_icc_tests;

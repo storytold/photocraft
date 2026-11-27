@@ -1,5 +1,5 @@
 use super::planes::color_count;
-use super::{AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, Serialize};
+use super::{ColorMode, DocState, Document, Serialize};
 
 // ---------------------------------------------------------------------------------------------
 // View state
@@ -78,20 +78,7 @@ impl ChannelView {
     }
 }
 
-/// Session-wide Quick Mask Options (double-click the Quick Mask button in Photoshop).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QuickMaskOptions {
-    pub color: Color,
-    pub opacity: f32,
-    pub indicates: ColorIndicates,
-}
-
-impl Default for QuickMaskOptions {
-    fn default() -> Self {
-        Self { color: AlphaChannel::DEFAULT_COLOR, opacity: 0.5, indicates: ColorIndicates::MaskedAreas }
-    }
-}
+pub use crate::state::QuickMaskOptions;
 
 /// Keep the view valid after the document changed (undo, deleted channels, mode changes).
 pub(crate) fn fix_view(st: &mut DocState) {

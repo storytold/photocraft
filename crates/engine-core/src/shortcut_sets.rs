@@ -12,10 +12,9 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::prefs::{Preferences, alternate_keys, normalize_shortcut};
+use crate::prefs::{Preferences, normalize_shortcut};
 
 /// The built-in set's name: the default bindings.
 pub const DEFAULTS_NAME: &str = "PhotoCraft Defaults";
@@ -24,64 +23,7 @@ pub const MAX_SETS: usize = 64;
 /// Longest set name, in characters.
 pub const MAX_NAME: usize = 64;
 
-/// A saved set: the overrides of the default bindings, in the shape the preferences keep them.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ShortcutSet {
-    /// Command id → main key; "" removes the default key.
-    #[serde(deserialize_with = "crate::prefs::theme_ids::command_keys")]
-    pub shortcuts: BTreeMap<String, String>,
-    /// Command id → further keys, replacing the defaults.
-    #[serde(deserialize_with = "crate::prefs::theme_ids::command_keys")]
-    pub alternate_shortcuts: BTreeMap<String, Vec<String>>,
-}
-
-impl ShortcutSet {
-    /// A set of these bindings, without the actions' function keys (they belong to the
-    /// actions, as in an `.atn` file, not to a set).
-    pub fn from_bindings(shortcuts: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>) -> Self {
-        let shortcuts = shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())).collect();
-        let alternate_shortcuts = alternates.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())).collect();
-        Self { shortcuts, alternate_shortcuts }
-    }
-
-    /// The bindings `p` uses now, without the actions' function keys.
-    pub fn of(p: &Preferences) -> Self {
-        Self::from_bindings(&p.shortcuts, &p.alternate_shortcuts)
-    }
-
-    /// Put this set's bindings in place of `shortcuts` / `alternates`, keeping the actions'
-    /// function keys: switching sets with `useSet` and in the Keyboard Shortcuts dialog.
-    pub fn apply(&self, shortcuts: &mut BTreeMap<String, String>, alternates: &mut BTreeMap<String, Vec<String>>) {
-        shortcuts.retain(|id, _| is_action_key(id));
-        shortcuts.extend(self.shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())));
-        alternates.retain(|id, _| is_action_key(id));
-        alternates.extend(self.alternate_shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())));
-    }
-
-    /// Use this set's bindings in `p`, keeping the actions' function keys.
-    pub fn load_into(&self, p: &mut Preferences) {
-        self.apply(&mut p.shortcuts, &mut p.alternate_shortcuts);
-    }
-
-    /// Check every key (a set from a call or a hand-edited file must not hold garbage).
-    fn validate(&self) -> Result<(), String> {
-        for (id, k) in &self.shortcuts {
-            if !k.is_empty() && normalize_shortcut(k).is_none() {
-                return Err(format!("`{k}` for `{id}` is not a valid shortcut (e.g. Cmd+Shift+N, F7)"));
-            }
-        }
-        for (id, keys) in &self.alternate_shortcuts {
-            alternate_keys(&json!(keys)).map_err(|e| format!("`{id}`: {e}"))?;
-        }
-        Ok(())
-    }
-}
-
-/// An action's function key (`actions.play:<name>`): kept by the action, not by a set.
-fn is_action_key(id: &str) -> bool {
-    crate::actions_cmds::is_action_key(id)
-}
+pub use crate::prefs::ShortcutSet;
 
 /// A set name as given, trimmed; an error for an empty, overlong or reserved name.
 pub fn set_name(name: &str) -> Result<String, String> {
@@ -202,8 +144,9 @@ pub fn describe(p: &Preferences) -> Value {
     })
 }
 
-/// A key as the Summarize table shows it on `mac` (⌘ spelled Cmd, ⌥ Option) or elsewhere
-/// (Ctrl, Alt).
+/// A key as the Summarize table shows it on `mac` (⌘ spelled Cmd, ⌥ Option, in the stored order)
+/// or elsewhere (Ctrl, Alt, ordered Alt, Shift, Ctrl as the reference shows them:
+/// `Alt+Shift+Ctrl+K`).
 fn key_label(sc: &str, mac: bool) -> String {
     let Some(n) = normalize_shortcut(sc) else { return sc.to_string() };
     // `Cmd++` splits into an empty part before the key, which joins back as `++`.
@@ -220,6 +163,16 @@ fn key_label(sc: &str, mac: bool) -> String {
             continue;
         }
         parts.push(shown);
+    }
+    // Off the Mac the modifiers read Alt, Shift, Ctrl. The key stays last, and `Cmd++`'s empty
+    // part before it ranks after the modifiers.
+    if !mac && let Some((_, modifiers)) = parts.split_last_mut() {
+        modifiers.sort_by_key(|m| match *m {
+            "Alt" => 0,
+            "Shift" => 1,
+            "Ctrl" => 2,
+            _ => 3,
+        });
     }
     parts.join("+")
 }
@@ -422,8 +375,20 @@ mod tests {
         assert!(mac.contains("Cmd+Control+Option+G") && mac.contains("Gaussian Blur &amp; more") && mac.contains("Filter &lt;x&gt;"), "{mac}");
         assert!(!mac.contains("Unbound") && !mac.contains("Empty"), "{mac}");
         let pc = summarize("S", &sections, false);
-        assert!(pc.contains("<td>Ctrl+C, F3</td>") && pc.contains("Ctrl+Alt+G"), "{pc}");
+        assert!(pc.contains("<td>Ctrl+C, F3</td>") && pc.contains("Alt+Ctrl+G"), "{pc}");
         assert_eq!(key_label("Cmd++", true), "Cmd++");
+    }
+
+    #[test]
+    fn summarize_orders_modifiers_alt_shift_ctrl_off_the_mac() {
+        // Edit › Keyboard Shortcuts… as the reference's Summarize page lists it (#14882).
+        let sections = vec![("Edit".to_string(), vec![("Keyboard Shortcuts...".to_string(), vec!["Cmd+Alt+Shift+K".to_string()])])];
+        let pc = summarize("S", &sections, false);
+        assert!(pc.contains("<td>Keyboard Shortcuts...</td><td>Alt+Shift+Ctrl+K</td>"), "{pc}");
+        assert_eq!(key_label("Shift+Ctrl+F8", false), "Shift+Ctrl+F8");
+        assert_eq!(key_label("Cmd+Alt++", false), "Alt+Ctrl++");
+        // The Mac keeps the stored order.
+        assert_eq!(key_label("Cmd+Ctrl+Alt+Shift+K", true), "Cmd+Control+Option+Shift+K");
     }
 
     #[test]

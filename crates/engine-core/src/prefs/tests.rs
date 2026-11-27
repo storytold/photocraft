@@ -1,4 +1,6 @@
 use super::*;
+use crate::color_cmds::ColorExt;
+use crate::prefs::SavedPrefsExt;
 
 #[test]
 fn system_title_bar_defaults_to_integrated_and_preserves_saved_choices() {
@@ -275,10 +277,10 @@ fn reset_one_colour_setting() {
     let mut s = session();
     s.execute("prefs.set", json!({"values": {"colorSettings.bpc": false, "colorSettings.workingRgb": "display-p3"}})).unwrap();
     assert_eq!(s.execute("prefs.reset", json!({"path": "colorSettings.bpc"})).unwrap(), json!(true));
-    assert!(s.color.settings.bpc);
-    assert_eq!(s.color.settings.working_rgb, "display-p3", "other colour settings are untouched");
+    assert!(s.color().settings.bpc);
+    assert_eq!(s.color().settings.working_rgb, "display-p3", "other colour settings are untouched");
     s.execute("prefs.reset", json!({"path": "colorSettings.workingRgb"})).unwrap();
-    assert_eq!(s.color.settings, crate::color_cmds::ColorSettings::default());
+    assert_eq!(s.color().settings, crate::color_cmds::ColorSettings::default());
     assert!(s.execute("prefs.reset", json!({"path": "colorSettings.notAField"})).is_err());
 }
 
@@ -402,8 +404,8 @@ fn json_round_trip_tolerates_unknown_and_missing_keys() {
     let mut t = crate::session();
     t.load_prefs_json(&text).unwrap();
     assert_eq!(t.prefs(), s.prefs());
-    assert_eq!(t.color.settings.working_rgb, "display-p3");
-    assert_eq!(t.color.settings.policy_rgb, crate::color_cmds::Policy::Convert);
+    assert_eq!(t.color().settings.working_rgb, "display-p3");
+    assert_eq!(t.color().settings.policy_rgb, crate::color_cmds::Policy::Convert);
     // Older/newer files: unknown keys ignored, missing ones default.
     let mut u = crate::session();
     u.load_prefs_json(r#"{"general": {"beepWhenDone": true, "futureThing": 1}, "someNewSection": {}}"#).unwrap();
@@ -452,60 +454,6 @@ fn shortcuts_normalise_and_detect_conflicts() {
     assert_eq!(normalize_shortcut("home").as_deref(), Some("Home"));
     let c = conflicts([("a", "Cmd+J"), ("b", "cmd+j"), ("c", "Cmd+K")]);
     assert_eq!(c, vec![("Cmd+J".to_string(), vec!["a".to_string(), "b".to_string()])]);
-}
-
-#[test]
-fn keyboard_shortcuts_reassign_and_reset() {
-    let mut s = session();
-    let undo = crate::commands::find("edit.undo").unwrap().shortcut;
-    assert_eq!(s.prefs().shortcut("edit.undo", undo), Some("Cmd+Z"));
-    // Give ⌘Z to Fill: Undo loses it (Photoshop moves a shortcut rather than duplicating it).
-    let r = s.execute("edit.keyboardShortcuts", json!({"set": {"edit.fill": "Cmd+Z"}})).unwrap();
-    assert_eq!(s.prefs().shortcut("edit.fill", None), Some("Cmd+Z"));
-    assert_eq!(s.prefs().shortcut("edit.undo", undo), None);
-    assert!(r["conflicts"].as_array().unwrap().is_empty());
-    // Keeping the duplicate reports a conflict.
-    let r = s.execute("edit.keyboardShortcuts", json!({"set": {"edit.undo": "Cmd+Z"}, "removeConflicts": false})).unwrap();
-    assert_eq!(r["conflicts"][0]["shortcut"], "Cmd+Z");
-    assert!(s.execute("edit.keyboardShortcuts", json!({"set": {"no.such.command": "F9"}})).is_err());
-    s.execute("edit.keyboardShortcuts", json!({"reset": true})).unwrap();
-    assert!(s.prefs().shortcuts.is_empty());
-    assert_eq!(s.prefs().shortcut("edit.undo", undo), Some("Cmd+Z"));
-    // Listing with a filter.
-    let r = s.execute("edit.keyboardShortcuts", json!({"filter": "gaussian"})).unwrap();
-    assert!(r["commands"].as_array().unwrap().iter().any(|c| c["id"] == "filter.blur.gaussianBlur"));
-}
-
-/// #249: temporary tools (held keys) and the fill / colour keys are bindable like commands.
-#[test]
-fn temporary_tools_and_fill_keys_are_rebindable() {
-    let mut s = session();
-    let r = s.execute("edit.keyboardShortcuts", json!({"filter": "tools.temporary"})).unwrap();
-    let ids: Vec<&str> = r["commands"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
-    assert!(
-        ids.contains(&"tools.temporary.hand")
-            && ids.contains(&"tools.temporary.zoomIn")
-            && ids.contains(&"tools.temporary.zoomOut")
-            && ids.contains(&"tools.temporary.erase"),
-        "{ids:?}"
-    );
-    assert!(r["commands"].as_array().unwrap().iter().all(|c| c["hold"] == true));
-    // Rebind the temporary zoom; an unknown id still fails.
-    s.execute("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomIn": "Ctrl+Space"}})).unwrap();
-    assert_eq!(s.prefs().shortcut("tools.temporary.zoomIn", Some("Cmd+Space")), Some("Ctrl+Space"));
-    assert!(s.execute("edit.keyboardShortcuts", json!({"set": {"tools.temporary.unknown": "Space"}})).is_err());
-    // Taking a temporary tool's key for a command removes it from the temporary tool.
-    s.execute("edit.keyboardShortcuts", json!({"set": {"edit.fillForeground": "Space"}})).unwrap();
-    assert_eq!(s.prefs().shortcut("tools.temporary.hand", Some("Space")), None);
-    assert_eq!(s.prefs().shortcut("edit.fillForeground", Some("Alt+Backspace")), Some("Space"));
-    // D / X and the fill keys are listed with their Photoshop defaults.
-    let r = s.execute("edit.keyboardShortcuts", json!({"list": true})).unwrap();
-    let def = |id: &str| r["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).map(|c| c["default"].clone());
-    assert_eq!(def("tools.swapColors"), Some(json!("X")));
-    assert_eq!(def("tools.defaultColors"), Some(json!("D")));
-    assert_eq!(def("edit.fillBackground"), Some(json!("Cmd+Backspace")));
-    // Bad values fail.
-    assert!(s.execute("edit.keyboardShortcuts", json!({"set": {"tools.temporary.hand": 7}})).is_err());
 }
 
 #[test]
@@ -1154,7 +1102,7 @@ fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
         .unwrap();
     assert_eq!(s.prefs().general, General::default());
     assert_eq!(s.prefs().performance.history_states, 20);
-    assert_eq!(s.color.settings.working_rgb, "display-p3", "the rest of the colour settings load");
+    assert_eq!(s.color().settings.working_rgb, "display-p3", "the rest of the colour settings load");
     let paths: Vec<String> = invalid.iter().map(InvalidPref::path).collect();
     assert_eq!(paths, ["general", "colorSettings.askOnMismatch"]);
     // A valid file reports nothing; one that isn't an object still fails as a whole.

@@ -1,6 +1,7 @@
 //! Free Transform of several selected layers by one box (#6501).
 
 use super::*;
+use crate::actions_cmds::ActionsExt;
 
 /// A 200 x 200 document: a red 40 x 20 block on "Paint" (x 10..50, y 10..30) and a type layer
 /// over it, both selected, the type layer active (as after creating it and ⌘-clicking Paint).
@@ -253,7 +254,7 @@ fn a_recorded_transform_of_the_selected_layers_replays_on_the_selection_in_anoth
     // What the canvas box commits: the ids it opened on, listed (#6501).
     s.execute("edit.transform", json!({"layers": [paint.0, text.0], "matrix": [1, 0, 0, 1, 30, 40]})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
-    let step = s.actions.list.actions()[0].steps[0].params.clone();
+    let step = s.actions().list.actions()[0].steps[0].params.clone();
     assert!(step.get("layers").is_none(), "the step plays on the selection, not on these ids: {step}");
     // Another document, its ids shifted by an extra layer under the two that get selected.
     s.execute("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
@@ -434,5 +435,5 @@ fn a_recorded_transform_of_other_layers_than_the_selection_keeps_their_ids() {
     s.execute("actions.record", json!({"name": "Paint only"})).unwrap();
     s.execute("edit.transform", json!({"layers": [paint.0], "matrix": [1, 0, 0, 1, 5, 0]})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
-    assert_eq!(s.actions.list.actions()[0].steps[0].params["layers"], json!([paint.0]));
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["layers"], json!([paint.0]));
 }

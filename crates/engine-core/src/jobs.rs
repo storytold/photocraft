@@ -27,6 +27,7 @@
 //! - While a job runs on a document, commands that would edit that document are disabled with a
 //!   message naming the job (queries and document-independent commands still run).
 
+use crate::color_cmds::ColorExt;
 use std::any::Any;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
@@ -1048,7 +1049,7 @@ pub struct PendingPsdPreflight {
 impl Session {
     /// A recording mode change must not reclassify an in-flight stroke from this take.
     pub(crate) fn tool_stroke_job_running(&self) -> bool {
-        self.jobs.running.iter().any(|job| job.started_in_take == Some(self.actions.take) && crate::actions_cmds::tool_stroke(&job.command))
+        self.jobs.running.iter().any(|job| job.started_in_take == Some(self.recording.take) && crate::actions_record::tool_stroke(&job.command))
     }
 
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
@@ -1201,7 +1202,7 @@ impl Session {
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
     /// (per layer for PSD/PSB) and cancellation, then add the document like
-    /// [`Session::open_document`] (Color Settings policies apply). `name` names the document.
+    /// [`ColorExt::open_document`](crate::color_cmds::ColorExt::open_document) (Color Settings policies apply). `name` names the document.
     /// The job's result is `{document, docId, name, warnings, color}`; on wasm it runs inline.
     /// `document` is the tab index at apply time; resolve `docId` before handling a delayed
     /// completion, since earlier handlers may have moved or closed tabs. When
@@ -1386,7 +1387,7 @@ impl Session {
                     crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
                     let damaged = confirm_damage && damaged;
-                    let question = s.color.open_question(&r.document).filter(|_| !raw);
+                    let question = s.color().open_question(&r.document).filter(|_| !raw);
                     if damaged || question.is_some() {
                         let held = s.hold_open(r.document, r.source_read_only);
                         return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
@@ -1743,14 +1744,15 @@ impl Session {
         result
     }
 
-    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::brush_cmds::LiveCommit>) -> Result<Started> {
+    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::state::LiveCommit>) -> Result<Started> {
         let spec = crate::registry::spec(id)?;
+        let hooks = crate::registry::hooks();
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
-        let params = crate::file_cmds::batch_open_params(self, id, &params).unwrap_or(params);
+        let params = hooks.request_params.iter().find_map(|f| f(self, id, &params)).unwrap_or(params);
         // Untrusted sessions gate every command, including the ones a command runs on its own
         // behalf (`file.automate.conditionalModeChange` runs `image.mode.*`), before any side
         // effect.
@@ -1762,39 +1764,14 @@ impl Session {
         let automation = self.authorize.is_some();
         let _authorization = AuthorizationScope::enter(self.authorize);
         let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
-        // Last Filter runs as the filter it repeats: journaled, recorded in an action, faded and
-        // run as a job like that filter, so a recorded step replays the same filter anywhere
-        // (#3089), as Transform Again records its transform (#1440). With no filter yet it falls
-        // through to its own precondition.
-        if id == "filter.lastFilter"
-            && let Some((filter, mut p)) = crate::filters::last_filter(self).filter(|(f, _)| f != id)
-        {
-            for key in ["target", "layer"] {
-                if let Some(value) = params.get(key) {
-                    if p.is_null() {
-                        p = serde_json::json!({});
-                    }
-                    if let Some(object) = p.as_object_mut() {
-                        object.insert(key.into(), value.clone());
-                    }
-                }
+        if let Some((other, p)) = hooks.redirect.iter().find_map(|f| f(self, id, &params)) {
+            return self.dispatch(&other, p, background);
+        }
+        self.validate_params(id, spec, &params)?;
+        for before in &hooks.before_command {
+            if let Some(v) = before(self, id, spec, &params)? {
+                return Ok(Started::Done(v));
             }
-            return self.dispatch(&filter, p, background);
-        }
-        if id == "file.new" {
-            crate::document_preset_cmds::validate_new_params(self, &params)?;
-        }
-        crate::param_check::check(spec, &params)?;
-        crate::filters::validate_params(id, &params)?;
-        // A command that may not run leaves a floating selection floating (#13169): it is refused
-        // before the piece drops, without a History step. One that may run is checked again
-        // below, once the piece has dropped, on the pixels and selection it will change.
-        if crate::float_cmds::drops_for(self, id) {
-            self.admit(id, spec, &params)?;
-        }
-        // A floating selection drops before any other command (Undo puts it back instead).
-        if let Some(v) = crate::float_cmds::before_command(self, id)? {
-            return Ok(Started::Done(v));
         }
         // Pixel commands follow the Channels panel target unless the caller names one.
         let run_params = self.admit(id, spec, &params)?;
@@ -1824,12 +1801,12 @@ impl Session {
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
-        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers().to_vec()) } else { None };
+        let pre_selected = if self.recording.target.is_some() { self.active().map(|st| st.selected_layers().to_vec()) } else { None };
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
-        let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
+        let recording = if spec.journal && crate::actions_record::replayable(id) { self.recording.target.take() } else { None };
         let before = self.active().map(|st| (st.doc.clone(), st.revision));
         let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
@@ -1839,8 +1816,8 @@ impl Session {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
         self.live_commit = None;
-        if self.actions.recording.is_none() {
-            self.actions.recording = recording;
+        if self.recording.target.is_none() {
+            self.recording.target = recording;
         }
         self.jobs.spawn = false;
         self.coalesce_request = None;
@@ -1857,12 +1834,11 @@ impl Session {
             self.note_command_damage(id, doc, *revision);
             self.note_pixel_change(doc.id, *revision);
         }
-        // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
-        // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
-        // replays where that shape is not installed. The run resolved it already, so it can't fail.
         let mut params = params;
         if r.is_ok() {
-            let _ = crate::filters_ext::resolve_shape_path(self, id, &mut params);
+            for rewrite in &hooks.run_params {
+                rewrite(self, id, &mut params);
+            }
         }
         let out = match (r, pending) {
             (Err(e), Some(job)) => {
@@ -1874,8 +1850,8 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.started_in_take = self.actions.recording.map(|_| self.actions.take);
-                job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id));
+                job.started_in_take = self.recording.target.map(|_| self.recording.take);
+                job.recorded_by = job.started_in_take.filter(|_| self.recording.record_tools || !crate::actions_record::tool_stroke(id));
                 job.automation = automation;
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
@@ -1915,7 +1891,7 @@ impl Session {
 
     /// The one place a command's redraw area spans more than one revision. A command that moved
     /// the active document's revision more than once (Paste Into, Stroke Path, a compound, a
-    /// script) reports what changed since it began, [`layer_multi_cmds::step_damage`] of the
+    /// script) reports what changed since it began, [`crate::damage::step_damage`] of the
     /// document before and after, measured from the revision before it. A single-revision command
     /// keeps the damage it reported. Debug and test builds also count a whole-document redraw of
     /// a small change ([`Session::whole_redraws`]).
@@ -1926,13 +1902,13 @@ impl Session {
         }
         let Some(st) = self.active_mut() else { return };
         if st.revision - from > 1 {
-            st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
+            st.last_damage = crate::damage::step_damage(before, &st.doc);
             st.damage_span = Some((from, st.revision));
             st.record_damage();
         }
         #[cfg(any(test, debug_assertions))]
         if st.last_damage.is_none()
-            && let Some(pct) = crate::layer_multi_cmds::small_change_pct(before, &st.doc)
+            && let Some(pct) = crate::damage::small_change_pct(before, &st.doc)
         {
             eprintln!("warning: {id}: redraws the whole document but changed {pct}% of it");
             self.whole_redraws += 1;
@@ -2000,38 +1976,35 @@ impl Session {
         pre_selected: Option<&[LayerId]>,
         before: &crate::actions_record::Before,
     ) {
-        // A layer-mask view ends when another layer becomes active (#196). Borrowed to change only when it does: the
-        // borrow moves the document's `Tracked` revision, and this runs after every command.
-        if self.active().is_some_and(crate::mask_view_cmds::stale)
-            && let Some(st) = self.active_mut()
-        {
-            st.channel_view.layer_mask = None;
+        let hooks = crate::registry::hooks();
+        for after in &hooks.after_command {
+            after(self, id, &params);
         }
-        crate::edit_menu_cmds::after_command(self, id, &params);
-        crate::automate_cmds::after_command(self, id);
-        self.sync_preset_store();
+        // A command that left the document as it was (Content-Aware Fill with the whole canvas
+        // selected, #14253) made no step for Edit › Fade to fade.
+        if !before.kept(self) {
+            for after in &hooks.after_edit {
+                after(self, id, &params);
+            }
+        }
         if !journal {
             return;
         }
-        if let Some(from) = nested_from.filter(|_| crate::actions_cmds::replayable(id)) {
+        if let Some(from) = nested_from.filter(|_| crate::actions_record::replayable(id)) {
             self.journal.truncate(from);
         }
         let typed = crate::actions_record::typed_layer(self, id, &params);
-        let params = match id {
-            _ if self.actions.recording.is_none() => params,
-            "layer.duplicate" => crate::artboard_cmds::recorded_duplicate(self, crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected)),
-            "layerComp.apply" => crate::comps_cmds::recorded_apply(self, params),
-            "edit.checkSpelling" if crate::type_spell_cmds::records(&params) => crate::type_spell_cmds::recorded_step(&params),
-            _ => crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected),
-        };
-        let params = crate::actions_cmds::recorded_params(self, id, params);
+        let params = if self.recording.target.is_none() { params } else { hooks.recorded(self, id, params, pre_selected) };
+        let params = crate::actions_record::recorded_params(self, id, params);
         let params = crate::actions_record::portable(self, id, params, before);
         // A step a control client runs while the user records keeps automation's gate.
-        crate::actions_cmds::note_step_origin(self, automation, id, &params);
+        for recorded in &hooks.step_recorded {
+            recorded(self, automation, id, &params);
+        }
         match crate::actions_record::fold_keystroke(self, id, &params, self.typed_layer) {
             crate::actions_record::Keystroke::Folded => {}
             crate::actions_record::Keystroke::None => {
-                if !crate::brush_cmds::coalesce_journal(self, id, &params) {
+                if !hooks.coalesce_journal.iter().any(|f| f(self, id, &params)) {
                     self.journal.push((id.to_string(), params));
                 }
             }
@@ -2095,9 +2068,11 @@ impl Session {
         } = job;
         // A recording started after the job (#7289) keeps what it has so far, and the job's step
         // goes into the journal past its start, so that recording doesn't get it.
-        let foreign = self.actions.recording.is_some() && *recorded_by != Some(self.actions.take);
+        let foreign = self.recording.target.is_some() && *recorded_by != Some(self.recording.take);
         if foreign {
-            crate::actions_cmds::flush_recording(self)?;
+            for flush in &crate::registry::hooks().flush_recording {
+                flush(self)?;
+            }
         }
         let prev_active = self.active;
         let target = match doc {
@@ -2137,15 +2112,15 @@ impl Session {
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
-        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let recording = if *journal && crate::actions_record::replayable(command) { self.recording.target.take() } else { None };
         let applied_from = target.and_then(|i| self.docs.get(i)).map(|st| (st.doc.id, st.revision));
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
-        if self.actions.recording.is_none() {
-            self.actions.recording = recording;
+        if self.recording.target.is_none() {
+            self.recording.target = recording;
         }
         self.coalesce_request = None;
         self.color_restrict = None;
@@ -2161,7 +2136,7 @@ impl Session {
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.
             self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
-            if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
+            if foreign && let Some((start, _)) = self.recording.target.as_mut() {
                 *start = self.journal.len();
             }
         }

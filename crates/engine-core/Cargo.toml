@@ -8,8 +8,8 @@ license.workspace = true
 workspace = true
 
 [features]
-# Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
-corpus = []
+# Exposes the allocation failpoints (`allocation::fail_next_for_test`) to other engine crates' tests; only dev-dependencies turn it on.
+failpoints = []
 
 [dependencies]
 craft-tracked = { workspace = true }
@@ -19,7 +19,7 @@ photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
 # PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
-craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "a46af76c7c74dd8dd375d694baaef00d5ae836a2" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }

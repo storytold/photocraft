@@ -7,7 +7,7 @@
 
 use craft::behavior::Axis;
 use craft::behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
-use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMenu};
+use craft::color_ui::ui::{ColorPanelCommand, ColorPanelLayout, ColorPanelMenu, ColorPanelShown};
 use craft::ui::contract::{Scroll, ShowContainer as _};
 use craft::ui::docking::DockHeights;
 use craft::ui::layout_components::Stack;
@@ -105,7 +105,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     // The Color panel sizes its field to the group and scrolls its slider modes itself (#6000).
     PanelEntry {
         heights: Some(COLOR_HEIGHTS),
-        rows: |_| ColorPanelMenu::rows(),
+        rows: |_| ColorPanelMenu::rows(ColorPanelLayout::ForegroundBackground),
         states: color_source_states,
         run: color_run,
         ..panel("color", || tl!("Color").to_string(), "palette", LEAST, super::color::panel)
@@ -228,7 +228,12 @@ pub(crate) static PANELS: &[PanelEntry] = &[
 
 /// The Color panel menu's states, from the panel's own state.
 fn color_states(app: &PhotocraftApp) -> SourceStates {
-    ColorPanelMenu::states(&app.ui.color_panel.panel).into_iter().map(|(command, state)| (command.into(), state)).collect()
+    let state = &app.ui.color_panel.panel;
+    // Photoshop's layout: the views follow the state's mode, and the foreground and background always hold a colour.
+    ColorPanelMenu::states(ColorPanelLayout::ForegroundBackground, state, &ColorPanelShown::Mode(state.mode), true)
+        .into_iter()
+        .map(|(command, state)| (command.into(), state))
+        .collect()
 }
 
 /// [`color_states`], derived from the panel's state.
@@ -276,12 +281,13 @@ pub(crate) fn registered(panel: &str) -> bool {
 }
 
 /// What may happen to `panel`: the canvas stays docked and open and takes no tabs, but panels open beside it; the
-/// toolbar never collapses to icons and never shares its column or tab group; every other panel moves, floats and
-/// closes. A locked workspace narrows these itself.
+/// toolbar never collapses to icons, never shares its column or tab group and docks only in dock columns, so it is
+/// always a vertical strip, never one across the window (#12517); every other panel moves, floats and closes. A
+/// locked workspace narrows these itself.
 pub(crate) fn permissions(panel: &str) -> Permissions {
     match panel {
         CANVAS => Permissions::PROTECTED.accepts_splits(true),
-        TOOLBAR => Permissions::ALL.collapses(false).shares_column(false),
+        TOOLBAR => Permissions::ALL.collapses(false).shares_column(false).docks_outside_columns(false),
         _ => Permissions::ALL,
     }
 }

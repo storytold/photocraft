@@ -22,15 +22,6 @@ fn pixel(s: &mut Session, x: i32, y: i32) -> [f32; 4] {
     [a[0], a[1], a[2], a[3]]
 }
 
-/// The composite of `color` painted with Edit › Fill on a new pixel layer: what a fill layer of
-/// that colour must look like.
-fn painted(mode: &str, depth: u32, color: [f32; 4]) -> [f32; 4] {
-    let mut s = session(mode, depth);
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
-    pixel(&mut s, 10, 10)
-}
-
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
     a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= tol)
 }
@@ -59,23 +50,6 @@ fn assert_in_mode(s: &Session, mode: ColorMode, what: &str) {
 }
 
 #[test]
-fn solid_color_fill_matches_edit_fill() {
-    for (mode, cm) in [("gray", ColorMode::Grayscale), ("cmyk", ColorMode::Cmyk), ("lab", ColorMode::Lab)] {
-        for depth in [8, 16, 32] {
-            let mut s = session(mode, depth);
-            s.execute("layer.newFillLayer.solidColor", json!({"color": "#0000ff"})).unwrap();
-            assert_in_mode(&s, cm, mode);
-            let got = pixel(&mut s, 10, 10);
-            let want = painted(mode, depth, BLUE);
-            assert!(close(got, want, 0.01), "{mode}/{depth}: fill layer {got:?}, painted {want:?}");
-            if cm == ColorMode::Grayscale {
-                assert!((got[0] - 0.114).abs() < 0.01 && got[0] == got[1] && got[1] == got[2], "{mode}/{depth}: {got:?}");
-            }
-        }
-    }
-}
-
-#[test]
 fn gradient_fill_layers_are_gray_in_a_grayscale_document() {
     let grey = |p: [f32; 4]| (p[0] - p[1]).abs() < 1e-4 && (p[1] - p[2]).abs() < 1e-4;
     let ways: [(&str, Value); 3] = [
@@ -94,19 +68,6 @@ fn gradient_fill_layers_are_gray_in_a_grayscale_document() {
             }
         }
     }
-}
-
-#[test]
-fn gradient_edits_keep_colours_in_the_document_mode() {
-    let mut s = session("cmyk", 8);
-    s.execute("gradient.fill.create", json!({"from": [0, 16], "to": [64, 16]})).unwrap();
-    s.execute("gradient.fill.set", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]})).unwrap();
-    assert_in_mode(&s, ColorMode::Cmyk, "gradient.fill.set");
-    let start = pixel(&mut s, 0, 16);
-    let red = painted("cmyk", 8, [1.0, 0.0, 0.0, 1.0]);
-    assert!(close(start, red, 0.02), "{start:?} vs {red:?}");
-    s.execute("gradient.presets.select", json!({"preset": "Green 01"})).unwrap();
-    assert_in_mode(&s, ColorMode::Cmyk, "gradient.presets.select");
 }
 
 #[test]

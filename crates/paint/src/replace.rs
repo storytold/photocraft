@@ -55,6 +55,10 @@ pub struct ReplaceSettings {
     pub anti_alias: bool,
     /// Replacement (foreground) colour, straight RGBA.
     pub color: [f32; 4],
+    /// The inks [`ReplaceSettings::color`] was picked as, when it was picked as CMYK (#4196, the
+    /// same pair a Brush stroke carries, `BrushSettings::color_cmyk`). In a CMYK document the ink
+    /// channels of the Color blend come from these rather than from converting `color` again.
+    pub color_inks: Option<[f32; 4]>,
     /// Background swatch for [`Sampling::BackgroundSwatch`].
     pub background: [f32; 4],
 }
@@ -68,6 +72,7 @@ impl Default for ReplaceSettings {
             tolerance: 0.3,
             anti_alias: true,
             color: [1.0, 0.0, 0.0, 1.0],
+            color_inks: None,
             background: [1.0; 4],
         }
     }
@@ -95,6 +100,15 @@ pub fn apply_color_replacement(
 pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut(&mut Region, &Footprint) {
     let fmt = pre.format();
     let n = fmt.channels();
+    // The CMYK profile of the document being recoloured, in scope where this effect is built (the
+    // engine enters it for the command, as it does for a Brush stroke). Every conversion to and
+    // from the RGB blend space goes through it, so the inks mean the document's device colour and
+    // not the built-in coated CMYK (#11918). Captured here and re-entered for each dab: a live
+    // preview runs this closure after the command that built it has returned. The same scope covers
+    // the pre-stroke reads the match is measured on (`pre.rgba`, `pre.read_rgba_into`), so on a
+    // document that carries a CMYK profile of its own which pixels fall inside the tolerance can
+    // move as well as the inks the dab stores.
+    let cmyk = photocraft_color::convert::active_cmyk_space();
     let mode = match rs.mode {
         ReplaceMode::Hue => BlendMode::Hue,
         ReplaceMode::Saturation => BlendMode::Saturation,
@@ -106,6 +120,13 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
     // the reference application (#11922): the stored a, b channels move straight to its. Lab/16
     // wasn't measured and keeps the RGB blend.
     let lab_color = fmt.mode == photocraft_color::ColorMode::Lab && fmt.sample == photocraft_color::SampleType::U8 && rs.mode == ReplaceMode::Color;
+    // In a CMYK/8 document the Color mode works on the document's own ink channels, the rule
+    // ISO 32000-1 11.3.5.3 gives for a non-separable blend in a CMYK space (#11918): C, M and Y
+    // complemented, blended like RGB - Color is SetLum(source, L(backdrop)) with ClipColor pulling
+    // the result back into gamut towards grey, which is what keeps the lightness of the BOTTOM
+    // layer - and complemented back, K from the backdrop. No RGB round trip goes through the pixel.
+    // CMYK/16 and the other three modes were not measured and keep the RGB blend.
+    let cmyk_color = fmt.mode == photocraft_color::ColorMode::Cmyk && fmt.sample == photocraft_color::SampleType::U8 && rs.mode == ReplaceMode::Color;
     let fg_ab = {
         let l = photocraft_color::convert::srgb_to_lab(fg);
         [(l[1] + 128.0) / 255.0, (l[2] + 128.0) / 255.0]
@@ -123,7 +144,12 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
             1.0
         }
     };
-    move |work: &mut Region, fp: &Footprint| {
+    let mut dab = move |work: &mut Region, fp: &Footprint| {
+        // The foreground's inks for this dab, only where the blend runs on the ink channels: the
+        // values it was picked as when it was picked as CMYK, else its RGB through the CMYK profile
+        // of the document (the scope this runs in). The `[0.0; 4]` arm is never read: `recolor`
+        // only uses `fg_inks` where `cmyk_color` holds.
+        let fg_inks = if cmyk_color { rs.color_inks.unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(fg)) } else { [0.0; 4] };
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         let sampled = match rs.sampling {
             Sampling::Continuous => {
@@ -203,6 +229,21 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 out[2] += (fg_ab[1] - px[2]) * k;
                 return;
             }
+            if cmyk_color {
+                // The ink channels themselves, per the comment on `cmyk_color`: complement C, M,
+                // Y, blend like RGB, complement back. K (`out[3]`) and the alpha keep the
+                // backdrop's values, which is what the standard has Color take from it.
+                let cb = [1.0 - px[0], 1.0 - px[1], 1.0 - px[2]];
+                let cs = [1.0 - fg_inks[0], 1.0 - fg_inks[1], 1.0 - fg_inks[2]];
+                let b = blend_rgb(BlendMode::Color, cb, cs);
+                // `cmyk_color` only holds for a CMYK format, whose pixels carry the four inks
+                // first, so channels 0..3 of `px` and `out` are C, M, Y and K.
+                for i in 0..3 {
+                    let ink = (1.0 - b[i]).clamp(0.0, 1.0);
+                    out[i] = px[i] + (ink - px[i]) * k;
+                }
+                return;
+            }
             let c = to_rgba(&fmt, px);
             let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
             let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
@@ -240,7 +281,8 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 px.copy_from_slice(&enc[..n]);
             }
         }
-    }
+    };
+    move |work: &mut Region, fp: &Footprint| photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || dab(work, fp))
 }
 
 #[cfg(test)]

@@ -135,7 +135,7 @@ impl CutParts {
         let mut out = self.rest.clone();
         let piece = self.piece.translated(dx, dy, self.piece_bounds);
         if self.mask {
-            crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
+            crate::pixel_fill::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
         } else {
             crate::transform_cmds::composite_over(&mut out, &piece);
         }
@@ -183,7 +183,7 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
         .into_par_iter()
         .map(|tc| -> Result<Option<(TileCoord, Arc<Tile>)>> {
             let tr = tc.rect().intersect(&b);
-            let mask = crate::fill_cmds::Mask::of(sel, tc);
+            let mask = crate::pixel_fill::Mask::of(sel, tc);
             if mask.empty(tr) {
                 return Ok(None);
             }
@@ -422,6 +422,17 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
         _ if keeps_floating(id) => Ok(None),
         _ => drop_floating(s).map(|_| None),
     }
+}
+
+/// The `before_command` hook. A command that may not run leaves a floating selection floating
+/// (#13169): it is refused before the piece drops, without a History step (dispatch checks one
+/// that may run again once the piece has dropped, on the pixels and selection it will change).
+/// Then [`before_command`]: the piece drops before any other command, and Undo puts it back.
+pub(crate) fn before_dispatch(s: &mut Session, id: &str, spec: &CommandSpec, params: &Value) -> Result<Option<Value>> {
+    if drops_for(s, id) {
+        s.admit(id, spec, params)?;
+    }
+    before_command(s, id)
 }
 
 pub fn specs() -> Vec<CommandSpec> {

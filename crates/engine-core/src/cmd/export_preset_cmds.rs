@@ -1,6 +1,8 @@
 //! Named Export As configurations. They persist with the other presets in the preferences
 //! document; applying one only returns settings, and the export itself stays in Export As.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -173,33 +175,33 @@ pub(crate) fn load(value: Value) -> Vec<ExportPreset> {
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.export.presets.save";
     let name = checked_name(req_str(p, "name", CMD)?).map_err(|e| bad(CMD, e))?;
-    if s.presets.export_presets.len() >= MAX_PRESETS && s.presets.export_presets.iter().all(|pr| !pr.name.eq_ignore_ascii_case(&name)) {
+    if s.presets().export_presets.len() >= MAX_PRESETS && s.presets().export_presets.iter().all(|pr| !pr.name.eq_ignore_ascii_case(&name)) {
         return Err(bad(CMD, format!("At most {MAX_PRESETS} export presets can be saved")));
     }
     let settings = ExportPresetSettings::from_params(p.get("settings").unwrap_or(&Value::Null), CMD)?;
     let preset = ExportPreset { name: name.clone(), settings };
-    if let Some(existing) = s.presets.export_presets.iter_mut().find(|pr| pr.name.eq_ignore_ascii_case(&name)) {
+    if let Some(existing) = s.presets_mut().export_presets.iter_mut().find(|pr| pr.name.eq_ignore_ascii_case(&name)) {
         *existing = preset.clone();
     } else {
-        s.presets.export_presets.push(preset.clone());
+        s.presets_mut().export_presets.push(preset.clone());
     }
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"preset": preset}))
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.export.presets.get";
     let name = req_str(p, "name", CMD)?;
-    let preset = s.presets.export_presets.iter().find(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
+    let preset = s.presets().export_presets.iter().find(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
     Ok(json!({"preset": preset}))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.export.presets.delete";
     let name = req_str(p, "name", CMD)?;
-    let index = s.presets.export_presets.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
-    s.presets.export_presets.remove(index);
-    s.presets_changed();
+    let index = s.presets().export_presets.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
+    s.presets_mut().export_presets.remove(index);
+    presets_changed(s);
     Ok(json!({"deleted": name}))
 }
 
@@ -210,13 +212,13 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.export.presets.rename";
     let name = req_str(p, "name", CMD)?;
     let new_name = checked_name(req_str(p, "newName", CMD)?).map_err(|e| bad(CMD, e))?;
-    let index = s.presets.export_presets.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
-    if s.presets.export_presets.iter().enumerate().any(|(at, pr)| at != index && pr.name.eq_ignore_ascii_case(&new_name)) {
+    let index = s.presets().export_presets.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
+    if s.presets().export_presets.iter().enumerate().any(|(at, pr)| at != index && pr.name.eq_ignore_ascii_case(&new_name)) {
         return Err(bad(CMD, "Another export preset has that name"));
     }
-    s.presets.export_presets[index].name = new_name;
-    s.presets_changed();
-    Ok(json!({"preset": s.presets.export_presets[index]}))
+    s.presets_mut().export_presets[index].name = new_name;
+    presets_changed(s);
+    Ok(json!({"preset": s.presets().export_presets[index]}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -228,7 +230,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{}",
             enabled: always,
-            run: |s, _| Ok(json!({"presets": s.presets.export_presets})),
+            run: |s, _| Ok(json!({"presets": s.presets().export_presets})),
             journal: false,
         },
         CommandSpec {
@@ -277,6 +279,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn settings(sizing: &str) -> Value {
         json!({
@@ -303,7 +306,7 @@ mod tests {
         s.execute("file.export.presets.save", json!({"name": "  Web JPEG  ", "settings": settings("pixels")})).unwrap();
         let again = s.execute("file.export.presets.save", json!({"name": "web jpeg", "settings": settings("scale")})).unwrap();
         assert_eq!(again["preset"]["settings"]["sizing"], "scale");
-        assert_eq!(s.presets.export_presets.len(), 1, "saving the same name replaces it");
+        assert_eq!(s.presets().export_presets.len(), 1, "saving the same name replaces it");
 
         let raw = s.prefs_to_json();
         let mut restored = crate::session();
@@ -325,7 +328,7 @@ mod tests {
         let raw = restored.prefs_to_json();
         let mut after = crate::session();
         after.load_prefs_json(&raw).unwrap();
-        assert!(after.presets.export_presets.is_empty());
+        assert!(after.presets().export_presets.is_empty());
     }
 
     #[test]
@@ -334,7 +337,7 @@ mod tests {
         for name in ["one", "two", "three"] {
             s.execute("file.export.presets.save", json!({"name": name, "settings": settings("scale")})).unwrap();
         }
-        let names = |s: &Session| s.presets.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let names = |s: &Session| s.presets().export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
         s.execute("file.export.presets.rename", json!({"name": "two", "newName": "second"})).unwrap();
         assert_eq!(names(&s), ["one", "second", "three"]);
         assert!(s.execute("file.export.presets.rename", json!({"name": "second", "newName": "THREE"})).is_err());

@@ -7,6 +7,8 @@
 //! history. A user contour is applied to an effect as a `contour` curve object (see
 //! [`contour_param`]); `.shc` files go through `craft_psd::shc` (see [`contours_from_shc`]).
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::Contour;
 use photocraft_doc::adjust::CurvePoint;
 use serde_json::{Value, json};
@@ -81,7 +83,7 @@ pub fn from_json(v: &Value) -> Vec<Contour> {
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
-    let lib = &s.presets.contours;
+    let lib = &s.presets().contours;
     Ok(json!({"count": lib.len(), "contours": lib.iter().map(|c| json!({"name": name_of(c), "contour": contour_param(c)})).collect::<Vec<_>>()}))
 }
 
@@ -89,32 +91,32 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.contours.new";
     let c = contour_from_param(p.get("contour").ok_or_else(|| bad(CMD, "missing `contour` (a standard contour's name or a curve object)"))?)
         .ok_or_else(|| bad(CMD, "`contour` is not a usable contour (unknown name, or a curve with fewer than 2 or more than 64 points)"))?;
-    if s.presets.contours.len() >= MAX_USER_CONTOURS {
+    if s.presets().contours.len() >= MAX_USER_CONTOURS {
         return Err(bad(CMD, format!("the contour library is full ({MAX_USER_CONTOURS} contours)")));
     }
     let name = match p.get("name") {
-        None | Some(Value::Null) => format!("Contour {}", s.presets.contours.len() + 1),
+        None | Some(Value::Null) => format!("Contour {}", s.presets().contours.len() + 1),
         Some(Value::String(n)) if !n.trim().is_empty() => n.trim().to_string(),
         Some(_) => return Err(bad(CMD, "`name` must be a non-empty string")),
     };
-    let name = add(&mut s.presets.contours, c, &name);
-    s.presets_changed();
-    let contour = s.presets.contours.last().map(contour_param).unwrap_or(Value::Null);
-    Ok(json!({"name": name, "contour": contour, "count": s.presets.contours.len()}))
+    let name = add(&mut s.presets_mut().contours, c, &name);
+    presets_changed(s);
+    let contour = s.presets().contours.last().map(contour_param).unwrap_or(Value::Null);
+    Ok(json!({"name": name, "contour": contour, "count": s.presets().contours.len()}))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.contours.delete";
     let name = str_param(p, "name").ok_or_else(|| bad(CMD, "missing `name`"))?;
     let at = s
-        .presets
+        .presets()
         .contours
         .iter()
         .position(|c| name_of(c) == name)
         .ok_or_else(|| bad(CMD, format!("no user contour \"{name}\" (see layer.layerStyle.contours.list)")))?;
-    s.presets.contours.remove(at);
-    s.presets_changed();
-    Ok(json!({"deleted": name, "count": s.presets.contours.len()}))
+    s.presets_mut().contours.remove(at);
+    presets_changed(s);
+    Ok(json!({"deleted": name, "count": s.presets().contours.len()}))
 }
 
 fn load(s: &mut Session, p: &Value) -> Result<Value> {
@@ -130,7 +132,7 @@ fn load(s: &mut Session, p: &Value) -> Result<Value> {
     if loaded.is_empty() {
         return Err(bad(CMD, "the file holds no usable contours"));
     }
-    let mut lib = if replace { Vec::new() } else { s.presets.contours.clone() };
+    let mut lib = if replace { Vec::new() } else { s.presets().contours.clone() };
     let mut names = Vec::new();
     for c in loaded {
         if lib.len() >= MAX_USER_CONTOURS {
@@ -139,20 +141,20 @@ fn load(s: &mut Session, p: &Value) -> Result<Value> {
         let n = name_of(&c).to_string();
         names.push(add(&mut lib, c, &n));
     }
-    s.presets.contours = lib;
-    s.presets_changed();
-    Ok(json!({"loaded": names, "count": s.presets.contours.len(), "skipped": found.len() - names.len()}))
+    s.presets_mut().contours = lib;
+    presets_changed(s);
+    Ok(json!({"loaded": names, "count": s.presets().contours.len(), "skipped": found.len() - names.len()}))
 }
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.contours.save";
     let lib: Vec<&Contour> = match p.get("names") {
-        None | Some(Value::Null) => s.presets.contours.iter().collect(),
+        None | Some(Value::Null) => s.presets().contours.iter().collect(),
         Some(Value::Array(a)) => {
             let mut v = Vec::new();
             for n in a {
                 let n = n.as_str().ok_or_else(|| bad(CMD, "`names` must be strings"))?;
-                v.push(s.presets.contours.iter().find(|c| name_of(c) == n).ok_or_else(|| bad(CMD, format!("no user contour \"{n}\"")))?);
+                v.push(s.presets().contours.iter().find(|c| name_of(c) == n).ok_or_else(|| bad(CMD, format!("no user contour \"{n}\"")))?);
             }
             v
         }
@@ -257,7 +259,7 @@ mod tests {
         // Appending the same file again keeps every name unique.
         let r = load(&mut s, &json!({"data": data})).unwrap();
         assert_eq!(r["count"], 6);
-        let names: std::collections::HashSet<_> = s.presets.contours.iter().map(|c| name_of(c).to_string()).collect();
+        let names: std::collections::HashSet<_> = s.presets().contours.iter().map(|c| name_of(c).to_string()).collect();
         assert_eq!(names.len(), 6);
     }
 
@@ -265,12 +267,12 @@ mod tests {
     fn library_persists_with_the_presets() {
         let mut s = crate::session();
         new(&mut s, &json!({"contour": curve("x"), "name": "Mine"})).unwrap();
-        let saved = s.presets.to_json(&s);
+        let saved = s.presets().to_json(&s);
         let mut t = crate::session();
         t.load_presets_json(saved);
-        assert_eq!(t.presets.contours.len(), 1);
-        assert_eq!(name_of(&t.presets.contours[0]), "Mine");
-        assert_eq!(t.presets.contours, s.presets.contours);
+        assert_eq!(t.presets().contours.len(), 1);
+        assert_eq!(name_of(&t.presets().contours[0]), "Mine");
+        assert_eq!(t.presets().contours, s.presets().contours);
     }
 
     #[test]
@@ -285,7 +287,7 @@ mod tests {
         assert!(delete(&mut s, &json!({})).is_err());
         assert!(save(&mut s, &json!({})).is_err(), "empty library");
         new(&mut s, &json!({"contour": curve("x"), "name": "Existing"})).unwrap();
-        let before = s.presets.contours.clone();
+        let before = s.presets().contours.clone();
         for p in [
             json!({}),
             json!({"data": 3}),
@@ -296,9 +298,9 @@ mod tests {
             json!({"path": "/nonexistent/x.shc"}),
         ] {
             assert!(load(&mut s, &p).is_err(), "{p}");
-            assert_eq!(s.presets.contours, before, "{p}");
+            assert_eq!(s.presets().contours, before, "{p}");
         }
-        assert_eq!(s.presets.contours, before);
+        assert_eq!(s.presets().contours, before);
         let big = from_json(&json!([{"points": [[0, 0]]}, "Ring", 7, {"name": "Cone", "points": [[0, 0], [1, 1]]}]));
         assert_eq!(big.len(), 1);
         assert_eq!(name_of(&big[0]), "Cone 2");
@@ -307,12 +309,12 @@ mod tests {
     fn malformed_persisted_library_keeps_existing_contours() {
         let mut s = crate::session();
         new(&mut s, &json!({"contour": curve("x"), "name": "Existing"})).unwrap();
-        let before = s.presets.contours.clone();
+        let before = s.presets().contours.clone();
         for value in [json!(null), json!(3), json!("bad"), json!({})] {
             s.load_presets_json(json!({"contours": value}));
-            assert_eq!(s.presets.contours, before);
+            assert_eq!(s.presets().contours, before);
         }
         s.load_presets_json(json!({"contours": []}));
-        assert!(s.presets.contours.is_empty());
+        assert!(s.presets().contours.is_empty());
     }
 }
