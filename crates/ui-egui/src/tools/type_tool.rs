@@ -12,7 +12,7 @@ use photocraft_text::TextLayout;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::state::TextEdit;
+use crate::state::{MaskSelectionMode, TextEdit};
 
 mod controls;
 mod defaults;
@@ -124,6 +124,9 @@ mod tests;
 
 #[cfg(test)]
 mod mask_replace_selection_tests;
+
+#[cfg(test)]
+mod mask_start_modifiers_tests;
 
 #[cfg(test)]
 mod commit_tests;

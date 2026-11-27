@@ -17,7 +17,7 @@ use super::defaults::{default_style_params, mask_style_from_active_layer};
 use super::editing::begin_edit;
 use super::layout::{hit_layer, offset_at};
 
-use super::{LayerId, PLACEHOLDER, PhotocraftApp, Point, TextEdit, active_doc_id, json, session_key, text_layer};
+use super::{LayerId, MaskSelectionMode, PLACEHOLDER, PhotocraftApp, Point, TextEdit, active_doc_id, json, session_key, text_layer};
 use crate::canvas::document_display::CanvasHost;
 use crate::canvas::tools::{FamilyTool, ToolScope};
 
@@ -37,6 +37,9 @@ pub(crate) struct TypeState {
     /// Whether ⌥ was held at the press of the running gesture. Set with `press`, taken by its release: an Alt+drag
     /// opens the Paragraph Text Size dialog instead of making the box (#12044), the modifier read at the press.
     pub(super) press_alt: bool,
+    /// Whether ⇧ was held at the press of the running gesture. Set with `press`, taken by its release:
+    /// with a Type Mask tool it decides how the mask's commit combines with the selection (#12508).
+    pub(super) press_shift: bool,
     /// The press of this pass ended an open session (the editor commits on a background press): it starts no new
     /// text, as in Photoshop. Set by the canvas controls before the tool runs, taken by the press, cleared by `drain`.
     pub(super) began_with_session: bool,
@@ -63,6 +66,7 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut TypeState, _response: &
     if !crate::canvas::tools::in_gesture(app) {
         state.press = None;
         state.press_alt = false;
+        state.press_shift = false;
     }
 }
 
@@ -203,7 +207,8 @@ fn press_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64, mods: 
         return ToolAction::Done;
     }
     let off = offset_at(app, id, x, y);
-    app.ui.text_edit = Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: off, anchor: off, session: key, created: false, mask: false });
+    app.ui.text_edit =
+        Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: off, anchor: off, session: key, created: false, mask: false, mask_start_mode: None });
     // The frame commits an edit that is no mask while a Type Mask tool is in hand: edit with
     // the Type tool, as Move's double-click does, and give the mask tool back at the end.
     app.ui.text_edit_return_tool = app.ui.tool.is_type_mask().then_some(app.ui.tool);
@@ -227,14 +232,39 @@ pub(crate) struct TypeSnapshot {
     pub tool: crate::state::Tool,
     pub options: crate::state::ToolOptions,
     pub placeholder: bool,
+    /// #12508: how the mask this gesture starts combines with the selection at its commit, read from
+    /// the modifiers held at its press. The Paragraph Text Size dialog carries it with the rest of
+    /// the snapshot, so the mask its OK creates combines the way the drag started.
+    #[serde(default)]
+    pub mask_start_mode: Option<MaskSelectionMode>,
 }
 
 impl TypeSnapshot {
     /// Read from the app as it stands at this moment: today's live reading, what the plain drag and
-    /// the click create with.
+    /// the click create with. The start's mask mode comes from the press, so the caller sets it.
     pub(crate) fn live(app: &PhotocraftApp) -> Self {
-        Self { tool: app.ui.tool, options: app.ui.tool_options.clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
+        Self {
+            tool: app.ui.tool,
+            options: app.ui.tool_options.clone(),
+            placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder,
+            mask_start_mode: None,
+        }
     }
+}
+
+/// #12508: the selection mode the modifiers held at the gesture's press give the mask's commit.
+/// Measured: ⇧ at a click adds its glyphs to the existing selection, ⌥ at the start of a drag
+/// subtracts them from it. The cases the issue marks *not measured* keep today's replace (no mode):
+/// ⌥ at a click without a drag, ⇧⌥ at the start (no intersect was ever seen), ⇧ at the start of a
+/// box drag, and ⌥ at a drag that found no selection to subtract from.
+fn mask_start_mode(app: &PhotocraftApp, is_box: bool, alt_at_press: bool, shift_at_press: bool) -> Option<MaskSelectionMode> {
+    if !app.ui.tool.is_type_mask() || (alt_at_press && shift_at_press) {
+        return None;
+    }
+    if shift_at_press && !is_box {
+        return Some(MaskSelectionMode::Add);
+    }
+    (alt_at_press && is_box && crate::canvas::tool_feedback::has_selection(app)).then_some(MaskSelectionMode::Subtract)
 }
 
 /// The `type.create` parameters a Type-tool gesture ending now starts from: the placeholder or
@@ -304,23 +334,30 @@ pub(crate) fn create_layer(app: &mut PhotocraftApp, mut p: serde_json::Value, ta
         let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
     }
     // Like Photoshop: the placeholder is selected, so typing replaces it.
-    app.ui.text_edit = Some(TextEdit { layer: id, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: true, mask });
+    app.ui.text_edit =
+        Some(TextEdit { layer: id, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: true, mask, mask_start_mode: s.mask_start_mode });
     app.ui.text_edit_return_tool = None;
     Ok(id)
 }
 
 /// A release that makes new text: from `start` to `end` in document units. A drag of at least 4 screen pixels both
 /// ways makes a paragraph box; anything less is a click, which makes point text, or text on or in the path under it.
-/// `alt_at_press` is ⌥ held at the press of the gesture.
-fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_press: bool) {
+/// `alt_at_press` and `shift_at_press` are ⌥ and ⇧ held at the press of the gesture.
+fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_press: bool, shift_at_press: bool) {
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let is_box = makes_box(app, start, end);
+    // A plain drag or click reads the tool, its options and the placeholder preference as they
+    // stand at its release, as they always have (#12044). The Paragraph Text Size dialog below
+    // takes this same snapshot, so the mask it creates combines the way this gesture started
+    // (#12508).
+    let mut snapshot = TypeSnapshot::live(app);
+    snapshot.mask_start_mode = mask_start_mode(app, is_box, alt_at_press, shift_at_press);
     // Photoshop (#12044): Alt+drag with the Type tool sizes the new paragraph box in the
     // Paragraph Text Size dialog instead of committing the drag, and its OK creates the text.
     // Measured for the horizontal Type tool, so the vertical Type tool and the Horizontal Type
     // Mask tool keep the plain drag; Alt+click (a drag too small for a box) stays point text.
     if alt_at_press && is_box && app.ui.tool == crate::state::Tool::Type {
-        crate::paragraph_text_size::open(app, [start[0].min(end[0]), start[1].min(end[1])], w, h);
+        crate::paragraph_text_size::open(app, [start[0].min(end[0]), start[1].min(end[1])], w, h, &snapshot);
         return;
     }
     // Photoshop (#12090): Alt+drag with the Vertical Type Mask tool opens the same dialog. With
@@ -330,9 +367,9 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_p
     // to the left of its start is not measured, so it keeps today's plain box.
     if alt_at_press && is_box && app.ui.tool == crate::state::Tool::VerticalTypeMask && end[0] >= start[0] && end[1] >= start[1] {
         if crate::canvas::tool_feedback::has_selection(app) {
-            crate::paragraph_text_size::open(app, [start[0], start[1]], w, h);
+            crate::paragraph_text_size::open(app, [start[0], start[1]], w, h, &snapshot);
         } else {
-            crate::paragraph_text_size::open_centred(app, [start[0], start[1]], 2.0 * w, 2.0 * h);
+            crate::paragraph_text_size::open_centred(app, [start[0], start[1]], 2.0 * w, 2.0 * h, &snapshot);
         }
         return;
     }
@@ -340,9 +377,6 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_p
     // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
     // on the path on its outline. The Type Mask tools ignore paths.
     let target = if !mask && !is_box { path_target(app, start[0], start[1]) } else { None };
-    // A plain drag or click reads the tool, its options and the placeholder preference as they
-    // stand at its release, as they always have (#12044).
-    let snapshot = TypeSnapshot::live(app);
     let mut p = create_params(app, is_box, &snapshot);
     if is_box {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
@@ -365,6 +399,7 @@ impl CanvasTool for TypeTool<'_> {
         let action = self.scope.with_app(|app| press_at(app, &ctx, at.x, at.y, pointer.mods));
         self.state.press = (action == ToolAction::Claimed).then_some(at);
         self.state.press_alt = action == ToolAction::Claimed && pointer.mods.alt;
+        self.state.press_shift = action == ToolAction::Claimed && pointer.mods.shift;
         action
     }
 
@@ -387,11 +422,12 @@ impl CanvasTool for TypeTool<'_> {
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let Some(start) = self.state.press.take() else { return };
         let alt = std::mem::take(&mut self.state.press_alt);
+        let shift = std::mem::take(&mut self.state.press_shift);
         let Some(space) = cx.space() else { return };
         let end = space.view.to_doc(pointer.pos);
         let ctx = self.scope.ctx().clone();
         self.scope.with_app(|app| {
-            create_text(app, [start.x, start.y], [end.x, end.y], alt);
+            create_text(app, [start.x, start.y], [end.x, end.y], alt, shift);
             // The new session's editor takes the keyboard from the pass it opens, as an edit of existing text does.
             if app.ui.text_edit.is_some() {
                 super::editing::focus_editor(&ctx);
@@ -402,6 +438,7 @@ impl CanvasTool for TypeTool<'_> {
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
         self.state.press = None;
         self.state.press_alt = false;
+        self.state.press_shift = false;
         self.state.began_with_session = false;
     }
 

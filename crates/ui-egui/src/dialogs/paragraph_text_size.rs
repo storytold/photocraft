@@ -56,28 +56,31 @@ fn build(w: f64, h: f64) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog
 /// text only while that document is still the active one, and with the tool and options that were
 /// active at the drag.
 ///
-/// The settings are snapshotted here rather than read at OK because the reference application's
-/// dialog is modal: nothing can change the tool (horizontal or vertical) or its options between the
-/// Alt+drag and OK, so the box always uses what was active at the drag. A control that changes them
-/// while the dialog happens to be open therefore cannot leak into the new layer (#12044).
-pub fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> DialogId {
-    open_with(app, at, w, h, false)
+/// The settings are snapshotted at the drag's release and carried here rather than read at OK,
+/// because the reference application's dialog is modal: nothing can change the tool (horizontal or
+/// vertical) or its options between the Alt+drag and OK, so the box always uses what was active at
+/// the drag. A control that changes them while the dialog happens to be open therefore cannot leak
+/// into the new layer (#12044).
+pub(crate) fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64, s: &crate::type_tool::TypeSnapshot) -> DialogId {
+    open_with(app, at, w, h, false, s)
 }
 
 /// Open the dialog centred on `(x, y)` — the Vertical Type Mask tool's Alt+drag start (#12090):
 /// the fields prefill the size to place, `(w, h)` is twice the dragged size there, and OK centres
 /// the box on `(x, y)`, so fields edited in the dialog keep the box centred on the drag start.
-pub fn open_centred(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> DialogId {
-    open_with(app, at, w, h, true)
+pub(crate) fn open_centred(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64, s: &crate::type_tool::TypeSnapshot) -> DialogId {
+    open_with(app, at, w, h, true, s)
 }
 
-/// The shared open: `centred` goes into the captured state next to the anchor point.
-fn open_with(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64, centred: bool) -> DialogId {
+/// The shared open: `centred` goes into the captured state next to the anchor point. `s` is the
+/// drag's own snapshot, read at its release: the gesture that opens the dialog is the one whose
+/// settings and mask mode its OK creates with (#12044, #12508).
+fn open_with(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64, centred: bool, s: &crate::type_tool::TypeSnapshot) -> DialogId {
     let captured = json!({
         "at": [at[0], at[1]],
         "centred": centred,
         "document": app.session.active().map(|st| json!(st.doc.id)).unwrap_or(Value::Null),
-        "settings": crate::type_tool::TypeSnapshot::live(app),
+        "settings": s,
     });
     let fields = DialogFields::from_pairs([(WIDTH, FieldValue::Number(w)), (HEIGHT, FieldValue::Number(h))]);
     params::open_param_unsaved(app, KEY, fields, captured, build(w, h))

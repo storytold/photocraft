@@ -153,7 +153,16 @@ mod tests {
         app.run("type.create", json!({"x": 10, "y": 60, "text": "ab"})).unwrap();
         app.sync_views();
         let layer = app.session.active().unwrap().active_layer.unwrap().0;
-        app.ui.text_edit = Some(crate::state::TextEdit { layer, document: None, caret: 2, anchor: 2, session: "glyphs".into(), created: false, mask: false });
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer,
+            document: None,
+            caret: 2,
+            anchor: 2,
+            session: "glyphs".into(),
+            created: false,
+            mask: false,
+            mask_start_mode: None,
+        });
         assert!(insert(&mut app, "→"));
         assert!(insert(&mut app, "€"));
         assert_eq!(text_of_active(&app), "ab→€");

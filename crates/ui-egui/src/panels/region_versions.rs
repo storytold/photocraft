@@ -290,7 +290,16 @@ mod tests {
         let sample = moved(&mut app, &|app| app.ui.tool_options.eyedropper.size = craft::color_ui::ui::SampleSize::Avg5);
         assert_eq!(sample, ["info", "optionsBar"], "the Sample Size the canvas menu picks");
         app.ui.tool = Tool::Type;
-        let edit = |caret| crate::state::TextEdit { layer: 1, document: None, caret, anchor: 0, session: String::new(), created: false, mask: false };
+        let edit = |caret| crate::state::TextEdit {
+            layer: 1,
+            document: None,
+            caret,
+            anchor: 0,
+            session: String::new(),
+            created: false,
+            mask: false,
+            mask_start_mode: None,
+        };
         app.ui.text_edit = Some(edit(0));
         let caret = moved(&mut app, &|app| app.ui.text_edit = Some(edit(2)));
         assert_eq!(caret, ["properties", "character", "paragraph", "glyphs", "optionsBar"], "the caret moved in the type being edited");

@@ -19,6 +19,17 @@ pub struct TypeInsertionStyle {
     pub style: photocraft_doc::text::CharStyle,
 }
 
+/// How the commit of a Type Mask combines with the selection that was already there when the mask
+/// started (#12508). The names are the `operation` values `type.createSelection` takes for them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
+#[serde(rename_all = "lowercase")]
+pub enum MaskSelectionMode {
+    /// ⇧ at the click that started the mask: its glyphs join the selection.
+    Add,
+    /// ⌥ at the start of the drag that started the mask: its glyphs are cut out of the selection.
+    Subtract,
+}
+
 /// In-progress inline type editing (Type tool). Offsets are character indices.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 pub struct TextEdit {
@@ -39,6 +50,12 @@ pub struct TextEdit {
     /// A Type Mask tool session: the layer is temporary and commits as a selection.
     #[serde(default)]
     pub mask: bool,
+    /// How this mask's commit combines with the selection that was already there when the mask
+    /// started (#12508): ⇧ at the click adds its glyphs, ⌥ at the start of a drag subtracts them.
+    /// Read once, from the press, when the release opens the session. `None` replaces the selection,
+    /// the rule #12073 measured and what every other start keeps.
+    #[serde(default)]
+    pub mask_start_mode: Option<MaskSelectionMode>,
 }
 
 /// Temporary Type-tool transform. The document is unchanged until it commits; this is view state.

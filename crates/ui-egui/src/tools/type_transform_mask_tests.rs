@@ -169,7 +169,16 @@ fn an_invisible_ordinary_type_layer_keeps_todays_refusal() {
     let id = LayerId(app.run("type.create", json!({"text": "AB", "size": 48, "x": 300, "y": 250})).unwrap()["layer"].as_u64().unwrap());
     app.run("layer.setProps", json!({"layer": id.0, "visible": false})).unwrap();
     // The session over that layer: not a mask, `mask: false`.
-    app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, document: None, caret: 1, anchor: 0, session: "s".into(), created: false, mask: false });
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: None,
+        caret: 1,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        mask_start_mode: None,
+    });
     let mut h = harness(app);
     hold(&mut h, type_command());
     assert!(crate::type_transform::frame(h.state_mut()).is_none(), "an invisible ordinary layer: no frame");

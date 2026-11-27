@@ -148,7 +148,16 @@ mod swatch_type_tests {
         app.run("tools.setColors", json!({"foreground": "#d8452e"})).unwrap();
         let fg = app.session.tools.foreground;
         app.ui.tool = Tool::Type;
-        app.ui.text_edit = Some(crate::state::TextEdit { layer: id, document: None, caret: 0, anchor: 5, session: "s".into(), created: false, mask: false });
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id,
+            document: None,
+            caret: 0,
+            anchor: 5,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            mask_start_mode: None,
+        });
         let mut h = Harness::builder()
             .with_context(app.ctx().clone())
             .with_size(vec2(300.0, 300.0))

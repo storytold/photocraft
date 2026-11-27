@@ -25,7 +25,7 @@ const ANTI_ALIAS_METHODS: [TextAntiAlias; 5] = [TextAntiAlias::None, TextAntiAli
 
 /// A text edit session on layer `layer` with the given selection, as the editor holds it.
 fn edit_of(layer: u64, caret: usize, anchor: usize, session: &str) -> crate::state::TextEdit {
-    crate::state::TextEdit { layer, document: None, caret, anchor, session: session.into(), created: false, mask: false }
+    crate::state::TextEdit { layer, document: None, caret, anchor, session: session.into(), created: false, mask: false, mask_start_mode: None }
 }
 
 /// Starts the session on the active type layer.

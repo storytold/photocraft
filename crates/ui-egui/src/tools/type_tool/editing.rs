@@ -2,7 +2,7 @@ use craft::text::ui::editor::CharToggle;
 use craft::ui::runtime::focus::{self, FocusTarget};
 
 use super::layout::{hit_layer, is_vertical, offset_at, shows_own_layout};
-use super::{LayerId, PhotocraftApp, TextEdit, TextLayer, active_doc_id, byte_range, current_text, json, session_key, text_layer};
+use super::{LayerId, MaskSelectionMode, PhotocraftApp, TextEdit, TextLayer, active_doc_id, byte_range, current_text, json, session_key, text_layer};
 
 /// Marks the session's editor to take the keyboard in the pass that first shows it: the framework knows an editor's
 /// doc key only once it has been shown, so a request made before that finds nothing.
@@ -45,7 +45,8 @@ pub fn edit_active(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), S
         commit(app);
         let key = session_key(app);
         begin_edit(app, ctx, id, &key)?;
-        app.ui.text_edit = Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: false, mask: false });
+        app.ui.text_edit =
+            Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: false, mask: false, mask_start_mode: None });
     } else {
         // The editor drops a composition when the selection moves from outside.
         if let Some(ed) = app.ui.text_edit.as_mut() {
@@ -77,7 +78,8 @@ pub fn edit_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64) -> 
         return false;
     }
     let off = offset_at(app, id, x, y);
-    app.ui.text_edit = Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: off, anchor: off, session: key, created: false, mask: false });
+    app.ui.text_edit =
+        Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: off, anchor: off, session: key, created: false, mask: false, mask_start_mode: None });
     let vertical = is_vertical(app, id);
     if !previous_tool.is_type() {
         app.ui.text_edit_return_tool = Some(previous_tool);
@@ -228,7 +230,8 @@ pub fn commit(app: &mut PhotocraftApp) {
 }
 
 /// [`commit`] from a click, button or key that has modifiers held. They no longer change the
-/// result, since a Type Mask always replaces the selection (#12073); the parameter stays so its
+/// result, since a Type Mask's combining follows the modifiers held when the mask started rather
+/// than the ones held at its commit (#12073, #12508); the parameter stays so its
 /// callers don't change.
 pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
     commit_ending(app, true);
@@ -303,11 +306,16 @@ fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
     }
     let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
     if ed.mask {
-        // Type Mask: the text's glyphs replace the selection, with ⇧ or ⌥ held too, as in the
-        // reference application (#12073), and the working layer goes, all in the session's one
-        // history step. No text: nothing changes.
+        // Type Mask: the text's glyphs combine with the selection the way the mask was started
+        // (#12508): ⇧ at the click adds them, ⌥ at the start of a drag subtracts them, anything else
+        // replaces, as in the reference application (#12073). Modifiers held only at this commit have
+        // no say (#12073), and the working layer goes, all in the session's one history step.
+        // No text: nothing changes.
         if !text.trim().is_empty()
-            && let Err(e) = app.run("type.createSelection", json!({"layer": ed.layer, "removeLayer": true, "operation": "new", "coalesce": ed.session}))
+            && let Err(e) = app.run(
+                "type.createSelection",
+                json!({"layer": ed.layer, "removeLayer": true, "operation": mask_operation(ed.mask_start_mode), "coalesce": ed.session}),
+            )
         {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -355,6 +363,17 @@ fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
         // nothing (#12050), so the History list shows the edit the user just ended. The Cancel
         // button ends through `cancel`, which never runs this.
         let _ = app.run("type.edit", json!({"layer": ed.layer, "coalesce": ed.session}));
+    }
+}
+
+/// The `type.createSelection` `operation` the mode a Type Mask was started with (#12508) asks for.
+fn mask_operation(mode: Option<MaskSelectionMode>) -> &'static str {
+    match mode {
+        Some(MaskSelectionMode::Add) => "add",
+        Some(MaskSelectionMode::Subtract) => "subtract",
+        // No mode: today's rule (#12073). A start never adds and subtracts at once, and never
+        // intersects, which the reference application did not show for ⇧⌥ (#12508).
+        None => "new",
     }
 }
 
