@@ -80,8 +80,9 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 /// as it does Transparency Shapes Layer off with effects or a special-eight blend on a layer drawn
 /// atop its clipping base (Blend Clipped Layers as Group on), Hard Mix with it off in a 16/32-bit
 /// document (or, on a layer without effects, on half-float accumulation), and individually blended
-/// clipped layers on a 32-bit base that takes several passes; its own gates are `plan::lower::advanced_on_cpu`,
-/// `plan::lower::clipped_on_cpu` and the planner and compositor checks.
+/// clipped layers on a 32-bit base that takes several passes or wears a 16-bit, vector or feathered
+/// mask; its own gates are `plan::lower::advanced_on_cpu`, `plan::lower::clipped_on_cpu` and the
+/// planner and compositor checks.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
     let a = &layer.advanced;
     if a.is_default() {
