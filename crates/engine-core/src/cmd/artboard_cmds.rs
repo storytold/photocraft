@@ -683,8 +683,9 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
 /// the reference application writes it into the board's file: a plain group (no longer an
 /// artboard) holding its layers over a new pixel layer "Background for <board>" filled with the
 /// board's background where the two boards overlap, in source coordinates and bottom to top. A
-/// group whose layers reach past its own board (effects, pixels outside the board, adjustments)
-/// gets a hard mask to its board, which the artboard clipped them to.
+/// group whose layers reach past the overlap (effects, pixels outside the board, adjustments)
+/// gets a hard mask to it: the artboard clipped them to its board, and Include Artboard Name grows
+/// the page past the rest of the overlap's edges.
 ///
 /// The artboard painted its background beneath the group and then composited the group (its
 /// blend mode, opacity, effects and masks) over it. A board with any of those keeps them on a
@@ -726,10 +727,10 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
         }
         // With the background in place: its pixels widen what the group's layers can reach.
         let reach = photocraft_compose::change_bounds(&group, doc.bounds());
-        if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
+        if reach.is_none_or(|r| !overlap.contains_rect(&r)) {
             let mut mask = photocraft_doc::LayerMask::reveal_all();
             mask.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
-            mask.surface.fill_rect(ab.rect, &[1.0]);
+            mask.surface.fill_rect(overlap, &[1.0]);
             group.mask = Some(mask);
         }
         out.push(group);

@@ -171,6 +171,20 @@ fn a_name_stays_in_the_top_border_over_a_transparent_extension() {
     }
 }
 
+/// Blue Board, above Red Board, has a shadow, so its layers are kept whole: the board clip must
+/// stop at the page, or Blue's pixels past Red Board's right edge show in the grown border.
+#[test]
+fn an_overlapping_board_with_effects_stays_out_of_the_border() {
+    let mut s = measured();
+    let blue = s.active().unwrap().doc.layers.iter().find(|l| l.name == "Blue Board").unwrap().id.0;
+    s.execute("layer.layerStyle.dropShadow", json!({"layer": blue, "size": 0})).unwrap();
+    let page = page_images(&export(&mut s, json!({"includeName": true}))).remove(0);
+    let b = 18;
+    assert!(close(page.get(b + 150, b + 90), BLUE, 0.05), "Blue shows where the boards overlap: {:?}", page.get(b + 150, b + 90));
+    // Source (210, 90): Blue's pixels, right of Red Board, in the right border.
+    assert!(close(page.get(b + 210, b + 90), [1.0; 4], 0.05), "the border keeps the extension colour: {:?}", page.get(b + 210, b + 90));
+}
+
 #[test]
 fn without_the_option_the_pdf_is_todays() {
     let mut s = measured();
