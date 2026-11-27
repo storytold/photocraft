@@ -945,10 +945,25 @@ impl LiveStroke {
         self.renderer.touched_keys()
     }
 
-    /// The GPU's coverage of tile `key` (`COV_TILE`² values), see
-    /// [`StrokeRenderer::feed_coverage`].
-    pub fn feed_coverage(&mut self, key: (i32, i32), values: &[f32]) {
-        self.renderer.feed_coverage(key, values);
+    /// The coverage tiles to read back now and the epoch to feed them as of, see
+    /// [`StrokeRenderer::calm_keys`]: call it after stamping every dab pushed so far, and read the
+    /// tiles back during the stroke so the end has few left.
+    pub fn calm_keys(&mut self, calm: u64) -> (Vec<(i32, i32)>, u64) {
+        self.renderer.calm_keys(calm)
+    }
+
+    /// Every tile whose coverage is not current and the epoch to feed them as of, see
+    /// [`StrokeRenderer::unfed_keys`]: what is left to read back after
+    /// [`finish_dabs`](Self::finish_dabs) and its stamps.
+    pub fn unfed_keys(&mut self) -> (Vec<(i32, i32)>, u64) {
+        self.renderer.unfed_keys()
+    }
+
+    /// The GPU's coverage of tile `key` (`COV_TILE`² values) as of the epoch its read-back was
+    /// asked for, see [`StrokeRenderer::feed_coverage`]. A feed older than a later touch of the
+    /// tile does not count: [`into_commit`](Self::into_commit) refuses while a tile is unfed.
+    pub fn feed_coverage(&mut self, key: (i32, i32), values: &[f32], as_of: u64) {
+        self.renderer.feed_coverage(key, values, as_of);
     }
 
     /// Whether the doc shows the stroke as a masked colour layer ([`begin_overlay`](Self::begin_overlay))
