@@ -1,0 +1,44 @@
+[package]
+name = "photocraft-script-js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Runs .js/.jsx scripts against a PhotoCraft session (Boa engine, deterministic replay for modal pauses)."
+
+[lints]
+workspace = true
+
+[dependencies]
+# boa_engine and boa_gc are pinned exactly together: the pause mechanism and the
+# replay tape depend on 0.22.0 behaviour (see src/abort.rs).
+boa_engine = { version = "=0.22.0", default-features = false, features = ["annex-b"] }
+boa_gc = "=0.22.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+photocraft-engine = { workspace = true }
+# The script host's heap limit, enforced on every allocation on every platform, the web's
+# script Worker included (src/isolate/heap.rs).
+cap = "=0.1.2"
+# The clock of a run in a web Worker (src/isolate/web_job.rs); `std::time` on the desktop.
+web-time = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Resident size of the script host, polled by the app (src/isolate/limits.rs).
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
+
+[target.'cfg(unix)'.dependencies]
+# The script host's own memory limit (Linux) and stopping its process group, without unsafe code.
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+# A job object that ends the script host with the app, without unsafe code.
+win32job = "2.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The script Worker: its messages to the page, and waiting for the page's answer in shared
+# memory (src/isolate/worker.rs).
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["DedicatedWorkerGlobalScope", "WorkerGlobalScope", "EventTarget", "Event", "MessageEvent", "Worker", "ErrorEvent"] }
+# Browser clock and randomness for the engine on the web build.
+boa_engine = { version = "=0.22.0", default-features = false, features = ["annex-b", "js"] }

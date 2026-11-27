@@ -2252,3 +2252,20 @@ fn translate_wrap_still_moves_a_frame() {
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "a framed layer still records a whole-canvas move");
     assert_eq!(tx(&s), before + 8.0, "the frame kept the raw delta");
 }
+
+/// Moves that take a layer's pixels out near the ends of the 32-bit range work, and reading its
+/// bounds there saturates instead of overflowing (a second move by 2^30 used to panic in the
+/// bounds code).
+#[test]
+fn moves_toward_the_coordinate_limits_do_not_overflow() {
+    let mut s = session(8);
+    let id = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+    for d in [1 << 30, 1 << 30, i32::MAX, -(1 << 30)] {
+        s.execute("layer.translate", json!({"layer": id.0, "dx": d, "dy": d})).unwrap();
+        // Past the range the bounds saturate (and may read as empty); they never wrap.
+        if let Some(b) = layer_bounds(doc(&s).layer(id).unwrap()) {
+            assert!(b.x1 >= b.x0 && b.y1 >= b.y0 && b.x1 >= 0, "{b:?}");
+        }
+        s.execute("document.inspect", json!({})).unwrap();
+    }
+}

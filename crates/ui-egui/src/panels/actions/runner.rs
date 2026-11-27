@@ -59,7 +59,9 @@ pub(crate) fn play_targets(app: &mut PhotocraftApp, targets: &[usize], from: usi
 /// The dialog a paused playback waits at: a step dialog by id, Check Spelling, or Step by Step and
 /// Pause For's wait before the next step.
 fn waiting_dialog(paused: &Value) -> Option<&Value> {
-    paused.get("dialog").filter(|d| d.is_u64() || matches!(d.as_str(), Some(crate::type_panels_ui::SPELLING | playback::PLAYBACK_TIMER)))
+    paused
+        .get("dialog")
+        .filter(|d| d.is_u64() || matches!(d.as_str(), Some(crate::type_panels_ui::SPELLING | playback::PLAYBACK_TIMER | crate::scripts::PLAYBACK_WAIT)))
 }
 
 /// The token of the paused playback waiting at `dialog` (see [`waiting_dialog`]).
@@ -67,6 +69,7 @@ fn paused_token(app: &PhotocraftApp, dialog: &Value) -> Option<u64> {
     match dialog.as_u64() {
         Some(id) => app.paused_playbacks.paused.iter().find(|(_, p)| p.dialog.is_some_and(|d| d.value() == id)).map(|(token, _)| *token),
         None if dialog.as_str() == Some(playback::PLAYBACK_TIMER) => playback::waiting(app),
+        None if dialog.as_str() == Some(crate::scripts::PLAYBACK_WAIT) => app.scripts.resume_token(),
         None => app.ui.type_panels.spell.as_ref().and_then(|d| d.resume),
     }
 }
@@ -538,6 +541,24 @@ impl ActionRunner for ShellRunner<'_> {
             }
             return self.pause(json!({"step": i, "id": id, "dialog": crate::type_panels_ui::SPELLING}));
         }
+        // A JavaScript step runs in the app; the playback goes on when the script ends
+        // (`script_step_finished`).
+        if id == "file.scripts.run" {
+            // The direct control route answers once the playback is done, and a script needs
+            // frames to run: refused there, not left running behind a reply that says the action
+            // finished.
+            if self.app.programmatic_playback {
+                return StepOutcome::Failed("a script step can't run on this route, which plays the action to its end before it answers; play the action from the Actions panel or through the app's own input".into());
+            }
+            let token = self.app.paused_playbacks.pause(action.name.clone(), i + 1, self.app.session.authorize);
+            return match crate::scripts::run_step(self.app, &p, token) {
+                Ok(_) => self.pause(json!({"step": i, "id": id, "dialog": crate::scripts::PLAYBACK_WAIT})),
+                Err(error) => {
+                    drop(self.app.paused_playbacks.take(token));
+                    StepOutcome::Failed(error)
+                }
+            };
+        }
         let app = &mut *self.app;
         let target = app.session.active().map(|d| d.doc.id);
         let result = match id {
@@ -949,6 +970,11 @@ pub(crate) struct PausedPlaybacks {
 }
 
 impl PausedPlaybacks {
+    /// Whether playback `token` is still paused (not stopped or finished).
+    pub(crate) fn holds(&self, token: u64) -> bool {
+        self.paused.contains_key(&token)
+    }
+
     /// Allocate an opaque token retaining the action, resume position and captured authorization gate.
     pub(super) fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
         self.last = self.last.wrapping_add(1);
@@ -1144,6 +1170,81 @@ pub(crate) fn resume_spelling(app: &mut PhotocraftApp, token: u64) -> Result<(),
     let error = "the active document changed while Check Spelling was open";
     report_play(app, &json!({"failed": {"step": from.saturating_sub(1), "id": "edit.checkSpelling", "error": error}}));
     Err(error.into())
+}
+
+/// Run `edit` (a script step's commands) inside the action scope of paused playback `token`, and
+/// bind the playback to what it left, as Check Spelling's corrections are: the edits join the
+/// action's history step, and the playback can resume after them. When the scope can't be
+/// entered (the script switched the active document), `edit` runs outside it and the playback
+/// reports that when it tries to go on.
+///
+/// The edit runs under the gate the playback paused with, as the action's remaining steps do.
+///
+/// # Errors
+/// The playback was stopped, or its gate and the session's current one are different policies
+/// that can't be combined; the edit does not run.
+pub(crate) fn within_paused<R>(app: &mut PhotocraftApp, token: u64, edit: impl FnOnce(&mut PhotocraftApp) -> R) -> Result<R, String> {
+    // A stopped playback takes its gate with it: nothing more runs for it.
+    let Some(paused) = app.paused_playbacks.paused.get(&token) else { return Err("the action playing this script was stopped".into()) };
+    let captured = paused.gate;
+    let saved = app.session.authorize;
+    app.session.authorize = continuation_gate(captured, saved)?;
+    // The app's last-resort guard catches a panic in a command: the session's gate must be its
+    // own again whichever way the edit ends, never the playback's wider one.
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| within_paused_history(app, token, edit)));
+    app.session.authorize = saved;
+    match out {
+        Ok(out) => Ok(out),
+        Err(panic) => {
+            // The action's history step was entered for the edit and can't be bound again: the
+            // playback ends here, its step closed, before the guard reports the panic.
+            abandoned(app, token);
+            std::panic::resume_unwind(panic)
+        }
+    }
+}
+
+fn within_paused_history<R>(app: &mut PhotocraftApp, token: u64, edit: impl FnOnce(&mut PhotocraftApp) -> R) -> R {
+    let Some(history) = app.paused_playbacks.paused.get_mut(&token).and_then(|p| p.history.take()) else { return edit(app) };
+    if history.resume(&mut app.session).is_err() {
+        if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
+            paused.history = Some(history);
+        }
+        return edit(app);
+    }
+    let out = edit(app);
+    let rebound = history.suspend_after_edit(&mut app.session);
+    if rebound.is_err() {
+        // Close the scope entered above; the kept continuation then refuses to resume twice.
+        actions_cmds::finish_pending_history(&mut app.session);
+    }
+    if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
+        paused.history = Some(rebound.unwrap_or(history));
+    }
+    out
+}
+
+/// A playback's script step ended: continue the action after it, or end the playback with the
+/// script's error.
+pub(crate) fn script_step_finished(app: &mut PhotocraftApp, token: u64, name: &str, result: Result<(), String>) {
+    match result {
+        // Step by Step and Pause For wait after it, as after any step another one follows;
+        // `resume` reports its own failure in the status bar.
+        Ok(()) => {
+            let follows = app.paused_playbacks.paused.get(&token).is_some_and(|p| {
+                app.session.actions().list.actions().iter().find(|a| a.name == p.action).is_some_and(|a| a.enabled_steps().any(|(i, _)| i >= p.from))
+            });
+            match playback::step_pause(app).filter(|_| follows) {
+                Some(wait) => playback::resume_after(app, token, wait),
+                None => drop(resume(app, token)),
+            }
+        }
+        Err(error) => {
+            let step = app.paused_playbacks.paused.get(&token).map_or(0, |p| p.from.saturating_sub(1));
+            abandoned(app, token);
+            report_play(app, &json!({"failed": {"step": step, "id": "file.scripts.run", "script": name, "error": error}}));
+        }
+    }
 }
 
 /// A step dialog confirmed (or a paced wait over): continue the playback `token` names after it.

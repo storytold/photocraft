@@ -190,6 +190,7 @@ mod style_and_align;
 mod svg_smart_object;
 mod tone_target_picker;
 mod transform_budget_unclamped;
+mod type_create_in_place;
 mod type_format_targets;
 mod type_postscript_font;
 mod undo_keeps_active_layer;
@@ -208,6 +209,7 @@ mod vector_in_type_spell_cmds;
 mod vector_in_type_vertical_history_name;
 mod vector_paste_options;
 mod wand_transparent_copy;
+mod whole_canvas_limits;
 mod working_rgb_profile;
 mod xmp_charref;
 

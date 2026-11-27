@@ -70,7 +70,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(st) = s.active_mut() {
                     st.history.set_current_label("New");
                 }
-                Ok(json!({ "document": i }))
+                let (id, serial) = s.documents().get(i).map(|d| (d.doc.id.0, d.serial)).unzip();
+                Ok(json!({ "document": i, "id": id, "serial": serial }))
             }
         ),
     ]

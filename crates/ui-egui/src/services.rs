@@ -538,6 +538,11 @@ pub struct Services {
     /// the framework's web `Files` exists (FW-264).
     #[cfg(target_arch = "wasm32")]
     pub file_dialog: Option<FileDialogFn>,
+    /// Starts JavaScript runs (`.js`, `.jsx`): a script host process per run on the desktop, a
+    /// dedicated Worker per run in the browser (never the UI thread). `None` where no script
+    /// service is installed. The browser's service is installed but refuses each start, with the
+    /// reason, on a page that isn't cross-origin isolated.
+    pub scripts: Option<crate::scripts::StartScriptFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
     /// Size and modification time of a file (native); `None` on the web, where Save never

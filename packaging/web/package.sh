@@ -33,7 +33,7 @@ if [[ "${1:-}" != "--skip-build" ]]; then
   (cd "$ROOT/apps/photocraft-web-boot" && trunk build --release)
 fi
 
-APP="$ROOT/dist/web"       # the app: index.html, wasm-bindgen glue, one .wasm
+APP="$ROOT/dist/web"       # the app: index.html, wasm-bindgen glue and .wasm, and the script Worker's
 BOOT="$ROOT/dist/web-boot" # the page that ships, and the module that starts the app from parts
 for site in "$APP" "$BOOT"; do
   [[ -f "$site/index.html" ]] || { echo "error: $site/index.html missing; run without --skip-build" >&2; exit 1; }
@@ -55,12 +55,12 @@ if [[ "$PART_BYTES" -le 0 ]] || [[ "$PART_BYTES" -gt "$MAX_FILE_BYTES" ]]; then
 fi
 
 WASM=""
-for wasm in "$APP"/*_bg.wasm; do
+for wasm in "$APP"/photocraft-web-*_bg.wasm; do
   [[ -f "$wasm" ]] || continue
-  [[ -z "$WASM" ]] || { echo "error: more than one .wasm in $APP; remove it and run without --skip-build" >&2; exit 1; }
+  [[ -z "$WASM" ]] || { echo "error: more than one app .wasm in $APP; remove it and run without --skip-build" >&2; exit 1; }
   WASM="$wasm"
 done
-[[ -n "$WASM" ]] || { echo "error: no .wasm in $APP" >&2; exit 1; }
+[[ -n "$WASM" ]] || { echo "error: no app .wasm in $APP" >&2; exit 1; }
 STEM="$(basename "$WASM" _bg.wasm)" # photocraft-web-<content hash>
 GLUE="$APP/$STEM.js"
 [[ -f "$GLUE" ]] || { echo "error: $GLUE missing" >&2; exit 1; }
@@ -85,7 +85,13 @@ wasm_bytes=$(size "$WASM")
 gzip_bytes=$(cat "$WORK/$NAME/app/$STEM".part-* | wc -c | tr -d ' ')
 part_count=$(($(wc -l <"$WORK/$NAME/app/parts.txt") - 1))
 echo "$(basename "$WASM"): $wasm_bytes bytes ($((wasm_bytes / 1048576)) MiB), shipped as $gzip_bytes bytes of gzip in $part_count part(s) of up to $PART_BYTES"
-# Sample server configs (MIME type, caching, compression); harmless where unused.
+# The script Worker (one per run): its loader, which keeps its name, and the glue and wasm it
+# loads, beside the page, which starts it as ./photocraft-script-worker_loader.js.
+for f in photocraft-script-worker_loader.js photocraft-script-worker.js photocraft-script-worker_bg.wasm; do
+  [[ -f "$APP/$f" ]] || { echo "error: $APP/$f missing" >&2; exit 1; }
+done
+cp "$APP"/photocraft-script-worker* "$WORK/$NAME/"
+# Sample server configs (MIME type, caching, compression, isolation); harmless where unused.
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"
 cp "$HERE/README.md" "$WORK/$NAME/HOSTING.md"
 copy_docs "$WORK/$NAME"

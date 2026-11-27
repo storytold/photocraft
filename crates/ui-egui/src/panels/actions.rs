@@ -34,7 +34,7 @@ pub(crate) mod runner;
 pub(crate) use runner::play_targets;
 pub(crate) use runner::{
     Gate, PausedPlaybacks, abandoned, authorize_owned, authorize_panel_preview, check_editor, is_editor, journal_view, open_recorded_editor, play, report_play,
-    resume, resume_spelling, run_step_dialog, spelling_change, stopped, suspended_guard, token_of,
+    resume, resume_spelling, run_step_dialog, script_step_finished, spelling_change, stopped, suspended_guard, token_of, within_paused,
 };
 
 #[cfg(test)]

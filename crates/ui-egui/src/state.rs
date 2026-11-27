@@ -312,6 +312,10 @@ pub struct UiState {
     /// list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
+    /// File › Scripts › Scripts Manager: whether it is open, the selected script and the tags
+    /// being typed. The list lives in the preferences.
+    #[serde(default)]
+    pub scripts: crate::scripts::ManagerUi,
     /// Layer Comps panel: the selected comp (by comp id).
     #[serde(default)]
     pub layer_comp_selected: Option<u32>,
@@ -499,6 +503,7 @@ impl Default for UiState {
             extras: Extras::default(),
             view: Default::default(),
             actions: Default::default(),
+            scripts: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
             type_panels: Default::default(),

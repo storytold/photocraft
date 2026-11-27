@@ -79,6 +79,20 @@ pub(super) fn pace(app: &mut PhotocraftApp, action: &str, i: usize, id: &str, ra
     json!({"step": i, "id": id, "dialog": PLAYBACK_TIMER})
 }
 
+/// Continue paused playback `token` after `wait`, as after a paced step: Esc, or an edit of the
+/// actions meanwhile, ends it instead ([`tick`]). For a step that ended on its own (a script).
+pub(super) fn resume_after(app: &mut PhotocraftApp, token: u64, wait: Duration) {
+    let rev = app.session.actions().list.revision();
+    let due = Instant::now().checked_add(wait).unwrap_or_else(Instant::now);
+    let pb = &mut app.paused_playbacks;
+    // One paced playback at a time, as in [`pace`].
+    if let Some(old) = pb.timer.replace(Timer { token, due, rev })
+        && old.token != token
+    {
+        pb.paused.remove(&old.token);
+    }
+}
+
 /// The token of the paced playback that is waiting, if any.
 pub(super) fn waiting(app: &PhotocraftApp) -> Option<u64> {
     app.paused_playbacks.timer.map(|t| t.token)

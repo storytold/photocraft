@@ -58,6 +58,7 @@ pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
 pub(crate) mod scratch_reads;
+pub mod scripts;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
@@ -80,6 +81,7 @@ pub use craft::window::{
 #[cfg(target_arch = "wasm32")]
 pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
+pub use scripts::{ON_DOCUMENT, ScriptCommands, ScriptDialog, ScriptEvent, ScriptRun, ScriptStart, StartScriptFn};
 pub use state::{Tool, UiState};
 
 mod app;
@@ -679,6 +681,8 @@ pub struct PhotocraftApp {
     /// A save parked behind a format's options prompt (TIFF, Targa, JPEG, DDS), run when the
     /// prompt closes (`format_prompts`).
     pub(crate) parked_save: Option<format_prompts::ParkedSave>,
+    /// The JavaScript run in progress and recent script output (see `scripts`).
+    pub(crate) scripts: scripts::Runtime,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,

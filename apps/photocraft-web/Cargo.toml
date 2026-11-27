@@ -18,6 +18,12 @@ workspace = true
 name = "photocraft-web"
 path = "src/main.rs"
 
+# The script Worker: one per run, started by the page (`src/scripts.rs`); built by Trunk next to
+# the page (`index.html`).
+[[bin]]
+name = "photocraft-script-worker"
+path = "src/script_worker.rs"
+
 [dependencies]
 photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }
@@ -25,6 +31,8 @@ photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ui-egui = { workspace = true }
 photocraft-raster = { workspace = true }
+photocraft-script-js = { workspace = true }
+web-time = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }

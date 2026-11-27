@@ -66,6 +66,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File", "Scripts"], "Statistics…", None, "file.scripts.statistics"),
     (&["File", "Scripts"], "---", None, "---"),
     (&["File", "Scripts"], "Browse…", None, "file.scripts.browse"),
+    (&["File", "Scripts"], "Scripts Manager…", None, "file.scripts.manager"),
     (&["File", "Import"], "Variable Data Sets…", None, "file.import.variableDataSets"),
     (&["File", "Import"], "Video Frames to Layers…", None, "file.import.videoFramesToLayers"),
     (&["File", "Import"], "Notes…", None, "file.import.notes"),

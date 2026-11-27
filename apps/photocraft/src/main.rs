@@ -59,6 +59,7 @@ mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod print_portal;
+mod scripts;
 mod services;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
@@ -416,6 +417,12 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
+/// The allocator: the system's, counted, so a script host (this executable started with
+/// `--script-host`) can cap its own heap at its run's memory limit. The app sets no limit.
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static HEAP: photocraft_script_js::isolate::HostAllocator = photocraft_script_js::isolate::host_allocator();
+
 fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, os_window::id_for(os_window::LaunchIdentity::NightlyV1))
 }
@@ -490,6 +497,13 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> eframe::Result {
+    // A script host (`photocraft --script-host`, started by the app to run one script in its own
+    // process) needs nothing of the app: no launch profile, window, logging, crash guard or
+    // instance handoff.
+    #[cfg(not(target_arch = "wasm32"))]
+    if photocraft_script_js::isolate::script_host_requested() {
+        std::process::exit(photocraft_script_js::isolate::serve(&HEAP));
+    }
     let Some(arguments) = prepare_launch() else { return Ok(()) };
 
     // Before anything starts a thread: may re-execute this process with glibc tuned to return

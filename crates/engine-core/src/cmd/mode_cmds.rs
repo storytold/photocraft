@@ -279,10 +279,11 @@ fn with_released_movement_locks<R>(l: &mut Layer, f: impl FnOnce(&mut Layer) -> 
 
 // ---------- flatten helpers ----------
 
-/// The flattened image as straight RGBA (over white when `opaque`).
-fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
-    let buf = photocraft_compose::flatten(doc);
-    if opaque { buf.over_background([1.0, 1.0, 1.0]).into_px() } else { buf.into_px() }
+/// The flattened image as straight RGBA (over white when `opaque`), or `cmd`'s refusal of a
+/// canvas past the compositor's limit (whose flatten would be empty, not the canvas's size).
+fn composite(doc: &Document, opaque: bool, cmd: &str) -> Result<Vec<[f32; 4]>> {
+    let buf = crate::image_cmds::flatten_whole(doc, cmd)?;
+    Ok(if opaque { buf.over_background([1.0, 1.0, 1.0]).into_px() } else { buf.into_px() })
 }
 
 /// Replace the document's layers by one 8-bit layer holding `px` in `mode`'s storage format.
@@ -422,7 +423,7 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
     let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
     let matte = indexed_matte(s, p)?;
     let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
-        let mut px = composite(doc, !transparency && matte.is_none());
+        let mut px = composite(doc, !transparency && matte.is_none(), CMD)?;
         if let Some(matte) = matte {
             for pixel in &mut px {
                 let alpha = pixel[3].clamp(0.0, 1.0);

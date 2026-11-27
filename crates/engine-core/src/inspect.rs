@@ -12,6 +12,10 @@ pub fn session(s: &Session) -> Value {
         "active": s.active_index(),
         "documents": s.documents().iter().enumerate().map(|(i, d)| json!({
             "index": i,
+            // Stable while the document stays open, unlike `index` (tabs move and close).
+            "id": d.doc.id.0,
+            // Never reused within the session, unlike `id` (`DocState::serial`).
+            "serial": d.serial,
             "name": d.doc.name,
             "path": d.path,
             "width": d.doc.size.width,
@@ -27,20 +31,39 @@ pub fn session(s: &Session) -> Value {
 }
 
 pub fn document(d: &DocState) -> Value {
-    document_with(d, false)
+    document_with(d, false, Parts::ALL)
+}
+
+/// The parts of [`document`] that are built only when asked for: each is as large as the
+/// document's layers or its History.
+#[derive(Clone, Copy, Debug)]
+pub struct Parts {
+    /// The History panel's rows (`history`, `historyRedo`, `historyIds`).
+    pub history: bool,
+    /// The layer tree (`layers`).
+    pub layers: bool,
+}
+
+impl Parts {
+    pub const ALL: Parts = Parts { history: true, layers: true };
+}
+
+/// [`document`] with only the `parts` asked for (a script reading a document's name needs
+/// neither its layers nor its History).
+pub fn document_parts(d: &DocState, parts: Parts) -> Value {
+    document_with(d, false, parts)
 }
 
 /// [`document`] plus every text run and paragraph run, anti-aliasing and the full serialized
 /// layer-effect settings, for format round-trip checks (`photocraft-cli info --detail`).
 pub fn document_detail(d: &DocState) -> Value {
-    document_with(d, true)
+    document_with(d, true, Parts::ALL)
 }
 
-fn document_with(d: &DocState, detail: bool) -> Value {
+fn document_with(d: &DocState, detail: bool, parts: Parts) -> Value {
     let doc = &d.doc;
     let selected = d.selected_layers();
-    let instances = smart_instances(&doc.layers);
-    json!({
+    let mut v = json!({
         "name": doc.name,
         "path": &d.path,
         "width": doc.size.width,
@@ -49,12 +72,11 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "depth": doc.depth.bits(),
         "resolution": doc.resolution_dpi,
         "activeLayer": d.active_layer.map(|l| l.0),
+        "backgroundLayer": doc.background().map(|l| l.id.0),
         "selectedLayers": selected.iter().map(|l| l.0).collect::<Vec<_>>(),
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
-        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
-        "history": d.history.entries(),
         "historySource": crate::history_source_cmds::source_json(d),
         "snapshots": d.snapshots().iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
         "canUndo": d.history.can_undo(),
@@ -74,7 +96,22 @@ fn document_with(d: &DocState, detail: bool) -> Value {
             "dataSets": doc.variables.data_sets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
             "active": doc.variables.active,
         })),
-    })
+    });
+    let Some(m) = v.as_object_mut() else { return v };
+    if parts.layers {
+        let instances = smart_instances(&doc.layers);
+        m.insert("layers".into(), json!(doc.layers.iter().rev().map(|l| layer_sel(l, selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>()));
+    }
+    if parts.history {
+        m.insert("history".into(), json!(d.history.entries()));
+        // The History panel rows after the current state (its last `history` entry), as
+        // `history.selectState` counts them.
+        m.insert("historyRedo".into(), json!(d.history.redo_labels().collect::<Vec<_>>()));
+        // A stable id per History panel row, in the rows' order (`history` then `historyRedo`):
+        // a row keeps its id while it exists.
+        m.insert("historyIds".into(), json!(d.history.row_ids().collect::<Vec<_>>()));
+    }
+    v
 }
 
 /// Layer tree top-to-bottom (display order). Smart object instances are counted within `l`.
@@ -174,7 +211,7 @@ fn layer_sel(
             v["smartContents"] = json!({"id": sm.contents_id.0, "instances": instances.get(&sm.contents_id).copied().unwrap_or(1)});
         }
         LayerContent::Text(t) => {
-            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt});
+            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt, "transform": t.transform.m});
             if detail {
                 v["text"]["antialias"] = serde_json::to_value(t.antialias).unwrap_or(Value::Null);
                 v["text"]["runs"] = serde_json::to_value(t.char_runs()).unwrap_or(Value::Null);
@@ -182,6 +219,11 @@ fn layer_sel(
             }
         }
         _ => {}
+    }
+    // The layer's own locks (only when one is set; a group's locks also hold its layers).
+    if l.locks.any() {
+        let k = l.locks;
+        v["locks"] = json!({"transparency": k.transparency, "pixels": k.pixels, "position": k.position, "artboard": k.artboard, "all": k.all});
     }
     // Advanced Blending › Channels (only when some channel is left out).
     if l.excluded_channels != 0 {

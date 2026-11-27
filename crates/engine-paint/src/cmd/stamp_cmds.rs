@@ -44,8 +44,10 @@ fn with_alpha(doc: &Document) -> PixelFormat {
 }
 
 /// A new pixel layer holding the composite of `doc`'s visible layers, rendered in bands.
-fn stamp_layer(doc: &Document, name: String) -> Result<Layer> {
+fn stamp_layer(doc: &Document, name: String, what: &str) -> Result<Layer> {
     let fmt = with_alpha(doc);
+    // The stamp is the size of the canvas: one past the budget can't be held.
+    crate::allocation::check_dense(doc.bounds(), fmt.bytes_per_pixel() as u64, what)?;
     let mut layer = Layer::raster(name, fmt);
     *crate::pixels_mut(&mut layer)? = photocraft_compose::flatten_to_surface(doc, fmt, None);
     Ok(layer)
@@ -70,11 +72,12 @@ fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
         // Like Photoshop, an empty pixel layer that is active (Layer > New > Layer, then Stamp
         // Visible, as recorded actions do) takes the stamp itself instead of getting a second layer.
         if let Some(empty) = (*active).filter(|id| is_empty_pixel_layer(doc, *id)) {
+            crate::allocation::check_dense(doc.bounds(), with_alpha(doc).bytes_per_pixel() as u64, "Stamp Visible")?;
             let surf = photocraft_compose::flatten_to_surface(doc, with_alpha(doc), None);
             *crate::pixels_mut(doc.layer_mut(empty).ok_or(EngineError::NoLayer(empty))?)? = surf;
             return Ok(empty);
         }
-        let layer = stamp_layer(doc, doc.next_layer_name("Layer"))?;
+        let layer = stamp_layer(doc, doc.next_layer_name("Layer"), "Stamp Visible")?;
         let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::Above);
         *active = Some(id);
         Ok(id)
@@ -117,6 +120,7 @@ fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {
         tmp.layers = vec![base, upper].into();
         let fmt = doc.pixel_format();
         let fmt = if lower.locks.transparency { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
+        crate::allocation::check_dense(tmp.bounds(), fmt.bytes_per_pixel() as u64, "Stamp Down")?;
         let surf = photocraft_compose::flatten_to_surface(&tmp, fmt, None);
         let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(surf));
         merged.id = lower.id;
@@ -144,7 +148,7 @@ fn stamp_selected(s: &mut Session, sel: &[LayerId]) -> Result<Value> {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
         let name = format!("{} (merged)", doc.layer(top).map_or("Layer", |l| l.name.as_str()));
-        let layer = stamp_layer(&solo, name)?;
+        let layer = stamp_layer(&solo, name, "Stamp Visible")?;
         let id = crate::layer_place::insert_new(doc, Some(top), layer, crate::layer_place::Place::Above);
         *active = Some(id);
         Ok(id)

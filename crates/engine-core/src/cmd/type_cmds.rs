@@ -842,6 +842,11 @@ fn copy_root(name: &str) -> Option<&str> {
     (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
 }
 
+/// A name the app gives a new layer itself: "Layer" and a number.
+fn is_default_layer_name(name: &str) -> bool {
+    name.strip_prefix("Layer ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
 /// The Type tool names new layers with this too, so `is_auto_named` recognises them.
 pub fn layer_name(text: &str) -> String {
@@ -1014,20 +1019,51 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Type Layer",
             menu: &["Layer", "New"],
             shortcut: None,
-            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
+            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"layer":id? (an id or name: an empty pixel layer that becomes this text layer in place, keeping its id and settings),"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
                 let mut t = new_text_layer(s, p, "type.create")?;
                 let given = p.get("name").and_then(Value::as_str).map(str::to_string);
                 let name = given.clone().unwrap_or_else(|| layer_name(&t.text));
+                // An id, or the name a recorded step keeps; one that names no layer fails rather
+                // than making a new layer.
+                let into = match p.get("layer") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(super::explicit_layer(s, p)?.ok_or_else(|| bad("type.create", "`layer` must name a layer"))?),
+                };
+                // A name the user gave the layer, even one that reads like "Layer 3", stays.
+                let typed = into.and_then(|id| typed_name(s, id));
                 // The reference application names new vertical text after its tool (#12058).
                 let label = if t.orientation == Orientation::Vertical { "New Vertical Type Layer" } else { NEW_TYPE_LAYER_LABEL };
                 let id = s.edit(label, |doc, active| {
                     refresh(doc, &mut t);
-                    let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Text(t)), crate::layer_place::Place::AutoEditable);
-                    *active = Some(id);
-                    Ok(id)
+                    let Some(into) = into else {
+                        let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Text(t)), crate::layer_place::Place::AutoEditable);
+                        *active = Some(id);
+                        return Ok(id);
+                    };
+                    // In place, in this one edit: the layer keeps its id, place and settings, so
+                    // nothing is left half done if the caller stops after it.
+                    let background = doc.is_background(into);
+                    // Its content changes: refused under Lock All or locked pixels, as a paint is.
+                    let locks = doc.effective_locks(into);
+                    if locks.all || locks.pixels {
+                        let name = doc.layer(into).map_or_else(String::new, |l| l.name.clone());
+                        return Err(EngineError::Other(format!("Could not complete your request because the layer \"{name}\" is locked")));
+                    }
+                    let layer = doc.layer_mut(into).ok_or(EngineError::NoLayer(into))?;
+                    let empty = matches!(&layer.content, LayerContent::Raster(surface) if crate::layer_place::shows_no_pixels(surface));
+                    if background || !empty {
+                        return Err(bad("type.create", "only an empty pixel layer that is not the background can become a text layer"));
+                    }
+                    layer.content = LayerContent::Text(t);
+                    // A name the app gave it ("Layer 3") goes; one the user gave it stays.
+                    if given.is_some() || (is_default_layer_name(&layer.name) && typed.as_deref() != Some(layer.name.as_str())) {
+                        layer.name = name;
+                    }
+                    *active = Some(into);
+                    Ok(into)
                 })?;
                 if let Some(given) = given {
                     note_typed_name(s, id, &given);

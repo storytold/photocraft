@@ -2158,6 +2158,44 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
     }
 }
 
+fn paused_gate(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+    Ok(())
+}
+
+/// A script step's edit runs under its playback's gate; a panic in it must not leave that gate
+/// on the session.
+#[test]
+fn a_panicking_paused_edit_restores_the_session_gate() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let token = app.paused_playbacks.pause("Scripted".into(), 1, Some(paused_gate));
+    assert!(app.session.authorize.is_none());
+    // What the edit saw is checked after the unwind: an assert inside it would panic too, and
+    // the panic would be taken for the deliberate one.
+    let mut seen = None;
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = super::runner::within_paused(&mut app, token, |app| {
+            seen = Some(app.session.authorize);
+            panic!("a command panicked");
+        });
+    }));
+    assert!(unwound.is_err(), "the panic goes on to the app's guard");
+    let seen = seen.expect("the edit ran");
+    assert!(seen.is_some_and(|gate| std::ptr::fn_addr_eq(gate, paused_gate as Gate)), "the edit runs under the playback's gate");
+    assert!(app.session.authorize.is_none(), "the session's own gate is back");
+}
+
+/// After a panic in a script step's edit the playback is over: nothing is left paused to
+/// continue it.
+#[test]
+fn a_panicking_paused_edit_ends_its_playback() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let token = app.paused_playbacks.pause("Scripted".into(), 1, None);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = super::runner::within_paused(&mut app, token, |_| panic!("a command panicked"));
+    }));
+    assert!(!app.paused_playbacks.holds(token));
+}
+
 /// #8047: a recorded Channel Mixer step with ink outputs reopened in an RGB document is refused by
 /// the RGB-only editor. Playback must say why, not fall back to the generic step editor over it.
 #[test]

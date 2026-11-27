@@ -152,6 +152,9 @@ mod tests {
         assert!(check_dense(far, 16, "test").is_err_and(|e| e.to_string().contains("working memory")));
         // Overflowing sizes saturate instead of wrapping into a small number.
         assert!(check_dense(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), u64::MAX, "test").is_err());
+        // A large document's composite (40000 x 30000, 8-bit RGBA) fits; the largest canvas's doesn't.
+        assert!(check_dense(Rect::from_xywh(0, 0, 40_000, 30_000), 4, "test").is_ok());
+        assert!(check_dense(Rect::from_xywh(0, 0, 300_000, 300_000), 4, "test").is_err());
     }
 
     #[test]

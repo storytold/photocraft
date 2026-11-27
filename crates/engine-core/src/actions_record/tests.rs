@@ -283,3 +283,75 @@ fn recorded_edit_targets_a_named_nonactive_type_layer_on_another_document() {
     let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("expected type layer") };
     assert_eq!(text.text, "New");
 }
+
+/// Records `type.create` turning the empty pixel layer `layer` into text, replays it in a new
+/// document laid out the same way, and returns whether the replay converted that layer and the
+/// layer counts before and after it.
+fn replay_in_place_conversion(select_it: bool) -> (bool, usize, usize) {
+    let mut s = session();
+    let caption = new_layer(&mut s, "Caption");
+    new_layer(&mut s, "Top");
+    if select_it {
+        s.execute("layer.select", json!({"layer": caption})).unwrap();
+    }
+    s.execute("actions.record", json!({"name": "Caption in place"})).unwrap();
+    s.execute("type.create", json!({"x": 2, "y": 20, "text": "Hi", "size": 12, "layer": caption})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    let replay_caption = new_layer(&mut s, "Caption");
+    let replay_top = new_layer(&mut s, "Top");
+    if select_it {
+        s.execute("layer.select", json!({"layer": replay_caption})).unwrap();
+    } else {
+        s.execute("layer.select", json!({"layer": replay_top})).unwrap();
+    }
+    let before = s.active().unwrap().doc.walk().len();
+    let played = s.execute("actions.play", json!({"action": "Caption in place"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let doc = &s.active().unwrap().doc;
+    let converted = matches!(doc.layer(LayerId(replay_caption)).map(|l| &l.content), Some(photocraft_doc::LayerContent::Text(_)));
+    (converted, before, doc.walk().len())
+}
+
+#[test]
+fn an_in_place_conversion_of_another_layer_replays_on_the_layer_it_names() {
+    let (converted, before, after) = replay_in_place_conversion(false);
+    assert!(converted, "the replay converts the layer named Caption");
+    assert_eq!(after, before, "no other layer is made");
+}
+
+#[test]
+fn an_in_place_conversion_of_the_selected_layer_stays_in_place_on_replay() {
+    let (converted, before, after) = replay_in_place_conversion(true);
+    assert!(converted, "the replay converts the layer, rather than adding a text layer beside it");
+    assert_eq!(after, before, "no other layer is made");
+}
+
+/// A recorded New Layer or New Group into a group keeps that group by its name, so the replay
+/// puts it into the group of that name in another document, whatever its id there.
+#[test]
+fn a_new_layer_into_a_group_replays_into_the_group_of_that_name() {
+    let mut s = session();
+    let group = s.execute("layer.new.group", json!({"name": "Box"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name": "Into Box"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Inside", "group": group})).unwrap();
+    s.execute("layer.new.group", json!({"name": "Sub", "group": group})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = s.execute("actions.get", json!({"action": "Into Box"})).unwrap()["steps"].clone();
+    assert_eq!((&steps[0][1]["group"], &steps[1][1]["group"]), (&json!("Box"), &json!("Box")), "both steps keep the group: {steps}");
+
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    // Other layers first, so the replay's Box has another id.
+    for name in ["One", "Two", "Three"] {
+        new_layer(&mut s, name);
+    }
+    let replay_box = s.execute("layer.new.group", json!({"name": "Box"})).unwrap()["layer"].as_u64().unwrap();
+    assert_ne!(replay_box, group);
+    let played = s.execute("actions.play", json!({"action": "Into Box"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let doc = &s.active().unwrap().doc;
+    let mut inside: Vec<String> = doc.layer(LayerId(replay_box)).unwrap().children().unwrap().iter().map(|l| l.name.clone()).collect();
+    inside.sort();
+    assert_eq!(inside, ["Inside", "Sub"], "both went into Box");
+}

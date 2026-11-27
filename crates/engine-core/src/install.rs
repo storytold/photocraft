@@ -100,6 +100,8 @@ const TABLES: &[Table] = &[
     ("web_cmds", crate::web_cmds::specs),
     ("automate_cmds", crate::automate_cmds::specs),
     ("print_cmds", crate::print_cmds::specs),
+    ("script_list_cmds", crate::script_list_cmds::specs),
+    ("script_options_cmds", crate::script_options_cmds::specs),
     ("installed_profiles", crate::installed_profiles::specs),
     ("layer_nav_cmds", crate::layer_nav_cmds::specs),
     ("frame_cmds", crate::frame_cmds::specs),
@@ -163,6 +165,7 @@ pub fn register(install: &mut Install) {
     }));
     hooks.recorded_step = Some(crate::layer_multi_cmds::recorded_step);
     hooks.before_command.push(crate::float_cmds::before_dispatch);
+    hooks.recorded_steps.push(("file.scripts.run", |s, _, p, _| crate::script_list_cmds::recorded_run(s, p)));
     hooks.recorded_steps.push(("edit.checkSpelling", |_, _, p, _| crate::type_spell_cmds::records(p).then(|| crate::type_spell_cmds::recorded_step(p))));
     hooks.prefs_applied.push(|s| crate::transform_cmds::set_budget(u64::from(s.prefs().performance.effective_memory_usage_mb()) << 20));
     // An edited Edit Contents document updates its parent as it closes.
