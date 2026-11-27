@@ -122,3 +122,76 @@ fn a_hidden_or_fully_locked_nested_group_stays_refused() {
     assert!(from_group(&mut s, inner).is_err());
     assert_eq!(doc(&s).layer(inner).unwrap().artboard(), None);
 }
+
+const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+
+/// 800 x 600 with the white Background and "Group 1" holding Red and "Inner" (holding Blue), with
+/// a yellow `over` layer clipped either inside Group 1 above Inner (`inside`) or above Group 1 at
+/// the top level. Returns the session and the ids of Inner and the yellow layer.
+fn clipped_session(over: Rect, inside: bool) -> (Session, LayerId, LayerId) {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
+    let ids = s
+        .edit("Groups", |doc, active| {
+            let red = square(doc, "Red", RED, [1.0, 0.0, 0.0, 1.0]);
+            let inner = Layer::group("Inner", vec![square(doc, "Blue", BLUE, [0.0, 0.0, 1.0, 1.0])]);
+            let mut yellow = square(doc, "Over", over, YELLOW);
+            yellow.clipped = true;
+            let (inner_id, yellow_id) = (inner.id, yellow.id);
+            if inside {
+                doc.insert_above(None, Layer::group("Group 1", vec![red, inner, yellow]));
+            } else {
+                doc.insert_above(None, Layer::group("Group 1", vec![red, inner]));
+                doc.insert_above(None, yellow);
+            }
+            *active = Some(inner_id);
+            Ok((inner_id, yellow_id))
+        })
+        .unwrap();
+    (s, ids.0, ids.1)
+}
+
+fn px(s: &Session, x: i32, y: i32) -> [f32; 4] {
+    photocraft_compose::flatten(doc(s)).get(x, y)
+}
+
+fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01)
+}
+
+#[test]
+fn layers_clipped_to_the_group_stay_behind_released_as_a_move_leaves_them() {
+    // Over covers Red and the corner beside it, and clips to Inner, which it doesn't overlap.
+    let over = Rect { x0: 50, y0: 50, x1: 350, y1: 300 };
+    let beside = (75, 75);
+    let (mut s, inner, yellow) = clipped_session(over, true);
+    assert!(close(px(&s, beside.0, beside.1), [1.0; 4]), "clipped to Inner, Over draws nothing there");
+    from_group(&mut s, inner).unwrap();
+    assert_eq!(tree(&s), ["Background", "Group 1: Red, Over", "Inner [artboard]: Blue"]);
+    let after = (doc(&s).layer(yellow).unwrap().clipped, px(&s, beside.0, beside.1));
+
+    // The same layer moved out with Move to gets the same treatment.
+    let (mut moved, inner, moved_yellow) = clipped_session(over, true);
+    let group = doc(&moved).layers[1].id;
+    moved.execute("layer.moveTo", json!({"layer": inner.0, "target": group.0, "position": "above"})).unwrap();
+    let want = (doc(&moved).layer(moved_yellow).unwrap().clipped, px(&moved, beside.0, beside.1));
+    assert_eq!(after.0, want.0, "Over is released, as a move leaves it, not clipped to Red");
+    assert!(!after.0);
+    assert!(close(after.1, want.1) && close(after.1, YELLOW), "released, Over draws in full beside Red: {:?}", after.1);
+}
+
+#[test]
+fn the_board_goes_above_the_layers_clipped_to_its_ancestor() {
+    // Over covers Red and Blue and clips to Group 1 at the top level.
+    let over = Rect { x0: 50, y0: 50, x1: 650, y1: 500 };
+    let red_middle = (200, 175);
+    let (mut s, inner, yellow) = clipped_session(over, false);
+    let before = px(&s, red_middle.0, red_middle.1);
+    assert!(close(before, YELLOW), "Over draws on Group 1's Red");
+    from_group(&mut s, inner).unwrap();
+    assert_eq!(tree(&s), ["Background", "Group 1: Red", "Over", "Inner [artboard]: Blue"]);
+    assert!(doc(&s).layer(yellow).unwrap().clipped, "Over still clips to Group 1");
+    assert!(!doc(&s).layer(inner).unwrap().clipped, "the board is not clipped");
+    let after = px(&s, red_middle.0, red_middle.1);
+    assert!(close(after, before), "outside the board the picture is unchanged: {before:?} -> {after:?}");
+}

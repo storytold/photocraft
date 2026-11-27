@@ -377,10 +377,16 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     let canvas = d.doc.bounds();
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
     let (rect, shift) = s.edit("Artboard from Group", |doc, active| {
-        // A nested group moves out to the top level, directly above its top-level ancestor.
+        // A nested group moves out to the top level, directly above its top-level ancestor. Clip
+        // groups follow it as they follow `layer.moveTo`: layers clipped to the group stay behind,
+        // released. It lands above the layers clipped to its ancestor, so that clip group stays
+        // whole (not measured in the reference).
         if let Some(top) = group_source(doc, id).map_err(|e| EngineError::Other(e.into()))? {
+            let before = crate::clip_group::Before::read(doc, &[id]);
             let g = doc.remove(id).ok_or(EngineError::NoLayer(id))?;
-            doc.layers.insert(top + 1, g);
+            let clipped = doc.layers.get(top).map_or(0, |t| crate::clip_group::clipped_above(doc, t.id).len());
+            doc.layers.insert((top + 1 + clipped).min(doc.layers.len()), g);
+            crate::clip_group::settle(doc, &[id], &before, false);
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // A hidden group keeps today's measure (not measured in the reference).
