@@ -757,6 +757,8 @@ mod paths_scroll_tests;
 #[cfg(test)]
 mod pencil_pressure_toggles_tests;
 #[cfg(test)]
+mod show_tooltips_env_tests;
+#[cfg(test)]
 mod smudge_alt_finger_tests;
 
 #[cfg(test)]

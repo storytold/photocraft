@@ -404,6 +404,9 @@ impl Framework {
             .density(suite_size(session.prefs().interface.density));
         // Read each frame, so a preference change shows at once.
         root.canvas_pattern = session.prefs().interface.show_canvas_dots;
+        // The framework's component tooltips follow the same two settings `sync_tooltips` gives egui: either Show
+        // Tooltips setting off hides them.
+        root.tooltips = session.prefs().interface.show_tooltips && session.prefs().tools.show_tooltips;
         root.values.set(craft::ui::canvas::ShowReadouts(session.prefs().tools.show_transformation_values));
         // Length fields read the Point/Pica size from the root; each passes its document's pixels
         // per inch in its own `LengthUnits`.
