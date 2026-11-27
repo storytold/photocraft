@@ -76,9 +76,9 @@ pub struct Compositor {
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, CachedPattern>,
-    /// The colour mode of the document being encoded: patterns paint in it
+    /// How the document being encoded takes its patterns' colours: they paint in it
     /// (`photocraft_compose::pattern::pattern_rgba`).
-    pattern_mode: photocraft_color::ColorMode,
+    pattern_space: photocraft_compose::pattern::PatternSpace,
     /// The document being encoded, which owns the patterns it paints with.
     pattern_doc: DocId,
     /// GPU memory pattern textures may hold ([`PATTERN_BUDGET`] by default).

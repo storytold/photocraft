@@ -1,6 +1,7 @@
 //! Real panel controls compose the menu-item commands with consent and retained selection. These trials read the
 //! dialog host (`app.framework`), so they live in the crate; the ones that use only the public API stay in
 //! `tests/it/actions_panel_menu.rs`.
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
@@ -22,7 +23,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
     let mut a = Action::new("A", vec![]);
     a.set = Some("S".into());
-    app.session.actions.list.push(a).unwrap();
+    app.session.actions_mut().list.push(a).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app.ui.actions.panel.expanded.insert("A".into());
     let mut h =
@@ -93,7 +94,7 @@ fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
 
 /// The steps of action `A`.
 fn steps(app: &PhotocraftApp) -> Vec<ActionStep> {
-    app.session.actions.list.action(0).unwrap().steps.clone()
+    app.session.actions().list.action(0).unwrap().steps.clone()
 }
 
 /// Menu insertion uses an actual chooser and never samples or executes current command settings.
@@ -121,7 +122,7 @@ fn insert_menu_item_chooser_cancels_or_records_descriptor_free_filter_event() {
     expected.execute("filter.blur.gaussianBlur", json!({"radius":2})).unwrap();
     let expected = photocraft_compose::flatten(&expected.active().unwrap().doc).into_px();
     assert_ne!(expected, original, "the Gaussian fixture has a visible effect");
-    h.state_mut().session.actions.list.insert_step(0, 1, ActionStep::new("select.all", json!({}))).unwrap();
+    h.state_mut().session.actions_mut().list.insert_step(0, 1, ActionStep::new("select.all", json!({}))).unwrap();
     let paused = h.state_mut().run("actions.play", json!({"action":"A"})).unwrap();
     let dialog = paused_dialog(&paused);
     assert_eq!(set_field(&mut h, dialog, "radius", json!(2))["ok"], true);
@@ -137,8 +138,8 @@ fn control_playback_opens_menu_settings_only_for_menu_invocation() {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     app.run("actions.insertMenuItem", json!({"action":"A","id":"filter.blur.gaussianBlur"})).unwrap();
-    app.session.actions.list.insert_step(0, 0, ActionStep::new("select.all", json!({}))).unwrap();
-    app.session.actions.list.insert_step(0, 2, ActionStep::new("select.deselect", json!({}))).unwrap();
+    app.session.actions_mut().list.insert_step(0, 0, ActionStep::new("select.all", json!({}))).unwrap();
+    app.session.actions_mut().list.insert_step(0, 2, ActionStep::new("select.deselect", json!({}))).unwrap();
     app.session.edit_prefs(|prefs| prefs.actions.performance = PlaybackPerformance::StepByStep);
 
     // Starting at the menu step checks the original dialog bug. Starting one step earlier
@@ -214,7 +215,7 @@ fn paused_menu_preview_keeps_the_requesting_gate_and_rejects_retargeting() {
     // The stored step now names another command than the editor opened for.
     h.state_mut()
         .session
-        .actions
+        .actions_mut()
         .list
         .replace_step(0, 0, ActionStep::new(atn_cmds::MENU_ITEM, json!({"id":"filter.distort.displace","eventKind":"name"})))
         .unwrap();

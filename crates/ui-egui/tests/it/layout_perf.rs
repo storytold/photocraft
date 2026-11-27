@@ -10,6 +10,7 @@ mod layout_doc;
 use egui::{Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
 use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::layer_multi_cmds::{layer_bounds, move_targets, moved};
 use photocraft_geom::Rect;
 use photocraft_ui_egui::state::Tool;

@@ -20,9 +20,14 @@ any workspace package it depends on has a changed file, and nothing shared chang
 a file outside the packages that is not documentation). They have no `cfg(windows)`, `cfg(unix)` or
 `cfg(target_os ...)` in their sources, so Windows adds no coverage over the Linux gate for them.
 
+The Linux gate skips by the same rule for every package except photocraft-gpu, whose tests the Linux
+gate runs on every pull request (`--skip-linux`).
+
 Usage:
   ci-windows-gpu-tests.py BASE               prints `true` (run photocraft-gpu's tests) or `false`.
   ci-windows-gpu-tests.py --skip-neutral BASE  prints the neutral packages to skip, space-separated
+                                               (nothing when none).
+  ci-windows-gpu-tests.py --skip-linux BASE    prints the packages the Linux gate skips, space-separated
                                                (nothing when none).
 """
 
@@ -130,6 +135,17 @@ def neutral_to_skip(changed, packages, root):
     return sorted(n for n in NEUTRAL if n in deps and not (inputs_of(n, deps) & owners))
 
 
+def linux_to_skip(changed, packages, root):
+    """Every workspace package but photocraft-gpu whose tests the Linux gate skips for these changed
+    files, sorted: nothing it depends on (itself included) has a changed file, and nothing shared
+    changed."""
+    owners = changed_packages(changed, packages, root)
+    if owners is None:
+        return []
+    deps = workspace_deps(packages)
+    return sorted(n for n in deps if n != GPU and not (inputs_of(n, deps) & owners))
+
+
 def changed_files(base, cwd=None):
     """The files changed between `base` and HEAD. `--no-renames` lists both sides of a move: by
     default git names only the destination, so moving a file out of photocraft-gpu would look like a
@@ -141,14 +157,17 @@ def changed_files(base, cwd=None):
 def main(argv):
     args = argv[1:]
     skip_neutral = args[:1] == ['--skip-neutral']
-    if skip_neutral:
+    skip_linux = args[:1] == ['--skip-linux']
+    if skip_neutral or skip_linux:
         args = args[1:]
     if len(args) != 1:
         print(__doc__, file=sys.stderr)
         return 2
     changed = changed_files(args[0])
     meta = json.loads(subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], check=True, capture_output=True, text=True).stdout)
-    if skip_neutral:
+    if skip_linux:
+        print(' '.join(linux_to_skip(changed, meta['packages'], meta['workspace_root'])))
+    elif skip_neutral:
         print(' '.join(neutral_to_skip(changed, meta['packages'], meta['workspace_root'])))
     else:
         print('true' if needs_gpu_tests(changed, meta['packages'], meta['workspace_root']) else 'false')

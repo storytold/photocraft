@@ -15,7 +15,7 @@ use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog
 #[cfg(test)]
 use craft::ui::patterns::preferences::PrefValue;
 use craft::ui::patterns::preferences::{
-    Closed, PageInfo, PreferencesDraft, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
+    Closed, PageInfo, PreferencesDraft, PreferencesLayout, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
 };
 use craft::ui::runtime::env::{Words, WordsOverride, with_env};
 use craft::ui::runtime::memory::SaveKey;
@@ -67,6 +67,14 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             // dialog draws the line from the note's cell, which `read_now` fills before the dialog's first frame.
             crate::monitor_status::read_now(app);
             dialog(crate::filter_dialog::open(app, "edit.colorSettings"))
+        }
+        "edit.findAndReplaceText"
+            if app
+                .session
+                .active()
+                .is_some_and(|st| st.doc.walk().iter().all(|(_, _, layer)| !matches!(layer.content, photocraft_doc::LayerContent::Text(_)))) =>
+        {
+            Some(Ok(Value::Null))
         }
         "edit.fade" | "edit.findAndReplaceText" | "edit.defineBrushPreset" | "edit.defineCustomShape" | "edit.autoAlignLayers" | "edit.autoBlendLayers" => {
             if !app.session.is_enabled(id) {
@@ -176,7 +184,14 @@ impl StackDialog for PrefsDialog {
         let out = with_env(
             ui,
             |set| set.words = Some(WordsOverride::Replace(words)),
-            |ui| PreferencesWindow::new(Bind::bound(&mut self.state)).remember(SaveKey::new("photocraft.preferences")).show(ui, &mut with_custom),
+            |ui| {
+                PreferencesWindow::new(Bind::bound(&mut self.state))
+                    // The reference application's layout: framed page list and groups, OK, Cancel, Prev and Next
+                    // in a column at the right (#17014).
+                    .layout(PreferencesLayout::Classic)
+                    .remember(SaveKey::new("photocraft.preferences"))
+                    .show(ui, &mut with_custom)
+            },
         );
         self.doc = Some(with_custom.custom(()));
         if let Some(request) = out.pick_color {
@@ -231,7 +246,7 @@ pub fn open_preferences(app: &mut PhotocraftApp, section: &str) {
         }
     };
     let pages: Vec<PageInfo> = StandardPage::ALL.into_iter().map(StandardPage::info).collect();
-    let doc = doc.pages(pages).rules(rules());
+    let doc = doc.pages(pages).rules(rules(app.ctx()));
     // Agents reach the desktop app only; the web build shows the settings it had before as rows.
     #[cfg(not(target_arch = "wasm32"))]
     let doc = doc.custom_page(super::custom_rows::AGENTS_PAGE);
@@ -352,5 +367,42 @@ pub(crate) fn set_draft(app: &mut PhotocraftApp, key: &str, value: PrefValue) ->
             true
         }
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod find_replace_empty_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn find_replace_empty_menu_invocation_is_silent() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = app.ctx().clone();
+        let command = "edit.findAndReplaceText";
+        assert!(!crate::menus::is_enabled(&app, command));
+        assert!(crate::menus::invoke(&mut app, &ctx, command, json!({})).is_err());
+
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        assert!(crate::menus::is_enabled(&app, command));
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.entries();
+        let status = (app.ui.status.clone(), app.ui.status_error);
+        assert_eq!(crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap(), Value::Null);
+        assert!(!app.dialog_open());
+        assert_eq!((app.ui.status.clone(), app.ui.status_error), status);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.entries(), history);
+
+        app.run("type.create", json!({"text": "word", "size": 8})).unwrap();
+        app.run("layer.setProps", json!({"locked": true})).unwrap();
+        assert!(!crate::menus::is_enabled(&app, command));
+        assert!(crate::menus::invoke(&mut app, &ctx, command, json!({})).is_err());
+        assert!(!app.dialog_open());
+        app.run("layer.setProps", json!({"locked": false})).unwrap();
+        assert!(crate::menus::is_enabled(&app, command));
+        let result = crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        assert!(result.get("dialog").is_some(), "{result}");
+        assert!(app.dialog_open());
     }
 }

@@ -1,3 +1,4 @@
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -132,7 +133,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             }
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
-            h.session.actions.list = ActionList::from_file(ActionsFile::new(set.clone(), Vec::new()));
+            h.session.actions_mut().list = ActionList::from_file(ActionsFile::new(set.clone(), Vec::new()));
             h.open_with_approval(input, a.approve_high_memory)?;
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)

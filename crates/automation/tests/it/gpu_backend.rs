@@ -13,6 +13,7 @@ mod gpu_tests {
 
     use photocraft_automation::workspace::AuthorizedWorkspace;
     use photocraft_automation::{GpuRenderer, Headless};
+    use photocraft_engine::color_cmds::ColorExt;
 
     fn make_test_doc(w: u32, h: u32, depth: SampleType) -> Document {
         let mut doc = Document::with_background("test_doc", Size::new(w, h), ColorMode::Rgb, depth, Color::WHITE);

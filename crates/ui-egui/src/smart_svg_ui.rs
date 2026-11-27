@@ -9,6 +9,7 @@ use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::sections::{DialogRole, FooterButton};
 use photocraft_doc::{DocId, LayerContent, LayerId, SmartSource};
 use serde_json::{Value, json};
 
@@ -284,7 +285,11 @@ fn dialog(ctx: &egui::Context, pending: &Pending, running: bool) -> HostedParamD
     HostedParamDialog::new(ctx, KEY, fields, move |fields| {
         let title = tr(if svg { "Edit SVG Smart Object" } else { "Edit Vector Smart Object" });
         let dialog = ParamDialog::new(KEY, Label::from(title), params(svg)).values(Bind::bound(fields));
-        if running { dialog.extra_buttons(vec![(STOP_SYNC.to_owned(), Label::from(tr("Stop syncing this Smart Object")))]) } else { dialog }
+        if running {
+            dialog.extra_buttons(vec![(STOP_SYNC.to_owned(), FooterButton::new(tr("Stop syncing this Smart Object"), DialogRole::Other))])
+        } else {
+            dialog
+        }
     })
 }
 
