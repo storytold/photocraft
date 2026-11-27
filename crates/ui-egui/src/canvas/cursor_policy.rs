@@ -102,15 +102,16 @@ pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
 
 /// Shape tools whose Alt Eyedropper also updates the tool's Fill.
 pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
-    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon)
+    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon | Tool::Star)
 }
 
-/// Whether an Alt or Shift+Alt press samples the foreground and Fill for the Triangle, Custom Shape,
-/// Rectangle, Ellipse and Polygon tools (#13364, #15856, #13333, #13224, #13317). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
-/// Control+Alt is excluded here, as in [`alt_samples`].
+/// Whether an Alt press samples the foreground and Fill for a shape tool. Sampling requires Shape
+/// mode, no active shape layer, and a sampleable pixel. The Star keeps Shift+Alt for drawing a
+/// constrained shape from the centre. Control+Alt is excluded, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
         && !mods.ctrl
+        && (!mods.shift || app.ui.tool != Tool::Star)
         && shape_alt_sets_fill(app.ui.tool)
         && app.ui.tool_options.shape_mode == craft::draw::ui::VectorMode::Shape
         && crate::vector_ui::active_shape_path(app).is_none()

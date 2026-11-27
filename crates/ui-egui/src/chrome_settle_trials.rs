@@ -112,6 +112,20 @@ fn a_hover_over_the_canvas_replays_the_toolbar_footer() {
     }
 }
 
+/// The pointer-move gate (#17148): a move within one toolbar button changes nothing under the pointer, so it runs no
+/// frame; a move over the canvas runs one, since the canvas follows the pointer (its cursor, the rulers' marks and the
+/// readouts).
+#[test]
+fn a_move_within_a_button_runs_no_frame_and_one_over_the_canvas_does() {
+    let h = harness();
+    let viewport = egui::ViewportId::ROOT;
+    let button = h.query_all_by_label("Move Tool").last().map(|node| node.rect()).expect("the toolbar shows the Move tool");
+    let inside = button.center();
+    assert!(!h.ctx.pointer_move_needs_pass(viewport, Some(inside), inside + vec2(1.0, 1.0)), "a move within the button");
+    let canvas = h.state().last_canvas_rect.center();
+    assert!(h.ctx.pointer_move_needs_pass(viewport, Some(canvas), canvas + vec2(1.0, 1.0)), "a move over the canvas");
+}
+
 /// Zoom In from the menu runs no panel body that does not show the view: before, every command counted as a command
 /// run, so a zoom ran every panel body in the next frame (#15493).
 #[test]
