@@ -123,12 +123,21 @@ fn a_smoothed_held_stroke_stays_one_pass_with_airbrush_off() {
 #[test]
 fn only_dodge_asks_the_canvas_to_repeat_a_held_point() {
     // `wants_time` is the canvas's whole signal for "keep this stroke's clock running", and the same
-    // live-stroke type backs the Color Replacement, Background Eraser and Pattern Stamp previews.
+    // live-stroke type backs the Color Replacement, Background Eraser and impressionist Pattern
+    // Stamp previews, which build their own effect on it. None of them asks, even with Build-up on
+    // in the brush.
     let mut s = grey();
     airbrush(&mut s, true);
     for cmd in ["paint.dodge", "paint.burn", "paint.sponge", "paint.blur", "paint.sharpen", "paint.smudge"] {
         let live = LiveDab::begin(&s, cmd, &dodge(&held_points(0), 50.0)).unwrap_or_else(|e| panic!("{cmd}: {e}"));
         assert_eq!(live.wants_time(), cmd == "paint.dodge", "{cmd} with Build-up on");
+    }
+    let id = s.active().unwrap().active_layer.unwrap();
+    let stroke = Stroke { brush: (*s.tools.brush).clone(), points: vec![StrokePoint::new(30.0, 20.0, 1.0)] };
+    for cmd in ["paint.colorReplacement", "paint.backgroundEraser", "paint.patternStamp"] {
+        let live = LiveDab::with_effect(&s, cmd, &json!({"target": "pixels"}), stroke.clone(), Some(id), 0, |_| -> DabEffect { Box::new(|_, _| {}) })
+            .unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        assert!(!live.wants_time(), "{cmd} with Build-up on still asks the canvas for no held repeat");
     }
 }
 

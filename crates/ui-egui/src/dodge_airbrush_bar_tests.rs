@@ -215,15 +215,12 @@ fn the_held_stroke_is_committed_from_the_pixels_it_previewed() {
 
 #[test]
 fn no_other_live_preview_repeats_a_held_pointer() {
-    // The same live-stroke type backs the Color Replacement, Pattern Stamp (impressionist) and
-    // Background Eraser previews, and the other retouching tools: none of them asks the canvas to
-    // repeat a held point, whichever Build-up its brush has.
-    for tool in [Tool::Dodge, Tool::Blur, Tool::Smudge, Tool::ColorReplacement, Tool::PatternStamp, Tool::BackgroundEraser] {
+    // The same live-stroke type backs the Color Replacement and Background Eraser previews and the
+    // other retouching tools: none of them asks the canvas to repeat a held point, whichever
+    // Build-up its brush has. (The impressionist Pattern Stamp preview is pinned at the engine end,
+    // where its live stroke is built: `only_dodge_asks_the_canvas_to_repeat_a_held_point`.)
+    for tool in [Tool::Dodge, Tool::Blur, Tool::Smudge, Tool::ColorReplacement, Tool::BackgroundEraser] {
         let mut h = canvas(tool, true);
-        if tool == Tool::PatternStamp {
-            h.state_mut().ui.tool_options.pattern_stamp_impressionist = true;
-            h.run_steps(1);
-        }
         let p = screen(&h, 100.0, 60.0);
         h.event(egui::Event::PointerMoved(p));
         h.run_steps(1);
@@ -236,4 +233,21 @@ fn no_other_live_preview_repeats_a_held_pointer() {
         h.run_steps(2);
         assert_eq!(after > before, tool == Tool::Dodge, "{tool:?}: a held pointer {before} -> {after} points");
     }
+}
+
+#[test]
+fn a_point_added_on_the_release_frame_keeps_its_time_too() {
+    // The release adds a final point when the pointer moved since the last pass. That point has to
+    // carry the time the live stroke is fed with, or the command no longer matches the stroke it was
+    // drawn for and renders the stroke itself instead of taking the pixels the preview showed.
+    let mut h = canvas(Tool::Dodge, true);
+    let p = screen(&h, 100.0, 60.0);
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    button(&mut h, true);
+    h.run_steps(6);
+    let up = screen(&h, 103.0, 60.0);
+    h.event(egui::Event::PointerButton { pos: up, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().retouch_from_live, "the release frame's point came along with its time");
 }
