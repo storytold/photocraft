@@ -4,6 +4,7 @@ use craft::host::{PickKind, Picked, ScriptedFiles};
 use craft::imaging::raw::RawDevelopSettings as CameraRaw;
 use craft::imaging::ui::raw_develop::RawDevelopWorkspace;
 use craft::ui::dialog::HostedWorkspace;
+use egui::Color32;
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -142,6 +143,59 @@ fn histogram_follows_preview_and_view_changes_do_not_render_or_edit() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     let pixel = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(0, 0);
     assert!((pixel[0] - 128.0 / 255.0).abs() < 0.0001);
+}
+
+/// Develops the open dialog's source with `settings` at 100%, as the workspace asks when its view shows more pixels than
+/// the proxy has, and runs frames until the after picture shows the full-resolution develop.
+fn refine_at_full_size(app: &mut PhotocraftApp, settings: CameraRaw) {
+    let request = RawPreviewRequest::new(1, settings, None, craft::ui::canvas::PixelRect::new(0, 0, 400, 200), 1.0);
+    drop(session(app).source.develop(&request));
+    for _ in 0..3000 {
+        frame(app);
+        if describe(app)["previewApproximate"] == false {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let d = describe(app);
+    panic!("the full-resolution preview never showed: pending {} error {}", d["detailPending"], d["detailError"]);
+}
+
+/// The after picture's pixels of columns 8..14 of row 0 at 100%.
+fn after_row(app: &PhotocraftApp) -> Vec<Color32> {
+    let mut out = ColorImage::filled([6, 1], Color32::TRANSPARENT);
+    session(app).source.after().read(craft::ui::canvas::PixelRect::new(8, 0, 14, 1), 1, &mut out);
+    out.pixels
+}
+
+/// A layer larger than the proxy: once the view shows more pixels than the proxy has, the visible part is developed at
+/// full resolution and replaces the proxy, and newer settings are developed again (#17012). Before, nothing collected
+/// the refinement, so the preview stayed the proxy scaled up: pixelated.
+#[test]
+fn the_full_resolution_preview_replaces_the_proxy_and_follows_the_settings() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    app.run("file.new", json!({"width": 2400, "height": 1200})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    // One black column: the proxy averages it with its grey neighbours.
+    app.run("select.rect", json!({"x": 10, "y": 0, "width": 1, "height": 1200})).unwrap();
+    app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let proxy = describe(&app)["proxy"].clone();
+    assert!(proxy[0].as_u64().unwrap() < 2400, "the dialog develops a proxy: {proxy}");
+    refine_at_full_size(&mut app, CameraRaw::default());
+    let row = after_row(&app);
+    assert_eq!(row[2], Color32::BLACK, "the 1-pixel column is sharp: {row:?}");
+    assert_eq!(row[3], Color32::from_gray(0x80), "{row:?}");
+    let mut brighter = CameraRaw::default();
+    brighter.exposure = 1.0;
+    refine_at_full_size(&mut app, brighter);
+    let row = after_row(&app);
+    assert!(row[3].r() > 0x90, "the refinement follows the new settings: {row:?}");
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
 }
 
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
