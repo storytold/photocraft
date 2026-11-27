@@ -158,6 +158,8 @@ pub fn register(install: &mut Install) {
 
     // model
     hooks.after_command.push(crate::mask_view_cmds::after_command);
+    // The remembered Proof Setup is the proof condition documents start from (#12820).
+    hooks.prefs_applied.push(crate::color_cmds::sync_proof_setup_pref);
     hooks.recorded_steps.push(("layer.duplicate", |s, id, p, pre_selected| {
         Some(crate::artboard_cmds::recorded_duplicate(s, crate::layer_multi_cmds::recorded_step(s, id, p.clone(), pre_selected)))
     }));

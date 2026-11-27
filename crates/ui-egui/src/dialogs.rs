@@ -631,8 +631,9 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
     Ok(params::open_bare(app, command, label))
 }
 
-/// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move.
-const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy"];
+/// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move. The
+/// remembered Proof Setup is the proof condition new documents start from after a restart (#12820).
+const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy", photocraft_engine::color_cmds::PROOF_SETUP_PREF];
 
 /// Preference entries the engine reads that a workspace also remembers in the framework's store: they stay, and are
 /// copied there only while it holds none. An empty recorded Content-Aware Fill step plays with the engine's copy (#14254).
