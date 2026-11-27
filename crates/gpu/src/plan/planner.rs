@@ -3,6 +3,7 @@ use super::lower::{
     style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
+use crate::textures::TexKind;
 use photocraft_compose::advanced::Scope;
 use photocraft_doc::Knockout;
 
@@ -518,14 +519,23 @@ impl<'a> Planner<'a> {
     /// clipped layer composited in its own mode onto the result and mixed back towards it by the
     /// base's shape (content alpha with masks) times the base's opacity. A clipped layer's shallow
     /// knockout stops at the backdrop beneath the base, which lives only for this clipping group.
-    /// A base of one Content pass gives its shape as an `F_COVER` record. A base that takes more
-    /// passes goes through a slot, which may be half float: in a 32-bit document it stays on the
-    /// CPU. Consumes `backdrop` and `ko`.
+    /// A base of one Content pass gives its shape as an `F_COVER` record, in a 32-bit document
+    /// read from a full-precision copy of its pixels (`Role::Coverage`). A base that takes more
+    /// passes goes through a slot, which may be half float, and a 16-bit, vector or feathered
+    /// mask uploads as half floats: in a 32-bit document both stay on the CPU. Consumes
+    /// `backdrop` and `ko`.
     fn clipped_individually(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot, ko: Option<Slot>) -> Result<Slot, Unsupported> {
         let single = single_content_pass(layer);
-        if !single && self.cx.depth == photocraft_color::SampleType::F32 {
+        let float = self.cx.depth == photocraft_color::SampleType::F32;
+        if float && !single {
             return Err(Unsupported(format!(
                 "Blend Clipped Layers as Group off on `{}`, a 32-bit base that takes several passes (composited on the CPU)",
+                layer.name
+            )));
+        }
+        if float && self.mask_use(layer).is_some_and(|m| TexKind::for_surface(Role::Mask, m.surface.get().format()) == TexKind::R16F) {
+            return Err(Unsupported(format!(
+                "Blend Clipped Layers as Group off on `{}`, a 32-bit base with a 16-bit, vector or feathered mask (composited on the CPU)",
                 layer.name
             )));
         }
@@ -533,6 +543,10 @@ impl<'a> Planner<'a> {
         let mut b = self.layer(layer, &[], backdrop, ko)?;
         let clip = if single {
             let mut p = self.content_pass(layer)?;
+            // Half floats round an alpha near 1 to 1: the record reads a full-precision copy.
+            if float && let Some(t) = p.tex.as_mut().filter(|t| TexKind::for_surface(Role::Content, t.surface.get().format()) == TexKind::Rgba16F) {
+                t.role = Role::Coverage;
+            }
             p.flags |= F_COVER;
             self.emit(p)
         } else {

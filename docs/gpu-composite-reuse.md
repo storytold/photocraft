@@ -26,8 +26,10 @@ still return `Unsupported` from the GPU planner and use the CPU path: Blend Inte
 Group with effects, Transparency Shapes Layer off with effects or a special-eight blend mode, and
 Layer / Vector Mask Hides Effects. So does Blend Clipped Layers as Group off in a 32-bit float
 document when the base takes more than one pass (a group, or a pattern fill without cached
-pixels): its coverage would go through an accumulator slot, which may be half float. A later GPU
-implementation of any of them preserves the boundary invariant.
+pixels), since its coverage would go through an accumulator slot, which may be half float, or
+wears a 16-bit, vector or feathered mask, which uploads as half floats. A one-pass 32-bit base
+has its coverage read from a full-precision copy of its pixels (16 bytes a pixel on the GPU). A
+later GPU implementation of any of them preserves the boundary invariant.
 
 ## Invalidation
 

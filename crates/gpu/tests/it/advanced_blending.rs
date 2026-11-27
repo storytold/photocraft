@@ -503,6 +503,37 @@ fn individually_clipped_multi_pass_bases_stay_on_the_cpu_at_32_bits() {
     }
 }
 
+/// A 16-bit, vector or feathered mask uploads as half floats, which can't tell near-full coverage
+/// from full: a 32-bit base wearing one keeps Blend Clipped Layers as Group off on the CPU; at 8
+/// bits it renders on the GPU.
+#[test]
+fn individually_clipped_32_bit_bases_with_half_float_masks_stay_on_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (sample, feather) in [(SampleType::U16, 0.0), (SampleType::U8, 2.0)] {
+        for depth in [SampleType::U8, SampleType::F32] {
+            let what = format!("{depth:?} document, {sample:?} mask, feather {feather}");
+            let mut d = doc(depth, true);
+            d.layers.push(underlay(&d, 2));
+            let mut m = LayerMask::reveal_all();
+            m.surface = Surface::with_default(PixelFormat { sample, ..PixelFormat::GRAY8 }, &[0.4]);
+            m.surface.write_region(Rect::new(8, 8, 30, 30), &[0.7; 22 * 22]);
+            m.feather = feather;
+            let mut base = clip_base(&d);
+            base.mask = Some(m);
+            let layers = clipped_pair(&d, base, 1.0);
+            d.layers.extend(layers);
+            if depth == SampleType::F32 {
+                let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+                    .expect_err("the GPU must refuse a 32-bit base with a half-float mask");
+                assert!(e.to_string().contains("Blend Clipped Layers as Group off"), "{what}: {e}");
+                assert!(g.comp.supports(&d).is_err(), "{what}");
+            } else {
+                check(&mut g, &d, &what);
+            }
+        }
+    }
+}
+
 #[test]
 fn individually_clipped_layers_with_masks_restrictions_and_blend_if_match_the_cpu() {
     let Some(mut g) = gpu() else { return };

@@ -154,7 +154,7 @@ const MANAGED_BAND_ROWS: i32 = 16;
 /// Whether `fmt` pixels reach `kind` texels through a per-pixel colour transform (CMYK, Lab).
 pub(crate) fn colour_managed(fmt: &PixelFormat, kind: TexKind) -> bool {
     use photocraft_color::ColorMode;
-    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
+    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F | TexKind::Rgba32F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
 }
 
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
@@ -204,13 +204,18 @@ fn convert_rows(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, rect
                 out.extend(v.map(|x| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8));
             }
             TexKind::Rgba16F => {
-                let [r, g, b, a] = rgba();
-                for h in [f32_to_f16(r), f32_to_f16(g), f32_to_f16(b), coverage_to_f16(a)] {
-                    out.extend(h.to_le_bytes());
+                let v = rgba();
+                for x in v {
+                    out.extend(f32_to_f16(x).to_le_bytes());
+                }
+            }
+            TexKind::Rgba32F => {
+                for x in rgba() {
+                    out.extend(x.to_le_bytes());
                 }
             }
             TexKind::R8Direct => out.push((px[0].clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
-            TexKind::R16F => out.extend(coverage_to_f16(px[0]).to_le_bytes()),
+            TexKind::R16F => out.extend(f32_to_f16(px[0]).to_le_bytes()),
             TexKind::R32F => out.extend(px[0].to_le_bytes()),
         }
     }
@@ -224,8 +229,6 @@ fn convert_rows(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, rect
 pub(crate) fn rgb_gray16_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
     use photocraft_color::ColorMode;
     static HALF: std::sync::OnceLock<Box<[u16]>> = std::sync::OnceLock::new();
-    // Alpha is coverage and has a table of its own (`coverage_to_f16`).
-    static COVER: std::sync::OnceLock<Box<[u16]>> = std::sync::OnceLock::new();
     if fmt.sample != SampleType::U16 {
         return None;
     }
@@ -235,18 +238,16 @@ pub(crate) fn rgb_gray16_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u
         _ => return None,
     };
     let half = HALF.get_or_init(|| (0..=u16::MAX).map(|v| f32_to_f16(v as f32 / 65535.0)).collect());
-    let cover = COVER.get_or_init(|| (0..=u16::MAX).map(|v| coverage_to_f16(v as f32 / 65535.0)).collect());
     let one = f32_to_f16(1.0).to_le_bytes();
     let ch = fmt.channels();
     let mut out = scratch::take_cap((TILE_SIZE * TILE_SIZE) as usize * 8);
     for px in bytes.chunks_exact(ch * 2) {
-        let from = |table: &[u16], i: usize| -> [u8; 2] {
+        let h = |i: usize| -> [u8; 2] {
             let v = px.get(i * 2..i * 2 + 2).map_or(0, |b| u16::from_ne_bytes([b[0], b[1]]));
-            table.get(v as usize).copied().unwrap_or(0).to_le_bytes()
+            half.get(v as usize).copied().unwrap_or(0).to_le_bytes()
         };
-        let h = |i: usize| from(half, i);
         let (r, g, b) = if gray { (h(0), h(0), h(0)) } else { (h(0), h(1), h(2)) };
-        let a = if fmt.alpha { from(cover, ch - 1) } else { one };
+        let a = if fmt.alpha { h(ch - 1) } else { one };
         out.extend_from_slice(&r);
         out.extend_from_slice(&g);
         out.extend_from_slice(&b);
@@ -273,15 +274,17 @@ pub(crate) fn rgb_gray32_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u
     let ch = fmt.channels();
     let mut out = scratch::take_cap((TILE_SIZE * TILE_SIZE) as usize * 8);
     for px in bytes.chunks_exact(ch * 4) {
-        let sample = |i: usize| -> f32 { px.get(i * 4..i * 4 + 4).map_or(0.0, |b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])) };
-        let h = |i: usize| -> [u8; 2] { f32_to_f16(sample(i)).to_le_bytes() };
+        let h = |i: usize| -> [u8; 2] {
+            let v = px.get(i * 4..i * 4 + 4).map_or(0.0, |b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]));
+            f32_to_f16(v).to_le_bytes()
+        };
         let (r, g, b) = if gray {
             let v = h(0);
             (v, v, v)
         } else {
             (h(0), h(1), h(2))
         };
-        let a = if fmt.alpha { coverage_to_f16(sample(ch - 1)).to_le_bytes() } else { one };
+        let a = if fmt.alpha { h(ch - 1) } else { one };
         out.extend_from_slice(&r);
         out.extend_from_slice(&g);
         out.extend_from_slice(&b);
@@ -358,20 +361,6 @@ pub fn f32_to_f16(x: f32) -> u16 {
         h += 1;
     }
     sign | h as u16
-}
-
-/// [`f32_to_f16`] for coverage (alpha and masks): a value below 1 never rounds up to 1, and one
-/// above 0 never becomes 0 or a subnormal half (which a GPU may flush to 0), so a shader that
-/// tests for full or no coverage agrees with the CPU.
-pub(crate) fn coverage_to_f16(x: f32) -> u16 {
-    let h = f32_to_f16(x);
-    if x < 1.0 && h == 0x3c00 {
-        0x3bff
-    } else if x > 0.0 && h < 0x0400 {
-        0x0400
-    } else {
-        h
-    }
 }
 
 /// f32 from IEEE half.

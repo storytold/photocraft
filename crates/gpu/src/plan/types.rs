@@ -133,6 +133,8 @@ pub enum Role {
     Fill,
     /// A stroked shape's stroke alone.
     Stroke,
+    /// A 32-bit base's pixels at full precision, read only by its `F_COVER` record.
+    Coverage,
 }
 
 /// A surface the pass needs on the GPU.

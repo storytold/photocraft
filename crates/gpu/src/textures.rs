@@ -55,6 +55,8 @@ pub(crate) enum TexKind {
     Rgba8,
     /// 16/32-bit formats converted to RGBA16F.
     Rgba16F,
+    /// A 32-bit clip base's pixels at full precision (`Role::Coverage`).
+    Rgba32F,
     /// GRAY8 masks copied verbatim.
     R8Direct,
     /// 16-bit masks as R16F (the precision 16-bit pixels get as RGBA16F).
@@ -66,6 +68,7 @@ pub(crate) enum TexKind {
 impl TexKind {
     pub(crate) fn for_surface(role: Role, f: PixelFormat) -> Self {
         match role {
+            Role::Coverage => TexKind::Rgba32F,
             Role::Content | Role::Fill | Role::Stroke if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
             Role::Content | Role::Fill | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
             Role::Content | Role::Fill | Role::Stroke => TexKind::Rgba16F,
@@ -78,6 +81,7 @@ impl TexKind {
         match self {
             TexKind::Rgba8Direct | TexKind::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
             TexKind::Rgba16F => wgpu::TextureFormat::Rgba16Float,
+            TexKind::Rgba32F => wgpu::TextureFormat::Rgba32Float,
             TexKind::R8Direct => wgpu::TextureFormat::R8Unorm,
             TexKind::R16F => wgpu::TextureFormat::R16Float,
             TexKind::R32F => wgpu::TextureFormat::R32Float,
@@ -87,6 +91,7 @@ impl TexKind {
         match self {
             TexKind::Rgba8Direct | TexKind::Rgba8 => 4,
             TexKind::Rgba16F => 8,
+            TexKind::Rgba32F => 16,
             TexKind::R8Direct => 1,
             TexKind::R16F => 2,
             TexKind::R32F => 4,

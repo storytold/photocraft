@@ -315,43 +315,28 @@ fn convert_tiles_converts_each_distinct_tile_once() {
     assert_eq!((converted, n), (CONVERT_BATCH + 5, CONVERT_BATCH + 5));
 }
 
-/// An RGBA16F texel: half floats for colour, and for alpha the half that keeps coverage apart
-/// from full and none.
-fn half_texel([r, g, b, a]: [f32; 4]) -> Vec<u8> {
-    [f32_to_f16(r), f32_to_f16(g), f32_to_f16(b), coverage_to_f16(a)].iter().flat_map(|h| h.to_le_bytes()).collect()
+/// An RGBA16F texel: the plain half of each channel.
+fn half_texel(v: [f32; 4]) -> Vec<u8> {
+    v.iter().flat_map(|x| f32_to_f16(*x).to_le_bytes()).collect()
 }
 
-/// Alpha and mask texels keep partial coverage partial: a 16-bit sample decodes below 1 exactly
-/// when it is below 65535 and above 0 exactly when it is above 0, and float samples just below 1
-/// or just above 0 stay between them.
+/// An `F_COVER` record reads a 32-bit clip base's own pixels (`Role::Coverage`), whose alpha is
+/// exact; ordinary RGBA16F texels hold the plain half of it, never moved away from 0 or 1.
 #[test]
-fn half_coverage_keeps_partial_values_partial() {
+fn coverage_texels_keep_32_bit_alpha_exact() {
     let c = TileCoord::new(0, 0);
-    let tile = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
-    let alpha = |texel: &[u8]| f16_to_f32(u16::from_le_bytes([texel[texel.len() - 2], texel[texel.len() - 1]]));
-    for (role, fmt) in [(Role::Content, PixelFormat::RGBA16), (Role::Mask, PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 })] {
-        let kind = TexKind::for_surface(role, fmt);
-        // One tile holds every 16-bit value once, as the alpha (or the mask value).
-        let data: Vec<f32> = (0..=u16::MAX).flat_map(|v| std::iter::repeat_n(f32::from(v) / 65535.0, fmt.channels())).collect();
-        let mut s = Surface::new(fmt);
-        s.write_region(tile, &data);
-        let bytes = convert_tile(&s, s.tile(c), kind, c);
-        assert_eq!(bytes.len(), (TILE_SIZE * TILE_SIZE) as usize * kind.bytes_per_pixel(), "{fmt:?}");
-        for (v, texel) in (0..=u16::MAX).zip(bytes.chunks_exact(kind.bytes_per_pixel())) {
-            let a = alpha(texel);
-            assert_eq!(a < 1.0, v < u16::MAX, "{fmt:?} {v}: {a}");
-            assert_eq!(a > 0.0, v > 0, "{fmt:?} {v}: {a}");
-        }
-    }
-    let inputs = [0.9999_f32, 1.0 - 2f32.powi(-24), 1e-9];
+    let inputs = [0.9999_f32, 1.0 - 2f32.powi(-24), 2f32.powi(-24), 1e-9, 2.0];
     let mut s = Surface::new(PixelFormat::RGBA32F);
     for (x, v) in (0..).zip(inputs) {
         s.write_region(Rect::new(x, 0, x + 1, 1), &[0.5, 0.5, 0.5, v]);
     }
-    let bytes = convert_tile(&s, s.tile(c), TexKind::Rgba16F, c);
-    for (v, texel) in inputs.iter().zip(bytes.chunks_exact(TexKind::Rgba16F.bytes_per_pixel())) {
-        let a = alpha(texel);
-        assert!(a > 0.0 && a < 1.0, "{v}: {a}");
+    let exact = TexKind::for_surface(Role::Coverage, PixelFormat::RGBA32F);
+    let full = convert_tile(&s, s.tile(c), exact, c);
+    let half = convert_tile(&s, s.tile(c), TexKind::Rgba16F, c);
+    let texels = full.chunks_exact(exact.bytes_per_pixel()).zip(half.chunks_exact(TexKind::Rgba16F.bytes_per_pixel()));
+    for (v, (f, h)) in inputs.iter().zip(texels) {
+        assert_eq!(f.get(12..16), Some(v.to_le_bytes().as_slice()), "{v}");
+        assert_eq!(h.get(6..8), Some(f32_to_f16(*v).to_le_bytes().as_slice()), "{v}");
     }
 }
 
