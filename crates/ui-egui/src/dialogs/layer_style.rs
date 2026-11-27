@@ -50,6 +50,8 @@ mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
 #[cfg(test)]
+mod gradient_overlay_last_values_tests;
+#[cfg(test)]
 mod pattern_overlay_picker_tests;
 
 /// The Styles preset gallery page id.
@@ -550,8 +552,8 @@ pub(crate) fn open_layer(app: &PhotocraftApp) -> Option<LayerId> {
 }
 
 /// The effects whose new instance starts with the values of the last one committed with OK, also after a restart, as
-/// the reference's do (#14877, Drop Shadow).
-const STARTS_FROM_LAST: &[EffectKind] = &[EffectKind::DropShadow];
+/// the reference's do (#14877, Drop Shadow; #14899, Gradient Overlay).
+const STARTS_FROM_LAST: &[EffectKind] = &[EffectKind::DropShadow, EffectKind::GradientOverlay];
 
 /// Where the last committed values of `kind` are kept (the framework's saved memory, so they survive a restart).
 fn last_committed_key(kind: EffectKind) -> craft::ui::runtime::memory::SaveKey {
@@ -560,10 +562,13 @@ fn last_committed_key(kind: EffectKind) -> craft::ui::runtime::memory::SaveKey {
 
 /// A new instance of the [`STARTS_FROM_LAST`] kinds starts from the last committed values over the usual defaults; an
 /// effect lit by the shared light keeps the document's light angle. Reset to Default still writes the Make Default (or
-/// factory) values, which it reads from the engine.
+/// factory) values, which it reads from the engine. A kept snapshot (`fx`, see [`keep_last_committed`]) goes with the
+/// new instance as a loaded effect's does; one that does not read as an effect is dropped.
 fn start_from_last_committed(app: &PhotocraftApp, specs: &mut [EffectSpec], light: f32) {
     for spec in specs.iter_mut().filter(|s| STARTS_FROM_LAST.contains(&s.kind)) {
-        let Some(last) = craft::ui::runtime::memory::saved_value::<Option<Value>>(app.ctx(), &last_committed_key(spec.kind)) else { continue };
+        let Some(mut last) = craft::ui::runtime::memory::saved_value::<Option<Value>>(app.ctx(), &last_committed_key(spec.kind)) else { continue };
+        let fx = last.as_object_mut().and_then(|o| o.remove("fx")).and_then(|fx| serde_json::from_str::<Value>(fx.as_str()?).ok());
+        let fx = fx.filter(|fx| serde_json::from_value::<Effect>(fx.clone()).is_ok());
         let mut values = style_params_json(&spec.defaults);
         if let (Some(o), Some(l)) = (values.as_object_mut(), last.as_object()) {
             o.extend(l.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -571,16 +576,46 @@ fn start_from_last_committed(app: &PhotocraftApp, specs: &mut [EffectSpec], ligh
         if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true) {
             values["angle"] = json!(light);
         }
-        spec.defaults = style_params(spec.kind, &values, None).over(&spec.defaults);
+        spec.defaults = style_params(spec.kind, &values, fx.as_ref()).over(&spec.defaults);
     }
 }
 
-/// After an OK: keeps the values of the committed style's last instance of each [`STARTS_FROM_LAST`] kind.
+/// Whether instance `e` was added or changed in the dialog: it has no snapshot of a loaded effect (`fx`), or its values
+/// or on state differ from that snapshot's. A loaded effect confirmed as it was (made by a script, a preset or a file)
+/// is not a value the user set on the page (#14899).
+fn edited_in_dialog(e: &EffectInstance, light: f32) -> bool {
+    let Some(loaded) = fx_of(&e.params).and_then(|fx| serde_json::from_value::<Effect>(fx).ok()) else { return true };
+    loaded.enabled() != e.on || style_params_json(&effect_params(e.kind, &loaded, light)) != style_params_json(&e.params)
+}
+
+/// After an OK: keeps the values of the committed style's last enabled instance of each [`STARTS_FROM_LAST`] kind that
+/// was added or changed in the dialog; a kind with no such instance keeps what it had.
 fn keep_last_committed(app: &PhotocraftApp, style: &LayerStyle) {
     for kind in STARTS_FROM_LAST {
-        if let Some(e) = style.effects.iter().rev().find(|e| e.kind == *kind) {
-            craft::ui::runtime::memory::set_saved_value::<Option<Value>>(app.ctx(), &last_committed_key(*kind), Some(style_params_json(&e.params)));
+        let Some(e) = style.effects.iter().rev().find(|e| e.kind == *kind && e.on && edited_in_dialog(e, style.global_light)) else { continue };
+        let mut values = style_params_json(&e.params);
+        if let Some(o) = values.as_object_mut() {
+            // A loaded gradient can hold more stops than a command takes, or a single colour stop (a file has no
+            // limits). Too many stops are kept with the loaded effect's snapshot (`fx`): a new instance started with
+            // them carries it, and while its stops are unchanged the engine takes them from the snapshot (#16354
+            // review). A single colour stop is not kept: the next instance starts with the default gradient and the
+            // rest of this OK. Fewer than two transparency stops read as none on the page, so only too many count.
+            let max = photocraft_engine::layer_style::MAX_STOPS;
+            let count = |key: &str| o.get(key).and_then(Value::as_array).map(Vec::len);
+            let too_many = count(gradient_field::KEY).is_some_and(|n| n > max) || count(gradient_field::OPACITY_KEY).is_some_and(|n| n > max);
+            let too_few = count(gradient_field::KEY).is_some_and(|n| n < 2);
+            match fx_of(&e.params) {
+                Some(fx) if too_many && !too_few => {
+                    o.insert("fx".into(), Value::String(fx.to_string()));
+                }
+                _ if too_many || too_few => {
+                    o.remove(gradient_field::KEY);
+                    o.remove(gradient_field::OPACITY_KEY);
+                }
+                _ => {}
+            }
         }
+        craft::ui::runtime::memory::set_saved_value::<Option<Value>>(app.ctx(), &last_committed_key(*kind), Some(values));
     }
 }
 
@@ -1062,10 +1097,27 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
     {
         o.insert("angle".into(), json!(light));
     }
-    let params = style_params(kind, &values, None);
+    let mut params = style_params(kind, &values, None);
+    let starts_from_last = STARTS_FROM_LAST.contains(&kind);
+    if starts_from_last {
+        // A new instance of this kind may start from the last OK, so a key the stored default leaves out goes back to
+        // the page's factory value instead of keeping the last OK's (#14899).
+        params = params.over(&EffectSpec::photoshop(kind).defaults);
+    }
+    if kind == EffectKind::GradientOverlay && !params.0.contains_key("smoothness") {
+        // Set, not left out: a loaded overlay's recorded interpolation keeps its Smoothness for a missing key, so a
+        // reset would keep it.
+        params.0.insert("smoothness".into(), StyleValue::Number(f64::from(photocraft_engine::layer_style::DEFAULT_SMOOTHNESS)));
+    }
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
+        let keys: Vec<String> = params.0.keys().cloned().collect();
         for (key, value) in params.0 {
             d.draft_mut().set_param(instance, &key, value);
+        }
+        // A key neither default gives may still hold the last OK's value: it goes, so the engine's default for a
+        // missing key applies. The loaded snapshot (`fx`) stays.
+        if starts_from_last && let Some(e) = d.draft_mut().style.effect_mut(instance) {
+            e.params.0.retain(|key, _| key == "fx" || keys.contains(key));
         }
     }
 }

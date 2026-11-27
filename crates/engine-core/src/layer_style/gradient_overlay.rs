@@ -55,7 +55,7 @@ pub(super) fn overlay(gradient: &mut Gradient, interpolation: &mut Option<Gradie
     let previous = interpolation.clone();
     let source = interpolation.get_or_insert_with(|| GradientInterpolation {
         method: requested.unwrap_or("classic").to_ascii_lowercase(),
-        smoothness: 100.0,
+        smoothness: super::DEFAULT_SMOOTHNESS,
         // Without a source record, intermediate stops may be baked samples (PSD import or
         // older method commands). Keep the legacy rebuild-from-ends behaviour on first choice.
         stops: vec![(0.0, gradient.stops.first().map_or(Color::BLACK, |s| s.1)), (1.0, gradient.stops.last().map_or(Color::WHITE, |s| s.1))],
