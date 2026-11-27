@@ -370,7 +370,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 ),
                 // Ticked on first open (#13648).
                 Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
-                Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
+                Param::new("encoding", tl!("Encoding"), ParamKind::radio(opts(&[("zip", tl!("ZIP")), ("jpeg", tl!("JPEG"))]), Some("jpeg".to_owned()))),
+                Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)).enabled_when("encoding", "jpeg"),
                 // The page mode, a radio pair with no caption, Multi-Page Document first and selected (#13649).
                 Param::new(
                     "mode",
