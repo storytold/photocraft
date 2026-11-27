@@ -670,7 +670,7 @@ fn memory_destination(key: &str) -> Option<String> {
 }
 
 /// `value` without its nulls: a missing key reads as the dialog's default, and TOML has no null.
-fn without_nulls(value: Value) -> Value {
+pub(crate) fn without_nulls(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(map.into_iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k, without_nulls(v))).collect()),
         Value::Array(items) => Value::Array(items.into_iter().filter(|v| !v.is_null()).map(without_nulls).collect()),
