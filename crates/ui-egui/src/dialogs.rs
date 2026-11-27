@@ -123,7 +123,7 @@ pub(crate) mod params {
         crate::smart_svg_ui::family(),
         ParamFamily { check: Some(crate::workspace_ui::check_param), ..ParamFamily::new(crate::workspace_ui::owns_param, crate::workspace_ui::run_param) },
         ParamFamily {
-            check: Some(filter_dialog::check),
+            check: Some(conditional_mode_change_dialog::check_target),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(conditional_mode_change_dialog::owns_target, conditional_mode_change_dialog::run_target)
         },

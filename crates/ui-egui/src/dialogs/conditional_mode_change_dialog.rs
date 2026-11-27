@@ -108,6 +108,9 @@ fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::
 /// values its OK passes on.
 const PENDING: &str = "conditionalModeChange";
 
+/// The key of a target mode's dialog's captured value that names the document it converts.
+const DOCUMENT: &str = "document";
+
 /// The captured value of this dialog as a recorded step's editor: `{"recorded": params}`, the step's params.
 const RECORDED: &str = "recorded";
 
@@ -163,7 +166,8 @@ fn open_target_dialog(app: &mut PhotocraftApp, result: &ParamResult) -> bool {
         crate::actions::fill_editor(app, id, &recorded);
     }
     let from = if from.is_null() { json!("any") } else { from };
-    app.framework.captured.insert(command.to_owned(), json!({PENDING: {"from": from, "to": to}}));
+    let doc = app.session.active().map(|st| st.doc.id);
+    app.framework.captured.insert(command.to_owned(), json!({PENDING: {"from": from, "to": to}, DOCUMENT: doc}));
     // A playing action continues after this dialog's OK.
     crate::actions::hand_over(app, result.id, id);
     true
@@ -173,6 +177,17 @@ fn open_target_dialog(app: &mut PhotocraftApp, result: &ParamResult) -> bool {
 /// on the document not converted yet (Bitmap and Duotone need Grayscale first), so it shows none.
 pub(crate) fn is_pending(captured: &Value) -> bool {
     captured.get(PENDING).is_some()
+}
+
+/// The held-OK check of the target modes' dialogs: one opened from this dialog converts the document it opened on, so
+/// its OK refuses while another one is active (the control channel can switch it under the dialog).
+pub(crate) fn check_target(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    if let Some(opened) = crate::dialogs::params::captured(app, &result.key).get(DOCUMENT)
+        && opened.as_u64() != app.session.active().map(|st| st.doc.id.0)
+    {
+        return Err(Label::from("the document Conditional Mode Change converts is no longer the active one"));
+    }
+    crate::filter_dialog::check(app, result)
 }
 
 /// Whether the dialog `key` can be a target mode's dialog opened from this one.

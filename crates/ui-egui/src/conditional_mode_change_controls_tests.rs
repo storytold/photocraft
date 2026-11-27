@@ -274,3 +274,32 @@ fn cancel_in_the_target_modes_dialog_leaves_the_document_as_it_was() {
         assert_eq!((mode(&h), history(&h)), (ColorMode::Rgb, before), "{target}: the document and History are unchanged");
     }
 }
+
+/// #13678: the target mode's dialog converts the document it opened on. With another document made active under it
+/// (the control channel's `ui.window.open` switches it while the dialog is open), its OK refuses and converts neither;
+/// back on its own document, OK converts that one.
+#[test]
+fn the_target_modes_dialog_converts_only_the_document_it_opened_on() {
+    let (mut h, id) = opened_gray();
+    h.state_mut().run("file.new", json!({"width": 40, "height": 20, "background": "#808080"})).unwrap();
+    h.state_mut().session.set_active(0);
+    set(&mut h, id, "to", json!("bitmap"));
+    ok(&mut h, id);
+    let (_, dialog) = open_dialog(&h).expect("the Bitmap dialog is open");
+    let switch = |h: &mut H, document: usize| {
+        let ctx = h.ctx.clone();
+        let (request, _reply) = crate::control::ControlRequest::new("ui.window.open", json!({"document": document}));
+        let _ = crate::control::handle(h.state_mut(), &ctx, &request);
+        h.run_steps(3);
+        assert_eq!(h.state().session.active_index(), Some(document), "the control channel switched the document");
+    };
+    switch(&mut h, 1);
+    assert!(crate::dialogs::testing::confirm(h.state_mut(), dialog).is_err(), "OK refuses on another document");
+    h.run_steps(3);
+    let modes = |h: &H| h.state().session.documents().iter().map(|st| st.doc.mode).collect::<Vec<_>>();
+    assert_eq!(modes(&h), [ColorMode::Rgb, ColorMode::Rgb], "neither document converted");
+    assert!(is_open(&h, dialog), "the dialog stays open");
+    switch(&mut h, 0);
+    ok(&mut h, dialog);
+    assert_eq!(modes(&h), [ColorMode::Bitmap, ColorMode::Rgb]);
+}
