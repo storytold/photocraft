@@ -43,8 +43,12 @@ fn steps(s: &Session) -> usize {
 
 /// The active layer's pixel at 4,4 (inside the red half).
 fn pixel(s: &Session) -> [f32; 4] {
-    let st = s.active().unwrap();
-    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(4, 4)
+    layer_pixel(s, s.active().unwrap().active_layer.unwrap())
+}
+
+/// Layer `id`'s pixel at 4,4.
+fn layer_pixel(s: &Session, id: photocraft_doc::LayerId) -> [f32; 4] {
+    s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().rgba(4, 4)
 }
 
 /// Black & White is greyed with the reference alert, running it is refused with it, and nothing
@@ -102,6 +106,56 @@ fn an_empty_pixel_layer_stops_with_the_empty_layer_alert() {
     let err = s.execute(BW, json!({})).expect_err("Black & White is refused").to_string();
     assert_eq!(err, BLACK_WHITE_EMPTY);
     assert_eq!(steps(&s), before, "no history state");
+}
+
+#[test]
+fn explicit_pixels_in_cmyk_are_refused_over_a_targeted_alpha_channel() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
+    s.execute("select.saveSelection", json!({"name": "Alpha 1"})).unwrap();
+    s.execute("image.mode.cmyk", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": {"alpha": 0}})).unwrap();
+    assert!(s.is_enabled(BW), "the alpha channel keeps the shared check: {:?}", s.disabled_reason(BW));
+    let p = json!({"target": "pixels"});
+    assert_eq!(s.disabled_reason_with(BW, &p).as_deref(), Some(BLACK_WHITE_UNAVAILABLE), "the layer's pixels in CMYK");
+    let (before, was) = (steps(&s), pixel(&s));
+    let err = s.execute(BW, p).expect_err("Black & White is refused").to_string();
+    assert!(err.contains(BLACK_WHITE_UNAVAILABLE), "{err}");
+    assert_eq!(steps(&s), before, "no history state");
+    assert_eq!(pixel(&s), was, "no pixel change");
+}
+
+#[test]
+fn a_hidden_layer_named_by_layer_is_refused() {
+    let mut s = session();
+    let paint = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": paint.0, "visible": false})).unwrap();
+    let background = s.active().unwrap().doc.layers[0].id;
+    s.execute("layer.select", json!({"layer": background.0})).unwrap();
+    assert!(s.is_enabled(BW), "the visible Background is active");
+    let p = json!({"layer": paint.0});
+    assert_eq!(s.disabled_reason_with(BW, &p).as_deref(), Some(BLACK_WHITE_UNAVAILABLE));
+    let (before, was) = (steps(&s), layer_pixel(&s, paint));
+    let err = s.execute(BW, p).expect_err("Black & White is refused").to_string();
+    assert!(err.contains(BLACK_WHITE_UNAVAILABLE), "{err}");
+    assert_eq!(steps(&s), before, "no history state");
+    assert_eq!(layer_pixel(&s, paint), was, "the hidden layer is unchanged");
+}
+
+#[test]
+fn a_visible_layer_named_by_layer_works_while_a_hidden_one_is_active() {
+    let mut s = session();
+    let paint = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Hidden"})).unwrap();
+    s.execute("layer.setProps", json!({"visible": false})).unwrap();
+    assert_eq!(s.disabled_reason(BW).as_deref(), Some(BLACK_WHITE_UNAVAILABLE), "the hidden layer is active");
+    let p = json!({"layer": paint.0});
+    assert_eq!(s.disabled_reason_with(BW, &p), None, "the visible layer named");
+    let before = steps(&s);
+    s.execute(BW, p).expect("Black & White runs on the named layer");
+    assert_eq!(steps(&s), before + 1, "one history state");
+    let now = layer_pixel(&s, paint);
+    assert!((now[0] - now[1]).abs() < 1e-3 && (now[1] - now[2]).abs() < 1e-3, "the named layer turned gray, got {now:?}");
 }
 
 #[test]

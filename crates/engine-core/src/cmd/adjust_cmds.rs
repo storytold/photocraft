@@ -415,25 +415,38 @@ pub(crate) const BLACK_WHITE_UNAVAILABLE: &str = "The command \"Black & White\" 
 /// The reference application's alert for Black & White on an empty pixel layer.
 pub(crate) const BLACK_WHITE_EMPTY: &str = "Could not complete the Black & White command because the active layer is empty.";
 
-/// Black & White's precondition (#14401): RGB documents only, and not on a hidden pixel layer, as
-/// in the reference application; otherwise [`has_adjustable`]'s. A mask, alpha channel or Quick
-/// Mask target and the modes not measured (Bitmap, Duotone, Multichannel) keep [`has_adjustable`].
+/// Black & White's precondition with no params: the Channels panel's target, as
+/// [`black_white_enabled_with`] checks it, else [`has_adjustable`].
 pub(crate) fn black_white_enabled(s: &Session) -> std::result::Result<(), String> {
-    use photocraft_color::ColorMode;
     let p = crate::channel_cmds::inject_target(s, BLACK_WHITE_ID, Value::Null);
-    if crate::channel_cmds::target_of(&p) != crate::channel_cmds::Target::Pixels {
-        return has_adjustable(s);
+    black_white_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Black & White's precondition for a call with `p`, its target filled in from the Channels panel
+/// (#14401): RGB documents only, and not on a hidden pixel layer (the active one or the one
+/// `"layer"` names), as in the reference application; otherwise [`has_adjustable`]'s. An alpha
+/// channel or Quick Mask target and the modes not measured (Bitmap, Duotone, Multichannel) keep
+/// [`has_adjustable`]; `None` for a layer mask or a filter mask, which keep their own checks.
+pub(crate) fn black_white_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    use photocraft_color::ColorMode;
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask | Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => {
+            let d = s.active()?;
+            Some(match d.doc.mode {
+                ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed => Err(BLACK_WHITE_UNAVAILABLE.into()),
+                // Not measured, so a hidden layer there is not refused either.
+                ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel => has_adjustable(s),
+                ColorMode::Rgb => {
+                    let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
+                    let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
+                    if hidden { Err(BLACK_WHITE_UNAVAILABLE.into()) } else { has_adjustable(s) }
+                }
+            })
+        }
     }
-    let d = s.active().ok_or("no document open")?;
-    match d.doc.mode {
-        ColorMode::Rgb => {}
-        ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed => return Err(BLACK_WHITE_UNAVAILABLE.into()),
-        // Not measured, so a hidden layer there is not refused either.
-        ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel => return has_adjustable(s),
-    }
-    let layer = d.active_layer.and_then(|id| d.doc.layer(id));
-    let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
-    if hidden { Err(BLACK_WHITE_UNAVAILABLE.into()) } else { has_adjustable(s) }
 }
 
 /// Black & White with `p` (its target filled in) stops on an empty pixel layer before it edits
