@@ -361,8 +361,8 @@ pub(super) fn labelled<R>(ui: &mut egui::Ui, label: &str, mut add: impl FnMut(&m
 }
 
 /// A check box named `label` over `value`.
-pub(super) fn check(ui: &mut egui::Ui, label: &str, value: &mut bool) {
-    Checkbox::new(Bind::bound(value)).label(label.to_owned()).show(ui);
+pub(super) fn check(ui: &mut egui::Ui, label: &str, value: Bind<'_, bool>) {
+    Checkbox::new(value).label(label.to_owned()).show(ui);
 }
 
 /// A number field named `label` over `value` (in `unit` when it is not empty), limited to `range`. The events of this

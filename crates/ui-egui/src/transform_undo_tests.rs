@@ -30,7 +30,7 @@ fn harness_tool(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     app.ui.tool = tool;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

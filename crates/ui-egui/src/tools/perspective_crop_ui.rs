@@ -20,7 +20,7 @@ use craft::behavior::kurbo::Size;
 use craft::draw::ui::crop::{CropDocKey, CropDocument, PerspectiveCropBar, PerspectiveCropEvent, PerspectiveCropTool, PerspectiveInput};
 use craft::ui::bars::BarOutput;
 use craft::ui::canvas::{CropShield, ToolHostResponse};
-use craft::ui::contract::Bind;
+use craft::ui::contract::bind_tracked;
 use craft::ui::runtime::edit::cancel_all;
 use photocraft_engine::perspective_crop_cmds::{BITMAP_MODE_ERROR, UNSUPPORTED_LAYERS_ERROR};
 use serde_json::json;
@@ -204,8 +204,11 @@ pub fn committed(app: &mut PhotocraftApp, out: &BarOutput) {
 /// range alert once.
 pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let document = document(app).unwrap_or_else(|| CropDocument::new(CropDocKey::new(0), Size::ZERO, 72.0));
-    let options = &mut app.ui.tool_options;
-    let shown = PerspectiveCropBar::new(&mut options.perspective_crop, &document, Bind::bound(&mut options.perspective_crop_grid)).show(ui);
+    let mut size = app.ui.tool_options.perspective_crop.clone();
+    let shown = PerspectiveCropBar::new(&mut size, &document, bind_tracked!(app.ui.tool_options => perspective_crop_grid)).show(ui);
+    if size != app.ui.tool_options.perspective_crop {
+        app.ui.tool_options.perspective_crop = size;
+    }
     if let Some(alert) = shown.out_of_range {
         crate::option_cells::range_alert(app, ui, &alert);
     }
