@@ -214,13 +214,15 @@ pub fn backends(plan: &Plan, os: Os) -> Option<wgpu::Backends> {
 
 /// Instance backends for `auto` on Windows (no `WGPU_BACKEND`) from `dx12_vendors`, the PCI vendor
 /// ids of the DX12 adapters: Direct3D 12 always, Vulkan unless an Intel adapter makes its driver
-/// unsafe (#4), and OpenGL only when DX12 lists no adapter at all (old GPUs and VMs, the last way
-/// to draw the window: #5191, #1788). With any DX12 adapter listed, OpenGL stays out: wgpu's
-/// OpenGL backend keeps a hidden window on a thread that pumps no messages (gfx-rs/wgpu#10504),
-/// and a keyboard-layout switch through its system hotkey (Ctrl+Shift+<n>) activates the layout
-/// inside this process and blocks notifying that window forever, freezing the app (#9219, #15304;
-/// vectorcraft closed its same hang, #4150, by not starting OpenGL). `dx12_vendors` is called only
-/// for that plan; `None` keeps [`backends`]' choice.
+/// unsafe (#4), and OpenGL only when DX12 lists no adapter at all, which on Windows means no
+/// Direct3D 12 runtime at all (#5191, #1788): Windows 10 and later list WARP even on old GPUs
+/// and in VMs, and WARP already ranks ahead of GL there (see [`rank`]). With any DX12 adapter
+/// listed, OpenGL stays out: wgpu's OpenGL backend keeps a hidden window on a thread that
+/// pumps no messages (gfx-rs/wgpu#10504), and a keyboard-layout switch through its system
+/// hotkey (Ctrl+Shift+<n>) activates the layout inside this process and blocks notifying that
+/// window forever, freezing the app (#9219, #15304; vectorcraft closed its same hang, #4150, by not
+/// starting OpenGL). `dx12_vendors` is called only for that plan; `None` keeps
+/// [`backends`]' choice.
 pub fn windows_auto_backends(plan: &Plan, os: Os, dx12_vendors: impl FnOnce() -> Vec<u32>) -> Option<wgpu::Backends> {
     let auto = plan.env.is_none() && plan.backend == GpuBackend::Auto && os == Os::Windows;
     if !auto {

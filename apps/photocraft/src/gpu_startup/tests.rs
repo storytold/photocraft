@@ -279,8 +279,8 @@ fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
     // No Intel adapter: Vulkan stays (as in egui's default), OpenGL goes (#15304).
     assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, WARP]), Some(wgpu::Backends::DX12 | wgpu::Backends::VULKAN));
     assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), Some(wgpu::Backends::DX12 | wgpu::Backends::VULKAN));
-    // DX12 lists no adapter at all: egui's default backends, OpenGL included, as the last way
-    // to draw the window (old GPUs and VMs, #5191, #1788).
+    // DX12 lists no adapter at all (no Direct3D 12 runtime: Windows 7, a DX12-less GPU;
+    // #5191, #1788): egui's default backends, OpenGL included.
     assert_eq!(windows_auto_backends(&auto, Os::Windows, Vec::new), None);
     // `WGPU_BACKEND`, `--safe-gpu`, a chosen backend, a crash fallback and other platforms
     // don't list the DX12 adapters at all.
@@ -310,7 +310,8 @@ fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
 /// pump, and PhotoCraft stops answering entirely (a taskbar switch activates it in explorer.exe
 /// instead, which is why that path doesn't freeze the app). With any Direct3D 12 adapter listed,
 /// `auto` on Windows must not start OpenGL at all; OpenGL stays only where DX12 lists no adapter
-/// (the last way to draw a window, #5191, #1788).
+/// at all, which means no Direct3D 12 runtime: Windows 10 and later list WARP even on old
+/// GPUs and in VMs (#5191, #1788).
 #[test]
 fn auto_on_windows_starts_no_opengl_when_directx_12_has_an_adapter() {
     const NVIDIA: u32 = 0x10de;
