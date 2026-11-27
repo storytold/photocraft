@@ -92,6 +92,7 @@ fn wait(device: &wgpu::Device) -> Result<(), Box<dyn std::error::Error>> {
 
 /// The release frame's tail: commit the stroke with the live pixels, then render what the canvas
 /// redraws at release. Returns the time it took and the MB it uploaded.
+/// Its phases (offer, `paint.stroke`, damage, render, GPU wait) are printed as `landing_phases_ms`.
 fn land(
     s: &mut Session,
     commit: photocraft_engine::brush_cmds::LiveCommit,
@@ -103,16 +104,26 @@ fn land(
     let t = Instant::now();
     let before = s.active().ok_or("no document")?.doc.clone();
     s.offer_live_commit(commit);
+    let t_offer = ms(t);
+    let t1 = Instant::now();
     let result = s.execute("paint.stroke", params)?;
     assert!(result.get("fromLive").is_some(), "the commit did not take the live pixels");
+    let t_exec = ms(t1);
+    let t2 = Instant::now();
     let doc = s.active().ok_or("no document")?.doc.clone();
     let damage = photocraft_compose::relayout_damage(&before, &doc).union(&overlay);
-    let mut mb = 0.0;
+    let t_damage = ms(t2);
+    let (mut mb, mut t_render, mut t_wait) = (0.0, 0.0, 0.0);
     if !damage.is_empty() {
+        let t3 = Instant::now();
         let stats = comp.render(device, queue, &doc, damage, |e, o| display.sink(device, e, o))?;
+        t_render = ms(t3);
+        let t4 = Instant::now();
         wait(device)?;
+        t_wait = ms(t4);
         mb = stats.bytes_uploaded as f64 / 1e6;
     }
+    println!("landing_phases_ms offer={t_offer:.2} execute={t_exec:.2} damage={t_damage:.2} render={t_render:.2} gpu_wait={t_wait:.2}");
     Ok((ms(t), mb))
 }
 
@@ -158,13 +169,29 @@ struct Step {
     work: Vec<Work>,
 }
 
+/// The paint thread's pen-up phases, in ms (`at` fields are instants, read against the pen-up).
+#[derive(Default, Clone, Copy)]
+struct Phases {
+    /// `Finish` arrived, the last dabs were made (`finish_dabs`, `unfed_keys`), `Final` was sent.
+    finish_recv: Option<Instant>,
+    finish_dabs: f64,
+    final_sent: Option<Instant>,
+    /// `Served` arrived.
+    served_recv: Option<Instant>,
+    /// The blocking poll's wait and the coverage feed after the handshake.
+    poll_wait: f64,
+    feed: f64,
+    into_commit: f64,
+    done_sent: Option<Instant>,
+}
+
 /// Paint thread to UI thread.
 enum Up {
     Step(Step),
     /// The release: the work left for the UI thread, which the thread waits for.
     Final(Vec<Work>),
     /// The commit and the bounds the stroke showed without its dither.
-    Done(Box<Result<(LiveCommit, Rect), String>>),
+    Done(Box<Result<(LiveCommit, Rect), String>>, Phases),
 }
 
 /// UI thread to paint thread.
@@ -181,14 +208,22 @@ struct Read {
     device: wgpu::Device,
 }
 
-fn feed(live: &mut LiveStroke, read: &Option<Read>, block: bool) {
+/// Returns the time spent in the poll (its wait) and in feeding what it returned, in ms.
+fn feed(live: &mut LiveStroke, read: &Option<Read>, block: bool) -> (f64, f64) {
+    let mut t = (0.0, 0.0);
     if let Some(r) = read
         && (block || r.readback.in_flight() > 0)
     {
-        for (key, values, tag) in r.readback.poll(&r.device, block) {
+        let p = Instant::now();
+        let got = r.readback.poll(&r.device, block);
+        t.0 = ms(p);
+        let f = Instant::now();
+        for (key, values, tag) in got {
             live.feed_coverage(key, &values, tag);
         }
+        t.1 = ms(f);
     }
+    t
 }
 
 /// The stroke's thread, as the canvas's `PaintThread` is: a step for the points that arrived (all
@@ -235,21 +270,32 @@ fn paint_thread(mut live: LiveStroke, read: Option<Read>, from_ui: Receiver<Down
                 }
             }
             Ok(Down::Finish) => {
+                let mut ph = Phases { finish_recv: Some(Instant::now()), ..Phases::default() };
                 if read.is_some() {
+                    let t = Instant::now();
                     let last: Vec<GpuDab> = live.finish_dabs().iter().map(gpu_dab).collect();
                     let work = vec![Work::Dabs(last), Work::Read(live.unfed_keys())];
+                    ph.finish_dabs = ms(t);
+                    ph.final_sent = Some(Instant::now());
                     if to_ui.send(Up::Final(work)).is_err() || !matches!(from_ui.recv(), Ok(Down::Served(true))) {
                         return;
                     }
+                    ph.served_recv = Some(Instant::now());
                     for _ in 0..4 {
-                        feed(&mut live, &read, true);
+                        let (p, f) = feed(&mut live, &read, true);
+                        ph.poll_wait += p;
+                        ph.feed += f;
                         if read.as_ref().is_none_or(|r| r.readback.in_flight() == 0) {
                             break;
                         }
                     }
                 }
                 let bounds = live.overlay_bounds().unwrap_or(Rect::EMPTY);
-                let _ = to_ui.send(Up::Done(Box::new(live.into_commit().map(|c| (c, bounds)).map_err(|e| e.to_string()))));
+                let t = Instant::now();
+                let result = live.into_commit().map(|c| (c, bounds)).map_err(|e| e.to_string());
+                ph.into_commit = ms(t);
+                ph.done_sent = Some(Instant::now());
+                let _ = to_ui.send(Up::Done(Box::new(result), ph));
                 return;
             }
             Ok(Down::Served(_)) | Err(RecvTimeoutError::Timeout) => {}
@@ -276,6 +322,9 @@ struct Ui {
     /// Tail tiles saved, and tails stamped, so far.
     tail_saved: usize,
     tails: usize,
+    /// Time in stamping and in asking for coverage tiles (`run`), in ms, summed.
+    t_stamp: f64,
+    t_ask: f64,
 }
 
 impl Ui {
@@ -288,24 +337,34 @@ impl Ui {
         for (i, item) in work.into_iter().enumerate() {
             match item {
                 Work::Dabs(dabs) => {
+                    let t = Instant::now();
                     self.take_tail_back(g);
                     if !dabs.is_empty() {
                         let mut enc = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench_stamp") });
                         g.comp.stamp_dabs(g.device, g.queue, &mut enc, self.layer, &dabs)?;
                         g.queue.submit([enc.finish()]);
                     }
+                    self.t_stamp += ms(t);
                 }
                 Work::Read(asked) => {
+                    let t = Instant::now();
                     if !asked.0.is_empty() {
                         self.backlog.push_back(asked);
                     }
                     self.ask(g, all);
+                    self.t_ask += ms(t);
                 }
-                Work::Tail(dabs) if Some(i) == last_stamp => self.show_tail(g, &dabs)?,
+                Work::Tail(dabs) if Some(i) == last_stamp => {
+                    let t = Instant::now();
+                    self.show_tail(g, &dabs)?;
+                    self.t_stamp += ms(t);
+                }
                 Work::Tail(_) => {}
             }
         }
+        let t = Instant::now();
         self.ask(g, all);
+        self.t_ask += ms(t);
         Ok(())
     }
 
@@ -395,8 +454,16 @@ fn live_run(
         let preview = live.gpu_preview().map_err(|why| format!("the stroke is not a GPU stroke: {why}"))?;
         let precision = g.comp.begin_external_mask(g.device, preview.doc.id, preview.layer, preview.doc.bounds(), None);
         println!("mask_precision={precision:?}");
-        let mut state =
-            Ui { layer: preview.layer, readback: MaskReadback::new(), backlog: VecDeque::new(), tail_tiles: Default::default(), tail_saved: 0, tails: 0 };
+        let mut state = Ui {
+            layer: preview.layer,
+            readback: MaskReadback::new(),
+            backlog: VecDeque::new(),
+            tail_tiles: Default::default(),
+            tail_saved: 0,
+            tails: 0,
+            t_stamp: 0.0,
+            t_ask: 0.0,
+        };
         let mut live = live;
         let tail = live.tail_dabs().0.iter().map(gpu_dab).collect();
         state.run(g, vec![Work::Dabs(first.iter().map(gpu_dab).collect()), Work::Tail(tail)], false)?;
@@ -483,15 +550,29 @@ fn live_run(
     let pen_up = Instant::now();
     tx.send(Down::Finish)?;
     let mut commit = None;
+    // The UI thread's side of the pen-up, as instants: `Final` received, handshake served (with the
+    // stamping and request_all it took), `Done` received.
+    let (mut final_at, mut served_at, mut done_at) = (None, None, None);
+    let (mut serve_stamp, mut serve_ask) = (0.0, 0.0);
+    let mut phases = Phases::default();
     let mut serve = |message: Up, g: &mut Gpu<'_>| -> Result<Option<(LiveCommit, Rect)>, Box<dyn std::error::Error>> {
         match message {
             Up::Final(work) => {
+                final_at = Some(Instant::now());
                 let Some(ui) = ui.as_mut() else { return Err("a CPU stroke has no final work".into()) };
+                let (s0, a0) = (ui.t_stamp, ui.t_ask);
                 ui.run(g, work, true)?;
+                serve_stamp = ui.t_stamp - s0;
+                serve_ask = ui.t_ask - a0;
                 tx.send(Down::Served(true))?;
+                served_at = Some(Instant::now());
                 Ok(None)
             }
-            Up::Done(result) => Ok(Some((*result)?)),
+            Up::Done(result, ph) => {
+                done_at = Some(Instant::now());
+                phases = ph;
+                Ok(Some((*result)?))
+            }
             Up::Step(_) => Ok(None),
         }
     };
@@ -517,6 +598,7 @@ fn live_run(
         }
     }
     let (commit, overlay) = commit.ok_or("no commit")?;
+    let landing_start = Instant::now();
     let (landing, mb) = land(s, commit, params, overlay, (&mut *g.comp, g.device, g.queue, &mut display))?;
     let (tail_per_step, tails) = ui.as_ref().map_or((0.0, 0), |u| (u.tail_saved as f64 / u.tails.max(1) as f64, u.tails));
     if let Some(ui) = ui.as_ref() {
@@ -524,6 +606,31 @@ fn live_run(
     }
     let _ = worker.join();
     let committed = ms(pen_up);
+    let since = |t: Option<Instant>| t.map_or(f64::NAN, |t| t.saturating_duration_since(pen_up).as_secs_f64() * 1e3);
+    let span = |a: Option<Instant>, b: Option<Instant>| match (a, b) {
+        (Some(a), Some(b)) => b.saturating_duration_since(a).as_secs_f64() * 1e3,
+        _ => f64::NAN,
+    };
+    println!(
+        "pen_up_phases_ms (instants from pen-up) thread_finish_recv={:.2} thread_final_sent={:.2} ui_final_recv={:.2} ui_served={:.2} thread_served_recv={:.2} thread_done_sent={:.2} ui_done_recv={:.2} landing_start={:.2}\n\
+         pen_up_phases_ms (durations) finish_dabs={:.2} handshake_wait={:.2} (final sent to UI recv) stamp={serve_stamp:.2} request_all={serve_ask:.2} serve_total={:.2} serve_to_thread={:.2} poll_wait={:.2} feed={:.2} into_commit={:.2} done_gap={:.2} (thread send to UI recv)",
+        since(phases.finish_recv),
+        since(phases.final_sent),
+        since(final_at),
+        since(served_at),
+        since(phases.served_recv),
+        since(phases.done_sent),
+        since(done_at),
+        landing_start.saturating_duration_since(pen_up).as_secs_f64() * 1e3,
+        phases.finish_dabs,
+        span(phases.final_sent, final_at),
+        span(final_at, served_at),
+        span(served_at, phases.served_recv),
+        phases.poll_wait,
+        phases.feed,
+        phases.into_commit,
+        span(phases.done_sent, done_at),
+    );
     let n = frames.len();
     let total: f64 = frames.iter().sum();
     frames.sort_by(f64::total_cmp);
