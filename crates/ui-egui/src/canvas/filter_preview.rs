@@ -48,10 +48,13 @@ fn adjust_request(app: &PhotocraftApp) -> Option<(craft::ui::dialog::DialogId, S
     Some((open.id, cmd, params))
 }
 
+/// An open preview dialog's request: the dialog, its command and its parameters.
+type PreviewRequest = (craft::ui::dialog::DialogId, String, String);
+
 /// What the canvas shows of an open filter or adjustment dialog's preview, for the document area's version
 /// (`region_versions::canvas`): the request the dialog asks for (its fields change with no command) and the result
 /// on screen, with whether OK's job is running.
-pub(crate) fn canvas_key(app: &PhotocraftApp) -> (Option<(craft::ui::dialog::DialogId, String, String)>, Option<(usize, bool)>) {
+pub(crate) fn canvas_key(app: &PhotocraftApp) -> (Option<PreviewRequest>, Option<(usize, bool)>) {
     let request = adjust_request(app).map(|(id, command, params)| (id, command, params.to_string()));
     let shown = app.filter_preview.as_ref().map(|p| (p.result.as_ref().map_or(0, |doc| std::sync::Arc::as_ptr(doc) as usize), p.committing));
     (request, shown)
