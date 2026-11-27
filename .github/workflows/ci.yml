@@ -106,7 +106,7 @@ jobs:
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -291,7 +291,7 @@ jobs:
       actions: write
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - name: Prune replaced cache entries
@@ -319,7 +319,7 @@ jobs:
       actions: write
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -349,7 +349,7 @@ jobs:
       CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -369,7 +369,7 @@ jobs:
             libgtk-3-dev
 
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -404,7 +404,7 @@ jobs:
       TRUNK_VERSION: 0.21.14
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -417,7 +417,7 @@ jobs:
         uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
 
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -497,7 +497,7 @@ jobs:
           - { crate: format, name: load }
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -529,7 +529,7 @@ jobs:
       RAYON_NUM_THREADS: "4"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -542,7 +542,7 @@ jobs:
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
             libgtk-3-dev
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -566,7 +566,7 @@ jobs:
       RAYON_NUM_THREADS: "4"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -579,7 +579,7 @@ jobs:
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
             libgtk-3-dev
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -608,14 +608,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -645,14 +645,14 @@ jobs:
       RAYON_NUM_THREADS: "4"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -676,7 +676,7 @@ jobs:
       RAYON_NUM_THREADS: "4"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@v7
@@ -689,7 +689,7 @@ jobs:
           ref: ${{ inputs.brush_tip_base }}
           path: before
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -726,7 +726,7 @@ jobs:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -744,7 +744,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/photocraft-baseline/crates/engine/examples"
           cp crates/engine/examples/bench_dry_mixer.rs "$RUNNER_TEMP/photocraft-baseline/crates/engine/examples/bench_dry_mixer.rs"
       - id: rust
-        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/rust-channel@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
@@ -795,7 +795,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
