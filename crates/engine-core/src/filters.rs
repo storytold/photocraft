@@ -212,9 +212,13 @@ pub(crate) fn apply_filter_to_surface_in(
     // Replays bypass command dispatch; nested paths must still obey the requesting session's
     // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
     crate::jobs::authorize_render_command(id, params)?;
-    // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
-    if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
-        return Ok(Some(out));
+    // The stack owns progress across filters; the operations below only inherit cancellation.
+    let cancelled = || ctx.cancelled();
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
+    // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds), interrupted mid-warp
+    // by the job's Cancel (#210).
+    if let Some(out) = crate::distort_cmds::apply_to_surface_with(id, params, surf, canvas, &ctl) {
+        return out.map(Some);
     }
     // Lens Correction / Adaptive Wide Angle / Camera Raw smart filters (lens_cmds).
     if let Some(out) = crate::lens_cmds::apply_to_surface(id, params, surf, canvas) {
@@ -231,9 +235,6 @@ pub(crate) fn apply_filter_to_surface_in(
     let Some(mut fp) = params_for(id, params) else { return Ok(None) };
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
     // unknown filter; the command itself already refused an unreadable map when it was added.
-    // The stack owns progress across filters; this operation only inherits cancellation.
-    let cancelled = || ctx.cancelled();
-    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
     match crate::filters_ext::resolve_map_path(&mut fp, params, &ctl) {
         Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
         Err(e) if matches!(fp, FilterParams::CustomShapeBlur { .. }) => return Err(e),

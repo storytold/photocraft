@@ -790,3 +790,125 @@ fn the_next_live_segment_takes_back_the_provisional_dab() {
     direct.stroke_segment_live(&s, [100.0, 100.0, 1.0], [101.0, 100.0, 1.0], 16.0);
     assert!(g == direct, "the first segment's dab was taken back before the second was applied");
 }
+
+/// A forward-warped marker column on a gray layer, and the field that moves it (#210 tests).
+fn warped_marker() -> (Surface, LiquifyField) {
+    let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 40.0);
+    s.points = vec![vec![40.0, 32.0], vec![52.0, 32.0]];
+    let field = LiquifyField::from_strokes(bounds(), 2.0, &[s]);
+    let mut img = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true));
+    img.fill_rect(bounds(), &[0.0, 1.0]);
+    img.fill_rect(Rect::new(40, 28, 42, 36), &[1.0, 1.0]);
+    (img, field)
+}
+
+#[test]
+fn apply_liquify_with_matches_apply_liquify_when_not_cancelled() {
+    let (img, field) = warped_marker();
+    let reported = std::sync::Mutex::new(0.0f32);
+    let progress = |p: f32| {
+        let mut m = reported.lock().unwrap();
+        *m = m.max(p);
+    };
+    let never = || false;
+    let out = apply_liquify_with(&img, &field, &Interrupt::new(&never, &progress)).expect("not cancelled");
+    let want = apply_liquify(&img, &field);
+    assert_ne!(want, img, "the stroke moves the marker");
+    assert_eq!(out, want);
+    assert_eq!(*reported.lock().unwrap(), 1.0);
+    assert_eq!(apply_liquify_with(&img, &field, &Interrupt::NONE), Some(want));
+}
+
+#[test]
+fn apply_liquify_with_stops_when_cancelled() {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    // A strip 130 tiles long with a short stroke in each tile, so the render runs in three
+    // batches (64, 64 and 2 tiles).
+    let ts = photocraft_geom::TILE_SIZE;
+    let strip = Rect::new(0, 0, 130 * ts, 16);
+    let strokes: Vec<LiquifyStroke> = (0..130)
+        .map(|t| {
+            let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 40.0);
+            let x = f64::from(t * ts + ts / 2);
+            s.points = vec![vec![x - 6.0, 8.0], vec![x + 6.0, 8.0]];
+            s
+        })
+        .collect();
+    let field = LiquifyField::from_strokes(strip, 2.0, &strokes);
+    let tiles = strip.tiles().filter(|t| field.touches(t.rect().intersect(&strip))).count();
+    assert_eq!(tiles, 130, "every tile is moved");
+    let mut img = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true));
+    img.fill_rect(strip, &[0.0, 1.0]);
+    img.fill_rect(Rect::new(0, 6, 130 * ts, 10), &[1.0, 1.0]);
+    let always = || true;
+    assert!(apply_liquify_with(&img, &field, &Interrupt::cancel_only(&always)).is_none());
+    // Cancelled after the first check: each of the first batch's tiles checks once and skips its
+    // work, the check after the batch stops the render, and no batch reports progress. A render
+    // that checked only at the end would check every tile (and report progress per batch); one
+    // without the per-tile check would check once.
+    let calls = AtomicUsize::new(0);
+    let later = || calls.fetch_add(1, SeqCst) >= 1;
+    let reported = AtomicUsize::new(0);
+    let progress = |_: f32| {
+        reported.fetch_add(1, SeqCst);
+    };
+    assert!(apply_liquify_with(&img, &field, &Interrupt::new(&later, &progress)).is_none());
+    let calls = calls.load(SeqCst);
+    assert_eq!(calls, RENDER_BATCH_TILES + 1, "one check per tile of the first batch, then the batch's");
+    assert!(calls < tiles);
+    assert_eq!(reported.load(SeqCst), 0, "no batch was finished");
+}
+
+/// Replays `strokes` on [`bounds`] under a check that cancels at its `trip`th call (0: never);
+/// the field and how many checks were made.
+fn replay_counting(strokes: &[LiquifyStroke], trip: usize) -> (Option<LiquifyField>, usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let calls = AtomicUsize::new(0);
+    let check = || {
+        let n = calls.fetch_add(1, SeqCst) + 1;
+        trip != 0 && n >= trip
+    };
+    let field = LiquifyField::from_strokes_with(bounds(), 2.0, strokes, &Interrupt::cancel_only(&check));
+    (field, calls.load(SeqCst))
+}
+
+#[test]
+fn a_cancelled_replay_stops_between_strokes() {
+    // #210: six 50 px drags of a 20 px brush (dabs half a pixel apart: a hundred each).
+    let strokes: Vec<LiquifyStroke> = (0..6)
+        .map(|i| {
+            let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 20.0);
+            let y = 8.0 + 8.0 * i as f64;
+            s.points = vec![vec![10.0, y], vec![60.0, y + 2.0]];
+            s
+        })
+        .collect();
+    // Not cancelled: one check before the field is allocated and one between strokes, and the
+    // same field as the replay nothing cancels.
+    let (field, calls) = replay_counting(&strokes, 0);
+    let field = field.expect("not cancelled");
+    assert_eq!(calls, strokes.len(), "one check before the field, one between strokes");
+    assert!(!field.is_identity(), "the strokes displace the field");
+    assert!(field == LiquifyField::from_strokes(bounds(), 2.0, &strokes), "the same field as from_strokes");
+    // Cancelled at check k + 1: k strokes were replayed, then nothing more was asked (or done).
+    for k in 0..strokes.len() {
+        let (field, calls) = replay_counting(&strokes, k + 1);
+        assert!(field.is_none(), "cancelled after {k} strokes");
+        assert_eq!(calls, k + 1, "stopped after {k} strokes: no later stroke was replayed");
+    }
+}
+
+#[test]
+fn a_cancelled_replay_stops_inside_a_long_stroke() {
+    // One stroke of 600 points (599 segments) checks at segments 256 and 512.
+    let mut long = LiquifyStroke::new(LiquifyTool::ForwardWarp, 20.0);
+    long.points = (0..600).map(|i| vec![5.0 + 0.1 * i as f64, 30.0]).collect();
+    let strokes = [long];
+    let (field, calls) = replay_counting(&strokes, 0);
+    assert_eq!(calls, 1 + 598 / STROKE_CHECK_SEGMENTS, "one before the field, one per {STROKE_CHECK_SEGMENTS} segments");
+    assert!(field.expect("not cancelled") == LiquifyField::from_strokes(bounds(), 2.0, &strokes), "the same field as from_strokes");
+    // Cancelled at the stroke's first check: the rest of the stroke is not walked.
+    let (field, calls) = replay_counting(&strokes, 2);
+    assert!(field.is_none());
+    assert_eq!(calls, 2, "stopped at segment {STROKE_CHECK_SEGMENTS}");
+}

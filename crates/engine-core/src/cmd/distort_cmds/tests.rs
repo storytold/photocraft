@@ -541,3 +541,366 @@ fn a_stored_puppet_mesh_is_drawn_only_on_the_placement_it_was_made_for() {
     bare.smart_filters[0].params["mesh"].as_object_mut().unwrap().remove("placement");
     assert_eq!(render(&bare), Rect::new(16, 14, 66, 44), "no placement: solved");
 }
+
+/// Starts `cmd` as the UI does (`Session::start`) and waits for its background job; returns the
+/// command's result.
+fn run_as_job(s: &mut Session, cmd: &str, p: Value) -> Value {
+    let crate::jobs::Started::Job(id) = s.start(cmd, p).unwrap() else { panic!("{cmd} ran inline") };
+    let t = std::time::Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            let crate::jobs::JobOutcome::Done(v) = e.outcome else { panic!("{cmd}: {e:?}") };
+            return v;
+        }
+        assert!(t.elapsed().as_secs() < 60, "{cmd} did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn puppet_warp_job_moves_a_linked_mask_with_the_pixels() {
+    // #4910 on the worker: the layer's warp hands the moved mask to the mask step there too.
+    for depth in [8u64, 16, 32] {
+        let mut s = masked_session(depth, &[(20, 24)]);
+        let before = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
+        run_as_job(&mut s, PUPPET, json!({"pins": [{"src": [30, 25], "dst": [36, 29]}], "mode": "rigid", "interpolation": "bilinear"}));
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{depth}: one undo step");
+        for y in [16, 30, 42] {
+            assert!(mask_at(&s, 27, y) < 0.01, "{depth}: the stripe moved to x 26..30 (y {y})");
+            assert!(mask_at(&s, 21, y) > 0.99, "{depth}: and left x 20..24 (y {y})");
+        }
+        let was = before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().pixel(21, 26);
+        assert!(worst_px(&active_surface(&s).pixel(27, 30), &was) <= 1.0 / 255.0, "{depth}");
+        s.undo();
+        assert!(mask_at(&s, 21, 30) < 0.01 && mask_at(&s, 27, 30) > 0.99, "{depth}: undo puts the mask back");
+    }
+}
+
+#[test]
+fn liquify_job_on_a_smart_object_adds_its_smart_filter() {
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let original = active_surface(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let (cmd, p) = smart_distortions()[0].clone();
+    let r = run_as_job(&mut s, cmd, p.clone());
+    assert_eq!(r["changed"], true, "{r}");
+    let sm = smart(&s);
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, LIQUIFY);
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    // The same render as the synchronous command.
+    let mut inline = session(8);
+    inline.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let inline_r = inline.execute(cmd, p).unwrap();
+    assert_eq!(active_surface(&s), active_surface(&inline));
+    assert_ne!(active_surface(&s), original);
+    // The field's largest displacement comes back on a smart object too, measured on the worker.
+    assert!(r["maxDisplacement"].as_f64().is_some_and(|m| m > 0.0), "{r}");
+    assert_eq!(r["maxDisplacement"], inline_r["maxDisplacement"], "{r} vs {inline_r}");
+}
+
+#[test]
+fn liquify_that_displaces_nothing_leaves_no_history_step() {
+    // Zero pressure moves nothing: no undo step, inline or as a background job, and the layer
+    // and document stay as they were.
+    let p = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "pressure": 0, "points": [[30, 25], [45, 25]]}]});
+    for threaded in [false, true] {
+        let mut s = session(8);
+        let doc = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
+        let r = if threaded { run_as_job(&mut s, LIQUIFY, p.clone()) } else { s.execute(LIQUIFY, p.clone()).unwrap() };
+        assert_eq!(r["changed"], false, "threaded {threaded}: {r}");
+        assert_eq!(r["maxDisplacement"], 0.0, "threaded {threaded}: {r}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "threaded {threaded}: no history step");
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "threaded {threaded}: the document was not replaced");
+    }
+}
+
+#[test]
+fn liquify_selection_blend_stops_when_cancelled() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let old = active_surface(&session(8));
+    let mut new = old.clone();
+    new.fill_rect(Rect::new(10, 10, 60, 40), &[1.0, 0.0, 0.0, 1.0]);
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    sel.fill_rect(Rect::new(0, 0, 35, 60), &[1.0]);
+    // Already cancelled: the blend stops at its first check, before it reads or allocates any
+    // pixels, and asks nothing more.
+    let calls = AtomicUsize::new(0);
+    let yes = || {
+        calls.fetch_add(1, Ordering::SeqCst);
+        true
+    };
+    assert!(matches!(mix_by_selection(&old, &new, &sel, &Interrupt::cancel_only(&yes)), Err(EngineError::Cancelled)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "stopped before the first band");
+    let mixed = mix_by_selection(&old, &new, &sel, &Interrupt::NONE).unwrap();
+    assert_eq!(mixed.read_region(Rect::new(10, 10, 35, 40)), new.read_region(Rect::new(10, 10, 35, 40)), "selected pixels take the result");
+    assert_eq!(mixed.read_region(Rect::new(35, 10, 60, 40)), old.read_region(Rect::new(35, 10, 60, 40)), "unselected pixels stay");
+}
+
+#[test]
+fn liquify_selection_blend_stops_mid_blend_when_cancelled() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // A selected area 400 rows tall: seven bands.
+    let area = Rect::new(0, 0, 50, 400);
+    let mut old = Surface::new(PixelFormat::RGBA8);
+    old.fill_rect(Rect::new(0, 0, 100, 400), &[0.2, 0.4, 0.6, 1.0]);
+    let mut new = Surface::new(PixelFormat::RGBA8);
+    new.fill_rect(Rect::new(0, 0, 100, 400), &[1.0, 0.0, 0.0, 1.0]);
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    sel.fill_rect(area, &[1.0]);
+    let bands = 400usize.div_ceil(MIX_BAND_ROWS as usize);
+    // Not cancelled: one check before any pixel is read, one per band and one per prune batch
+    // (two tiles: one batch).
+    let calls = AtomicUsize::new(0);
+    let never = || {
+        calls.fetch_add(1, Ordering::SeqCst);
+        false
+    };
+    let mixed = mix_by_selection(&old, &new, &sel, &Interrupt::cancel_only(&never)).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1 + bands + 1);
+    assert_eq!(mixed.read_region(area), new.read_region(area), "selected pixels take the result");
+    assert_eq!(mixed.read_region(Rect::new(50, 0, 100, 400)), old.read_region(Rect::new(50, 0, 100, 400)), "unselected pixels stay");
+    // Cancelled as the third band is about to start: the first two were blended, the rest are
+    // never read, blended or written, and nothing more is asked.
+    let calls = AtomicUsize::new(0);
+    let at_third_band = || calls.fetch_add(1, Ordering::SeqCst) + 1 >= 4;
+    assert!(matches!(mix_by_selection(&old, &new, &sel, &Interrupt::cancel_only(&at_third_band)), Err(EngineError::Cancelled)));
+    assert_eq!(calls.load(Ordering::SeqCst), 4, "no band after the cancel was processed");
+}
+
+/// Runs `cmd` inline under `ctx` (as a live preview does), so a test can count and trip its
+/// cancel checks.
+fn run_inline(s: &mut Session, ctx: &crate::jobs::JobCtx, cmd: &str, p: Value) -> Result<Value> {
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    let r = s.execute(cmd, p);
+    s.set_inline_job_ctx(None);
+    r
+}
+
+/// 64×1024 document whose new layer is painted all over and wholly selected: Liquify's selection
+/// blend there takes 16 bands.
+fn tall_selected_session() -> Session {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 64, "height": 1024, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("paint", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        for y in 0..1024 {
+            for x in 0..64 {
+                let v = ((x / 3 + y / 3) % 2) as f32;
+                surf.write_pixel(x, y, &[v, 1.0 - v, 0.5, 1.0]);
+            }
+        }
+        let mut sel = Surface::new(PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(0, 0, 64, 1024), &[1.0]);
+        doc.selection = Some(sel);
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+#[test]
+fn liquify_cancelled_mid_blend_leaves_the_document_and_history() {
+    // A brush taller than the canvas, dragged 200 px: the warp touches all four of its 64×256
+    // tiles. (Dabs fall a twentieth of the radius apart, so the drag must be longer than that or
+    // the stroke lays no dab and warps nothing.)
+    let stroke = |pressure: u32| json!({"strokes": [{"tool": "forwardWarp", "size": 2400, "pressure": pressure, "points": [[32, 400], [32, 600]]}]});
+    let (tiles, bands) = (4, 1024 / MIX_BAND_ROWS as usize);
+    let checks = |selected: bool, p: Value| {
+        let mut s = tall_selected_session();
+        if !selected {
+            s.edit("deselect", |doc, _| {
+                doc.selection = None;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let ctx = crate::jobs::JobCtx::new();
+        run_inline(&mut s, &ctx, LIQUIFY, p).unwrap();
+        ctx.checks()
+    };
+    // Before the warp: zero pressure warps nothing and returns before its first check.
+    let before = checks(false, stroke(0));
+    // Without a selection: those, the warp's (one per tile and one per batch of tiles) and the
+    // ones after the warp, which also follow the blend.
+    let unblended = checks(false, stroke(100));
+    assert!(unblended > before + tiles, "unblended {unblended} <= before {before} + tiles {tiles}: the stroke warps nothing");
+    let after = unblended.saturating_sub(before + tiles + 1);
+    assert!(after < bands / 2, "after {after} >= bands {bands} / 2 (before {before}, unblended {unblended})");
+    // With it, the selection path's own checks: the blend's (one before its first band, one per
+    // band, one per prune batch), all between the warp and the `after` checks.
+    let selected = checks(true, stroke(100));
+    let span = selected.saturating_sub(unblended);
+    assert!(span > bands, "span {span} <= bands {bands} (selected {selected}, unblended {unblended}, before {before}, after {after})");
+    // The warp ends at check `unblended - after`; halfway through the selection path's checks is
+    // a band's: at least a few bands in, with as many still to come, whether the selection path's
+    // checks besides the bands come before them or after.
+    let trip = unblended - after + span / 2;
+    let mut s = tall_selected_session();
+    let doc = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.cancel_at_check(trip);
+    let r = run_inline(&mut s, &ctx, LIQUIFY, stroke(100));
+    assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+    let made = ctx.checks();
+    assert!(made == trip, "made {made} != trip {trip}: no band after the cancel was read, blended or written (span {span}, after {after})");
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "the document is unchanged");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
+}
+
+#[test]
+fn liquify_cancelled_while_replaying_its_strokes_leaves_the_document_and_history() {
+    // #210: `n` strokes of a 30 px brush, each dragged 25 px (dabs 0.75 px apart: over thirty
+    // per stroke, so none is an identity at full pressure).
+    let strokes = |n: usize, pressure: u32| {
+        let s: Vec<Value> =
+            (0..n).map(|i| json!({"tool": "forwardWarp", "size": 30, "pressure": pressure, "points": [[20, 12 + 3 * i], [45, 14 + 3 * i]]})).collect();
+        json!({"strokes": s})
+    };
+    let n = 8;
+    let checks = |p: Value| {
+        let mut s = session(8);
+        let ctx = crate::jobs::JobCtx::new();
+        let r = run_inline(&mut s, &ctx, LIQUIFY, p).unwrap();
+        (ctx.checks(), r["changed"] == true)
+    };
+    // At zero pressure the field stays an identity and the job returns right after the replay:
+    // the job's first check, one before the field is allocated and one between strokes.
+    let (one, _) = checks(strokes(1, 0));
+    let (idle, _) = checks(strokes(n, 0));
+    assert!(one == 2 && idle == one + n - 1, "{one} {idle}: expected 2 and {} (n {n})", 1 + n);
+    // At full pressure the warp's own checks follow: the first is check `idle + 1`.
+    let (full, changed) = checks(strokes(n, 100));
+    assert!(changed && full > idle + 2, "{full} {idle} {changed}: the warp checks after the replay");
+    // Cancelled at the check before stroke n / 2: half the strokes replayed, half never were,
+    // and the warp never started.
+    let trip = one + n / 2;
+    assert!(trip < idle, "{trip} {idle}: the trip lands in the replay");
+    let mut s = session(8);
+    let doc = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.cancel_at_check(trip);
+    let r = run_inline(&mut s, &ctx, LIQUIFY, strokes(n, 100));
+    let made = ctx.checks();
+    assert!(made == trip, "{made} {trip}: no check after the cancel (idle {idle}, full {full})");
+    assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "the document is unchanged");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
+}
+
+/// 600×600 document whose new layer holds a pattern over (20, 20)–(580, 580): its warps draw
+/// into several of the canvas's nine 256 px tiles. `tint` makes the pixels (and so a smart
+/// object made of them, which the smart filter stage cache keys by) the caller's own.
+fn big_session(tint: f32) -> Session {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 600, "height": 600, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("paint", move |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        for y in 20..580 {
+            for x in 20..580 {
+                let v = ((x / 7 + y / 7) % 2) as f32;
+                surf.write_pixel(x, y, &[v, 1.0 - v, tint, 1.0]);
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+#[test]
+fn smart_filter_replay_stops_mid_warp_when_cancelled() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Content over several destination tiles, so a cancel halfway lands after tiles were drawn.
+    let surf = active_surface(&big_session(0.31));
+    let canvas = Rect::new(0, 0, 600, 600);
+    let pins = json!([{"src": [300, 300], "dst": [320, 310]}]);
+    let verts = [[18.0, 18.0], [582.0, 18.0], [582.0, 582.0], [18.0, 582.0]];
+    let moved: Vec<[f64; 2]> = verts.iter().map(|v| [v[0] + 2.0, v[1] + 1.0]).collect();
+    let mesh = json!({"pins": pins, "verts": verts, "deformed": moved, "tris": [[0, 1, 2], [0, 2, 3]]});
+    let q = [[20.0, 20.0], [580.0, 20.0], [580.0, 580.0], [20.0, 580.0]];
+    let cases = [
+        ("liquify", LIQUIFY, json!({"strokes": [{"tool": "forwardWarp", "size": 400, "points": [[200, 300], [400, 300]]}]})),
+        ("puppet, solved", PUPPET_SMART, json!({"pins": pins, "mode": "rigid"})),
+        ("puppet, stored mesh", PUPPET_SMART, json!({"pins": pins, "mesh": mesh})),
+        ("perspective", PERSPECTIVE_SMART, json!({"planes": [{"src": q, "dst": [[30.0, 20.0], [570.0, 25.0], [580.0, 580.0], [20.0, 575.0]]}]})),
+    ];
+    for (name, id, p) in cases {
+        let calls = AtomicUsize::new(0);
+        let count = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            false
+        };
+        let out = apply_to_surface_with(id, &p, &surf, canvas, &Interrupt::cancel_only(&count)).unwrap().unwrap();
+        assert_eq!(out, apply_to_surface(id, &p, &surf, canvas).unwrap(), "{name}: the same pixels as the replay nothing cancels");
+        assert_ne!(out, surf, "{name}: warped");
+        let total = calls.load(Ordering::SeqCst);
+        assert!(total >= 4, "{name}: the warp checks per destination tile ({total})");
+        // Cancelled halfway through its checks: the replay gives up instead of finishing.
+        let calls = AtomicUsize::new(0);
+        let halfway = || calls.fetch_add(1, Ordering::SeqCst) + 1 >= total.div_ceil(2);
+        let r = apply_to_surface_with(id, &p, &surf, canvas, &Interrupt::cancel_only(&halfway));
+        assert!(matches!(r, Some(Err(EngineError::Cancelled))), "{name}: {r:?}");
+    }
+}
+
+#[test]
+fn smart_object_warp_cancelled_while_running_leaves_the_document() {
+    // Each warp as an identity (its params checked the same way, nothing to draw), as it is
+    // (with a default spelled out, so its rendered stage isn't cached for the cancelled run), and
+    // the warp to cancel. The smart object's source is this test's own (`big_session`'s tint), so
+    // no other test can have cached its stages. Each warp draws into several 256 px tiles.
+    let q = [[20.0, 20.0], [580.0, 20.0], [580.0, 580.0], [20.0, 580.0]];
+    let r = [[30.0, 22.0], [570.0, 20.0], [580.0, 580.0], [20.0, 570.0]];
+    let stroke = |pressure: u32| json!([{"tool": "forwardWarp", "size": 400, "pressure": pressure, "points": [[200, 300], [400, 300]]}]);
+    let pins = json!([{"src": [300, 300], "dst": [320, 310]}]);
+    let cases = [
+        (LIQUIFY, json!({"strokes": stroke(0)}), json!({"strokes": stroke(100), "meshSize": 2}), json!({"strokes": stroke(100)})),
+        (
+            PUPPET_SMART,
+            json!({"pins": [], "mode": "rigid"}),
+            json!({"pins": pins, "mode": "rigid", "interpolation": "bicubic"}),
+            json!({"pins": pins, "mode": "rigid"}),
+        ),
+        (
+            PERSPECTIVE_SMART,
+            json!({"planes": [{"src": q, "dst": q}]}),
+            json!({"planes": [{"src": q, "dst": r}], "interpolation": "bicubic"}),
+            json!({"planes": [{"src": q, "dst": r}]}),
+        ),
+    ];
+    let smart_session = || {
+        let mut s = big_session(0.43);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s
+    };
+    for (cmd, identity, spelled_out, warp) in cases {
+        let checks = |p: &Value| {
+            let ctx = crate::jobs::JobCtx::new();
+            run_inline(&mut smart_session(), &ctx, cmd, p.clone()).unwrap();
+            ctx.checks()
+        };
+        // The checks before the warp starts (and after it ends), and the warp's own.
+        let around = checks(&identity);
+        let during = checks(&spelled_out).saturating_sub(around);
+        assert!(during >= 4, "{cmd}: the smart object's warp checks per destination tile ({during})");
+        let mut s = smart_session();
+        let doc = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
+        let ctx = crate::jobs::JobCtx::new();
+        // Halfway through the warp's checks: after its first tiles, before its last.
+        ctx.cancel_at_check(around + during.div_ceil(2));
+        let out = run_inline(&mut s, &ctx, cmd, warp);
+        assert!(matches!(out, Err(EngineError::Cancelled)), "{cmd}: {out:?}");
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "{cmd}: the document is unchanged");
+        assert!(smart(&s).smart_filters.is_empty(), "{cmd}: no smart filter recorded");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd}: no history step");
+    }
+}

@@ -107,6 +107,12 @@ struct Shared {
     batch_decision: Condvar,
     batch_preview: Mutex<Option<BatchPreview>>,
     batch_preview_generation: std::sync::atomic::AtomicU64,
+    /// Tests: [`JobCtx::cancelled`] calls so far, and the call that cancels the job (0: none);
+    /// see [`JobCtx::cancel_at_check`].
+    #[cfg(test)]
+    checks: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    trip_at: std::sync::atomic::AtomicUsize,
 }
 
 /// The current folder Batch input, published as an immutable snapshot for the desktop canvas.
@@ -143,7 +149,9 @@ const COMMITTED: u8 = 4;
 
 impl std::fmt::Debug for JobCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JobCtx").field("progress", &self.fraction()).field("cancelled", &self.cancelled()).finish()
+        // The state itself, not `cancelled()`: printing a context is not a cancel check.
+        let cancelled = self.shared.state.load(Ordering::Acquire) & CANCEL_REQUESTED != 0;
+        f.debug_struct("JobCtx").field("progress", &self.fraction()).field("cancelled", &cancelled).finish()
     }
 }
 
@@ -168,7 +176,33 @@ impl JobCtx {
 
     /// Has the job been cancelled? Long loops check this and stop early.
     pub fn cancelled(&self) -> bool {
+        #[cfg(test)]
+        self.count_check();
         self.shared.state.load(Ordering::Acquire) & CANCEL_REQUESTED != 0
+    }
+
+    /// Tests: cancel the job at its `n`th cancellation check from now on (counting every
+    /// [`JobCtx::cancelled`] call, from any thread), as a Cancel arriving mid-work would.
+    #[cfg(test)]
+    pub(crate) fn cancel_at_check(&self, n: usize) {
+        let done = self.shared.checks.load(Ordering::SeqCst);
+        self.shared.trip_at.store(done + n.max(1), Ordering::SeqCst);
+    }
+
+    /// Tests: how many times [`JobCtx::cancelled`] has been asked.
+    #[cfg(test)]
+    pub(crate) fn checks(&self) -> usize {
+        self.shared.checks.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn count_check(&self) {
+        let n = self.shared.checks.fetch_add(1, Ordering::SeqCst) + 1;
+        let at = self.shared.trip_at.load(Ordering::SeqCst);
+        if at != 0 && n >= at {
+            // As `try_cancel`, without waking a Batch (tests that trip a cancel run no Batch).
+            let _ = self.shared.state.try_update(Ordering::AcqRel, Ordering::Acquire, |state| (state & COMMITTED == 0).then_some(state | CANCEL_REQUESTED));
+        }
     }
 
     /// Ask the job to stop (idempotent). Does nothing once it has [committed](Self::commit).
@@ -373,7 +407,8 @@ pub enum CancelRefused {
     /// and will report its real outcome when it ends.
     Committing,
     /// A Batch already asked to stop, or past its last input: it ends on its own and reports
-    /// the outputs it wrote.
+    /// the outputs it wrote; or, for [`Session::cancel_working_job`], a worker that has already
+    /// produced its result (applied at the next poll).
     Finishing,
 }
 
@@ -1580,6 +1615,18 @@ impl Session {
 
     /// [`Self::cancel_job`], saying why a job was not cancelled.
     pub fn try_cancel_job(&mut self, id: JobId) -> std::result::Result<(), CancelRefused> {
+        self.cancel_job_unless(id, false)
+    }
+
+    /// [`Self::try_cancel_job`], also refusing (`Finishing`) a job whose worker has already
+    /// produced its result but not been polled yet, in the same atomic step as the cancel.
+    /// Cancel-latency benchmarks use it so every sample stops a worker mid-work.
+    pub fn cancel_working_job(&mut self, id: JobId) -> std::result::Result<(), CancelRefused> {
+        self.cancel_job_unless(id, true)
+    }
+
+    /// Cancel job `id`; with `finished`, not once its worker has produced its result.
+    fn cancel_job_unless(&mut self, id: JobId, finished: bool) -> std::result::Result<(), CancelRefused> {
         let Some(i) = self.jobs.running.iter().position(|r| r.id == id) else { return Err(CancelRefused::NotRunning) };
         // Earlier batch outputs are already on disk. Let the worker stop after its current
         // input and return the completed and skipped lists.
@@ -1593,7 +1640,11 @@ impl Session {
         }
         // Past its commit (a save replacing its file) the job runs to the end and reports its
         // real outcome; calling it cancelled would be false.
-        if !self.jobs.running[i].ctx.try_cancel() {
+        let ctx = &self.jobs.running[i].ctx;
+        if finished && !ctx.committed() && !ctx.cancel_if_running() {
+            return Err(CancelRefused::Finishing);
+        }
+        if !ctx.try_cancel() {
             return Err(CancelRefused::Committing);
         }
         let job = self.jobs.running.remove(i);
