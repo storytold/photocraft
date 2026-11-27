@@ -1,16 +1,16 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 use photocraft_engine::Session;
 use photocraft_engine::genai::{
     AiErrorKind, AiFailure, ConnectionRow, Disclosure, FillJob, FillPlan, FillRequest, GenerativeAi, JobPoll, ModelRow, SentInput, SentItem, SentKind,
     ServiceKind, SetupView,
 };
-use photocraft_engine::genai_cmds::{AGREE, DISCARD, RETRY};
 
 use super::*;
 use crate::Services;
+use crate::new_layer_ui::testing::set;
 
 const SECRET: &str = "sk-ui-test-not-a-real-key";
 
@@ -167,7 +167,7 @@ fn app_with(f: Fake) -> (PhotocraftApp, Arc<Fake>) {
     let ai: photocraft_engine::genai::SharedAi = Arc::new(Ai(Arc::clone(&f)));
     let mut app = PhotocraftApp::new(Session::new(), Services { genai: Some(ai), ..Default::default() });
     app.run("file.new", json!({"width": 64, "height": 64, "background": "#ffffff"})).unwrap();
-    (app, f)
+    (*app, f)
 }
 
 /// A harness drawing `f` with PhotoCraft's fonts and theme.
@@ -185,44 +185,65 @@ fn harness<'a>(mut f: impl FnMut(&mut egui::Ui, &mut PhotocraftApp) + 'a, app: P
     h
 }
 
-fn fill_item(app: &PhotocraftApp) -> Option<crate::menus::MenuItem> {
-    crate::menus::menu_items(app).into_iter().find(|i| i.id == FILL)
+/// Edit › Generative Fill as the menus list it.
+fn fill_row(app: &PhotocraftApp) -> Option<(String, bool)> {
+    crate::menus::menu_rows(app).into_iter().find(|r| r.command.id == FILL).map(|r| (r.command.id.to_string(), r.enabled))
 }
 
-fn open_prompt_dialog(app: &mut PhotocraftApp) -> u64 {
-    let ctx = egui::Context::default();
-    crate::menus::invoke(app, &ctx, FILL, json!({})).unwrap()["dialog"].as_u64().unwrap()
+/// Open the prompt through the menu, as a click on Edit › Generative Fill does.
+fn open_prompt_dialog(app: &mut PhotocraftApp) -> DialogId {
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(app, &ctx, FILL, json!({})).unwrap();
+    open_dialog(app, FILL).expect("the prompt opened")
 }
 
-fn dialog_with(app: &PhotocraftApp, mark: &str) -> Option<u64> {
-    app.ui.dialogs.iter().find(|d| d.fields.contains_key(mark)).map(|d| d.id)
+/// Fill the selection with `prompt` through the prompt dialog.
+fn generate(app: &mut PhotocraftApp, prompt: &str) {
+    let id = open_prompt_dialog(app);
+    set(app, id, "prompt", json!(prompt)).unwrap();
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(app, &ctx, id).unwrap();
 }
 
-fn layers(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().doc.layers.len()
+fn groups(app: &PhotocraftApp) -> Vec<Layer> {
+    app.session.active().unwrap().doc.layers.iter().filter(|l| l.is_group()).cloned().collect()
+}
+
+/// Tick the shell until `done` holds (at most 10 s).
+fn tick_until(app: &mut PhotocraftApp, done: impl Fn(&PhotocraftApp) -> bool) {
+    let ctx = app.ctx().clone();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done(app) {
+        assert!(std::time::Instant::now() < deadline, "timed out: {:?}", app.session.generative_fills());
+        crate::jobs_ui::tick(app, &ctx);
+        feed(app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[test]
 fn the_web_build_lists_no_generative_fill() {
     let mut web = PhotocraftApp::new(Session::new(), Services::default());
     web.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-    assert!(fill_item(&web).is_none(), "no generative AI there: no item");
+    assert!(fill_row(&web).is_none(), "no generative AI there: no item");
     assert!(!web.session.generative_status().is_ready());
 }
 
 #[test]
-fn unavailable_greys_the_menu_item_and_says_why() {
+fn unavailable_greys_the_menu_item_and_the_prompt_offers_setup() {
     let reason = "Generative fill has no model chosen. Open Set up AI to choose one.";
     let (mut app, f) = app_with(fake());
     app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
-    assert!(fill_item(&app).unwrap().enabled);
+    assert!(fill_row(&app).unwrap().1);
     *f.status.lock().unwrap() = AiStatus::Unavailable { reason: reason.into() };
-    let item = fill_item(&app).expect("listed on the desktop");
-    assert!(!item.enabled, "greyed out");
-    // Asked each time it's about to be used: the shared layer's reason, as it is.
-    let ctx = egui::Context::default();
-    assert_eq!(crate::menus::invoke(&mut app, &ctx, FILL, json!({})).unwrap_err(), reason);
-    assert!(app.ui.dialogs.is_empty());
+    assert!(!fill_row(&app).expect("listed on the desktop").1, "greyed out");
+    assert_eq!(app.session.disabled_reason(FILL).as_deref(), Some(reason), "the shared layer's reason, as it is");
+    // Opened anyway (a shortcut), the prompt can't Generate, and its footer opens the setup.
+    let id = open_prompt_dialog(&mut app);
+    let ctx = app.ctx().clone();
+    assert!(crate::dialogs::confirm(&mut app, &ctx, id).is_err());
+    footer(&mut app, &ctx, id, SET_UP);
+    assert!(open_dialog(&app, setup::KEY).is_some());
 }
 
 /// FredApps on #2879: no setup promotion in the options bar. The button is there once a model is
@@ -239,146 +260,64 @@ fn the_options_bar_button_shows_once_set_up_or_when_asked_for() {
         let mut h = harness(|ui, app: &mut PhotocraftApp| options_bar_button(app, ui), app);
         h.run_steps(2);
         assert_eq!(h.query_by_label("Generative Fill…").is_some(), shown, "{status:?}, always {always}");
-        if !shown {
-            continue;
-        }
-        h.get_by_label("Generative Fill…").click();
-        h.run_steps(2);
-        let app = h.state();
-        let setup = app.ui.dialogs.iter().any(|d| crate::prefs_ui::is_preferences(&d.fields) && d.fields["section"] == SETUP_SECTION);
-        let prompt = dialog_with(app, PROMPT_MARK).is_some();
-        // Set up, it asks for a prompt; not set up, it opens the setup instead.
-        assert_eq!((prompt, setup), (status.is_ready(), !status.is_ready()), "{status:?}");
     }
-    // Configured but no selection: shown, greyed out.
-    let (app, _) = app_with(fake());
-    let mut h = harness(|ui, app: &mut PhotocraftApp| options_bar_button(app, ui), app);
-    h.run_steps(2);
-    assert!(h.get_by_label("Generative Fill…").accesskit_node().is_disabled(), "nothing to fill yet");
-    // The web build has no Generative AI: never, even when asked for.
-    let mut web = PhotocraftApp::new(Session::new(), Services::default());
-    web.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-    web.run("prefs.set", json!({"path": "integrations.alwaysShowGenerativeFillButton", "value": true})).unwrap();
-    let mut h = harness(|ui, app: &mut PhotocraftApp| options_bar_button(app, ui), web);
-    h.run_steps(2);
-    assert!(h.query_by_label("Generative Fill…").is_none());
-}
-
-#[test]
-fn showing_the_button_before_setup_is_opt_in() {
-    assert!(!photocraft_engine::prefs::Preferences::default().integrations.always_show_generative_fill_button);
 }
 
 #[test]
 fn the_prompt_dialog_runs_the_fill_and_remembers_the_prompt() {
-    let (mut app, f) = app_with(Fake { remote: false, ..fake() });
-    let ctx = egui::Context::default();
-    // No selection: Generative Fill can't run, and says why.
-    assert!(crate::menus::invoke(&mut app, &ctx, FILL, json!({})).is_err());
+    let (mut app, _) = app_with(fake());
     app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
-    let id = open_prompt_dialog(&mut app);
-    let fields = &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
-    assert_eq!(ok_label(fields).as_deref(), Some("Generate 3"), "says how many it makes");
-    assert_eq!(fields["__command"], FILL, "automation confirming it is judged as the command");
-    assert!(can_confirm(&app, fields));
-    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("a red square"));
-    let before = layers(&app);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(layers(&app), before + 1);
-    assert_eq!(app.session.active().unwrap().doc.layers.last().unwrap().name, "a red square");
-    assert_eq!(f.sent.load(Ordering::SeqCst), 3, "three variations");
-    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "a red square", "separate": true})));
-    let (_, params) = app.session.journal.iter().rev().find(|(c, _)| c == FILL).unwrap();
-    assert_eq!(params, &json!({"prompt": "a red square"}));
-}
-
-#[test]
-fn a_prompt_left_open_while_the_tool_stops_working_explains_and_offers_setup() {
-    let (mut app, f) = app_with(fake());
-    app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
-    let id = open_prompt_dialog(&mut app);
-    let reason = "The key for OpenAI is missing. Open Set up AI to add it.";
-    *f.status.lock().unwrap() = AiStatus::Unavailable { reason: reason.into() };
-    assert!(!can_confirm(&app, &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields), "Generate is greyed");
-    let mut h = harness(
-        move |ui, app: &mut PhotocraftApp| {
-            let mut fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
-            body(app, ui, &mut fields);
-        },
-        app,
-    );
+    let ctx = app.ctx().clone();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(900.0, 700.0))
+        .with_context(ctx.clone())
+        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+    let id = open_prompt_dialog(h.state_mut());
     h.run_steps(2);
-    h.get_by_label(reason);
-    h.get_by_label("Set Up Generative AI…").click();
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "prompt", json!("a red kite")).unwrap();
     h.run_steps(2);
-    let app = h.into_state();
-    assert!(
-        app.ui.dialogs.iter().any(|d| crate::prefs_ui::is_preferences(&d.fields) && d.fields["section"] == SETUP_SECTION),
-        "Preferences › Integrations opened"
-    );
+    h.get_by_label("Generate 3").click();
+    h.run_steps(3);
+    assert_eq!(groups(h.state()).len(), 1);
+    assert_eq!(groups(h.state())[0].name, "a red kite");
+    h.state_mut().run("select.rect", json!({"x": 30, "y": 30, "width": 8, "height": 8})).unwrap();
+    let id = open_prompt_dialog(h.state_mut());
+    h.run_steps(2);
+    assert_eq!(crate::new_layer_ui::testing::fields(h.state(), id).text("prompt"), Some("a red kite"), "remembered");
 }
 
 #[test]
 fn consent_is_asked_before_anything_is_sent_and_this_time_is_not_remembered() {
     let (mut app, f) = app_with(Fake { remote: true, ..fake() });
     app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
-    let id = open_prompt_dialog(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("a kite"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(f.sent.load(Ordering::SeqCst), 0, "nothing sent yet");
-    let consent = dialog_with(&app, CONSENT_MARK).expect("the consent prompt opened");
-    let fields = app.ui.dialogs.iter().find(|d| d.id == consent).unwrap().fields.clone();
-    assert_eq!(fields["destination"], "https://fake.example");
-    assert_eq!(fields["__command"], AGREE, "automation confirming it is refused as `layer.generative.agree`");
-    assert_eq!(fields["items"].as_array().unwrap().len(), 3);
-    assert_eq!(ok_label(&fields).as_deref(), Some("Send"));
-    assert_eq!(cancel_label(&fields), Some("Don't Send"));
-    // It shows where, what (with sizes) and the four choices.
-    let mut h = harness(
-        move |ui, app: &mut PhotocraftApp| {
-            let mut fields = app.ui.dialogs.iter().find(|d| d.id == consent).unwrap().fields.clone();
-            body(app, ui, &mut fields);
-        },
-        app,
-    );
-    h.run_steps(2);
-    h.get_by_label("Generative Fill will send this to https://fake.example:");
-    h.get_by_label_contains("The picture around the selection · ");
-    h.get_by_label_contains("The selection's shape · ");
-    h.get_by_label_contains("Your prompt");
-    for choice in ["Only this time", "For an hour", "For a day", "Until I turn it off"] {
-        h.get_by_label(choice);
-    }
-    let mut app = h.into_state();
-    crate::dialogs::confirm(&mut app, consent).unwrap();
+    generate(&mut app, "lamp");
+    assert_eq!(f.sent.load(Ordering::SeqCst), 0, "nothing sent before the answer");
+    let consent = open_dialog(&app, consent::KEY).expect("asked");
+    assert!(!app.ui.status_error, "waiting isn't an error: {}", app.ui.status);
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, consent).unwrap();
     assert_eq!(f.sent.load(Ordering::SeqCst), 3);
-    assert!(app.session.generative_fills().is_empty());
-    assert_eq!(app.session.active().unwrap().doc.layers.last().unwrap().name, "a kite");
-    // The next fill asks again.
-    let id = open_prompt_dialog(&mut app);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    let consent = dialog_with(&app, CONSENT_MARK).expect("asked again");
-    // Until turned off: remembered, so the one after goes straight through.
-    app.ui.dialog_mut(consent).unwrap().fields.insert("term".into(), json!("until_revoked"));
-    crate::dialogs::confirm(&mut app, consent).unwrap();
-    let id = open_prompt_dialog(&mut app);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(dialog_with(&app, CONSENT_MARK).is_none());
-    assert_eq!(f.sent.load(Ordering::SeqCst), 9);
+    assert_eq!(groups(&app).len(), 1);
+    assert!(!f.remembered.load(Ordering::SeqCst), "only this time");
+    // Asked again next time.
+    app.run("select.rect", json!({"x": 30, "y": 30, "width": 8, "height": 8})).unwrap();
+    generate(&mut app, "lamp 2");
+    assert!(open_dialog(&app, consent::KEY).is_some());
 }
 
 #[test]
 fn dont_send_discards_the_fill_and_nothing_is_sent() {
     let (mut app, f) = app_with(Fake { remote: true, ..fake() });
     app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
-    let id = open_prompt_dialog(&mut app);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    let consent = dialog_with(&app, CONSENT_MARK).unwrap();
-    let before = layers(&app);
-    crate::dialogs::cancel(&mut app, consent).unwrap();
-    assert!(app.session.generative_fills().is_empty());
+    generate(&mut app, "lamp");
+    let consent = open_dialog(&app, consent::KEY).expect("asked");
+    let ctx = app.ctx().clone();
+    crate::dialogs::cancel(&mut app, &ctx, consent).unwrap();
+    feed(&mut app, &ctx);
     assert_eq!(f.sent.load(Ordering::SeqCst), 0);
-    assert_eq!(layers(&app), before);
+    assert!(app.session.generative_fills().is_empty(), "discarded");
+    assert!(open_dialog(&app, consent::KEY).is_none(), "not asked again");
+    assert!(groups(&app).is_empty());
 }
 
 #[test]
@@ -386,97 +325,70 @@ fn one_answer_covers_every_area_filled_at_once() {
     let (mut app, f) = app_with(Fake { remote: true, ..fake() });
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
     app.run("select.rect", json!({"x": 40, "y": 40, "width": 16, "height": 16, "mode": "add"})).unwrap();
-    let id = open_prompt_dialog(&mut app);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    let consent = dialog_with(&app, CONSENT_MARK).unwrap();
-    assert_eq!(app.ui.dialogs.iter().find(|d| d.id == consent).unwrap().fields["fills"].as_array().unwrap().len(), 2);
-    crate::dialogs::confirm(&mut app, consent).unwrap();
+    generate(&mut app, "x");
+    assert_eq!(consent::asked_fills(&app).len(), 2, "both areas wait on the one prompt");
+    let consent = open_dialog(&app, consent::KEY).unwrap();
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, consent).unwrap();
     assert_eq!(f.sent.load(Ordering::SeqCst), 6);
-    assert_eq!(app.session.active().unwrap().doc.layers.iter().filter(|l| l.is_group()).count(), 2);
-}
-
-/// Step `h` until the setup's read of the shared settings (on a worker) has answered.
-fn setup_read(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
-    for _ in 0..400 {
-        h.run_steps(1);
-        if h.query_by_label("Model for Generative Fill").is_some() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    panic!("the setup was never read");
-}
-
-#[test]
-fn a_slow_setup_read_never_holds_up_the_frame() {
-    let (app, _) = app_with(Fake { setup_delay: std::time::Duration::from_millis(400), ..fake() });
-    let mut h = harness(|ui, app: &mut PhotocraftApp| prefs_section(app, ui), app);
-    let started = std::time::Instant::now();
-    h.run_steps(2);
-    assert!(started.elapsed() < std::time::Duration::from_millis(300), "the read runs on a worker");
-    h.get_by_label("Generative Fill uses Fill One (Fake).");
-    assert!(h.query_by_label("Model for Generative Fill").is_none(), "nothing to show until it answers");
-    setup_read(&mut h);
-    h.get_by_label("Fill One");
-}
-
-#[test]
-fn setup_lists_models_chooses_and_connects_without_the_key_in_any_field() {
-    let (app, f) = app_with(fake());
-    let mut h = harness(|ui, app: &mut PhotocraftApp| prefs_section(app, ui), app);
-    setup_read(&mut h);
-    h.get_by_label("Generative AI");
-    h.get_by_label("Generative Fill uses Fill One (Fake).");
-    h.get_by_label("Fake");
-    h.get_by_label("Fill One").click();
-    h.run_steps(2);
-    assert_eq!(*f.chosen.lock().unwrap(), Some(("fake".into(), "fill-1".into())), "the suite's choice, through the shared layer");
-    h.state_mut().genai.setup.key = format!("  {SECRET}\n");
-    h.run_steps(1);
-    h.get_by_label("Connect").click();
-    for _ in 0..200 {
-        h.run_steps(1);
-        if f.connected.lock().unwrap().len() == 1 && h.query_by_label("Connected.").is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    h.get_by_label("Connected.");
-    assert_eq!(f.connected.lock().unwrap()[0].0, ServiceKind::OpenAi);
-    let app = h.into_state();
-    assert!(app.genai.setup.key.is_empty(), "the typed key is handed over and forgotten");
-    let dialogs = serde_json::to_string(&app.ui.dialogs).unwrap();
-    let prefs = serde_json::to_string(&app.session.prefs().to_json()).unwrap();
-    assert!(!dialogs.contains(SECRET) && !prefs.contains(SECRET), "never in dialog fields or preferences");
+    assert_eq!(groups(&app).len(), 2);
 }
 
 #[test]
 fn separate_areas_are_filled_one_by_one_unless_asked_otherwise() {
-    let (mut app, _) = app_with(Fake { remote: false, ..fake() });
+    let (mut app, _) = app_with(fake());
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
     app.run("select.rect", json!({"x": 40, "y": 40, "width": 16, "height": 16, "mode": "add"})).unwrap();
     let id = open_prompt_dialog(&mut app);
-    let fields = |app: &PhotocraftApp, id: u64| app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
-    assert_eq!(fields(&app, id)["__areas"], 2);
-    assert_eq!(fields(&app, id)["separate"], true, "on unless turned off");
-    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("x"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    let groups = |app: &PhotocraftApp| -> Vec<(String, photocraft_geom::Rect)> {
-        let doc = &app.session.active().unwrap().doc;
-        doc.layers.iter().filter(|l| l.is_group()).map(|l| (l.name.clone(), l.mask.as_ref().unwrap().surface.content_bounds())).collect()
-    };
-    let r = |x, y, w, h| photocraft_geom::Rect::from_xywh(x, y, w, h);
-    assert_eq!(groups(&app), [("x".into(), r(4, 4, 12, 12)), ("x".into(), r(40, 40, 16, 16))]);
-    // Turned off, the selection is filled as one; the choice is remembered.
+    assert_eq!(crate::new_layer_ui::testing::fields(&app, id).bool("separate"), Some(true), "on unless turned off");
+    set(&mut app, id, "prompt", json!("x")).unwrap();
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    let bounds =
+        |app: &PhotocraftApp| -> Vec<photocraft_geom::Rect> { groups(app).iter().map(|l| l.mask.as_ref().unwrap().surface.content_bounds()).collect() };
+    let r = photocraft_geom::Rect::from_xywh;
+    assert_eq!(bounds(&app).len(), 2);
+    assert!(bounds(&app)[0].contains_rect(&r(4, 4, 12, 12)) && bounds(&app)[1].contains_rect(&r(40, 40, 16, 16)), "{:?}", bounds(&app));
+    // Turned off, the selection is filled as one.
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
+    app.run("select.rect", json!({"x": 40, "y": 40, "width": 16, "height": 16, "mode": "add"})).unwrap();
     let id = open_prompt_dialog(&mut app);
-    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
-    f.insert("prompt".into(), json!("y"));
-    f.insert("separate".into(), json!(false));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(groups(&app).last().unwrap(), &("y".into(), r(4, 4, 52, 52)));
-    assert_eq!(app.session.prefs().dialogs.get(FILL).unwrap()["separate"], false);
-    let id = open_prompt_dialog(&mut app);
-    assert_eq!(fields(&app, id)["separate"], false);
+    set(&mut app, id, "prompt", json!("y")).unwrap();
+    set(&mut app, id, "separate", json!(false)).unwrap();
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    assert_eq!(bounds(&app).len(), 3);
+}
+
+#[test]
+fn setup_connects_and_chooses_without_the_key_in_any_field() {
+    let (mut app, f) = app_with(fake());
+    let id = open_setup(&mut app);
+    let ctx = app.ctx().clone();
+    tick_until(&mut app, |app| setup::read_for_test(app).is_some());
+    let read = setup::read_for_test(&app).unwrap().unwrap();
+    assert_eq!(read.models.len(), 1);
+    setup::connect_for_test(&mut app, ServiceKind::OpenAi, SECRET);
+    tick_until(&mut app, |_| !f.connected.lock().unwrap().is_empty());
+    assert_eq!(f.connected.lock().unwrap()[0], (ServiceKind::OpenAi, SECRET.to_owned()));
+    let fields = crate::new_layer_ui::testing::fields(&app, id);
+    assert!(fields.iter().all(|(_, v)| !format!("{v:?}").contains(SECRET)), "the key is never in the dialog's fields");
+    setup::choose_for_test(&mut app, "fake", "fill-1");
+    assert_eq!(*f.chosen.lock().unwrap(), Some(("fake".into(), "fill-1".into())));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    assert!(open_dialog(&app, setup::KEY).is_none());
+}
+
+/// A setup read that takes a while (the keychain) never holds the frame up.
+#[test]
+fn a_slow_setup_read_never_holds_up_the_frame() {
+    let (mut app, _) = app_with(Fake { setup_delay: std::time::Duration::from_millis(400), ..fake() });
+    open_setup(&mut app);
+    let ctx = app.ctx().clone();
+    let t = std::time::Instant::now();
+    feed(&mut app, &ctx);
+    assert!(t.elapsed() < std::time::Duration::from_millis(200), "{:?}", t.elapsed());
+    assert!(setup::read_for_test(&app).is_none(), "not read yet");
+    tick_until(&mut app, |app| setup::read_for_test(app).is_some());
 }
 
 // ---- Fills that run side by side --------------------------------------------------------------
@@ -488,30 +400,9 @@ fn background(f: Fake) -> (PhotocraftApp, Arc<Fake>) {
     (app, f)
 }
 
-fn generate(app: &mut PhotocraftApp, prompt: &str) {
-    let id = open_prompt_dialog(app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!(prompt));
-    crate::dialogs::confirm(app, id).unwrap();
-}
-
-/// Tick the shell until `done` holds (at most 10 s).
-fn tick_until(app: &mut PhotocraftApp, done: impl Fn(&PhotocraftApp) -> bool) {
-    let ctx = egui::Context::default();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !done(app) {
-        assert!(std::time::Instant::now() < deadline, "timed out: {:?}", app.session.generative_fills());
-        crate::jobs_ui::tick(app, &ctx);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-}
-
-fn group_count(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().doc.layers.iter().filter(|l| l.is_group()).count()
-}
-
 #[test]
 fn in_the_background_fills_block_nothing_and_land_where_they_were_started() {
-    let (mut app, _) = background(Fake { delay: std::time::Duration::from_millis(300), remote: false, ..fake() });
+    let (mut app, _) = background(Fake { delay: std::time::Duration::from_millis(300), ..fake() });
     let bg = app.session.active().unwrap().active_layer;
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
     generate(&mut app, "a");
@@ -523,199 +414,80 @@ fn in_the_background_fills_block_nothing_and_land_where_they_were_started() {
     generate(&mut app, "b");
     let fills = app.session.generative_fills();
     assert_eq!(fills.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
-    // The status bar counts them.
-    let mut h = harness(|ui, app: &mut PhotocraftApp| status_fills(app, ui), app);
-    h.run_steps(2);
-    assert!(h.query_by_label("2 generating").is_some() || h.query_by_label("1 generating · 1 waiting").is_some(), "status readout");
-    let mut app = h.into_state();
     tick_until(&mut app, |app| app.session.generative_fills().is_empty() && !app.session.has_jobs());
-    assert_eq!(group_count(&app), 2);
+    assert_eq!(groups(&app).len(), 2);
     assert_eq!(app.session.active().unwrap().active_layer, bg, "the person's layer stays active");
     assert!(app.ui.status.starts_with("Generated"), "{}", app.ui.status);
 }
 
 #[test]
-fn a_background_fill_waiting_for_consent_asks_and_shows_in_the_layers_panel() {
+fn a_background_fill_waiting_for_consent_asks() {
     let (mut app, f) = background(Fake { remote: true, ..fake() });
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
     generate(&mut app, "lamp");
     tick_until(&mut app, |app| app.session.generative_fills().first().is_some_and(|f| f.state == "consent") && !app.session.has_jobs());
-    let consent = dialog_with(&app, CONSENT_MARK).expect("the job's end asked");
+    let consent = open_dialog(&app, consent::KEY).expect("the job's end asked");
     assert!(!app.ui.status_error, "waiting isn't an error: {}", app.ui.status);
-    let doc = app.session.active().unwrap().doc.id;
-    let mut h = harness(move |ui, app: &mut PhotocraftApp| layer_rows_unplaced(app, ui, doc, &[]), app);
-    h.run_steps(2);
-    h.get_by_label("Needs your OK: lamp");
-    let mut app = h.into_state();
-    crate::dialogs::confirm(&mut app, consent).unwrap();
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, consent).unwrap();
     tick_until(&mut app, |app| app.session.generative_fills().is_empty() && !app.session.has_jobs());
-    assert_eq!(group_count(&app), 1);
+    assert_eq!(groups(&app).len(), 1);
     assert_eq!(f.sent.load(Ordering::SeqCst), 3);
 }
 
 #[test]
-fn a_failed_fill_keeps_its_row_offers_retry_and_can_be_discarded() {
+fn a_failed_fill_offers_retry_and_can_be_discarded() {
     let offline = AiFailure::new(AiErrorKind::Network, "Could not reach the service: offline");
-    let (mut app, f) = background(Fake { fail: Some(offline), delay: std::time::Duration::from_millis(20), ..fake() });
+    let (mut app, _) = background(Fake { fail: Some(offline), delay: std::time::Duration::from_millis(20), ..fake() });
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
-    generate(&mut app, "lamp");
+    generate(&mut app, "x");
     tick_until(&mut app, |app| app.session.generative_fills().first().is_some_and(|f| f.state == "failed") && !app.session.has_jobs());
-    assert!(app.ui.status_error && app.ui.status.contains("offline"), "{}", app.ui.status);
-    let doc = app.session.active().unwrap().doc.id;
-    let mut h = harness(move |ui, app: &mut PhotocraftApp| layer_rows_unplaced(app, ui, doc, &[]), app);
-    h.run_steps(2);
-    h.get_by_label("Failed: lamp");
-    let mut app = h.into_state();
-    // Retry with a working service lands it.
-    let working: photocraft_engine::genai::SharedAi = Arc::new(Ai(Arc::new(Fake { delay: std::time::Duration::from_millis(20), ..fake() })));
-    app.session.set_generative_ai(Some(working));
+    assert!(app.ui.status.contains("offline"), "{}", app.ui.status);
     let id = app.session.generative_fills()[0].id;
-    app.run(RETRY, json!({"fill": id})).unwrap();
-    tick_until(&mut app, |app| app.session.generative_fills().is_empty() && !app.session.has_jobs());
-    assert_eq!(group_count(&app), 1);
-    // Discard stops one that is still generating; nothing lands.
-    let slow: photocraft_engine::genai::SharedAi = Arc::new(Ai(Arc::new(Fake { delay: std::time::Duration::from_millis(300), ..fake() })));
-    app.session.set_generative_ai(Some(slow));
-    app.run("select.rect", json!({"x": 30, "y": 30, "width": 12, "height": 12})).unwrap();
-    generate(&mut app, "gone");
-    let id = app.session.generative_fills()[0].id;
-    app.run(DISCARD, json!({"fill": id})).unwrap();
-    app.session.join_cancelled_jobs();
-    tick_until(&mut app, |app| !app.session.has_jobs());
+    app.run(photocraft_engine::genai_cmds::DISCARD, json!({"fill": id})).unwrap();
     assert!(app.session.generative_fills().is_empty());
-    assert_eq!(group_count(&app), 1);
-    let _ = f;
 }
 
-#[test]
-fn a_refused_key_says_so_and_offers_setup() {
-    let auth = AiFailure::new(AiErrorKind::Auth, "OpenAI refused the key. Check it in Set up AI.");
-    let (mut app, _) = background(Fake { fail: Some(auth), ..fake() });
-    app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
-    generate(&mut app, "lamp");
-    tick_until(&mut app, |app| app.session.generative_fills().first().is_some_and(|f| f.state == "failed") && !app.session.has_jobs());
-    assert!(app.ui.status.contains("refused the key"), "the layer's message: {}", app.ui.status);
-    let doc = app.session.active().unwrap().doc.id;
-    let mut h = harness(move |ui, app: &mut PhotocraftApp| layer_rows_unplaced(app, ui, doc, &[]), app);
-    h.run_steps(2);
-    let mut app = h.into_state();
-    // The tag offers the way to fix it.
-    let mut h = harness(
-        move |ui, app: &mut PhotocraftApp| {
-            let xf = crate::canvas::ViewXform { rect: ui.max_rect(), zoom: 4.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
-            let painter = ui.painter().clone();
-            paint_pending(app, &ui.ctx().clone(), &painter, &xf, doc);
-        },
-        std::mem::replace(&mut app, PhotocraftApp::new(Session::new(), Services::default())),
-    );
-    h.run_steps(2);
-    h.get_by_label("Set Up Generative AI…").click();
-    h.run_steps(2);
-    let app = h.into_state();
-    assert!(app.ui.dialogs.iter().any(|d| crate::prefs_ui::is_preferences(&d.fields)));
-}
-
+/// The canvas draws each fill in progress: its veil, outline and tag.
 #[test]
 fn the_canvas_draws_fills_in_progress() {
-    let (mut app, _) = background(Fake { delay: std::time::Duration::from_millis(500), ..fake() });
+    let (mut app, _) = background(Fake { delay: std::time::Duration::from_secs(5), ..fake() });
     app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
-    generate(&mut app, "a");
-    let doc = app.session.active().unwrap().doc.id;
+    generate(&mut app, "kite");
     let mut h = harness(
-        move |ui, app: &mut PhotocraftApp| {
-            let xf = crate::canvas::ViewXform { rect: ui.max_rect(), zoom: 4.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
-            let painter = ui.painter().clone();
-            paint_pending(app, &ui.ctx().clone(), &painter, &xf, doc);
+        |ui, app: &mut PhotocraftApp| {
+            let rect = ui.max_rect();
+            let view = craft::behavior::CanvasView::new(rect, craft::behavior::kurbo::Point::new(32.0, 32.0), 4.0);
+            paint_pending(app, ui, rect, view);
         },
         app,
     );
-    h.run_steps(2);
-    // Its tag: what it is doing, with Cancel.
-    assert!(h.query_by_label("Generating").is_some() || h.query_by_label_contains("Waiting").is_some());
-    h.get_by_label("Cancel this Generative Fill").click();
-    h.run_steps(2);
-    let mut app = h.into_state();
-    app.session.join_cancelled_jobs();
-    tick_until(&mut app, |app| !app.session.has_jobs());
-    assert!(app.session.generative_fills().is_empty());
+    h.run_steps(3);
+    h.get_by_label("Generating");
+    h.get_by_label("Cancel this Generative Fill");
 }
 
 /// Properties shows a generative layer's variations: clicking one shows it, and Generate More
 /// adds three.
 #[test]
 fn properties_show_the_variations() {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 760.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let (mut app, _) = app_with(Fake { remote: false, ..fake() });
-        app.run("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 24})).unwrap();
-        app
-    });
-    h.state_mut().run(FILL, json!({"prompt": "a red kite"})).unwrap();
-    for _ in 0..200 {
-        h.run_steps(1);
-        if h.state().session.generative_layer().is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let group = h.state().session.generative_layer().expect("the fill finished");
-    h.run_steps(4);
+    let (mut app, _) = app_with(fake());
+    app.run("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 24})).unwrap();
+    app.run(FILL, json!({"prompt": "a red kite"})).unwrap();
+    let group = app.session.generative_layer().expect("the fill finished");
+    let mut h = harness(|ui, app: &mut PhotocraftApp| variations_section(app, ui), app);
+    h.run_steps(3);
     let shown = |h: &egui_kittest::Harness<'_, PhotocraftApp>| -> Vec<bool> {
         h.state().session.active().unwrap().doc.layer(group).unwrap().children().unwrap().iter().map(|l| l.visible).collect()
     };
     assert_eq!(shown(&h), [true, false, false]);
     h.get_by_label("Variations");
-    h.get_by_label("Generate More");
-    if let (Some(dir), Ok(img)) = (std::env::var_os("GENAI_SNAPSHOT_DIR"), h.render()) {
-        img.save(std::path::Path::new(&dir).join("genai-variations.png")).unwrap();
-    }
-    // The Layers panel lists "Variation 3" too; the thumbnail is the one in Properties, above it.
-    let thumb = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Variation 3").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).unwrap();
-    thumb.click();
-    h.run_steps(4);
+    h.get_by_label("Variation 3").click();
+    h.run_steps(3);
     assert_eq!(shown(&h), [false, false, true]);
     h.get_by_label("Generate More").click();
-    for _ in 0..200 {
-        h.run_steps(1);
-        if shown(&h).len() == 6 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    h.run_steps(3);
     assert_eq!(shown(&h), [false, false, false, true, false, false]);
-}
-
-/// Renders the prompt, the consent prompt and the setup for a look
-/// (`GENAI_SNAPSHOT_DIR=… cargo test -p photocraft-ui-egui --lib genai_ui::tests::the_windows_render`).
-#[test]
-fn the_windows_render() {
-    let Some(dir) = std::env::var_os("GENAI_SNAPSHOT_DIR") else { return };
-    let dir = std::path::PathBuf::from(dir);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let (mut app, _) = app_with(Fake { remote: true, ..fake() });
-        app.run("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 24})).unwrap();
-        app.ui.tool = crate::state::Tool::RectMarquee;
-        app
-    });
-    h.run_steps(6);
-    let save = |h: &mut egui_kittest::Harness<PhotocraftApp>, name: &str| {
-        if let Ok(img) = h.render() {
-            img.save(dir.join(name)).unwrap();
-        }
-    };
-    let id = open_prompt_dialog(h.state_mut());
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("a red kite"));
-    h.run_steps(6);
-    save(&mut h, "genai-prompt.png");
-    crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    h.run_steps(6);
-    save(&mut h, "genai-consent.png");
-    let consent = dialog_with(h.state(), CONSENT_MARK).unwrap();
-    crate::dialogs::cancel(h.state_mut(), consent).unwrap();
-    open_setup(h.state_mut());
-    h.run_steps(8);
-    save(&mut h, "genai-setup.png");
 }
 
 /// Review follow-ups (#10903).

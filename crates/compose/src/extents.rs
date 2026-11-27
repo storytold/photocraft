@@ -1,6 +1,8 @@
-use super::content::{render_content, surface_to_buffer};
+use super::content::{render_content_with, surface_to_buffer_with};
 use super::ctx::Ctx;
-use super::{BlendMode, Document, Layer, LayerContent, Rect, adjustment_quantum, advanced, bounds, effects, masks, shape_split};
+use super::{
+    BlendMode, BufferAlloc, Document, InfallibleBufferAlloc, Layer, LayerContent, Rect, adjustment_quantum, advanced, bounds, effects, masks, shape_split,
+};
 
 /// Bounds of a layer's own pixels (union over group children; the canvas
 /// for fill layers; an artboard's board).
@@ -114,17 +116,27 @@ pub fn effect_outline(layer: &Layer) -> Option<&photocraft_doc::vector::Path> {
 /// fill is opaque (it can differ from ours by a fraction of a pixel: psd-tools shape-fx2), the
 /// path where the fill fades out (psd-tools stroke-effects).
 pub(crate) fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
+    match effect_shape_with(layer, rect, cx, &InfallibleBufferAlloc) {
+        Ok(shape) => shape,
+        Err(never) => match never {},
+    }
+}
+
+pub(crate) fn effect_shape_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<Vec<f32>, A::Error> {
     let n = rect.width() as usize * rect.height() as usize;
     // Transparency Shapes Layer off: the effects take the whole layer as their shape (its masks
     // still apply).
     if !layer.advanced.transparency_shapes {
-        return mask_vals(layer, rect, cx).unwrap_or_else(|| vec![1.0; n]);
+        return Ok(mask_vals(layer, rect, cx).unwrap_or_else(|| vec![1.0; n]));
     }
     let Some(path) = effect_outline(layer).filter(|_| n > 0) else {
-        return render_content(layer, rect, cx).map(|b| b.px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
+        return Ok(render_content_with(layer, rect, cx, alloc)?.map(|b| b.px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]));
     };
     // Unmasked: the masks scale the shape, they aren't the fill's transparency.
-    let a: Vec<f32> = layer.surface().map(|s| surface_to_buffer(s, rect).px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
+    let a: Vec<f32> = match layer.surface() {
+        Some(s) => surface_to_buffer_with(s, rect, alloc)?.px.iter().map(|p| p[3]).collect(),
+        None => vec![0.0; n],
+    };
     let cov = photocraft_vector::path_coverage(path, rect);
     let mv = mask_vals(layer, rect, cx);
     let (w, h) = (rect.width() as usize, rect.height() as usize);
@@ -148,7 +160,7 @@ pub(crate) fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
         }
     }
     recycle_mask(mv);
-    out
+    Ok(out)
 }
 
 /// The frame layer-effect gradients and linked patterns are laid out in, when it isn't the

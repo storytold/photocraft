@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Fill, Surface};
 
 /// A Bézier knot (anchor + two control points).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Knot {
     pub anchor: Point,
     /// Control point of the segment arriving at this knot.
@@ -50,7 +50,7 @@ impl Knot {
 }
 
 /// How a subpath combines with the subpaths before it (Photoshop's path operations).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum PathOp {
     /// Combine shapes (union).
     #[default]
@@ -68,14 +68,14 @@ pub enum PathOp {
 }
 
 /// Winding rule used to fill each subpath.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum FillRule {
     #[default]
     NonZero,
     EvenOdd,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Subpath {
     pub closed: bool,
     pub knots: Vec<Knot>,
@@ -114,7 +114,7 @@ impl Subpath {
 }
 
 /// A vector path: subpaths plus how they are filled and combined.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Path {
     pub subpaths: Vec<Subpath>,
     #[serde(default)]
@@ -167,7 +167,7 @@ impl Path {
 }
 
 /// A document-level path (Paths panel entry).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct NamedPath {
     pub name: String,
     pub path: Path,
@@ -176,7 +176,7 @@ pub struct NamedPath {
 }
 
 /// The document's clipping path (PSD resource 2999): which saved path clips on export.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ClippingPath {
     pub name: String,
     /// Output flatness in device pixels (0 = printer default).
@@ -184,7 +184,7 @@ pub struct ClippingPath {
 }
 
 /// A layer's vector mask (Layer › Vector Mask).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct VectorMask {
     pub path: Path,
     pub enabled: bool,
@@ -204,7 +204,7 @@ impl VectorMask {
 }
 
 /// Where a stroke sits relative to the path.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum StrokeAlign {
     Inside,
     #[default]
@@ -212,7 +212,7 @@ pub enum StrokeAlign {
     Outside,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum LineCap {
     #[default]
     Butt,
@@ -220,7 +220,7 @@ pub enum LineCap {
     Square,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum LineJoin {
     #[default]
     Miter,
@@ -229,7 +229,7 @@ pub enum LineJoin {
 }
 
 /// Shape stroke (Photoshop's shape "Stroke" options, not the layer-style stroke).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct ShapeStroke {
     /// Width in px.
@@ -291,7 +291,7 @@ impl ShapeStroke {
 }
 
 /// Parametric ("live") shape the path was generated from, kept for re-editing (Properties panel).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LiveShape {
     /// Rectangle `[x, y, w, h]` with corner radii `[tl, tr, br, bl]` (all zero = sharp).
@@ -303,12 +303,21 @@ pub enum LiveShape {
         rect: [f64; 4],
     },
     /// Regular polygon or star inscribed in `rect`; `star_ratio` = inner/outer radius (1 = polygon).
-    /// `corner_radius` rounds every vertex (0 = sharp), each within what its edges allow; the
-    /// Triangle tool draws a 3-sided one.
+    /// `corner_radius` rounds every vertex of a polygon and the outer points of a star (0 = sharp),
+    /// each within what its edges allow.
     Polygon {
         rect: [f64; 4],
         sides: u32,
         star_ratio: f64,
+        #[serde(default)]
+        corner_radius: f64,
+    },
+    /// Isosceles triangle filling `rect`: the apex at the centre of the top edge, then the bottom
+    /// right and the bottom left corner (the Triangle tool, Create Triangle). `corner_radius`
+    /// rounds all three corners (0 = sharp), each within what its edges allow. Triangles saved
+    /// before this kind existed are 3-sided `Polygon`s and keep that geometry.
+    Triangle {
+        rect: [f64; 4],
         #[serde(default)]
         corner_radius: f64,
     },
@@ -332,12 +341,15 @@ pub enum LiveShape {
 }
 
 /// A shape layer: a filled and/or stroked path.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ShapeLayer {
     pub path: Path,
     /// `None` = no fill (Photoshop's fill "none").
     pub fill: Option<Fill>,
     pub stroke: Option<ShapeStroke>,
+    /// Align Edges (PSD `sn2P`, scripting `useAlignedRendering`): at render time the whole shape
+    /// is fitted to whole document pixels (`photocraft_vector::align_edges`); `path` is unchanged.
+    pub use_aligned_rendering: bool,
     pub live: Option<LiveShape>,
     /// Rasterized appearance (from PSD or `photocraft-vector`).
     pub cache: Option<Surface>,
@@ -353,7 +365,17 @@ pub struct ShapeLayer {
 
 impl Default for ShapeLayer {
     fn default() -> Self {
-        ShapeLayer { path: Path::default(), fill: None, stroke: None, live: None, cache: None, psd_raw: None, density: 1.0, feather: 0.0 }
+        ShapeLayer {
+            path: Path::default(),
+            fill: None,
+            stroke: None,
+            use_aligned_rendering: false,
+            live: None,
+            cache: None,
+            psd_raw: None,
+            density: 1.0,
+            feather: 0.0,
+        }
     }
 }
 

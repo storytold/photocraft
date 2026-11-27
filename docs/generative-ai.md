@@ -10,14 +10,15 @@ windows. This page follows the shape the maintainers asked for in issue #41 and 
 Every Craft app works with no AI set up. Until a model is chosen for the catalogue's
 `generative-fill` tool, Generative Fill is greyed out, the options bar has no button for it, and
 nothing is contacted. The selection tools' options bar shows a Generative Fill… button once it can
-run; Preferences › Integrations › Always show the Generative Fill… button in the options bar
-(off by default) shows it before that too, and then it opens the setup.
+run; Preferences › Integrations › Generative AI › Always show the Generative Fill… button in the
+options bar (off by default) shows it before that too, and then it opens the setup.
 
 ## Setting it up
 
 The Craft launcher's Set up AI window is where a model is set up for the whole suite. Until it
-ships, PhotoCraft has a small setup of its own built from the same shared pieces, in
-Edit › Preferences › AI Integrations… › Generative AI:
+ships, PhotoCraft has a small setup of its own built from the same shared pieces: the Generative
+AI window, opened by Set Up Generative AI… (in the Generative Fill dialog while the tool can't run,
+on the options bar's button before setup, and on a failed fill's tag):
 
 - **Generative AI** says whether Generative Fill can run. When it can, it names the model and
   connection and says whether it runs on this computer or online. When it can't, it shows the
@@ -74,9 +75,8 @@ is what tests do so they never touch a person's real settings.
 Fills don't wait for each other, and nothing waits for them. Press Generate and the selection is
 let go: select the next thing and start another while the first generates. Each fill in progress
 shows on the canvas (its area under a moving shimmer, with a tag: generating, waiting its turn,
-waiting for your OK, or failed; the time taken; Cancel, Retry, Review…), in the Layers panel (a
-locked row where its group will land) and in the status bar (how many are generating, waiting,
-need your OK or failed; click it for the list). At most 5 fills talk to the service at once; the
+waiting for your OK, or failed; the time taken; Cancel, Retry, Review…). The status bar's job
+readout leaves them to their tags, and Esc doesn't stop them. At most 5 fills talk to the service at once; the
 rest wait their turn. A request the service turns down for its rate limit is started again after
 a pause (what the service asked for, else 4, 8 and 16 s). The result lands where it was started,
 on its own document, without becoming the active layer; it is dropped if the canvas changed size
@@ -158,8 +158,8 @@ pixels out.
 ## Diagnostics
 
 A fill that came back wrong can be looked at as it was before anyone adjusts prompts or blending:
-**Save Fill Diagnostics…** (the Layers panel's menu on a generative layer or a variation, the
-link under Properties › Variations, or the status bar's list for a failed fill) asks for a folder
+**Save Fill Diagnostics…** (the button under Properties › Variations, or
+`layer.generative.saveDiagnostics` with `fill` for a failed fill) asks for a folder
 and writes a new folder there with
 
 - `crop.png`: the area as rendered from the visible layers in sRGB at the request size, before
@@ -190,9 +190,9 @@ their choice in another Craft app meanwhile (PhotoCraft reuses an answer for abo
 drawing the menus doesn't read the settings every frame, and reads it again on a worker thread,
 since the read reaches the keychain, which can block while an unlock prompt is open; only with no
 answer yet, or right after a change made in PhotoCraft's own setup, is it read on the spot). When it can't, the menu item is greyed,
-the reason is the layer's own sentence, and Preferences › AI Integrations is where to fix it.
+the reason is the layer's own sentence, and Set Up Generative AI… is where to fix it.
 
-A fill that fails keeps its tag and row until Retry (sent again as it was started, with the model
+A fill that fails keeps its tag until Retry (sent again as it was started, with the model
 chosen now) or Discard, run from a script or the CLI as well as in the background. At most 8 fills
 wait at once (failed, or for the person's agreement), since each keeps what it sends in memory: a
 new fill is refused until one is retried, sent or discarded. Messages are the layer's, which name the connection and never hold a

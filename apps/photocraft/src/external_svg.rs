@@ -627,17 +627,14 @@ mod native {
     /// True for a symlink, or on Windows any reparse point, whose target could be swapped.
     /// Expects `symlink_metadata`, which describes the link itself rather than its target.
     fn is_redirect(metadata: &Metadata) -> bool {
-        if metadata.file_type().is_symlink() {
-            return true;
-        }
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
-            metadata.file_attributes() & 0x0000_0400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+            metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0000_0400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
         }
         #[cfg(not(windows))]
         {
-            false
+            metadata.file_type().is_symlink()
         }
     }
 
@@ -1162,7 +1159,7 @@ mod native {
         #[test]
         fn missing_editor_errors_name_the_dialog_option() {
             let dialog = include_str!("../../../crates/ui-egui/src/smart_svg_ui.rs");
-            assert!(dialog.contains(&format!("(Editor::Program, \"{OTHER_APPLICATION}\")")), "the dialog label changed");
+            assert!(dialog.contains(&format!("(Editor::Program, \"program\", \"{OTHER_APPLICATION}\")")), "the dialog label changed");
             let source = include_str!("external_svg.rs");
             assert!(!source.contains(concat!("Other ", "editor")), "errors must name the dialog's option");
             #[cfg(target_os = "linux")]

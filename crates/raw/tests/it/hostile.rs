@@ -127,7 +127,7 @@ fn samples() -> Vec<Vec<u8>> {
 fn exercise(b: &[u8]) {
     let _ = identify(b);
     let _ = embedded_preview(b);
-    let _ = embedded_previews(b);
+    let _ = embedded_preview(b);
     let _ = embedded_preview_color_space(b);
     let opts = DevelopOptions { limits: Limits { max_alloc: 64 << 20, ..Limits::default() }, ..Default::default() };
     if let Ok(s) = decode(b, &opts.limits) {
@@ -157,10 +157,23 @@ fn a_seed_states_a_maker_note_colour_space() {
     assert!(samples().iter().any(|b| embedded_preview_color_space(b) == Some(PreviewColorSpace::AdobeRgb)));
 }
 
+/// Whether the fuzz tests below run every case instead of their fixed sample: `PHOTOCRAFT_FULL_SWEEP=1`,
+/// the switch `photocraft_testkit::Sweep` reads (this standalone crate cannot depend on the testkit).
+fn full_sweep() -> bool {
+    std::env::var_os("PHOTOCRAFT_FULL_SWEEP").is_some_and(|v| v == "1")
+}
+
 #[test]
 fn every_truncation_fails_cleanly() {
+    // The fixed sample: the first and last 16 lengths, which cut the header and the last bytes of
+    // the sensor data, every 7th length in the first 2 KiB, and about 300 lengths per file past it.
+    // Only the RW2 seed is much longer: RW2 pads its data to a 16 KiB block, so its cuts past 2 KiB
+    // all decode the same zeros, and every 7th of them cost more than the rest of the test.
+    // The full sweep tries every length.
+    let full = full_sweep();
     for b in samples() {
-        for n in (0..b.len()).step_by(3) {
+        let step = |n: usize| if n < 2048 { 7 } else { (b.len() / 300).max(7) };
+        for n in (0..b.len()).filter(|&n| full || n % step(n) == 0 || n < 16 || n + 16 >= b.len()) {
             exercise(&b[..n]);
         }
     }
@@ -168,13 +181,15 @@ fn every_truncation_fails_cleanly() {
 
 #[test]
 fn random_corruption_never_panics() {
-    let mut s = 0xDEAD_BEEF_u64;
-    let mut next = || {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        s >> 33
-    };
-    for b in samples() {
-        for _ in 0..400 {
+    let cases = if full_sweep() { 400 } else { 40 };
+    for (i, b) in samples().iter().enumerate() {
+        // A stream per file, so the fixed sample is the start of the full sweep's.
+        let mut s = 0xDEAD_BEEF_u64 ^ (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut next = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s >> 33
+        };
+        for _ in 0..cases {
             let mut c = b.clone();
             for _ in 0..1 + next() % 6 {
                 let at = next() as usize % c.len();

@@ -76,9 +76,9 @@ pub struct Compositor {
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, CachedPattern>,
-    /// The colour mode of the document being encoded: patterns paint in it
+    /// How the document being encoded takes its patterns' colours: they paint in it
     /// (`photocraft_compose::pattern::pattern_rgba`).
-    pattern_mode: photocraft_color::ColorMode,
+    pattern_space: photocraft_compose::pattern::PatternSpace,
     /// The document being encoded, which owns the patterns it paints with.
     pattern_doc: DocId,
     /// GPU memory pattern textures may hold ([`PATTERN_BUDGET`] by default).
@@ -118,9 +118,6 @@ pub struct Compositor {
     /// out of memory.
     fail_allocs: u32,
     acc_format: wgpu::TextureFormat,
-    /// Whether the effect-map pipelines could be built (else documents with layer effects are
-    /// [`Unsupported`] and use the CPU compositor).
-    effect_maps: bool,
     /// `CmykSpace::id` of the document being encoded (0: built-in coated CMYK).
     cmyk: u64,
     /// The device's health (see [`Compositor::set_health`]); `None` = assumed healthy.
@@ -141,6 +138,7 @@ mod encode;
 mod fx_passes;
 mod kit;
 mod paging;
+mod pipelines;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod readback;
 mod setup;

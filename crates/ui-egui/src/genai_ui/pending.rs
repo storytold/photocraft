@@ -1,18 +1,20 @@
-//! Generative Fills that haven't landed. Nothing waits for them: while one generates
-//! the user selects the next area and starts another. Each one shows
-//! - on the canvas: its area under a moving shimmer, with a running outline and a tag (generating,
-//!   waiting its turn, waiting for the person's OK to send it, or failed; how long it has taken,
-//!   Cancel, Retry once it failed, Review… while it waits for consent);
-//! - in the Layers panel: a locked "Generating…" row where its layer will land;
-//! - in the status bar: how many are generating, waiting and failed, and a list of them.
-//!
-//! A fill's area flashes once when its layer lands.
+//! Generative Fills that haven't landed. Nothing waits for them: while one generates the user
+//! selects the next area and starts another. Each one shows on the canvas: its area under a moving
+//! shimmer, with a running outline and a tag (generating, waiting its turn, waiting for the
+//! person's OK to send it, or failed; how long it has taken, Cancel, Retry once it failed, Review…
+//! while it waits for consent). A fill's area flashes once when its layer lands.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
-use photocraft_doc::{DocId, Layer, LayerId};
+use craft::behavior::CanvasView;
+use craft::behavior::IconId;
+use craft::imaging::trace::{MaskRect, Segment};
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::runtime::env::Label;
+use egui::{Color32, Pos2, Rect, RichText, Stroke, pos2, vec2};
+use photocraft_doc::{DocId, LayerId};
 use photocraft_engine::genai::AiErrorKind;
 use photocraft_engine::genai_cmds::{self as gc, FillInfo};
 use photocraft_engine::jobs::{JobEvent, JobOutcome};
@@ -20,7 +22,6 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
 use crate::theme::Tokens;
 
 /// Grid cells across the longer side of a fill's shimmering veil.
@@ -29,6 +30,9 @@ const VEIL_CELLS: u32 = 40;
 const FLASH_S: f64 = 0.8;
 /// Length of the running outline's dashes, in points.
 const DASH: f32 = 5.0;
+/// Most outline segments across the longer side of a fill's area: the trace steps over larger
+/// areas so a big fill stays cheap to draw.
+const OUTLINE_CELLS: u32 = 1024;
 
 /// What the shell keeps for fills in progress.
 #[derive(Default)]
@@ -37,28 +41,13 @@ pub struct Pending {
     shapes: HashMap<u64, Arc<Shape>>,
     /// Landed fills' areas, flashing until the time given.
     flashes: Vec<(Arc<Shape>, f64)>,
-    /// This frame's fills (the Layers panel asks once per row): pass number and list.
-    frame: Option<(u64, Arc<Vec<FillInfo>>)>,
-}
-
-/// The fills that haven't landed, read once per frame.
-fn fills_now(app: &mut PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<FillInfo>> {
-    let pass = ctx.cumulative_pass_nr();
-    if let Some((p, fills)) = &app.genai.pending.frame
-        && *p == pass
-    {
-        return Arc::clone(fills);
-    }
-    let fills = Arc::new(app.session.generative_fills());
-    app.genai.pending.frame = Some((pass, Arc::clone(&fills)));
-    fills
 }
 
 /// A fill's area as drawn.
 struct Shape {
     doc: DocId,
     /// Outline segments, in document pixels.
-    outline: Vec<crate::outline::Segment>,
+    outline: Vec<Segment>,
     /// The selection at the veil's grid points, `(cols + 1) × (rows + 1)`, `cell` pixels apart
     /// from the bounds' corner.
     veil: Vec<f32>,
@@ -72,9 +61,11 @@ struct Shape {
 }
 
 impl Shape {
-    /// A fill's outline and veil grid, from its selection within bounds `b`.
-    fn new(doc: DocId, mask: &Surface, b: photocraft_geom::Rect) -> Shape {
-        let outline = crate::outline::outline_scaled_serial(mask, b, crate::outline::bounded_step(b, 1));
+    /// A fill's outline and veil grid, from its selection within bounds `b` of a document `size`.
+    fn new(doc: DocId, mask: &Surface, b: photocraft_geom::Rect, size: [u32; 2]) -> Shape {
+        let step = b.width().max(b.height()).max(1).div_ceil(OUTLINE_CELLS).max(1);
+        let source = crate::canvas::outline::SurfaceMask::new(mask, mask.generation(), size);
+        let outline = craft::imaging::trace::outline(&source, MaskRect::new(b.x0, b.y0, b.x1, b.y1), step);
         let cell = (b.width().max(b.height()).max(1) as f32 / VEIL_CELLS as f32).max(1.0);
         let cols = ((b.width() as f32 / cell).ceil() as usize).max(1);
         let rows = ((b.height() as f32 / cell).ceil() as usize).max(1);
@@ -96,21 +87,25 @@ impl Shape {
     }
 }
 
+/// Document pixels to screen points through the canvas's view.
+fn to_screen(view: &CanvasView, x: f32, y: f32) -> Pos2 {
+    view.to_screen(craft::behavior::kurbo::Point::new(f64::from(x), f64::from(y)))
+}
+
 /// A colour at `alpha` (0..1) of its own.
 fn faded(c: Color32, alpha: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// Does job command `id` belong to Generative Fill (its progress shows here, not in the status
-/// bar's job readout)?
+/// Does job command `id` belong to Generative Fill (its progress shows on the canvas, not in the
+/// status bar's job readout)?
 pub fn is_generative(id: &str) -> bool {
     [gc::FILL, gc::RETRY, gc::MORE, gc::AGREE].contains(&id)
 }
 
-/// Shell actions a tag or row asks for besides commands.
+/// Shell actions a tag asks for besides commands.
 const REVIEW: &str = "genai.review";
 const SETUP: &str = "genai.setup";
-const DIAGNOSTICS: &str = gc::SAVE_DIAGNOSTICS;
 
 /// A failure as the person reads it: the shared layer's message, except where its guide says
 /// to put it plainly (a busy service, an internal fault).
@@ -133,20 +128,21 @@ fn shape(app: &mut PhotocraftApp, f: &FillInfo) -> Option<Arc<Shape>> {
     if let Some(s) = app.genai.pending.shapes.get(&f.id) {
         return Some(Arc::clone(s));
     }
+    let size = app.session.documents().iter().find(|st| st.doc.id == f.document).map(|st| [st.doc.size.width, st.doc.size.height])?;
     let mask = app.session.generative_fill_mask(f.id)?;
     let [x0, y0, x1, y1] = f.bounds;
     let b = photocraft_geom::Rect::new(x0, y0, x1, y1);
     if b.is_empty() {
         return None;
     }
-    let s = Arc::new(Shape::new(f.document, mask, b));
+    let s = Arc::new(Shape::new(f.document, mask, b, size));
     app.genai.pending.shapes.insert(f.id, Arc::clone(&s));
     Some(s)
 }
 
 /// The veil: the area tinted `color`, `base` strong, with a bright band sweeping across it when
 /// `sweep`.
-fn paint_veil(painter: &egui::Painter, xf: &ViewXform, s: &Shape, color: Color32, base: f32, sweep: Option<f64>) {
+fn paint_veil(painter: &egui::Painter, view: &CanvasView, s: &Shape, color: Color32, base: f32, sweep: Option<f64>) {
     let mut mesh = egui::Mesh::default();
     // The band crosses the area diagonally, then pauses off its edge.
     let band = sweep.map(|t| (t * 0.5) % 1.6 - 0.3);
@@ -156,7 +152,7 @@ fn paint_veil(painter: &egui::Painter, xf: &ViewXform, s: &Shape, color: Color32
             let cov = s.veil.get(j * (s.cols + 1) + i).copied().unwrap_or(0.0);
             let u = (i as f32 / s.cols as f32 + j as f32 / s.rows as f32) / 2.0;
             let glow = band.map_or(0.0, |b| (-((u - b as f32) / 0.14).powi(2)).exp());
-            mesh.colored_vertex(xf.to_screen(x, y), faded(color, cov * (base + 0.3 * glow)));
+            mesh.colored_vertex(to_screen(view, x, y), faded(color, cov * (base + 0.3 * glow)));
         }
     }
     let w = s.cols + 1;
@@ -175,7 +171,7 @@ fn paint_veil(painter: &egui::Painter, xf: &ViewXform, s: &Shape, color: Color32
     painter.add(mesh);
 }
 
-/// A 1-point line from `a` to `b` as a quad in `mesh`.
+/// A line `width` points wide from `a` to `b` as a quad in `mesh`.
 fn line(mesh: &mut egui::Mesh, a: Pos2, b: Pos2, width: f32, color: Color32) {
     let d = b - a;
     let len = d.length();
@@ -192,12 +188,12 @@ fn line(mesh: &mut egui::Mesh, a: Pos2, b: Pos2, width: f32, color: Color32) {
 }
 
 /// The outline in `color`, with white dashes running along it when `time` is given.
-fn paint_outline(painter: &egui::Painter, xf: &ViewXform, s: &Shape, color: Color32, time: Option<f64>) {
+fn paint_outline(painter: &egui::Painter, view: &CanvasView, s: &Shape, color: Color32, time: Option<f64>) {
     let clip = painter.clip_rect().expand(2.0);
     let mut mesh = egui::Mesh::default();
     let phase = time.map(|t| ((t * 18.0) % f64::from(DASH * 2.0)) as f32);
     for (a, b) in &s.outline {
-        let (pa, pb) = (xf.to_screen(a[0] as f32, a[1] as f32), xf.to_screen(b[0] as f32, b[1] as f32));
+        let (pa, pb) = (to_screen(view, a[0] as f32, a[1] as f32), to_screen(view, b[0] as f32, b[1] as f32));
         if !clip.intersects(Rect::from_two_pos(pa, pb)) {
             continue;
         }
@@ -232,7 +228,7 @@ fn title(f: &FillInfo) -> String {
     if f.prompt.trim().is_empty() { tl!("No prompt: removes what is selected").to_owned() } else { f.prompt.clone() }
 }
 
-/// A tag's or a row's tooltip: the prompt and, for a failed fill, why.
+/// A tag's tooltip: the prompt and, for a failed fill, why.
 fn hover(f: &FillInfo) -> String {
     match error_text(f) {
         Some(e) => format!("{}\n{}", title(f), crate::i18n::fmt(tl!("Generative Fill failed: {error}"), &[("error", &e)])),
@@ -250,51 +246,29 @@ fn state_text(f: &FillInfo) -> String {
     }
 }
 
-/// The spinner, clock or warning sign before a fill's state.
-fn state_icon(ui: &mut egui::Ui, f: &FillInfo, size: f32, t: &Tokens) {
-    match f.state {
-        "running" => {
-            ui.add(egui::Spinner::new().size(size).color(t.accent));
-        }
-        state => {
-            let (r, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-            let (icon, tint) = match state {
-                "failed" => ("triangle-alert", t.danger),
-                "consent" => ("hand", t.accent),
-                _ => ("clock", t.text_dim),
-            };
-            crate::icons::paint(ui, r, icon, size, tint);
-        }
-    }
+/// An icon button of a tag.
+fn icon_button(ui: &mut egui::Ui, icon: &'static str, tip: &str) -> bool {
+    IconButton::new(IconId::new(icon)).label(Label::from(tip.to_owned())).tooltip(tip.to_owned()).show(ui).clicked()
 }
 
-/// Retry and Cancel (or Discard, once it failed) for fill `f`, as icon buttons, Cancel last
-/// (`reversed`: in a right-to-left layout, so it is added first).
-fn buttons(ui: &mut egui::Ui, f: &FillInfo, size: f32, reversed: bool, actions: &mut Vec<(&'static str, Value)>) {
-    let retry = |ui: &mut egui::Ui, actions: &mut Vec<(&'static str, Value)>| {
-        if f.state == "failed" && needs_setup(f) && crate::icons::button(ui, "settings", size, false, tl!("Set Up Generative AI…")).clicked() {
-            actions.push((SETUP, Value::Null));
-        }
-        if f.state == "failed" && crate::icons::button(ui, "rotate-cw", size, false, tl!("Retry")).clicked() {
-            actions.push((gc::RETRY, json!({"fill": f.id})));
-        }
-        if f.state == "consent" && crate::icons::button(ui, "hand", size, false, tl!("Review…")).clicked() {
-            actions.push((REVIEW, Value::Null));
-        }
-    };
-    if !reversed {
-        retry(ui, actions);
+/// Set Up, Retry or Review…, then Cancel (or Discard, once it failed) for fill `f`.
+fn buttons(ui: &mut egui::Ui, f: &FillInfo, actions: &mut Vec<(&'static str, Value)>) {
+    if f.state == "failed" && needs_setup(f) && icon_button(ui, "settings", tl!("Set Up Generative AI…")) {
+        actions.push((SETUP, Value::Null));
+    }
+    if f.state == "failed" && icon_button(ui, "rotate_cw", tl!("Retry")) {
+        actions.push((gc::RETRY, json!({"fill": f.id})));
+    }
+    if f.state == "consent" && icon_button(ui, "hand", tl!("Review…")) {
+        actions.push((REVIEW, Value::Null));
     }
     let tip = if matches!(f.state, "failed" | "consent") { tl!("Discard") } else { tl!("Cancel this Generative Fill") };
-    if crate::icons::button(ui, "x", size, false, tip).clicked() {
+    if icon_button(ui, "x", tip) {
         actions.push((gc::DISCARD, json!({"fill": f.id})));
-    }
-    if reversed {
-        retry(ui, actions);
     }
 }
 
-/// Run what the tags, rows and list asked for: commands, the consent prompt, setup or Save Fill Diagnostics.
+/// Run what the tags asked for: commands, the consent prompt or the setup.
 fn run_actions(app: &mut PhotocraftApp, actions: Vec<(&'static str, Value)>) {
     for (id, params) in actions {
         if id == REVIEW {
@@ -305,14 +279,6 @@ fn run_actions(app: &mut PhotocraftApp, actions: Vec<(&'static str, Value)>) {
             super::open_setup(app);
             continue;
         }
-        // It asks for a folder first.
-        if id == DIAGNOSTICS {
-            if let Err(e) = super::save_diagnostics(app, &params) {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
-            continue;
-        }
         if let Err(e) = app.run(id, params) {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -320,9 +286,11 @@ fn run_actions(app: &mut PhotocraftApp, actions: Vec<(&'static str, Value)>) {
     }
 }
 
-/// Over the canvas of document `doc`: each fill's veil, outline and tag, and the flashes of those
-/// that just landed.
-pub fn paint_canvas(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, doc: DocId) {
+/// Over the canvas `rect` of the active document: each fill's veil, outline and tag, and the
+/// flashes of those that just landed.
+pub fn paint_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, view: CanvasView) {
+    let Some(doc) = app.session.active().map(|st| st.doc.id) else { return };
+    let ctx = ui.ctx().clone();
     let all = app.session.generative_fills();
     let now = ctx.input(|i| i.time);
     app.genai.pending.flashes.retain(|(_, until)| *until > now);
@@ -331,37 +299,38 @@ pub fn paint_canvas(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui
     if fills.is_empty() && app.genai.pending.flashes.iter().all(|(s, _)| s.doc != doc) {
         return;
     }
-    let t = Tokens::get(ctx);
+    let t = Tokens::get(&ctx);
+    let painter = ui.painter().with_clip_rect(rect);
     for f in &fills {
         let Some(s) = shape(app, f) else { continue };
         match f.state {
             "running" => {
-                paint_veil(painter, xf, &s, t.accent, 0.16, Some(now));
-                paint_outline(painter, xf, &s, t.accent, Some(now));
+                paint_veil(&painter, &view, &s, t.accent, 0.16, Some(now));
+                paint_outline(&painter, &view, &s, t.accent, Some(now));
             }
             "queued" => {
-                paint_veil(painter, xf, &s, t.accent, 0.08, None);
-                paint_outline(painter, xf, &s, t.text_dim, Some(now));
+                paint_veil(&painter, &view, &s, t.accent, 0.08, None);
+                paint_outline(&painter, &view, &s, t.text_dim, Some(now));
             }
             "consent" => {
-                paint_veil(painter, xf, &s, t.accent, 0.08, None);
-                paint_outline(painter, xf, &s, t.accent, None);
+                paint_veil(&painter, &view, &s, t.accent, 0.08, None);
+                paint_outline(&painter, &view, &s, t.accent, None);
             }
             _ => {
-                paint_veil(painter, xf, &s, t.danger, 0.14, None);
-                paint_outline(painter, xf, &s, t.danger, None);
+                paint_veil(&painter, &view, &s, t.danger, 0.14, None);
+                paint_outline(&painter, &view, &s, t.danger, None);
             }
         }
     }
     for (s, until) in app.genai.pending.flashes.iter().filter(|(s, _)| s.doc == doc) {
         let k = ((until - now) / FLASH_S).clamp(0.0, 1.0) as f32;
-        paint_veil(painter, xf, s, Color32::WHITE, 0.45 * k, None);
+        paint_veil(&painter, &view, s, Color32::WHITE, 0.45 * k, None);
     }
     // The tags would cover a dialog opened over the canvas (the next fill's prompt).
-    if app.ui.dialogs.is_empty() {
+    if app.framework.dialogs.stack().ids().next().is_none() {
         let mut actions = Vec::new();
         for f in &fills {
-            tag(ctx, painter.clip_rect(), xf, f, &t, &mut actions);
+            tag(&ctx, rect, &view, f, &t, &mut actions);
         }
         run_actions(app, actions);
     }
@@ -372,9 +341,9 @@ pub fn paint_canvas(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui
 }
 
 /// A fill's tag, just above its area's top-left corner (inside the canvas).
-fn tag(ctx: &egui::Context, canvas: Rect, xf: &ViewXform, f: &FillInfo, t: &Tokens, actions: &mut Vec<(&'static str, Value)>) {
+fn tag(ctx: &egui::Context, canvas: Rect, view: &CanvasView, f: &FillInfo, t: &Tokens, actions: &mut Vec<(&'static str, Value)>) {
     let [x0, y0, x1, y1] = f.bounds.map(|v| v as f32);
-    let corners = [xf.to_screen(x0, y0), xf.to_screen(x1, y0), xf.to_screen(x0, y1), xf.to_screen(x1, y1)];
+    let corners = [to_screen(view, x0, y0), to_screen(view, x1, y0), to_screen(view, x0, y1), to_screen(view, x1, y1)];
     let mut area = Rect::NOTHING;
     for c in corners {
         area.extend_with(c);
@@ -393,222 +362,20 @@ fn tag(ctx: &egui::Context, canvas: Rect, xf: &ViewXform, f: &FillInfo, t: &Toke
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.horizontal(|ui| {
-                    state_icon(ui, f, 12.0, t);
+                    if f.state == "running" {
+                        ui.add(egui::Spinner::new().size(12.0).color(t.accent));
+                    }
                     let color = if f.state == "failed" { t.danger } else { t.text };
                     ui.label(RichText::new(state_text(f)).size(11.5).color(color));
                     if !matches!(f.state, "failed" | "consent") {
                         ui.label(RichText::new(elapsed(f.elapsed_ms)).size(11.0).color(t.text_faint));
                     }
-                    buttons(ui, f, 18.0, false, actions);
+                    buttons(ui, f, actions);
                 });
             })
             .response
             .on_hover_text(hover(f));
     });
-}
-
-/// Show `f`'s area: its document comes forward and the view centres on it.
-fn go_to(app: &mut PhotocraftApp, f: &FillInfo) {
-    let Some(i) = app.session.documents().iter().position(|st| st.doc.id == f.document) else { return };
-    if app.session.active_index() != Some(i) {
-        let _ = app.run("document.activate", json!({"document": i}));
-    }
-    let [x0, y0, x1, y1] = f.bounds;
-    if let Some(v) = app.ui.views.get_mut(i) {
-        v.center = [(x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0];
-    }
-}
-
-/// The Layers panel's rows for fills on `doc` whose layer lands right above layer `above`, drawn
-/// just before its row: oldest first, since each lands right above it, under the earlier ones.
-pub fn layer_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: DocId, above: LayerId, depth: usize) {
-    let all = fills_now(app, ui.ctx());
-    if all.is_empty() {
-        return;
-    }
-    let fills: Vec<FillInfo> = all.iter().filter(|f| f.document == doc && f.anchor == Some(above)).cloned().collect();
-    rows(app, ui, &fills, depth);
-}
-
-/// The rows of fills on `doc` whose layer isn't among the rows shown (`shown`): none was active,
-/// it was deleted, or it is in a closed group. They go at the top.
-pub fn layer_rows_unplaced(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: DocId, shown: &[(usize, &Layer)]) {
-    let all = fills_now(app, ui.ctx());
-    let fills: Vec<FillInfo> = all.iter().filter(|f| f.document == doc && f.anchor.is_none_or(|a| !shown.iter().any(|(_, l)| l.id == a))).cloned().collect();
-    rows(app, ui, &fills, 0);
-}
-
-/// Draw the rows of `fills` and act on their clicks.
-fn rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, fills: &[FillInfo], depth: usize) {
-    if fills.is_empty() {
-        return;
-    }
-    let mut actions = Vec::new();
-    let mut go = None;
-    for f in fills {
-        if layer_row(ui, f, depth, &mut actions) {
-            go = Some(f.clone());
-        }
-    }
-    if let Some(f) = go {
-        go_to(app, &f);
-    }
-    run_actions(app, actions);
-}
-
-/// A "Generating…" row: where the fill's layer will land, locked until it does. Clicking it shows
-/// the area. True when clicked.
-fn layer_row(ui: &mut egui::Ui, f: &FillInfo, depth: usize, actions: &mut Vec<(&'static str, Value)>) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let row_h = if t.pro { 32.0 } else { 46.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
-    if !ui.is_rect_visible(rect) {
-        return false;
-    }
-    let painter = ui.painter_at(rect.expand(1.0));
-    let failed = f.state == "failed";
-    let tint = if failed { t.danger } else { t.accent };
-    painter.rect_filled(rect, 0.0, faded(tint, 0.08));
-    if f.state == "running" {
-        // A soft band runs along the row while it generates.
-        let time = ui.input(|i| i.time);
-        let cx = rect.left() + ((time * 0.4) % 1.0) as f32 * rect.width();
-        let band = Rect::from_min_max(pos2((cx - 40.0).max(rect.left()), rect.top()), pos2((cx + 40.0).min(rect.right()), rect.bottom()));
-        painter.rect_filled(band, 0.0, faded(tint, 0.08));
-    }
-    if t.pro {
-        painter.line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
-        painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
-    }
-    let ts = if t.pro { 24.0 } else { 34.0 };
-    let x = rect.left() + 34.0 + crate::layer_row_ui::indent(depth, rect.width(), 34.0 + ts + 90.0);
-    let thumb = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
-    painter.rect_filled(thumb, t.radius_sm, t.field);
-    painter.rect_stroke(thumb, t.radius_sm, Stroke::new(1.0, faded(tint, 0.6)), egui::StrokeKind::Inside);
-    let mut inner =
-        ui.new_child(egui::UiBuilder::new().max_rect(thumb.shrink(ts * 0.22)).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
-    state_icon(&mut inner, f, ts * 0.5, &t);
-    // Lock, then the buttons, from the right.
-    let mut right = rect.right() - crate::layer_row_ui::RIGHT_PAD;
-    let mut button = |icon: &str, tip: &str| {
-        let r = Rect::from_center_size(pos2(right - 9.0, rect.center().y), vec2(18.0, 18.0));
-        right -= 22.0;
-        let resp = ui.interact(r, ui.scope_id().with(("genai-row", f.id, icon.to_owned())), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(r, t.radius_sm, t.hover);
-        }
-        crate::icons::paint(ui, r, icon, 12.0, if resp.hovered() { t.text } else { t.text_dim });
-        resp.on_hover_text(tip).clicked()
-    };
-    if button("x", if failed || f.state == "consent" { tl!("Discard") } else { tl!("Cancel this Generative Fill") }) {
-        actions.push((gc::DISCARD, json!({"fill": f.id})));
-    }
-    if failed && button("rotate-cw", tl!("Retry")) {
-        actions.push((gc::RETRY, json!({"fill": f.id})));
-    }
-    if f.state == "consent" && button("hand", tl!("Review…")) {
-        actions.push((REVIEW, Value::Null));
-    }
-    let lock = Rect::from_center_size(pos2(right - 9.0, rect.center().y), vec2(14.0, 14.0));
-    crate::icons::paint(ui, lock, "lock", 11.0, t.text_faint);
-    right -= 20.0;
-    let name = match f.state {
-        "failed" => crate::i18n::fmt(tl!("Failed: {name}"), &[("name", &f.name)]),
-        "consent" => crate::i18n::fmt(tl!("Needs your OK: {name}"), &[("name", &f.name)]),
-        "queued" => crate::i18n::fmt(tl!("Waiting: {name}"), &[("name", &f.name)]),
-        _ => crate::i18n::fmt(tl!("Generating: {name}"), &[("name", &f.name)]),
-    };
-    let name_rect = Rect::from_min_max(pos2(thumb.right() + 8.0, rect.top()), pos2(right, rect.bottom()));
-    let font = egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 });
-    let name_label = name.clone();
-    let galley = painter.layout(name, font, if failed { t.danger } else { t.text_dim }, name_rect.width().max(10.0));
-    let y = rect.center().y - galley.size().y.min(row_h) / 2.0;
-    ui.painter().with_clip_rect(name_rect).galley(pos2(name_rect.left(), y), galley, t.text_dim);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &name_label));
-    resp.on_hover_text(format!("{}\n{}", hover(f), tl!("Locked until its layer lands"))).clicked()
-}
-
-/// The status bar's readout: how many fills are generating, waiting and failed; click for the
-/// list.
-pub fn status(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let fills = app.session.generative_fills();
-    if fills.is_empty() {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    let count = |state: &str| fills.iter().filter(|f| f.state == state).count() as u64;
-    let (running, queued, failed, consent) = (count("running"), count("queued"), count("failed"), count("consent"));
-    let lang = crate::i18n::current();
-    let mut parts = Vec::new();
-    if running > 0 {
-        parts.push(crate::i18n::trn(lang, running, "{n} generating", "{n} generating"));
-    }
-    if queued > 0 {
-        parts.push(crate::i18n::trn(lang, queued, "{n} waiting", "{n} waiting"));
-    }
-    if consent > 0 {
-        parts.push(crate::i18n::trn(lang, consent, "{n} needs your OK", "{n} need your OK"));
-    }
-    if failed > 0 {
-        parts.push(crate::i18n::trn(lang, failed, "{n} failed", "{n} failed"));
-    }
-    ui.add_space(6.0);
-    // The status bar reads from the far end: the readout, then what it is doing.
-    let color = if failed > 0 && running + queued + consent == 0 { t.danger } else { t.text_dim };
-    let resp = ui
-        .add(egui::Label::new(RichText::new(parts.join(" · ")).size(11.5).color(color)).sense(Sense::click()))
-        .on_hover_text(tl!("Generative Fills in progress"));
-    if running > 0 {
-        ui.add(egui::Spinner::new().size(11.0).color(t.accent));
-    } else if failed > 0 {
-        let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-        crate::icons::paint(ui, r, "triangle-alert", 12.0, t.danger);
-    }
-    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| list(app, ui, &fills));
-}
-
-/// The status bar's list: each fill with its state, Go to area, Retry and Cancel or Discard.
-fn list(app: &mut PhotocraftApp, ui: &mut egui::Ui, fills: &[FillInfo]) {
-    let t = Tokens::get(ui.ctx());
-    ui.set_min_width(380.0);
-    ui.label(RichText::new(tl!("Generative Fill")).font(crate::theme::semibold(12.5)).color(t.text));
-    let active = app.session.active().map(|st| st.doc.id);
-    let mut actions = Vec::new();
-    let mut go = None;
-    for f in fills {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            state_icon(ui, f, 12.0, &t);
-            let mut what = title(f);
-            if what.chars().count() > 40 {
-                what = format!("{}…", what.chars().take(39).collect::<String>());
-            }
-            if active != Some(f.document)
-                && let Some(st) = app.session.documents().iter().find(|st| st.doc.id == f.document)
-            {
-                what = format!("{what} ({})", st.doc.name);
-            }
-            ui.label(RichText::new(what).size(12.0).color(t.text)).on_hover_text(hover(f));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                buttons(ui, f, 20.0, true, &mut actions);
-                if f.diagnostics
-                    && super::offered(app)
-                    && crate::icons::button(ui, "file", 20.0, false, tl!("Save Fill Diagnostics…")).on_hover_text(super::diagnostics_tip()).clicked()
-                {
-                    actions.push((DIAGNOSTICS, json!({"fill": f.id})));
-                }
-                if crate::icons::button(ui, "search", 20.0, false, tl!("Go to area")).clicked() {
-                    go = Some(f.clone());
-                }
-                let detail = if f.state == "running" { format!("{} · {}", state_text(f), elapsed(f.elapsed_ms)) } else { state_text(f) };
-                ui.label(RichText::new(detail).size(11.0).color(if f.state == "failed" { t.danger } else { t.text_faint }));
-            });
-        });
-    }
-    if let Some(f) = go {
-        go_to(app, &f);
-    }
-    run_actions(app, actions);
 }
 
 /// A Generative Fill job ended: its layer landed (the area flashes), or it failed (its tag says
@@ -652,7 +419,7 @@ pub fn on_job_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: &JobEvent) 
             let shown = app.session.generative_fills().iter().find(|f| f.job == Some(e.id)).and_then(error_text).unwrap_or_else(|| err.clone());
             let msg = crate::i18n::fmt(tl!("Generative Fill failed: {error}"), &[("error", &shown)]);
             if failed_and_kept(app) {
-                // Its tag and row say so and offer Retry.
+                // Its tag says so and offers Retry.
                 app.ui.status = msg;
                 app.ui.status_error = true;
             } else {

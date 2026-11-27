@@ -4,16 +4,44 @@
 //! day, or until they turn it off. Only the longer answers are remembered, in PhotoCraft's own
 //! consent record kept by the shared AI layer. Don't Send discards the fills; nothing was sent.
 //!
-//! One prompt answers every fill waiting for the same destination (several areas filled at once).
+//! One prompt answers every fill waiting for the same destination (several areas filled at once):
+//! fills that come to wait while it is open join it ([`feed`]).
 
-use photocraft_engine::genai::{ConsentTerm, Disclosure};
+use std::sync::{Arc, Mutex};
+
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind};
+use craft::ui::runtime::env::Label;
+use photocraft_engine::genai::{ConsentTerm, Disclosure, SentInput};
 use photocraft_engine::genai_cmds::{AGREE, DISCARD};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
+use crate::dialogs::params;
 
-pub const CONSENT_MARK: &str = "__genaiConsent";
+/// The consent prompt's dialog key: confirming it is judged as `layer.generative.agree`, which
+/// automation may not run; only the person agrees to sending their pixels.
+pub const KEY: &str = AGREE;
+
+/// What the open prompt asks about, shared with its rows' drawing.
+#[derive(Clone, Default, PartialEq)]
+pub struct Asked {
+    /// The fills it answers.
+    fills: Vec<u64>,
+    destination: String,
+    connection: String,
+    model: String,
+    /// Each kind of data sent, with every waiting fill's size of it.
+    items: Vec<(SentInput, Vec<u64>)>,
+}
+
+/// The open prompt's [`Asked`], read by its rows each pass, and the prompt's dialog id.
+#[derive(Default)]
+pub struct Shared {
+    asked: Arc<Mutex<Asked>>,
+    dialog: Option<DialogId>,
+}
 
 /// The fills waiting for the same destination as the first one that waits, and what each of
 /// them would send, if any wait.
@@ -30,47 +58,72 @@ fn waiting(app: &PhotocraftApp) -> Option<(Vec<u64>, Vec<Disclosure>)> {
     Some((ids, disclosures))
 }
 
-/// What the prompt lists: each kind of data sent, with every waiting fill's size of it (one
-/// answer covers them all, so each one's sizes are shown, not just the first's).
-fn items(disclosures: &[Disclosure]) -> Value {
-    let Some(first) = disclosures.first() else { return json!([]) };
-    let items: Vec<Value> = first
+/// What the prompt lists for `ids` waiting with `disclosures`.
+fn asked(ids: Vec<u64>, disclosures: &[Disclosure]) -> Option<Asked> {
+    let first = disclosures.first()?;
+    let items = first
         .items
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let sizes: Vec<Option<u64>> = disclosures.iter().map(|d| d.items.get(i).filter(|x| x.input == item.input).and_then(|x| x.bytes)).collect();
-            json!({"input": item.input, "kind": item.kind, "bytes": item.bytes, "sizes": sizes})
+            let sizes = disclosures.iter().filter_map(|d| d.items.get(i).filter(|x| x.input == item.input).and_then(|x| x.bytes)).collect();
+            (item.input, sizes)
         })
         .collect();
-    json!(items)
+    Some(Asked { fills: ids, destination: first.destination.clone(), connection: first.connection.clone(), model: first.model.clone(), items })
+}
+
+/// Is dialog `id` the consent prompt (open, or just closed)?
+pub(super) fn is(app: &PhotocraftApp, id: DialogId) -> bool {
+    app.genai.consent.dialog == Some(id)
+}
+
+/// The fills the open prompt asks about. For tests.
+#[cfg(test)]
+pub(super) fn asked_fills(app: &PhotocraftApp) -> Vec<u64> {
+    app.genai.consent.asked.lock().map(|a| a.fills.clone()).unwrap_or_default()
 }
 
 /// Ask about fills waiting for consent: open the prompt, or add newly waiting fills for the same
 /// destination to the one that is open.
 pub fn ask_if_waiting(app: &mut PhotocraftApp) {
     let Some((ids, disclosures)) = waiting(app) else { return };
-    let Some(disclosure) = disclosures.first().cloned() else { return };
-    if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.fields.contains_key(CONSENT_MARK)) {
-        if d.fields.get("destination").and_then(Value::as_str) == Some(disclosure.destination.as_str()) {
-            d.fields.insert("fills".into(), json!(ids));
-            d.fields.insert("items".into(), items(&disclosures));
+    let Some(next) = asked(ids, &disclosures) else { return };
+    if super::open_dialog(app, KEY).is_some() {
+        if let Ok(mut open) = app.genai.consent.asked.lock()
+            && open.destination == next.destination
+            && *open != next
+        {
+            *open = next;
         }
         return;
     }
-    let mut f = Map::new();
-    f.insert(CONSENT_MARK.into(), json!(true));
-    // Automation confirming it is judged as `layer.generative.agree`, which it may not run: only
-    // the person agrees to sending their pixels.
-    f.insert("__command".into(), json!(AGREE));
-    f.insert("__label".into(), json!("Generative Fill"));
-    f.insert("fills".into(), json!(ids));
-    f.insert("destination".into(), json!(disclosure.destination));
-    f.insert("connection".into(), json!(disclosure.connection));
-    f.insert("model".into(), json!(disclosure.model));
-    f.insert("items".into(), items(&disclosures));
-    f.insert("term".into(), json!(ConsentTerm::ThisTime.id()));
-    app.ui.open_dialog(DialogKind::Command, f);
+    if let Ok(mut open) = app.genai.consent.asked.lock() {
+        *open = next;
+    }
+    let shared = Arc::clone(&app.genai.consent.asked);
+    let terms: Vec<(String, Label)> = ConsentTerm::ALL.iter().map(|t| (t.id().to_owned(), Label::from(term_label(*t)))).collect();
+    let id = params::open_param_unsaved(app, KEY, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
+        let rows = vec![Param::new("term", tl!("Allow sending to it:"), ParamKind::radio(terms.clone(), Some(ConsentTerm::ThisTime.id().to_owned())))];
+        let shared = Arc::clone(&shared);
+        ParamDialog::command(KEY, tl!("Generative Fill"), rows)
+            .values(Bind::bound(fields))
+            .ok_label(Label::from(tl!("Send")))
+            .cancel_label(Label::from(tl!("Don't Send")))
+            .below(move |ui, _| {
+                let Ok(a) = shared.lock() else { return };
+                body(ui, &a);
+            })
+    });
+    app.genai.consent.dialog = Some(id);
+}
+
+/// Each frame: fills that came to wait for the open prompt's destination join it, and a prompt is
+/// opened for any left waiting once it closed.
+pub(super) fn feed(app: &mut PhotocraftApp) {
+    if waiting(app).is_some() {
+        ask_if_waiting(app);
+    }
 }
 
 /// A size as the prompt shows it.
@@ -81,12 +134,12 @@ fn size(bytes: u64) -> String {
 }
 
 /// What a disclosed item is, in words, with its size in each fill that waits (in order).
-pub(super) fn item_text(input: &str, sizes: &[u64]) -> String {
+pub(super) fn item_text(input: SentInput, sizes: &[u64]) -> String {
     let what = match input {
-        "source" => tl!("The picture around the selection"),
-        "mask" => tl!("The selection's shape"),
-        "prompt" => return tl!("Your prompt").to_owned(),
-        _ => tl!("Other data"),
+        SentInput::Source => tl!("The picture around the selection"),
+        SentInput::Mask => tl!("The selection's shape"),
+        SentInput::Prompt => return tl!("Your prompt").to_owned(),
+        SentInput::Other => tl!("Other data"),
     };
     if sizes.is_empty() {
         return what.to_owned();
@@ -104,47 +157,38 @@ fn term_label(t: ConsentTerm) -> &'static str {
     }
 }
 
-/// The consent prompt: where it goes, what is sent with each fill's sizes, and how long the yes lasts.
-pub fn body(_app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// Where it goes and what is sent, with each fill's sizes.
+fn body(ui: &mut egui::Ui, a: &Asked) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let get = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
-    ui.set_max_width(420.0);
-    ui.label(
-        egui::RichText::new(crate::i18n::fmt(tl!("Generative Fill will send this to {destination}:"), &[("destination", &get("destination"))])).color(t.text),
-    );
-    ui.add(egui::Label::new(egui::RichText::new(format!("{} · {}", get("connection"), get("model"))).color(t.text_faint).size(12.0)).wrap());
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Generative Fill will send this to {destination}:"), &[("destination", &a.destination)])).color(t.text));
+    super::faint(ui, &format!("{} · {}", a.connection, a.model));
     ui.add_space(6.0);
-    for item in f.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
-        let input = item.get("input").and_then(Value::as_str).unwrap_or("");
-        let sizes: Vec<u64> = match item.get("sizes").and_then(Value::as_array) {
-            Some(each) => each.iter().filter_map(Value::as_u64).collect(),
-            None => item.get("bytes").and_then(Value::as_u64).into_iter().collect(),
-        };
-        ui.add(egui::Label::new(format!("•  {}", item_text(input, &sizes))).wrap());
+    for (input, sizes) in &a.items {
+        ui.add(egui::Label::new(format!("•  {}", item_text(*input, sizes))).wrap());
     }
-    let n = f.get("fills").and_then(Value::as_array).map_or(0, Vec::len) as u64;
+    let n = a.fills.len() as u64;
     if n > 1 {
         ui.add_space(4.0);
-        let line = crate::i18n::trn(crate::i18n::current(), n, "{n} Generative Fill waits for this answer.", "{n} Generative Fills wait for this answer.");
-        ui.add(egui::Label::new(egui::RichText::new(line).color(t.text_faint).size(12.0)).wrap());
-    }
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new(tl!("Allow sending to it:")).font(crate::theme::semibold(12.5)).color(t.text));
-    let mut term = get("term");
-    for choice in ConsentTerm::ALL {
-        if ui.radio_value(&mut term, choice.id().to_owned(), term_label(choice)).changed() {
-            f.insert("term".into(), json!(term));
-        }
+        super::faint(
+            ui,
+            &crate::i18n::trn(crate::i18n::current(), n, "{n} Generative Fill waits for this answer.", "{n} Generative Fills wait for this answer."),
+        );
     }
 }
 
-/// Send: agree to each waiting fill for the chosen term; they start.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let term = f.get("term").and_then(Value::as_str).unwrap_or(ConsentTerm::ThisTime.id()).to_owned();
-    let ids: Vec<u64> = f.get("fills").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+/// The fills the closed prompt answered, taken from it.
+fn take_fills(app: &mut PhotocraftApp) -> Vec<u64> {
+    app.genai.consent.dialog = None;
+    app.genai.consent.asked.lock().map(|mut a| std::mem::take(&mut *a).fills).unwrap_or_default()
+}
+
+/// Send: agree to each waiting fill for the chosen term (`term`, the radio row's; `None` is only
+/// this time); they start.
+pub(super) fn confirm(app: &mut PhotocraftApp, term: Option<&str>) -> Result<Value, String> {
+    let term = term.unwrap_or(ConsentTerm::ThisTime.id()).to_owned();
     let mut last = Ok(Value::Null);
     let mut first_error = None;
-    for id in ids {
+    for id in take_fills(app) {
         let still = app.session.generative_fills().iter().any(|f| f.id == id && f.state == "consent");
         if still {
             last = app.run(AGREE, json!({"fill": id, "term": term}));
@@ -154,8 +198,6 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             }
         }
     }
-    // Others may have come to wait meanwhile (another destination): ask about them next.
-    ask_if_waiting(app);
     match first_error {
         Some(e) => Err(e),
         None => last,
@@ -163,12 +205,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 }
 
 /// Don't Send: the fills it asked about are discarded; nothing of them was sent.
-pub fn cancelled(app: &mut PhotocraftApp, f: &Map<String, Value>) {
-    let ids: Vec<u64> = f.get("fills").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+pub(super) fn cancelled(app: &mut PhotocraftApp) {
+    let ids = take_fills(app);
     let waiting: Vec<u64> = ids.into_iter().filter(|id| app.session.generative_fills().iter().any(|f| f.id == *id && f.state == "consent")).collect();
-    if !waiting.is_empty() {
-        let _ = app.run(DISCARD, json!({"fills": waiting}));
+    for id in waiting {
+        let _ = app.run(DISCARD, json!({"fill": id}));
     }
-    // Fills for another destination may have come to wait behind this prompt: ask about them now.
-    ask_if_waiting(app);
 }

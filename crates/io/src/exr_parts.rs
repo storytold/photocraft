@@ -3,7 +3,7 @@
 //! file listed for a chooser ([`entries`]), and the chosen ones imported as the layers of
 //! one document ([`import`]), with an optional additive beauty precomp from the AOVs.
 
-use photocraft_cms::Builtin;
+use craft_cms::Builtin;
 use photocraft_codecs::{self as codecs, ChannelLayout, DecodeOptions, Image, SampleType};
 use photocraft_color::{ColorMode, SampleType as DocSample};
 use photocraft_doc::{Document, Layer, LayerContent, Size};
@@ -165,24 +165,19 @@ pub struct Selection {
     pub precomp: bool,
 }
 
-/// An image as an importable layer: F16 becomes F32 (lossless, warned once by the caller),
-/// the layout matches the document's, the surface is built a band of rows at a time. The
-/// returned mode tells the caller whether this layer is grayscale.
-fn layer_surface(img: &Image, max: &mut (u32, u32)) -> Result<(Surface, ColorMode), IoError> {
-    let (layout, mode) = if matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA) {
-        (ChannelLayout::GrayA, ColorMode::Grayscale)
-    } else {
-        (ChannelLayout::Rgba, ColorMode::Rgb)
-    };
+/// An image as an importable layer: F16 becomes F32 (lossless, warned once by the caller), the
+/// layout is RGBA (a gray part or group fills R, G and B alike, as every EXR opens as RGB,
+/// #14069), the surface is built a band of rows at a time.
+fn layer_surface(img: &Image, max: &mut (u32, u32)) -> Result<Surface, IoError> {
     max.0 = max.0.max(img.width());
     max.1 = max.1.max(img.height());
-    let converted = img.convert(layout, SampleType::F32);
-    image_surface(&converted, layout, SampleType::F32).map(|s| (s, mode))
+    let converted = img.convert(ChannelLayout::Rgba, SampleType::F32);
+    image_surface(&converted, ChannelLayout::Rgba, SampleType::F32)
 }
 
 /// Imports the chosen entries as the layers of one document: parts whole, groups from their
-/// own channels, F16 kept losslessly as F32, the linear-light EXR values tagged linear sRGB
-/// or linear gray.
+/// own channels, F16 kept losslessly as F32, the document RGB and the linear-light EXR values
+/// tagged linear sRGB.
 /// `precomp` adds the additive sum of the file's AOV groups as a top layer and fails,
 /// naming the missing AOVs, when the light-path set is incomplete.
 pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult, IoError> {
@@ -230,7 +225,6 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     // channels.
     let mut layers: Vec<Layer> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    let mut gray_only = true;
     let mut max = (1u32, 1u32);
     let mut f16_seen = false;
 
@@ -239,8 +233,7 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
         if img.sample_type() == SampleType::F16 {
             f16_seen = true;
         }
-        let (surface, mode) = layer_surface(&img, &mut max)?;
-        gray_only &= mode == ColorMode::Grayscale;
+        let surface = layer_surface(&img, &mut max)?;
         layers.push(Layer::new(part_display_name(part), LayerContent::Raster(surface)));
     }
     for group in &chosen_groups {
@@ -251,14 +244,12 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
         if img.sample_type() == SampleType::F16 {
             f16_seen = true;
         }
-        let (surface, mode) = layer_surface(&img, &mut max)?;
-        gray_only &= mode == ColorMode::Grayscale;
+        let surface = layer_surface(&img, &mut max)?;
         layers.push(Layer::new(group.prefix.clone(), LayerContent::Raster(surface)));
     }
 
     if sel.precomp {
         let layer = precomp_layer(bytes, &all_groups, &opts, &mut max, &mut warnings)?;
-        gray_only = false; // the precomp is an RGB layer by construction
         layers.push(layer);
     }
 
@@ -268,12 +259,10 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     if f16_seen {
         warnings.push("16-bit float samples are stored as 32-bit float".to_string());
     }
-    let mode = if gray_only { ColorMode::Grayscale } else { ColorMode::Rgb };
-    let mut doc = Document::new(name, Size::new(max.0, max.1), mode, DocSample::F32);
-    doc.layers = layers;
-    // OpenEXR holds linear, scene-referred values (Y is linear luminance): use the profile
-    // matching the selected parts' mode, as File › Open does.
-    doc.icc_profile = Some(if gray_only { photocraft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
+    let mut doc = Document::new(name, Size::new(max.0, max.1), ColorMode::Rgb, DocSample::F32);
+    doc.layers = layers.into();
+    // OpenEXR holds linear, scene-referred values: tag them linear sRGB, as File › Open does.
+    doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
     Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
@@ -334,7 +323,7 @@ fn precomp_layer(bytes: &[u8], all_groups: &[Group], opts: &DecodeOptions, max: 
     let img = Image::from_f32(w, h, ChannelLayout::Rgba, &out)?;
     max.0 = max.0.max(w);
     max.1 = max.1.max(h);
-    let (surface, _) = layer_surface(&img, max)?;
+    let surface = layer_surface(&img, max)?;
     warnings.push("beauty (precomp) is the additive sum of the file's AOVs; alpha is the maximum coverage".to_string());
     Ok(Layer::new("beauty (precomp)", LayerContent::Raster(surface)))
 }
