@@ -144,6 +144,19 @@ fn switching_units_keeps_a_small_pixel_size() {
     });
 }
 
+/// Width and Height take only numbers in their bounds: automation sets them through their own rows.
+#[test]
+fn width_and_height_refuse_a_value_their_rows_cannot_hold() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let (mut h, id) = opened();
+        let ctx = h.ctx.clone();
+        let dialogs = &mut h.state_mut().framework.dialogs;
+        assert!(dialogs.set_json_field(&ctx, id, "width", json!("bad")).is_err(), "a text width");
+        assert!(dialogs.set_json_field(&ctx, id, "height", json!(-1.0)).is_err(), "a negative height");
+        assert_eq!((num(&h, id, "width"), num(&h, id, "height")), (8.0, 10.0), "the size stays");
+    });
+}
+
 /// Picks `unit` in the Units list, as the list's pick does.
 fn pick_unit(h: &mut H, id: DialogId, unit: &str) {
     set(h, id, "units", json!(unit));

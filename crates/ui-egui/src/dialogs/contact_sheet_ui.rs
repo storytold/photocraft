@@ -40,7 +40,7 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
             .tooltip(tl!("Images in subfolders will start on a new Contact Sheet")),
         Param::section(tl!("Document")),
         Param::new("units", tl!("Units"), ParamKind::choice(opts(&UNITS), Some("inches".into()))),
-        Param::custom(UNITS_SHOWN, Label::Empty, follow_units).companions(["width", "height"]).full_width(),
+        Param::custom(UNITS_SHOWN, Label::Empty, follow_units).full_width(),
         Param::new("width", tl!("Width"), ParamKind::number(Some(0.0), Some(300_000.0), 8.0, 0.5, 2)),
         Param::new("height", tl!("Height"), ParamKind::number(Some(0.0), Some(300_000.0), 10.0, 0.5, 2)),
         Param::number_with_units("resolution", tl!("Resolution"), 300.0, 1.0, 2, resolution).bounds(Some(1.0), Some(10_000.0)),
