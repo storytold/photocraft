@@ -139,6 +139,21 @@ fn right_click_off_the_mesh_opens_no_pin_menu_and_escape_only_closes_the_menu() 
     assert_eq!(pins_of(h.state()), pins, "and changes nothing");
 }
 
+/// The open menu takes the keys: Enter chooses the focused row and does not commit the warp, as Enter on the pins does.
+#[test]
+fn enter_in_the_menu_chooses_the_row_and_keeps_the_session() {
+    let mut h = harness(puppet(&[]));
+    right_click_doc(&mut h, [150.0, 120.0]);
+    assert!(session(h.state()).menu.is_some(), "the menu opened");
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().distort.puppet.is_some(), "Enter in the menu does not commit Puppet Warp");
+    assert!(session(h.state()).menu.is_none(), "Enter chooses a row and closes the menu");
+    assert_eq!(pins_of(h.state()).len(), 1, "the focused row, Add Pin, ran");
+}
+
 /// Remove All Pins needs a pin and Select All Pins two; a fixed pin among two greys nothing. A greyed row is refused.
 #[test]
 fn greyed_rows_follow_the_pins() {
