@@ -6,6 +6,7 @@ use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
 use craft::ui::pickers::Select;
 use craft::ui::text::RangeAlert;
 use photocraft_engine::presets::PresetsExt;
@@ -53,13 +54,16 @@ pub(super) fn string_entries(items: &[(&str, &str)]) -> Vec<Entry<String>> {
     items.iter().map(|(value, label)| Entry::new((*value).to_owned(), (*label).to_owned())).collect()
 }
 
-/// A radio group over a string option.
+/// A radio group over a string option, its radios side by side: stacked, the one-line bar clips all but the
+/// first (#16337).
 fn radios(ui: &mut egui::Ui, label: &str, value: &mut String, items: &[(&str, &str)]) {
     let picked = RadioGroup::new(label.to_owned(), Bind::given(value.clone()))
         .show(ui, |ui, _| {
-            for (v, l) in items {
-                Radio::new((*v).to_owned()).label((*l).to_owned()).show(ui);
-            }
+            Row::new().show(ui, |ui, _| {
+                for (v, l) in items {
+                    Radio::new((*v).to_owned()).label((*l).to_owned()).show(ui);
+                }
+            });
         })
         .output
         .value()
@@ -129,12 +133,14 @@ pub(super) fn content_aware_move(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> 
 /// Spot Healing's options.
 pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let o = &mut app.ui.tool_options;
-    radios(
-        ui,
-        tl!("Type"),
-        &mut o.spot_type,
-        &[("contentAware", tl!("Content-Aware")), ("createTexture", tl!("Create Texture")), ("proximityMatch", tl!("Proximity Match"))],
-    );
+    Field::new(tl!("Type")).show(ui, |ui, _| {
+        radios(
+            ui,
+            tl!("Type"),
+            &mut o.spot_type,
+            &[("contentAware", tl!("Content-Aware")), ("createTexture", tl!("Create Texture")), ("proximityMatch", tl!("Proximity Match"))],
+        );
+    });
     Divider::vertical().show(ui);
     check(ui, tl!("Sample All Layers"), &mut o.sample_all.spot_healing, true, None);
     None

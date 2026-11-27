@@ -1,5 +1,6 @@
 //! Retouch options-bar behaviour that needs the whole bar host: the Content-Aware Move box
-//! disabling its cells, and a stored fraction surviving the Blur, Sharpen and Smudge bars.
+//! disabling its cells, a stored fraction surviving the Blur, Sharpen and Smudge bars, and the healing radios
+//! laid out in one row.
 
 use egui::accesskit::Role;
 use egui::vec2;
@@ -89,4 +90,33 @@ fn showing_a_bar_keeps_a_stored_fraction() {
         h.run_steps(5);
         assert_eq!(h.state().ui.tool_options.strength, 33.7, "showing_a_bar_keeps_a_stored_fraction: showing the {tool:?} bar leaves the fraction");
     }
+}
+
+/// Checks that the radios in `labels` sit side by side on the row of the `row` cell (role, label), after the
+/// group's `caption` label when given.
+fn assert_radios_in_row(h: &Harness<'_, Box<PhotocraftApp>>, test: &str, row: (Role, &str), labels: &[&str], caption: Option<&str>) {
+    let row = h.get_by_role_and_label(row.0, row.1).rect();
+    let mut left = caption.map_or(f32::MIN, |c| h.get_by_role_and_label(Role::Label, c).rect().right());
+    for label in labels {
+        let r = h.get_by_role_and_label(Role::RadioButton, label).rect();
+        assert!(r.width() > 0.0 && r.height() > 0.0, "{test}: {label} has a rect: {r:?}");
+        assert!((row.top()..=row.bottom()).contains(&r.center().y), "{test}: {label} sits on the bar's row {row:?}: {r:?}");
+        assert!(r.left() >= left, "{test}: {label} sits right of the cell before it ({left}): {r:?}");
+        left = r.right();
+    }
+}
+
+#[test]
+fn spot_healing_and_patch_show_every_radio_side_by_side() {
+    let test = "spot_healing_and_patch_show_every_radio_side_by_side";
+    let mut app = new_app(100, 60);
+    app.ui.tool = Tool::SpotHealing;
+    let h = bar(app);
+    let row = (Role::CheckBox, "Sample All Layers");
+    assert_radios_in_row(&h, test, row, &["Content-Aware", "Create Texture", "Proximity Match"], Some("Type"));
+
+    let mut app = new_app(100, 60);
+    app.ui.tool = Tool::Patch;
+    let h = bar(app);
+    assert_radios_in_row(&h, test, (Role::ComboBox, "Patch"), &["Source", "Destination"], None);
 }
