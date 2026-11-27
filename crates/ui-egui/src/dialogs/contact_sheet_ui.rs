@@ -167,6 +167,25 @@ pub(crate) fn footer_buttons() -> Vec<(String, Label)> {
     [("load", tl!("Load…")), ("save", tl!("Save…")), ("reset", tl!("Reset…"))].map(|(id, label)| (id.to_owned(), Label::from(label))).into()
 }
 
+/// Every open of the dialog has the same id, so Load…'s pick and Reset…'s question, answered after the dialog closed,
+/// would fill the next open. They answer only the open they were asked from, counted here.
+fn opens_id() -> egui::Id {
+    egui::Id::unique("pc-contact-sheet-opens")
+}
+
+/// Counts a new open of the dialog.
+pub(crate) fn opened(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        let opens = data.get_temp_mut_or_default::<u64>(opens_id());
+        *opens = opens.wrapping_add(1);
+    });
+}
+
+/// The number of the dialog's latest open.
+fn opens(ctx: &egui::Context) -> u64 {
+    ctx.data(|data| data.get_temp::<u64>(opens_id())).unwrap_or_default()
+}
+
 /// The largest settings file Load… reads: the reference's are under 1 KiB.
 const SETTINGS_FILE_MAX: usize = 1 << 20;
 
@@ -175,9 +194,11 @@ const SETTINGS_FILE_MAX: usize = 1 << 20;
 pub(crate) fn footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, action: &str) {
     let outcome = match action {
         "load" => {
-            let ctx = ctx.clone();
+            let (ctx, asked) = (ctx.clone(), opens(ctx));
             app.pick_file_bytes_filtered(&["xml"], move |app, name, bytes| {
-                load(app, &ctx, id, &name, &bytes);
+                if opens(&ctx) == asked {
+                    load(app, &ctx, id, &name, &bytes);
+                }
                 Ok(Value::Null)
             })
         }
@@ -190,7 +211,7 @@ pub(crate) fn footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId,
             })
         }
         "reset" => {
-            ask_reset(app, id);
+            ask_reset(app, id, opens(ctx));
             Ok(Value::Null)
         }
         _ => Ok(Value::Null),
@@ -266,24 +287,25 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, mut read: M
     }
 }
 
-/// The tag of Reset…'s question: the dialog it resets.
-struct ResetQuestion(DialogId);
+/// The tag of Reset…'s question: the dialog it resets and the open it was asked from ([`opens`]).
+struct ResetQuestion(DialogId, u64);
 
 /// Reset… asks first, as the reference application's script alert does.
-fn ask_reset(app: &mut PhotocraftApp, id: DialogId) {
+fn ask_reset(app: &mut PhotocraftApp, id: DialogId, asked: u64) {
     let prompt = StandardPrompt::custom(tl!("Restore default settings?"))
         .title(tl!("Script Alert"))
         .button(PromptChoice::Proceed, tl!("Yes"))
         .button(PromptChoice::Cancel, tl!("No"))
-        .tag(ResetQuestion(id));
+        .tag(ResetQuestion(id, asked));
     let _ = crate::dialogs::alerts::open_prompt(app, prompt);
 }
 
 /// The `PROMPTS` entry of Reset…'s question: Yes shows the defaults, with no folder chosen; No changes nothing. `false`
 /// for another prompt's answer.
-pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
-    let Some(ResetQuestion(id)) = answer.take_tag::<ResetQuestion>() else { return false };
+pub(crate) fn answer(app: &mut PhotocraftApp, ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(ResetQuestion(id, asked)) = answer.take_tag::<ResetQuestion>() else { return false };
     if answer.choice == PromptChoice::Proceed
+        && opens(ctx) == asked
         && let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
     {
         for param in build(&Value::Null) {

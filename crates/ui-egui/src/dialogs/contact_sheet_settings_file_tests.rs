@@ -1,5 +1,6 @@
 //! #13698: Contact Sheet II's Load…, Save… and Reset…, and the settings file they read and write.
 
+use craft::host::{Picked, ScriptedFiles};
 use craft::ui::dialog::{DialogId, StackDialog, StandardPrompt};
 use serde_json::{Map, Value, json};
 
@@ -269,7 +270,11 @@ fn a_file_that_is_not_a_settings_file_is_an_error() {
 
 /// The dialog open from the menu, on a fresh app.
 fn opened() -> (H, DialogId) {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    opened_over(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()))
+}
+
+/// The dialog open from the menu over `app`.
+fn opened_over(mut app: Box<PhotocraftApp>) -> (H, DialogId) {
     let ctx = app.ctx().clone();
     let reply = crate::menus::invoke(&mut app, &ctx, super::super::COMMAND, json!({})).unwrap();
     let want = reply["dialog"].as_str().map(str::to_owned).or_else(|| reply["dialog"].as_u64().map(|v| v.to_string())).expect("the reply names a dialog");
@@ -379,4 +384,29 @@ fn reset_asks_first_and_yes_restores_the_defaults_with_no_folder() {
             assert_eq!(shown, [json!("/tmp/sheets"), json!(3), json!("pixels")], "No changes nothing");
         }
     }
+}
+
+/// Load…'s pick answered after its dialog closed and opened again leaves the new open alone: every open has the same
+/// id.
+#[test]
+fn a_load_answered_after_the_dialog_reopened_changes_nothing() {
+    let files = std::sync::Arc::new(ScriptedFiles::held());
+    let services = crate::Services { files: Some(files.clone()), ..Default::default() };
+    let (mut h, id) = opened_over(PhotocraftApp::new(photocraft_engine::Session::new(), services));
+    let ctx = h.ctx.clone();
+    super::super::footer(h.state_mut(), &ctx, id, "load");
+    crate::dialogs::testing::cancel(h.state_mut(), id).expect("the dialog closes");
+    h.run_steps(3);
+    crate::menus::invoke(h.state_mut(), &ctx, super::super::COMMAND, json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().framework.dialogs.open_dialogs().iter().any(|d| d.id == id), "the new open has the same id");
+    let shown = |h: &H| ["input", "units", "width", "mode", "columns"].map(|key| field(h, id, key));
+    let before = shown(&h);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Contact Sheet II.xml");
+    std::fs::write(&path, reference_load_file()).unwrap();
+    files.answer(Picked::Paths(vec![path])).expect("Load…'s file dialog is open");
+    h.state_mut().poll_file_dialog();
+    h.run_steps(3);
+    assert_eq!(shown(&h), before);
 }
