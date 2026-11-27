@@ -65,17 +65,30 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 /// The version of the options bar: every tool option (`app.ui.tool_options`, all of which the bar shows; keys, the
 /// canvas menu, the canvas and its task bars, panels and presets write them without a command), the commit and cancel
 /// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
-/// Zoom tool's view, and an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
+/// Zoom tool's view, an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
 /// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
-/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets and
-/// the colours.
+/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets, the
+/// colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
+/// app hides (#12892), which a Pen drawing click by click changes with no History step (#12890). Which path is
+/// selected is already in [`version`]; the hidden path is held as its document's place, since its content can only
+/// change with the document's revision, which `version` holds too.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
     let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
-    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture))
+    let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
+    let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), hidden);
+    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, paths))
+}
+
+/// The version of the toolbar's footer: the colour chips' two colours, whether the active document is in Quick Mask and
+/// the screen mode the Screen Mode button shows. A shortcut changed in the keymap reaches the buttons' tooltips through
+/// the framework, which tracks the keymap a view reads.
+pub(crate) fn toolbar_footer(app: &PhotocraftApp) -> u64 {
+    let quick_mask = app.session.active().is_some_and(|st| st.doc.quick_mask.is_some());
+    version(app, (colours(app), quick_mask, app.ui.view.screen_mode))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
@@ -133,6 +146,15 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
 /// filter mask, the selected path; the Layers, Channels, Paths and Properties panels and the canvas set it without a
 /// command), the tool and the preferences (Preferences' Apply and OK and other writers change them through the engine
 /// or `prefs.edit`, not as a counted command: units, the language, toolbar slots).
+/// Whether running command `id` leaves every settling region's version as it is: a view command (zoom, fit, print size,
+/// rotate) changes only the canvas view, which every region that shows it holds in its version (the Navigator, the Info
+/// panel and the options bar through [`view`], the status bar in its own props), so it need not count as a command run
+/// and run every panel body in the next frame (#15493). While an action is recorded it counts: the Actions panel lists
+/// the step it records.
+pub(crate) fn changes_only_the_view(app: &PhotocraftApp, id: &str) -> bool {
+    crate::shortcut_dispatch::is_view_command(id) && app.session.recording.target.is_none()
+}
+
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     app.commands_run.hash(&mut hasher);
@@ -316,6 +338,25 @@ mod tests {
     }
 
     /// The UI language moves the title bar's version (its menu titles).
+    /// A view command from a key or a menu changes only the view: it is no command run, so the panel bodies keep their
+    /// versions (#15493). While an action is recorded it is one, because the Actions panel lists the step.
+    #[test]
+    fn a_view_command_is_no_command_run_unless_an_action_is_recorded() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        let before = (app.commands_run, panel(&app, "layers"), panel(&app, "history"));
+        let fired = crate::blend_keys::test_fired(craft::ui::canvas::ViewCommands::ZoomIn.into());
+        crate::shortcut_dispatch::run_fired(&mut app, &ctx, &[fired]);
+        let _ = crate::menus::invoke(&mut app, &ctx, "view.fitOnScreen", serde_json::json!({}));
+        assert_eq!((app.commands_run, panel(&app, "layers"), panel(&app, "history")), before, "a zoom key and Fit on Screen run no panel");
+        app.session.recording.target = Some((0, 0));
+        let _ = crate::menus::invoke(&mut app, &ctx, "view.fitOnScreen", serde_json::json!({}));
+        assert_eq!(app.commands_run, before.0 + 1, "recorded, Fit on Screen is a command run");
+        let fired = crate::blend_keys::test_fired(craft::ui::canvas::ViewCommands::ZoomIn.into());
+        crate::shortcut_dispatch::run_fired(&mut app, &ctx, &[fired]);
+        assert_eq!(app.commands_run, before.0 + 2, "recorded, a zoom key is a command run");
+    }
+
     #[test]
     fn the_language_moves_the_title_bar() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

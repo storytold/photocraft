@@ -735,14 +735,20 @@ fn raw_open_legacy_baseline_pixels() {
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
+    // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
+    // center pixel `[47838, 39368, 49721]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
+    // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`). Whole-image hashes differ by
+    // 1 LSB between MSVC and glibc `libm` float math on Windows.
+    let expected_def_hash = if cfg!(target_os = "windows") { 15_396_184_765_895_906_317 } else { 10_802_259_885_448_765_778 };
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 2_792_208_992_597_872_838 } else { 12_255_299_099_314_572_538 };
     assert_eq!(
         (def_px, def_hash, wb, tuned_px, tuned_hash),
         (
-            [[29624, 25113, 50386], [47838, 39368, 49721], [54364, 41011, 44877]],
-            4_077_782_316_697_218_873,
+            [[29689, 25226, 50514], [47838, 39368, 49721], [58598, 42281, 45071]],
+            expected_def_hash,
             false,
-            [[39218, 33230, 65535], [63447, 52123, 65535], [65535, 54111, 59021]],
-            13_721_670_327_866_894_160,
+            [[39333, 33449, 65535], [63354, 52144, 65535], [65535, 55781, 59230]],
+            expected_tuned_hash,
         )
     );
 }
@@ -800,13 +806,17 @@ fn raw_open_camera_wb_legacy_baseline_pixels() {
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
+    // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
+    // center pixel `[51905, 40291, 54669]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
+    // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 6_427_926_143_910_930_207 } else { 8_451_299_581_473_829_420 };
     assert_eq!(
         (def_px, def_hash, tuned_px, tuned_hash),
         (
-            [[32172, 25684, 55879], [51905, 40291, 54669], [54973, 41164, 49114]],
-            11_079_887_031_689_206_845,
-            [[41995, 33769, 65535], [65535, 53416, 65535], [65535, 54256, 62211]],
-            14_795_269_389_460_323_633,
+            [[32235, 25796, 56002], [51905, 40291, 54669], [63986, 43623, 49478]],
+            6_651_437_429_964_055_359,
+            [[42154, 34080, 65535], [65535, 53404, 65535], [65535, 57910, 62593]],
+            expected_tuned_hash,
         )
     );
 }

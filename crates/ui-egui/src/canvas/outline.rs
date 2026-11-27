@@ -24,8 +24,10 @@ impl MaskSource for SurfaceMask<'_> {
         self.size
     }
 
+    /// The mask's revision with the scratch read-error generation: a selection tile that fails to read traces as
+    /// empty, and as its pixels once it reads, without a new revision (`crate::scratch_reads`).
     fn revision(&self) -> u64 {
-        self.revision
+        crate::scratch_reads::with(self.revision)
     }
 
     /// The allocated tiles: every pixel that differs from the default lies in one, and the union of their rects is

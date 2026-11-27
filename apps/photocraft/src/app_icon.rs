@@ -1,6 +1,6 @@
 //! The app icon, everywhere Windows, macOS and Linux show one (#248).
 //!
-//! - **Executable:** `build.rs` embeds `assets/app-icon/photocraft.ico` (16–256 px) as icon
+//! - **Executable:** `build.rs` selects the stable or nightly-only `.ico` (16–256 px) as icon
 //!   resource 1, which Explorer, Alt+Tab and an unpinned taskbar button fall back to.
 //! - **Window:** [`window_icon`] sets the title-bar and taskbar icon at runtime (`WM_SETICON` on
 //!   Windows, `_NET_WM_ICON` on X11, the Dock when running unbundled on macOS).
@@ -9,20 +9,31 @@
 //!   shortcut's icon under its `<Icon Id>`, so that id must carry the target's `.exe` extension
 //!   (ICE50); an extensionless id showed a blank page on the taskbar. The tests below check it.
 //!
-//! The process keeps Windows' implicit AppUserModelID (derived from the executable path), which
-//! is what makes that matching work for both the MSI shortcut and the portable exe. An explicit
-//! ID would need a Win32 call (`unsafe`, which the workspace forbids) and would then also have to
-//! be stamped on the shortcut, or the taskbar would stop matching the two.
+//! Stable keeps Windows' implicit AppUserModelID (derived from the executable path), which
+//! is what makes that matching work for both the MSI shortcut and the portable exe. Changing
+//! stable's ID would also require changing its matching shortcut policy. Nightly is separate:
+//! its app bootstrap uses the existing safe Windows bindings to set its persistent channel
+//! identity before any native window.
 
 /// Window, taskbar and (when running unbundled) Dock icon. macOS gets the padded 1024 px render
 /// on Apple's icon grid; elsewhere the 256 px hicolor render of the full tile.
 pub fn window_icon() -> egui::IconData {
-    match eframe::icon_data::from_png_bytes(PNG) {
+    match eframe::icon_data::from_png_bytes(icon_png(crate::build_flavor::COMPILED, cfg!(target_os = "macos"))) {
         Ok(icon) => icon,
         Err(e) => {
             log::warn!("app icon: {e}");
             egui::IconData::default()
         }
+    }
+}
+
+fn icon_png(flavor: crate::build_flavor::BuildFlavor, macos: bool) -> &'static [u8] {
+    if flavor != crate::build_flavor::BuildFlavor::NightlyV1 {
+        PNG
+    } else if macos {
+        include_bytes!("../../../assets/app-icon/photocraft-nightly-1024.png")
+    } else {
+        include_bytes!("../../../assets/app-icon/photocraft-nightly.png")
     }
 }
 
@@ -60,6 +71,41 @@ const PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nightly_uses_each_platforms_distinct_nonblank_native_size_icon() {
+        use crate::build_flavor::BuildFlavor;
+        assert_eq!(icon_png(BuildFlavor::Stable, true), PNG);
+        assert_eq!(icon_png(BuildFlavor::Stable, false), PNG);
+        for (macos, expected_size) in [(false, 256), (true, 1024)] {
+            let nightly = icon_png(BuildFlavor::NightlyV1, macos);
+            assert_ne!(nightly, PNG);
+            let icon = eframe::icon_data::from_png_bytes(nightly).unwrap();
+            assert_eq!((icon.width, icon.height), (expected_size, expected_size));
+            assert!(icon.rgba.chunks(4).any(|pixel| pixel[3] > 0));
+        }
+    }
+
+    #[test]
+    fn nightly_executable_icon_retains_all_six_shell_sizes() {
+        let ico = include_bytes!("../../../assets/app-icon/photocraft-nightly.ico");
+        assert_ne!(ico.as_slice(), ICO);
+        assert_eq!((u16_at(ico, 0), u16_at(ico, 2)), (0, 1));
+        let mut sizes = Vec::new();
+        for i in 0..u16_at(ico, 4) {
+            let entry = 6 + 16 * i;
+            let width = if ico[entry] == 0 { 256 } else { usize::from(ico[entry]) };
+            let height = if ico[entry + 1] == 0 { 256 } else { usize::from(ico[entry + 1]) };
+            assert_eq!(width, height);
+            let image = &ico[u32_at(ico, entry + 12)..][..u32_at(ico, entry + 8)];
+            assert!(image.starts_with(b"\x89PNG\r\n\x1a\n"));
+            let decoded = eframe::icon_data::from_png_bytes(image).unwrap();
+            assert_eq!((decoded.width as usize, decoded.height as usize), (width, height));
+            sizes.push(width);
+        }
+        for expected in [16, 24, 32, 48, 64, 256] {
+            assert!(sizes.contains(&expected), "missing nightly icon size {expected}");
+        }
+    }
 
     const ICO: &[u8] = include_bytes!("../../../assets/app-icon/photocraft.ico");
     const WXS: &str = include_str!("../../../packaging/windows/photocraft.wxs");

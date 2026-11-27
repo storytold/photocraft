@@ -1,0 +1,29 @@
+[package]
+name = "photocraft-engine-paint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# The painting commands of the engine (photocraft#15710): brushes, erasers, retouching, fills,
+# gradients, red eye, samplers, stamps and the Move tool's picking. Built on photocraft-engine-core.
+[dependencies]
+photocraft-engine-core = { workspace = true }
+craft-cms = { workspace = true }
+photocraft-algo = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-compose = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-geom = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-paint = { workspace = true }
+photocraft-raster = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Core's allocation failpoints, which the brush and fill tests arm.
+[dev-dependencies]
+photocraft-engine-core = { workspace = true, features = ["failpoints"] }

@@ -152,6 +152,13 @@ pub(crate) fn command() -> Command {
         .mut_args(blank_env_is_unset)
 }
 
+/// Nightly has no control server. Its unused inherited port must not prevent a window from
+/// opening; Stable retains its existing environment/usage-error behavior.
+pub(crate) fn command_for_profile(nightly: bool) -> Command {
+    let command = command();
+    if nightly { command.mut_arg("control", |arg| arg.env(None::<&str>)) } else { command }
+}
+
 /// Parse the launch arguments (without the binary name) with `cmd`, from [`command`]. Old macOS
 /// passes a process serial number (`-psn_…`) when launched from Finder: it is dropped first, unless
 /// it comes after `--`. A bad value from a variable is a usage error naming the variable.
@@ -214,6 +221,37 @@ mod tests {
         let Err(e) = parse_args(args) else { panic!("{args:?} parsed") };
         assert_eq!(e.exit_code(), 2, "{args:?}: {e}");
         e.to_string()
+    }
+
+    #[test]
+    fn nightly_ignores_only_the_unused_control_port_environment() {
+        const CHILD: &str = "PHOTOCRAFT_TEST_CONTROL_PORT_CHILD";
+        if let Ok(profile) = std::env::var(CHILD) {
+            let nightly = profile == "nightly";
+            let result = parse(command_for_profile(nightly), Vec::<OsString>::new());
+            if nightly {
+                assert!(result.is_ok(), "unused invalid control-port environment must not block Nightly");
+                assert!(result.unwrap().control.is_none());
+                assert!(parse(command_for_profile(true), ["--control", "70000"].map(OsString::from)).is_err(), "explicit invalid values remain invalid");
+            } else {
+                assert_eq!(result.err().unwrap().exit_code(), 2, "Stable preserves its invalid-environment error");
+            }
+            return;
+        }
+        for profile in ["stable", "nightly"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "launch_args::tests::nightly_ignores_only_the_unused_control_port_environment", "--nocapture"])
+                .env(CHILD, profile)
+                .env("PHOTOCRAFT_CONTROL_PORT", "not-a-port")
+                .env_remove("PHOTOCRAFT_CONTROL_TOKEN")
+                .env_remove("PHOTOCRAFT_CONTROL_TOKEN_FILE")
+                .env_remove("PHOTOCRAFT_AUTOMATION_READ_ROOT")
+                .env_remove("PHOTOCRAFT_AUTOMATION_WRITE_ROOT")
+                .env_remove("PHOTOCRAFT_IN_WINDOW_MENUS")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{profile}: {}", String::from_utf8_lossy(&output.stdout));
+        }
     }
 
     #[test]

@@ -215,7 +215,8 @@ fn path_mode_other_operations_and_the_curvature_pen_make_no_layer_on_the_first_c
     let before = steps(&app);
     app.ui.tool_options.vector_mode = VectorMode::Path;
     click(&mut app, 125.0, 25.0);
-    assert!(shapes(&app).is_empty() && steps(&app) == before, "Path mode");
+    // Path mode makes no layer; its first anchor is the Work Path's own step (#12890).
+    assert!(shapes(&app).is_empty() && steps(&app) == before + 1, "Path mode");
     assert!(app.ui.pen.as_ref().is_some_and(|p| !p.live_layer));
 
     let mut app = self::app();
