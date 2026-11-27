@@ -249,9 +249,10 @@ fn unreadable_native_drop(path: std::path::PathBuf) -> OsFile {
 fn finish_read_failure(app: &mut PhotocraftApp, source: &str, reason: &str, worker_error: &str) {
     let job = app.jobs.opens.first().map(|tab| tab.job);
     let reply = job.map(|job| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.jobs.waiters.push((job, tx));
-        rx
+        let (request, reply) = ControlRequest::new("engine.execute", json!({}));
+        let channel = app.control.get_or_insert_with(|| craft::automation::ControlChannel::new(std::sync::mpsc::channel().1));
+        channel.settle(request, Reply::AfterJob(job.0), None, 0.0);
+        reply
     });
     let ctx = app.ctx().clone();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);

@@ -760,7 +760,7 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
     assert!(message.contains("could not be measured"), "{message}");
     assert!(message.contains("8 GiB") && message.contains("may run out of memory"), "{message}");
     assert!(!message.contains("available)"), "the unknown-capacity message claims no available figure: {message}");
-    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog.value()}))["ok"], true);
+    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
 
     // A measured capacity shows the number and drops the uncertainty warning.
     let id = store_preflight(&mut app, "known.psd", 3 * gb, Some(5 * gb));
@@ -779,7 +779,7 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
     let message = crate::open_prompt::memory_message(prompt);
     assert!(message.contains("5.0 GiB available"), "{message}");
     assert!(!message.contains("could not be measured") && !message.contains("may run out of memory"), "{message}");
-    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog.value()}))["ok"], true);
+    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
     assert!(no_dialog(&app));
 }
 
@@ -802,7 +802,7 @@ fn memory_prompt_warns_when_little_memory_would_be_left() {
     let dialog = memory_dialog(&mut app);
     let message = crate::open_prompt::memory_message(front_memory(&app));
     assert!(message.contains("Little memory would be left") && message.contains("may run out of memory"), "{message}");
-    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog.value()}))["ok"], true);
+    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
 }
 
 /// #10897: reopening an ordinary file whose high-memory prompt is already waiting shows that
