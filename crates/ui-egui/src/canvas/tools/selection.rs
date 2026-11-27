@@ -9,7 +9,7 @@ use std::cell::RefCell;
 
 use craft::behavior::geometry::{Constraint, SelectionOperation};
 use craft::behavior::kurbo::{Point, Rect};
-use craft::behavior::{CancelReason, Cursor, EditEvent, Mixed, PixelSize, PointerButton};
+use craft::behavior::{CancelReason, Cursor, EditEvent, IconId, Mixed, PaintedCursor, PixelSize, PointerButton, PointerGlyph};
 use craft::imaging::ui::select::{
     DragKind, LassoTool, MagneticLassoTool, MarqueeKind, MarqueeTool, PolygonLassoTool, PressRule, SelectEvent, SelectPhase, SelectionDrag, SelectionProbe,
     SelectionShape, drag_kind,
@@ -477,6 +477,18 @@ impl CanvasTool for WandPass<'_> {
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
         self.state.drag.cancel(self.probe, reason, cx);
+    }
+
+    /// The wand icon is the normal pointer, with the selection operation badge when it can combine
+    /// with an existing selection. Precise Other Cursors and Caps Lock replace it with a crosshair.
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.precise() {
+            return Cursor::Painted(PaintedCursor::Crosshair);
+        }
+        let has_selection = self.probe.has_selection();
+        let operation = SelectionOperation::resolve(self.bar, cx.mods, has_selection);
+        let badge = has_selection.then(|| operation.badge()).flatten();
+        Cursor::Painted(PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("wand_sparkles"), badge))
     }
 
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}

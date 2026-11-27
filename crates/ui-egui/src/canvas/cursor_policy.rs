@@ -194,3 +194,7 @@ mod custom_shape_alt_eyedropper_tests;
 #[cfg(test)]
 #[path = "magic_eraser_cursor_tests.rs"]
 mod magic_eraser_cursor_tests;
+
+#[cfg(test)]
+#[path = "magic_wand_cursor_tests.rs"]
+mod magic_wand_cursor_tests;
