@@ -48,6 +48,11 @@ pub(super) fn layout_checked(app: &PhotocraftApp, k: &str) -> Option<bool> {
 /// the user moved the window): this is the offset between the two.
 /// Zero where the app shows its document windows on the fallback layer inside its own window, and where the host has
 /// not reported the app window's rect yet (before its first pass): both keep today's placement.
+/// One fallback this gate does not read: the framework also shows the layer inside the app window while OS windows are
+/// available, when the app window itself is full screen or (on Wayland) maximized — `opens_over` in craft-libs
+/// `ui-contract/src/runtime/windows.rs`. `WindowHost::opens_windows()` answers for the viewport of the running pass,
+/// not for the app window, so a command run from the menu cannot decide that here; the offset is still added, and the
+/// epic's #16846 is where full-screen modes with floating document windows are worked.
 fn desktop_origin(app: &PhotocraftApp) -> egui::Pos2 {
     let host = craft::ui::runtime::windows::WindowHost::of(app.ctx());
     if !host.viewports_available() {
