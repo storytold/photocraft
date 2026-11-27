@@ -27,14 +27,14 @@ fn live_transform_eyes_accept_clicks_while_channel_rows_stay_locked() {
     h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Green").click();
     h.run_steps(2);
     assert_eq!(h.state().session.active().unwrap().channel_view.target, ChannelTarget::Color(0));
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Visibility Green").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Visibility Green").click();
     h.run_steps(2);
     assert!(h.state().session.active().unwrap().channel_view.color_visible(1));
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Visibility Red").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Visibility Red").click();
     h.run_steps(2);
     assert!(!h.state().session.active().unwrap().channel_view.color_visible(0));
     assert_eq!(h.state().ui.transform.as_ref().unwrap().quad_array(), quad);
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Visibility RGB").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Visibility RGB").click();
     h.run_steps(2);
     assert_eq!(h.state().session.active().unwrap().channel_view.visible_colors(3), 3);
     assert_eq!(h.state().session.active().unwrap().channel_view.target, ChannelTarget::Color(0));
@@ -62,7 +62,7 @@ fn colour_eye_exits_grayscale_mask_view_without_unlocking_the_transform_target()
     h.run_steps(2);
     let ctx = h.ctx.clone();
     crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Visibility Green").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Visibility Green").click();
     h.run_steps(2);
     let st = h.state().session.active().unwrap();
     assert_eq!(photocraft_engine::mask_view_cmds::current(st).unwrap().mode, photocraft_engine::mask_view_cmds::MaskViewMode::Overlay);

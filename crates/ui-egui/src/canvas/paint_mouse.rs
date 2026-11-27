@@ -279,7 +279,7 @@ pub(crate) fn context_popup(app: &mut PhotocraftApp, tool: Tool, mods: Mods, doc
     if crate::layer_pick_ui::is_gesture(tool, mods) {
         let layers = crate::layer_pick_ui::layers_at(app, doc[0], doc[1]);
         if !layers.is_empty() {
-            return Some(ContextPopup::Menu(MenuKind::Layers { layers }));
+            return Some(ContextPopup::Menu(MenuKind::Layers { layers, depth: Vec::new(), isolate: false }));
         }
         return (!mods.cmd && menu::pasteboard_at(app, tool, doc)).then_some(ContextPopup::Menu(MenuKind::Pasteboard));
     }

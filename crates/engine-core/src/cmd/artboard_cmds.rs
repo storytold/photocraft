@@ -410,6 +410,11 @@ pub fn from_layers_defaults(s: &Session) -> Option<(String, [i64; 2])> {
     Some((next_artboard_name(&d.doc), [w, h]))
 }
 
+/// The smallest width or height Artboard from Layers takes, in pixels (#14577).
+pub const FROM_LAYERS_MIN: i64 = 4;
+/// The largest width or height Artboard from Layers takes, in pixels (#14577).
+pub const FROM_LAYERS_MAX: i64 = 32_000;
+
 fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let sel = crate::layer_multi_cmds::selected(s);
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -422,8 +427,9 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the artboard width and height must not be negative"));
     }
     // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
-    // their bounds on that axis (#9087).
-    let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
+    // their bounds on that axis (#9087). As the dialog's fields do, a size outside 4..=32000 px
+    // is clamped to it (#14577).
+    let size = [int(p, "width"), int(p, "height")].map(|v| v.filter(|v| *v != 0).map(|v| v.clamp(FROM_LAYERS_MIN, FROM_LAYERS_MAX)));
     let (gid, rect, shift) = s.edit("New Artboard From Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
@@ -1112,17 +1118,18 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files, "warnings": warnings}))
 }
 
-/// The scratch state an artboard export starts from. Building the boards copies their pixels
-/// (and the PNG-8 and PDF paths flatten them) before the encoder's own scratch check sees them,
-/// and a tile that fails to read gives placeholder pixels: [`ScratchGuard::check`] refuses them
-/// before a file is written, as the export pipeline does for a document it reads itself.
-struct ScratchGuard<'a> {
+/// The scratch state an export starts from. Building artboards copies their pixels (and the
+/// PNG-8 and PDF paths flatten them), as Render Video's PNG frames are flattened, before the
+/// encoder's own scratch check sees them, and a tile that fails to read gives placeholder pixels:
+/// [`ScratchGuard::check`] refuses them before a file is written, as the export pipeline does for
+/// a document it reads itself.
+pub(crate) struct ScratchGuard<'a> {
     doc: &'a Document,
     generation: u64,
 }
 
 impl<'a> ScratchGuard<'a> {
-    fn new(doc: &'a Document) -> Result<Self> {
+    pub(crate) fn new(doc: &'a Document) -> Result<Self> {
         photocraft_compose::discard_unreadable_pixel_caches();
         doc.scratch_health().map_err(EngineError::Other)?;
         Ok(Self { doc, generation: photocraft_raster::spill::read_error_generation() })
@@ -1130,7 +1137,7 @@ impl<'a> ScratchGuard<'a> {
 
     /// An error when a scratch read failed since [`ScratchGuard::new`], or the document's own
     /// pixels are unreadable.
-    fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         photocraft_raster::spill::check_since(self.generation).and_then(|()| self.doc.scratch_health()).map_err(EngineError::Other)
     }
 }
@@ -1420,7 +1427,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromLayers",
             "Artboard from Layers…",
             &["Layer", "New"],
-            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 0 keeps their bounds) → {layer, rect}"##,
+            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 4..32000 px, a size outside is clamped to it, 0 keeps their bounds) → {layer, rect}"##,
             has_free_layers,
             artboard_from_layers
         ),
@@ -1495,6 +1502,10 @@ mod include_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
 mod from_layers_history_name_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_size_range_tests.rs"]
+mod from_layers_size_range_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]

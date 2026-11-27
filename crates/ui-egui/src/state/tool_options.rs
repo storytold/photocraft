@@ -93,6 +93,9 @@ pub struct ToolOptions {
     pub pattern_stamp_angle: f32,
     /// current | currentAndBelow | all
     pub clone_sample: String,
+    /// Healing Brush › Mode: Replace, which copies the source without healing (#12101). Like the
+    /// painting tools' Clear flags it is tool-only: the stroke params carry it, not the brush.
+    pub healing_replace: bool,
     /// Spot Healing: contentAware | createTexture | proximityMatch
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -162,6 +165,9 @@ pub struct ToolOptions {
     #[serde(rename = "useAlignedRendering", alias = "align_edges")]
     pub align_edges: bool,
     pub polygon_sides: u32,
+    /// The Star tool's points for the next star (#16867): its own, apart from the Polygon tool's
+    /// [`Self::polygon_sides`]. 3 to 20; 5 to start and after Reset Tool.
+    pub star_points: u32,
     /// The Polygon tool's corner radius in px for the next polygon (#13302): its own, not the
     /// Rectangle's [`Self::corner_radius`]. 0 draws sharp corners.
     pub polygon_corner_radius: f32,
@@ -476,6 +482,7 @@ impl Default for ToolOptions {
             pattern_stamp_scale: 100.0,
             pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
+            healing_replace: false,
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
             patch_content_aware: false,
@@ -508,6 +515,7 @@ impl Default for ToolOptions {
             corner_radius: 0.0,
             align_edges: true,
             polygon_sides: 5,
+            star_points: 5,
             polygon_corner_radius: 0.0,
             line_weight: 1.0,
             arrow_start: false,

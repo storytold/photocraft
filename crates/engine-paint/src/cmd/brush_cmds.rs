@@ -18,7 +18,7 @@ use photocraft_paint::GrayTile;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-pub use crate::brush_defs::MAX_TIP;
+pub use crate::brush_defs::{MAX_DEFINED_TIP, MAX_TIP};
 use crate::brush_defs::{sampled_brush, validate_brush};
 use crate::cmd::has_paintable;
 use crate::commands::{CommandSpec, is_mask_target, paint_surface};
@@ -1081,7 +1081,13 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    s.active().ok_or("no document")?;
+    let d = s.active().ok_or("no document")?;
+    // The area the command reads (selection, else canvas) is limited, not just the painted
+    // extent, like Photoshop (#14275).
+    let area = d.doc.selection.as_ref().map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
+    if area.width().max(area.height()) > MAX_DEFINED_TIP {
+        return Err(format!("the area is larger than {MAX_DEFINED_TIP} px"));
+    }
     Ok(())
 }
 
@@ -1609,3 +1615,6 @@ mod define_brush_color_density_tests;
 
 #[cfg(test)]
 mod filter_mask_stroke_tests;
+
+#[cfg(test)]
+mod define_brush_size_limit_tests;

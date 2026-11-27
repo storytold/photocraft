@@ -1,12 +1,14 @@
 //! The Retouch options bar's toning family: Dodge and Burn, Sponge, Blur, Sharpen and Smudge, Color Replacement.
 
-use craft::behavior::IconId;
+use craft::behavior::{IconId, NumberCodec};
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Segmented;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft::ui::display::Divider;
+use craft::ui::form::Field;
 use craft::ui::primitives::IconSpec;
-use craft::ui::text::RangeAlert;
+use craft::ui::runtime::env::Env;
+use craft::ui::text::{NumberField, NumberValue, RangeAlert};
 use photocraft_color::BlendMode;
 
 use super::heal::{check, choose, string_entries};
@@ -73,6 +75,75 @@ pub(super) fn sponge(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<Range
     flow
 }
 
+/// Smudge keeps the original Angle field's truncation of typed fractions.
+/// The shared field still owns parsing, range alerts, stepping and scrubbing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SmudgeAngle(f32);
+
+impl NumberValue for SmudgeAngle {
+    fn number(&self) -> Option<f64> {
+        Some(f64::from(self.0))
+    }
+    fn of_number(number: f64) -> Self {
+        Self(number.trunc() as f32)
+    }
+    fn blank() -> Option<Self> {
+        None
+    }
+    fn named(&self) -> Option<u32> {
+        None
+    }
+    fn from_name(_: u32) -> Option<Self> {
+        None
+    }
+}
+
+fn smudge_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let before = (*app.session.tools.brush).clone();
+    let mut brush = before.clone();
+    let mut angle = SmudgeAngle(brush.angle);
+    let shown = Field::new(tl!("Angle"))
+        .side(SideLabel::new().scrub(true).icon(IconSpec::svg(IconId::new("rotate_cw"))).layout(FieldLayout::Inside))
+        .sizing(Sizing::Content)
+        .show(ui, |ui, _| {
+            NumberField::named(tl!("Angle"), Bind::bound(&mut angle))
+                .range(-180.0..=180.0)
+                .step(1.0)
+                .codec(NumberCodec::new(Env::of(ui).units().reader(None), 0))
+                .unit("°")
+                .scrub_by_label()
+                .tooltip(tl!("Set the brush angle"))
+                .show(ui)
+        })
+        .inner;
+    let mut key = None;
+    let mut alert = None;
+    if let Some(shown) = shown {
+        brush.angle = angle.0;
+        key = shown.edit.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+        alert = shown.out_of_range.filter(|alert| !alert.range.contains(&alert.typed.trunc()));
+    }
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+    alert
+}
+
+/// Smudge's pressure-for-size switch edits the active tool's own brush through
+/// the same command and gesture path as the current Background Eraser controls.
+fn smudge_pressure_size(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let before = (*app.session.tools.brush).clone();
+    let mut brush = before.clone();
+    let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure").to_owned())
+        .show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_size = on;
+    }
+    let key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+}
+
 /// The options of Blur, Sharpen and Smudge.
 pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> Option<RangeAlert> {
     let o = &mut app.ui.tool_options;
@@ -81,9 +152,11 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     // The cell writes only on a commit, so a shared fraction is not rounded (#12650).
     let strength = number(tl!("Strength"), &mut o.strength, 1.0..=100.0).whole().unit("%").show(ui).out_of_range;
-    // Sharpen's Angle follows Strength (#12946); the bar shows either field's range alert.
-    let angle = if tool == Tool::Sharpen { brush_angle(ui, app) } else { None };
-    let strength = strength.or(angle);
+    let angle = match tool {
+        Tool::Smudge => smudge_angle(ui, app),
+        Tool::Sharpen => brush_angle(ui, app),
+        _ => None,
+    };
     let o = &mut app.ui.tool_options;
     if let Some(all) = o.sample_all.slot(tool) {
         check(ui, tl!("Sample All Layers"), all, true, None);
@@ -93,8 +166,9 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     if tool == Tool::Smudge {
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
+        smudge_pressure_size(ui, app);
     }
-    strength
+    strength.or(angle)
 }
 
 /// The brush Angle cell, as the Background Eraser's: whole degrees -180..180 over the tool's own

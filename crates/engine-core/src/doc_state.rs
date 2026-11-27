@@ -34,6 +34,9 @@ pub struct DocState {
     pub channel_view: channel_cmds::ChannelView,
     /// Interactive single-channel transform; never saved or included in pixel history.
     pub channel_transform: Option<channel_transform::Guard>,
+    /// The channel views undo brings back, by the step they belong to: the ids of the history
+    /// states New Channel or Calculations started from and made (#14683). View state, not history.
+    pub(crate) undo_channel_views: Vec<(u64, u64, channel_cmds::ChannelView)>,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
     pub isolated_layers: Vec<LayerId>,
     /// Painting symmetry preset or sampled path (tool state, not document pixels).
@@ -148,6 +151,7 @@ impl DocState {
             coalesce: None,
             channel_view,
             channel_transform: None,
+            undo_channel_views: Vec::new(),
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
