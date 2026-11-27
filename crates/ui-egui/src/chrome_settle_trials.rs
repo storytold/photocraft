@@ -254,16 +254,24 @@ fn a_tool_option_runs_the_options_bar_once() {
 }
 
 /// A bar that runs and writes every control's value back leaves the tool options' revision alone, so idle frames never
-/// move what the bar's version holds.
+/// move what the bar's version holds, whichever tool's bar is showing.
 #[test]
 fn an_idle_options_bar_leaves_the_tool_options_revision() {
     let mut h = harness();
+    let mut moved = Vec::new();
+    for tool in crate::state::Tool::ALL {
+        h.state_mut().ui.tool = tool;
+        h.run_steps(4);
+        let settled = h.state().ui.tool_options.revision();
+        h.run_steps(6);
+        if h.state().ui.tool_options.revision() != settled {
+            moved.push(tool);
+        }
+    }
+    assert!(moved.is_empty(), "idle frames moved the tool options under {moved:?}");
+    // A changed option runs the bar, whose own writes then change nothing more.
     h.state_mut().ui.tool = crate::state::Tool::Move;
     h.run_steps(4);
-    let settled = h.state().ui.tool_options.revision();
-    h.run_steps(10);
-    assert_eq!(h.state().ui.tool_options.revision(), settled, "ten idle frames");
-    // A changed option runs the bar, whose own writes then change nothing more.
     let on = h.state().ui.tool_options.move_auto_select;
     h.state_mut().ui.tool_options.move_auto_select = !on;
     let changed = h.state().ui.tool_options.revision();

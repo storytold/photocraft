@@ -599,7 +599,7 @@ mod tests {
         let mut s = SampleAllLayers::default();
         assert!(s.slot(Tool::Brush).is_none());
         for t in [Tool::MagicWand, Tool::PaintBucket, Tool::Blur, Tool::Sharpen, Tool::Smudge, Tool::Remove] {
-            *s.slot(t).unwrap() = true;
+            *s.slot_mut(t).unwrap() = true;
             assert!(s.get(t), "{t:?}");
         }
         assert!(!s.get(Tool::QuickSelection));

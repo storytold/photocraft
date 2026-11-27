@@ -162,7 +162,7 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     }
     // Sample All Layers is each tool's own (#5524): only `tool`'s goes back.
     let d = ToolOptions::default();
-    if let Some(all) = o.sample_all.slot(tool) {
+    if let Some(all) = o.sample_all.slot_mut(tool) {
         *all = d.sample_all.get(tool);
     }
 }
@@ -172,7 +172,7 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
 pub fn sample_all_key(tool: Tool) -> Option<String> {
     let base = crate::state::SampleAllLayers::default();
     let mut probe = base;
-    let slot = probe.slot(tool)?;
+    let slot = probe.slot_mut(tool)?;
     *slot = !*slot;
     let (Ok(Value::Object(b)), Ok(Value::Object(m))) = (serde_json::to_value(base), serde_json::to_value(probe)) else { return None };
     m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
