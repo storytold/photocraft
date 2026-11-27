@@ -145,6 +145,32 @@ fn switching_units_keeps_a_small_pixel_size() {
     });
 }
 
+/// `ui.dialog.set units` and OK with no frame between them run the sheet at the size the dialog showed.
+#[test]
+fn ok_right_after_a_units_change_keeps_the_size() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let (mut h, id) = opened();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.png"), png(40, 20)).unwrap();
+        set(&mut h, id, "input", json!(dir.path().to_string_lossy()));
+        set(&mut h, id, "caption", json!(false));
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        app.framework.dialogs.set_json_field(&ctx, id, "units", json!("pixels")).unwrap();
+        crate::dialogs::testing::confirm(app, id).expect("OK is accepted");
+        h.run_steps(4);
+        let sheet = &h.state().session.active().expect("a sheet").doc;
+        assert_eq!((sheet.size.width, sheet.size.height), (2400, 3000));
+    });
+}
+
+/// A white PNG of `w` x `h` pixels.
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let mut image = photocraft_engine::Session::new();
+    image.execute("file.new", json!({"width": w, "height": h, "background": "white"})).unwrap();
+    photocraft_io::export(&image.active().unwrap().doc, "a.png", &Default::default()).unwrap().bytes
+}
+
 /// Width and Height take only numbers in their bounds: automation sets them through their own rows.
 #[test]
 fn width_and_height_refuse_a_value_their_rows_cannot_hold() {
@@ -205,10 +231,7 @@ fn ok_runs_the_command_with_the_same_params() {
         assert_eq!((&p["depth"], &p["placeAcrossFirst"]), (&json!(16), &json!(false)));
 
         let dir = tempfile::tempdir().unwrap();
-        let mut image = photocraft_engine::Session::new();
-        image.execute("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
-        let png = photocraft_io::export(&image.active().unwrap().doc, "a.png", &Default::default()).unwrap().bytes;
-        std::fs::write(dir.path().join("a.png"), png).unwrap();
+        std::fs::write(dir.path().join("a.png"), png(40, 20)).unwrap();
         set(&mut h, id, "input", json!(dir.path().to_string_lossy()));
         set(&mut h, id, "caption", json!(false));
         set(&mut h, id, "depth", json!("8"));
