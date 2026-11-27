@@ -141,6 +141,35 @@ fn flood_keep(mask: &mut [bool], w: usize, h: usize, seed: usize) {
     }
 }
 
+/// One seed pixel per separate red-eye region: the scan-order first pixel of every connected
+/// `is_red_eye` component in the window, as window-local `(x, y)` pairs. Read-only; used by the
+/// box form (#12569) to run [`apply`] once per region a box covers, at most `max` seeds, scan
+/// order. It decides no pixel of the picture - [`apply`] still owns the correction.
+pub fn region_seeds(px: &[[f32; 4]], w: usize, h: usize, max: usize) -> Vec<(i32, i32)> {
+    let n = w.saturating_mul(h);
+    let mut out = Vec::new();
+    if w == 0 || h == 0 || max == 0 || px.len() < n {
+        return out;
+    }
+    let mut rest: Vec<bool> = px[..n].iter().map(|p| is_red_eye(*p)).collect();
+    while let Some(seed) = rest.iter().position(|on| *on) {
+        out.push(((seed % w) as i32, (seed / w) as i32));
+        if out.len() >= max {
+            break;
+        }
+        // Flood from the seed to learn its whole region, then clear that region so the next
+        // round finds the next one.
+        let mut region = rest.clone();
+        flood_keep(&mut region, w, h, seed);
+        for (left, on) in rest.iter_mut().zip(region.iter()) {
+            if *on {
+                *left = false;
+            }
+        }
+    }
+    out
+}
+
 fn erode(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
     let mut out = vec![false; mask.len()];
     for y in 0..h {
@@ -471,5 +500,21 @@ mod tests {
         assert_eq!(apply(&mut px, 0, 0, (0, 0), (0, 0), 50.0, 50.0), 0);
         let mut tiny = vec![[0.95, 0.1, 0.1, 1.0]; 4];
         assert_eq!(apply(&mut tiny, 8, 8, (1, 1), (0, 0), 50.0, 50.0), 0);
+    }
+
+    #[test]
+    fn region_seeds_find_each_red_region_once() {
+        // Two red 3x3 blocks, separated by white, on a white field.
+        let red: [f32; 4] = [0.95, 0.1, 0.1, 1.0];
+        let off: [f32; 4] = [0.9, 0.9, 0.9, 1.0];
+        let mut px = vec![off; 20 * 10];
+        for (x, y) in [(1usize, 1usize), (2, 1), (1, 2), (11, 6), (12, 6), (11, 7)] {
+            px[y * 20 + x] = red;
+        }
+        let seeds = region_seeds(&px, 20, 10, 8);
+        assert_eq!(seeds, vec![(1, 1), (11, 6)], "one seed per region, scan order");
+        // A single region yields one seed; the cap cuts at `max`; a clear window yields none.
+        assert_eq!(region_seeds(&px, 20, 10, 1).len(), 1);
+        assert_eq!(region_seeds(&vec![off; 20 * 10], 20, 10, 8).len(), 0);
     }
 }

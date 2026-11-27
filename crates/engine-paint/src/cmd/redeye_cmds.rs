@@ -1,7 +1,9 @@
 //! Red Eye tool: click a pupil to neutralize the flash reflection.
 //!
 //! Toolbar-only (`paint.redEye`, empty menu path). The kernel in `photocraft-algo::redeye`
-//! runs on a window around each click plus the mask-filter halo.
+//! runs on a window around each click plus the mask-filter halo. A `rect` (#12569) is a box
+//! drag: the kernel runs once per separate red region inside the rectangle, every change
+//! clipped to it, one History state.
 
 use photocraft_algo::redeye::{self, MAX_POINTS, MAX_WINDOW};
 use photocraft_color::ColorMode;
@@ -67,6 +69,40 @@ fn clicks(p: &Value) -> Result<Vec<(i32, i32)>> {
         (None, None) if p.get("x").is_none() && p.get("y").is_none() => Err(bad("missing `x`,`y` or `points`")),
         _ => Err(bad("`x` and `y` must be finite numbers")),
     }
+}
+
+/// The box form (#12569): `rect: [x, y, w, h]` in document pixels corrects only inside the
+/// rectangle. Bad values (wrong type or length, empty or negative size, off the document, out of
+/// the pixel range) are errors, never a panic.
+fn rect_click(s: &Session, p: &Value) -> Result<Option<Rect>> {
+    let Some(v) = p.get("rect") else { return Ok(None) };
+    if p.get("points").is_some() || p.get("x").is_some() || p.get("y").is_some() {
+        return Err(bad("`rect` is its own form: give `rect` or `x`,`y` or `points`"));
+    }
+    let q = v.as_array().filter(|a| a.len() == 4).ok_or_else(|| bad(format!("`rect` must be [x, y, w, h] (got {v})")))?;
+    let mut n = [0.0f64; 4];
+    for (slot, item) in n.iter_mut().zip(q) {
+        *slot = item
+            .as_f64()
+            .filter(|x| x.is_finite() && x.abs() <= f64::from(i32::MAX))
+            .ok_or_else(|| bad(format!("`rect` must be four finite numbers in the pixel range (got {item})")))?;
+    }
+    let (x, y, w, h) = (n[0], n[1], n[2], n[3]);
+    let (w, h) = (w.floor(), h.floor());
+    if w < 1.0 || h < 1.0 {
+        return Err(bad("`rect` needs a width and a height of at least 1 px"));
+    }
+    let (x0, y0, w32, h32) = (x.floor() as i32, y.floor() as i32, w as i32, h as i32);
+    let (x1, y1) = match (x0.checked_add(w32), y0.checked_add(h32)) {
+        (Some(x1), Some(y1)) => (x1, y1),
+        _ => return Err(bad("`rect` is too large")),
+    };
+    let rect = Rect::new(x0, y0, x1, y1);
+    let Some(d) = s.active() else { return Err(EngineError::Other("no document open".into())) };
+    if rect.intersect(&d.doc.bounds()).is_empty() {
+        return Err(bad("`rect` is outside the document"));
+    }
+    Ok(Some(rect))
 }
 
 fn read_rect(cx: i32, cy: i32, radius: f32) -> Result<Rect> {
@@ -240,7 +276,12 @@ fn mode_refusal(s: &Session) -> Result<()> {
 
 fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     mode_refusal(s)?;
-    let pts = clicks(p)?;
+    let box_ = rect_click(s, p)?;
+    let pts = match box_ {
+        // The box's clicks are found in the pixels themselves, inside the edit (below).
+        Some(_) => Vec::new(),
+        None => clicks(p)?,
+    };
     let pupil_raw = num(p, "pupilSize", 50.0)?;
     let darken = num(p, "darken", 50.0)?;
     if redeye::unclamped_window_side(pupil_raw).is_none() {
@@ -251,9 +292,41 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     let id = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|d| d.active_layer) };
     let (damage, total) = s.edit("Red Eye Removal Tool", |doc, active| {
         let canvas = doc.bounds();
+        // A box drag (#12569) changes nothing outside its rectangle; the kernel window is clipped to it.
+        let clip = box_.map_or(canvas, |r| r.intersect(&canvas));
         let sel = doc.selection.clone();
         let layer = id.or(*active);
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
+        // The box (#12569 review): the kernel runs once per separate red region inside the clip -
+        // a box over two pupils corrects both - each region clicked at its own seed and windowed,
+        // clipped to the box as a single click was. Regions inside the selection are clicked first,
+        // so the press-point rule below judges a region the box can actually reach. A box with no
+        // red keeps one click at the clip's centre, which makes a rectangle centred off the canvas
+        // behave like the same rectangle inside it.
+        let pts: Vec<(i32, i32)> = match box_ {
+            None => pts,
+            Some(_) => {
+                if clip.is_empty() {
+                    return Err(bad("`rect` is outside the document"));
+                }
+                let area = (clip.width() as u64).saturating_mul(clip.height() as u64);
+                if area > (MAX_WINDOW as u64).saturating_mul(MAX_WINDOW as u64) {
+                    return Err(bad(format!("`rect` covers more than the {MAX_WINDOW}² px the kernel reads at once")));
+                }
+                let (w, h) = (clip.width() as usize, clip.height() as usize);
+                let window = rgba_region(surf, clip);
+                let mut seeds: Vec<(i32, i32)> =
+                    redeye::region_seeds(&window, w, h, MAX_POINTS).into_iter().map(|(x, y)| (clip.x0.saturating_add(x), clip.y0.saturating_add(y))).collect();
+                if let Some(s) = sel.as_ref() {
+                    seeds.sort_by_key(|(x, y)| if s.sample_channel(*x, *y, 0) > 0.0 { 0 } else { 1 });
+                }
+                if seeds.is_empty() {
+                    let (half_w, half_h) = ((clip.width() / 2) as i32, (clip.height() / 2) as i32);
+                    seeds.push((clip.x0.saturating_add(half_w), clip.y0.saturating_add(half_h)));
+                }
+                seeds
+            }
+        };
         let Some(&first) = pts.first() else { return Err(EngineError::Other(MISS.into())) };
         // The press point decides (#12576): a press outside the selection is refused like a miss,
         // not clipped. Feathered (partly selected) and off-canvas presses were not measured and keep
@@ -266,7 +339,7 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
         let mut total = 0u32;
         let mut damage = Rect::EMPTY;
         for click in &pts {
-            let (area, n) = apply_click(surf, sel.as_ref(), lock, *click, pupil, darken, canvas)?;
+            let (area, n) = apply_click(surf, sel.as_ref(), lock, *click, pupil, darken, clip)?;
             total = total.saturating_add(n);
             damage = if damage.is_empty() { area } else { damage.union(&area) };
         }
@@ -286,7 +359,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Red Eye",
         menu: &[],
         shortcut: None,
-        params: r#"{"x":px, "y":px} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
+        params: r#"{"x":px, "y":px} | {"rect":[x,y,w,h]} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
         enabled,
         run: red_eye,
         journal: true,
