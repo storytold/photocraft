@@ -183,6 +183,19 @@ fn width_and_height_refuse_a_value_their_rows_cannot_hold() {
     });
 }
 
+/// A size of 0 is the command's 8 x 10 in the units shown, so switching the units shows that size, not 0.
+#[test]
+fn switching_units_converts_a_zero_size_as_the_command_reads_it() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let (mut h, id) = opened();
+        pick_unit(&mut h, id, "inches");
+        set(&mut h, id, "width", json!(0.0));
+        pick_unit(&mut h, id, "cm");
+        assert!((num(&h, id, "width") - 20.32).abs() < 1e-6, "width: {}", num(&h, id, "width"));
+        assert!((num(&h, id, "height") - 25.4).abs() < 1e-6, "height: {}", num(&h, id, "height"));
+    });
+}
+
 /// Picks `unit` in the Units list, as the list's pick does.
 fn pick_unit(h: &mut H, id: DialogId, unit: &str) {
     set(h, id, "units", json!(unit));
