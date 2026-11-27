@@ -258,8 +258,7 @@ impl Compositor {
                 lut: s.lut.clone(),
             });
         }
-        self.kit.run(device, queue, encoder, &draws);
-        Ok(())
+        self.kit.run(device, queue, encoder, &draws)
     }
 }
 

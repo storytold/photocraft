@@ -1,7 +1,5 @@
-pub mod bidi_text;
 pub mod cjk_fonts;
 pub mod direction;
-pub mod egui_fonts;
-pub(super) mod font_filters;
-pub(super) mod font_preview;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod installed_fonts;
 pub mod served_fonts;
