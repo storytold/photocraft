@@ -30,6 +30,9 @@ struct Key {
     exclude: Vec<LayerId>,
     /// The grid step's bits: the preferences change it without a document edit.
     grid: Option<[u64; 2]>,
+    /// The box a live Move-tool layer drag started from, while it runs: it joins the targets
+    /// (#16855), and it changes with the drag rather than with the document.
+    start: Option<[f64; 4]>,
 }
 
 /// The last built targets, kept at `PhotocraftApp::snap_cache`.
@@ -84,6 +87,22 @@ fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     set
 }
 
+/// The box the live Move-tool drag started from, while a whole-layer drag of a single pixel layer
+/// runs: the start position counts as a target like another layer's box (#16855). The measured
+/// case is one pixel layer: groups and multi-layer or linked sets, floating pixels, a Cmd stand-in
+/// and an open Free Transform are not measured and keep today's behaviour, so no box comes back
+/// for them.
+fn start_box(app: &PhotocraftApp) -> Option<[f64; 4]> {
+    if app.ui.tool != Tool::Move || app.ui.transform.is_some() {
+        return None;
+    }
+    let (rect, _) = app.canvas_tools.mover.dragged_box()?;
+    let st = app.session.active()?;
+    let moved = move_targets(&st.doc, st.selected_layers());
+    let one_layer = matches!(moved.as_slice(), [only] if st.doc.layer(*only).is_some_and(|l| !l.is_group()));
+    one_layer.then_some(rect)
+}
+
 /// View › Snap To and View › Show › Smart Guides.
 fn options(app: &PhotocraftApp) -> SnapOptions {
     let st = &app.ui.view.snap_to;
@@ -109,7 +128,7 @@ fn grid(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> (Point, Vec2) 
     (Point::ORIGIN, Vec2::new(x, y))
 }
 
-fn build(st: &photocraft_engine::DocState, options: &SnapOptions, exclude: &[LayerId], grid: (Point, Vec2)) -> SnapTargets {
+fn build(st: &photocraft_engine::DocState, options: &SnapOptions, exclude: &[LayerId], grid: (Point, Vec2), start: Option<[f64; 4]>) -> SnapTargets {
     let doc = &st.doc;
     let bounds = Rect::new(0.0, 0.0, doc.size.width as f64, doc.size.height as f64);
     let guides = doc.guides.vertical.iter().map(|g| (Axis::Y, *g)).chain(doc.guides.horizontal.iter().map(|g| (Axis::X, *g)));
@@ -125,6 +144,12 @@ fn build(st: &photocraft_engine::DocState, options: &SnapOptions, exclude: &[Lay
                 t.add_rect(Rect::new(r[0], r[1], r[2], r[3]), SnapKind::LayerEdge, SnapKind::LayerCenter);
             }
         }
+        // The live Move-tool drag's own start position joins the targets like another layer's box
+        // (#16855). It was just excluded from the walk with the layers that move; its box at the
+        // press stands in, so the drag lines up with and pulls to where it started.
+        if let Some(r) = start {
+            t.add_rect(Rect::new(r[0], r[1], r[2], r[3]), SnapKind::LayerEdge, SnapKind::LayerCenter);
+        }
     }
     if options.selection
         && let Some(sel) = &doc.selection
@@ -138,17 +163,19 @@ fn build(st: &photocraft_engine::DocState, options: &SnapOptions, exclude: &[Lay
 }
 
 /// The targets of document `idx` without the layers in `exclude`: the one target builder. The same
-/// `Arc` comes back while the document revision, the Snap To options, the grid and `exclude` stay.
+/// `Arc` comes back while the document revision, the Snap To options, the grid, `exclude` and a
+/// live drag's start box stay.
 pub(crate) fn targets(app: &PhotocraftApp, idx: usize, exclude: &[LayerId]) -> Arc<SnapTargets> {
     let Some(st) = app.session.documents().get(idx) else { return Arc::new(SnapTargets::new()) };
     let options = options(app);
     let grid = grid(app, st);
-    let key = Key { doc: st.doc.id, revision: st.revision, options, exclude: exclude.to_vec(), grid: Some([grid.1.x.to_bits(), grid.1.y.to_bits()]) };
+    let start = if app.session.active_index() == Some(idx) { start_box(app) } else { None };
+    let key = Key { doc: st.doc.id, revision: st.revision, options, exclude: exclude.to_vec(), grid: Some([grid.1.x.to_bits(), grid.1.y.to_bits()]), start };
     let mut cache = app.snap_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(c) = cache.as_ref().filter(|c| c.key == key) {
         return c.targets.clone();
     }
-    let targets = Arc::new(build(st, &options, exclude, grid));
+    let targets = Arc::new(build(st, &options, exclude, grid, start));
     *cache = Some(SnapCache { key, targets: targets.clone() });
     targets
 }
@@ -207,5 +234,8 @@ pub(crate) fn smart_guide_color(app: &PhotocraftApp) -> Option<DataColor> {
         .map(|c| DataColor::new(Color32::from_rgb(c[0], c[1], c[2])))
 }
 
+#[cfg(test)]
+#[path = "snap_start_position_tests.rs"]
+mod snap_start_position_tests;
 #[cfg(test)]
 mod tests;
