@@ -119,7 +119,7 @@ fn canvas(tool: Tool, build_up: bool) -> H {
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
     app.ui.tool = tool;
     crate::paint_mouse::sync_tool_brush(&mut app);
-    app.run("tools.setBrush", json!({"brush": {"size": 40.0, "hardness": 1.0, "buildUp": build_up, "smoothing": {"amount": 0.0}}})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 40.0, "hardness": 1.0, "buildUp": build_up}})).unwrap();
     app.ui.tool_options.exposure = 50.0;
     app.sync_views();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
@@ -195,5 +195,45 @@ fn a_held_dodge_stroke_is_one_history_state() {
         assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "one Dodge Tool state, Airbrush {build_up}");
         assert_eq!(app.session.journal.len(), journal + 1, "one command, Airbrush {build_up}");
         assert_eq!(app.session.journal.iter().next_back().unwrap().0, "paint.dodge", "Airbrush {build_up}");
+    }
+}
+
+/// Points the live stroke in progress has been given.
+fn stroke_points(h: &H) -> usize {
+    crate::canvas::paint_tool::stroking(h.state()).map_or(0, |s| s.points.len())
+}
+
+#[test]
+fn the_held_stroke_is_committed_from_the_pixels_it_previewed() {
+    // The release hands the live stroke the last points of the drag with their times, so the command
+    // matches the stroke it was drawn for and takes those pixels instead of rendering the stroke
+    // again (#12682).
+    let mut h = canvas(Tool::Dodge, true);
+    let _ = held(&mut h, 12);
+    assert!(h.state().retouch_from_live, "the commit took the preview's pixels");
+}
+
+#[test]
+fn no_other_live_preview_repeats_a_held_pointer() {
+    // The same live-stroke type backs the Color Replacement, Pattern Stamp (impressionist) and
+    // Background Eraser previews, and the other retouching tools: none of them asks the canvas to
+    // repeat a held point, whichever Build-up its brush has.
+    for tool in [Tool::Dodge, Tool::Blur, Tool::Smudge, Tool::ColorReplacement, Tool::PatternStamp, Tool::BackgroundEraser] {
+        let mut h = canvas(tool, true);
+        if tool == Tool::PatternStamp {
+            h.state_mut().ui.tool_options.pattern_stamp_impressionist = true;
+            h.run_steps(1);
+        }
+        let p = screen(&h, 100.0, 60.0);
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        button(&mut h, true);
+        assert!(h.state().live_stroke.is_some(), "{tool:?}: a live preview, so the hold has something to repeat into");
+        let before = stroke_points(&h);
+        h.run_steps(12);
+        let after = stroke_points(&h);
+        button(&mut h, false);
+        h.run_steps(2);
+        assert_eq!(after > before, tool == Tool::Dodge, "{tool:?}: a held pointer {before} -> {after} points");
     }
 }

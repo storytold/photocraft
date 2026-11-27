@@ -631,7 +631,23 @@ pub(super) fn offer_live_retouch(app: &mut PhotocraftApp, d: &PaintStroke) {
     if steps.iter().any(Result::is_err) {
         return;
     }
-    let rest: Vec<_> = d.points.get(fed..).unwrap_or_default().iter().map(|q| photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+    // The same times `feed_live_stroke` gave the points before them, so the points the live stroke
+    // rendered are the points the committing command parses from its params - the one point the
+    // release frame adds would otherwise be missing a time, and the command would render the stroke
+    // itself instead of taking these pixels.
+    let t0 = app.stylus.point_ms(0);
+    let rest: Vec<_> = d
+        .points
+        .get(fed..)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(k, q)| {
+            let mut sp = photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32);
+            sp.time = app.stylus.point_ms(fed + k) - t0;
+            sp
+        })
+        .collect();
     // A refused offer (the brush changed mid-stroke, say) leaves the commit to render the stroke.
     match stroke {
         EngineStroke::Retouch(live) if !dab => offer_retouch(app, live, &rest),
