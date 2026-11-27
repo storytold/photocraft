@@ -12,13 +12,14 @@ use craft::behavior::{DisplayOrder, IconId, ItemSource, SelectionChange};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::Text;
+use craft::ui::layout_components::Row;
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Label, with_env};
 use craft::ui::tabs::{Tab, TabKind, TabStrip};
 use craft::ui::text::TextField;
 use serde::{Deserialize, Serialize};
@@ -277,25 +278,29 @@ fn define_page(ui: &mut egui::Ui, layers: &[(u64, String, bool)], state: &mut Va
     let method_entries = entries(METHODS);
     let mut remove = None;
     for (i, def) in state.defs.iter_mut().enumerate() {
-        ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
-                TextField::new(label(tl!("Name")), Bind::bound(&mut def.name)).show(ui);
-                if let Some(layer) = Select::new(label(tl!("Layer")), Bind::given(def.layer), &layer_entries).show(ui).value() {
-                    def.layer = *layer;
-                }
-                if let Some(ty) = Select::new(label(tl!("Type")), Bind::given(def.ty.clone()), &type_entries).show(ui).value() {
-                    def.ty.clone_from(ty);
-                }
-                if def.ty == "pixelReplacement"
-                    && let Some(method) = Select::new(label(tl!("Method")), Bind::given(def.method.clone()), &method_entries).show(ui).value()
-                {
-                    def.method.clone_from(method);
-                }
-                if IconButton::new(IconId::new("minus")).label(label(tl!("Remove Variable"))).show(ui).clicked() {
-                    remove = Some(i);
-                }
-            });
-        });
+        with_env(
+            ui,
+            |env| env.id_salt = Some(egui::Id::unique(i)),
+            |ui| {
+                Row::new().show(ui, |ui, _| {
+                    TextField::new(label(tl!("Name")), Bind::bound(&mut def.name)).show(ui);
+                    if let Some(layer) = Select::new(label(tl!("Layer")), Bind::given(def.layer), &layer_entries).show(ui).value() {
+                        def.layer = *layer;
+                    }
+                    if let Some(ty) = Select::new(label(tl!("Type")), Bind::given(def.ty.clone()), &type_entries).show(ui).value() {
+                        def.ty.clone_from(ty);
+                    }
+                    if def.ty == "pixelReplacement"
+                        && let Some(method) = Select::new(label(tl!("Method")), Bind::given(def.method.clone()), &method_entries).show(ui).value()
+                    {
+                        def.method.clone_from(method);
+                    }
+                    if IconButton::new(IconId::new("minus")).label(label(tl!("Remove Variable"))).show(ui).clicked() {
+                        remove = Some(i);
+                    }
+                });
+            },
+        );
     }
     if let Some(i) = remove {
         state.defs.remove(i);
@@ -316,7 +321,7 @@ fn data_sets_page(ui: &mut egui::Ui, state: &mut VariablesState) -> Option<usize
     state.fill_values();
     state.clamp();
     let total = state.data_sets.len();
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         if IconButton::new(IconId::new("chevron_left")).label(label(tl!("Previous Data Set"))).enabled(state.cur > 0).show(ui).clicked() {
             state.cur -= 1;
         }
@@ -344,19 +349,23 @@ fn data_sets_page(ui: &mut egui::Ui, state: &mut VariablesState) -> Option<usize
     TextField::new(label(tl!("Name")), Bind::bound(&mut set.name)).show(ui);
     for (i, def) in defs.iter().enumerate() {
         let Some(value) = set.values.iter_mut().find(|v| v.variable == def.name) else { continue };
-        ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
-                Text::new(label(&def.name)).show(ui);
-                match &mut value.value {
-                    Cell::Flag(on) => {
-                        Checkbox::new(Bind::bound(on)).label(label(tl!("Visible"))).show(ui);
+        with_env(
+            ui,
+            |env| env.id_salt = Some(egui::Id::unique(i)),
+            |ui| {
+                Row::new().show(ui, |ui, _| {
+                    Text::new(label(&def.name)).show(ui);
+                    match &mut value.value {
+                        Cell::Flag(on) => {
+                            Checkbox::new(Bind::bound(on)).label(label(tl!("Visible"))).show(ui);
+                        }
+                        Cell::Text(text) => {
+                            TextField::new(label(&def.name), Bind::bound(text)).show(ui);
+                        }
                     }
-                    Cell::Text(text) => {
-                        TextField::new(label(&def.name), Bind::bound(text)).show(ui);
-                    }
-                }
-            });
-        });
+                });
+            },
+        );
     }
     Button::new(label(tl!("Apply"))).show(ui).clicked().then_some(cur)
 }
@@ -384,7 +393,7 @@ impl StackDialog for VariablesDialog {
                 .shown(page)
                 .show_items(ui, &Pages, &mut |key, _| Tab::new(label(if *key == 0 { tl!("Define") } else { tl!("Data Sets") })));
             for event in strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     page = key.min(1);

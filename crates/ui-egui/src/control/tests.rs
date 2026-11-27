@@ -3,6 +3,7 @@ use crate::canvas_tool_menu::MenuKind;
 use craft::automation::actions::{Action, ActionList, ActionStep};
 use craft::color_ui::ui::{SampleSize, SampleSource};
 use craft::keymap::CommandRef;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 /// An action named `name` whose steps run the given commands.
 // PLAN: assumed `app.session.actions.list` is craft-automation's `ActionList`
@@ -113,7 +114,7 @@ fn perf_output_includes_slow_frames() {
     }
     // A nested run (`actions.play` → its view steps through `App::run`) is inside the outer
     // call's time: the frame counts the outer command once, not the steps again.
-    app.session.actions.list.push(action("Zoom", vec![("view.zoomIn", json!({})), ("view.zoomOut", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Zoom", vec![("view.zoomIn", json!({})), ("view.zoomOut", json!({}))])).unwrap();
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
@@ -551,7 +552,13 @@ fn agent_can_inspect_and_choose_pen_make_selection_from_full_context_menu() {
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     assert_eq!(app.ui.canvas_tool_menu.as_ref().unwrap().pos, screen_point(&app, 8.0, 8.0));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
-    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 9);
+    // #12915: (8,8) lies on the closed work path's diagonal, so the menu now leads with the
+    // segment's Add Anchor Point entry above one more separator.
+    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 10);
+    assert!(
+        entries.iter().any(|row| row.get("id") == Some(&json!("path.addAnchor")) && row.get("enabled") == Some(&json!(true))),
+        "the segment entry heads the menu"
+    );
     assert!(entries.iter().any(|row| row.get("id") == Some(&json!("path.toSelection")) && row.get("enabled") == Some(&json!(true))));
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"file.new"}))["ok"], false);
     let chosen = call(&mut app, &ctx, "ui.context.choose", json!({"id":"path.toSelection"}));
@@ -950,6 +957,21 @@ fn ui_set_theme_picks_a_library_theme_the_suite_has_not_loaded() {
     }
     assert_eq!(app.ui.theme.id().as_str(), SAMPLE_THEME_ID);
     assert!(app.ui.theme.is_dark());
+}
+
+/// #17096: a size another Craft app writes to the suite becomes PhotoCraft's density preference, which the root reads.
+#[test]
+fn a_size_another_app_picks_becomes_the_density_preference() {
+    use craft::theme_store::{Op, SelectionChange};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.framework.sync_theme(&mut app.session);
+    assert_eq!(app.session.prefs().interface.density, photocraft_engine::prefs::UiDensity::Compact);
+    let base = app.framework.suite().accepted().clone();
+    app.framework.suite().watch().request(Op::Update { base, change: SelectionChange::size(craft::theme::Size::Comfortable) });
+    for _ in 0..4 {
+        app.framework.sync_theme(&mut app.session);
+    }
+    assert_eq!(app.session.prefs().interface.density, photocraft_engine::prefs::UiDensity::Comfortable);
 }
 
 /// A slot naming a theme the suite doesn't know (a deleted library theme) shows the mode's
@@ -1747,8 +1769,8 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": command, "params": {"layer": smart.0}}));
         assert_eq!(r["ok"], false, "{r}");
         assert!(r["error"].as_str().unwrap().contains("ambient smart-object path denied"), "{r}");
-        app.session.actions.list = ActionList::new();
-        app.session.actions.list.push(action("Linked contents", vec![(command, json!({"layer": smart.0}))])).unwrap();
+        app.session.actions_mut().list = ActionList::new();
+        app.session.actions_mut().list.push(action("Linked contents", vec![(command, json!({"layer": smart.0}))])).unwrap();
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Linked contents"}}));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(r["result"]["ran"], 0, "{r}");
@@ -1774,7 +1796,7 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
 fn actions_play_checks_each_step_over_control() {
     let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.actions.list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
     let ctx = app.ctx().clone();
     let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Open"}}));
     assert_eq!(r["ok"], true, "{r}");
@@ -1789,7 +1811,7 @@ fn actions_play_checks_each_step_over_control() {
 fn actions_play_checks_each_step_for_synthetic_input() {
     let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.actions.list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
     app.automation_input = true;
     let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
     assert_eq!(r["ran"], 0, "{r}");
@@ -1798,7 +1820,7 @@ fn actions_play_checks_each_step_for_synthetic_input() {
 
     // A local play (no automation input) still runs recorded steps.
     app.automation_input = false;
-    app.session.actions.list.delete_step(0, 0).unwrap();
+    app.session.actions_mut().list.delete_step(0, 0).unwrap();
     app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
     let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
     assert_eq!(r["ran"], 1, "{r}");
@@ -2255,6 +2277,17 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     // Magic Eraser has no menu.
     shift_right(&mut app, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
+}
+
+#[test]
+fn ui_set_align_edges_uses_scripted_tool_option_name() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": true}))["ok"], true);
+    assert!(app.ui.tool_options.align_edges);
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["useAlignedRendering"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": "true"}))["ok"], false);
+    assert!(app.ui.tool_options.align_edges);
 }
 
 /// A fresh app with a document, as a control client finds it, and the context the control channel runs on.

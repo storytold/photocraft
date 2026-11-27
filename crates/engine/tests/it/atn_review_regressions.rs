@@ -2,6 +2,7 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use photocraft_doc::LayerContent;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -150,7 +151,7 @@ fn custom_supported_representations_map_and_save_losslessly() {
         let mut native = session("rgb");
         native.execute("filter.other.custom", action.steps[0].params.clone()).unwrap();
         let mut played = session("rgb");
-        played.actions.list.push(action.clone()).unwrap();
+        played.actions_mut().list.push(action.clone()).unwrap();
         played.execute("actions.play", json!({"action":action.name})).unwrap();
         let commands: Vec<_> = played.journal.iter().filter(|(id, _)| id == "filter.other.custom").collect();
         assert!(!commands.is_empty());
@@ -158,8 +159,8 @@ fn custom_supported_representations_map_and_save_losslessly() {
         let (id, last) = photocraft_engine::filters::last_filter(&played).unwrap();
         assert_eq!(id, "filter.other.custom");
         assert!(last.get("__atnCustom").is_none());
-        assert!(played.actions.list.actions()[0].steps[0].params.get("__atnCustom").is_some());
-        assert_eq!(exported(&played.actions.list.actions()[0]), d, "Save Actions still owns the original descriptor");
+        assert!(played.actions().list.actions()[0].steps[0].params.get("__atnCustom").is_some());
+        assert_eq!(exported(&played.actions().list.actions()[0]), d, "Save Actions still owns the original descriptor");
         assert_eq!(photocraft_compose::flatten(&played.active().unwrap().doc).px, photocraft_compose::flatten(&native.active().unwrap().doc).px);
         action.steps[0].params["scale"] = json!(4);
         assert_eq!(exported(&action).get("Scl "), Some(&D::Integer(4)), "editing must not reuse stale original metadata");
@@ -237,7 +238,7 @@ fn named_batch_resolves_recorded_layer_targets() {
     source.execute("layer.new.layer", json!({"name":"Active"})).unwrap();
     std::fs::write(&input, photocraft_format::save_to_bytes(&source.active().unwrap().doc, &Default::default()).unwrap()).unwrap();
     let mut s = Session::new();
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("Hide", vec![ActionStep::new("layer.setProps", json!({"visible":false,"_actionLayer":{"name":"Target","ordinal":0}}))]))
         .unwrap();
@@ -647,10 +648,10 @@ fn imported_batch_references_follow_collision_renames_once_and_keep_other_sets()
     let mut s = Session::new();
     let mut old = Action::new("Child", vec![ActionStep::new("select.deselect", json!({}))]);
     old.set = Some("Other".into());
-    s.actions.list.push(old).unwrap();
+    s.actions_mut().list.push(old).unwrap();
     let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&file).unwrap()),"replace":false})).unwrap();
     let own_name = loaded["actions"][1].as_str().unwrap();
-    let imported = &s.actions.list.actions()[1];
+    let imported = &s.actions().list.actions()[1];
     assert_eq!(imported.steps[0].params["action"], own_name);
     assert_eq!(imported.steps[1].params["action"], "Child");
     assert_eq!(imported.steps[1].params["set"], "Other");
@@ -701,7 +702,7 @@ fn batch_unqualified_export_keeps_cross_set_resolution() {
         let mut child = Action::new("Child", vec![ActionStep::new("image.imageSize", json!({"width":3,"height":1,"resample":"nearest"}))]);
         child.set = Some("Other set".into());
         let mut s = Session::new();
-        s.actions.list.push(child).unwrap();
+        s.actions_mut().list.push(child).unwrap();
         let result = s.execute("file.automate.batch", batch).unwrap();
         assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
         let doc = photocraft_io::import("out.png", &std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap().document;
@@ -723,10 +724,10 @@ fn batch_load_override_preserves_original_set_identity_and_foreign_references() 
         if collision {
             let mut old = Action::new("Child", vec![ActionStep::new("image.imageSize", json!({"width":5,"height":1,"resample":"nearest"}))]);
             old.set = Some("Destination".into());
-            s.actions.list.push(old).unwrap();
+            s.actions_mut().list.push(old).unwrap();
         }
         let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"set":"Destination","replace":false})).unwrap();
-        let parent = s.actions.list.actions().iter().find(|a| a.name == loaded["actions"][0].as_str().unwrap()).unwrap();
+        let parent = s.actions().list.actions().iter().find(|a| a.name == loaded["actions"][0].as_str().unwrap()).unwrap();
         let batch = parent.steps[0].params.clone();
         assert_eq!(batch["set"], "Destination");
         assert_eq!(batch["action"], if foreign { json!("Child") } else { loaded["actions"][1].clone() });
@@ -976,7 +977,7 @@ fn called_actions_packages_explicit_batch_children_and_replays_them() {
                 assert_eq!(rewritten["kept"], 17);
             }
             let mut s = Session::new();
-            s.actions.list = ActionList::from_file(ActionsFile::new(captured, Vec::new()));
+            s.actions_mut().list = ActionList::from_file(ActionsFile::new(captured, Vec::new()));
             let result = s.execute(&steps[0].0, steps[0].1.clone()).unwrap();
             assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
             let doc = photocraft_io::import("saved.png", &std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap().document;
@@ -1008,7 +1009,7 @@ fn called_actions_packages_shared_descendants_at_the_shallowest_depth() {
         assert_eq!(captured.iter().map(|a| &a.name).collect::<Vec<_>>(), list.iter().map(|a| &a.name).collect::<Vec<_>>());
         assert_eq!(captured[0].steps[0].params["action"], "Child");
         let mut s = Session::new();
-        s.actions.list = ActionList::from_file(ActionsFile::new(captured, Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(captured, Vec::new()));
         let result = s.execute(&steps[0].0, steps[0].1.clone()).unwrap();
         assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
         assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
@@ -1059,15 +1060,15 @@ fn batch_carries_script_limits_and_restores_balanced_depth() {
     let step = json!({"command":"file.scripts.browse","params":{"steps":[{"command":"select.all"}]}});
     for (depth, spending, allowed) in [(16, 0, false), (1, photocraft_engine::actions_cmds::MAX_PLAYBACK_STEPS - 1, false), (1, 2, true)] {
         let mut s = Session::new();
-        s.actions.script_depth = depth;
-        s.actions.script_steps = spending;
+        s.recording.script_depth = depth;
+        s.recording.script_steps = spending;
         let result = s.execute("file.automate.batch",json!({"input":[input,input],"output":dir.path().join("out"),"steps":[step],"namingComponents":[{"component":"serial2"},{"component":"extension"}]})).unwrap();
         assert_eq!(result["errors"].as_array().unwrap().is_empty(), allowed, "{result}");
-        assert_eq!(s.actions.script_depth, depth);
+        assert_eq!(s.recording.script_depth, depth);
         if depth == 1 {
             // Per input: the Batch's direct step (the nested script), then that script's one step
             // unless the playback limit refuses it.
-            assert_eq!(s.actions.script_steps, spending + if allowed { 4 } else { 2 });
+            assert_eq!(s.recording.script_steps, spending + if allowed { 4 } else { 2 });
         }
     }
 }
