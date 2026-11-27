@@ -842,6 +842,9 @@ mod navigator_gpu_tests;
 mod overlay_gpu_tests;
 
 #[cfg(test)]
+mod gpu_commit_tests;
+
+#[cfg(test)]
 mod color_swatch_tests;
 #[cfg(test)]
 mod dialog_title_ellipsis_tests;
