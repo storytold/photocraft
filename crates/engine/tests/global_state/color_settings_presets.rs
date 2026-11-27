@@ -21,6 +21,8 @@ fn every_setup_runs_and_sets_the_compositor() {
         let r = s.execute("edit.colorSettings", json!({"preset": name})).unwrap();
         assert_eq!(r["preset"], name);
         assert_eq!(r["settings"]["blendTextGamma"], json!(TEXT_GAMMA), "{name}");
+        assert_eq!(r["settings"]["blendTextGammaOn"], json!(true), "{name}");
+        assert_eq!(photocraft_compose::psblend::text_gamma(), TEXT_GAMMA, "{name}");
         // The compositor follows the setup's Spot dot gain.
         let spot = r["settings"]["spotDotGain"].as_f64().unwrap() as f32;
         assert_eq!(spot_dot_gain(), spot, "{name}");

@@ -1,5 +1,6 @@
 use craft::theme::variant::Tone;
 use craft::ui::contract::Show as _;
+use craft::ui::menu::MenuRow;
 use craft::ui::notices::{Notice, NoticeLayout};
 
 use super::{BlendMode, LayerId, PhotocraftApp};
@@ -46,7 +47,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .settings(settings)
         .thumbnails(&thumbs, &source)
         .filter(Bind::bound(&mut filter))
-        .row_menu(|target| layers_tree::row_menu(app, tree, target))
+        .row_menu(|target| layers_tree::row_menu(app, tree, target).into_iter().map(MenuRow::from).collect())
         .document(st.doc.id);
     if let Some((id, groups)) = reveal {
         panel = panel.reveal(id, groups);

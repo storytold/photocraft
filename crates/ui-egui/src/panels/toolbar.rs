@@ -1,7 +1,7 @@
 use super::{PhotocraftApp, Tool, json};
 use craft::behavior::overlay::Side;
 use craft::color_ui::ui::{PairWell, SwatchPair, Well};
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
+use craft::ui::contract::{Bind, Gap, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::rails::{
@@ -17,6 +17,9 @@ use super::tool_commands;
 #[cfg(test)]
 #[path = "toolbar_docking_tests.rs"]
 mod toolbar_docking_tests;
+#[cfg(test)]
+#[path = "toolbar_flyout_mark_tests.rs"]
+mod toolbar_flyout_mark_tests;
 #[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
@@ -181,8 +184,29 @@ fn rail<'a>(
     if editing { rail.editing() } else { rail }
 }
 
-/// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons.
+/// The footer's view: the app it reads, which its version stands for, and the rail's columns, which lay its buttons
+/// out side by side or stacked.
+#[derive(MemoProps)]
+struct FooterProps<'a> {
+    version: u64,
+    columns: usize,
+    #[memo_props(covered_by = "version", reason = "the footer's version holds everything the footer shows of the app")]
+    app: &'a mut PhotocraftApp,
+}
+
+/// The rail's footer, a memoized view: it replays while [`region_versions::toolbar_footer`](super::region_versions::toolbar_footer)
+/// holds and no input reaches it. The rail replays its tool buttons but calls its footer every pass, and running the
+/// chips and the two buttons was more than half of the toolbar's time in a frame whose pointer only moved over the
+/// canvas (#15493).
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
+    let version = super::region_versions::toolbar_footer(app);
+    let props = FooterProps { version, columns: rail.columns, app };
+    let _ =
+        MemoView::new("photocraft.toolbar_footer", props, |props: &mut FooterProps<'_>, ui: &mut egui::Ui| footer_now(props.app, ui, props.columns)).show(ui);
+}
+
+/// The footer's content: the colour chips, then the Quick Mask and Screen Mode buttons.
+fn footer_now(app: &mut PhotocraftApp, ui: &mut egui::Ui, columns: usize) {
     color_chips(app, ui);
     let modes = |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
         quick_mask_button(app, ui);
@@ -190,7 +214,7 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
     };
     // The two buttons sit centred in the rail's columns, side by side in two columns.
     Row::new().fill_width().align(RowAlign::Center).gap(Gap::Tight).show(ui, |ui, _| {
-        if rail.columns > 1 {
+        if columns > 1 {
             modes(ui, app);
         } else {
             Stack::new().gap(Gap::Tight).show(ui, |ui, _| modes(ui, app));

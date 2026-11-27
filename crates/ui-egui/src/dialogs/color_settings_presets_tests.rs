@@ -59,8 +59,8 @@ fn opening_shows_the_stored_setup_and_keeps_its_values() {
 
 #[test]
 fn picking_a_setup_loads_it_but_keeps_the_text_gamma() {
-    // Blend Text Colors Using Gamma off (1.0) before the pick.
-    let mut app = app_with(ColorSettings { blend_text_gamma: 1.0, ..ColorSettings::default() });
+    // Blend Text Colors Using Gamma off, at 1.8, before the pick.
+    let mut app = app_with(ColorSettings { blend_text_gamma: 1.8, blend_text_gamma_on: false, ..ColorSettings::default() });
     let id = open_dialog(&mut app, 1);
     assert_eq!(fields(&app, id)["preset"], CUSTOM_SETTINGS, "PhotoCraft's defaults match no setup");
     dialog_set(&mut app, id, "preset", json!("Europe Prepress 3"));
@@ -70,7 +70,8 @@ fn picking_a_setup_loads_it_but_keeps_the_text_gamma() {
     assert_eq!((&f["workingRgb"], &f["workingCmyk"], &f["workingGray"]), (&json!("adobe-rgb-compat"), &json!("coated-fogra39"), &json!("dot-gain-20-compat")));
     assert_eq!((&f["askOnMismatch"], &f["askOnPaste"], &f["askOnMissing"]), (&json!(true), &json!(true), &json!(true)));
     assert!(same(&f["spotDotGain"], &json!(15.0)), "{}", f["spotDotGain"]);
-    assert!(same(&f["blendTextGamma"], &json!(1.0)), "kept: {}", f["blendTextGamma"]);
+    assert!(same(&f["blendTextGamma"], &json!(1.8)), "kept: {}", f["blendTextGamma"]);
+    assert_eq!(f["blendTextGammaOn"], json!(false), "the box is kept too");
 }
 
 #[test]

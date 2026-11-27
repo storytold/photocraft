@@ -1,5 +1,5 @@
 //! The Mixer Brush's Load Solid Colors Only (#11952). On, ⌥-click loads the one colour under the
-//! hotspot (red/green edge at 200,300 → 30,180,60), the swatch shows it and the next stroke paints
+//! hotspot (the first green pixel, 200,300 → 30,180,60), the swatch shows it and the next stroke paints
 //! it; off, ⌥-click loads the tip image as before.
 
 use egui::Modifiers;
@@ -42,7 +42,8 @@ fn level(c: [f32; 4]) -> [i32; 4] {
 fn with_it_on_alt_click_loads_the_colour_under_the_hotspot_and_the_next_stroke_paints_it() {
     let mut app = app();
     app.run("tools.setBrush", json!({"brush": {"mixer": {"solidColorsOnly": true, "wet": 0.0}, "size": 20, "hardness": 1.0}})).unwrap();
-    alt_click(&mut app, 200.0, 300.0);
+    // The middle of the first green pixel: a click right on the edge can map back a hair short of it.
+    alt_click(&mut app, 200.5, 300.0);
     let mixer = &app.session.tools.mixer;
     assert_eq!(mixer.reservoir.map(level), Some(level(GREEN)), "{mixer:?}");
     assert!(mixer.spatial.is_none(), "a plain colour, not the tip image");

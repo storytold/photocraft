@@ -14,9 +14,10 @@ use photocraft_geom::TILE_SIZE;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{color_param, layer_param, parse_blend};
+use crate::commands::{cmyk_param, color_param, layer_param, parse_blend};
 use crate::content_sampling::{content_aware, content_aware_options};
-use crate::pixel_fill::{Blend, Source, blend_into, read_rgba};
+pub use crate::pixel_fill::greyed_modes;
+use crate::pixel_fill::{Blend, Source, blend_into, check_mode_available, read_rgba};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -75,23 +76,39 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let channel = crate::channel_cmds::is_channel_target(p);
     let id = if channel { None } else { Some(layer_param(s, p)?) };
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    check_mode_available(CMD, &st.doc, mode)?;
     let doc_bounds = st.doc.bounds();
     let sel = st.doc.selection.clone();
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
     let mut out = json!({ "contents": contents });
     let restore = contents == "history";
     let source = match contents {
-        "foreground" => color_source(s, s.tools.foreground),
+        "foreground" => color_source(s, s.tools.foreground, 0),
         // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
-        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background)),
-        "color" => color_source(s, color_param(CMD, p, "color", s.tools.foreground)?),
+        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background), 1),
+        "color" => {
+            let rgba = color_param(CMD, p, "color", s.tools.foreground)?;
+            match cmyk_param(CMD, p, "colorCmyk")? {
+                Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
+                Some(_) => return Err(bad("`colorCmyk` requires an opaque color")),
+                None if p.get("color").is_none_or(Value::is_null) => color_source(s, rgba, 0),
+                None => match s.tools.matching_cmyk([rgba[0], rgba[1], rgba[2]]) {
+                    Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
+                    _ => Source::Color(rgba),
+                },
+            }
+        }
         "black" => Source::Color([0.0, 0.0, 0.0, 1.0]),
         "gray" => Source::Color([128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]),
         "white" => Source::Color([1.0; 4]),
         "pattern" => {
             let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
             let (scale, angle, _, phase) = crate::pattern_cmds::placement(CMD, p)?;
-            let tile = photocraft_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
+            // Where a pattern fill layer and a Pattern Overlay paint the pattern through the grey
+            // profile (an 8- or 16-bit Grayscale document in the default grey space), so does
+            // Edit › Fill (#14975).
+            let space = photocraft_compose::pattern::PatternSpace::of_pixels(&st.doc);
+            let tile = photocraft_compose::pattern::Tile::new_in(&pat, space).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
             // Photoshop's Fill uses the canvas origin.
             let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
             out["pattern"] = json!(pat.id);
@@ -140,8 +157,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A fill colour: the inks it was picked as when it was picked as CMYK (#4196), else plain sRGB.
-fn color_source(s: &Session, c: [f32; 4]) -> Source {
-    match s.tools.picked_cmyk([c[0], c[1], c[2]]) {
+fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source {
+    match s.tools.picked_role_cmyk(role) {
         Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
         _ => Source::Color(c),
     }
@@ -149,3 +166,6 @@ fn color_source(s: &Session, c: [f32; 4]) -> Source {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mode_by_document_tests;

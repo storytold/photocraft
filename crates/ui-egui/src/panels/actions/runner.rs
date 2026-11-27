@@ -35,7 +35,7 @@ pub(crate) fn play_targets(app: &mut PhotocraftApp, targets: &[usize], from: usi
             o.insert("ran".into(), json!(ran));
         }
         last = Some(v);
-        if let Some(dialog) = paused.filter(|_| !failed) {
+        if let Some(dialog) = paused {
             // As they are now, not by index: the list can be reordered while the dialog is open
             // (`actions.move`), and one deleted and made again under its name isn't the same action.
             let list = &app.session.actions().list;
@@ -287,10 +287,9 @@ enum Called {
 /// paused playback's [`PausedPlayback::callers`], so it continues after the called action) or a
 /// silent stop end the caller there.
 fn called(app: &mut PhotocraftApp, caller: &str, i: usize, id: &str, value: &Value, target: Option<photocraft_doc::DocId>) -> Called {
-    if let Some(error) = actions_cmds::nested_failure(id, value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
-        // Keep the same child-result detail as headless Actions and Scripts.
-        return Called::Failed(error, Some(value.clone()));
-    }
+    // A child that waits at a dialog carries its caller, even when its result also reports the
+    // failure that opened the Continue / Stop message (#10769): the pause is checked first so the
+    // caller goes on after the answer instead of failing here.
     if let Some(inner) = value.get("paused").filter(|p| p.is_object()) {
         if let Some(token) = waiting_dialog(inner).and_then(|dialog| paused_token(app, dialog))
             && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
@@ -301,6 +300,10 @@ fn called(app: &mut PhotocraftApp, caller: &str, i: usize, id: &str, value: &Val
             entry.callers.push((caller.to_string(), i.saturating_add(1)));
         }
         return Called::Paused(inner.clone());
+    }
+    if let Some(error) = actions_cmds::nested_failure(id, value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
+        // Keep the same child-result detail as headless Actions and Scripts.
+        return Called::Failed(error, Some(value.clone()));
     }
     if matches!(id, "actions.play" | "actions.conditional")
         && let Some(stop) = value.get("stopped").filter(|s| s.is_object())
@@ -318,6 +321,92 @@ fn failure(step: usize, id: &str, error: &str, result: Option<Value>) -> Value {
         failed["result"] = result;
     }
     failed
+}
+
+/// The message and resume step for a failed step of `action` that names a layer the playing
+/// document does not have: the Continue / Stop the reference application shows when an action
+/// plays on a document without the recorded names (#10769, docs/atn.md › Playing on another
+/// document). It reports a Select of a missing layer as the command being unavailable, and steps
+/// that name a layer as the layer object being unavailable. The ask also fires when the layer was
+/// deleted from the original document: the test is against the playing document as it stands, not
+/// against names it never had. `None` keeps today's plain failure: steps naming no layer (target
+/// steps, numeric ids kept for ambiguous names, a rename's new name), names the playing document
+/// can resolve for that step's own selector kind, as the engine's lookup for that form does (the
+/// step failed for another reason), failures
+/// reported for a step other than the one named in them (a player refusal), and step indexes the
+/// action does not have.
+pub(super) fn missing_layer_prompt(app: &PhotocraftApp, action: &Action, failed: &Value) -> Option<(String, usize)> {
+    let index = failed.get("step").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok())?;
+    let step = action.steps.get(index)?;
+    // Only a failure reported for this step itself: the player's refusals come back at the step
+    // Play starts at, under the Play label (`actions.play`), and must not be read as an ask.
+    if failed.get("id").and_then(Value::as_str) != Some(step.command.as_str()) {
+        return None;
+    }
+    let selector = named_step_layer(&step.command, &step.params)?;
+    let name = selector.name();
+    let doc = &app.session.active()?.doc;
+    // The presence test follows the lookup THIS kind uses in the engine. A `layer` param goes
+    // through `explicit_layer`: the exact name, else the same name whatever its case, so a step
+    // naming "background" finds a "Background" layer and its failure is unrelated to a missing
+    // layer. A Select step's `name` (`selection_target`) and a recorded visibility step's
+    // `_actionLayer` (`playback_params`) are matched exactly, so over a document holding "b" the
+    // step naming "B" is a layer that document does not have and the ask follows the failure.
+    let exact = |want: &str| doc.walk().into_iter().any(|(_, _, layer)| layer.name == want);
+    let resolved = exact(name) || selector.folds_case() && doc.walk().into_iter().any(|(_, _, layer)| layer.name.to_lowercase() == name.to_lowercase());
+    if resolved {
+        return None;
+    }
+    let message = if step.command == "layer.select" {
+        tl!("The command 'Select' is not currently available").to_string()
+    } else {
+        crate::i18n::fmt(tl!("The object 'Layer \"{name}\"' is not currently available"), &[("name", name)])
+    };
+    Some((message, index.saturating_add(1)))
+}
+
+/// The layer a recorded step names, as the kind of selector it is: a `layer` the recorder made
+/// into a name or a source layer's `{"name": …}` object, a Select step's `name`, and a visibility
+/// step's recorded target. A numeric `layer` names no layer: the recorder kept that id for an
+/// ambiguous name.
+fn named_step_layer<'a>(id: &str, params: &'a Value) -> Option<StepLayer<'a>> {
+    if let Some(layer) = params.get("layer")
+        && let Some(name) = layer.as_str().or_else(|| layer.get("name").and_then(Value::as_str))
+    {
+        return Some(StepLayer::Param(name));
+    }
+    if id == "layer.select" {
+        return params.get("name").and_then(Value::as_str).map(StepLayer::SelectName);
+    }
+    params.get("_actionLayer").and_then(|target| target.get("name")).and_then(Value::as_str).map(StepLayer::Recorded)
+}
+
+/// The kind of layer selector a recorded step carries. Each form is resolved by its own engine
+/// lookup, and only some of those lookups fall back to a case-insensitive name match, so the
+/// missing-layer ask tests presence per kind rather than with one rule for every name.
+enum StepLayer<'a> {
+    /// A `layer` param: a name string or a source layer's `{"name": …}` object, resolved by
+    /// `explicit_layer` (the exact name, else the same name whatever its case).
+    Param(&'a str),
+    /// A Select step's `name`, resolved by `selection_target`: the exact name, at `occurrence`.
+    SelectName(&'a str),
+    /// A recorded visibility step's `_actionLayer`, resolved by `playback_params`: the exact name,
+    /// at the recorded ordinal.
+    Recorded(&'a str),
+}
+
+impl<'a> StepLayer<'a> {
+    /// The name the step gives its layer, whatever its kind.
+    fn name(&self) -> &'a str {
+        match self {
+            Self::Param(name) | Self::SelectName(name) | Self::Recorded(name) => name,
+        }
+    }
+
+    /// Whether this kind's engine lookup also accepts the name in another case.
+    fn folds_case(&self) -> bool {
+        matches!(self, Self::Param(_))
+    }
 }
 
 /// How long Step by Step or Pause For waits after step `i` of `action`, or `None` when it goes on at
@@ -564,6 +653,10 @@ fn play_steps(
         if let Some(f) = report.failed {
             failed = Some(failure(f.step, &f.command, &f.message, detail));
         } else if let Some(refusal) = &report.refused {
+            // A refusal is the whole call's, not one step's: it is reported at the step Play
+            // starts at, under the Play label. `playback_plan` pre-refuses a recursion or a 17th
+            // level at the calling step (which fails as the call's own step, with that label), so
+            // the player's refusal is what a resumed or rebased playback reports.
             failed = Some(failure(from, "actions.play", &refusal_text(refusal), None));
         } else if report.waiting {
             if let (Some(at), Some(wait)) = (report.paused_at, wait) {
@@ -576,11 +669,30 @@ fn play_steps(
             stopped = ending;
         }
     }
-    let history = if failed.is_none() && paused.is_some() { actions_cmds::suspend_history(&mut app.session) } else { None };
+    // "Playing on another document": when a step that names a layer fails because the playing
+    // document does not have it, the playback stops there and asks a person Continue (skip the
+    // step, play on from the next) or Stop (#10769). The edits so far stay applied. Agents and
+    // paced failures that name no missing layer keep today's plain failure report.
+    let mut prompted = false;
+    if let Some(f) = failed.as_ref().filter(|_| interactive && paused.is_none() && stopped.is_none())
+        && let Some((message, from)) = missing_layer_prompt(app, &action, f)
+    {
+        let token = app.paused_playbacks.pause(action.name.clone(), from, app.session.authorize);
+        let dialog = dialogs::open_stop_message(app, &message, true, token);
+        if let Some(entry) = app.paused_playbacks.paused.get_mut(&token) {
+            entry.allow_continue = true;
+            entry.dialog = Some(dialog);
+            // Continue skips the failed step: the pause's own step never ran and is not counted.
+            entry.timed = true;
+        }
+        paused = Some(json!({"step": f.get("step"), "id": f.get("id"), "dialog": dialog.value()}));
+        prompted = true;
+    }
+    let history = if (failed.is_none() || prompted) && paused.is_some() { actions_cmds::suspend_history(&mut app.session) } else { None };
     actions_cmds::finish_playback(&mut app.session, None, &action, from);
     match paused.as_ref().and_then(waiting_dialog).cloned() {
         // Paused for a dialog: the call goes on after it, so recording stays suspended.
-        Some(dialog) if failed.is_none() => {
+        Some(dialog) if failed.is_none() || prompted => {
             let token = paused_token(app, &dialog);
             let entry = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t));
             match entry {
@@ -603,6 +715,9 @@ fn play_steps(
         }
     }
     Ok(match (failed, paused, stopped) {
+        // The report of a Continue / Stop ask keeps both: the failed step and the message the
+        // playback waits at, so `play_targets` carries the rest of a set like a dialog pause does.
+        (Some(f), Some(p), _) if prompted => json!({"action": action.name, "ran": ran, "failed": f, "paused": p}),
         (Some(f), _, _) => json!({"action": action.name, "ran": ran, "failed": f}),
         (None, Some(p), _) => json!({"action": action.name, "ran": ran, "paused": p}),
         (None, None, Some(s)) => json!({"action": action.name, "ran": ran, "stopped": s}),
@@ -636,7 +751,9 @@ pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
         app.ui.status_error = false;
         return;
     }
-    if let Some(paused) = v.get("paused").filter(|p| p.is_object()) {
+    // A Continue / Stop ask carries `paused` for its message but reports the failed step below:
+    // the failure line, not "waiting for its dialog", stands behind the message.
+    if let Some(paused) = v.get("paused").filter(|p| p.is_object() && v.get("failed").is_none()) {
         if paused.get("dialog").and_then(Value::as_str) == Some(playback::PLAYBACK_TIMER) {
             // Step by Step or Pause For between two steps: the last report comes at the end.
             return;
