@@ -162,7 +162,7 @@ enum Up {
     /// The release: the work left for the UI thread, which the thread waits for.
     Final(Vec<Work>),
     /// The commit and the bounds the stroke showed without its dither.
-    Done(Result<(LiveCommit, Rect), String>),
+    Done(Box<Result<(LiveCommit, Rect), String>>),
 }
 
 /// UI thread to paint thread.
@@ -244,7 +244,7 @@ fn paint_thread(mut live: LiveStroke, read: Option<Read>, from_ui: Receiver<Down
                     }
                 }
                 let bounds = live.overlay_bounds().unwrap_or(Rect::EMPTY);
-                let _ = to_ui.send(Up::Done(live.into_commit().map(|c| (c, bounds)).map_err(|e| e.to_string())));
+                let _ = to_ui.send(Up::Done(Box::new(live.into_commit().map(|c| (c, bounds)).map_err(|e| e.to_string()))));
                 return;
             }
             Ok(Down::Served(_)) | Err(RecvTimeoutError::Timeout) => {}
@@ -416,7 +416,7 @@ fn live_run(
                 tx.send(Down::Served(true))?;
                 Ok(None)
             }
-            Up::Done(result) => Ok(Some(result?)),
+            Up::Done(result) => Ok(Some((*result)?)),
             Up::Step(_) => Ok(None),
         }
     };
