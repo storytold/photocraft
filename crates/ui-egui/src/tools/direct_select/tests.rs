@@ -245,7 +245,7 @@ fn a_curvature_pen_double_click_through_the_canvas_rounds_a_corner() {
     app.ui.extras.rulers = false;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

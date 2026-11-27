@@ -110,12 +110,12 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut PaintState, _response: 
     let ctx = app.ctx().clone();
     // The stroke is still painting what it was given: show its steps as they finish.
     if live_stroke_busy(app) {
-        ctx.request_repaint();
+        craft::ui::runtime::frame::request_repaint(&ctx);
     }
     // A held pen keeps the clock running for airbrush build-up and smoothing catch-up (asked
     // after the feed, which brings in what the stroke's thread last painted).
     if stroke_wants_time(app) {
-        ctx.request_repaint_after(Duration::from_millis(HOLD_REPEAT_MS as u64));
+        craft::ui::runtime::frame::request_repaint_after(&ctx, Duration::from_millis(HOLD_REPEAT_MS as u64).as_secs_f64());
     }
 }
 

@@ -233,7 +233,7 @@ impl TypeSnapshot {
     /// Read from the app as it stands at this moment: today's live reading, what the plain drag and
     /// the click create with.
     pub(crate) fn live(app: &PhotocraftApp) -> Self {
-        Self { tool: app.ui.tool, options: app.ui.tool_options.clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
+        Self { tool: app.ui.tool, options: (*app.ui.tool_options).clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
     }
 }
 
@@ -371,7 +371,7 @@ impl CanvasTool for TypeTool<'_> {
     /// With an edit open and the type box hidden, another type layer is the tool's over the edit's move reach and
     /// caret: a press there commits the edit (`claimed_regions`). With ⌘ held the box shows, and its own reach rules.
     fn regions(&self) -> Vec<ToolRegion> {
-        let mods = craft::ui::runtime::pointer::frame(self.scope.ctx()).mods;
+        let mods = craft::ui::runtime::pointer::mods(self.scope.ctx());
         let regions = self.scope.with_app(|app| {
             let box_shown = app.ui.tool.is_type() && crate::type_transform::whole_box(app, mods);
             if crate::type_transform::active(app) || box_shown {

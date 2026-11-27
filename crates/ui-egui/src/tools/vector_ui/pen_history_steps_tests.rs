@@ -370,10 +370,15 @@ fn the_options_bar_row_follows_each_path_ingredient_on_its_own() {
     let steps = app.session.active().unwrap().history.past_len();
     let enabled =
         |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| ["Selection…", "Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled());
-    let mut h = egui_kittest::Harness::builder()
-        .with_size(egui::vec2(1600.0, 300.0))
-        .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app| crate::panels::region_versions::show_options_bar(app, ui), app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 300.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, app| {
+            // The bar in the shell's options slot, keyed by its version as in the app's window.
+            let _ = craft::ui::shell::AppShell::embedded(craft::ui::runtime::env::WindowKey::new("options"))
+                .options_bar(true, |app| Some(crate::panels::region_versions::options_bar(app)), |ui, _, app| crate::panels::options_bar(app, ui))
+                .show(ui, app);
+        },
+        app,
+    );
     h.run();
     assert_eq!(enabled(&h), [false, false], "nothing selected, no Work Path, no draft");
 

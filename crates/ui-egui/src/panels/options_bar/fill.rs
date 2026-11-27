@@ -1,7 +1,7 @@
 //! The Paint Bucket's members of the options bar, and the Mode list of the Paint Bucket and the stamp tools.
 
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, bind_tracked};
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::pickers::Select;
 use photocraft_doc::BlendMode;
@@ -100,26 +100,41 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let entries = mode_entries(Tool::PaintBucket, true, false);
     let sources = [Entry::new(false, tl!("Foreground").to_owned()), Entry::new(true, tl!("Pattern").to_owned())];
-    let o = &mut app.ui.tool_options;
     // The Source dropdown stands alone, without a caption, as in the reference.
-    Select::new(tl!("Source").to_owned(), Bind::bound(&mut o.bucket_fill_pattern), &sources).tooltip(tl!("Set source for fill area").to_owned()).show(ui);
-    let mut mode = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
+    Select::new(tl!("Source").to_owned(), bind_tracked!(app.ui.tool_options => bucket_fill_pattern), &sources)
+        .tooltip(tl!("Set source for fill area").to_owned())
+        .show(ui);
+    let o = &app.ui.tool_options;
+    let shown = if o.bucket_clear { PaintMode::Clear } else { PaintMode::Blend(o.bucket_blend_mode) };
+    let mut mode = shown;
     labelled(ui, tl!("Mode"), |ui| mode_select(Bind::bound(&mut mode), &entries).tooltip(tl!("Fill Mode").to_owned()).show(ui));
-    match mode {
-        PaintMode::Clear => o.bucket_clear = true,
-        PaintMode::Blend(blend) => {
-            o.bucket_clear = false;
-            o.bucket_blend_mode = blend;
+    if mode != shown {
+        let o = &mut app.ui.tool_options;
+        match mode {
+            PaintMode::Clear => o.bucket_clear = true,
+            PaintMode::Blend(blend) => {
+                o.bucket_clear = false;
+                o.bucket_blend_mode = blend;
+            }
+            PaintMode::Behind => {}
+            // Replace belongs to the Healing Brush's list, never the Paint Bucket's.
+            PaintMode::HealingReplace => {}
         }
-        PaintMode::Behind => {}
-        // Replace belongs to the Healing Brush's list, never the Paint Bucket's.
-        PaintMode::HealingReplace => {}
     }
-    let opacity = number(tl!("Opacity"), &mut o.fill_opacity, 1.0..=100.0).whole().unit("%").tooltip(tl!("Set opacity for fill")).show(ui).out_of_range;
-    let tolerance = number(tl!("Tolerance"), &mut o.tolerance, 0.0..=255.0).whole_alerting_fractions().tooltip(tl!("Range of colors to fill")).show(ui);
-    Checkbox::new(Bind::bound(&mut o.anti_alias)).label(tl!("Anti-alias").to_owned()).tooltip(tl!("Smoothes edge transition").to_owned()).show(ui);
-    Checkbox::new(Bind::bound(&mut o.contiguous)).label(tl!("Contiguous").to_owned()).tooltip(tl!("Fill only contiguous pixels").to_owned()).show(ui);
-    Checkbox::new(Bind::bound(&mut o.sample_all.paint_bucket)).label(tl!("All Layers").to_owned()).tooltip(tl!("Fill composite image").to_owned()).show(ui);
+    let opacity = number(tl!("Opacity"), bind_tracked!(app.ui.tool_options => fill_opacity), 1.0..=100.0)
+        .whole()
+        .unit("%")
+        .tooltip(tl!("Set opacity for fill"))
+        .show(ui)
+        .out_of_range;
+    let tolerance = number(tl!("Tolerance"), bind_tracked!(app.ui.tool_options => tolerance), 0.0..=255.0)
+        .whole_alerting_fractions()
+        .tooltip(tl!("Range of colors to fill"))
+        .show(ui);
+    let (anti_alias, contiguous, all_layers) = bind_tracked!(app.ui.tool_options => anti_alias, contiguous, sample_all.paint_bucket);
+    Checkbox::new(anti_alias).label(tl!("Anti-alias").to_owned()).tooltip(tl!("Smoothes edge transition").to_owned()).show(ui);
+    Checkbox::new(contiguous).label(tl!("Contiguous").to_owned()).tooltip(tl!("Fill only contiguous pixels").to_owned()).show(ui);
+    Checkbox::new(all_layers).label(tl!("All Layers").to_owned()).tooltip(tl!("Fill composite image").to_owned()).show(ui);
     if opacity.is_some() {
         let _ = crate::dialogs::alerts::alert(app, tl!(PAINT_BUCKET_OPACITY_ALERT));
     } else if let Some(alert) = tolerance.out_of_range {
