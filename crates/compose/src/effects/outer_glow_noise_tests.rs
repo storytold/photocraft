@@ -124,8 +124,9 @@ fn bit_hash(m: &Map) -> u64 {
 }
 
 /// Noise 0 stays bit-identical: this is the whole-map FNV hash `glow_map` gives for the
-/// issue's document with Noise 0 on upstream/main, so the new law must not touch it.
+/// issue's document with Noise 0 on upstream/main, so the new law must not touch it. Re-pinned
+/// for #15871, whose Range rule moves this Range 50 % map towards the measured #14958 profile.
 #[test]
 fn noise_zero_maps_stay_bit_identical() {
-    assert_eq!(bit_hash(&map(0.0)), 0x340b_6ce5_05c9_a71d, "the Noise 0 outer glow map moved");
+    assert_eq!(bit_hash(&map(0.0)), 0x49c1_01e2_0b3d_c395, "the Noise 0 outer glow map moved");
 }

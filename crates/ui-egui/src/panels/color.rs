@@ -2,7 +2,7 @@
 //! `tools.setColors` (one history step per gesture) and recolour what is selected (`apply_color`).
 
 use craft::behavior::EditEvent;
-use craft::color_ui::ui::{ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelState, PanelTarget, PickedColor};
+use craft::color_ui::ui::{ColorPanel, ColorPanelAction, ColorPanelCommand, ColorPanelMenu, ColorPanelState, PanelTarget, PickedColor};
 use craft::theme::Srgba;
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox};
 use serde_json::json;
@@ -119,5 +119,10 @@ pub(crate) fn srgba(c: [f32; 4]) -> Srgba {
 pub(crate) fn run_menu_command(app: &mut PhotocraftApp, command: ColorPanelCommand) -> Option<String> {
     let tools = &app.session.tools;
     let edited = srgba(if app.ui.color_panel.panel.background { tools.background } else { tools.foreground });
-    ColorPanelMenu::run_command(&mut app.ui.color_panel.panel, command, edited)
+    // Photoshop's layout has no Invert, Complement or Create New Swatch rows, and a mode is set on the state itself:
+    // only the copy commands leave the host something to do.
+    match ColorPanelMenu::run_command(&mut app.ui.color_panel.panel, command, edited)? {
+        ColorPanelAction::Copy(text) => Some(text),
+        _ => None,
+    }
 }

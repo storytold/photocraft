@@ -1,6 +1,7 @@
 //! Live retouch latency on a materialized 24 MP layer. Run the same example at base and head
 //! in release mode on one machine. Setup, Undo and the full output fingerprint are not timed.
 //! This measures engine stroke work; canvas compositing/upload and presentation are excluded.
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use std::time::Instant;
 
 use photocraft_engine::{EngineError, Session, paint::StrokePoint, retouch_cmds::LiveDab};
