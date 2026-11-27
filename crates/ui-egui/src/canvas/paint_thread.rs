@@ -410,6 +410,7 @@ impl<R> Finishing<R> {
     }
 
     /// The result if it is there, without waiting.
+    #[cfg(test)]
     pub(super) fn poll(&mut self) -> Wait<R> {
         self.wait(Duration::ZERO)
     }
@@ -438,6 +439,7 @@ impl<R> Finishing<R> {
     }
 
     /// Wait for the result; `None` if the thread stopped without one.
+    #[cfg(test)]
     pub(super) fn wait_forever(&mut self) -> Option<R> {
         match self.wait(Duration::MAX) {
             Wait::Ready(r) => Some(r),
