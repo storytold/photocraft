@@ -236,11 +236,19 @@ impl GenerativeAi for CraftAi {
 
     /// Check the request against the chosen model and say what it would send, and where.
     fn plan(&self, request: FillRequest) -> Result<Arc<dyn FillPlan>, AiFailure> {
-        let req = Request::new(self.role.capability.clone())
+        let images = Request::new(self.role.capability.clone())
             .with_input(InputRole::Source, Payload::inline("image/png", request.source_png).map_err(failure)?)
-            .with_input(InputRole::Mask, Payload::inline("image/png", request.mask_png).map_err(failure)?)
-            .with_input(InputRole::Prompt, Payload::text(request.prompt));
+            .with_input(InputRole::Mask, Payload::inline("image/png", request.mask_png).map_err(failure)?);
+        let mut req = images.clone().with_input(InputRole::Prompt, Payload::text(request.prompt));
         let mut plan = self.client.plan(&self.role, req.clone()).map_err(failure)?;
+        // A blank fill removes what is there. The engine says so as an instruction, which FLUX
+        // Fill doesn't follow: it paints what the prompt describes, so it is given a description.
+        if request.blank
+            && let Some(described) = photocraft_engine::genai::blank_description(plan.model().as_str())
+        {
+            req = images.with_input(InputRole::Prompt, Payload::text(described));
+            plan = self.client.plan(&self.role, req.clone()).map_err(failure)?;
+        }
         // OpenAI picks its own quality unless told, and fills came back soft; other adapters
         // refuse params they don't know, so this is asked only of OpenAI.
         if plan.provider() == "openai" {

@@ -128,7 +128,7 @@ impl Scene {
 }
 
 fn request() -> FillRequest {
-    FillRequest { source_png: png(8, 8, [10, 20, 30]), mask_png: png(8, 8, [255, 255, 255]), prompt: "a red balloon".into() }
+    FillRequest { source_png: png(8, 8, [10, 20, 30]), mask_png: png(8, 8, [255, 255, 255]), prompt: "a red balloon".into(), blank: false }
 }
 
 fn wait(job: &mut Box<dyn photocraft_engine::genai::FillJob>) -> JobPoll {

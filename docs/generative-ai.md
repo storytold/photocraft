@@ -113,8 +113,10 @@ variation (three requests by default; a metered service bills each one):
   fill goes, opaque black where the picture is kept, partly transparent along a feathered edge.
   Transparent-means-edit is the convention mask-based image models read (OpenAI's image edits,
   ComfyUI's image loader).
-- **The prompt**, or for an empty prompt a fixed instruction to continue the surrounding picture
-  through the masked area.
+- **The prompt**. An empty prompt removes what the selection holds, as in the reference
+  application: most models get a fixed instruction to fill the area with the background behind it
+  (`CONTINUE_PROMPT`). FLUX Fill doesn't follow instructions but paints what its prompt describes,
+  so it is sent a short description of empty background instead (`genai::blank_description`).
 
 Where it goes is the connection's address (`https://api.openai.com`, say), or nowhere off the
 computer for a model that runs on it. The shared layer reads the key only when a job starts, from
@@ -170,7 +172,7 @@ and writes a new folder there with
 - `crop.png`: the area as rendered from the visible layers in sRGB at the request size, before
   the selection was cleared (this is not sent);
 - `source.png`, `mask.png`, `prompt.txt`: exactly what was sent (for an empty prompt, the fixed
-  instruction to continue the picture);
+  instruction; a FLUX model was sent `genai::blank_description`'s words instead);
 - `returned-N.png` (or `.jpg`, `.webp`): each picture exactly as the service returned it;
 - `composite-N.png`: each placed variation shown alone, over the area, from the document as it is
   now;

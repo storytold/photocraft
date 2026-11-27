@@ -79,7 +79,10 @@ const MAX_VARIATIONS: u64 = 4;
 /// Longest prompt, in bytes.
 pub const MAX_PROMPT: usize = 8_000;
 /// What is asked for when the prompt is empty.
-pub const CONTINUE_PROMPT: &str = "Fill the masked area so the surrounding picture continues through it seamlessly, matching its content, lighting, texture and perspective. Add no new objects.";
+///
+/// A blank fill removes what is there, as the reference application's does. The wording names no
+/// kind of thing: models given "objects" or "content", even to leave out, tend to paint some in.
+pub const CONTINUE_PROMPT: &str = "Remove whatever is inside the masked area and fill it with the background behind it, continuing the surrounding surfaces, texture, lighting and perspective, so the area looks as if nothing had ever been there.";
 /// What a fill waiting for the person's agreement reports as its error.
 const NEEDS_CONSENT: &str = "waiting for your agreement to send this";
 
@@ -280,7 +283,8 @@ impl FillInput {
         // Image models need words: an empty prompt asks for the picture to carry on through the
         // selection, which removes what was there.
         let prompt = if self.prompt.is_empty() { CONTINUE_PROMPT.to_owned() } else { self.prompt.clone() };
-        let p = Arc::new(Prepared { request: FillRequest { source_png, mask_png, prompt }, reference });
+        let blank = self.prompt.is_empty();
+        let p = Arc::new(Prepared { request: FillRequest { source_png, mask_png, prompt, blank }, reference });
         *self.prepared.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&p));
         Ok(p)
     }

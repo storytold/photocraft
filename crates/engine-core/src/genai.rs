@@ -117,8 +117,19 @@ pub struct FillRequest {
     /// fill goes, opaque black where the picture is kept, partly transparent along a feathered
     /// edge. Transparent-means-edit is the convention mask-based image models read.
     pub mask_png: Vec<u8>,
-    /// What to put there; may be empty (continue the picture through the selection).
+    /// What to put there. When the person left it empty this is the engine's own instruction to
+    /// remove what is there ([`crate::cmd::genai_cmds::CONTINUE_PROMPT`]) and `blank` is set.
     pub prompt: String,
+    /// The person left the prompt empty: a fill then removes what the selection holds. An adapter
+    /// whose model reads the prompt as a description, not an instruction, words that its own way.
+    pub blank: bool,
+}
+
+/// What a blank fill asks of `model` when it reads its prompt as a picture's description rather
+/// than an instruction (FLUX Fill, through Black Forest Labs or a ComfyUI workflow): the background
+/// alone, naming nothing that could be painted in. `None`: the engine's instruction is sent.
+pub fn blank_description(model: &str) -> Option<&'static str> {
+    model.to_ascii_lowercase().contains("flux").then_some("empty background, the same surface, texture and light as around it")
 }
 
 /// Which input of the request a [`SentItem`] is.

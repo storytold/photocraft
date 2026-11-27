@@ -416,6 +416,7 @@ fn an_empty_prompt_is_allowed_and_names_the_layer_generative_fill() {
     let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
     assert_eq!(doc(&s).layer(id).unwrap().name, "Generative Fill");
     assert_eq!(f.sent.lock().unwrap()[0].prompt, CONTINUE_PROMPT, "models need words: continue the picture");
+    assert!(f.sent.lock().unwrap()[0].blank, "the adapter is told the prompt was left empty");
     assert_eq!(s.generative_prompt(id), Some(""));
     let long = "word ".repeat(30);
     s.execute(FILL, json!({"prompt": long})).unwrap();
@@ -1105,4 +1106,17 @@ fn a_native_save_and_reopen_keeps_the_generative_layer() {
     let more = s.execute(MORE, json!({"count": 1})).unwrap();
     assert_eq!(more["variations"], json!([3]));
     assert_eq!(shown(&s, id), [false, false, false, true]);
+}
+
+/// A blank fill on FLUX Fill sends a description of empty background, since FLUX paints what its
+/// prompt describes; instruction-following models keep the engine's instruction to remove.
+#[test]
+fn a_blank_fill_describes_empty_background_to_flux_only() {
+    for flux in ["flux-pro-1.0-fill", "black-forest-labs/FLUX.1-Fill-dev"] {
+        let d = crate::genai::blank_description(flux).expect("FLUX gets a description");
+        assert!(d.contains("empty background") && !d.contains("object"), "{d}");
+    }
+    for other in ["gpt-image-1", "gemini-2.5-flash-image", "nano-banana-2"] {
+        assert_eq!(crate::genai::blank_description(other), None, "{other}");
+    }
 }
