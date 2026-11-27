@@ -159,6 +159,17 @@ fn a_visible_layer_named_by_layer_works_while_a_hidden_one_is_active() {
 }
 
 #[test]
+fn an_empty_layer_in_duotone_keeps_todays_behaviour() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 16, "height": 16, "mode": "gray", "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Empty"})).unwrap();
+    s.execute("image.mode.duotone", json!({"type": "monotone"})).unwrap();
+    let before = steps(&s);
+    s.execute(BW, json!({})).expect("Duotone was not measured, so the empty layer is not refused");
+    assert_eq!(steps(&s), before + 1, "a history state, as before");
+}
+
+#[test]
 fn rgb_at_8_16_and_32_bit_works() {
     for depth in [8, 16, 32] {
         assert_works(&mut session_at(depth), &format!("RGB {depth} bit"));

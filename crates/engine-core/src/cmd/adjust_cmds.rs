@@ -450,9 +450,10 @@ pub(crate) fn black_white_enabled_with(s: &Session, p: &Value) -> Option<std::re
 }
 
 /// Black & White with `p` (its target filled in) stops on an empty pixel layer before it edits
-/// anything (#14401); its other refusals are the precondition's, checked before `run`.
+/// anything (#14401); its other refusals are the precondition's, checked before `run`. Only RGB
+/// was measured: the other modes are greyed or keep today's behaviour.
 pub(crate) fn black_white_empty_refusal(s: &Session, p: &Value) -> Result<()> {
-    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels || s.active().is_some_and(|d| d.doc.mode != photocraft_color::ColorMode::Rgb) {
         return Ok(());
     }
     let id = crate::commands::layer_param(s, p)?;
