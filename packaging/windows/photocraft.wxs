@@ -79,7 +79,10 @@
           </Extension>
         </ProgId>
         <!-- PSD/PSB and images: offered under "Open with", never forced as the default. -->
-        <ProgId Id="Photocraft.PhotoshopDocument" Description="PSD Document" Icon="PhotocraftExe" IconIndex="0" />
+        <!-- The document icon is resource 2 of photocraft.exe (apps/photocraft/build.rs);
+             ProgId@Icon only points at a File, so the shell icon is set here instead. -->
+        <ProgId Id="Photocraft.PhotoshopDocument" Description="PSD Document" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Photocraft.PhotoshopDocument\DefaultIcon" Value="&quot;[#PhotocraftExe]&quot;,-2" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Photocraft.PhotoshopDocument\shell\open\command" Value="&quot;[#PhotocraftExe]&quot; &quot;%1&quot;" Type="string" />
         <ProgId Id="Photocraft.Image" Description="Image" Icon="PhotocraftExe" IconIndex="0" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Photocraft.Image\shell\open\command" Value="&quot;[#PhotocraftExe]&quot; &quot;%1&quot;" Type="string" />

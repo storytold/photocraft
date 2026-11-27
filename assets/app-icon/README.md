@@ -32,6 +32,10 @@ vectorised. License: see `LICENSE.txt`.
 - `photocraft-1024.png`: 1024 px render on the macOS grid.
 - `photocraft.icns`: macOS bundle icon (`CFBundleIconFile`).
 - `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
+- `photocraft-document.svg`: Windows PSD file icon master: a page with a folded corner filled into
+  a rounded flap, a blue (`#2f7bf5`) ring and the ArtCraft mark, a deep (`#001729`) field and
+  outlined `PSD` lettering; no font dependency.
+- `photocraft-document.ico`: Windows PSD file icon (16–256 px), embedded as resource 2.
 - `hicolor/<size>/apps/ai.storyteller.photocraft.png` (16–512) and `hicolor/scalable/...svg`:
   Linux icon theme.
 
@@ -39,6 +43,20 @@ The app also sets the window icon and Wayland app ID at runtime (`apps/photocraf
 `main.rs`). On Windows the taskbar shows the icon of the Start Menu shortcut that launches the
 exe, so the MSI's `<Icon Id>` keeps the `.exe` extension (ICE50); `app_icon.rs` documents the
 details and tests the `.ico` sizes and the WiX icon references.
+
+Windows `.psd`/`.psb` files use resource 2 (`"photocraft.exe",-2`) when PhotoCraft is chosen for
+them; the app tile, `.pcraft` and the image ProgId are untouched. `ProgId@Icon` in WiX 5 takes a
+File, not an MSI Icon entry, so the shell icon is written as the ProgId's `DefaultIcon` instead. The
+document icon adapts design 01, "red outline page", from the redesigns JustCallMeAD posted in
+storytold/pdfcraft#308: the page geometry, the fold and the mark placement are theirs, the fold is
+filled into a rounded flap as on the shipped PdfCraft icon, the ring and the mark are PhotoCraft blue,
+the field is deep ink and the three letters are outlined type. The ArtCraft mark on it is the
+project's, used as a mark, not licensed for reuse; a fork that distributes a modified version must
+remove or replace it ([LICENSE-document.txt](LICENSE-document.txt)). The label is sized to match the
+PdfCraft PDF icon (186 × 70 at 512, against 203 × 76), so the two read as one family.
+
+Every PNG and the `.ico` are rendered from the master; `packaging/icons.sh` is for the app tile and
+does not build this one. Pack the `.ico` with `cargo run -p xtask -- ico`.
 
 ## Regenerate
 
