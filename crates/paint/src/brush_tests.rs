@@ -150,6 +150,17 @@ fn bounded_one_pixel_soft_tip_tapers_as_the_pixel_centre_reaches_the_edge() {
 }
 
 #[test]
+fn bounded_subpixel_soft_tip_paints_when_the_dab_sits_between_supersamples() {
+    // A traced Normal 0.5 px, 0% hardness outline is smaller than the 4x4 sample grid (nearest
+    // sample at about 0.177 px). A dab on the pixel centre must still leave a mark.
+    let outline = 0.25 * crate::half_coverage_radius(1.0, 0.0);
+    let brush = BrushSettings { hardness: 0.0, tip_boundary: Some(outline / 0.5), ..brush() };
+    let r = raster(&brush, &Dab::round(Point::new(50.5, 50.5), 0.5, 1.0));
+    assert!(at(&r, 50, 50) > 0.0, "coverage at the pixel centre, outline {outline}");
+    assert_eq!(at(&r, 51, 50), 0.0);
+}
+
+#[test]
 fn sampled_tip_is_scaled_and_oriented() {
     // Tip: left half painted.
     let tip = GrayTile::from_fn(16, 16, |x, _| if x < 8 { 1.0 } else { 0.0 });

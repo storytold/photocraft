@@ -402,7 +402,7 @@ fn subpixel_soft_brush_uses_the_displayed_outline() {
         app.run("prefs.set", json!({"values": {"cursors.painting": mode}})).unwrap();
         app.ui.tool = Tool::Brush;
         assert_eq!(app.session.tools.brush.size, 0.5);
-        for (y, distance, painted) in [(12, outside, false), (20, inside, true)] {
+        for (y, distance, painted) in [(12, outside, false), (20, inside, true), (24, 0.0, true)] {
             let x = 16.5 - distance;
             let point_y = f64::from(y) + 0.5;
             let check = |doc: &Document| {
@@ -415,6 +415,32 @@ fn subpixel_soft_brush_uses_the_displayed_outline() {
             tool_event(&mut app, ToolEvent::Up { x, y: point_y }, M);
             check(&app.session.active().unwrap().doc);
         }
+    }
+}
+
+#[test]
+fn soft_brush_in_standard_and_precise_cursors_keeps_coverage_past_the_nominal_radius() {
+    use photocraft_engine::prefs::PaintingCursor;
+
+    for (mode, setting) in [(PaintingCursor::Standard, "standard"), (PaintingCursor::Precise, "precise")] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 128, "height": 128, "background": "transparent"})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 80, "hardness": 0.0}})).unwrap();
+        app.run("prefs.set", json!({"values": {"cursors.painting": setting}})).unwrap();
+        assert_eq!(app.session.prefs().cursors.painting, mode);
+        app.ui.tool = Tool::Brush;
+        let check = |doc: &Document| {
+            let s = doc.layers[0].surface().unwrap();
+            assert!(s.rgba(64, 64)[3] > 0.9);
+            // 45 px is past the 40 px nominal radius; these cursors have no outline to clip to.
+            assert!(s.rgba(64 + 45, 64)[3] > 0.0, "{mode:?}");
+        };
+        tool_event(&mut app, ToolEvent::Down { x: 64.5, y: 64.5, pressure: 1.0 }, M);
+        check(&display_doc(&mut app, 0).0);
+        tool_event(&mut app, ToolEvent::Up { x: 64.5, y: 64.5 }, M);
+        check(&app.session.active().unwrap().doc);
+        let (_, params) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").unwrap();
+        assert!(params.get("tipBoundary").is_none(), "{mode:?} {params}");
     }
 }
 

@@ -239,7 +239,14 @@ impl TipProfile {
     pub(crate) fn cap_supersampled_coverage(self, distance: f32, average: f32) -> f32 {
         // Inward samples can still be inside the tip as the pixel centre reaches the boundary.
         // The centre's falloff keeps their average from leaving a visible jump at the cutoff.
-        if self.bounded { average.min(self.falloff(distance)) } else { average }
+        // When the tip sits between the 4×4 sample points, every sample can be outside while the
+        // centre is still inside; keep the centre's coverage so the dab is not dropped.
+        if self.bounded {
+            let centre = self.falloff(distance);
+            if average > 0.0 { average.min(centre) } else { centre }
+        } else {
+            average
+        }
     }
 }
 
