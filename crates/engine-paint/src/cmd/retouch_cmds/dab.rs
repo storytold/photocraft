@@ -190,7 +190,7 @@ const LINEAR_MIDTONES_STRENGTH: f32 = 1.34;
 
 /// The Midtones Dodge (`burn = false`) or Burn curve for one linear value of a 32-bit document at
 /// exposure `e` (0..1): `v ± 1.34·e·v²·(1 − v)^1.5`, each channel on its own. It is fitted to the
-/// reference's 32-bit results (#12687), which tone the stored linear values: much gentler on the
+/// reference's 32-bit results (#12687, #12674), which tone the stored linear values: much gentler on the
 /// mid tones than the 8-bit curve on gamma-encoded values, and the shadows are left alone. Black
 /// and white stay put, values outside 0..1 (light above white) are kept as they are, and tones
 /// stay in order at every exposure.
@@ -203,15 +203,16 @@ fn linear_midtones(v: f32, e: f32, burn: bool) -> f32 {
     if burn { v - d } else { v + d }
 }
 
-/// The 32-bit reference was measured at Exposure 50 % only (#12687); other exposures keep the
+/// The 32-bit reference was measured at Exposure 50 % only (#12687, #12674); other exposures keep the
 /// gamma curve.
 const MEASURED_LINEAR_EXPOSURE: f32 = 0.5;
 
 /// Dodge or Burn of a 32-bit colour with the curve the other bit depths use, except that light above
 /// white isn't clipped: Protect Tones scales such a colour to its new luma without gamut
-/// compression, which would pull it back to 1.0 (#12687). Such a colour whose luma isn't positive
-/// (a negative channel outweighs it) can't be scaled by luma, so it takes the per-channel curve, as
-/// with Protect Tones off, which keeps light above white too. Other colours get today's result.
+/// compression, which would pull it back to 1.0 (#12687, #12674). Such a colour whose luma isn't
+/// positive (a negative channel outweighs it) can't be scaled by luma, so it takes the per-channel
+/// curve, as with Protect Tones off, which keeps light above white too. Other colours get today's
+/// result.
 #[inline]
 fn dodge_burn_float(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect: bool) -> [f32; 3] {
     if protect && c.iter().any(|&v| v > 1.0) {
@@ -345,14 +346,14 @@ impl DabTool {
     pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
         let sp = spacing;
         match self.clone() {
-            // A 32-bit RGB document holds linear values, which the reference's default Dodge tones
-            // with its own curve. Grayscale, the other ranges, Protect Tones off and the other
+            // A 32-bit RGB document holds linear values, which the reference's default Dodge and Burn
+            // tone with their own curve. Grayscale, the other ranges, Protect Tones off and the other
             // exposures weren't measured there and keep the gamma curve, without clipping light
             // above white.
-            Self::Tone { burn: false, range: ToneRange::Midtones, exposure, protect: true }
+            Self::Tone { burn, range: ToneRange::Midtones, exposure, protect: true }
                 if fmt.sample == SampleType::F32 && fmt.mode == ColorMode::Rgb && (exposure - MEASURED_LINEAR_EXPOSURE).abs() < 1e-4 =>
             {
-                tone_stroke(fmt, move |c| c.map(|v| linear_midtones(v, exposure, false)))
+                tone_stroke(fmt, move |c| c.map(|v| linear_midtones(v, exposure, burn)))
             }
             Self::Tone { burn, range, exposure, protect } if fmt.sample == SampleType::F32 => {
                 tone_stroke(fmt, move |c| dodge_burn_float(c, exposure, range, burn, protect))
@@ -884,3 +885,7 @@ mod smudge_mode_tests;
 #[cfg(test)]
 #[path = "dodge_32bit_linear_tests.rs"]
 mod dodge_32bit_linear_tests;
+
+#[cfg(test)]
+#[path = "burn_32bit_linear_tests.rs"]
+mod burn_32bit_linear_tests;
