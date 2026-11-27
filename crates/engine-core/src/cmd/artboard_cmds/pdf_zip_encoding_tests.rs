@@ -5,26 +5,23 @@
 
 use std::io::Read;
 
+use super::pdf_overlapping_areas_tests::paint;
 use super::*;
+use photocraft_geom::Rect;
 
 const CMD: &str = "file.export.artboardsToPdf";
 
 fn session() -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 800, "height": 400, "depth": 8, "resolution": 72, "background": "transparent"})).unwrap();
-    let mut board = |rect: [i64; 4], name: &str, layer: Option<([i64; 4], &str)>| {
-        let id = s.execute("layer.new.artboard", json!({"rect": rect, "name": name, "background": "white"})).unwrap()["layer"].clone();
-        if let Some(([x, y, width, height], color)) = layer {
-            s.execute("layer.select", json!({"layer": id})).unwrap();
-            s.execute("layer.new.layer", json!({})).unwrap();
-            s.execute("select.rect", json!({"x": x, "y": y, "width": width, "height": height, "antiAlias": false})).unwrap();
-            s.execute("edit.fill", json!({"color": color})).unwrap();
-            s.execute("select.deselect", json!({})).unwrap();
-        }
+    let mut board = |rect: [i64; 4], name: &str| {
+        s.execute("layer.new.artboard", json!({"rect": rect, "name": name, "background": "white"})).unwrap()["layer"].as_u64().unwrap()
     };
-    board([0, 0, 200, 150], "Red Board", Some(([20, 20, 100, 80], "#DC1E1E")));
-    board([120, 30, 200, 200], "Blue Board", Some(([130, 40, 100, 100], "#1E1EDC")));
-    board([600, 0, 100, 100], "Empty Board", None);
+    let red = board([0, 0, 200, 150], "Red Board");
+    let blue = board([120, 30, 200, 200], "Blue Board");
+    board([600, 0, 100, 100], "Empty Board");
+    paint(&mut s, red, "Red", Rect::new(20, 20, 120, 100), [220, 30, 30]);
+    paint(&mut s, blue, "Blue", Rect::new(130, 40, 230, 140), [30, 30, 220]);
     s
 }
 
