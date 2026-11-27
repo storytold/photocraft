@@ -565,6 +565,9 @@ pub struct BrushSettings {
     pub size: f32,
     /// 0 (soft) ..1 (hard). Computed tips only.
     pub hardness: f32,
+    /// Optional per-stroke boundary as a fraction of a computed tip's radius.
+    #[serde(skip)]
+    pub tip_boundary: Option<f32>,
     /// Spacing between dabs as a fraction of the diameter.
     pub spacing: f32,
     /// Photoshop's Spacing checkbox. Off: the pointer's speed sets the spacing (one dab every
@@ -645,6 +648,7 @@ impl Default for BrushSettings {
         Self {
             size: 20.0,
             hardness: 1.0,
+            tip_boundary: None,
             spacing: 0.1,
             spacing_enabled: true,
             opacity: 1.0,

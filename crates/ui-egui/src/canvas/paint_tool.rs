@@ -61,12 +61,27 @@ pub(crate) struct PaintStroke {
     /// A ⇧-click line from the previous stroke's end. Smoothing doesn't apply to it, so it ends
     /// at the click whatever Catch-up on Stroke End is set to, as in Photoshop (#11887).
     pub(crate) line: bool,
+    /// The brush cursor's boundary at the press, shared by preview and commit.
+    pub(crate) tip_boundary: Option<f32>,
 }
 
 impl PaintStroke {
     /// A stroke of `tool` that began at `start` with `points`, pressed with `modifiers`.
     fn new(tool: Tool, start: [f64; 2], points: Vec<[f64; 3]>, modifiers: Mods, erase: bool) -> Self {
-        Self { tool, history_params: None, start, points, modifiers, live: modifiers, released: Mods::NONE, erase, clear: false, constrain: None, line: false }
+        Self {
+            tool,
+            history_params: None,
+            start,
+            points,
+            modifiers,
+            live: modifiers,
+            released: Mods::NONE,
+            erase,
+            clear: false,
+            constrain: None,
+            line: false,
+            tip_boundary: None,
+        }
     }
 
     /// Records the modifiers of a pointer of the gesture.
@@ -285,6 +300,7 @@ fn begin(app: &mut PhotocraftApp, state: &mut PaintState, pointer: &ToolPointer,
     // panel's source back.
     let tool = crate::eraser_ui::drag_tool(app, tool, mods.alt);
     let mut stroke = PaintStroke::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase);
+    stroke.tip_boundary = crate::brush_cursor::soft_tip_boundary(app, tool);
     stroke.clear = clear;
     stroke.line = from.is_some();
     stroke.history_params = crate::retouch_ui::history_params_at_press(app, tool, mods.alt);

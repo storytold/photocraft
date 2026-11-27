@@ -34,6 +34,34 @@ fn stroke_backwards_compatible() {
 }
 
 #[test]
+fn soft_round_stroke_fades_to_zero_at_its_tip_boundary() {
+    for boundary in [0.55, 1.0] {
+        let mut s = session(96, 96);
+        let p = json!({"points": [[48.5, 48.5]], "size": 60, "hardness": 0, "tipBoundary": boundary, "color": "#000000"});
+        let live = LiveStroke::begin(&s, &p).unwrap();
+        let live_surf = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap();
+        s.execute("paint.stroke", p).unwrap();
+        let painted = surface(&s);
+        assert!(same_pixels(live_surf, &painted, Rect::new(0, 0, 96, 96)));
+        let radius = 30.0 * boundary;
+        let middle = painted.rgba(48 + (radius / 2.0) as i32, 48)[3];
+        let near_edge = painted.rgba(48 + (radius * 0.85) as i32, 48)[3];
+        assert!(painted.rgba(48, 48)[3] > middle && middle > near_edge && near_edge > 0.0);
+        for y in 0..96 {
+            for x in 0..96 {
+                if f64::from(x - 48).hypot(f64::from(y - 48)) >= radius {
+                    assert_eq!(painted.rgba(x, y)[3], 0.0, "boundary {boundary}, pixel ({x}, {y})");
+                }
+            }
+        }
+    }
+    let mut s = session(96, 96);
+    let p = json!({"points": [[48.5, 48.5]], "size": 60, "tipBoundary": "invalid"});
+    assert!(LiveStroke::begin(&s, &p).is_err());
+    assert!(s.execute("paint.stroke", p).is_err());
+}
+
+#[test]
 fn a_stroke_from_far_off_the_canvas_paints_only_what_reaches_it() {
     // Dabs that cannot reach the canvas are not rasterized (their coverage is never read).
     let mut s = session(80, 80);

@@ -277,12 +277,13 @@ impl BrushContext {
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
         let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
         let hardness = if dual { self.brush.dual_brush.hardness } else { self.brush.hardness };
-        // A computed soft tip paints past its nominal radius (see `tip_shape`).
         let aliased = self.brush.aliased && !dual;
         let reach = if sampled {
             d.radius * std::f32::consts::SQRT_2
         } else if aliased {
             d.radius
+        } else if let Some(fraction) = self.brush.tip_boundary.filter(|f| !dual && *f > 0.0 && *f <= 1.0) {
+            d.radius * fraction
         } else {
             crate::tip_reach(d.radius, hardness).max(d.radius)
         };
@@ -355,7 +356,8 @@ impl BrushContext {
         let r = d.radius;
         let ro = d.roundness.max(0.5 / r).min(1.0);
         let rm = (r * ro).max(0.5);
-        let profile = TipProfile::new(rm, hardness);
+        let boundary = b.tip_boundary.filter(|_| !dual && !aliased && mips.is_none());
+        let profile = TipProfile::with_boundary(rm, hardness, boundary);
         let reach = if aliased || mips.is_some() { rm } else { profile.reach().max(rm) };
         let reach2 = (reach + 0.5) * (reach + 0.5);
         // Sampled-tip mapping.
@@ -1634,7 +1636,8 @@ impl GeneralTip<'_> {
                 }
                 None if small => {
                     let d2 = (u * ro).powi(2) + v * v;
-                    if d2 >= small_reach2 {
+                    // Subpixel samples must not paint a pixel whose centre is outside the cursor.
+                    if d2 >= small_reach2 || !profile.contains_pixel(d2) {
                         continue;
                     }
                     let mut sum = 0.0;

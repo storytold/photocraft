@@ -115,6 +115,26 @@ fn hard_edge_is_sharp() {
 }
 
 #[test]
+fn bounded_soft_tip_leaves_pixel_centres_outside_its_edge_untouched() {
+    for radius in [3.0, 30.0] {
+        for hardness in [0.0, 0.5, 0.95] {
+            let boundary = crate::half_coverage_radius(radius, hardness);
+            let brush = BrushSettings { hardness, tip_boundary: Some(boundary / radius), ..brush() };
+            let dab = Dab::round(Point::new(50.5, 50.5), radius, 1.0);
+            let r = raster(&brush, &dab);
+            assert!(at(&r, 50, 50) > 0.5);
+            for y in r.0.y0..r.0.y1 {
+                for x in r.0.x0..r.0.x1 {
+                    if ((x - 50) as f32).hypot((y - 50) as f32) >= boundary {
+                        assert_eq!(at(&r, x, y), 0.0, "radius {radius}, hardness {hardness}, pixel ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn sampled_tip_is_scaled_and_oriented() {
     // Tip: left half painted.
     let tip = GrayTile::from_fn(16, 16, |x, _| if x < 8 { 1.0 } else { 0.0 });

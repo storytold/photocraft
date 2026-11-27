@@ -175,13 +175,26 @@ pub(crate) struct TipProfile {
     core: f32,
     shoulder: f32,
     reach: f32,
+    bounded: bool,
 }
 
 impl TipProfile {
     #[inline]
     pub(crate) fn new(radius: f32, hardness: f32) -> Self {
         let (core, shoulder) = tip_shape(radius, hardness);
-        Self { core, shoulder, reach: core + 2.6 * shoulder }
+        Self { core, shoulder, reach: core + 2.6 * shoulder, bounded: false }
+    }
+
+    pub(crate) fn with_boundary(radius: f32, hardness: f32, fraction: Option<f32>) -> Self {
+        let mut tip = Self::new(radius, hardness);
+        if let Some(fraction) = fraction.filter(|f| *f > 0.0 && *f <= 1.0) {
+            // Scale the solid core with the footprint, then taper the remaining width to zero.
+            tip.reach = radius * fraction;
+            tip.core *= fraction;
+            tip.shoulder = tip.reach - tip.core;
+            tip.bounded = true;
+        }
+        tip
     }
 
     #[inline]
@@ -191,6 +204,14 @@ impl TipProfile {
 
     #[inline]
     pub(crate) fn falloff(self, d: f32) -> f32 {
+        if self.bounded {
+            // Smoothstep has zero slope at both ends, including the visible edge.
+            if d >= self.reach {
+                return 0.0;
+            }
+            let t = ((self.reach - d) / self.shoulder).clamp(0.0, 1.0);
+            return t * t * (3.0 - 2.0 * t);
+        }
         if d <= self.core {
             return 1.0;
         }
@@ -205,6 +226,10 @@ impl TipProfile {
             return 0.0;
         }
         self.falloff(d)
+    }
+
+    pub(crate) fn contains_pixel(self, distance_squared: f32) -> bool {
+        !self.bounded || distance_squared < self.reach * self.reach
     }
 }
 

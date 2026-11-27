@@ -410,6 +410,9 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &PaintStroke, points: &[Vec<
     if crate::eraser_ui::block_mode(app, tool) {
         p["block"] = json!(true);
     }
+    if let Some(boundary) = d.tip_boundary {
+        p["tipBoundary"] = json!(boundary);
+    }
     p
 }
 

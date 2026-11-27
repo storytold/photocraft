@@ -476,11 +476,21 @@ fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, S
     })
 }
 
+fn stroke_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
+    let cmd = "paint.stroke";
+    let mut brush = with_blend_mode(resolve_brush(s, p, cmd)?, p);
+    if let Some(boundary) = p.get("tipBoundary") {
+        let fraction = boundary.as_f64().map(|v| v as f32).filter(|v| *v > 0.0 && *v <= 1.0);
+        brush.tip_boundary = Some(fraction.ok_or_else(|| bad(cmd, "tipBoundary must be greater than 0 and at most 1"))?);
+    }
+    Ok(brush)
+}
+
 /// `paint.stroke`: the Brush (and Eraser) tool. When the spacing left the stroke with its first
 /// dab only, the result also has the dab `pitch` in pixels and `warnings` saying so (#8389).
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
-    let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
+    let brush = stroke_brush(s, p)?;
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
     if flag(p, "fill", false) {
         return fill_region(s, p, label, brush, pts);
@@ -644,7 +654,7 @@ impl LiveStroke {
             "paint.pencil" => true,
             other => return Err(bad(other, "live strokes are `paint.stroke` or `paint.pencil`")),
         };
-        let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
+        let brush = if pencil { pencil_brush(s, p)? } else { stroke_brush(s, p)? };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
         let st = s.active().ok_or(EngineError::NoDocument)?;

@@ -78,6 +78,26 @@ pub(crate) fn sync_tip(app: &mut PhotocraftApp) {
     app.brush_tip = Some((key, tip));
 }
 
+/// The soft computed tip's displayed radius, as a fraction of its nominal dab radius.
+pub(crate) fn soft_tip_boundary(app: &PhotocraftApp, tool: Tool) -> Option<f32> {
+    let brush = &app.session.tools.brush;
+    if !matches!(tool, Tool::Brush | Tool::Eraser) || aliased(app, tool).is_some() || brush.hardness >= 1.0 || !matches!(*brush.tip, TipShape::Round) {
+        return None;
+    }
+    if app.session.prefs().cursors.painting != PaintingPref::NormalTip {
+        return Some(1.0);
+    }
+    // Traced tips use the outline's radius units. The framework's round cursor uses document pixels.
+    if !is_plain(brush) {
+        return Some(photocraft_paint::half_coverage_radius(1.0, brush.hardness));
+    }
+    Some((normal_round_radius(brush) / (brush.size / 2.0).max(0.5)).min(1.0))
+}
+
+fn normal_round_radius(brush: &BrushSettings) -> f32 {
+    photocraft_paint::half_coverage_radius(brush.size / 2.0, brush.hardness).max(1.0)
+}
+
 /// The tip of `brush`: two circles for a plain round tip, else the engine's traced outlines.
 fn build(brush: &BrushSettings) -> BrushTip {
     let size = f64::from(brush.size);
@@ -86,7 +106,7 @@ fn build(brush: &BrushSettings) -> BrushTip {
     {
         return BrushTip::new(size, BrushTipOutline::traced(TipRings::new(normal), TipRings::new(full)));
     }
-    let normal = photocraft_paint::half_coverage_radius(brush.size / 2.0, brush.hardness).max(1.0);
+    let normal = normal_round_radius(brush);
     BrushTip::round(size, f64::from(normal))
 }
 
