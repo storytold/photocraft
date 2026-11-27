@@ -2,6 +2,7 @@ use super::*;
 use craft::behavior::{EditEvent, Mixed};
 use craft::keymap::Mods;
 use craft::ui::contract::{MemoKey, ReorderMove};
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 fn group(name: &str) -> PresetKey {
@@ -83,7 +84,11 @@ fn each_panel_uses_a_preset_its_own_way() {
         (GRADIENTS, PresetEvent::activate(item("g"), none), run("gradient.presets.apply", json!({"preset": "g"}))),
         (GRADIENTS, PresetEvent::drop_at(item("g"), at, none), run("gradient.presets.apply", json!({"preset": "g"}))),
         (SHAPES, PresetEvent::select(item("Star"), none), Some(Act::CustomShapeTool)),
-        (SHAPES, PresetEvent::activate(item("Star"), none), run("shape.presets.place", json!({"preset": "Star", "fill": shape_fill(&app)}))),
+        (
+            SHAPES,
+            PresetEvent::activate(item("Star"), none),
+            run("shape.presets.place", json!({"preset": "Star", "fill": shape_fill(&app), "useAlignedRendering": app.ui.tool_options.align_edges})),
+        ),
         (TOOL_PRESETS, PresetEvent::select(item("T"), none), Some(Act::ToolPreset("T".into()))),
         (TOOL_PRESETS, PresetEvent::activate(item("T"), none), Some(Act::ToolPreset("T".into()))),
         (TOOL_PRESETS, PresetEvent::drop_at(item("T"), at, none), None),
@@ -95,7 +100,7 @@ fn each_panel_uses_a_preset_its_own_way() {
     let drop = canvas_drop_rect(&app).center();
     let c = crate::canvas::document_display::doc_point_at(&app, drop).expect("the drop is on the canvas");
     let side = (48.0_f64 * 0.3).max(8.0);
-    let expected = json!({"preset": "Star", "fill": shape_fill(&app), "rect": [c.x - side / 2.0, c.y - side / 2.0, side, side]});
+    let expected = json!({"preset": "Star", "fill": shape_fill(&app), "useAlignedRendering": app.ui.tool_options.align_edges, "rect": [c.x - side / 2.0, c.y - side / 2.0, side, side]});
     assert_eq!(panel_act(&app, SHAPES, &PresetEvent::drop_at(item("Star"), drop, none)), run("shape.presets.place", expected));
 }
 
@@ -172,9 +177,27 @@ fn a_pattern_replaced_under_its_id_keys_a_new_picture() {
     assert_eq!(pattern_key(&first), pattern_key(&first.clone()), "a clone holds the same pixels");
 }
 
+/// A pattern swatch drawn while a pattern tile failed to read shows zeros: once the tile reads again (no new
+/// generation), the swatch keys a new picture, and so do the style thumbnails drawn over the patterns.
+#[test]
+fn pattern_and_style_pictures_follow_a_scratch_read_error_transition() {
+    let mut app = app();
+    let pattern = app.session.patterns.items[0].clone();
+    let (swatch, library) = (pattern_key(&pattern), StyleLibrary::held(&mut app));
+    assert_eq!(pattern_key(&pattern), swatch);
+    assert!(Arc::ptr_eq(&library, &StyleLibrary::held(&mut app)));
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_ne!(pattern_key(&pattern), swatch, "the swatch draws again");
+    let after = StyleLibrary::held(&mut app);
+    assert!(!Arc::ptr_eq(&library, &after), "the style library is taken again");
+    let stamps = |library: &StyleLibrary| library.styles.iter().map(|(stamp, _)| *stamp).collect::<Vec<_>>();
+    assert!(!stamps(&library).is_empty());
+    assert!(stamps(&library).iter().zip(stamps(&after)).all(|(before, now)| *before != now), "every style thumbnail draws again");
+}
+
 /// The flat list of the app's style presets.
 fn styles(app: &PhotocraftApp) -> Vec<StylePreset> {
-    app.session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect()
+    app.session.presets().styles.iter().flat_map(|group| group.items.iter().cloned()).collect()
 }
 
 /// #16221: a style's picture key covers its effect values and the patterns' pixels: a same-named style with as many

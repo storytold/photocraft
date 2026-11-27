@@ -7,6 +7,7 @@ use craft::ui::dialog::{DialogId, DialogResult};
 use photocraft_doc::Contour as DocContour;
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_engine::layer_style::{contour_from_param, contour_param, contour_to_shc};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::{Child, child_of, take_child};
@@ -55,7 +56,7 @@ pub(super) fn to_param(c: &Contour) -> Value {
 
 /// The user's contour library.
 pub(super) fn user_contours(app: &PhotocraftApp) -> Vec<Contour> {
-    app.session.presets.contours.iter().map(from_doc).collect()
+    app.session.presets().contours.iter().map(from_doc).collect()
 }
 
 /// The engine's interpolation of a contour's points (levels `0..=255` on both axes) as one output
@@ -145,7 +146,7 @@ pub(super) fn library_action(app: &mut PhotocraftApp, action: ContourAction) {
                 Ok(json!({"path": path}))
             })
         }),
-        ContourAction::Delete(i) => match app.session.presets.contours.get(i).map(name_of) {
+        ContourAction::Delete(i) => match app.session.presets().contours.get(i).map(name_of) {
             Some(name) => app.run("layer.layerStyle.contours.delete", json!({"name": name})),
             None => Err("no such contour".into()),
         },

@@ -109,6 +109,15 @@ pub fn tent_kernel(w: f32) -> (i32, Vec<f32>) {
     ((n as i32 - 1) / 2, t)
 }
 
+/// The end tap of the box of width `w` that [`tent_kernel`] squares, and the tap next to it
+/// (`None` for a single-tap box): the tent's last tap is `end²`, without building the tent.
+pub(super) fn box_end_taps(w: f32) -> Option<(f32, f32)> {
+    match box_weights(w).as_slice() {
+        [.., next, end] => Some((*end, *next)),
+        _ => None,
+    }
+}
+
 /// Box geometry for a (fractional) width: (`r`, end-tap weight `f`, 1 / width) — the
 /// [`box_weights`] taps are `r - 1` full ones each side of the centre plus the two end taps at `f`.
 fn box_geom(bw: f32) -> (i64, f64, f64) {
