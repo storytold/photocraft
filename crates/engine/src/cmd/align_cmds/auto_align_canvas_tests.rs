@@ -290,3 +290,26 @@ fn a_selected_layer_that_was_not_placed_stays_with_the_canvas() {
         assert_eq!(bounds(&s, odd), Rect::new(120, 100, 180, 160), "lock {lock}: the layer that wasn't placed stays put");
     }
 }
+
+#[test]
+fn a_selected_background_that_was_not_placed_stays_the_background() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 300, "depth": depth, "background": "white"})).unwrap();
+        let bg = s.active().unwrap().doc.background().unwrap().id;
+        // The aligned box is the reference at 50,40,350,260: the canvas keeps its size and only the
+        // aligned layers move by -50,-40. The flat white Background has nothing to match.
+        let reference = new_layer(&mut s, "Ref");
+        paint(&mut s, reference, Rect::new(50, 40, 350, 260), tex);
+        let shift = new_layer(&mut s, "Shift");
+        paint(&mut s, shift, Rect::new(74, 56, 374, 276), |x, y| tex(x - 24, y - 16));
+        select(&mut s, &[bg, reference, shift]);
+        let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition", "reference": reference.0})).unwrap();
+        assert_eq!(r["failed"], json!([bg.0]), "depth {depth}: {r}");
+        assert_eq!(canvas(&s), (400, 300), "depth {depth}");
+        assert_eq!(bounds(&s, reference), Rect::new(0, 0, 300, 220), "depth {depth}");
+        let doc = &s.active().unwrap().doc;
+        assert!(doc.is_background(bg), "depth {depth}: the Background didn't move, so it stays the Background");
+        assert_eq!(doc.layer(bg).unwrap().name, "Background", "depth {depth}");
+    }
+}

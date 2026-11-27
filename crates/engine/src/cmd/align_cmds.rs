@@ -285,8 +285,9 @@ fn place_aligned(doc: &mut Document, cmd: &str, ids: &[LayerId], placed: &[Layer
             }
         }
     }
+    // The Background's own move: the full shift when it was placed, else only the canvas origin.
     if let Some(bg) = doc.background().map(|l| l.id).filter(|id| ids.contains(id))
-        && (p.shift != (0, 0) || grew)
+        && ((if placed.contains(&bg) { p.shift } else { p.origin }) != (0, 0) || grew)
     {
         crate::extra_cmds::background_to_layer(doc, bg);
     }
