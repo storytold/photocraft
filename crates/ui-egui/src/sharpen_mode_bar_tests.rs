@@ -117,7 +117,7 @@ fn blur_has_no_mode_and_smudge_keeps_its_own_dropdown() {
 fn the_stroke_sends_the_tools_own_mode_and_the_engine_takes_every_row() {
     let mut app = new_app(Tool::Sharpen);
     let (cmd, p) = crate::tools::retouch_ui::dab_params(&app, Tool::Sharpen).unwrap();
-    assert_eq!((cmd.as_ref(), &p["mode"]), ("paint.sharpen", &json!("Normal")), "Normal by default");
+    assert_eq!((cmd, &p["mode"]), ("paint.sharpen", &json!("Normal")), "Normal by default");
     for (mode, name) in ROWS {
         app.ui.tool_options.sharpen_mode = mode;
         let (_, p) = crate::tools::retouch_ui::dab_params(&app, Tool::Sharpen).unwrap();
