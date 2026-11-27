@@ -8,8 +8,8 @@ The folded corner is filled into a rounded flap, as on the shipped PdfCraft docu
 icon, which is where that part of the treatment comes from.
 Copyright (c) 2026 JustCallMeAD and the PhotoCraft contributors.
 Licensed under either the MIT License or the Apache License, Version 2.0, at your
-option. Full texts are LICENSE-MIT and LICENSE-APACHE at the repository root, and
-beside this file in Windows distributions.
+option. Full texts are LICENSE-MIT and LICENSE-APACHE at the repository root and
+at the top level of the Windows portable and nightly archives.
 
 The ArtCraft mark on the document (the "A") is a brand mark of the ArtCraft
 project. It is used here as a mark, not as a licence: no trademark right is
@@ -20,5 +20,7 @@ back to this repository may keep the mark unchanged.
 
 The lettering is outlined type (Geist, SIL Open Font License 1.1), converted to
 curves before export; the artwork embeds no font, no live text and no external
-image. Regenerate the ICO with `cargo run -p xtask -- ico`; the artwork and its
-provenance are recorded in ATTRIBUTION.md.
+image. The ICO is packed from 16-256 px renders of this master with
+`cargo run -p xtask -- ico photocraft-document.ico <render.png>...`; the exact
+commands are in README.md, and the artwork and its provenance are recorded in
+ATTRIBUTION.md.

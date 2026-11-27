@@ -3,7 +3,7 @@
      JustCallMeAD posted in https://github.com/storytold/pdfcraft/issues/308: the page, its
      folded corner and the ArtCraft mark are theirs and are kept as exported. Finish for
      PhotoCraft: the outline and the mark are the app's blue (#2F7BF5), the field is the
-     suite's deep ink (#001729), the fold is a filled rounded flap as in the shipped
+     suite's deep ink (#001424), the fold is a filled rounded flap as in the shipped
      pdfcraft-document.svg instead of a hollow diagonal, and the lettering is "PSD" in Paper
      white, outlined type (Geist ExtraBold, converted to curves), never live text.
      Geometry drawn in CorelDRAW 2026 and kept as exported. The ArtCraft mark is a brand
@@ -16,7 +16,7 @@
   <defs>
     <style type="text/css">
      <![CDATA[
-      .fil0 {fill:#001729;fill-rule:nonzero}
+      .fil0 {fill:#001424;fill-rule:nonzero}
       .fil1 {fill:#2F7BF5;fill-rule:nonzero}
       .fil2 {fill:white;fill-rule:nonzero}
      ]]>

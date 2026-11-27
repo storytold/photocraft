@@ -33,7 +33,7 @@ vectorised. License: see `LICENSE.txt`.
 - `photocraft.icns`: macOS bundle icon (`CFBundleIconFile`).
 - `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
 - `photocraft-document.svg`: Windows PSD file icon master: a page with a folded corner filled into
-  a rounded flap, a blue (`#2f7bf5`) ring and the ArtCraft mark, a deep (`#001729`) field and
+  a rounded flap, a blue (`#2f7bf5`) ring and the ArtCraft mark, a deep (`#001424`) field and
   outlined `PSD` lettering; no font dependency.
 - `photocraft-document.ico`: Windows PSD file icon (16–256 px), embedded as resource 2.
 - `hicolor/<size>/apps/ai.storyteller.photocraft.png` (16–512) and `hicolor/scalable/...svg`:
@@ -56,12 +56,21 @@ remove or replace it ([LICENSE-document.txt](LICENSE-document.txt)). The label i
 PdfCraft PDF icon (186 × 70 at 512, against 203 × 76), so the two read as one family.
 
 Every PNG and the `.ico` are rendered from the master; `packaging/icons.sh` is for the app tile and
-does not build this one. Pack the `.ico` with `cargo run -p xtask -- ico`.
+does not build this one. The document `.ico` is packed with `xtask`, which takes the output path and
+then the input PNGs, the way `icons.sh` packs the app tile:
+
+```sh
+for s in 16 20 24 32 40 48 64 128 256; do
+  resvg -w "$s" -h "$s" assets/app-icon/photocraft-document.svg "/tmp/psd-$s.png"
+done
+cargo run -p xtask -- ico assets/app-icon/photocraft-document.ico /tmp/psd-{16,20,24,32,40,48,64,128,256}.png
+```
 
 ## Regenerate
 
 Replace `photocraft.svg` (and `photocraft-small.svg`), then run `packaging/icons.sh`. It needs
-`resvg`, plus `iconutil` on macOS; the `.ico` is packed by `cargo xtask ico`.
+`resvg`, plus `iconutil` on macOS; the app `.ico` is packed by `cargo run -p xtask -- ico <out.ico> <in.png>...`; the
+document icon keeps its own command above.
 
 ## Nightly channel
 
