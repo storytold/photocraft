@@ -112,6 +112,18 @@ fn a_hover_over_the_canvas_replays_the_toolbar_footer() {
     }
 }
 
+/// Zoom In from the menu runs no panel body that does not show the view: before, every command counted as a command
+/// run, so a zoom ran every panel body in the next frame (#15493).
+#[test]
+fn a_zoom_runs_only_the_panels_that_show_the_view() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "view.zoomIn", json!({})).unwrap();
+    h.run_steps(1);
+    let bodies = (views_ran(&h, "region_versions::PanelBody<"), views(&h, "region_versions::PanelBody<", MemoRun::Replayed));
+    assert!(bodies.0 <= 1 && bodies.1 >= 2, "only the Navigator's body may run, the others replay: {bodies:?}");
+}
+
 /// The footer runs again when a colour it shows changes without a command (the Color panel's sliders, a Color Picker
 /// preview) and when the document goes into Quick Mask, so its chips and button never show a stale state.
 #[test]

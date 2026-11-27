@@ -4,6 +4,7 @@
 
 mod artboard_export_scratch;
 mod color_settings_presets;
+mod color_settings_text_gamma;
 mod lut_row_cache_purge;
 mod mask_cache_purge;
 mod memory_gate;
