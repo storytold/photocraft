@@ -36,6 +36,8 @@ impl Serialize for SavedPrefs {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         let mut v = self.prefs.to_json();
         if let Value::Object(m) = &mut v {
+            // Match inks by RGB when SettingsStore merges concurrent saves.
+            m.insert("toolColors".into(), super::tool_colors::encode(&self.prefs.tool_colors));
             m.insert("colorSettings".into(), serde_json::to_value(&self.color_settings).map_err(serde::ser::Error::custom)?);
             m.insert("presets".into(), self.presets.clone());
         }
@@ -218,7 +220,14 @@ impl SavedPrefsExt for Session {
             invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "spotDotGain".into()], value: json!(gain) });
             self.color_mut().settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
         }
-        photocraft_compose::psblend::set_text_gamma(self.color().settings.blend_text_gamma);
+        // A field value outside 1.00..3.00 (a hand-edited file) loads as the default, as an
+        // unreadable one does; `validate_settings` would refuse every later edit otherwise.
+        let gamma = self.color().settings.blend_text_gamma;
+        if !(gamma.is_finite() && (crate::color_cmds::MIN_TEXT_GAMMA..=photocraft_compose::psblend::MAX_TEXT_GAMMA).contains(&gamma)) {
+            invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "blendTextGamma".into()], value: json!(gamma) });
+            self.color_mut().settings.blend_text_gamma = photocraft_compose::psblend::TEXT_GAMMA;
+        }
+        photocraft_compose::psblend::set_text_gamma(self.color().settings.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(self.color().settings.spot_dot_gain);
         self.prefs.edit(|p| *p = prefs);
         self.load_presets_json(presets);

@@ -684,6 +684,22 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
         "foreground" => s.tools.foreground,
         "white" => [1.0; 4],
         "black" => [0.0, 0.0, 0.0, 1.0],
+        // The reference application's Gray: 128,128,128 (#14543). A 32-bit document holds linear
+        // light, so there it is grey 128 decoded as `change_depth` decodes it (0.2159).
+        "gray" => {
+            // An Indexed document was not measured (#14543) and keeps today's background colour.
+            if s.active().is_some_and(|d| d.doc.mode == ColorMode::Indexed) {
+                return s.tools.background;
+            }
+            let v = 128.0 / 255.0;
+            let v = match s.active().map(|d| (d.doc.mode, d.doc.depth)) {
+                Some((mode @ (ColorMode::Rgb | ColorMode::Grayscale), SampleType::F32)) => {
+                    photocraft_compose::adjust::Transfer::for_document(mode, SampleType::U8).decode(v)
+                }
+                _ => v,
+            };
+            [v, v, v, 1.0]
+        }
         "transparent" => [0.0; 4],
         hex if hex.starts_with('#') => {
             let h = hex.trim_start_matches('#');
@@ -701,12 +717,22 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);
     let (w, h) = if size_units(p, "image.canvasSize", &["px", "percent"])? == "percent" {
         if relative {
-            return Err(bad("image.canvasSize", "percentage dimensions require an absolute canvas size"));
+            // A share of each current side, added to it: 50 grows a side by half, -50 halves it.
+            let delta = |key: &str, side: f64| match p.get(key).filter(|value| !value.is_null()) {
+                None => Ok(0.0),
+                Some(value) => value
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .map(|value| value * side / 100.0)
+                    .ok_or_else(|| bad("image.canvasSize", format!("`{key}` must be a number"))),
+            };
+            (delta("width", ow)?, delta("height", oh)?)
+        } else {
+            (
+                scaled_dimension(p, "width", ow / 100.0, "image.canvasSize")?.unwrap_or(ow),
+                scaled_dimension(p, "height", oh / 100.0, "image.canvasSize")?.unwrap_or(oh),
+            )
         }
-        (
-            scaled_dimension(p, "width", ow / 100.0, "image.canvasSize")?.unwrap_or(ow),
-            scaled_dimension(p, "height", oh / 100.0, "image.canvasSize")?.unwrap_or(oh),
-        )
     } else {
         (
             p.get("width").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { ow }),
@@ -1252,7 +1278,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.canvasSize",
             "Canvas Size…",
             ["Image"],
-            r##"{"width":number,"height":number,"units":"px|percent"="px" (percent uses each current side; absolute sizes only),"relative":bool=false,"anchor":"topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight"="center","extensionColor":"background|foreground|white|black|transparent|#rrggbb"="background"}"##,
+            r##"{"width":number,"height":number,"units":"px|percent"="px" (percent uses each current side; relative percent adds that share, so -50 halves a side),"relative":bool=false,"anchor":"topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight"="center","extensionColor":"background|foreground|white|black|gray|transparent|#rrggbb"="background"}"##,
             has_doc,
             canvas_size
         ),
@@ -1319,6 +1345,9 @@ mod duplicate_selection_tests;
 mod tests;
 
 #[cfg(test)]
+mod canvas_size_relative_percent_tests;
+
+#[cfg(test)]
 mod canvas_size_selection_tests;
 
 #[cfg(test)]
@@ -1329,4 +1358,4 @@ mod image_size_drops_selection_tests;
 mod canvas_size_noop_history_tests;
 
 #[cfg(test)]
-mod canvas_size_center_offset_tests;
+mod canvas_size_gray_tests;

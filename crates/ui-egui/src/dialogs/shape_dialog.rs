@@ -28,8 +28,33 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: ShapeKind, at: Point) -> Optio
     let sides = o.polygon_sides.clamp(3, 100);
     let units = GuideUnits::new(ruler, size[0], size[1], dpi).points_per_inch(points);
     // The options bar has no star ratio: a polygon opens as a plain polygon.
-    let options = CreateShapeOptions::initial(kind, at).units(units).tool(radius, sides, 1.0);
-    Some(app.framework.dialogs.open(CreateShapeDialog::new(options).alert_title(tl!("PhotoCraft"))))
+    let mut options = CreateShapeOptions::initial(kind, at).units(units).tool(radius, sides, 1.0);
+    if kind == ShapeKind::Ellipse {
+        options = ellipse_prefill(app, options);
+    }
+    let dialog = CreateShapeDialog::new(options);
+    // Create Ellipse's range alert carries the dialog's own title, "Create Ellipse", as the reference's does (#13230).
+    // The other kinds' alerts weren't measured and keep the app's name.
+    let dialog = if kind == ShapeKind::Ellipse { dialog } else { dialog.alert_title(tl!("PhotoCraft")) };
+    Some(app.framework.dialogs.open(dialog))
+}
+
+/// Create Ellipse opens as Photoshop's does (#13229): with the active ellipse layer's size, or 100 × 100 with a pixel
+/// layer active or none, whatever the last OK was, and From Center unchecked (the tool has no From Center option yet).
+/// Another shape layer active wasn't measured and keeps the remembered values.
+fn ellipse_prefill(app: &PhotocraftApp, mut options: CreateShapeOptions) -> CreateShapeOptions {
+    use photocraft_doc::{LayerContent, LiveShape};
+
+    let active = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id)));
+    match active.map(|l| &l.content) {
+        Some(LayerContent::Shape(shape)) => match shape.live {
+            Some(LiveShape::Ellipse { rect: [_, _, w, h] }) if w.abs() >= 1.0 && h.abs() >= 1.0 => options.size = (w.abs(), h.abs()),
+            _ => return options,
+        },
+        _ => options.size = (100.0, 100.0),
+    }
+    options.from_center = false;
+    options.recalled()
 }
 
 /// Whether a click at `at` (document px) with the Rectangle tool in Shape mode lies inside the active live
@@ -73,3 +98,11 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "shape_dialog/create_ellipse_prefill_tests.rs"]
+mod create_ellipse_prefill_tests;
+
+#[cfg(test)]
+#[path = "shape_dialog/create_ellipse_range_alert_tests.rs"]
+mod create_ellipse_range_alert_tests;
