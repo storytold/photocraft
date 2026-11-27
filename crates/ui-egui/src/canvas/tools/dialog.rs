@@ -77,7 +77,12 @@ impl CanvasTool for DialogTool<'_> {
             let follows = canvas_input::follows_drag(app, pick);
             match pick {
                 DialogPick::TonePicker(_) => (canvas_input::pick_tone(app, at), !follows),
-                DialogPick::CurvesPoint => (canvas_input::add_curve_point(app, at, mods.shift), true),
+                DialogPick::CurvesPoint => {
+                    // A cancelled gesture can leave a preview point selected; never let the next
+                    // press move that stale point if this sample is rejected.
+                    canvas_input::release(app, pick);
+                    (canvas_input::add_curve_point(app, at, mods.shift), !follows)
+                }
                 DialogPick::Color => (canvas_input::pick_color(app, at), !follows),
                 DialogPick::ParamDropper => (canvas_input::pick_dropper(app, at, mods), !follows),
                 DialogPick::ColorRange => (canvas_input::pick_color_range(app, at, mods), !follows),
@@ -121,6 +126,9 @@ impl CanvasTool for DialogTool<'_> {
             DialogPick::GradientDrag => {
                 canvas_input::drag_gradient(app, start, total);
             }
+            DialogPick::CurvesPoint => {
+                canvas_input::drag_curve_point(app, total);
+            }
             DialogPick::PatternPhase => {
                 // `false`: a pick change, an unlink or an outside phase change ended the gesture.
                 if let Some(mut drag) = state.phase.take()
@@ -143,6 +151,9 @@ impl CanvasTool for DialogTool<'_> {
             if let Some(drag) = state.phase.take() {
                 pattern_fill_ui::release(app, drag, at);
             }
+            if let (DialogPick::CurvesPoint, Some(start)) = (pick, state.press) {
+                canvas_input::drag_curve_point(app, [at[0] - start[0], at[1] - start[1]]);
+            }
             canvas_input::release(app, pick);
         });
         self.state.press = None;
@@ -160,7 +171,8 @@ impl CanvasTool for DialogTool<'_> {
     /// The drags that move content (the pattern's phase, a shadow's offset, a gradient's offset) follow every move from
     /// the press, so a move of a pixel or two moves it, as production's dialog drags; none of them reads a click.
     fn takes_every_move(&self) -> bool {
-        self.state.press.is_some() && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::GradientDrag)
+        self.state.press.is_some()
+            && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::GradientDrag | DialogPick::CurvesPoint)
     }
 
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}

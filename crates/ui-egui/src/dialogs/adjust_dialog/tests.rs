@@ -7,6 +7,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::adjust_editors::values;
+use crate::dialogs::canvas_input::DialogPick;
 
 fn app_with_image() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
@@ -360,6 +361,25 @@ fn command_click_on_the_image_adds_a_point_on_the_composite_curve() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     ok(&mut app, &ctx, id).unwrap();
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+}
+
+#[test]
+fn command_drag_moves_the_new_curve_point_without_editing_the_document() {
+    let mut app = app_with_image();
+    let id = open(&mut app, "image.adjustments.curves").unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let _ = crate::dialogs::canvas_input::add_curve_point(&mut app, [8.0, 8.0], false);
+    let original = channel_points(&mut app, "points");
+    assert_eq!(original.len(), 3);
+    let output = original[1][1];
+    assert!(crate::dialogs::canvas_input::drag_curve_point(&mut app, [0.0, -20.0]));
+    let moved = channel_points(&mut app, "points");
+    assert_eq!(moved[1][0], original[1][0], "the sampled input stays fixed");
+    assert_eq!(moved[1][1], output + 20.0, "upward travel raises the curve output");
+    crate::dialogs::canvas_input::release(&mut app, DialogPick::CurvesPoint);
+    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+    assert_eq!(app.adjust_open.as_ref().and_then(|open| open.curve_drag), None);
+    let _ = id;
 }
 
 /// #7325: a plain click, a full curve and an armed eyedropper add nothing.

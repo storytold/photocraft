@@ -87,6 +87,16 @@ pub(crate) struct OpenAdjust {
     recorded: Value,
     /// The captured parameters a Smart Filter edit lays over the recorded ones through the engine's normal form.
     normalized: Option<Value>,
+    /// The point created by the on-image Curves gesture, while its pointer is held.
+    pub(crate) curve_drag: Option<CurveDrag>,
+}
+
+/// The selected Curves point and its value at the start of an on-image drag.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CurveDrag {
+    pub(crate) channel: usize,
+    pub(crate) point: usize,
+    pub(crate) output: f32,
 }
 
 /// The conversion context of a value in `mode` with the parameters `base` and the isolated plane `isolated`.
@@ -214,7 +224,10 @@ fn set_params(app: &mut PhotocraftApp, id: DialogId, params: &Value, change: Cha
     let read = if retargeted && open.unresolved { None } else { values::from_params(&open.kind, params, &shown.cx).ok() };
     let taken = read.is_some();
     match read {
-        Some(value) if change == Change::Edit => *dialog.value_mut() = DialogValue { value, ..shown },
+        Some(value) if change == Change::Edit => {
+            *dialog.value_mut() = DialogValue { value, ..shown };
+            open.curve_drag = None;
+        }
         Some(value) => dialog.seed(DialogValue { value, ..shown }),
         // The address is the dialog's context, not a setting: a refused value keeps the retarget.
         None if retargeted => dialog.seed(shown),
@@ -342,15 +355,42 @@ pub(crate) fn add_point(app: &mut PhotocraftApp, at: [f64; 2], every_channel: bo
     let AdjustValue::Curves { curves, .. } = &mut value.value else { return true };
     let added = CurvesPanel::add_point_from_sample(curves, &channels, shown, Srgba::from_rgb_array(sample), every_channel, &curve_levels);
     if let Some(index) = added {
+        let output = match curves.curves.get(shown) {
+            Some(craft::imaging::ui::curve::Curve::Points { points, .. }) => points.get(index).map_or(0.0, |point| point[1]),
+            _ => 0.0,
+        };
         *dialog.value_mut() = value;
         dialog.select_point(index);
         // The next sample of a picker starts from the curve with this point.
         if let Some(open) = app.adjust_open.as_mut() {
             open.picker_base = None;
             open.picked = None;
+            open.curve_drag = Some(CurveDrag { channel: shown, point: index, output });
         }
     }
     true
+}
+
+/// Moves the point created by the current on-image Curves gesture. Vertical travel is mapped one
+/// document pixel to one curve level, with upward travel increasing the output.
+pub(crate) fn drag_curve_point(app: &mut PhotocraftApp, total: [f64; 2]) -> bool {
+    let Some(open) = app.adjust_open.as_ref() else { return false };
+    let Some(drag) = open.curve_drag else { return false };
+    let id = open.id;
+    let output = (drag.output - total[1] as f32).clamp(0.0, 255.0);
+    let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id) else { return false };
+    let AdjustValue::Curves { curves, .. } = &mut dialog.value_mut().value else { return false };
+    let Some(craft::imaging::ui::curve::Curve::Points { points, .. }) = curves.curves.get_mut(drag.channel) else { return false };
+    let Some(point) = points.get_mut(drag.point) else { return false };
+    point[1] = output;
+    true
+}
+
+/// Ends an on-image Curves gesture without changing the selected point.
+pub(crate) fn end_curve_drag(app: &mut PhotocraftApp) {
+    if let Some(open) = app.adjust_open.as_mut() {
+        open.curve_drag = None;
+    }
 }
 
 /// Settings an adjustment dialog keeps from its last OK although it opens at its neutral ones:
@@ -666,6 +706,7 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
         setup,
         recorded,
         normalized,
+        curve_drag: None,
     });
     Ok(id)
 }
@@ -837,7 +878,7 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
         if let Ok(mut shared) = open.setup.lock() {
             *shared = setup;
         }
-        (open.mode, open.target, open.unresolved, open.picker_base, open.picked) = (seeded.mode, seeded.target, false, None, None);
+        (open.mode, open.target, open.unresolved, open.picker_base, open.picked, open.curve_drag) = (seeded.mode, seeded.target, false, None, None, None);
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id) {
             dialog.seed(DialogValue { value: seeded.value, cx: seeded.cx });
         }
@@ -858,7 +899,7 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
         shown.cx = value_cx(smart_mode, target.channel.clone(), shown.cx.base.clone());
         dialog.seed(shown);
     }
-    (open.mode, open.target, open.picker_base, open.picked) = (smart_mode, target, None, None);
+    (open.mode, open.target, open.picker_base, open.picked, open.curve_drag) = (smart_mode, target, None, None, None);
 }
 
 /// What OK on the open dialog runs, `(command, its params, the dialog's params)`: the adjustment command on the dialog's
