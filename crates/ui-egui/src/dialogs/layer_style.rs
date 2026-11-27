@@ -204,6 +204,11 @@ fn values_of(e: &Effect, light: f32) -> Value {
             if let Some(source) = interpolation {
                 set(&mut v, "method", json!(source.method));
                 set(&mut v, "smoothness", json!(source.smoothness));
+            } else {
+                // No recorded method (a baked PSD curve): the factory Smooth (#14900) must not
+                // rebuild it on an unchanged OK, so the page shows its stops as they are.
+                set(&mut v, "method", json!("custom"));
+                drop_keys(&mut v, &["smoothness"]);
             }
             let (stops, opacity) = gradient_field::stops_to_json(&gradient_field::stops_of_doc(stops, &g.opacity_stops));
             set(&mut v, gradient_field::KEY, stops);
