@@ -2,16 +2,18 @@
 //! request an error result still receive it.
 
 use super::*;
-use crate::control::{ControlRequest, Outcome, handle};
-use crate::file_dialog::{self, FileDialogAnswer};
-use crate::state::DialogKind;
+use crate::control::{ControlRequest, Reply, handle};
+use craft::host::{Picked, ScriptedFiles};
+use craft::ui::dialog::{DialogId, OpenDialog};
+use craft::ui::runtime::drag::OsFile;
+use std::sync::Arc;
 use crate::{Services, menus};
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-fn app_with(answer: Option<FileDialogAnswer>) -> PhotocraftApp {
+fn app_with(answer: Option<Picked>) -> Box<PhotocraftApp> {
     let services = Services {
-        file_dialog: Some(file_dialog::fake(vec![answer]).0),
+        files: Some(Arc::new(ScriptedFiles::answering(vec![answer.unwrap_or(Picked::Cancelled)]))),
         import: Some(Box::new(|name, bytes, opts| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| format!("{name}: {e}"))
         })),
@@ -21,12 +23,23 @@ fn app_with(answer: Option<FileDialogAnswer>) -> PhotocraftApp {
 }
 
 fn pick(app: &mut PhotocraftApp) {
-    menus::invoke(app, &egui::Context::default(), "file.open", json!({})).unwrap();
-    app.poll_file_dialog(&egui::Context::default(), None);
+    let ctx = app.ctx().clone();
+    menus::invoke(app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog();
 }
 
-fn messages(app: &PhotocraftApp) -> Vec<&str> {
-    app.ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).map(|d| d.fields["message"].as_str().unwrap()).collect()
+fn error_dialogs(app: &PhotocraftApp) -> Vec<OpenDialog> {
+    app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert")).collect()
+}
+
+fn messages(app: &PhotocraftApp) -> Vec<String> {
+    error_dialogs(app).into_iter().map(|d| d.fields.unwrap()["message"].as_str().unwrap().to_owned()).collect()
+}
+
+fn no_dialogs(app: &PhotocraftApp) -> bool { app.framework.dialogs.open_dialogs().is_empty() }
+
+fn memory_id(app: &PhotocraftApp) -> DialogId {
+    crate::dialogs::alerts::prompt_tagged::<crate::open_prompt::MemoryTag>(app).unwrap()
 }
 
 fn expected(name: &str) -> String {
@@ -49,7 +62,7 @@ fn unrecognized_and_mislabeled_files_show_the_exact_alert_without_opening_docume
         ("unknown.psb", b"ordinary text".to_vec()),
         ("unknown.psdt", b"ordinary text".to_vec()),
     ] {
-        let mut app = app_with(Some(FileDialogAnswer::Contents(name.into(), bytes)));
+        let mut app = app_with(Some(Picked::Contents(vec![(name.into(), bytes)])));
         pick(&mut app);
         let wanted = expected(name);
         assert_eq!(messages(&app), [wanted.as_str()]);
@@ -66,11 +79,11 @@ fn unrecognized_and_mislabeled_files_show_the_exact_alert_without_opening_docume
         interactive.open_bytes("unknown.psdt", b"ordinary text").unwrap_err(),
         "unknown.psdt: PSD: invalid signature [111, 114, 100, 105], expected 8BPS"
     );
-    assert!(interactive.ui.dialogs.is_empty(), "the caller owns presentation of a returned error");
+    assert!(no_dialogs(&interactive), "the caller owns presentation of a returned error");
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let mut app = app_with(Some(FileDialogAnswer::Contents("unknown.psdt".into(), b"ordinary text".to_vec())));
+        let mut app = app_with(Some(Picked::Contents(vec![("unknown.psdt".into(), b"ordinary text".to_vec())])));
         app.background_jobs = true;
         pick(&mut app);
         assert_eq!(app.jobs.opens.len(), 1);
@@ -90,14 +103,14 @@ fn an_open_failure_alert_has_one_ok_button_and_closes_when_clicked() {
     app.open_failed("notes.txt", "notes.txt: codec: unrecognized image format");
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(900.0, 600.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
-        .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
     h.run_steps(3);
     assert!(h.query_by_label(&expected("notes.txt")).is_some());
     assert!(h.query_by_label("Cancel").is_none());
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(no_dialogs(h.state()));
     assert!(h.state().session.documents().is_empty());
 }
 
@@ -121,16 +134,17 @@ fn other_read_errors_keep_their_reason_and_only_exact_leading_source_prefixes_ar
 #[test]
 fn several_failed_files_each_get_one_alert_and_valid_files_still_open() {
     let files = vec![("a.txt".into(), b"text".to_vec()), ("b.png".into(), png()), ("c.png".into(), b"text".to_vec()), ("d.png".into(), png())];
-    let mut app = app_with(Some(FileDialogAnswer::ContentsMany(files)));
+    let mut app = app_with(Some(Picked::Contents(files)));
     pick(&mut app);
     assert_eq!(messages(&app), [expected("a.txt"), expected("c.png")]);
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["b.png", "d.png"]);
-    assert!(app.ui.notices.iter().all(|n| !n.error));
-    let first = app.ui.dialogs[0].id;
-    crate::dialogs::confirm(&mut app, first).unwrap();
+    assert!(app.ui.notices.iter().all(|n| n.tone != craft::theme::variant::Tone::Bad));
+    let app_ctx = app.ctx().clone();
+    let first = error_dialogs(&app)[0].id;
+    crate::dialogs::confirm(&mut app, &app_ctx, first).unwrap();
     assert_eq!(messages(&app), [expected("c.png")]);
-    let second = app.ui.dialogs[0].id;
-    crate::dialogs::confirm(&mut app, second).unwrap();
+    let second = error_dialogs(&app)[0].id;
+    crate::dialogs::confirm(&mut app, &app_ctx, second).unwrap();
     assert!(messages(&app).is_empty());
     assert_eq!(app.session.documents().len(), 2);
 }
@@ -142,14 +156,14 @@ fn background_open_failures_are_reported_once_when_the_jobs_finish() {
     app.open_bytes("first.txt", b"text").unwrap();
     app.open_bytes("second.png", b"text").unwrap();
     app.open_bytes("valid.png", &png()).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !app.jobs.opens.is_empty() {
         assert!(std::time::Instant::now() < deadline, "open jobs did not finish");
         crate::jobs_ui::tick(&mut app, &ctx);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    let mut actual = messages(&app).into_iter().map(str::to_owned).collect::<Vec<_>>();
+    let mut actual = messages(&app);
     actual.sort();
     let mut wanted = vec![expected("first.txt"), expected("second.png")];
     wanted.sort();
@@ -157,7 +171,7 @@ fn background_open_failures_are_reported_once_when_the_jobs_finish() {
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["valid.png"]);
     crate::jobs_ui::tick(&mut app, &ctx);
     assert_eq!(messages(&app).len(), 2, "a consumed failure event cannot show twice");
-    assert!(app.ui.notices.iter().all(|n| !n.error));
+    assert!(app.ui.notices.iter().all(|n| n.tone != craft::theme::variant::Tone::Bad));
 }
 
 #[test]
@@ -166,7 +180,7 @@ fn cancelling_file_open_does_not_show_an_error() {
     pick(&mut app);
     assert!(!app.file_dialog_open());
     assert!(app.session.documents().is_empty());
-    assert!(app.ui.dialogs.is_empty());
+    assert!(no_dialogs(&app));
     assert!(app.ui.notices.is_empty());
     assert!(!app.ui.status_error);
 }
@@ -181,16 +195,16 @@ fn automation_and_control_open_still_return_the_original_error() {
         let mut app = app_with(None);
         let err = app.open_automation_bytes(name, b"text").unwrap_err();
         assert_eq!(err, expected_error);
-        assert!(app.ui.dialogs.is_empty());
+        assert!(no_dialogs(&app));
         let read_name = name.to_string();
         app.services.automation_read =
             Some(Box::new(move |_| Ok(crate::AutomationReadResult { name: read_name.clone(), bytes: b"text".to_vec(), save_path: None })));
         let (request, _rx) = ControlRequest::new("app.open", json!({"path": name}));
-        let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), &request) else { panic!("open should return immediately") };
+        let Reply::Done(reply) = handle(&mut app, &egui::Context::default(), &request) else { panic!("open should return immediately") };
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["error"], expected_control_error);
         assert!(app.session.documents().is_empty());
-        assert!(app.ui.dialogs.is_empty());
+        assert!(no_dialogs(&app));
         assert!(app.ui.notices.is_empty());
     }
 }
@@ -205,18 +219,15 @@ fn missing_source(tag: &str, name: &str) -> (std::path::PathBuf, String, String)
     (path, source, reason)
 }
 
+/// A native path plus tempting valid bytes: choosing bytes instead of reading the path would
+/// open a document and fail the original missing-file and raw-error assertions below.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug)]
-struct UnreadableNativeDrop(std::path::PathBuf);
-
-#[cfg(not(target_arch = "wasm32"))]
-impl egui::DroppedFile for UnreadableNativeDrop {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        panic!("a native absolute-path drop must read from disk")
-    }
+fn unreadable_native_drop(path: std::path::PathBuf) -> OsFile {
+    let mut file = OsFile::default();
+    file.name = display_name(&path.to_string_lossy());
+    file.path = Some(path);
+    file.bytes = Some(png().into());
+    file
 }
 
 /// Apply actual worker events and check the unmodified error sent to a waiting control client.
@@ -228,7 +239,7 @@ fn finish_read_failure(app: &mut PhotocraftApp, source: &str, reason: &str, work
         app.jobs.waiters.push((job, tx));
         rx
     });
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !app.jobs.opens.is_empty() {
         assert!(std::time::Instant::now() < deadline, "open job did not finish");
@@ -257,7 +268,7 @@ fn native_drop_read_failures_name_the_source_once_in_foreground_and_background()
         for background in [false, true] {
             let mut app = app_with(None);
             app.background_jobs = background;
-            app.open_dropped(&egui::Context::default(), vec![std::sync::Arc::new(UnreadableNativeDrop(path.clone()))], None);
+            app.open_dropped(&egui::Context::default(), vec![unreadable_native_drop(path.clone())], crate::file_open::DropTo::Window);
             assert_eq!(app.jobs.opens.len(), usize::from(background), "exercise the actual selected execution route");
             let worker_name = app.jobs.opens.first().map(|tab| tab.name.as_str()).unwrap_or(name);
             if background {
@@ -290,15 +301,14 @@ fn recent_grid_and_list_read_failures_keep_the_reason_without_repeating_the_path
     for grid in [false, true] {
         let mut app = app_with(None);
         app.background_jobs = false;
-        app.ui.chrome.home_recent_grid = grid;
+        app.ui.chrome.home_recent_view = if grid { craft::ui::shell::RecentView::Grid } else { craft::ui::shell::RecentView::List };
         app.push_recent(&source);
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(900.0, 760.0))
-            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .with_context(app.ctx().clone())
             .build_ui_state(
-                |ui, app: &mut PhotocraftApp| {
-                    let recent = app.ui.recent_files.clone();
-                    crate::home_recent_ui::show_home_recent(app, ui, &recent, 600.0);
+                |ui, app: &mut Box<PhotocraftApp>| {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
                 },
                 app,
             );
@@ -332,10 +342,10 @@ fn os_open_read_failures_keep_the_existing_full_source_route() {
 fn smart_object_open_read_failures_retain_the_read_source_without_a_save_or_recent_path() {
     let (_, source, reason) = missing_source("smart-object", "missing.psd");
     for background in [false, true] {
-        let mut app = app_with(Some(FileDialogAnswer::Paths(vec![source.clone()])));
+        let mut app = app_with(Some(Picked::Paths(vec![source.clone().into()])));
         app.background_jobs = background;
         app.open_dialog_as_smart_object().unwrap();
-        app.poll_file_dialog(&egui::Context::default(), None);
+        app.poll_file_dialog();
         assert_eq!(app.jobs.opens.len(), usize::from(background), "exercise the actual selected execution route");
         assert!(app.jobs.opens.iter().all(|tab| tab.path.is_none()), "a Smart Object remains untitled");
         assert!(app.jobs.opens.iter().all(|tab| tab.error_source.as_deref() == Some(source.as_str())));
@@ -348,7 +358,7 @@ fn smart_object_open_read_failures_retain_the_read_source_without_a_save_or_rece
 fn recognized_psd_header_failures_keep_their_diagnostic_and_raw_error() {
     // The file signature is recognized: a bad version is a PSD error, not a codec miss.
     let bytes = b"8BPS\0\0".to_vec();
-    let mut app = app_with(Some(FileDialogAnswer::Contents("corrupt.psdt".into(), bytes.clone())));
+    let mut app = app_with(Some(Picked::Contents(vec![("corrupt.psdt".into(), bytes.clone())])));
     pick(&mut app);
     assert_eq!(messages(&app), ["Couldn't open corrupt.psdt: PSD: unsupported file version 0"]);
     assert!(app.session.documents().is_empty());
@@ -357,7 +367,7 @@ fn recognized_psd_header_failures_keep_their_diagnostic_and_raw_error() {
     let mut direct = app_with(None);
     // The typed PSD path returns its raw IO error without adding a source-name prefix.
     assert_eq!(direct.open_bytes("corrupt.psdt", &bytes).unwrap_err(), "PSD: unsupported file version 0");
-    assert!(direct.ui.dialogs.is_empty());
+    assert!(no_dialogs(&direct));
 
     // A damaged internal block or an unrelated/malformed diagnostic retains its reason.
     for reason in [
@@ -384,10 +394,12 @@ fn template_psd_for_memory_prompt() -> Vec<u8> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn memory_dialog_reply(app: &mut PhotocraftApp, dialog: u64, accept: bool) -> serde_json::Value {
+fn memory_dialog_reply(app: &mut PhotocraftApp, dialog: DialogId, accept: bool) -> serde_json::Value {
     let method = if accept { "ui.dialog.confirm" } else { "ui.dialog.cancel" };
-    let (request, _rx) = ControlRequest::new(method, json!({"dialog": dialog}));
-    let Outcome::Done(reply) = handle(app, &egui::Context::default(), &request) else { panic!("memory prompt reply is immediate") };
+    let (request, _rx) = ControlRequest::new(method, json!({"dialog": dialog.value()}));
+    let ctx = app.ctx().clone();
+    let Reply::Done(reply) = handle(app, &ctx, &request) else { panic!("memory prompt reply is immediate") };
+    ctx.run_ui(Default::default(), |ui| crate::dialogs::run(app, ui)).textures_delta.clear();
     reply
 }
 
@@ -413,7 +425,7 @@ fn byte_template_memory_prompt_keeps_the_source_through_real_open_approve_and_ca
     let memory = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
     for background in [false, true] {
         for accept in [false, true] {
-            let mut app = app_with(Some(FileDialogAnswer::Contents("card.psdt".into(), psd.clone())));
+            let mut app = app_with(Some(Picked::Contents(vec![("card.psdt".into(), psd.clone())])));
             app.background_jobs = background;
             photocraft_io::psd_budget::with_test_estimate_charge(3 * gb, || {
                 photocraft_io::memory::with_mock_memory(memory, || {
@@ -430,8 +442,8 @@ fn byte_template_memory_prompt_keeps_the_source_through_real_open_approve_and_ca
                     assert_eq!(prompt.error_source.as_deref(), Some("card.psdt"));
                     assert!(prompt.estimated > 3 * gb);
                     let preflight = prompt.id;
-                    let dialog = app.ui.dialogs[0].id;
-                    assert!(crate::open_prompt::owns_memory(&app.ui.dialogs[0].fields));
+                    let dialog = memory_id(&app);
+                    assert!(crate::dialogs::alerts::prompt_tag::<crate::open_prompt::MemoryTag>(&app).is_some());
                     let reply = memory_dialog_reply(&mut app, dialog, accept);
                     assert_eq!(reply["ok"], true, "{reply}");
                     if background && accept {
@@ -448,7 +460,7 @@ fn byte_template_memory_prompt_keeps_the_source_through_real_open_approve_and_ca
                         assert!(opened.path.is_none(), "error source is never a save destination");
                     }
                     assert!(app.ui.recent_files.is_empty(), "byte input does not acquire a Recent path");
-                    assert!(app.ui.dialogs.is_empty());
+                    assert!(no_dialogs(&app));
                     assert!(app.held_memory_prompts.is_empty());
                     assert!(app.prompt_order.is_empty());
                     assert!(app.jobs.opens.is_empty());
@@ -476,6 +488,21 @@ fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_re
         0, 8, // depth
         0, 3, // RGB
     ];
+    // The typed UI confirmation is an acknowledgement. The underlying approval result keeps
+    // its original raw wrapper, checked independently through the same real stored preflight.
+    {
+        let mut direct = app_with(None);
+        direct.background_jobs = false;
+        let source = photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.clone()));
+        let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
+        let id = direct.session.store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+            id: 0, name: "Untitled-1".into(), source, fingerprint, required: 1000, soft_limit: 500,
+            hard_limit: 2000, available_ram: Some(4000), confirm_damage: true,
+        }).unwrap();
+        crate::open_prompt::arrive_memory(&mut direct, id, "Untitled-1".into(), None, Some("card.psdt".into()), None, None, 1000, Some(4000), false, false);
+        let error = crate::open_prompt::answer_memory(&mut direct, true).unwrap_err();
+        assert_eq!(error, "Untitled-1: Untitled-1: PSD: unsupported file version 0", "preserve the approval's original wrapper");
+    }
     for background in [false, true] {
         let mut app = app_with(None);
         app.background_jobs = background;
@@ -496,7 +523,7 @@ fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_re
             })
             .unwrap();
         crate::open_prompt::arrive_memory(&mut app, preflight, "Untitled-1".into(), None, Some("card.psdt".into()), None, None, 1000, Some(4000), false, false);
-        let dialog = app.ui.dialogs[0].id;
+        let dialog = memory_id(&app);
         let reply = memory_dialog_reply(&mut app, dialog, true);
         let reason = "PSD: unsupported file version 0";
         if background {
@@ -507,8 +534,7 @@ fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_re
             assert_eq!(tab.error_source.as_deref(), Some("card.psdt"));
             finish_read_failure(&mut app, "card.psdt", reason, &format!("Untitled-1: {reason}"));
         } else {
-            assert_eq!(reply["ok"], false);
-            assert_eq!(reply["error"], format!("Untitled-1: Untitled-1: {reason}"), "preserve the approval's original wrapper");
+            assert_eq!(reply["ok"], true, "typed confirmation acknowledges its receipt; the approval error is presented by the real prompt consumer: {reply}");
             assert_eq!(messages(&app), [format!("Couldn't open card.psdt: {reason}")]);
         }
         assert_eq!(app.ui.status, format!("Couldn't open card.psdt: {reason}"));
@@ -524,8 +550,9 @@ fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_re
         assert!(app.jobs.batches.is_empty());
         assert_eq!(app.session.pending_preflight_bytes().unwrap(), 0);
         assert!(app.session.take_pending_preflight(preflight).is_none());
-        let alert = app.ui.dialogs[0].id;
-        crate::dialogs::confirm(&mut app, alert).unwrap();
-        assert!(app.ui.dialogs.is_empty(), "the one error alert closes normally");
+        let alert = error_dialogs(&app)[0].id;
+        let ctx = app.ctx().clone();
+        crate::dialogs::confirm(&mut app, &ctx, alert).unwrap();
+        assert!(no_dialogs(&app), "the one error alert closes normally");
     }
 }
