@@ -151,9 +151,9 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, Vec<ContentOp>)>, SelectionFo
 }
 
 /// The pixels of `surface` over `rect` and the rect they cover: as they are at `scale` 1, else
-/// resampled bicubically by `scale` about the document origin (the page keeps its size, so the
-/// image is drawn at fewer pixels per inch). The edge pixels repeat outwards, so the page's border
-/// doesn't fade into the transparency beyond it.
+/// resampled bicubically by `scale` (the page keeps its size, so the image is drawn at fewer
+/// pixels per inch). The edge pixels repeat outwards, so the page's border doesn't fade into the
+/// transparency beyond it.
 fn region_at(
     surface: &photocraft_raster::Surface,
     rect: photocraft_geom::Rect,
@@ -164,7 +164,11 @@ fn region_at(
         return Ok((surface.read_region(rect), rect));
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let small = photocraft_algo::resample::resize_surface_in_canvas(surface, scale, scale, photocraft_algo::resample::Resample::Bicubic, rect);
+    // Resampled from the origin: about the document origin the rounding of `rect`'s edges would
+    // depend on where the board sits, so equal boards could get images of different sizes.
+    let moved = surface.translated(-rect.x0, -rect.y0, rect);
+    let rect = photocraft_geom::Rect::from_xywh(0, 0, rect.width(), rect.height());
+    let small = photocraft_algo::resample::resize_surface_in_canvas(&moved, scale, scale, photocraft_algo::resample::Resample::Bicubic, rect);
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let rect = photocraft_algo::resample::scaled_rect(rect, scale, scale);
     Ok((small.read_region(rect), rect))
@@ -265,10 +269,11 @@ pub fn export_with(
         // A page keeps `device` bytes a pixel for its composite and one a pixel for each plate.
         let retained = page_pixels.saturating_mul((device.unwrap_or(0) + plate_count) as u64);
         // One page renders at a time: its f32 composite surface plus the region read back from
-        // it, both `n` channels at 4 bytes per pixel, and between them the resampled surface when
-        // the page is downsampled. The whole-document canvas is never held.
+        // it, both `n` channels at 4 bytes per pixel, and between them its copy at the origin and
+        // the resampled surface when the page is downsampled. The whole-document canvas is never
+        // held.
         let largest = artboards.iter().map(|(_, _, a)| rect_pixels(a.rect)).max().unwrap_or(0);
-        let stores = if image_scale < 1.0 { 3 } else { 2 };
+        let stores = if image_scale < 1.0 { 4 } else { 2 };
         let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(stores);
         let estimate = retained.saturating_add(temporary);
         if estimate > MAX_PDF_EXPORT_BYTES {
