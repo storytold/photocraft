@@ -392,6 +392,21 @@ fn warp_refusal(app: &PhotocraftApp) -> Option<&'static str> {
     if !t.layers.is_empty() { Some(WARP_ONE_LAYER) } else { moves_group(app, t).then_some(WARP_GROUP) }
 }
 
+/// Would [`begin`] box the active group as one layer? Asked before it runs: a large layer's box
+/// opens only when its preparing job lands, too late for [`warp_refusal`].
+fn opens_group_box(app: &PhotocraftApp) -> bool {
+    if crate::vector_ui::free_transform_path(app).is_some() {
+        return false;
+    }
+    let target = crate::canvas::paint_target(app);
+    let Some(st) = app.session.active() else { return false };
+    let Some(id) = st.active_layer else { return false };
+    let targets = photocraft_engine::transform_cmds::box_targets(&st.doc, &photocraft_engine::transform_cmds::selection_targets(st));
+    targets == [id]
+        && photocraft_engine::transform_cmds::lone_target(&st.doc, Some(id), &json!({ "target": target })).is_ok_and(|t| t.is_none())
+        && st.doc.layer(id).is_some_and(|l| matches!(l.content, LayerContent::Group(_)))
+}
+
 /// Free Transform on a copy (⌥⌘T, no menu item): duplicates the active layer (with a selection,
 /// its selected pixels, as Layer via Copy) and transforms the copy (#352).
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
@@ -708,6 +723,9 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
         return Err(why.into());
     }
     if app.ui.transform.is_none() {
+        if opens_group_box(app) {
+            return Err(WARP_GROUP.into());
+        }
         begin(app, ctx)?;
         if let Some(why) = warp_refusal(app) {
             cancel(app);
