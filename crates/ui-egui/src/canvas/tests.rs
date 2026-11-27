@@ -1,9 +1,11 @@
 use super::document_display::{CanvasHost, active_view};
 use super::*;
-use craft::behavior::canvas::ZoomLadder;
+use craft::behavior::canvas::ZoomScheme;
 use craft::behavior::kurbo::Size;
 use craft::ui::canvas::{PixelRect, RasterSource};
 use craft::ui::primitives::Revision;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 
 #[test]
 fn display_image_matches_egui_unmultiplied_conversion() {
@@ -41,7 +43,7 @@ fn app_on_two_displays() -> Box<PhotocraftApp> {
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("edit.fill", json!({"color": "#cc8040"})).unwrap();
     let icc = |id: &str| Some(resolve_profile(id, None, None).unwrap().to_bytes());
-    app.session.color.set_displays(Ok(vec![
+    app.session.color_mut().set_displays(Ok(vec![
         Display { id: 1, name: "A".into(), frame: [0.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("srgb") },
         Display { id: 4, name: "B".into(), frame: [100.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("display-p3") },
     ]));
@@ -175,8 +177,8 @@ fn clone_overlay_is_circular_and_respects_visibility() {
     assert_eq!(image(32 + 8, 32 + 8).a(), 0, "the brush square's corner, outside the circle, is clipped");
     assert_eq!(image(32 + 12, 32).a(), 0, "past the hard tip's rim");
     assert_eq!(app.session.active().unwrap().revision, revision);
-    assert!(app.session.presets.clone.active().anchor.is_none());
-    app.session.presets.clone.overlay.show = false;
+    assert!(app.session.presets().clone.active().anchor.is_none());
+    app.session.presets_mut().clone.overlay.show = false;
     assert!(clone_source_image(&mut app).is_none(), "a hidden Clone Source shows no image");
 }
 
@@ -218,7 +220,7 @@ fn clone_overlay_opacity_and_flow_match_a_stamp_on_another_layer() {
             app.ui.tool = Tool::CloneStamp;
             app.ui.tool_options.clone_sample = "all".into();
             app.session.tools.brush.size = 20.0;
-            app.session.presets.clone.overlay.clipped = clipped;
+            app.session.presets_mut().clone.overlay.clipped = clipped;
             for (opacity, flow) in [(1.0, 1.0), (0.5, 1.0), (1.0, 0.25), (0.5, 0.4)] {
                 // A full-strength overlay is shown first, so the change comes after a shown one.
                 clone_overlay_centre_alpha(&mut app);
@@ -244,7 +246,7 @@ fn clone_overlay_opacity_and_flow_match_a_stamp_on_another_layer() {
 fn clone_overlay_separate_opacity_setting_still_multiplies_the_brush_opacity() {
     let mut app = clone_overlay_app(20.0);
     app.session.tools.brush.opacity = 0.5;
-    app.session.presets.clone.overlay.opacity = 40.0;
+    app.session.presets_mut().clone.overlay.opacity = 40.0;
     let alpha = clone_overlay_centre_alpha(&mut app);
     assert!((alpha - 0.2).abs() < 0.01, "50% brush opacity times 40% overlay opacity: {alpha}");
 }
@@ -360,7 +362,7 @@ fn clone_cursor_from_an_inactive_document_cannot_replace_the_active_offset_refer
             app.ui.document_windows.arrangement = Some(Arrangement::TwoUpVertical);
             super::testing::frame(&mut app);
             let document = app.session.active().unwrap().doc.id;
-            let slots = app.session.presets.clone.clone();
+            let slots = app.session.presets().clone.clone();
             let revision = app.session.active().unwrap().revision;
             super::testing::move_to(&mut app, [40.0, 30.0], egui::Modifiers::NONE);
             assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [40.0, 30.0])));
@@ -380,7 +382,7 @@ fn clone_cursor_from_an_inactive_document_cannot_replace_the_active_offset_refer
             assert_eq!(crate::preset_panels::clone_offset_edit(&app, [-20.0, -10.0]).unwrap()["anchor"], json!([40.0, 30.0]));
             super::testing::move_to(&mut app, [44.0, 34.0], egui::Modifiers::NONE);
             assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [44.0, 34.0])), "the active canvas still updates normally");
-            assert_eq!(app.session.presets.clone, slots, "hover does not establish a source anchor");
+            assert_eq!(app.session.presets().clone, slots, "hover does not establish a source anchor");
             assert_eq!(app.session.active().unwrap().revision, revision, "hover does not paint");
         }
     }
@@ -659,6 +661,21 @@ fn a_secondary_canvas_hand_pans_while_a_transform_is_open() {
     assert_eq!(box_key(&app), box_before, "the drag didn't touch the box");
 }
 
+/// The canvas can paint a batch as a nested list, which keeps its place in egui's final paint order.
+fn flattened_paint_shapes(output: &egui::FullOutput) -> Vec<&egui::Shape> {
+    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
+            shape => into.push(shape),
+        }
+    }
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        open(&clipped.shape, &mut shapes);
+    }
+    shapes
+}
+
 #[test]
 fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // #5086: a guide crossing a layer under Free Transform was hidden behind the preview of
@@ -692,16 +709,7 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // At 100 % centred on the document, screen and document coordinates coincide.
     let layer = Rect::from_min_max(pos2(100.0, 100.0), pos2(200.0, 160.0));
     let near = |r: Rect| (r.min - layer.min).length() < 1.0 && (r.max - layer.max).length() < 1.0;
-    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
-        match shape {
-            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
-            shape => into.push(shape),
-        }
-    }
-    let mut shapes = Vec::new();
-    for clipped in &out.shapes {
-        open(&clipped.shape, &mut shapes);
-    }
+    let shapes = flattened_paint_shapes(&out);
     let position = |pred: &dyn Fn(&egui::Shape) -> bool| shapes.iter().position(|s| pred(s));
     // The moving pixels: the mesh that spans the layer's box.
     let preview = position(&|s| matches!(s, egui::Shape::Mesh(m) if near(m.calc_bounds())));
@@ -714,6 +722,74 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     };
     assert!(preview < guide, "the guide ({guide}) draws over the transform preview ({preview})");
     assert!(guide < frame, "the box ({frame}) draws over the guide ({guide})");
+}
+
+#[test]
+fn marching_ants_draw_over_a_guide_on_the_selection_edge() {
+    use craft::behavior::kurbo::Point;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 100})).unwrap();
+    app.ui.tool = Tool::RectMarquee;
+    app.ui.extras.rulers = false;
+    app.ui.extras.grid = false;
+    app.ui.extras.guides = true;
+    app.ui.view.extras = true;
+    app.ui.view.show.canvas_guides = true;
+    app.ui.view.show.selection_edges = true;
+    app.sync_views();
+
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [200.0, 150.0];
+    view.clear_pending();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let draw = |app: &mut PhotocraftApp| {
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            canvas_view(app, ui, CanvasHost::main(0), rect, view.clone(), true);
+        });
+        output.textures_delta.clear();
+        output
+    };
+
+    let output = draw(&mut app);
+    let shown = active_view(&app).expect("the canvas view");
+    let edge = Rect::from_two_pos(shown.to_screen(Point::new(100.0, 100.0)), shown.to_screen(Point::new(100.0, 160.0)));
+    let pixel = output.pixels_per_point.recip();
+    let is_guide = |shape: &egui::Shape| {
+        let egui::Shape::LineSegment { points, .. } = shape else { return false };
+        points.iter().all(|p| (p.x - edge.left()).abs() <= pixel)
+            && points[0].y.min(points[1].y) < edge.top() - pixel
+            && points[0].y.max(points[1].y) > edge.bottom() + pixel
+    };
+    let is_ants = |shape: &egui::Shape| {
+        let bounds = match shape {
+            egui::Shape::Mesh(mesh) => mesh.calc_bounds(),
+            egui::Shape::Rect(rect) => rect.rect,
+            egui::Shape::LineSegment { points, .. } => Rect::from_two_pos(points[0], points[1]),
+            _ => return false,
+        };
+        // A strip or dash on the selection edge, allowing for the framework's device-pixel snap.
+        bounds.height() > 0.0
+            && bounds.width() <= 2.0 * pixel
+            && (bounds.center().x - edge.left()).abs() <= pixel
+            && bounds.top() >= edge.top() - pixel
+            && bounds.bottom() <= edge.bottom() + 2.0 * pixel
+    };
+    let shapes = flattened_paint_shapes(&output);
+    let guide = shapes.iter().position(|shape| is_guide(shape)).expect("the guide spanning the selection");
+    let ants = shapes.iter().position(|shape| is_ants(shape)).expect("the ants along the left edge");
+    assert!(guide < ants, "the guide ({guide}) paints before the ants ({ants})");
+
+    app.ui.view.show.selection_edges = false;
+    let output = draw(&mut app);
+    let shapes = flattened_paint_shapes(&output);
+    assert!(shapes.iter().any(|shape| is_guide(shape)), "hiding selection edges leaves the guide");
+    assert!(!shapes.iter().any(|shape| is_ants(shape)), "the edge paint belongs to the ants");
 }
 
 #[test]
@@ -860,7 +936,7 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
 
 /// The zoom typed into a zoom field: the field's percent, kept inside the zoom range of the document.
 fn type_zoom(view: &mut View, percent: f32) {
-    view.zoom = ZoomLadder::clamp(f64::from(percent) / 100.0, Size::new(f64::from(view.doc_size[0]), f64::from(view.doc_size[1]))) as f32;
+    view.zoom = ZoomScheme::PHOTOSHOP.clamp(f64::from(percent) / 100.0, Size::new(f64::from(view.doc_size[0]), f64::from(view.doc_size[1]))) as f32;
     view.clear_pending();
 }
 
@@ -971,8 +1047,8 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
 
 /// #11276: a document floating in its own window zooms from the zoom typed into the status bar
 /// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
-/// copy of the view. Only the typed zoom fields are driven here, not the Navigator's slider or
-/// zoom buttons.
+/// copy of the view. #16415: so does the zoom typed into the floating window's own status bar.
+/// Only the typed zoom fields are driven here, not the Navigator's slider or zoom buttons.
 #[test]
 fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -995,7 +1071,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     // A Navigator in a column of icons shows in a flyout, which the click into the status bar closes: expand its column
     // so the panel stays while both fields are typed into.
     let navigator = "navigator".to_owned();
-    if h.state().ui.docking.layout.opens_in_flyout(&navigator) {
+    if h.state().ui.docking.layout().opens_in_flyout(&navigator) {
         crate::panel_docking::apply(h.state_mut(), vec![craft::behavior::dock::Action::set_iconic(navigator.clone(), false)]).unwrap();
         h.state_mut().ui.flyout = None;
         crate::panel_docking::show_panel(h.state_mut(), "navigator", Some(true)).unwrap();
@@ -1018,9 +1094,20 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         f.sort_by(|a, b| a.left().total_cmp(&b.left()));
         f
     };
-    assert_eq!(fields(&h).len(), 2, "the status bar's and the Navigator's zoom fields");
-    for (field, typed, want) in [(0, "200", 2.0), (1, "50", 0.5), (0, "300", 3.0), (1, "100", 1.0)] {
-        let at = fields(&h)[field].center();
+    // The main status bar's field lies lowest, the Navigator's furthest right, the floating window's status bar's is the
+    // third.
+    let pick = |f: &[egui::Rect], which: &str| -> egui::Rect {
+        let lowest = f.iter().copied().max_by(|a, b| a.bottom().total_cmp(&b.bottom())).unwrap_or(egui::Rect::NOTHING);
+        let right = f.iter().copied().max_by(|a, b| a.left().total_cmp(&b.left())).unwrap_or(egui::Rect::NOTHING);
+        match which {
+            "status" => lowest,
+            "navigator" => right,
+            _ => f.iter().copied().find(|r| *r != lowest && *r != right).unwrap_or(egui::Rect::NOTHING),
+        }
+    };
+    assert_eq!(fields(&h).len(), 3, "the status bar's, the Navigator's and the floating window's zoom fields");
+    for (field, typed, want) in [("status", "200", 2.0), ("navigator", "50", 0.5), ("window", "300", 3.0), ("navigator", "100", 1.0)] {
+        let at = pick(&fields(&h), field).center();
         h.event(egui::Event::PointerMoved(at));
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });

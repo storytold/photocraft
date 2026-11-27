@@ -620,13 +620,23 @@ impl DabBuilder {
     }
 
     pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
+        self.build_step(*s, out);
+    }
+
+    fn build_step(&mut self, mut s: StepInput, out: &mut Vec<Dab>) {
         let b = &self.brush;
+        // Both initial Airbrush dabs share the first Fade step. Count jitter uses the emitted step.
+        let emitted_step = s.step;
+        if b.build_up {
+            s.step = emitted_step.saturating_sub(1);
+        }
+        let s = &s;
         let seed = self.seed;
         let sd = &b.shape_dynamics;
         let sc = &b.scattering;
         let count = if sc.enabled {
             let n = sc.count.clamp(1, 16) as f32;
-            let k = scalar(&sc.count_jitter, s, rand01(seed, s.step, stream::COUNT));
+            let k = scalar(&sc.count_jitter, s, rand01(seed, emitted_step, stream::COUNT));
             ((n * k).round() as u32).clamp(1, 16)
         } else {
             1
@@ -860,7 +870,7 @@ impl DabGenerator {
             // step list (the pixel-grid mode can emit 1e7 steps for one).
             let brush = &*self.step_brush;
             let builder = &mut self.builder;
-            self.walker.push(p, &|q| step_len_for(brush, q), &mut |s| builder.build(&s, dabs));
+            self.walker.push(p, &|q| step_len_for(brush, q), &mut |s| builder.build_step(s, dabs));
             if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
                 let step = db.step_len(&p);
                 w.push(p, &|_| step, &mut |s| db.build(&s, dual));
@@ -884,7 +894,7 @@ impl DabGenerator {
         let mut sm = Vec::new();
         self.smoother.finish(&mut sm);
         self.walk(&sm, dabs, dual);
-        self.walker.finish(&mut |s| self.builder.build(&s, dabs));
+        self.walker.finish(&mut |s| self.builder.build_step(s, dabs));
         if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
             w.finish(&mut |s| db.build(&s, dual));
         }
