@@ -357,34 +357,59 @@ pub fn open_settings(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The options-bar button beside the brush field that shows and hides the Brush Settings panel (Photoshop's "Toggle
-/// the Brush Settings panel"). It runs Window › Brush Settings (F5).
+/// The options-bar button beside the brush field that shows and hides Brush Settings (F5).
 pub(crate) fn settings_toggle(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    panel_toggle(ui, app, PanelToggle::BrushSettings);
+}
+
+/// Healing's button beside the brush field runs the existing Window > Clone Source command.
+pub(crate) fn clone_source_toggle(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    panel_toggle(ui, app, PanelToggle::CloneSource);
+}
+
+/// Which existing panel the options-bar button controls.
+#[derive(Clone, Copy)]
+enum PanelToggle {
+    BrushSettings,
+    CloneSource,
+}
+
+fn panel_toggle(ui: &mut egui::Ui, app: &mut PhotocraftApp, panel: PanelToggle) {
+    let (key, id, command) = match panel {
+        PanelToggle::BrushSettings => ("brush-settings-toggle", "brushSettings", "window.panel.brushSettings"),
+        PanelToggle::CloneSource => ("clone-source-toggle", "cloneSource", "window.panel.cloneSource"),
+    };
     let mut toggled = Vec::new();
-    let props = ToggleProps { shown: crate::panel_docking::is_shown(app, "brushSettings"), toggled: Outbox::new(&mut toggled) };
-    let _ = MemoView::new("brush-settings-toggle", props, toggle_view).show(ui);
+    let props = ToggleProps {
+        clone_source: matches!(panel, PanelToggle::CloneSource),
+        shown: crate::panel_docking::is_shown(app, id),
+        toggled: Outbox::new(&mut toggled),
+    };
+    let _ = MemoView::new(key, props, toggle_view).show(ui);
     if !toggled.is_empty()
-        && let Err(e) = crate::menus::invoke(app, ui.ctx(), "window.panel.brushSettings", json!({}))
+        && let Err(e) = crate::menus::invoke(app, ui.ctx(), command, json!({}))
     {
         app.ui.status = e;
     }
 }
 
-/// Every input of the Brush Settings toggle.
+/// Every input of a panel toggle.
 #[derive(MemoProps)]
 struct ToggleProps<'a> {
+    clone_source: bool,
     shown: bool,
     toggled: Outbox<'a, ()>,
 }
 
-/// The Brush Settings toggle's view.
+/// The panel toggle's view; only its panel kind and open state invalidate an idle replay.
 fn toggle_view(props: &mut ToggleProps<'_>, ui: &mut egui::Ui) {
+    let (label, tip, icon) = if props.clone_source {
+        (tl!("Toggle the Clone Source panel"), tl!("Toggle the Clone Source panel"), "sampler")
+    } else {
+        (tl!("Toggle the Brush Settings panel"), tl!("Toggle the Brush Settings panel  (F5)"), "adjustments")
+    };
     let mut on = props.shown;
-    ToggleButton::new(tl!("Toggle the Brush Settings panel"), Bind::bound(&mut on))
-        .icon(craft::behavior::IconId::new("adjustments"))
-        .icon_only()
-        .tooltip(tl!("Toggle the Brush Settings panel  (F5)"))
-        .show(ui);
+    ToggleButton::new(label, Bind::bound(&mut on)).icon(craft::behavior::IconId::new(icon)).icon_only().tooltip(tip).show(ui);
     if on != props.shown {
         props.toggled.send(());
     }

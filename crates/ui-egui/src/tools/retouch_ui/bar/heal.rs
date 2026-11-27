@@ -1,13 +1,16 @@
 //! The Retouch options bar's healing family: Remove, Patch, Content-Aware Move, Spot Healing, Clone Stamp and
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
-use craft::behavior::Value;
+use craft::behavior::{IconId, NumberCodec, Value};
+use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
-use craft::ui::text::RangeAlert;
+use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::env::Env;
+use craft::ui::text::{NumberField, NumberValue, RangeAlert};
 use photocraft_engine::presets::PresetsExt;
 use serde_json::Value as Json;
 
@@ -140,6 +143,70 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
     None
 }
 
+/// The measured Healing angle discards a typed fraction rather than rounding it. The shared
+/// number field still owns parsing, the range, stepping, scrubbing and range alerts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HealingAngle(f32);
+
+impl NumberValue for HealingAngle {
+    fn number(&self) -> Option<f64> {
+        Some(f64::from(self.0))
+    }
+    fn of_number(number: f64) -> Self {
+        Self(number.trunc() as f32)
+    }
+    fn blank() -> Option<Self> {
+        None
+    }
+    fn named(&self) -> Option<u32> {
+        None
+    }
+    fn from_name(_: u32) -> Option<Self> {
+        None
+    }
+}
+
+/// Healing-only Angle and Pressure for Size, after Sample. The shell switches in the active
+/// tool's brush; the same keyed command path as Brush Settings keeps the other tools independent.
+fn healing_brush_controls(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let before = (*app.session.tools.brush).clone();
+    let mut brush = before.clone();
+    let mut angle = HealingAngle(brush.angle);
+    let shown = Field::new(tl!("Angle"))
+        .side(SideLabel::new().scrub(true).icon(IconSpec::svg(IconId::new("rotate_cw"))).layout(FieldLayout::Inside))
+        .sizing(Sizing::Content)
+        .show(ui, |ui, _| {
+            NumberField::named(tl!("Angle"), Bind::bound(&mut angle))
+                .range(-180.0..=180.0)
+                .step(1.0)
+                .codec(NumberCodec::new(Env::of(ui).units().reader(None), 0))
+                .unit("°")
+                .scrub_by_label()
+                .tooltip(tl!("Set the brush angle"))
+                .show(ui)
+        })
+        .inner;
+    let mut key = None;
+    let mut alert = None;
+    if let Some(shown) = shown {
+        brush.angle = angle.0;
+        key = shown.edit.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+        // The original angle control truncates before deciding whether a typed value is out of range.
+        alert = shown.out_of_range.filter(|alert| !alert.range.contains(&alert.typed.trunc()));
+    }
+    let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure").to_owned())
+        .show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_size = on;
+        key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
+    }
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+    alert
+}
+
 /// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
 /// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
@@ -152,11 +219,12 @@ pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeA
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
     choose(ui, tl!("Sample"), sample, &samples, !indexed, clone_stamp.then(|| tl!("Choose which layers to sample")));
+    let alert = if app.ui.tool == Tool::Healing { healing_brush_controls(ui, app) } else { None };
     if source_unset {
         Divider::vertical().show(ui);
         hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
     }
-    None
+    alert
 }
 
 #[allow(dead_code)]
