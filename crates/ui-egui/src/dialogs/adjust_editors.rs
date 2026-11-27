@@ -23,7 +23,7 @@ use craft::imaging::ui::adjust::{
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::requests::ColorRequest;
 use egui::Ui;
@@ -35,6 +35,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+mod curves_auto;
 mod session;
 pub mod values;
 
@@ -287,6 +288,19 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 values::set_curves_mode(&mut converted, mode);
                 *curves = converted.clone();
                 edit.push(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: converted }, Arc::from("Curves Mode"), None));
+            }
+            // Auto (#9229, #9237): the shown channel's curve becomes the fitted copy of the reference application's
+            // (black stays at (0, 0), white at about 228 or the image's own, three points lifting the midtones; see
+            // curves_auto), as one edit. With the pencil it draws that curve into the shown channel's map and stays in
+            // pencil mode, so the other channels' drawn maps keep every level. An empty histogram (a fully transparent
+            // layer) has no such points: Auto changes nothing.
+            let auto = craft::ui::buttons::Button::new(tl!("Auto")).id_salt("curves-auto").tooltip(tl!("Automatically correct curves")).show(ui);
+            if auto.clicked()
+                && let Some(next) = curves_auto::auto(curves, out.channel, &setup.histograms)
+            {
+                let from = AdjustValue::Curves { curves: curves.clone() };
+                *curves = next.clone();
+                edit.push(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: next }, Arc::from("Auto"), None));
             }
             AdjustOut { ask: None, edit }
         }
