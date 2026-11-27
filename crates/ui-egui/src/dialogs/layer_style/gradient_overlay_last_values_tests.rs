@@ -2,8 +2,7 @@
 //! document and after a restart. Cancel, commands run outside the dialog and Make Default leave that memory alone;
 //! Reset to Default still gives the factory (or Make Default) values.
 
-use photocraft_engine::Session;
-use photocraft_engine::prefs::SavedPrefsExt;
+use craft::ui::runtime::memory::{saved_value, set_saved_value};
 use serde_json::{Value, json};
 
 use super::tests::{ColorStop, DialogId, EffectKind, GradientStops, Srgba, StyleValue, app_with_layer, cancel, defaults, draft, edit, first_of, ok};
@@ -82,12 +81,13 @@ fn ok_values_open_the_next_gradient_overlay_on_a_new_document() {
 fn ok_values_survive_a_restart() {
     let mut app = app_with_layer(20);
     let expected = commit_overlay(&mut app);
-    app.framework.move_memories(&mut app.session);
 
-    let mut session = Session::new();
-    session.load_prefs_json(&app.session.prefs_to_json()).unwrap();
+    // A fresh app reads them from the saved tier's stored form, as the other remembered dialogs' tests do.
+    let stored = saved_value::<Option<Value>>(app.ctx(), &last_committed_key(GRADIENT));
+    assert!(stored.is_some(), "the OK kept the values");
     drop(app);
-    let mut reopened = PhotocraftApp::new(session, crate::Services::default());
+    let mut reopened = app_with_layer(20);
+    set_saved_value(reopened.ctx(), &last_committed_key(GRADIENT), stored);
     new_document(&mut reopened);
     let next = open_gradient(&mut reopened);
     assert_eq!(page(&reopened, next), expected);
@@ -400,14 +400,14 @@ fn a_recalled_gradient_with_more_stops_than_a_command_takes_keeps_them() {
     }
 }
 
-/// A remembered snapshot that does not read as an effect (an edited settings file) is dropped: the
+/// A kept snapshot that does not read as an effect (an edited settings file) is dropped: the
 /// new overlay opens without it and applies with the remembered values.
 #[test]
 fn a_remembered_snapshot_that_does_not_read_is_dropped() {
     for fx in [json!("not json"), json!("{\"kind\": \"nothing\"}"), json!(7)] {
         let mut app = app_with_layer(20);
         let values = json!({"opacity": 60, "stops": [[0.0, "#ff0000"], [1.0, "#0000ff"]], "opacityStops": [], "fx": fx});
-        last_ok(GRADIENT).store(app.framework.host(), &values);
+        set_saved_value(app.ctx(), &last_committed_key(GRADIENT), Some(values));
         let id = open_gradient(&mut app);
         let instance = first_of(&app, id, GRADIENT);
         assert!(draft(&app, id).style.effect(instance).unwrap().params.get("fx").is_none(), "{fx}");

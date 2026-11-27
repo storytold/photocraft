@@ -9,6 +9,7 @@
 
 use photocraft_engine::presets::PresetsExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::sync::Arc;
 
 use craft::color_ui::gradient::GradientStops;
@@ -18,13 +19,14 @@ use craft::imaging::layer_style::{
     StyleParams, StyleValue,
 };
 use craft::imaging::ui::layer_style::{ContourEditorDialog, HostedLayerStyle, LayerStyleAsk};
-use craft::settings::Remembered;
 use craft::theme::Srgba;
 use craft::ui::contract::Entry;
 use craft::ui::contract::Tracked;
 use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::list::ThumbAspect;
 use craft::ui::patterns::presets::{PresetFns, PresetRow, PresetSource, ThumbInfo};
 use craft::ui::primitives::ContentPainterCx;
+use craft::ui::primitives::FacePaint;
 use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::env::Env;
 use egui::{ColorImage, Pos2, Rect, pos2};
@@ -35,18 +37,22 @@ use photocraft_engine::pattern_cmds::PatternLibrary;
 use photocraft_engine::presets::styles::StylePreset;
 use serde_json::{Map, Value, json};
 
-use crate::panels::preset_browser::StyleLibrary;
+use crate::panels::preset_browser::{Folder, StyleLibrary};
 use crate::{PhotocraftApp, color_picker_ui};
 
 #[cfg(test)]
 mod bevel_reset_angle_tests;
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod drop_shadow_last_values_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
 #[cfg(test)]
 mod gradient_overlay_last_values_tests;
+#[cfg(test)]
+mod pattern_overlay_picker_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
@@ -486,10 +492,10 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let mut user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    recall_last_ok(app.framework.host(), &mut user);
+    let user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let keys = blend_keys();
-    let specs = specs(&keys, &user, light);
+    let mut specs = specs(&keys, &user, light);
+    start_from_last_committed(app, &mut specs, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
     match select {
         None => {
@@ -511,11 +517,12 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
         }
     }
     let channels = channel_names(mode).into_iter().map(String::from).collect();
+    let ctx = app.ctx().clone();
     let hosted = HostedLayerStyle::new(tl!("Layer Style").to_string(), draft, channels)
         .specs(specs)
         .blend_keys(keys)
         .blend_modes(blend_modes(&layer))
-        .patterns(PresetSource::new(pattern_list(app), PresetFns::new(|patterns, env| pattern_rows(patterns, env))))
+        .patterns(PresetSource::new(pattern_presets(app, &ctx), PresetFns::new(pattern_rows)))
         .user_contours(contour::user_contours(app))
         .sampler(contour::sampler)
         .style_presets(style_presets(app))
@@ -544,64 +551,60 @@ pub(crate) fn open_layer(app: &PhotocraftApp) -> Option<LayerId> {
     (app.session.active()?.doc.id == doc).then_some(layer)
 }
 
-// ------------------------------------------------------------------ last committed values
+/// The effects whose new instance starts with the values of the last one committed with OK, also after a restart, as
+/// the reference's do (#14877, Drop Shadow; #14899, Gradient Overlay).
+const STARTS_FROM_LAST: &[EffectKind] = &[EffectKind::DropShadow, EffectKind::GradientOverlay];
 
-/// The effect kinds whose new instance opens with the values of the last instance of that kind
-/// committed with the dialog's OK (#14899), kept in the app's settings so they survive a restart.
-/// Another page opts in by joining the list (Color Overlay #14870, Drop Shadow #14877, Inner
-/// Shadow #14932, Pattern Overlay #14972).
-const REMEMBERS_LAST_OK: &[EffectKind] = &[EffectKind::GradientOverlay];
-
-/// Where the last committed values of `kind` live: `photocraft.layerStyle.<kind>`.
-fn last_ok(kind: EffectKind) -> Remembered<Value> {
-    Remembered::new(format!("photocraft.layerStyle.{}", kind.key()))
+/// Where the last committed values of `kind` are kept (the framework's saved memory, so they survive a restart).
+fn last_committed_key(kind: EffectKind) -> craft::ui::runtime::memory::SaveKey {
+    craft::ui::runtime::memory::SaveKey::named(format!("photocraft.layerStyle.lastCommitted.{}", kind.key()))
 }
 
-/// Lays the last committed values of each remembering kind over its Make Default entry in `user`:
-/// the reference application opens a new instance with the last OK even after a Make Default, which
-/// only Reset to Default reads. A kind with nothing committed yet keeps its Make Default values.
-fn recall_last_ok(host: &craft::host::Host, user: &mut Map<String, Value>) {
-    for kind in REMEMBERS_LAST_OK {
-        let Some(Value::Object(values)) = last_ok(*kind).recall(host) else { continue };
-        // A key the stored values leave out (a gradient too large to remember) keeps its Make Default value.
-        match user.get_mut(kind.key()).and_then(Value::as_object_mut) {
-            Some(made) => made.extend(values),
-            None => {
-                user.insert(kind.key().into(), Value::Object(values));
-            }
+/// A new instance of the [`STARTS_FROM_LAST`] kinds starts from the last committed values over the usual defaults; an
+/// effect lit by the shared light keeps the document's light angle. Reset to Default still writes the Make Default (or
+/// factory) values, which it reads from the engine. A kept snapshot (`fx`, see [`keep_last_committed`]) goes with the
+/// new instance as a loaded effect's does; one that does not read as an effect is dropped.
+fn start_from_last_committed(app: &PhotocraftApp, specs: &mut [EffectSpec], light: f32) {
+    for spec in specs.iter_mut().filter(|s| STARTS_FROM_LAST.contains(&s.kind)) {
+        let Some(mut last) = craft::ui::runtime::memory::saved_value::<Option<Value>>(app.ctx(), &last_committed_key(spec.kind)) else { continue };
+        let fx = last.as_object_mut().and_then(|o| o.remove("fx")).and_then(|fx| serde_json::from_str::<Value>(fx.as_str()?).ok());
+        let fx = fx.filter(|fx| serde_json::from_value::<Effect>(fx.clone()).is_ok());
+        let mut values = style_params_json(&spec.defaults);
+        if let (Some(o), Some(l)) = (values.as_object_mut(), last.as_object()) {
+            o.extend(l.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true) {
+            values["angle"] = json!(light);
+        }
+        spec.defaults = style_params(spec.kind, &values, fx.as_ref()).over(&spec.defaults);
     }
 }
 
-/// Whether instance `e` was added or changed in the dialog: it has no snapshot of a loaded effect
-/// (`fx`), or its values or on state differ from that snapshot's. A loaded effect confirmed as it
-/// was (made by a script, a preset or a file) is not a value the user set on the page.
+/// Whether instance `e` was added or changed in the dialog: it has no snapshot of a loaded effect (`fx`), or its values
+/// or on state differ from that snapshot's. A loaded effect confirmed as it was (made by a script, a preset or a file)
+/// is not a value the user set on the page (#14899).
 fn edited_in_dialog(e: &EffectInstance, light: f32) -> bool {
     let Some(loaded) = fx_of(&e.params).and_then(|fx| serde_json::from_value::<Effect>(fx).ok()) else { return true };
     loaded.enabled() != e.on || style_params_json(&effect_params(e.kind, &loaded, light)) != style_params_json(&e.params)
 }
 
-/// After a successful OK: stores, per remembering kind, the values of the last enabled instance in
-/// `style` the user added or changed. A kind with no such instance keeps what it had.
-fn remember_last_ok(host: &craft::host::Host, style: &LayerStyle) {
-    for kind in REMEMBERS_LAST_OK {
-        let Some(last) = style.effects.iter().rev().find(|e| e.kind == *kind && e.on && edited_in_dialog(e, style.global_light)) else { continue };
-        let mut values = style_params_json(&last.params);
-        // Settings are TOML, which has no null: a value the grammar left empty is not stored.
+/// After an OK: keeps the values of the committed style's last enabled instance of each [`STARTS_FROM_LAST`] kind that
+/// was added or changed in the dialog; a kind with no such instance keeps what it had.
+fn keep_last_committed(app: &PhotocraftApp, style: &LayerStyle) {
+    for kind in STARTS_FROM_LAST {
+        let Some(e) = style.effects.iter().rev().find(|e| e.kind == *kind && e.on && edited_in_dialog(e, style.global_light)) else { continue };
+        let mut values = style_params_json(&e.params);
         if let Some(o) = values.as_object_mut() {
-            o.retain(|_, v| !v.is_null());
-            // A loaded gradient can hold more stops than a command takes, or a single colour stop (a
-            // file has no limits). Too many stops are remembered with the loaded effect's snapshot
-            // (`fx`): a new instance opened with them carries it, and while its stops are unchanged
-            // the engine takes them from the snapshot instead of the command (#16354 review). A
-            // single colour stop is not remembered: the next one opens with the default gradient
-            // and the rest of this OK. Fewer than two transparency stops read as none on the page,
-            // so only too many count there.
+            // A loaded gradient can hold more stops than a command takes, or a single colour stop (a file has no
+            // limits). Too many stops are kept with the loaded effect's snapshot (`fx`): a new instance started with
+            // them carries it, and while its stops are unchanged the engine takes them from the snapshot (#16354
+            // review). A single colour stop is not kept: the next instance starts with the default gradient and the
+            // rest of this OK. Fewer than two transparency stops read as none on the page, so only too many count.
             let max = photocraft_engine::layer_style::MAX_STOPS;
             let count = |key: &str| o.get(key).and_then(Value::as_array).map(Vec::len);
             let too_many = count(gradient_field::KEY).is_some_and(|n| n > max) || count(gradient_field::OPACITY_KEY).is_some_and(|n| n > max);
             let too_few = count(gradient_field::KEY).is_some_and(|n| n < 2);
-            match fx_of(&last.params) {
+            match fx_of(&e.params) {
                 Some(fx) if too_many && !too_few => {
                     o.insert("fx".into(), Value::String(fx.to_string()));
                 }
@@ -612,7 +615,7 @@ fn remember_last_ok(host: &craft::host::Host, style: &LayerStyle) {
                 _ => {}
             }
         }
-        last_ok(*kind).store(host, &values);
+        craft::ui::runtime::memory::set_saved_value::<Option<Value>>(app.ctx(), &last_committed_key(*kind), Some(values));
     }
 }
 
@@ -633,12 +636,7 @@ fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) 
                     spec.fields.insert(after + 1, field);
                 }
             }
-            let mut values = fresh_params(key, light, user.get(*key));
-            // A remembered snapshot (`fx`, see `remember_last_ok`) goes with a new instance as a
-            // loaded effect's does; one that does not read as an effect is dropped.
-            let fx = values.as_object_mut().and_then(|o| o.remove("fx")).and_then(|fx| serde_json::from_str::<Value>(fx.as_str()?).ok());
-            let fx = fx.filter(|fx| serde_json::from_value::<Effect>(fx.clone()).is_ok());
-            spec.defaults = style_params(kind, &values, fx.as_ref()).over(&spec.defaults);
+            spec.defaults = style_params(kind, &fresh_params(key, light, user.get(*key)), None).over(&spec.defaults);
             Some(spec)
         })
         .collect()
@@ -656,21 +654,112 @@ fn blend_keys() -> HashMap<String, String> {
     photocraft_color::BlendMode::LAYER_MODES.into_iter().map(|m| (m.label().to_string(), m.label().to_string())).collect()
 }
 
-/// The patterns a style can use (document's, then the library's), as (id, name).
-pub fn pattern_list(app: &PhotocraftApp) -> Vec<(String, String)> {
+/// The patterns the Pattern field offers (the document's, then the library's, deduplicated by id), as the session
+/// holds them: a reference, so the same pattern names both its row and its swatch.
+fn picker_patterns(app: &PhotocraftApp) -> Vec<&photocraft_doc::Pattern> {
     let mut seen = HashSet::new();
     let doc_pats = app.session.active().map(|d| d.doc.patterns.as_slice()).unwrap_or_default();
-    doc_pats
-        .iter()
-        .chain(app.session.patterns.items.iter())
-        .filter(|p| seen.insert(p.id.clone()))
-        .map(|p| (p.id.clone(), p.display_name().to_string()))
-        .collect()
+    doc_pats.iter().chain(app.session.patterns.items.iter()).filter(|p| seen.insert(&p.id)).collect()
 }
 
-/// One row per pattern of [`pattern_list`], keyed by its id.
-fn pattern_rows(patterns: &[(String, String)], _: &Env) -> Vec<PresetRow<String>> {
-    patterns.iter().map(|(id, name)| PresetRow::item(id.clone(), name.clone(), 0)).collect()
+/// What the Pattern field's picker shows: the library's folders with their patterns, the patterns in no folder after
+/// them, and the swatch each pattern paints. Taken when the dialog opens, like the rest of what it opens with: a
+/// library edited while the dialog is open shows at the next opening.
+#[derive(craft::ui::contract::MemoProps)]
+pub(crate) struct PatternPresets {
+    folders: Vec<Folder>,
+    loose: Vec<(String, String)>,
+    /// The pattern's id, the key of its face and the texture of its swatch.
+    #[memo_props(hash = "an id, the key of its picture and the texture it paints")]
+    swatches: Vec<(String, u64, egui::TextureId)>,
+    #[memo_props(
+        covered_by = "swatches",
+        reason = "the owners of those textures: the picker paints by id and does not ask the store again, so the dialog holds them while it is open (#16252)"
+    )]
+    _textures: Vec<egui::TextureHandle>,
+}
+
+impl PatternPresets {
+    /// The face key and the texture of the pattern `id`, as [`pattern_presets`] loaded them.
+    fn swatch(&self, id: &str) -> Option<(u64, egui::TextureId)> {
+        self.swatches.iter().find(|(swatch, _, _)| *swatch == id).map(|(_, face, texture)| (*face, *texture))
+    }
+}
+
+/// The key of a pattern's thumbnail face: its id, the generation of its pixels, and the scratch read-error
+/// generation, so a pattern replaced under its id keys a new picture and one that failed to read keys again once it
+/// reads (`crate::scratch_reads`, as the preview swatch's own key does).
+fn pattern_face_key(pattern: &photocraft_doc::Pattern) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (&pattern.id, pattern.surface.generation(), crate::scratch_reads::generation()).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The presets of the Pattern field, its swatches loaded on `ctx` while the dialog opens (as the Pattern Fill
+/// dialog loads its own): each folder of the library that holds one of those patterns and the patterns it holds, then
+/// the patterns in no folder, in the same order as the list.
+pub(crate) fn pattern_presets(app: &PhotocraftApp, ctx: &egui::Context) -> PatternPresets {
+    let patterns = picker_patterns(app);
+    let groups = &app.session.presets().pattern_groups;
+    let shown = |pattern: &&photocraft_doc::Pattern| (pattern.id.clone(), pattern.display_name().to_string());
+    let folders: Vec<Folder> = groups
+        .iter()
+        .map(|group| Folder {
+            name: group.name.clone(),
+            items: group.items.iter().filter_map(|id| patterns.iter().find(|pattern| &pattern.id == id)).map(shown).collect(),
+        })
+        // A folder with none of the picker's patterns would be an empty header.
+        .filter(|folder| !folder.items.is_empty())
+        .collect();
+    let loose: Vec<(String, String)> =
+        patterns.iter().filter(|pattern| !groups.iter().any(|group| group.items.iter().any(|id| id == &pattern.id))).map(shown).collect();
+    let mut swatches = Vec::new();
+    let mut textures = Vec::new();
+    for pattern in patterns {
+        let handle = crate::panels::preset_browser::pattern_texture_handle(ctx, pattern);
+        swatches.push((pattern.id.clone(), pattern_face_key(pattern), handle.id()));
+        textures.push(handle);
+    }
+    PatternPresets { folders, loose, swatches, _textures: textures }
+}
+
+/// The picker's rows: each folder, its patterns below it, and the patterns in no folder after the folders. This order
+/// is also what the page reads an empty Pattern value from - it takes the first row that is not a folder - so a new
+/// Pattern Overlay starts on the first pattern of the first folder.
+///
+/// A folder row's key carries its place in the folder list, so two folders that carry the same name (the preset store
+/// does not refuse that) keep their chevrons apart, and a pattern id - which a file may carry verbatim - would have to
+/// be spelled like `folder/0/Name` to be mistaken for one. A pattern listed in two folders is a row once, under the
+/// first of them, so no pattern id is ever a row twice.
+fn pattern_rows(inputs: &PatternPresets, _: &Env) -> Vec<PresetRow<String>> {
+    let mut rows = Vec::new();
+    let mut placed = HashSet::new();
+    for (at, folder) in inputs.folders.iter().enumerate() {
+        let items: Vec<&(String, String)> = folder.items.iter().filter(|(id, _)| placed.insert(id.clone())).collect();
+        if items.is_empty() {
+            continue; // every pattern of this folder stands in an earlier one: no empty header
+        }
+        rows.push(PresetRow::group(format!("folder/{at}/{}", folder.name), folder.name.clone(), 0));
+        rows.extend(items.into_iter().map(|(id, name)| pattern_row(id, name, 1, inputs)));
+    }
+    // The loose ones are in no folder at all, so none of them was placed above.
+    rows.extend(inputs.loose.iter().map(|(id, name)| pattern_row(id, name, 0, inputs)));
+    rows
+}
+
+/// One pattern's row: keyed and named by the pattern, painting the swatch loaded for it. A pattern whose swatch did
+/// not load keeps the row's name, which is what the picker's face falls back to.
+fn pattern_row(id: &str, name: &str, depth: usize, inputs: &PatternPresets) -> PresetRow<String> {
+    let row = PresetRow::item(id.to_string(), name.to_string(), depth);
+    match inputs.swatch(id) {
+        Some((face, texture)) => row.preview_face(
+            ThumbAspect::SQUARE,
+            FacePaint::new(face, move |cx, rect| {
+                cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
+            }),
+        ),
+        None => row,
+    }
 }
 
 /// The Gradients panel's presets resolved with the tool colours, for the Gradient field's select.
@@ -823,17 +912,8 @@ fn light_to_apply(style: &LayerStyle, initial: Option<f64>) -> Option<f64> {
     light_angle
 }
 
-/// Runs the style's commands through `run`: blending options, then the whole effect list in one
-/// `layer.layerStyle.replace` (instances keep their order; their snapshots carry what the dialog
-/// doesn't model). `light` is the document's global light angle when the dialog opened.
-// The typed draft cannot hold a malformed parameter group, so there is nothing to validate.
-pub(crate) fn apply(
-    style: &LayerStyle,
-    layer: LayerId,
-    light: Option<f64>,
-    mut run: impl FnMut(&str, Value) -> Result<Value, String>,
-) -> Result<Value, String> {
-    run("layer.layerStyle.blendingOptions", blending_json(&style.blending, layer))?;
+/// Applies blending, the ordered effect snapshots, and any shared light change in one edit.
+pub(crate) fn apply(style: &LayerStyle, layer: LayerId, light: Option<f64>, run: impl FnOnce(&str, Value) -> Result<Value, String>) -> Result<Value, String> {
     let entries: Vec<Value> = style
         .effects
         .iter()
@@ -843,12 +923,11 @@ pub(crate) fn apply(
             effect_entry(fx_of(&e.params).as_ref(), e.kind.key(), params, light)
         })
         .collect();
-    run("layer.layerStyle.replace", json!({"layer": layer.0, "effects": entries}))?;
-    // An effect lit by the global light follows the document's light angle, so the Angle slider
-    // drives that shared angle rather than the per-effect angle the compositor ignores.
+    let mut params = json!({"layer": layer.0, "blendingOptions": blending_json(&style.blending, layer), "effects": entries});
     if let Some(angle) = light_to_apply(style, light) {
-        run("layer.layerStyle.globalLight", json!({"angle": angle}))?;
+        params["globalLight"] = json!({"angle": angle});
     }
+    run("layer.layerStyle.replace", params)?;
     Ok(Value::Null)
 }
 
@@ -958,10 +1037,10 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
     let Some(light) = app.session.active().filter(|s| s.doc.id == doc).map(|s| f64::from(s.doc.global_light.angle)) else {
         return fail(app, "Layer Style target document changed".into());
     };
-    match apply(style, layer, Some(light), |id, p| app.run(id, p)) {
-        Ok(_) => remember_last_ok(app.framework.host(), style),
-        Err(error) => fail(app, error),
+    if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
+        return fail(app, error);
     }
+    keep_last_committed(app, style);
 }
 
 /// Applies a style preset to the draft without touching the document: Cancel leaves the document
@@ -1019,15 +1098,15 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
         o.insert("angle".into(), json!(light));
     }
     let mut params = style_params(kind, &values, None);
-    if REMEMBERS_LAST_OK.contains(&kind) {
-        // A new instance of this kind may start from the last OK, so a key the stored default
-        // leaves out goes back to the page's factory value instead of keeping the last OK's.
+    let starts_from_last = STARTS_FROM_LAST.contains(&kind);
+    if starts_from_last {
+        // A new instance of this kind may start from the last OK, so a key the stored default leaves out goes back to
+        // the page's factory value instead of keeping the last OK's (#14899).
         params = params.over(&EffectSpec::photoshop(kind).defaults);
     }
-    let remembers = REMEMBERS_LAST_OK.contains(&kind);
-    if remembers && kind == EffectKind::GradientOverlay && !params.0.contains_key("smoothness") {
-        // Set, not left out: a loaded overlay's recorded interpolation keeps its Smoothness for a
-        // missing key, so a reset would keep it.
+    if kind == EffectKind::GradientOverlay && !params.0.contains_key("smoothness") {
+        // Set, not left out: a loaded overlay's recorded interpolation keeps its Smoothness for a missing key, so a
+        // reset would keep it.
         params.0.insert("smoothness".into(), StyleValue::Number(f64::from(photocraft_engine::layer_style::DEFAULT_SMOOTHNESS)));
     }
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
@@ -1035,9 +1114,9 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
         for (key, value) in params.0 {
             d.draft_mut().set_param(instance, &key, value);
         }
-        // A key neither default gives may still hold the last OK's value: it goes, so the engine's
-        // default for a missing key applies. The loaded snapshot (`fx`) stays.
-        if remembers && let Some(e) = d.draft_mut().style.effect_mut(instance) {
+        // A key neither default gives may still hold the last OK's value: it goes, so the engine's default for a
+        // missing key applies. The loaded snapshot (`fx`) stays.
+        if starts_from_last && let Some(e) = d.draft_mut().style.effect_mut(instance) {
             e.params.0.retain(|key, _| key == "fx" || keys.contains(key));
         }
     }
@@ -1130,5 +1209,7 @@ pub(crate) fn gradient_layer_bounds(session: &Session, layer: LayerId) -> Option
     (w > 0.0 && h > 0.0).then_some([w, h])
 }
 
+#[cfg(test)]
+mod ok_history_tests;
 #[cfg(test)]
 mod tests;

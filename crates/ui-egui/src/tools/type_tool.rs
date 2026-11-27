@@ -54,7 +54,7 @@ pub(crate) use panel::toggle_opentype;
 pub use panel::{character_panel, type_properties};
 #[cfg(test)]
 pub(crate) use pointer::{PathClick, path_target};
-pub(crate) use pointer::{TypeState, box_shape, drain, tool};
+pub(crate) use pointer::{TypeSnapshot, TypeState, box_shape, create_layer, create_params, drain, tool};
 pub(crate) use values::doc_unit;
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
@@ -137,3 +137,6 @@ mod mask_escape_tests;
 
 #[cfg(test)]
 mod unchanged_edit_history_tests;
+
+#[cfg(test)]
+mod vertical_mask_alt_drag_tests;
