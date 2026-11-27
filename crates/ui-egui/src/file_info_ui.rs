@@ -265,7 +265,7 @@ impl StackDialog for FileInfoDialog {
                             }
                         });
                     for event in list.events {
-                        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                             && let Some(category) = keys.iter().find_map(|key| CATEGORIES.iter().find(|category| category.key == key.as_str()))
                             && category.key != selected
                         {
