@@ -16,7 +16,7 @@ use craft::keymap::{Chord, Key, Mods};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 
-use super::cursor_policy::{alt_loads_mixer, alt_samples, click_tool_cursor, mixer_target_locked, sample_target};
+use super::cursor_policy::{alt_loads_mixer, alt_samples, click_tool_cursor, paint_cursor_blocked, sample_target};
 use super::document_display::CanvasHost;
 
 use super::PhotocraftApp;
@@ -225,18 +225,22 @@ fn click_tool(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
     }
 }
 
+fn bucket_targets_pasteboard(app: &PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
+    let plain_shift = mods.shift && !mods.alt && !mods.ctrl && !mods.cmd;
+    let Some(st) = app.session.active() else { return false };
+    let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+    let (x, y) = (at[0], at[1]);
+    let outside = x.is_finite() && y.is_finite() && (x < 0.0 || y < 0.0 || x >= w || y >= h);
+    plain_shift && outside && st.doc.selection.is_none()
+}
+
 /// Paint Bucket ⇧-click on the pasteboard sets the pasteboard colour to the foreground colour, as
 /// in the reference application (#12534): the custom colour, and use it, as the pasteboard menu's
 /// Select Custom Color… does. It is a preference, so no history state and no document change.
 /// Only a plain ⇧ with no selection: other modifiers and an active selection were not measured and
 /// keep today's fill. True when it handled the click.
 pub(crate) fn bucket_pasteboard_click(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
-    let plain_shift = mods.shift && !mods.alt && !mods.ctrl && !mods.cmd;
-    let Some(st) = app.session.active() else { return false };
-    let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
-    let (x, y) = (at[0], at[1]);
-    let outside = x.is_finite() && y.is_finite() && (x < 0.0 || y < 0.0 || x >= w || y >= h);
-    if !plain_shift || !outside || st.doc.selection.is_some() {
+    if !bucket_targets_pasteboard(app, at, mods) {
         return false;
     }
     let [r, g, b, _] = app.session.tools.foreground;
@@ -489,8 +493,10 @@ impl CanvasTool for PaintTool<'_> {
             if alt_loads_mixer(tool, cx.mods) && !cx.mods.cmd {
                 return if cx.precise() { Cursor::Painted(PaintedCursor::Crosshair) } else { sample_target() };
             }
-            // Over a layer it can't paint (Lock All), the Mixer Brush shows a no-entry sign (#11957).
-            if tool == Tool::MixerBrush && mixer_target_locked(app) {
+            let sets_pasteboard = tool == Tool::PaintBucket
+                && cx.mods.shift
+                && cx.pointer.as_ref().and_then(|pointer| doc_point(cx, pointer.pos)).is_some_and(|at| bucket_targets_pasteboard(app, at, cx.mods));
+            if !sets_pasteboard && paint_cursor_blocked(app) {
                 return Cursor::System(CursorIcon::NotAllowed);
             }
             // The Paint Bucket and the Magic Eraser act on a click: their own pointers, no brush tip.
