@@ -439,7 +439,7 @@ macro_rules! sample_all_slot {
 
 impl SampleAllLayers {
     /// `tool`'s setting; false for a tool without the option.
-    pub fn get(mut self, tool: Tool) -> bool {
+    pub fn get(self, tool: Tool) -> bool {
         self.slot(tool).unwrap_or(false)
     }
 
