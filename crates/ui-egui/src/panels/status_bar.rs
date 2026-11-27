@@ -70,9 +70,10 @@ enum StatusEvent {
 
 /// The status bar, in the shell's status slot: the zoom readout of the active document and the latest status
 /// message, and at the far end the render-path note, the background redraw and the background jobs' progress with
-/// Cancel (#210). The body and the trailing group are a memoized view each, so a frame where neither changed replays
-/// them. The bar itself stays the slot's direct child: it fills the slot's height and centres its content there, where
-/// a memoized view around it would be moved down onto the slot row's line and clipped at the window's bottom edge.
+/// Cancel (#210). The slot replays while `region_versions::status_bar` holds; when it runs, the body and the trailing
+/// group are a memoized view each, so a frame that changed only one runs only that one. The bar itself stays the slot
+/// pane's direct child: it fills the slot's height and centres its content there, where a memoized view around it
+/// would be moved down onto the slot row's line and clipped at the window's bottom edge.
 pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let job = crate::jobs_ui::status_job(app);
     let values = chrome_ui::status_values(app);

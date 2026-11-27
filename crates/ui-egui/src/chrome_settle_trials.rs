@@ -53,6 +53,35 @@ fn chrome_views(h: &H) -> Vec<(&'static str, MemoRun)> {
     last_frame_memo_runs(&h.ctx).into_iter().filter(|(name, _, _)| CHROME.iter().any(|c| name.contains(c))).map(|(name, _, run)| (name, run)).collect()
 }
 
+/// The shell's slots of the harness's window, in the order the shell shows them (`AppShell`): the title bar, the
+/// options bar, the status bar.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ShellSlot {
+    Title,
+    Options,
+    Status,
+}
+
+/// How the shell's view of `slot` took part in `runs`: `(ran, replayed)`. The shell's slot views share one props type,
+/// so they are told apart by id, in the order the shell decides them in every pass, which is the order it shows its
+/// slots in.
+pub(crate) fn slot_runs(runs: &[(&'static str, egui::Id, MemoRun)], slot: ShellSlot) -> (usize, usize) {
+    let mut ids: Vec<egui::Id> = Vec::new();
+    for (name, id, _) in runs {
+        if name.contains("app_shell::SlotView<") && !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    let Some(&id) = ids.get(slot as usize) else { return (0, 0) };
+    let count = |how: MemoRun| runs.iter().filter(|(_, of, run)| *of == id && *run == how).count();
+    (count(MemoRun::Ran), count(MemoRun::Replayed))
+}
+
+/// How the shell's view of `slot` took part in the last frame: `(ran, replayed)`.
+fn slot_views(h: &H, slot: ShellSlot) -> (usize, usize) {
+    slot_runs(&last_frame_memo_runs(&h.ctx), slot)
+}
+
 /// The panel tab strips the last pass ran.
 fn tab_strip_runs(h: &H) -> Vec<(&'static str, u32)> {
     last_pass_runs(&h.ctx).into_iter().filter(|(ty, _)| ty.contains("TabStrip<'_, craft_ui_panels::docking::PanelKey>")).collect()
@@ -68,8 +97,8 @@ fn a_hover_over_the_canvas_replays_the_dock_chrome_and_the_menu_bar() {
     for step in 1..=3 {
         h.event(Event::PointerMoved(at + vec2(step as f32, 0.0)));
         h.run_steps(1);
-        // The menu bar sits in the title bar's own view: while that replays, the menu bar replays with it.
-        let title_replayed = views(&h, "TitleSlot<", MemoRun::Replayed) == 1;
+        // The menu bar sits in the title slot's view: while that replays, the menu bar replays with it.
+        let title_replayed = slot_views(&h, ShellSlot::Title).1 == 1;
         let columns = (views_ran(&h, "area::ColumnView<"), views(&h, "area::ColumnView<", MemoRun::Replayed));
         assert!(columns.0 == 0 && columns.1 >= 1, "hover step {step}: the dock's columns replay: {columns:?}");
         let views = chrome_views(&h);
@@ -94,8 +123,8 @@ fn a_hover_over_the_canvas_replays_the_bars_and_the_panel_bodies() {
     for step in 1..=3 {
         h.event(Event::PointerMoved(at + vec2(step as f32, 0.0)));
         h.run_steps(1);
-        for slot in ["TitleSlot<", "OptionsSlot<", "status_bar::StatusProps<"] {
-            assert_eq!((views_ran(&h, slot), views(&h, slot, MemoRun::Replayed)), (0, 1), "hover step {step}: the {slot} view replays");
+        for slot in [ShellSlot::Title, ShellSlot::Options, ShellSlot::Status] {
+            assert_eq!(slot_views(&h, slot), (0, 1), "hover step {step}: the {slot:?} slot's view replays");
         }
         let columns = (views_ran(&h, "area::ColumnView<"), views(&h, "area::ColumnView<", MemoRun::Replayed));
         assert!(
@@ -189,7 +218,7 @@ fn the_chrome_runs_when_what_it_shows_changes() {
         h.run_steps(1);
         // The new tab titles change label widths, so the frame takes a second pass that replays what the first ran:
         // the frame's views tell.
-        let (tabs, title) = (views_ran(&h, "docking::group::TabRow<"), views_ran(&h, "TitleSlot<"));
+        let (tabs, title) = (views_ran(&h, "docking::group::TabRow<"), slot_views(&h, ShellSlot::Title).0);
         assert!(tabs > 0 && title > 0, "a new language runs the tab rows and the title bar: {tabs} tab rows, {title} title bars");
         h.run_steps(2);
     }
@@ -204,7 +233,7 @@ fn the_chrome_runs_when_what_it_shows_changes() {
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
     h.run_steps(1);
     // The edit's frame takes two passes, and its second replays what the first ran: the frame's views tell.
-    assert!(views_ran(&h, "TitleSlot<") > 0, "an unsaved edit runs the title bar");
+    assert!(slot_views(&h, ShellSlot::Title).0 > 0, "an unsaved edit runs the title bar");
 }
 
 /// A dialog closed with Escape runs no command, and the menu bar takes the menu keys again: Alt+F opens the File menu.
@@ -225,14 +254,24 @@ fn the_menu_keys_open_a_menu_after_a_dialog_closes_with_escape() {
     assert!(items(&h) > titles, "Alt+F opens the File menu: {} menu items, {titles} titles", items(&h));
 }
 
-/// The options bar and status bar views that ran over the next `steps` frames, summed.
-fn ran_over(h: &mut H, steps: usize, name: &str) -> usize {
+/// What `ran` counts in each of the next `steps` frames, summed.
+fn ran_over(h: &mut H, steps: usize, ran: impl Fn(&H) -> usize) -> usize {
     (0..steps)
         .map(|_| {
             h.run_steps(1);
-            views_ran(h, name)
+            ran(h)
         })
         .sum()
+}
+
+/// The options bar's slot view, if it ran in the last frame.
+fn options_ran(h: &H) -> usize {
+    slot_views(h, ShellSlot::Options).0
+}
+
+/// The status bar's body view, if it ran in the last frame.
+fn status_ran(h: &H) -> usize {
+    views_ran(h, "status_bar::StatusProps<")
 }
 
 /// A pan with a tool whose bar shows no view field runs neither the options bar nor the status bar (it shows the zoom
@@ -243,12 +282,12 @@ fn a_pan_runs_neither_bar_and_a_zoom_runs_the_status_bar() {
     h.state_mut().ui.tool = crate::state::Tool::Move;
     h.run_steps(4);
     h.state_mut().ui.views[0].center[0] += 40.0;
-    assert_eq!(ran_over(&mut h, 3, "OptionsSlot<"), 0, "a pan runs no options bar");
+    assert_eq!(ran_over(&mut h, 3, options_ran), 0, "a pan runs no options bar");
     h.state_mut().ui.views[0].center[0] += 40.0;
-    assert_eq!(ran_over(&mut h, 3, "status_bar::StatusProps<"), 0, "a pan runs no status bar");
+    assert_eq!(ran_over(&mut h, 3, status_ran), 0, "a pan runs no status bar");
 
     h.state_mut().ui.views[0].zoom *= 2.0;
-    let status = ran_over(&mut h, 3, "status_bar::StatusProps<");
+    let status = ran_over(&mut h, 3, status_ran);
     assert!(status > 0, "a zoom runs the status bar: {status}");
 }
 
@@ -259,7 +298,7 @@ fn a_zoom_runs_the_zoom_tools_options_bar() {
     h.state_mut().ui.tool = crate::state::Tool::Zoom;
     h.run_steps(4);
     h.state_mut().ui.views[0].zoom *= 2.0;
-    assert!(ran_over(&mut h, 3, "OptionsSlot<") > 0, "a zoom runs the Zoom tool's bar");
+    assert!(ran_over(&mut h, 3, options_ran) > 0, "a zoom runs the Zoom tool's bar");
 }
 
 /// A tool option changed outside the bar runs the bar, and the frames after it replay it.
@@ -268,12 +307,12 @@ fn a_tool_option_runs_the_options_bar_once() {
     let mut h = harness();
     h.state_mut().ui.tool = crate::state::Tool::Move;
     h.run_steps(4);
-    assert_eq!(ran_over(&mut h, 2, "OptionsSlot<"), 0, "settled");
+    assert_eq!(ran_over(&mut h, 2, options_ran), 0, "settled");
     let on = h.state().ui.tool_options.move_auto_select;
     h.state_mut().ui.tool_options.move_auto_select = !on;
-    assert!(ran_over(&mut h, 1, "OptionsSlot<") > 0, "a changed option runs the bar");
+    assert!(ran_over(&mut h, 1, options_ran) > 0, "a changed option runs the bar");
     // What the bar's frame remembers of the option (the saved preferences) moves no version.
-    assert_eq!(ran_over(&mut h, 3, "OptionsSlot<"), 0, "the frames after the changed one run no bar");
+    assert_eq!(ran_over(&mut h, 3, options_ran), 0, "the frames after the changed one run no bar");
 }
 
 /// A bar that runs and writes every control's value back leaves the tool options' revision alone, so idle frames never

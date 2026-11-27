@@ -229,9 +229,9 @@ impl PhotocraftApp {
         AppShell::new(WindowKey::main())
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
-            .title_bar_if(menu_bar, |ui, _cx, app| panels::region_versions::show_title_bar(app, ui))
-            .options_bar(options_bar && !home, |ui, _cx, app| panels::region_versions::show_options_bar(app, ui))
-            .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
+            .title_bar_if(menu_bar, |app| Some(panels::region_versions::title_bar(app)), |ui, _cx, app| panels::title_bar(app, ui))
+            .options_bar(options_bar && !home, |app| Some(panels::region_versions::options_bar(app)), |ui, _cx, app| panels::options_bar(app, ui))
+            .status(status_bar && !home, |app| Some(panels::region_versions::status_bar(app)), |ui, _cx, app| panels::status_bar(app, ui))
             .body(|ui, cx, app| {
                 if home {
                     canvas::document_area(app, ui);
