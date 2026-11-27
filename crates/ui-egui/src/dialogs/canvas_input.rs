@@ -105,11 +105,11 @@ pub(crate) fn disarm_dropper(app: &mut PhotocraftApp) {
 
 /// Whether `pick` keeps sampling while the primary button stays held and the pointer moves: the one rule of the
 /// dialogs' eyedroppers (the Levels and Curves picker, the Color Picker's, a parameter dialog's, Color Range's), Add and
-/// Subtract samples included: a held drag keeps adding or subtracting. The Properties panel's armed picker, a Curves
-/// point and the preview locator act on the press alone.
+/// Subtract samples included: a held drag keeps adding or subtracting. A Curves point uses the drag to move the point it
+/// creates; the Properties panel's armed picker and the preview locator act on the press alone.
 pub(crate) fn follows_drag(app: &PhotocraftApp, pick: DialogPick) -> bool {
     match pick {
-        DialogPick::TonePicker(_) => app.framework.dialogs.stack().top().is_some(),
+        DialogPick::TonePicker(_) | DialogPick::CurvesPoint => app.framework.dialogs.stack().top().is_some(),
         DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange => true,
         _ => false,
     }
@@ -140,10 +140,15 @@ pub(crate) fn pick_tone(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
     if app.framework.dialogs.stack().top().is_some() { super::adjust_dialog::pick(app, at) } else { super::layer_picker::sample_at(app, at[0], at[1]) }
 }
 
-/// A ⌘-click at `at` on the image with Curves open: a point on the shown curve (one per colour channel with
-/// `every_channel`).
+/// A ⌘-click/drag at `at` on the image with Curves open: a point on the shown curve (one per colour channel with
+/// `every_channel`), followed by vertical movement of the selected point.
 pub(crate) fn add_curve_point(app: &mut PhotocraftApp, at: [f64; 2], every_channel: bool) -> bool {
     super::adjust_dialog::add_point(app, at, every_channel)
+}
+
+/// A drag after a Curves point was sampled on the image.
+pub(crate) fn drag_curve_point(app: &mut PhotocraftApp, total: [f64; 2]) -> bool {
+    super::adjust_dialog::drag_curve_point(app, total)
 }
 
 /// The colour of the image at `at` for the armed dropper of the top dialog. `None` off the image or over transparency.
@@ -224,6 +229,9 @@ pub(crate) fn release(app: &mut PhotocraftApp, pick: DialogPick) {
         && let Some(dialog) = app.framework.dialogs.get_mut::<HostedLayerStyle>()
     {
         dialog.draft_mut().end_drag();
+    }
+    if matches!(pick, DialogPick::CurvesPoint) {
+        super::adjust_dialog::end_curve_drag(app);
     }
 }
 

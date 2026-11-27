@@ -77,7 +77,7 @@ impl CanvasTool for DialogTool<'_> {
             let follows = canvas_input::follows_drag(app, pick);
             match pick {
                 DialogPick::TonePicker(_) => (canvas_input::pick_tone(app, at), !follows),
-                DialogPick::CurvesPoint => (canvas_input::add_curve_point(app, at, mods.shift), true),
+                DialogPick::CurvesPoint => (canvas_input::add_curve_point(app, at, mods.shift), !follows),
                 DialogPick::Color => (canvas_input::pick_color(app, at), !follows),
                 DialogPick::ParamDropper => (canvas_input::pick_dropper(app, at, mods), !follows),
                 DialogPick::ColorRange => (canvas_input::pick_color_range(app, at, mods), !follows),
@@ -120,6 +120,9 @@ impl CanvasTool for DialogTool<'_> {
             }
             DialogPick::GradientDrag => {
                 canvas_input::drag_gradient(app, start, total);
+            }
+            DialogPick::CurvesPoint => {
+                canvas_input::drag_curve_point(app, total);
             }
             DialogPick::PatternPhase => {
                 // `false`: a pick change, an unlink or an outside phase change ended the gesture.
