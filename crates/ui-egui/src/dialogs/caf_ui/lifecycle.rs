@@ -6,6 +6,7 @@ use craft::imaging::ui::fill::{FillCommand, FillEvent, FillLimits, FillOpen, Fil
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::runtime::env::Label;
 use photocraft_engine::edit_menu_cmds::{MAX_CAF_EDITS, MAX_CAF_POINTS};
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -128,11 +129,74 @@ fn report(app: &mut PhotocraftApp, e: &str) {
     app.ui.status_error = true;
 }
 
-/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported.
+/// The settings an empty recorded Content-Aware Fill step plays with (#14254).
+const RECORDED_SETTINGS: [&str; 7] = ["sampling", "sampleAllLayers", "colorAdaptation", "rotationAdaptation", "scale", "mirror", "output"];
+
+/// The workspace's own memory names Rotation Adaptation `rotation`; an empty recorded step reads `rotationAdaptation`.
+const WORKSPACE_ROTATION: &str = "rotation";
+
+/// The settings an empty recorded step plays with, from what the workspace remembers (#14254).
+pub(crate) fn recorded_from_workspace(memory: Value) -> Value {
+    let Value::Object(mut settings) = memory else { return json!({}) };
+    if let Some(rotation) = settings.remove(WORKSPACE_ROTATION) {
+        settings.insert("rotationAdaptation".into(), rotation);
+    }
+    settings.retain(|key, _| RECORDED_SETTINGS.contains(&key.as_str()));
+    Value::Object(settings)
+}
+
+/// The settings an empty recorded step plays with, in the form the workspace remembers them.
+pub(crate) fn recorded_to_workspace(settings: &mut Value) {
+    if let Some(settings) = settings.as_object_mut()
+        && let Some(rotation) = settings.remove("rotationAdaptation")
+    {
+        settings.insert(WORKSPACE_ROTATION.into(), rotation);
+    }
+}
+
+/// `command`'s settings that an empty recorded step plays with.
+fn recorded(command: &FillCommand) -> Option<Value> {
+    let Ok(Value::Object(mut settings)) = serde_json::to_value(command) else { return None };
+    settings.retain(|key, _| RECORDED_SETTINGS.contains(&key.as_str()));
+    Some(Value::Object(settings))
+}
+
+/// Keeps `settings` in `prefs.dialogs` too, where an empty recorded step reads them: the workspace remembers its
+/// own copy in the framework's store, which the engine can't see.
+fn remember(app: &mut PhotocraftApp, settings: Value) {
+    app.session.prefs.edit(|p| p.dialogs.insert(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS.into(), settings));
+}
+
+/// The background job a command's reply says is still running.
+fn pending_job(reply: &Value) -> Option<JobId> {
+    (reply.get("pending") == Some(&Value::Bool(true))).then(|| reply.get("job").and_then(Value::as_u64).map(JobId)).flatten()
+}
+
+/// A background fill ended: its settings are remembered only when it was applied, not when it failed or was
+/// cancelled (#14254).
+pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
+    let Some(i) = app.jobs.caf_settings.iter().position(|(job, _)| *job == e.id) else { return };
+    let (_, settings) = app.jobs.caf_settings.remove(i);
+    if matches!(e.outcome, JobOutcome::Done(_)) {
+        remember(app, settings);
+    }
+}
+
+/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported and keeps the
+/// settings of the last fill that ran.
 pub(super) fn apply(app: &mut PhotocraftApp, command: &FillCommand) -> Result<(), String> {
     let layer = app.caf.as_ref().ok_or("Content-Aware Fill is not open")?.layer;
     match app.run(CMD, plan_params(command, layer)) {
-        Ok(_) => Ok(()),
+        Ok(reply) => {
+            if let Some(settings) = recorded(command) {
+                match pending_job(&reply) {
+                    // A background fill can still fail or be cancelled: its settings wait for the job's end.
+                    Some(job) => app.jobs.caf_settings.push((job, settings)),
+                    None => remember(app, settings),
+                }
+            }
+            Ok(())
+        }
         Err(e) => {
             report(app, &e);
             Err(e)
