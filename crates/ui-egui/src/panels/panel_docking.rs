@@ -221,8 +221,14 @@ struct Panels<'a> {
 }
 
 impl DockPanels<String> for Panels<'_> {
+    /// A panel body is a memoized view keyed by its version (#16118); the canvas shows state that changes without a
+    /// command (the view, redraw progress, animation and job overlays), so it runs every pass.
     fn body(&mut self, panel: &String, ui: &mut egui::Ui, _: &mut BodyCx<'_>) {
-        body(self.app, ui, panel);
+        if panel == CANVAS {
+            body(self.app, ui, panel);
+        } else {
+            super::region_versions::show_panel(self.app, ui, panel);
+        }
     }
 
     /// The canvas group is the document area: it draws its own tabs and documents in the group's rect. The toolbar's
@@ -329,7 +335,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
     }
     // Files dropped on a floating panel's own window open as documents, and the main window comes forward.
     if !window_files.is_empty() {
-        app.open_dropped(&ctx, window_files, crate::file_open::DropTo::Window);
+        let files = window_files.into_iter().flat_map(|dropped| dropped.files).collect();
+        app.open_dropped(&ctx, files, crate::file_open::DropTo::Window);
     }
 }
 

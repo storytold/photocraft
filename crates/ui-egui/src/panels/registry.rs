@@ -1,20 +1,24 @@
 //! The panel registry: every panel PhotoCraft shows in its workspace, with its name, icon, size policy, body and
 //! panel menu, and the built-in workspaces those panels are arranged in.
 //!
-//! The dock (`panel_docking`) reads a panel's spec and body from here; the command sources read each panel's menu
-//! states and run its fired commands through [`states`] and [`run_fired`]. One arrangement serves every theme.
+//! The dock (`panel_docking`) reads a panel's spec and body from here; the framework reads each panel's menu states as
+//! a command source of its own ([`PanelEntry::states`]) and runs its fired commands through [`run_fired`]. One
+//! arrangement serves every theme.
 
 use craft::behavior::Axis;
 use craft::behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
-use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMenu};
+use craft::color_ui::ui::{ColorPanelCommand, ColorPanelLayout, ColorPanelMenu, ColorPanelShown};
 use craft::ui::contract::{Scroll, ShowContainer as _};
 use craft::ui::docking::DockHeights;
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::PanelRow;
-use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
+use craft::ui::runtime::commands::{CommandRef, CommandSet as _};
 use egui::{Rect, pos2, vec2};
 
+use std::sync::Arc;
+
 use super::PhotocraftApp;
+use crate::app::framework::{SourceStates, StatesOf, derived_states, no_states};
 
 /// One registered panel.
 pub(crate) struct PanelEntry {
@@ -34,8 +38,9 @@ pub(crate) struct PanelEntry {
     pub body: fn(&mut PhotocraftApp, &mut egui::Ui),
     /// The rows of the panel's menu, before the dock's own rows.
     pub rows: fn(&PhotocraftApp) -> Vec<PanelRow>,
-    /// The state of each command the rows name, for a panel whose rows are a framework command set.
-    pub states: fn(&PhotocraftApp) -> Vec<(CommandRef, CommandState)>,
+    /// The state of each command the rows name, for a panel whose rows are a framework command set: a value derived
+    /// under the panel's id from what the states read, so one panel's change builds only its own.
+    pub states: StatesOf,
     /// Runs a fired command of the panel's command set; `false` when the command is not the panel's.
     pub run: fn(&mut PhotocraftApp, &egui::Context, &CommandRef) -> bool,
 }
@@ -54,10 +59,6 @@ pub(crate) const CANVAS_MIN: [f32; 2] = [200.0, 120.0];
 const MIN_WIDTH: f32 = 220.0;
 
 fn no_rows(_: &PhotocraftApp) -> Vec<PanelRow> {
-    Vec::new()
-}
-
-fn no_states(_: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     Vec::new()
 }
 
@@ -104,14 +105,14 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     // The Color panel sizes its field to the group and scrolls its slider modes itself (#6000).
     PanelEntry {
         heights: Some(COLOR_HEIGHTS),
-        rows: |_| ColorPanelMenu::rows(),
-        states: color_states,
+        rows: |_| ColorPanelMenu::rows(ColorPanelLayout::ForegroundBackground),
+        states: color_source_states,
         run: color_run,
         ..panel("color", || tl!("Color").to_string(), "palette", LEAST, super::color::panel)
     },
     PanelEntry {
         rows: super::swatches_ui::panel_rows,
-        states: super::swatches_ui::command_states,
+        states: super::swatches_ui::source_states,
         run: super::swatches_ui::run_fired,
         ..panel("swatches", || tl!("Swatches").to_string(), "swatch_book", LEAST, super::swatches_ui::panel)
     },
@@ -140,7 +141,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     PanelEntry { heights: Some(NAVIGATOR_HEIGHTS), ..panel("navigator", || tl!("Navigator").to_string(), "navigation", LEAST, super::navigator::navigator) },
     PanelEntry {
         rows: super::histogram_panel::panel_rows,
-        states: super::histogram_panel::command_states,
+        states: super::histogram_panel::source_states,
         run: super::histogram_panel::run_fired,
         ..panel("histogram", || tl!("Histogram").to_string(), "chart_line", LEAST, |app, ui| scrolled(app, ui, super::histogram_panel::show))
     },
@@ -148,13 +149,13 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     PanelEntry {
         heights: Some(HISTORY_HEIGHTS),
         rows: super::history_menu_ui::panel_rows,
-        states: super::history_menu_ui::command_states,
+        states: super::history_menu_ui::source_states,
         run: super::history_menu_ui::run_fired,
         ..panel("history", || tl!("History").to_string(), "clock", LEAST, super::history::history)
     },
     PanelEntry {
         rows: super::actions::menu::panel_rows,
-        states: super::actions::menu::states,
+        states: super::actions::menu::source_states,
         run: super::actions::menu::run_fired,
         ..panel("actions", || tl!("Actions").to_string(), "play", LEAST, super::actions::panel)
     },
@@ -166,13 +167,13 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     PanelEntry {
         heights: Some(LAYERS_HEIGHTS),
         rows: super::layers_panel_ui::panel_rows,
-        states: super::layers_panel_ui::command_states,
+        states: super::layers_panel_ui::source_states,
         run: super::layers_panel_ui::run_fired,
         ..panel("layers", || tl!("Layers").to_string(), "layers", 110.0, super::layers::layers)
     },
     PanelEntry {
         rows: super::channels_panel::panel_rows,
-        states: super::channels_panel::command_states,
+        states: super::channels_panel::source_states,
         run: super::channels_panel::run_fired,
         ..panel("channels", || tl!("Channels").to_string(), "squares_subtract", 110.0, super::channels_panel::show)
     },
@@ -180,7 +181,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     PanelEntry { heights: Some(BRUSHES_HEIGHTS), ..panel("brushes", || tl!("Brushes").to_string(), "brush", 70.0, super::brush_panel::brushes::panel) },
     PanelEntry {
         rows: super::preset_browser::styles_rows,
-        states: super::preset_browser::styles_states,
+        states: super::preset_browser::styles_source_states,
         run: super::preset_browser::styles_run,
         ..floating("styles", || tl!("Styles").to_string(), "sparkles", [300.0, 420.0], |app, ui| scrolled(app, ui, super::preset_panels::styles_panel))
     },
@@ -215,7 +216,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     panel("timeline", || tl!("Timeline").to_string(), "split_horizontal", LEAST, super::timeline_ui::body),
     PanelEntry {
         rows: super::brush_panel::panel_rows,
-        states: super::brush_panel::command_states,
+        states: super::brush_panel::source_states,
         run: super::brush_panel::run_fired,
         ..floating("brushSettings", || tl!("Brush Settings").to_string(), "brush_cleaning", [520.0, 460.0], super::brush_settings::brush_settings)
     },
@@ -226,8 +227,18 @@ pub(crate) static PANELS: &[PanelEntry] = &[
 ];
 
 /// The Color panel menu's states, from the panel's own state.
-fn color_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
-    ColorPanelMenu::states(&app.ui.color_panel.panel).into_iter().map(|(command, state)| (command.into(), state)).collect()
+fn color_states(app: &PhotocraftApp) -> SourceStates {
+    let state = &app.ui.color_panel.panel;
+    // Photoshop's layout: the views follow the state's mode, and the foreground and background always hold a colour.
+    ColorPanelMenu::states(ColorPanelLayout::ForegroundBackground, state, &ColorPanelShown::Mode(state.mode), true)
+        .into_iter()
+        .map(|(command, state)| (command.into(), state))
+        .collect()
+}
+
+/// [`color_states`], derived from the panel's state.
+fn color_source_states(app: &PhotocraftApp, name: &'static str) -> Arc<SourceStates> {
+    derived_states(app, name, &app.ui.color_panel.panel, || color_states(app))
 }
 
 /// Runs a fired Color panel menu command; Copy Color as HTML and Copy Color's Hex Code put their text on the
@@ -270,19 +281,15 @@ pub(crate) fn registered(panel: &str) -> bool {
 }
 
 /// What may happen to `panel`: the canvas stays docked and open and takes no tabs, but panels open beside it; the
-/// toolbar never collapses to icons and never shares its column or tab group; every other panel moves, floats and
-/// closes. A locked workspace narrows these itself.
+/// toolbar never collapses to icons, never shares its column or tab group and docks only in dock columns, so it is
+/// always a vertical strip, never one across the window (#12517); every other panel moves, floats and closes. A
+/// locked workspace narrows these itself.
 pub(crate) fn permissions(panel: &str) -> Permissions {
     match panel {
         CANVAS => Permissions::PROTECTED.accepts_splits(true),
-        TOOLBAR => Permissions::ALL.collapses(false).shares_column(false),
+        TOOLBAR => Permissions::ALL.collapses(false).shares_column(false).docks_outside_columns(false),
         _ => Permissions::ALL,
     }
-}
-
-/// The state of every panel's menu commands.
-pub(crate) fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
-    PANELS.iter().flat_map(|panel| (panel.states)(app)).collect()
 }
 
 /// Runs a fired panel menu command through the panel whose command set it belongs to; `false` when none takes it.

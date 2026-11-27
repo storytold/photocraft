@@ -56,6 +56,21 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     ITEMS.iter().flatten().map(|&id| (CommandRef::new(id), CommandState::new().enabled(command_state(app, resolve(id, snapshot).0)))).collect()
 }
 
+/// What [`command_states`] reads: the rules (the Pen and Crop histories and an open Free Transform among them) and the
+/// snapshot selected in the panel.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    rules: crate::menus::facts::RuleFacts<'a>,
+    #[memo_props(hash = "a plain model id, a snapshot id and the history spot: plain values")]
+    snapshot: &'a Option<(photocraft_doc::DocId, u64, crate::panels::history::HistorySpot)>,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts { rules: crate::menus::facts::RuleFacts::of(app), snapshot: &app.ui.history_snapshot };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs the item `command` and reports whether it is one of this menu's. History Options… opens its
 /// dialog, as the menu bar's command does. Step Backward/Forward over a Pen path step it as Edit ›
 /// Undo/Redo do (`vector_ui::pen_history_step`).
@@ -120,10 +135,10 @@ mod tests {
         }
     }
 
-    /// Step Backward after a Pen path was closed gives it back to the Pen, open, rather than
-    /// deleting it; Step Forward closes it again (#6619), as Edit › Undo and Redo do.
+    /// Step Backward over a finished Pen path takes its closing click back: the open path stays in the Work Path,
+    /// and Step Forward closes it again (#12890, as Edit › Undo and Redo do).
     #[test]
-    fn steps_over_a_finished_pen_path_give_it_back_to_the_pen() {
+    fn steps_over_a_finished_pen_path_step_the_clicks() {
         use crate::canvas::testing::click;
         let mut app = app();
         app.ui.tool = crate::state::Tool::Pen;
@@ -131,12 +146,17 @@ mod tests {
             click(&mut app, at, egui::Modifiers::NONE);
         }
         assert!(app.ui.pen.is_none(), "the path is closed");
+        let work = |app: &crate::PhotocraftApp| {
+            let sub = app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].clone();
+            (sub.closed, sub.knots.len())
+        };
+        assert_eq!(work(&app), (true, 3));
         fire(&mut app, "history.stepBackward");
-        assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(3), "the open path is back on the Pen");
-        assert!(app.session.active().unwrap().doc.work_path.is_none());
+        assert_eq!(work(&app), (false, 3), "the closing click is taken back, the anchors stay");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(3), "the open path is back on the Pen (#6619)");
         fire(&mut app, "history.stepForward");
-        assert!(app.ui.pen.is_none());
-        assert!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
+        assert!(app.ui.pen.is_none(), "Step Forward finishes it again");
+        assert_eq!(work(&app), (true, 3), "Step Forward closes it again");
     }
 
     /// A drawn crop frame greys the items that move the document under it (#9285).

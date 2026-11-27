@@ -22,7 +22,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use craft::ui::bars::StatusProgress;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft::ui::dialog::{BlockingOverlay, PromptAnswer, PromptChoice, StandardPrompt};
 use craft::ui::display::{Picture, Progress, Shade, Text};
@@ -652,6 +651,10 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         end_batch(app);
         return;
     }
+    // A removal that wrote its fill to a new layer above a Smart Object explains that layer when the
+    // job ends (#12555): the engine's result says which removal it was, which is the only thing the
+    // interface can read after a background run.
+    let smart_object_edits = matches!(&e.outcome, JobOutcome::Done(v) if e.command == "paint.remove" && crate::retouch_ui::removal_edits_a_smart_object(v));
     match e.outcome {
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
@@ -688,6 +691,12 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
+    }
+    // A Remove job whose fill went to a new layer above a Smart Object explains that layer only now:
+    // the stroke itself could not, because the job's result is the first thing that says what landed
+    // (#12555). A cancelled or failed removal carries no such result and stays quiet.
+    if smart_object_edits {
+        crate::retouch_ui::notice_edits_layer(app);
     }
 }
 
@@ -825,27 +834,22 @@ pub fn save_progress(app: &PhotocraftApp, doc: DocId) -> Option<String> {
     app.session.job(save.job).map(|j| saving_percent(&j))
 }
 
-/// The status bar's job readout (the bar's trailing group): the job's label, a progress bar, the percentage and a
-/// cancel button, "Saving" for a save. A print's cancel is shown refused: the system print queue owns it. Draws
-/// nothing when no job runs.
-pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(j) = job_in_view(app) else { return };
+/// The job the status bar's trailing group shows, and its progress: the job's label, the fraction and a cancel
+/// button, "Saving" for a save. A print's cancel is shown refused: the system print queue owns it. `None` when no job
+/// runs.
+pub(crate) fn status_job(app: &PhotocraftApp) -> Option<(JobId, crate::panels::status_bar::Progress)> {
+    let j = job_in_view(app)?;
     if j.command == "file.automate.batch" {
-        return;
+        return None;
     }
     let saving = app.jobs.saves.iter().any(|s| s.job == j.id);
     let more = app.session.jobs().len().saturating_sub(1);
     // A save's percentage is the component's own.
     let name = if saving { tl!("Saving").to_owned() } else { tl!(&j.label).to_owned() };
     let label = if more > 0 { format!("{name} (+{more})") } else { name };
-    let mut progress = StatusProgress::new(label, shown_fraction(&j)).cancel(tl!("Cancel (Esc)").to_owned());
     // A print has already reached the spool worker; cancellation belongs to the system queue.
-    if matches!(j.command.as_str(), "file.print" | "file.printOneCopy") {
-        progress = progress.cancel_refused(tl!("Manage submitted jobs in the system print queue").to_owned());
-    }
-    if progress.show(ui).cancelled {
-        cancel(app, j.id);
-    }
+    let refused = matches!(j.command.as_str(), "file.print" | "file.printOneCopy").then(|| tl!("Manage submitted jobs in the system print queue").to_owned());
+    Some((j.id, crate::panels::status_bar::Progress { label, fraction: shown_fraction(&j), cancel: Some(tl!("Cancel (Esc)").to_owned()), refused }))
 }
 
 /// Show the folder Batch worker's immutable current document in the canvas area. The worker
