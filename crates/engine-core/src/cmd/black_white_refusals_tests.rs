@@ -47,7 +47,7 @@ pub(super) fn pixel(s: &Session) -> [f32; 4] {
 }
 
 /// Layer `id`'s pixel at 4,4.
-fn layer_pixel(s: &Session, id: photocraft_doc::LayerId) -> [f32; 4] {
+pub(super) fn layer_pixel(s: &Session, id: photocraft_doc::LayerId) -> [f32; 4] {
     s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().rgba(4, 4)
 }
 

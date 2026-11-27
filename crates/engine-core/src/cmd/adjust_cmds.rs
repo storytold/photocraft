@@ -429,13 +429,7 @@ pub(crate) fn black_white_enabled(s: &Session) -> std::result::Result<(), String
 /// [`has_adjustable`]; `None` for a layer mask or a filter mask, which keep their own checks.
 pub(crate) fn black_white_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
     use photocraft_color::ColorMode;
-    greyed_on_pixels(
-        s,
-        p,
-        &[ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed],
-        &[ColorMode::Rgb],
-        BLACK_WHITE_UNAVAILABLE,
-    )
+    greyed_on_pixels(s, p, &[ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed], &[ColorMode::Rgb], BLACK_WHITE_UNAVAILABLE)
 }
 
 /// Black & White with `p` (its target filled in) stops on an empty pixel layer before it edits
@@ -460,16 +454,22 @@ pub(crate) const COLOR_BALANCE_EMPTY: &str = "Could not complete the Color Balan
 /// otherwise [`has_adjustable`]'s, as for a hidden layer in the modes not measured (Duotone).
 /// Bitmap is refused by the shared Bitmap gate and a targeted layer mask by `mask_target_enabled`.
 pub(crate) fn color_balance_enabled(s: &Session) -> std::result::Result<(), String> {
-    use photocraft_color::ColorMode;
     let p = crate::channel_cmds::inject_target(s, COLOR_BALANCE_ID, Value::Null);
+    color_balance_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// [`color_balance_enabled`] for a call with `p`, its target filled in from the Channels panel:
+/// the target and the `"layer"` it names are the call's own. `None` for a layer mask or a filter
+/// mask, which `mask_target_enabled` checks.
+pub(crate) fn color_balance_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use photocraft_color::ColorMode;
     greyed_on_pixels(
         s,
-        &p,
+        p,
         &[ColorMode::Grayscale, ColorMode::Multichannel],
         &[ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed],
         COLOR_BALANCE_UNAVAILABLE,
     )
-    .unwrap_or_else(|| has_adjustable(s))
 }
 
 /// Color Balance with `p` (its target filled in) stops on an empty pixel layer (#14416).

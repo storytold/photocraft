@@ -7,7 +7,7 @@
 
 use serde_json::json;
 
-use super::black_white_refusals_tests::{pixel, session, steps};
+use super::black_white_refusals_tests::{layer_pixel, pixel, session, steps};
 use crate::Session;
 use crate::adjust_cmds::{COLOR_BALANCE_EMPTY, COLOR_BALANCE_UNAVAILABLE};
 
@@ -116,6 +116,60 @@ fn an_empty_pixel_layer_stops_with_the_empty_layer_alert() {
     let err = s.execute(CB, params()).expect_err("Color Balance is refused").to_string();
     assert_eq!(err, COLOR_BALANCE_EMPTY);
     assert_eq!(steps(&s), before, "no history state");
+}
+
+/// A Grayscale document with alpha channel 0 saved from a selection, the composite targeted.
+fn grayscale_with_an_alpha_channel() -> Session {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
+    s.execute("select.saveSelection", json!({"name": "Alpha 1"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    s.execute("channel.target.composite", json!({})).unwrap();
+    s
+}
+
+#[test]
+fn an_explicit_alpha_channel_in_grayscale_works_over_the_targeted_composite() {
+    let mut s = grayscale_with_an_alpha_channel();
+    assert_eq!(s.disabled_reason(CB).as_deref(), Some(COLOR_BALANCE_UNAVAILABLE), "the composite is greyed");
+    let mut p = params();
+    p["target"] = json!({"channel": 0});
+    assert_eq!(s.disabled_reason_with(CB, &p), None, "the alpha channel named");
+    let before = steps(&s);
+    s.execute(CB, p).expect("the alpha channel is adjusted");
+    assert_eq!(steps(&s), before + 1, "one history state");
+}
+
+#[test]
+fn explicit_pixels_in_grayscale_are_refused_over_a_targeted_alpha_channel() {
+    let mut s = grayscale_with_an_alpha_channel();
+    s.execute("channel.target", json!({"channel": {"alpha": 0}})).unwrap();
+    assert!(s.is_enabled(CB), "the alpha channel keeps the shared check: {:?}", s.disabled_reason(CB));
+    let mut p = params();
+    p["target"] = json!("pixels");
+    assert_eq!(s.disabled_reason_with(CB, &p).as_deref(), Some(COLOR_BALANCE_UNAVAILABLE), "the layer's pixels in Grayscale");
+    let (before, was) = (steps(&s), pixel(&s));
+    let err = s.execute(CB, p).expect_err("Color Balance is refused").to_string();
+    assert!(err.contains(COLOR_BALANCE_UNAVAILABLE), "{err}");
+    assert_eq!((steps(&s), pixel(&s)), (before, was), "no history state, no pixel change");
+}
+
+#[test]
+fn a_hidden_layer_named_by_layer_is_refused() {
+    let mut s = session();
+    let paint = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": paint.0, "visible": false})).unwrap();
+    let background = s.active().unwrap().doc.layers[0].id;
+    s.execute("layer.select", json!({"layer": background.0})).unwrap();
+    assert!(s.is_enabled(CB), "the visible Background is active");
+    let mut p = params();
+    p["layer"] = json!(paint.0);
+    assert_eq!(s.disabled_reason_with(CB, &p).as_deref(), Some(COLOR_BALANCE_UNAVAILABLE));
+    let (before, was) = (steps(&s), layer_pixel(&s, paint));
+    let err = s.execute(CB, p).expect_err("Color Balance is refused").to_string();
+    assert!(err.contains(COLOR_BALANCE_UNAVAILABLE), "{err}");
+    assert_eq!((steps(&s), layer_pixel(&s, paint)), (before, was), "no history state, the hidden layer is unchanged");
 }
 
 #[test]
