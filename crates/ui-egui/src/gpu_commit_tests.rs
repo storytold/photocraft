@@ -69,18 +69,18 @@ fn stamp(ctx: &photocraft_gpu::NativeContext, comp: &mut photocraft_gpu::Composi
     ctx.queue().submit([encoder.finish()]);
 }
 
-/// Read back `keys` completely (the queue holds a few buffers at a time).
+/// Ask for `keys` as of `tag` (the queue holds a few buffers at a time) and wait for them all.
 fn read_all(
     ctx: &photocraft_gpu::NativeContext,
     comp: &photocraft_gpu::Compositor,
     rb: &MaskReadback,
     layer: photocraft_doc::LayerId,
     mut keys: Vec<(i32, i32)>,
-) -> Vec<((i32, i32), Vec<f32>)> {
-    let want = keys.len();
+    tag: u64,
+) -> Vec<((i32, i32), Vec<f32>, u64)> {
     let mut out = Vec::new();
-    while out.len() < want {
-        let taken = rb.request(comp, ctx.device(), ctx.queue(), layer, &keys);
+    while !keys.is_empty() || rb.in_flight() > 0 {
+        let taken = rb.request(comp, ctx.device(), ctx.queue(), layer, &keys, tag);
         keys.drain(..taken);
         out.extend(rb.poll(ctx.device(), true));
     }
@@ -119,25 +119,26 @@ fn a_gpu_stroke_commits_paint_strokes_pixels() {
             let used = comp.begin_external_mask(ctx.device(), preview.doc.id, preview.layer, preview.doc.bounds(), precision);
             stamp(&ctx, &mut comp, preview.layer, &first);
             let rb = MaskReadback::new();
-            for (i, chunk) in pts[1..].chunks(3).enumerate() {
+            let mut mid = 0usize;
+            for chunk in pts[1..].chunks(3) {
                 let step: Vec<StrokePoint> = chunk.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
                 let dabs = live.push_dabs(&step).unwrap();
                 stamp(&ctx, &mut comp, preview.layer, &dabs);
-                if i == n / 6 {
-                    // Mid-stroke: coverage read back and fed early is replaced by the final read.
-                    for (key, values) in read_all(&ctx, &comp, &rb, preview.layer, live.touched_keys()) {
-                        live.feed_coverage(key, &values);
-                    }
+                // The tiles that went calm are read back while the stroke is drawn (after the
+                // stamps, so the copies see them) and fed as of the epoch they were asked at.
+                let (calm, epoch) = live.calm_keys(2);
+                mid += calm.len();
+                for (key, values, tag) in read_all(&ctx, &comp, &rb, preview.layer, calm, epoch) {
+                    live.feed_coverage(key, &values, tag);
                 }
             }
+            assert!(mid > 0, "some tiles were read back during the stroke");
             let last = live.finish_dabs();
             stamp(&ctx, &mut comp, preview.layer, &last);
-            let keys = live.touched_keys();
-            assert!(keys.len() > 1);
-            let tiles = read_all(&ctx, &comp, &rb, preview.layer, keys.clone());
-            assert_eq!(tiles.len(), keys.len());
-            for (key, values) in &tiles {
-                live.feed_coverage(*key, values);
+            let (keys, epoch) = live.unfed_keys();
+            assert!(keys.len() < live.touched_keys().len(), "the tiles read back mid-stroke are not read again");
+            for (key, values, tag) in read_all(&ctx, &comp, &rb, preview.layer, keys, epoch) {
+                live.feed_coverage(key, &values, tag);
             }
             assert!(rb.bytes_requested() > 0);
             let seed = live.seed;
