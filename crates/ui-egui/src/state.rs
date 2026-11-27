@@ -331,6 +331,9 @@ pub struct UiState {
     /// Slice and Slice Select tools (see `slice_ui`).
     #[serde(default)]
     pub slices: crate::slice_ui::SliceUi,
+    /// The open Save for Web dialog's colour table shifts (see `file_ui::web`).
+    #[serde(skip)]
+    pub web_table: crate::dialogs::file_ui::WebTable,
     /// Frame tool (see `frame_tool`).
     #[serde(default)]
     pub frame_tool: crate::frame_tool::FrameToolUi,
@@ -503,6 +506,7 @@ impl Default for UiState {
             analysis: Default::default(),
             timeline: Default::default(),
             slices: Default::default(),
+            web_table: Default::default(),
             frame_tool: Default::default(),
             task_bar_shown: None,
             artboard_tool: Default::default(),

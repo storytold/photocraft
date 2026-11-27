@@ -15,7 +15,7 @@ use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog
 #[cfg(test)]
 use craft::ui::patterns::preferences::PrefValue;
 use craft::ui::patterns::preferences::{
-    Closed, PageInfo, PreferencesDraft, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
+    Closed, PageInfo, PreferencesDraft, PreferencesLayout, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
 };
 use craft::ui::runtime::env::{Words, WordsOverride, with_env};
 use craft::ui::runtime::memory::SaveKey;
@@ -184,7 +184,14 @@ impl StackDialog for PrefsDialog {
         let out = with_env(
             ui,
             |set| set.words = Some(WordsOverride::Replace(words)),
-            |ui| PreferencesWindow::new(Bind::bound(&mut self.state)).remember(SaveKey::new("photocraft.preferences")).show(ui, &mut with_custom),
+            |ui| {
+                PreferencesWindow::new(Bind::bound(&mut self.state))
+                    // The reference application's layout: framed page list and groups, OK, Cancel, Prev and Next
+                    // in a column at the right (#17014).
+                    .layout(PreferencesLayout::Classic)
+                    .remember(SaveKey::new("photocraft.preferences"))
+                    .show(ui, &mut with_custom)
+            },
         );
         self.doc = Some(with_custom.custom(()));
         if let Some(request) = out.pick_color {
@@ -239,7 +246,7 @@ pub fn open_preferences(app: &mut PhotocraftApp, section: &str) {
         }
     };
     let pages: Vec<PageInfo> = StandardPage::ALL.into_iter().map(StandardPage::info).collect();
-    let doc = doc.pages(pages).rules(rules());
+    let doc = doc.pages(pages).rules(rules(app.ctx()));
     // Agents reach the desktop app only; the web build shows the settings it had before as rows.
     #[cfg(not(target_arch = "wasm32"))]
     let doc = doc.custom_page(super::custom_rows::AGENTS_PAGE);

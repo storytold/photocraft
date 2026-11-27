@@ -102,7 +102,15 @@ const INPUT_OR_READ: &[&str] = &[
 ];
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Reply {
-    if !INPUT_OR_READ.contains(&req.method.as_str()) {
+    // A view command run by id (`engine.execute`, `ui.menu.invoke`) changes only what the view's regions hold in their
+    // versions.
+    let command = match req.method.as_str() {
+        "engine.execute" => req.params.get("command"),
+        "ui.menu.invoke" => req.params.get("id"),
+        _ => None,
+    };
+    let view_only = command.and_then(serde_json::Value::as_str).is_some_and(|id| crate::panels::region_versions::changes_only_the_view(app, id));
+    if !INPUT_OR_READ.contains(&req.method.as_str()) && !view_only {
         app.commands_run += 1;
         ctx.request_repaint();
     }

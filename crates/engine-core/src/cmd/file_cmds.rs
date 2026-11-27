@@ -42,7 +42,7 @@ pub use batch_run::{BatchInput, OutputClaims, encode_batch_error_log, list_image
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_files_tree};
 pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_save_point, process_files};
-pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
+pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with, layers_to_files_needs_more_layers};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
@@ -434,7 +434,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layers to Files…",
             &["File", "Export"],
             None,
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it)} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"iccProfile":bool? (Include ICC Profile: false, no profile in any file; true, the document's profile, or its mode's working profile when it has none, PSD included, and none in a CMYK document's PNG; unset, as before),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it)} → {files}"##,
             native_doc,
             layers_to_files
         ),
@@ -476,6 +476,10 @@ mod batch_log_format_tests;
 #[cfg(test)]
 #[path = "file_cmds/export_clut_cube_header_tests.rs"]
 mod export_clut_cube_header_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/layers_to_files_single_layer_tests.rs"]
+mod layers_to_files_single_layer_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/layers_to_files_png_names_tests.rs"]
@@ -572,3 +576,7 @@ mod aces_exr_tests {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/layers_to_files_icc_tests.rs"]
+mod layers_to_files_icc_tests;

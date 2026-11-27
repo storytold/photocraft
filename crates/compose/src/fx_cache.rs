@@ -30,6 +30,8 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
         h.finish()
     }
     layer.id.0.hash(h);
+    // The same display surface can blend differently before and after rasterizing a text child.
+    std::mem::discriminant(&layer.content).hash(h);
     // What the maps depend on: `fill_opacity` shades them; layer `opacity` is applied when the
     // maps are composited and `visible` only skips the lookup entirely, so neither belongs in
     // the key (an opacity drag must not rebuild shadows over the whole layer; the GPU's
@@ -59,6 +61,12 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
             }
         }
         LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+        LayerContent::Shape(shape) => {
+            layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h);
+            format!("{:?}{:?}{:?}{:?}", shape.path, shape.fill, shape.stroke, shape.live).hash(h);
+            shape.use_aligned_rendering.hash(h);
+            (shape.density.to_bits(), shape.feather.to_bits()).hash(h);
+        }
         _ => layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h),
     }
     if let Some(m) = &layer.mask {
@@ -229,6 +237,8 @@ pub(crate) fn effect_maps_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &C
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cx.layer_keys.identity(layer, cx.doc).hash(&mut h);
+    // Converting a layer can reuse its exact tiles and ID but change how its stroke reads alpha.
+    std::mem::discriminant(&layer.content).hash(&mut h);
     (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     let key = h.finish();

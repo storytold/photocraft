@@ -183,6 +183,8 @@ pub struct JobsUi {
     /// The file being placed in the background, if any. One at a time: files dropped meanwhile
     /// wait in the app's drop queue.
     pub place: Option<PlaceJob>,
+    /// Content-Aware Fill settings waiting for their background fill: remembered when it is applied (#14254).
+    pub(crate) caf_settings: Vec<(JobId, Value)>,
 }
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
@@ -609,6 +611,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     crate::transform_tool::on_job_event(app, &e);
     // A Vanishing Point commit's session comes back when its job fails or is cancelled.
     crate::vp_ui::on_job_event(app, &e);
+    crate::caf_ui::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }
@@ -653,6 +656,10 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         end_batch(app);
         return;
     }
+    // A removal that wrote its fill to a new layer above a Smart Object explains that layer when the
+    // job ends (#12555): the engine's result says which removal it was, which is the only thing the
+    // interface can read after a background run.
+    let smart_object_edits = matches!(&e.outcome, JobOutcome::Done(v) if e.command == "paint.remove" && crate::retouch_ui::removal_edits_a_smart_object(v));
     match e.outcome {
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
@@ -689,6 +696,12 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
+    }
+    // A Remove job whose fill went to a new layer above a Smart Object explains that layer only now:
+    // the stroke itself could not, because the job's result is the first thing that says what landed
+    // (#12555). A cancelled or failed removal carries no such result and stays quiet.
+    if smart_object_edits {
+        crate::retouch_ui::notice_edits_layer(app);
     }
 }
 

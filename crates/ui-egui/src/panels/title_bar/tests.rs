@@ -17,7 +17,7 @@ fn integrated_app(size: egui::Vec2, pixels_per_point: f32, setup: impl FnOnce(&m
     let mut h = Harness::builder().with_size(size).with_pixels_per_point(pixels_per_point).with_max_steps(64).build_eframe(move |cc| {
         let desktop = Desktop::detect(Backend::X11);
         let decision = decide(Os::Windows, Runtime::Native, Backend::X11, &desktop, WindowKind::Main, TitleBarPref::Integrated, None);
-        PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
+        PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision, None);
         let mut session = photocraft_engine::Session::new();
         session.edit_prefs(|p| p.general.auto_show_home_screen = false);
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, crate::Services::default());

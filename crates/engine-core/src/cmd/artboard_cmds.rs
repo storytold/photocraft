@@ -410,6 +410,11 @@ pub fn from_layers_defaults(s: &Session) -> Option<(String, [i64; 2])> {
     Some((next_artboard_name(&d.doc), [w, h]))
 }
 
+/// The smallest width or height Artboard from Layers takes, in pixels (#14577).
+pub const FROM_LAYERS_MIN: i64 = 4;
+/// The largest width or height Artboard from Layers takes, in pixels (#14577).
+pub const FROM_LAYERS_MAX: i64 = 32_000;
+
 fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let sel = crate::layer_multi_cmds::selected(s);
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -422,8 +427,9 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the artboard width and height must not be negative"));
     }
     // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
-    // their bounds on that axis (#9087).
-    let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
+    // their bounds on that axis (#9087). As the dialog's fields do, a size outside 4..=32000 px
+    // is clamped to it (#14577).
+    let size = [int(p, "width"), int(p, "height")].map(|v| v.filter(|v| *v != 0).map(|v| v.clamp(FROM_LAYERS_MIN, FROM_LAYERS_MAX)));
     let (gid, rect, shift) = s.edit("New Artboard From Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
@@ -971,6 +977,22 @@ impl FileType {
     }
 }
 
+/// The formats Include Background in Export leaves the fill out of: those that keep transparency.
+const TRANSPARENT_FORMATS: &[&str] = &["png", "tif", "tiff", "webp"];
+
+/// Whether Artboards to Files keeps the boards' fill: yes unless `"includeBackground": false` asks
+/// otherwise for PNG (PNG-24 included), TIFF or WebP. PSD, PNG-8, PDF and the formats without
+/// alpha (JPEG, BMP, Targa) keep today's file, as #13631 asks: the reference application was not
+/// measured there. [`drop_white_fill`] then leaves out only what was measured.
+fn includes_background(p: &Value, file_type: &FileType) -> bool {
+    let keeps_alpha = match file_type {
+        FileType::Png24 => true,
+        FileType::Save(ext) => TRANSPARENT_FORMATS.contains(&ext.as_str()),
+        FileType::Png8 | FileType::Pdf => false,
+    };
+    p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true) || !keeps_alpha
+}
+
 /// Formats whose file names Artboards to Files writes with a `-` for each space, as the reference
 /// application does for PNG (and, per #13633, JPEG, BMP, Targa and TIFF). PSD keeps its spaces,
 /// as do the formats the reference application was not measured with.
@@ -1038,12 +1060,19 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     if boards.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
+    let file_type = FileType::of(&format, cmd)?;
+    // Include Background in Export unticked (#13631): each board's white fill is left out of the
+    // files that keep transparency, before the name border extends the canvas.
+    if !includes_background(p, &file_type) {
+        for one in &mut boards {
+            drop_white_fill(one);
+        }
+    }
     if let Some(o) = &border {
         for one in &mut boards {
             add_name_border(one, o, cmd)?;
         }
     }
-    let file_type = FileType::of(&format, cmd)?;
     let truecolour = matches!(file_type, FileType::Png24);
     let ext = match file_type {
         FileType::Pdf => {
@@ -1089,17 +1118,18 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files, "warnings": warnings}))
 }
 
-/// The scratch state an artboard export starts from. Building the boards copies their pixels
-/// (and the PNG-8 and PDF paths flatten them) before the encoder's own scratch check sees them,
-/// and a tile that fails to read gives placeholder pixels: [`ScratchGuard::check`] refuses them
-/// before a file is written, as the export pipeline does for a document it reads itself.
-struct ScratchGuard<'a> {
+/// The scratch state an export starts from. Building artboards copies their pixels (and the
+/// PNG-8 and PDF paths flatten them), as Render Video's PNG frames are flattened, before the
+/// encoder's own scratch check sees them, and a tile that fails to read gives placeholder pixels:
+/// [`ScratchGuard::check`] refuses them before a file is written, as the export pipeline does for
+/// a document it reads itself.
+pub(crate) struct ScratchGuard<'a> {
     doc: &'a Document,
     generation: u64,
 }
 
 impl<'a> ScratchGuard<'a> {
-    fn new(doc: &'a Document) -> Result<Self> {
+    pub(crate) fn new(doc: &'a Document) -> Result<Self> {
         photocraft_compose::discard_unreadable_pixel_caches();
         doc.scratch_health().map_err(EngineError::Other)?;
         Ok(Self { doc, generation: photocraft_raster::spill::read_error_generation() })
@@ -1107,7 +1137,7 @@ impl<'a> ScratchGuard<'a> {
 
     /// An error when a scratch read failed since [`ScratchGuard::new`], or the document's own
     /// pixels are unreadable.
-    fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         photocraft_raster::spill::check_since(self.generation).and_then(|()| self.doc.scratch_health()).map_err(EngineError::Other)
     }
 }
@@ -1397,7 +1427,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromLayers",
             "Artboard from Layers…",
             &["Layer", "New"],
-            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 0 keeps their bounds) → {layer, rect}"##,
+            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 4..32000 px, a size outside is clamped to it, 0 keeps their bounds) → {layer, rect}"##,
             has_free_layers,
             artboard_from_layers
         ),
@@ -1429,7 +1459,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|png24|png8|jpg|bmp|tga|tiff|psd|pdf|…"="png" (png24 = truecolour .png, png8 = indexed .png, tga = Targa; pdf = one multi-page <prefix>.pdf, bottom artboard first, pages at 72 ppi),"prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12? (JPEG, and the PDF pages),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false (PNG, PNG-24),"transparency":bool=true (PNG, PNG-8, PNG-24; false: over white, no alpha),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group),"includeName":bool=false (Include Artboard Name: a border of (w + h) / 20 px on each side, the name in the top one; psd and pdf keep their layers),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension; "other" takes extensionColor),"extensionColor":"#rrggbb"|[r,g,b]? (used when extension is "other"),"textColor":"#rrggbb"|[r,g,b]=black} → {files, warnings} (warnings: what a file could not hold, each "<file name>: <warning>"; one "<prefix><artboard name>.<extension>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
+            r##"{"dir":folder,"format":"png|png24|png8|jpg|bmp|tga|tiff|psd|pdf|…"="png" (png24 = truecolour .png, png8 = indexed .png, tga = Targa; pdf = one multi-page <prefix>.pdf, bottom artboard first, pages at 72 ppi),"prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12? (JPEG, and the PDF pages),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false (PNG, PNG-24),"transparency":bool=true (PNG, PNG-8, PNG-24; false: over white, no alpha),"includeBackground":bool=true (false: each board's white fill is left out of PNG, PNG-24, TIFF and WebP files, so they come out transparent where the board's layers have no pixels; an empty board, other fills, documents other than 8-bit RGB, PSD, PNG-8, PDF and formats without alpha keep it),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group),"includeName":bool=false (Include Artboard Name: a border of (w + h) / 20 px on each side, the name in the top one; psd and pdf keep their layers),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension; "other" takes extensionColor),"extensionColor":"#rrggbb"|[r,g,b]? (used when extension is "other"),"textColor":"#rrggbb"|[r,g,b]=black} → {files, warnings} (warnings: what a file could not hold, each "<file name>: <warning>"; one "<prefix><artboard name>.<extension>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),
@@ -1463,12 +1493,19 @@ mod first_board_background_tests;
 #[path = "artboard_cmds/from_group_reset_props_tests.rs"]
 mod from_group_reset_props_tests;
 #[cfg(test)]
+#[path = "artboard_cmds/include_background_tests.rs"]
+mod include_background_tests;
+#[cfg(test)]
 #[path = "artboard_cmds/include_name_tests.rs"]
 mod include_name_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
 mod from_layers_history_name_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_size_range_tests.rs"]
+mod from_layers_size_range_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]

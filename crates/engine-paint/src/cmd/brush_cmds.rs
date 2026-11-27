@@ -18,7 +18,7 @@ use photocraft_paint::GrayTile;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-pub use crate::brush_defs::MAX_TIP;
+pub use crate::brush_defs::{MAX_DEFINED_TIP, MAX_TIP};
 use crate::brush_defs::{sampled_brush, validate_brush};
 use crate::cmd::has_paintable;
 use crate::commands::{CommandSpec, is_mask_target, paint_surface};
@@ -210,7 +210,9 @@ pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings>
         b.smoothing.amount = v.clamp(0.0, 1.0);
     }
     b.color = color(p.get("color"), s.tools.foreground);
-    b.color_cmyk = s.tools.picked_cmyk([b.color[0], b.color[1], b.color[2]]).map(|k| ([b.color[0], b.color[1], b.color[2]], k));
+    let rgb = [b.color[0], b.color[1], b.color[2]];
+    b.color_cmyk =
+        if p.get("color").is_none_or(Value::is_null) { s.tools.picked_role_cmyk(0).map(|k| (rgb, k)) } else { s.tools.matching_cmyk(rgb).map(|k| (rgb, k)) };
     b.background = s.tools.background;
     b.erase = flag(p, "erase", false);
     b.seed = match p.get("seed").and_then(Value::as_u64) {
@@ -242,10 +244,11 @@ fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option
 
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
 /// paints the background colour instead (Photoshop).
-fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
+fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4], bg_inks: Option<[f32; 4]>) {
     if brush.erase && lock {
         brush.erase = false;
         brush.color = bg;
+        brush.color_cmyk = bg_inks.map(|inks| ([bg[0], bg[1], bg[2]], inks));
     }
 }
 
@@ -265,6 +268,7 @@ pub(super) fn stroke_into(s: &mut Session, cmd: &str, p: &Value, label: &str, br
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let raw_bg = s.tools.background;
+    let bg_inks = s.tools.picked_role_cmyk(1);
     let bg = crate::color_cmds::swatch_in_doc(s, raw_bg);
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
@@ -287,12 +291,12 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let clip = paintable_area(canvas, surf);
             let mut brush = brush;
-            erase_locked(&mut brush, lock, bg);
+            erase_locked(&mut brush, lock, bg, bg_inks);
             if auto_erase {
                 // A stroke in the table's colour starts on what the foreground painted as.
                 let fg = table.as_ref().map_or(fg, |t| table_color(t, fg));
                 // Not in #11940: Pencil Auto Erase keeps the plain background colour.
-                apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg);
+                apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg, bg_inks);
             }
             let unpainted = table.as_ref().map(|_| surf.clone());
             let damage = if let Some(axis) = &symmetry {
@@ -337,7 +341,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
 /// layer would store it (its mode and depth) against the pixel, its alpha aside, so one level
 /// off paints the foreground. In a CMYK layer a foreground picked as CMYK is probed as the inks
 /// the stroke paints (#13060), not as its RGB stand-in converted back.
-fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
+fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4], bg_inks: Option<[f32; 4]>) {
     let Some(p0) = start else { return };
     let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
     let format = surf.format();
@@ -356,6 +360,7 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
     // Far below one 8-bit level: only the float noise of the conversion.
     if c[3] > 0.0 && (0..3).all(|i| (c[i] - stored[i]).abs() < 1e-5) {
         brush.color = bg;
+        brush.color_cmyk = bg_inks.map(|inks| ([bg[0], bg[1], bg[2]], inks));
     }
 }
 
@@ -651,10 +656,11 @@ impl LiveStroke {
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         let clip = paintable_area(canvas, surf);
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
-        erase_locked(&mut brush, lock, bg);
+        let bg_inks = s.tools.picked_role_cmyk(1);
+        erase_locked(&mut brush, lock, bg, bg_inks);
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| table_color(t, fg));
-            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
+            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background, bg_inks);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
@@ -920,6 +926,10 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
         tolerance: pct(p, "tolerance", 30.0).max(0.01),
         anti_alias: flag(p, "antiAlias", true),
         color: brush.color,
+        // The inks the foreground was picked as, when it was picked as CMYK (the same pair a Brush
+        // stroke carries, `BrushSettings::color_cmyk`): in a CMYK document the Color blend works on
+        // those channels (#11918).
+        color_inks: brush.color_cmyk.map(|(_, inks)| inks),
         background: s.tools.background,
     };
     let id = layer_id(s, p)?;
@@ -931,13 +941,17 @@ pub const COLOR_REPLACEMENT_STEP: &str = "Color Replacement Tool";
 
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
+    let cmyk = doc_cmyk_space(s);
     // The reference application names every click, stroke and Shift+click segment "Color
     // Replacement Tool" (#11933); the command's label is the same, so recorded actions match.
-    let dmg = s.edit(COLOR_REPLACEMENT_STEP, |doc, _| {
-        let sel = doc.selection.clone();
-        let lock = doc.effective_locks(id).transparency;
-        let surf = paint_surface(doc, id, &json!({}))?;
-        apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
+    // The dab's colour conversions run in the document's own CMYK space, as a Brush stroke's do (#11918).
+    let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        s.edit(COLOR_REPLACEMENT_STEP, |doc, _| {
+            let sel = doc.selection.clone();
+            let lock = doc.effective_locks(id).transparency;
+            let surf = paint_surface(doc, id, &json!({}))?;
+            apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
+        })
     })?;
     Ok(damage_json(s, dmg))
 }
@@ -946,8 +960,14 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
 /// recolouring per dab as the commit, so the preview at the last point is the committed result.
 pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
-    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| Box::new(color_replacement_effect(pre.clone(), rs)))?
-        .with_tail_preview()
+    let cmyk = doc_cmyk_space(s);
+    // The same CMYK space as the commit, so the preview's dabs recolour the same device colours.
+    photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| {
+            Box::new(color_replacement_effect(pre.clone(), rs))
+        })
+    })?
+    .with_tail_preview()
 }
 
 fn brush_json(b: &BrushSettings) -> Value {
@@ -1061,7 +1081,13 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    s.active().ok_or("no document")?;
+    let d = s.active().ok_or("no document")?;
+    // The area the command reads (selection, else canvas) is limited, not just the painted
+    // extent, like Photoshop (#14275).
+    let area = d.doc.selection.as_ref().map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
+    if area.width().max(area.height()) > MAX_DEFINED_TIP {
+        return Err(format!("the area is larger than {MAX_DEFINED_TIP} px"));
+    }
     Ok(())
 }
 
@@ -1568,6 +1594,10 @@ mod tests;
 mod color_replacement_modes_tests;
 
 #[cfg(test)]
+#[path = "color_replacement_cmyk_tests.rs"]
+mod color_replacement_cmyk_tests;
+
+#[cfg(test)]
 mod mixer_live_tests;
 
 #[cfg(test)]
@@ -1585,3 +1615,6 @@ mod define_brush_color_density_tests;
 
 #[cfg(test)]
 mod filter_mask_stroke_tests;
+
+#[cfg(test)]
+mod define_brush_size_limit_tests;

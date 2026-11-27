@@ -66,9 +66,13 @@ mod count_show_extras_tests;
 #[cfg(test)]
 mod crop_mode_tests;
 #[cfg(test)]
+mod freeform_shift_tests;
+#[cfg(test)]
 mod gradient_options_bar_mode_tests;
 #[cfg(test)]
 mod line_tool_defaults_tests;
+#[cfg(test)]
+mod note_import_show_tests;
 #[cfg(test)]
 mod object_selection_gear_tests;
 #[cfg(test)]

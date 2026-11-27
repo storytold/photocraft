@@ -1276,6 +1276,7 @@ fn export_stages_with_renderer(
             document_path: opts.document_path.clone(),
             read_linked_files: opts.read_linked_files,
             stage_on_scratch_from: Some(psd_export::STAGE_DOCUMENTS_FROM),
+            embed_icc: opts.encode.embed_icc,
             ..Default::default()
         };
         // The preview is rendered first, while only the document is in memory: its full-size

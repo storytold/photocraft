@@ -24,17 +24,24 @@ use super::{PhotocraftApp, canvas_view};
 /// The canvas panel with the tab strip and the document, or the Home screen; then drops layers dragged onto another
 /// document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Files the OS drops on the main window outside the tab strip: the Home screen has no other target (#16588).
+    let dropped = super::window_drop::take(ui, ui.max_rect());
     if crate::jobs_ui::batch_preview(app, ui) {
         // The preview replaces the tabs: a floating window dropped meanwhile docks nowhere (#16415).
         app.dock_drop_rect = None;
-        return;
+        // It replaces the canvas too: a file dropped where the canvas was opens, not into the hidden document.
+        app.drop_canvas_rect = None;
+    } else {
+        crate::distort_ui::drop_foreign(app, ui.ctx());
+        crate::layer_transfer::prepare(app, ui.ctx());
+        documents(app, ui);
+        crate::layer_transfer::finish(app, ui.ctx());
+        // The Shift+Alt+right-click HUD Color Picker (#6098), while its gesture is held.
+        crate::color_hud::show(app, ui);
     }
-    crate::distort_ui::drop_foreign(app, ui.ctx());
-    crate::layer_transfer::prepare(app, ui.ctx());
-    documents(app, ui);
-    crate::layer_transfer::finish(app, ui.ctx());
-    // The Shift+Alt+right-click HUD Color Picker (#6098), while its gesture is held.
-    crate::color_hud::show(app, ui);
+    if let Some(files) = dropped {
+        super::window_drop::open(app, ui.ctx(), files);
+    }
 }
 
 /// Where each pane of Window › Arrange's n-up or Tile arrangement is in `rect`, with the document it shows: pane `i` is

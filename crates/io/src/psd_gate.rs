@@ -139,7 +139,7 @@ pub(crate) fn acquire_decode_admission(ctl: &photocraft_raster::Interrupt) -> Re
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn reentrant_admission_does_not_deadlock() {
@@ -201,29 +201,40 @@ mod tests {
         assert_eq!(active_attempt_remaining(), Some(1));
     }
 
+    /// Wait (at most 10 s) until a thread waiting at the gate has checked its interrupt `n`
+    /// times. It checks once on every pass of the wait loop, which it only enters while another
+    /// thread holds admission, so the count says it is waiting there rather than not there yet.
+    fn until_checked(checks: &AtomicUsize, n: usize) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while checks.load(Ordering::SeqCst) < n {
+            assert!(std::time::Instant::now() < deadline, "the second thread never waited at the gate");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
     fn gate_serializes_concurrent_threads() {
         let ctl = photocraft_raster::Interrupt::NONE;
         let guard = acquire_decode_admission(&ctl).unwrap();
 
-        let thread_started = Arc::new(AtomicBool::new(false));
+        let checks = Arc::new(AtomicUsize::new(0));
         let thread_acquired = Arc::new(AtomicBool::new(false));
 
-        let t_started = Arc::clone(&thread_started);
+        let t_checks = Arc::clone(&checks);
         let t_acquired = Arc::clone(&thread_acquired);
         let handle = std::thread::spawn(move || {
-            let ctl = photocraft_raster::Interrupt::NONE;
-            t_started.store(true, Ordering::SeqCst);
+            let counted = || {
+                t_checks.fetch_add(1, Ordering::SeqCst);
+                false
+            };
+            let ctl = photocraft_raster::Interrupt::cancel_only(&counted);
             let g = acquire_decode_admission(&ctl).unwrap();
             t_acquired.store(true, Ordering::SeqCst);
             drop(g);
         });
 
-        while !thread_started.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
-        // Give background thread time to reach condvar wait
-        std::thread::sleep(Duration::from_millis(60));
+        // Two passes of the wait loop: the thread has waited on the condvar at least once.
+        until_checked(&checks, 2);
         assert!(!thread_acquired.load(Ordering::SeqCst), "second thread must block while guard held");
 
         drop(guard);
@@ -236,19 +247,25 @@ mod tests {
         let ctl = photocraft_raster::Interrupt::NONE;
         let guard = acquire_decode_admission(&ctl).unwrap();
 
+        let checks = Arc::new(AtomicUsize::new(0));
         let cancelled = Arc::new(AtomicBool::new(false));
         let c_flag = Arc::clone(&cancelled);
 
-        let flag_for_thread = Arc::clone(&cancelled);
+        let (flag_for_thread, t_checks) = (Arc::clone(&cancelled), Arc::clone(&checks));
         let handle = std::thread::spawn(move || {
-            let cancelled = || flag_for_thread.load(Ordering::SeqCst);
+            // Read the flag before counting: once the count moves, that check has said "go on".
+            let cancelled = || {
+                let cancelled = flag_for_thread.load(Ordering::SeqCst);
+                t_checks.fetch_add(1, Ordering::SeqCst);
+                cancelled
+            };
             let progress = |_: f32| {};
             let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
             acquire_decode_admission(&interrupt).map(drop)
         });
 
-        // Let thread block on condvar
-        std::thread::sleep(Duration::from_millis(60));
+        // The thread is in the wait loop, blocked behind the guard.
+        until_checked(&checks, 1);
         // Cancel waiting thread
         c_flag.store(true, Ordering::SeqCst);
 
