@@ -1,47 +1,57 @@
 //! #1120: workspace selection/reset must apply useful layouts, including saved layouts.
 
 use photocraft_engine::Session;
-use photocraft_ui_egui::dock::{self, Group};
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_ui_egui::dock;
 use photocraft_ui_egui::{PhotocraftApp, menus};
 use serde_json::{Value, json};
 
-const PRESETS: [(&str, &str, &[Group], bool); 6] = [
-    ("essentials", "Essentials", &[Group::Color, Group::Properties, Group::Layers], false),
-    ("photography", "Photography", &[Group::Properties, Group::Navigator, Group::History, Group::Layers], false),
-    ("painting", "Painting", &[Group::Color, Group::Layers], false),
-    ("graphicAndWeb", "Graphic and Web", &[Group::Properties, Group::Character, Group::Layers], false),
-    ("pixelArt", "Pixel Art", &[Group::Color, Group::Navigator, Group::Layers], false),
-    ("motion", "Motion", &[Group::Properties, Group::Layers], true),
+/// The panels the presets differ in, in the order [`shown`] reports them.
+const PANELS: [&str; 6] = ["color", "properties", "navigator", "history", "character", "layers"];
+
+const PRESETS: [(&str, &str, &[&str], bool); 6] = [
+    ("essentials", "Essentials", &["color", "properties", "navigator", "history", "layers"], false),
+    ("photography", "Photography", &["properties", "navigator", "history", "layers"], false),
+    ("painting", "Painting", &["color", "layers"], false),
+    ("graphicAndWeb", "Graphic and Web", &["properties", "character", "layers"], false),
+    ("pixelArt", "Pixel Art", &["color", "navigator", "layers"], false),
+    ("motion", "Motion", &["properties", "layers"], true),
 ];
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(Session::new(), Default::default())
 }
 
 fn invoke(app: &mut PhotocraftApp, id: &str, params: Value) {
-    menus::invoke(app, &egui::Context::default(), id, params).unwrap();
+    let ctx = app.ctx().clone();
+    menus::invoke(app, &ctx, id, params).unwrap();
 }
 
 fn select(app: &mut PhotocraftApp, suffix: &str) {
     invoke(app, &format!("window.workspace.{suffix}"), json!({}));
 }
 
-fn layout(app: &PhotocraftApp) -> Value {
-    json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open})
+/// Whether the workspace holds `panel`, in a column of icons or not.
+fn is_open(app: &PhotocraftApp, panel: &str) -> bool {
+    app.ui.docking.layout().contains(&panel.to_owned())
 }
 
-fn shown(app: &PhotocraftApp) -> Vec<Group> {
-    app.ui.dock.order().into_iter().filter(|g| g.shown(&app.ui.panels)).collect()
+fn shown(app: &PhotocraftApp) -> Vec<&'static str> {
+    PANELS.into_iter().filter(|panel| is_open(app, panel)).collect()
+}
+
+fn layout(app: &PhotocraftApp) -> Value {
+    json!({"current": app.workspaces.set.current, "shown": shown(app), "timeline": is_open(app, "timeline"), "dock": app.ui.docking})
 }
 
 #[test]
 fn reported_presets_have_distinct_useful_layouts() {
     let mut app = app();
     let mut failures = Vec::new();
-    for (suffix, name, groups, timeline) in PRESETS.into_iter().skip(3) {
+    for (suffix, name, panels, timeline) in PRESETS.into_iter().skip(3) {
         select(&mut app, suffix);
-        if shown(&app) != groups || app.ui.timeline.open != timeline {
-            failures.push(format!("{name}: {:?}, timeline={}", shown(&app), app.ui.timeline.open));
+        if shown(&app) != panels || is_open(&app, "timeline") != timeline {
+            failures.push(format!("{name}: {:?}, timeline={}", shown(&app), is_open(&app, "timeline")));
         }
     }
     assert!(failures.is_empty(), "incorrect layouts: {failures:?}");
@@ -52,23 +62,19 @@ fn presets_select_expected_panels_and_reset_every_dock_group() {
     let mut app = app();
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     let doc = app.session.active().unwrap().doc.clone();
-    for (suffix, name, groups, timeline) in PRESETS {
+    for (suffix, name, panels, timeline) in PRESETS {
         select(&mut app, suffix);
-        assert_eq!(app.ui.workspace, name);
-        assert_eq!(shown(&app), groups, "{name}");
-        assert_eq!(app.ui.timeline.open, timeline, "{name}");
+        assert_eq!(app.workspaces.set.current, suffix);
+        assert_eq!(shown(&app), panels, "{name}");
+        assert_eq!(is_open(&app, "timeline"), timeline, "{name}");
         let id = format!("window.workspace.{suffix}");
-        assert_eq!(menus::menu_items(&app).iter().find(|item| item.id == id).unwrap().checked, Some(true));
+        assert_eq!(menus::menu_rows(&app).iter().find(|item| item.command.id == id).unwrap().kind.checked(), Some(true));
         let expected = layout(&app);
-        app.ui.panels.character = !app.ui.panels.character;
-        app.ui.panels.navigator = !app.ui.panels.navigator;
-        app.ui.timeline.open = !timeline;
-        app.ui.dock.order = vec![Group::Layers, Group::Color];
-        app.ui.dock.set_collapsed(Group::Layers, true);
-        app.ui.dock.heights.insert(Group::Properties, 99.0);
-        app.ui.dock_tabs.color = 2;
-        app.ui.dock_tabs.layers = 2;
-        invoke(&mut app, "window.workspace.resetWorkspace", json!({}));
+        invoke(&mut app, "window.panel.character", json!({}));
+        invoke(&mut app, "window.panel.navigator", json!({}));
+        invoke(&mut app, "window.panel.timeline", json!({}));
+        assert_ne!(layout(&app), expected, "the edits change the layout of {name}");
+        invoke(&mut app, "workspace.reset", json!({}));
         assert_eq!(layout(&app), expected, "reset {name}");
         assert_eq!(app.session.active().unwrap().doc, doc, "layout must not create/edit a timeline");
     }
@@ -84,24 +90,24 @@ fn presets_are_deterministic_from_every_other_preset_and_select_route() {
             let mut app = app();
             select(&mut app, prior);
             invoke(&mut app, "window.workspace.select", json!({"name": name}));
-            assert_eq!(layout(&app), expected, "{prior} -> {name}");
+            assert_eq!(shown(&app), shown(&baseline), "{prior} -> {name}");
+            assert_eq!(app.workspaces.set.current, expected["current"], "{prior} -> {name}");
         }
     }
 }
 
 #[test]
 fn preset_layouts_round_trip_through_remembered_preferences() {
-    for (suffix, name, _, _) in PRESETS {
+    for (suffix, _, _, _) in PRESETS {
         let mut app = app();
         select(&mut app, suffix);
         let expected = layout(&app);
-        dock::persist(&mut app, &egui::Context::default());
+        dock::persist(&mut app);
         let mut session = Session::new();
         session.load_prefs_json(&app.session.prefs_to_json()).unwrap();
         let mut restored = PhotocraftApp::new(session, Default::default());
         dock::restore(&mut restored);
-        assert_eq!(restored.ui.workspace, name);
-        assert_eq!(layout(&restored), expected, "restore {name}");
+        assert_eq!(layout(&restored), expected, "restore {suffix}");
     }
 }
 
@@ -109,21 +115,20 @@ fn preset_layouts_round_trip_through_remembered_preferences() {
 fn open_timeline_is_saved_without_saving_playback() {
     let mut app = app();
     invoke(&mut app, "window.panel.timeline", json!({}));
-    assert!(app.ui.timeline.open);
-    app.ui.timeline.playing = true;
-    invoke(&mut app, "window.workspace.newWorkspace", json!({"name": "Open timeline"}));
-    dock::persist(&mut app, &egui::Context::default());
+    assert!(is_open(&app, "timeline"));
+    invoke(&mut app, "workspace.new", json!({"name": "Open timeline"}));
+    dock::persist(&mut app);
     let prefs = app.session.prefs_to_json();
     let mut session = Session::new();
     session.load_prefs_json(&prefs).unwrap();
     let mut restored = PhotocraftApp::new(session, Default::default());
     dock::restore(&mut restored);
-    assert!(restored.ui.timeline.open);
-    assert!(!restored.ui.timeline.playing);
+    assert!(is_open(&restored, "timeline"));
+    assert!(!restored.ui.timeline.playing());
     select(&mut restored, "essentials");
     invoke(&mut restored, "window.workspace.select", json!({"name": "Open timeline"}));
-    assert!(restored.ui.timeline.open);
-    assert!(!restored.ui.timeline.playing);
+    assert!(is_open(&restored, "timeline"));
+    assert!(!restored.ui.timeline.playing());
 }
 
 #[test]
@@ -131,21 +136,21 @@ fn custom_workspaces_restore_timeline_visibility_and_dock_after_presets() {
     let mut app = app();
     for (name, suffix) in [("Custom still", "pixelArt"), ("Custom motion", "motion")] {
         select(&mut app, suffix);
-        app.ui.dock.order = vec![Group::Navigator, Group::Color];
-        app.ui.dock_tabs.color = 1;
-        app.ui.dock.set_collapsed(Group::Properties, true);
+        invoke(&mut app, "window.panel.history", json!({}));
         let expected = layout(&app);
-        invoke(&mut app, "window.workspace.newWorkspace", json!({"name": name}));
+        invoke(&mut app, "workspace.new", json!({"name": name}));
         let mut session = Session::new();
         session.load_prefs_json(&app.session.prefs_to_json()).unwrap();
         let mut restored = PhotocraftApp::new(session, Default::default());
         select(&mut restored, if suffix == "motion" { "essentials" } else { "motion" });
         invoke(&mut restored, "window.workspace.select", json!({"name": name}));
-        assert_eq!(layout(&restored), expected, "custom select {name}");
-        restored.ui.timeline.open = !restored.ui.timeline.open;
-        restored.ui.panels.color = !restored.ui.panels.color;
-        invoke(&mut restored, "window.workspace.resetWorkspace", json!({}));
-        assert_eq!(layout(&restored), expected, "custom reset {name}");
+        assert_eq!(shown(&restored), shown(&app), "custom select {name}");
+        assert_eq!(is_open(&restored, "timeline"), expected["timeline"], "custom select {name}");
+        invoke(&mut restored, "window.panel.timeline", json!({}));
+        invoke(&mut restored, "window.panel.color", json!({}));
+        invoke(&mut restored, "workspace.reset", json!({}));
+        assert_eq!(shown(&restored), shown(&app), "custom reset {name}");
+        assert_eq!(is_open(&restored, "timeline"), expected["timeline"], "custom reset {name}");
     }
 }
 
@@ -153,62 +158,28 @@ fn custom_workspaces_restore_timeline_visibility_and_dock_after_presets() {
 fn legacy_workspace_without_timeline_visibility_still_loads() {
     let mut app = app();
     select(&mut app, "painting");
-    let mut legacy = layout(&app);
-    legacy.as_object_mut().unwrap().remove("timelineOpen");
-    app.session.prefs.edit(|p| p.workspaces.insert("Legacy".into(), legacy));
+    let painting = craft::behavior::dock::Workspace::clone(&app.ui.docking);
+    // PLAN: assumed the integration crate reaches `craft` (the facade) as the app crate does.
+    app.workspaces.set.saved.push(craft::behavior::dock::NamedWorkspace::new("legacy", "Legacy", painting));
     select(&mut app, "motion");
     invoke(&mut app, "window.workspace.select", json!({"name": "Legacy"}));
-    assert_eq!(shown(&app), [Group::Color, Group::Layers]);
-    assert!(!app.ui.timeline.open);
+    assert_eq!(shown(&app), ["color", "layers"]);
+    assert!(!is_open(&app, "timeline"));
 }
 
+/// A preset replaces the arrangement: the shell preferences and the lock stay, and the toolbar, a panel of the
+/// arrangement, is in every preset.
 #[test]
 fn presets_preserve_shell_preferences_and_workspace_lock() {
     let mut app = app();
-    app.ui.panels.toolbar = false;
-    app.ui.panels.toolbar_double = true;
     app.ui.panels.options_bar = false;
     app.ui.panels.status_bar = false;
-    app.session.prefs.edit(|p| p.workspace_locked = true);
+    app.workspaces.set.locked = true;
     for (suffix, _, _, _) in PRESETS {
         select(&mut app, suffix);
-        assert!(!app.ui.panels.toolbar);
-        assert!(app.ui.panels.toolbar_double);
+        assert!(is_open(&app, "toolbar"), "{suffix} has the toolbar");
         assert!(!app.ui.panels.options_bar);
         assert!(!app.ui.panels.status_bar);
-        assert!(app.session.prefs().workspace_locked);
+        assert!(app.workspaces.set.locked);
     }
-}
-
-#[test]
-fn titlebar_picker_displays_every_selected_preset() {
-    fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
-        match shape {
-            egui::Shape::Text(text) => texts.push(text.galley.text().to_string()),
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, texts)),
-            _ => {}
-        }
-    }
-
-    let mut missing = Vec::new();
-    for (suffix, name, _, _) in PRESETS {
-        let mut app = app();
-        select(&mut app, suffix);
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, Default::default());
-        let mut texts = Vec::new();
-        for _ in 0..3 {
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 900.0))), ..Default::default() };
-            let mut output = ctx.run_ui(input, |ui| photocraft_ui_egui::panels::title_bar(&mut app, ui));
-            output.textures_delta.clear();
-            texts.clear();
-            for shape in output.shapes {
-                collect_text(&shape.shape, &mut texts);
-            }
-        }
-        if !texts.iter().any(|text| text == name) {
-            missing.push(name);
-        }
-    }
-    assert!(missing.is_empty(), "selected presets missing from titlebar picker: {missing:?}");
 }

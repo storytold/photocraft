@@ -15,6 +15,7 @@ testgen = ["dep:image", "dep:flate2"]
 corpus = []
 
 [dependencies]
+craft-develop.workspace = true
 craft-raw.workspace = true
 # Synthetic fixture output used only by the retired format-parser tests.
 image = { workspace = true, features = ["jpeg"], optional = true }

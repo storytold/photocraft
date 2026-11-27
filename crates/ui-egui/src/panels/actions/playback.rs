@@ -1,24 +1,32 @@
 //! Playback Options: the Actions panel menu's dialog, and the Step by Step and Pause For pacing of a
 //! person's Play.
 //!
-//! A paced Play is still one playback: after each step [`super::play_owned`] parks the rest of the
-//! action like a step dialog does (a [`super::PausedPlayback`] token holding the suspended history and
-//! recording), and [`tick`] resumes it once the wait is over, so the steps share one history state
-//! and the canvas redraws between them. Esc, the panel's Stop button, an edit of the action list or a
-//! new recording end it there, keeping the steps already applied. Programmatic playback never waits.
+//! A paced Play is still one playback: after each step the runner parks the rest of the action like a
+//! step dialog does (a [`super::PausedPlayback`] token holding the suspended history and recording), and
+//! [`tick`] resumes it once the wait is over, so the steps share one history state and the canvas
+//! redraws between them. Esc, the panel's Stop button, an edit of the action list or a new recording end
+//! it there, keeping the steps already applied. Programmatic playback never waits.
 
-use serde_json::{Map, Value, json};
+use craft::ui::contract::Bind;
+use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::Label;
+use photocraft_engine::actions_cmds::ActionsExt;
+use serde_json::{Value, json};
 use web_time::{Duration, Instant};
 
 use photocraft_engine::prefs::{Actions, PlaybackPerformance};
 
 use crate::PhotocraftApp;
+use crate::dialogs::params::{self, ParamFamily};
 
 /// The marker a paced playback leaves where a step dialog's id would be (see [`super::waiting_dialog`]).
 pub(crate) const PLAYBACK_TIMER: &str = "__playbackTimer";
 
-/// The field marking a Playback Options dialog.
-const PLAYBACK_OPTIONS: &str = "__actionsPlaybackOptions";
+/// The key of the Playback Options dialog.
+const KEY: &str = "actionsPanel.playbackOptions";
+
+/// The Playback Options dialog's result handler. OK is refused for seconds the field cannot show.
+pub(crate) const FAMILY: ParamFamily = ParamFamily { check: Some(check), ..ParamFamily::new(|key| key == KEY, run) };
 
 /// Step by Step's gap between two steps: the reference application takes about 1.15 s per step
 /// with nothing to redraw (measured 2026-11-05), and adds Pause For's seconds to it.
@@ -52,22 +60,10 @@ pub(super) fn step_pause(app: &PhotocraftApp) -> Option<Duration> {
     }
 }
 
-/// Step `i` of `action` ended as `c` (`ran` steps of it before): when it simply ran and Step by
-/// Step or Pause For waits before the next enabled step, park the rest ([`super::Called::Paced`]).
-pub(super) fn paced(app: &mut PhotocraftApp, action: &super::Action, i: usize, id: &str, ran: u64, c: super::Called) -> super::Called {
-    if !matches!(c, super::Called::Done) || !action.enabled_steps().any(|(j, _)| j > i) {
-        return c;
-    }
-    match step_pause(app) {
-        Some(wait) => super::Called::Paced(pace(app, &action.name, i, id, ran.saturating_add(1), wait)),
-        None => c,
-    }
-}
-
 /// Park `action` after its step `i` (`ran` steps of it so far): it continues from the next step
-/// after `wait`. Returns the `paused` value [`super::play_owned`] reports.
-fn pace(app: &mut PhotocraftApp, action: &str, i: usize, id: &str, ran: u64, wait: Duration) -> Value {
-    let rev = app.session.actions.rev;
+/// after `wait`. Returns the `paused` value the runner reports.
+pub(super) fn pace(app: &mut PhotocraftApp, action: &str, i: usize, id: &str, ran: u64, wait: Duration) -> Value {
+    let rev = app.session.actions().list.revision();
     let gate = app.session.authorize;
     let pb = &mut app.paused_playbacks;
     let token = pb.pause(action.to_string(), i.saturating_add(1), gate);
@@ -97,111 +93,86 @@ pub(crate) fn pending(app: &PhotocraftApp) -> bool {
 /// the option is on. Returns whether one was waiting.
 pub(crate) fn stop(app: &mut PhotocraftApp) -> bool {
     let Some(timer) = app.paused_playbacks.timer.take() else { return false };
-    let fields = Map::from_iter([(super::RESUME.to_string(), json!(timer.token))]);
-    super::stopped(app, &fields);
+    super::runner::stopped(app, timer.token);
     true
 }
 
 /// Once per frame: play the next step when its wait is over, or end the playback on Esc, an edit of
-/// the action list or a new recording.
+/// the action list or a new recording. A frame's Esc belongs to its first pass; a second pass of the frame finds
+/// the wait already ended (or no Esc) and applies only its own input.
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(timer) = app.paused_playbacks.timer else { return };
-    let esc = app.ui.dialogs.is_empty() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-    let changed = timer.rev != app.session.actions.rev || app.session.actions.recording.is_some();
+    let esc = !app.dialog_open() && crate::window_keys::take_escape(ctx);
+    let changed = timer.rev != app.session.actions().list.revision() || app.session.recording.target.is_some();
     if esc || changed || !app.paused_playbacks.paused.contains_key(&timer.token) {
         stop(app);
         return;
     }
     let now = Instant::now();
     // A dialog opened meanwhile (Playback Options itself, say) holds the next step until it closes.
-    if now < timer.due || !app.ui.dialogs.is_empty() {
+    if now < timer.due || app.dialog_open() {
         ctx.request_repaint_after(timer.due.saturating_duration_since(now).max(Duration::from_millis(100)));
         return;
     }
     app.paused_playbacks.timer = None;
-    let fields = Map::from_iter([(super::RESUME.to_string(), json!(timer.token))]);
     // `resume` reports the outcome in the status bar.
-    let _ = super::resume(app, &fields);
+    let _ = super::runner::resume(app, timer.token);
     ctx.request_repaint();
 }
 
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(PLAYBACK_OPTIONS)
+/// Pause For's seconds as the engine takes them: a whole number within [`Actions::PAUSE_SECONDS`].
+fn whole_seconds(seconds: f64) -> Option<u8> {
+    let range = Actions::PAUSE_SECONDS;
+    let whole = seconds.is_finite() && seconds.fract() == 0.0 && seconds >= f64::from(*range.start()) && seconds <= f64::from(*range.end());
+    whole.then_some(seconds as u8)
+}
+
+/// The dialog's rows over the saved options: Performance (Accelerated, Step by Step, Pause For: n seconds, whose
+/// seconds field is on only with Pause For) and History (Create a single history state).
+fn rows(performance: &str, seconds: f64, single: bool) -> Vec<Param> {
+    let modes = [
+        (PlaybackPerformance::Accelerated, Label::from(tl!("Accelerated"))),
+        (PlaybackPerformance::StepByStep, Label::from(tl!("Step by Step"))),
+        (PlaybackPerformance::Pause, Label::from(tl!("Pause For:"))),
+    ];
+    let options: Vec<(String, Label)> = modes.into_iter().map(|(mode, label)| (mode.name().to_owned(), label)).collect();
+    let range = Actions::PAUSE_SECONDS;
+    let (least, most) = (f64::from(*range.start()), f64::from(*range.end()));
+    vec![
+        Param::new("performance", tl!("Performance"), ParamKind::radio(options, Some(performance.to_owned()))),
+        Param::new("seconds", tl!("seconds"), ParamKind::number(Some(least), Some(most), seconds, 1.0, 0))
+            .enabled_when("performance", PlaybackPerformance::Pause.name()),
+        Param::new("singleState", tl!("Create a single history state"), ParamKind::bool(single)),
+    ]
 }
 
 /// Playback Options…: the saved options, Pause For's seconds kept while another mode is chosen.
 pub(super) fn open_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let a = &app.session.prefs().actions;
-    let fields = json!({
-        PLAYBACK_OPTIONS: true,
-        "__label": "Playback Options",
-        "performance": a.performance.name(),
-        "seconds": a.pause_seconds(),
-        "singleState": a.create_single_history_state,
+    let saved = &app.session.prefs().actions;
+    let (performance, seconds, single) = (saved.performance.name().to_owned(), f64::from(saved.pause_seconds()), saved.create_single_history_state);
+    let id = params::open_param(app, KEY, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
+        ParamDialog::command(KEY, tl!("Playback Options"), rows(&performance, seconds, single)).values(Bind::bound(fields)).alert_title(tl!("PhotoCraft"))
     });
-    let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
-    Ok(json!({"dialog": id}))
+    Ok(json!({"dialog": id.value()}))
 }
 
-/// Performance (Accelerated, Step by Step, Pause For: n seconds) and History (Create a single
-/// history state), laid out as the reference application's dialog.
-pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
-    ui.spacing_mut().item_spacing.y = 6.0;
-    crate::widgets::section_label(ui, tl!("Performance"));
-    crate::widgets::hairline(ui);
-    let mut performance = fields.get("performance").and_then(Value::as_str).and_then(PlaybackPerformance::parse).unwrap_or_default();
-    let before = performance;
-    ui.indent("playback-options-performance", |ui| {
-        ui.radio_value(&mut performance, PlaybackPerformance::Accelerated, tl!("Accelerated"));
-        ui.radio_value(&mut performance, PlaybackPerformance::StepByStep, tl!("Step by Step"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut performance, PlaybackPerformance::Pause, tl!("Pause For:"));
-            let range = Actions::PAUSE_SECONDS;
-            if performance == PlaybackPerformance::Pause {
-                let mut seconds = f32::from(seconds_of(fields));
-                let r = crate::widgets::value_field_prec(ui, &mut seconds, f32::from(*range.start())..=f32::from(*range.end()), "", 40.0, 0);
-                if r.accessible_name(tl!("Pause For")).changed() {
-                    fields.insert("seconds".into(), json!(clamp_seconds(f64::from(seconds))));
-                }
-            } else {
-                // Empty and greyed until Pause For is chosen, as in the reference application.
-                ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).desired_width(40.0)).accessible_name(tl!("Pause For"));
-            }
-            ui.add_enabled(performance == PlaybackPerformance::Pause, egui::Label::new(tl!("seconds")));
-        });
-    });
-    if performance != before {
-        fields.insert("performance".into(), json!(performance.name()));
+/// Refuses seconds that are not a whole number in range, which the field cannot show.
+fn check(_app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    match result.fields.number("seconds").and_then(whole_seconds) {
+        Some(_) => Ok(()),
+        None => Err(Label::from(tl!("Pause For takes a whole number of seconds"))),
     }
-    ui.add_space(4.0);
-    crate::widgets::section_label(ui, tl!("History"));
-    crate::widgets::hairline(ui);
-    let mut single = fields.get("singleState").and_then(Value::as_bool).unwrap_or(true);
-    ui.indent("playback-options-history", |ui| {
-        if ui.checkbox(&mut single, tl!("Create a single history state")).changed() {
-            fields.insert("singleState".into(), json!(single));
-        }
+}
+
+/// OK: stores the options (`actions.setPlayback`) as the dialog holds them.
+fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
+    let fields = &result.fields;
+    let request = json!({
+        "performance": fields.text("performance"),
+        "seconds": fields.number("seconds").and_then(whole_seconds),
+        "singleState": fields.bool("singleState"),
     });
-}
-
-/// A whole number of seconds within range: the reference application's field takes only digits and
-/// puts the closest valid value in.
-fn clamp_seconds(v: f64) -> u8 {
-    let range = Actions::PAUSE_SECONDS;
-    if !v.is_finite() {
-        return *range.start();
+    if let Err(error) = app.run("actions.setPlayback", request) {
+        super::dialogs::report(app, error);
     }
-    v.round().clamp(f64::from(*range.start()), f64::from(*range.end())) as u8
-}
-
-fn seconds_of(fields: &Map<String, Value>) -> u8 {
-    fields.get("seconds").and_then(Value::as_f64).map_or(*Actions::PAUSE_SECONDS.start(), clamp_seconds)
-}
-
-/// OK: store the options (`actions.setPlayback`). Performance and Create a single history state go
-/// as the dialog holds them, so the command refuses a value automation set that the dialog can't
-/// show (`null`, an unknown mode) instead of saving a default in its place.
-pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
-    let field = |key: &str| fields.get(key).cloned().unwrap_or(Value::Null);
-    app.run("actions.setPlayback", json!({"performance": field("performance"), "seconds": seconds_of(fields), "singleState": field("singleState")}))
 }

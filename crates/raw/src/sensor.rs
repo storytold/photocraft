@@ -80,9 +80,10 @@ impl Cfa {
     }
 
     /// `true` for a Bayer pattern: a 2×2 period holding one red, one blue and two
-    /// diagonal greens.
+    /// diagonal greens. The declared period must be even on both axes: a `3×2` `RGR/GBG`
+    /// looks Bayer over its first two columns but wraps to red where a 2×2 period has green.
     pub fn is_bayer(&self) -> bool {
-        if self.width == 0 || self.height == 0 || self.width > 16 || self.height > 16 {
+        if self.width == 0 || self.height == 0 || self.width > 16 || self.height > 16 || !self.width.is_multiple_of(2) || !self.height.is_multiple_of(2) {
             return false;
         }
         let (ox, oy) = (self.origin_x % self.width, self.origin_y % self.height);
