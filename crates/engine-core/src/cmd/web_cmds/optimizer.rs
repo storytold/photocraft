@@ -124,6 +124,9 @@ pub fn optimize(
     };
     let (ww, hh) = (w as u32, h as u32);
     let e = |e: photocraft_codecs::CodecError| other(e);
+    // The camera's EXIF names the sensor's pixel size: the file names its own (this slice's size).
+    let exif = exif.map(|x| craft_metadata::edit::exif_with_pixel_size(x, (ww, hh)));
+    let exif = exif.as_deref();
     let mut look: Vec<u8> = Vec::new();
     let mut color_table = Vec::new();
     let mut transparent_index = None;
