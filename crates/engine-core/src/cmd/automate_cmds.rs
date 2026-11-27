@@ -600,13 +600,24 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 let embedded = src.icc_profile.take();
                 let builtin = crate::color_cmds::composite_profile(&src);
                 src.icc_profile = embedded;
-                let tagged = src
+                let own = src
                     .icc_profile
                     .as_ref()
                     .and_then(|b| crate::color_cmds::profile_from_bytes(b).ok())
-                    .is_some_and(|p| p.color_space == crate::color_cmds::mode_space(src.mode));
-                if !tagged && s.color.settings.policy(src.mode) != crate::color_cmds::Policy::Off {
-                    src.icc_profile = Some(s.color.working(src.mode).to_bytes());
+                    .filter(|p| p.color_space == crate::color_cmds::mode_space(src.mode));
+                let off = s.color.settings.policy(src.mode) == crate::color_cmds::Policy::Off;
+                let working = s.color.working(src.mode);
+                match own {
+                    // Off discards a profile other than the working one; 32-bit linear files keep theirs.
+                    Some(own) if off && !own.same_colors(&working) => {
+                        let linear = src.depth == photocraft_color::SampleType::F32
+                            && (own.same_colors(craft_cms::Builtin::LinearSrgb.profile()) || own.same_colors(craft_cms::builtin::linear_gray()));
+                        if !linear {
+                            src.icc_profile = None;
+                        }
+                    }
+                    None if !off => src.icc_profile = Some(working.to_bytes()),
+                    _ => {}
                 }
                 let mut t = Session::new();
                 t.add_document(src, None);

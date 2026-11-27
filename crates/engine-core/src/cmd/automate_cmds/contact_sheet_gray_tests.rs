@@ -123,3 +123,23 @@ fn an_untagged_grey_file_is_taken_in_the_working_grey() {
     let got = centre_of(&centres, "grey")[0];
     assert!((got - want).abs() <= 0.5 / 255.0, "sheet {got}, file {want}");
 }
+
+#[test]
+fn color_management_off_takes_an_adobe_rgb_file_as_file_open_does() {
+    // Off discards an embedded profile other than the working one, so File › Open shows the file's own numbers.
+    let dir = tmp("rgb-off");
+    let path = format!("{dir}/red.png");
+    let mut t = crate::session();
+    t.execute("file.new", json!({"width": 24, "height": 24, "background": "#c81e1e"})).unwrap();
+    t.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    crate::file_cmds::save_doc(&t.active().unwrap().doc, &path, None).unwrap();
+    let file = import(&file_name(&path), &read_file(&path).unwrap()).unwrap();
+    assert!(file.icc_profile.is_some(), "the test file must carry its Adobe RGB profile");
+    let mut s = crate::session();
+    s.execute("edit.colorSettings", json!({"policyRgb": "off"})).unwrap();
+    s.open_document(file, None);
+    let want = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(12, 12);
+    let centres = sheet_centres(&mut s, &dir, "rgb", 8);
+    let got = centre_of(&centres, "red");
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() <= 0.5 / 255.0), "sheet {got:?}, File › Open {want:?}");
+}
