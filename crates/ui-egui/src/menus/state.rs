@@ -235,5 +235,10 @@ pub(super) fn translated_menu_label(lang: crate::i18n::Lang, id: &str, label: &s
     {
         return crate::i18n::tr_id(lang, id, "Quick Export as PNG").replace("PNG", fmt);
     }
+    if id == "window.arrange.newWindowForDocument"
+        && let Some(name) = label.strip_prefix("New Window for ")
+    {
+        return crate::i18n::fmt(crate::i18n::tr(lang, "New Window for {name}"), &[("name", name)]);
+    }
     crate::i18n::tr_id(lang, id, label).to_string()
 }

@@ -314,18 +314,20 @@ fn normal_rgb(backdrop: [f32; 4], source: [f32; 4], as_: f32, ao: f32) -> [f32; 
 /// mix of the encoded values (psd-tools layer_effects.psd: a 69 % edge pixel of a blue overlay
 /// over grey is 57/255 in red, an encoded mix gives 40).
 pub const TEXT_GAMMA: f32 = 1.45;
+/// The highest text blending gamma Color Settings takes (Photoshop's field runs 1.00–3.00).
+pub const MAX_TEXT_GAMMA: f32 = 3.0;
 
 static TEXT_GAMMA_SETTING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3fb9_999a); // 1.45f32
 
 /// Sets Color Settings › "Blend Text Colors Using Gamma" (1 = off). It is an application
 /// setting, not stored in documents (1 here means switched off: a plain mix of the encoded
-/// values). Values are clamped to Photoshop's 1.00–2.20.
+/// values). Values are clamped to Photoshop's 1.00–3.00.
 ///
 /// The value is process-wide: a test that changes it races every concurrently running test
 /// that composites a type layer, so such tests belong in their own test binary (see
 /// `crates/engine/tests/text_gamma.rs`).
 pub fn set_text_gamma(gamma: f32) {
-    let g = if gamma.is_finite() { gamma.clamp(1.0, 2.2) } else { TEXT_GAMMA };
+    let g = if gamma.is_finite() { gamma.clamp(1.0, MAX_TEXT_GAMMA) } else { TEXT_GAMMA };
     TEXT_GAMMA_SETTING.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
