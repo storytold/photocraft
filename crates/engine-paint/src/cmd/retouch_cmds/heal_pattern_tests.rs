@@ -308,13 +308,16 @@ fn a_pattern_stroke_ignores_the_clone_source_slot() {
     assert!(s.presets().clone.active().document_closed, "the fixture: the slot names the closed document");
     let before = state(&s);
     s.execute("paint.healingBrush", stroke("Heal tile", json!({}))).unwrap();
-    assert_ne!(state(&s).0, before.0, "the tile painted");
-    assert_eq!(s.active().unwrap().history.undo_label(), Some("Healing Brush"), "one Healing Brush step");
-    // The sampled branch keeps its own guard: the same slot still refuses a stroke that needs it.
+    let painted = state(&s);
+    assert_ne!(painted.0, before.0, "the tile painted");
+    assert_eq!(painted.1, before.1 + 1, "one Healing Brush step");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Healing Brush"), "the stroke's History name");
+    // The sampled branch keeps its own guard: the same slot still refuses a stroke that needs it,
+    // and the refusal leaves the frame the pattern stroke painted and its one step exactly as they
+    // were - not merely different from the untouched document.
     let err = s.execute("paint.healingBrush", json!({"points": [[10, 10]], "size": 8, "hardness": 100})).unwrap_err().to_string();
     assert!(err.contains("closed"), "a sampled stroke still reads the slot: {err}");
-    assert_ne!(state(&s).0, before.0.clone(), "the refused sampled stroke painted nothing of its own");
-    assert_eq!(s.active().unwrap().history.past_len(), before.1 + 1, "and added no step");
+    assert_eq!(state(&s), painted, "the refused sampled stroke painted nothing of its own and added no step");
 }
 
 #[test]
