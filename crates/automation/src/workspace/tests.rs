@@ -1,14 +1,81 @@
 use super::*;
 
+/// The folders `roots` made on this thread, removed when the thread ends. Each test runs on
+/// its own thread, so a test's folders go when it returns or panics.
+struct RemovedAtThreadExit(Vec<PathBuf>);
+
+impl Drop for RemovedAtThreadExit {
+    fn drop(&mut self) {
+        for base in &self.0 {
+            // A test that panicked may have left a folder read-only.
+            if std::fs::remove_dir_all(base).is_err() {
+                make_writable(base);
+                let _ = std::fs::remove_dir_all(base);
+            }
+        }
+    }
+}
+
+/// Makes `dir` and every folder below it writable, without following symlinks.
+#[cfg(unix)]
+fn make_writable(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            make_writable(&entry.path());
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn make_writable(_: &std::path::Path) {}
+
+thread_local! {
+    static MADE: std::cell::RefCell<RemovedAtThreadExit> = const { std::cell::RefCell::new(RemovedAtThreadExit(Vec::new())) };
+}
+
+fn roots_base(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("photocraft-workspace-{}-{name}", std::process::id()))
+}
+
 fn roots(name: &str) -> (PathBuf, PathBuf, AuthorizedWorkspace) {
-    let base = std::env::temp_dir().join(format!("photocraft-workspace-{}-{name}", std::process::id()));
+    let base = roots_base(name);
     let inside = base.join("inside");
     let outside = base.join("outside");
     let _ = std::fs::remove_dir_all(&base);
+    MADE.with_borrow_mut(|made| made.0.push(base.clone()));
     std::fs::create_dir_all(&inside).unwrap();
     std::fs::create_dir_all(&outside).unwrap();
     let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
     (inside, outside, workspace)
+}
+
+#[test]
+fn roots_folders_are_removed_when_the_test_thread_ends() {
+    for (name, panics, read_only) in [("roots-cleanup", false, false), ("roots-cleanup-panic", true, false), ("roots-cleanup-read-only", true, true)] {
+        let joined = std::thread::spawn(move || {
+            let (inside, outside, workspace) = roots(name);
+            workspace.write("out.png", b"x").unwrap();
+            std::fs::create_dir(inside.join("frames")).unwrap();
+            std::fs::write(outside.join("other.txt"), b"x").unwrap();
+            assert!(roots_base(name).is_dir());
+            #[cfg(unix)]
+            if read_only {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::write(inside.join("frames/1.png"), b"x").unwrap();
+                std::fs::set_permissions(inside.join("frames"), std::fs::Permissions::from_mode(0o555)).unwrap();
+            }
+            #[cfg(not(unix))]
+            let _ = read_only;
+            if panics {
+                panic!("a failing test");
+            }
+        })
+        .join();
+        assert_eq!(joined.is_err(), panics);
+        assert!(!roots_base(name).exists(), "{name}: {} was left behind", roots_base(name).display());
+    }
 }
 
 #[test]
