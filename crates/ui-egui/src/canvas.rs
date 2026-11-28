@@ -250,6 +250,9 @@ mod document_window_title_tests;
 mod arrange_window_origin_tests;
 
 #[cfg(test)]
+mod arrange_active_document_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
