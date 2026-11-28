@@ -114,11 +114,16 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     // The options bar's Use Legacy check box and Diffusion field (#12103), read before anything is
-    // sampled so an out-of-range value costs no work. Diffusion is accepted, validated and
+    // sampled so an out-of-range or wrongly typed value costs no work. Both are strict about their
+    // type, as `diffusion` already is: the key absent or null is the default, a supplied value of
+    // another type is an error rather than a silent false. Diffusion is accepted, validated and
     // remembered - the bar, a preset and an action step all keep it - but its pixels for the values
     // other than 5 were never measured, so every whole value 1..7 paints today's stroke: the field
     // costs nothing until that row of the ticket is measured.
-    let legacy = flag(p, "legacy", false);
+    let legacy = match p.get("legacy") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "`legacy` must be a boolean"))?,
+    };
     diffusion_param(p, CMD)?;
     let which = sample_layers(p, CMD)?;
     let source = super::clone_sampling::resolve(s, p, CMD)?;

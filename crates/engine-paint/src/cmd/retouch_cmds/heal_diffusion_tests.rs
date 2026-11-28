@@ -3,7 +3,8 @@
 //! with any value from 1 to 7, the stroke heals exactly as it did before the option existed: the
 //! pinned levels below are the values main b88866441b gives on this document. `diffusion: 0`, `8`,
 //! `-1`, `5.5` (the field holds whole numbers) and a non-number are errors that paint nothing and
-//! add no History step.
+//! add no History step, and so is a `legacy` that is not a boolean: `"true"`, `1` and `[true]` are
+//! refused, while an absent or null `legacy` is false.
 //!
 //! The reference application's pixels for the Diffusion values other than 5 are not measured, so
 //! the field is accepted, validated and stored while every value keeps today's stroke; measuring
@@ -101,6 +102,32 @@ fn use_legacy_blends_otherwise_on_the_same_click() {
     let mut off = document();
     off.execute("paint.healingBrush", stroke(Some(("legacy", json!(false))))).unwrap();
     assert_eq!(read(&off), m, "legacy false is the absent key");
+}
+
+#[test]
+fn a_legacy_that_is_not_a_boolean_is_an_error_and_paints_nothing() {
+    // The options bar sends a real boolean. A string or a number is a wrongly typed parameter, and
+    // the command's params line says bool, so `"legacy": "true"` may not pass as off and paint
+    // today's stroke - any more than `diffusion: "5"` passes as 5.
+    for wrong in [json!("true"), json!(1), json!(0), json!([true]), json!({"on": true})] {
+        let mut s = document();
+        let before = (read(&s), s.active().unwrap().history.past_len());
+        let err = s.execute("paint.healingBrush", stroke(Some(("legacy", wrong.clone())))).unwrap_err().to_string();
+        assert!(err.contains("`legacy` must be a boolean"), "{wrong}: the error names the key: {err}");
+        assert_eq!((read(&s), s.active().unwrap().history.past_len()), (before.0.clone(), before.1), "{wrong}: nothing painted, no step");
+    }
+    // The absent key, a null one and `false` are one and the same modern stroke; `true` is the one
+    // that turns Legacy on.
+    let mut modern = document();
+    modern.execute("paint.healingBrush", stroke(None)).unwrap();
+    for (label, key) in [("a null `legacy`", Some(("legacy", Value::Null))), ("`legacy: false`", Some(("legacy", json!(false))))] {
+        let mut s = document();
+        s.execute("paint.healingBrush", stroke(key)).unwrap();
+        assert_eq!(read(&s), read(&modern), "{label} is the absent key");
+    }
+    let mut on = document();
+    on.execute("paint.healingBrush", stroke(Some(("legacy", json!(true))))).unwrap();
+    assert_ne!(read(&on), read(&modern), "the boolean true is what blends differently");
 }
 
 #[test]
