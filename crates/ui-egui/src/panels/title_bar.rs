@@ -32,30 +32,37 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The title the bar shows: the active document's name with a dot when it has unsaved changes, or the app name with
 /// no document open. With Preferences › Interface › Show File Name In Title off, the file name drops out and the app
-/// name (and the dot) remains, since the tabs already name the file (#5037).
+/// name (and the dot) remains, since the tabs already name the file (#5037). A Copyrighted document's title starts
+/// with the tab's "© ", whether the name shows or not (#13993).
 pub(crate) fn title_text(app: &PhotocraftApp) -> String {
     title_text_for(app, crate::os_window::identity())
 }
 
 fn title_text_for(app: &PhotocraftApp, identity: crate::os_window::LaunchIdentity) -> String {
-    let document = app.session.active().map(|d| (d.doc.name.as_str(), d.is_dirty()));
+    let active = app.session.active();
+    let document = active.map(|d| (d.doc.name.as_str(), d.is_dirty()));
+    let mark = active.map(|d| crate::canvas::tabs::copyright_prefix(app, d)).unwrap_or_default();
     crate::channel_titles::drawn_title(
         crate::os_window::name_for(identity),
         document,
         app.session.prefs().interface.show_file_name_in_title,
         identity == crate::os_window::LaunchIdentity::NightlyV1,
+        mark,
     )
 }
 
 /// The OS window title retains its channel through document/dirty/preference changes.
-/// Stable formatting is unchanged; Nightly never falls back to the stable brand name.
+/// Stable formatting is unchanged; Nightly never falls back to the stable brand name. A Copyrighted
+/// document's name, or the app name standing in for it, carries the tab's "© " prefix (#13993).
 pub fn window_title(app: &PhotocraftApp) -> String {
     window_title_for(app, crate::os_window::identity())
 }
 
 fn window_title_for(app: &PhotocraftApp, identity: crate::os_window::LaunchIdentity) -> String {
-    let document = app.session.active().map(|d| (d.doc.name.as_str(), d.is_dirty()));
-    crate::channel_titles::os_title(crate::os_window::name_for(identity), document, app.session.prefs().interface.show_file_name_in_title)
+    let active = app.session.active();
+    let document = active.map(|d| (d.doc.name.as_str(), d.is_dirty()));
+    let mark = active.map(|d| crate::canvas::tabs::copyright_prefix(app, d)).unwrap_or_default();
+    crate::channel_titles::os_title(crate::os_window::name_for(identity), document, app.session.prefs().interface.show_file_name_in_title, mark)
 }
 
 #[cfg(test)]
