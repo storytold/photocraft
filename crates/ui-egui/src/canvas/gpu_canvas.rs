@@ -240,6 +240,7 @@ impl GpuCanvas {
         if self.rs.adapter.get_info().device_type != wgpu::DeviceType::Cpu && std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_none() {
             compositor_build::start(
                 &self.rs.device,
+                self.rs.adapter.get_info().backend,
                 photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter),
                 ctx,
                 &self.compositor_build,

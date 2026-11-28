@@ -15,7 +15,7 @@ pub(super) type Slot = Arc<Mutex<BuildState>>;
 pub(super) type Completion = Arc<Mutex<Option<Result<(), (String, bool)>>>>;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::TextureFormat, ctx: &egui::Context, slot: &Slot, completion: &Completion) {
+pub(super) fn start(device: &eframe::wgpu::Device, backend: eframe::wgpu::Backend, format: eframe::wgpu::TextureFormat, ctx: &egui::Context, slot: &Slot, completion: &Completion) {
     let mut state = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !matches!(*state, BuildState::NotStarted) {
         return;
@@ -26,7 +26,7 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
     let spawned = std::thread::Builder::new().name("gpu-compositor-build".into()).spawn(move || {
         let threads = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            photocraft_gpu::Compositor::try_new_with_format_threads_classified(&device, format, threads)
+            photocraft_gpu::Compositor::try_new_with_format_threads_classified(&device, backend, format, threads)
         }));
         let (result, outcome) = match result {
             Ok(Ok(comp)) => (BuildState::Ready(Box::new(comp)), Ok(())),

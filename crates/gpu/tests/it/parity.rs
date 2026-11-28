@@ -3167,12 +3167,12 @@ fn unbuildable_pipelines_are_an_error_not_a_panic() {
     // here would crash it (as FXC once did on D3D12). A depth format can't be a colour target, so
     // its pipelines fail to build.
     let Some((adapter, device, _, _lock)) = any_device() else { return };
-    let e = Compositor::try_new_with_format_threads(&device, wgpu::TextureFormat::Depth32Float, 4).err().expect("depth target must fail");
+    let e = Compositor::try_new_with_format_threads_on_backend(&device, adapter.get_info().backend, wgpu::TextureFormat::Depth32Float, 4).err().expect("depth target must fail");
     assert!(e.0.contains("pipelines"), "{e}");
     // The format the app picks builds (effect maps the adapter can't render are left out, not fatal).
     let f = Compositor::preferred_acc_format(&adapter);
     if adapter.get_texture_format_features(f).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
-        assert!(Compositor::try_new_with_format_threads(&device, f, 4).is_ok());
+        assert!(Compositor::try_new_with_format_threads_on_backend(&device, adapter.get_info().backend, f, 4).is_ok());
     }
 }
 

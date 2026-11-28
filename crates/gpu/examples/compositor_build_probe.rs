@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::scope(|scope| {
                 scope.spawn(|| {
                     let build_start = Instant::now();
-                    let result = Compositor::try_new_with_format_threads(&device, format, threads);
+                    let result = Compositor::try_new_with_format_threads_on_backend(&device, info.backend, format, threads);
                     let elapsed = build_start.elapsed().as_secs_f64() * 1000.0;
                     let error = result.err().map(|e| e.to_string());
                     let _ = build_tx.send((error, elapsed));
@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         } else {
             let start = Instant::now();
-            let result = Compositor::try_new_with_format_threads(&device, format, threads);
+            let result = Compositor::try_new_with_format_threads_on_backend(&device, info.backend, format, threads);
             let build_ms = start.elapsed().as_secs_f64() * 1000.0;
             let error = result.err().map(|e| e.to_string());
             samples.push(Sample { build_ms, ok: error.is_none(), error });

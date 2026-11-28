@@ -63,7 +63,7 @@ fn every_compositor_pipeline_builds() {
                 wgpu::Backend::Gl => 1,
                 _ => std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
             };
-            if let Err(e) = Compositor::try_new_with_format_threads(&device, format, threads) {
+            if let Err(e) = Compositor::try_new_with_format_threads_on_backend(&device, info.backend, format, threads) {
                 panic!("{:?} adapter {} (driver {}): {e}", info.backend, info.name, info.driver_info);
             }
         }

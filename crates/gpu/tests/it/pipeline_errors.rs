@@ -27,12 +27,12 @@ fn a_pipeline_built_on_another_thread_fails_as_an_error() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((adapter, device, _queue)) = device() else { return };
     // Never a render target, so every accumulation pipeline fails validation.
-    let Err(e) = Compositor::try_new_with_format_threads(&device, wgpu::TextureFormat::Rgb9e5Ufloat, 4) else {
+    let Err(e) = Compositor::try_new_with_format_threads_on_backend(&device, adapter.get_info().backend, wgpu::TextureFormat::Rgb9e5Ufloat, 4) else {
         panic!("a compositor accumulating into Rgb9e5Ufloat");
     };
     assert!(e.0.contains("couldn't build the compositor's pipelines"), "{e:?}");
     // The device is still usable for a compositor it can build.
-    assert!(Compositor::try_new_with_format_threads(&device, Compositor::preferred_acc_format(&adapter), 4).is_ok());
+    assert!(Compositor::try_new_with_format_threads_on_backend(&device, adapter.get_info().backend, Compositor::preferred_acc_format(&adapter), 4).is_ok());
 }
 
 /// A compositor whose pipelines fail to build on first use, on a device whose errors go to the
@@ -88,7 +88,7 @@ fn parallel_compositor_builds_leave_the_shader_cache_intact() {
             let handles: Vec<_> = (0..builds)
                 .map(|_| {
                     scope.spawn(|| {
-                        let built = Compositor::try_new_with_format_threads(&device, format, 4);
+                        let built = Compositor::try_new_with_format_threads_on_backend(&device, adapter.get_info().backend, format, 4);
                         assert!(built.is_ok(), "round {round}: {:?}", built.err());
                     })
                 })
