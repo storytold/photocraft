@@ -695,6 +695,7 @@ fn parse_actions_formats() {
     // #489: the step shapes a recorded action and a droplet store, bare or wrapped.
     let want = vec![("a".to_string(), json!({"x":1})), ("b".to_string(), json!({}))];
     for text in [
+        concat!("\u{feff}", r#"[["a",{"x":1}],["b"]]"#),
         r#"[["a",{"x":1}],["b"]]"#,
         r#"[["a",{"x":1}],"b"]"#,
         r#"{"steps":[["a",{"x":1}],["b",{}]]}"#,
@@ -744,6 +745,7 @@ fn batch_accepts_recorded_action_steps() {
         ("objects", r#"[{"command":"image.adjustments.invert"}]"#),
         ("pairs", r#"[["image.adjustments.invert",{}]]"#),
         ("ids", r#"["image.adjustments.invert"]"#),
+        ("bom", "\u{feff}[\"image.adjustments.invert\"]"),
         ("droplet", r#"{"photocraftDroplet":1,"action":{"steps":[["image.adjustments.invert",{}]]}}"#),
     ];
     for (name, actions) in shapes {
