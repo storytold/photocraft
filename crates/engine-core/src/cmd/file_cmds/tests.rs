@@ -3416,6 +3416,8 @@ fn only_layered_files_save_in_place() {
 #[test]
 fn openraster_holds_a_document_only_when_it_drops_nothing() {
     let mut s = session(16, 16, 8);
+    // This lossless fixture deliberately has no metadata for OpenRaster to drop.
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     s.execute("layer.new.layer", json!({})).unwrap();
     let plain = doc(&s).clone();
     for p in ["a.psd", "a.psb", "a.pcraft", "a.ora", "A.ORA"] {

@@ -1050,6 +1050,8 @@ fn an_unavailable_dialog_is_reported_and_a_cancelled_one_is_not() {
 #[test]
 fn openraster_save_never_overwrites_what_it_cannot_hold() {
     let (mut app, files, written) = app();
+    // The plain in-place-save control deliberately excludes metadata OpenRaster cannot hold.
+    Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     app.run("layer.new.layer", json!({})).unwrap();
     app.session.active_mut().unwrap().path = Some("/pics/art.ora".into());
     let ctx = egui::Context::default();

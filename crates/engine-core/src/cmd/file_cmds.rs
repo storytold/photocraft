@@ -45,7 +45,7 @@ pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_s
 pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with, layers_to_files_needs_more_layers};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
-pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
+pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, starting_xmp, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
@@ -464,6 +464,10 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "file_cmds/place_selection_centre_tests.rs"]
 mod place_selection_centre_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/new_document_xmp_tests.rs"]
+mod new_document_xmp_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
