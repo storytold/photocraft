@@ -71,6 +71,8 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "general.imageInterpolation" => Interpolation::NAMES,
         "interface.appearanceMode" => AppearanceMode::NAMES,
         "interface.density" => UiDensity::NAMES,
+        "interface.contrast" => &["system", "standard", "high"],
+        "interface.motion" => &["system", "full", "reduced", "off"],
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,

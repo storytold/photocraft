@@ -27,6 +27,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 use craft::automation::agents::AgentSettings;
 pub use craft::automation::agents::WhenAppClosed;
+use craft::theme::{ContrastChoice, MotionChoice};
 
 /// A string-valued choice enum with its JSON names (used to validate `prefs.set` and to fill
 /// dropdowns in the Preferences dialog).
@@ -354,6 +355,10 @@ pub struct Interface {
     pub favorite_themes: Vec<String>,
     /// Compact or Comfortable controls, shared with the other Craft apps like the mode and themes (#17096).
     pub density: UiDensity,
+    /// The UI contrast the suite shares, including following the system.
+    pub contrast: ContrastChoice,
+    /// The animation preference the suite shares, including following the system.
+    pub motion: MotionChoice,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
@@ -442,6 +447,8 @@ impl Default for Interface {
             light_theme: "craft.pro".into(),
             favorite_themes: Vec::new(),
             density: UiDensity::Compact,
+            contrast: ContrastChoice::default(),
+            motion: MotionChoice::default(),
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             show_canvas_dots: true,

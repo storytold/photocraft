@@ -102,6 +102,7 @@ mod gpu_tests {
         let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_pixels_per_point(1.0).renderer(renderer).build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+            app.run("prefs.set", json!({"values": {"interface.motion": "full"}})).unwrap();
             app.set_wgpu(cc.wgpu_render_state.clone().unwrap());
             app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
             app.run("edit.fill", json!({"color": "#2060c0"})).unwrap();
