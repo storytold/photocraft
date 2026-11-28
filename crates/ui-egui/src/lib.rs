@@ -865,6 +865,8 @@ mod color_replacement_digit_keys_tests;
 #[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
+mod home_recent_count_tests;
+#[cfg(test)]
 mod home_recent_gate_tests;
 #[cfg(test)]
 mod layers_panel_nodes;
