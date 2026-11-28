@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 use crate::PhotocraftApp;
 
 mod color_settings_presets;
-mod rows;
+pub(crate) mod rows;
 pub(crate) use color_settings_presets::reconcile as reconcile_color_settings;
 pub(crate) use rows::{REPLACE_COLOR, replace_color_sample};
 
@@ -713,6 +713,11 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     // An emptied embedded LUT is no data: a stored empty `data` would be read over the chosen `lut`.
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
         map.remove("data");
+    }
+    // Data Order and Table Order belong to a `.cube` (#14423): values kept from one are not sent for another LUT.
+    if command == "image.adjustments.colorLookup" && !rows::lut_is_cube(fields) {
+        map.remove("dataOrder");
+        map.remove("tableOrder");
     }
     if command == "image.mode.indexedColor" {
         // The matte colour row belongs to the "custom" choice, which the command takes as the colour itself.
