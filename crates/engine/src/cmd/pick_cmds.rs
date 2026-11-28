@@ -35,8 +35,11 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId>
     let rows = doc.walk();
     let mut out = Vec::new();
     for (path, _, l) in rows.iter().rev() {
-        // The layer and every enclosing group must be visible.
-        if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
+        // A hidden or clipped-away parent also hides all of its children.
+        if !(1..=path.len()).all(|n| {
+            let ancestor = &path[..n];
+            doc.layer_at(ancestor).is_some_and(|a| a.visible && (!a.clipped || clip_base_shows(doc, ancestor, x, y)))
+        }) {
             continue;
         }
         // An artboard clips its layers to the board (#1531): pixels past its edge aren't shown,
@@ -53,7 +56,7 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId>
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
             continue;
         }
-        if coverage(l, x, y, type_bounds) > 0.0 && clip_base_shows(doc, path, x, y) {
+        if coverage(l, x, y, type_bounds) > 0.0 {
             out.push(l.id);
         }
     }
@@ -88,9 +91,6 @@ fn clip_base_shows(doc: &Document, path: &[usize], x: i32, y: i32) -> bool {
     let Some((&k, parent)) = path.split_last() else { return true };
     let siblings = if parent.is_empty() { Some(&doc.layers[..]) } else { doc.layer_at(parent).and_then(Layer::children) };
     let Some(siblings) = siblings else { return true };
-    if !siblings.get(k).is_some_and(|l| l.clipped) {
-        return true;
-    }
     // A clipped run at the bottom of its list has no base: the compositor draws it unclipped.
     let Some(base) = siblings.get(..k).and_then(|below| below.iter().rev().find(|l| !l.clipped)) else { return true };
     base.visible && (matches!(base.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) || coverage(base, x, y, false) > 0.0)
@@ -314,6 +314,30 @@ mod tests {
         // A hidden base hides the whole clipping group.
         s.execute("layer.setProps", json!({"layer": a.0, "visible": false})).unwrap();
         assert_eq!(pick(&mut s, 5, 5), bg.0);
+    }
+
+    #[test]
+    fn a_child_in_a_clipped_group_is_hit_only_where_the_group_shows() {
+        let (mut s, base, child) = two_squares();
+        s.execute("layer.select", json!({"layer": child.0})).unwrap();
+        let group = s.execute("layer.new.groupFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setProps", json!({"layer": group, "clipped": true})).unwrap();
+
+        let doc = &s.active().unwrap().doc;
+        assert!(!layers_at(doc, 25, 25).contains(&child));
+        assert_ne!(move_auto_select_target(doc, 25, 25, false), Some(child));
+
+        s.edit("fill the base", |doc, _| {
+            doc.layer_mut(base).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 30, 30), &[1.0; 4]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(move_auto_select_target(&s.active().unwrap().doc, 25, 25, false), Some(child));
+
+        s.execute("layer.setProps", json!({"layer": base.0, "visible": false})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert!(!layers_at(doc, 25, 25).contains(&child));
+        assert_ne!(move_auto_select_target(doc, 25, 25, false), Some(child));
     }
 
     #[test]
