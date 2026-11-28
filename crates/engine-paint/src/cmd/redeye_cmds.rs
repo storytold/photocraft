@@ -498,6 +498,25 @@ mod tests {
         assert!(rgba(&s, 60, 20)[0] < 0.7);
     }
 
+    /// A box covering more separate red regions than the 64 clicks one command applies (#12569
+    /// review): the `points` form refuses an over-long list, and the box must refuse too rather than
+    /// silently leave the regions past the 64th uncorrected.
+    #[test]
+    fn a_box_with_more_than_64_red_regions_is_refused() {
+        let mut s = session(120, 100, 8, "rgb");
+        // 80 separate red 3x3 blocks on a grey ground: 10 columns x 8 rows at a 12 px pitch.
+        paint_layer(&mut s, |x, y| {
+            let in_grid = x / 12 < 10 && y / 12 < 8;
+            let on_block = (x % 12 - 3).abs().max((y % 12 - 3).abs()) <= 1;
+            if in_grid && on_block { [0.95, 0.10, 0.10, 1.0] } else { [0.9, 0.9, 0.9, 1.0] }
+        });
+        let past = s.active().unwrap().history.past_len();
+        let err = s.execute("paint.redEye", json!({"rect": [0, 0, 120, 96]})).unwrap_err().to_string();
+        assert!(err.to_lowercase().contains("rect"), "{err}");
+        assert!(err.contains("64"), "{err}");
+        assert_eq!(s.active().unwrap().history.past_len(), past, "the refusal leaves no History state");
+    }
+
     #[test]
     fn cmyk_document_is_refused_and_keeps_its_pixels_bit_exact() {
         let mut s = session(64, 64, 8, "cmyk");
