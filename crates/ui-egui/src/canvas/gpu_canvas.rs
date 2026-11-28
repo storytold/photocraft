@@ -588,6 +588,10 @@ impl GpuCanvas {
 
     /// Replace the whole document image with a `format` texture of premultiplied `texels`.
     fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
+        self.health.guard(|| self.upload_full_unguarded(doc, size, format, texels));
+    }
+
+    fn upload_full_unguarded(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
         if size[0] == 0 || size[1] == 0 || texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) || !self.health.is_ok() {
             return;
         }
@@ -610,6 +614,10 @@ impl GpuCanvas {
     /// in its texture format (`size[0] * size[1]` texels: RGBA8 or RGBA16F). Returns false if the
     /// document isn't uploaded, the rectangle doesn't fit or the buffer has the wrong size.
     pub fn upload_rect(&self, doc: u64, origin: [u32; 2], size: [u32; 2], texels: &[u8]) -> bool {
+        self.health.guard(|| self.upload_rect_unguarded(doc, origin, size, texels)).unwrap_or(false)
+    }
+
+    fn upload_rect_unguarded(&self, doc: u64, origin: [u32; 2], size: [u32; 2], texels: &[u8]) -> bool {
         if !self.health.is_ok() {
             return false;
         }
@@ -626,6 +634,8 @@ impl GpuCanvas {
         if size[0] == 0 || size[1] == 0 {
             return true;
         }
+        #[cfg(test)]
+        test_hooks::panic_like_a_removed_device();
         d.write(queue, origin, size, size[0], texels);
         d.regenerate_mips(device, queue, res, [origin[0], origin[1], origin[0] + size[0], origin[1] + size[1]]);
         true
@@ -923,6 +933,10 @@ impl GpuCanvas {
     /// band (each band converted and uploaded before the next is rendered), so a huge document
     /// never needs a full-size float composite or texture-format copy in memory.
     pub fn upload_composite(&self, key: u64, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
+        self.health.guard(|| self.upload_composite_unguarded(key, doc, display));
+    }
+
+    fn upload_composite_unguarded(&self, key: u64, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
         let size = [doc.size.width, doc.size.height];
         let Some(format) = self.prepare_texture(key, doc) else { return };
         let (device, queue) = (&self.rs.device, &self.rs.queue);
@@ -1015,6 +1029,10 @@ impl GpuCanvas {
     /// `size`³ RGBA8 texels, red fastest. RGB is the display colour for each lattice input;
     /// alpha 255 marks out-of-gamut colours for the gamut warning.
     pub fn set_display_lut(&self, doc: u64, output: u32, size: u32, rgba: Option<&[u8]>) {
+        self.health.guard(|| self.set_display_lut_unguarded(doc, output, size, rgba));
+    }
+
+    fn set_display_lut_unguarded(&self, doc: u64, output: u32, size: u32, rgba: Option<&[u8]>) {
         if !self.health.is_ok() {
             return;
         }
@@ -1040,6 +1058,10 @@ impl GpuCanvas {
     /// Set a separately sampled curve/matrix/curve display transform. CMS validates this
     /// representation and provides bounded tables; no profile interpretation lives in the UI.
     pub fn set_display_matrix_shaper(&self, doc: u64, output: u32, shaper: &craft::cms::GpuMatrixShaper) {
+        self.health.guard(|| self.set_display_matrix_shaper_unguarded(doc, output, shaper));
+    }
+
+    fn set_display_matrix_shaper_unguarded(&self, doc: u64, output: u32, shaper: &craft::cms::GpuMatrixShaper) {
         if !self.health.is_ok() {
             return;
         }
@@ -1117,3 +1139,27 @@ mod sharp_gpu_tests;
 
 #[cfg(test)]
 mod tests;
+
+/// Test-only fault injection: makes the next rectangle upload panic the way wgpu does when the
+/// driver removed the device between two polls (#13529).
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PANIC_NEXT_UPLOAD: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn arm_upload_panic() {
+        PANIC_NEXT_UPLOAD.with(|c| c.set(true));
+    }
+
+    pub(super) fn panic_like_a_removed_device() {
+        if PANIC_NEXT_UPLOAD.with(|c| c.replace(false)) {
+            std::panic::panic_any("Error in Queue::write_texture: Parent device is lost".to_string());
+        }
+    }
+}
+
+#[cfg(test)]
+mod lost_device_tests;

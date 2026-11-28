@@ -44,6 +44,10 @@ impl GpuCanvas {
     /// already resident: an edit's re-render, without a new texture. False when that page isn't
     /// held or `buf` falls outside it.
     pub fn update_page(&self, key: u64, page: u64, buf: &photocraft_compose::Buffer) -> bool {
+        self.health.guard(|| self.update_page_unguarded(key, page, buf)).unwrap_or(false)
+    }
+
+    fn update_page_unguarded(&self, key: u64, page: u64, buf: &photocraft_compose::Buffer) -> bool {
         let (w, h) = (buf.rect.width(), buf.rect.height());
         if !self.health.is_ok() || w == 0 || h == 0 || buf.px.len() as u64 != u64::from(w) * u64::from(h) {
             return false;
@@ -72,6 +76,10 @@ impl GpuCanvas {
     }
 
     pub fn upload_page(&self, p: PageUpload<'_>) -> bool {
+        self.health.guard(|| self.upload_page_unguarded(p)).unwrap_or(false)
+    }
+
+    fn upload_page_unguarded(&self, p: PageUpload<'_>) -> bool {
         let PageUpload { key, page, size, depth, factor, core, buf } = p;
         let (w, h) = (buf.rect.width(), buf.rect.height());
         if !self.health.is_ok()
