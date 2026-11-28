@@ -545,11 +545,9 @@ fn median(v: &mut [u16]) -> f64 {
     if v.is_empty() {
         return 0.0;
     }
-    let mid = v.len() / 2;
-    let (_, m, _) = v.select_nth_unstable(mid);
-    let m = f64::from(*m);
-    let m = if v.len().is_multiple_of(2) { (m + f64::from(*v[..mid].iter().max().unwrap_or(&0))) / 2.0 } else { m };
-    m / 65535.0
+    // An even selection reports the lower of the two middle gray values.
+    let (_, middle, _) = v.select_nth_unstable((v.len() - 1) / 2);
+    f64::from(*middle) / 65535.0
 }
 
 /// Summary over features (area-weighted mean, pooled median).

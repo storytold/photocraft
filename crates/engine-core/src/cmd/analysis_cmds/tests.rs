@@ -146,6 +146,28 @@ fn features_area_perimeter_circularity() {
 }
 
 #[test]
+fn measurement_log_uses_the_lower_middle_gray_sample_for_an_even_selection() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 4, "height": 1, "mode": "grayscale", "depth": 8, "background": "white"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 1})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+
+    let r = s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    let values = &r["rows"][0]["values"];
+    assert_eq!(values["grayMedian"], values["grayMin"]);
+    assert!(values["grayMean"].as_f64().unwrap() > values["grayMedian"].as_f64().unwrap());
+}
+
+#[test]
+fn even_gray_median_is_the_lower_middle_sample_above_the_minimum() {
+    let gray = [0_u8, 16, 240, 255].map(|value| f32::from(value) / 255.0);
+    let features = measure_features(&[true; 4], &gray, 4, 1, (0, 0), 255.0);
+    assert_eq!(features.len(), 1);
+    assert_eq!(round4(features[0].gray_median), 16.0);
+}
+
+#[test]
 fn record_selection_rows_respect_scale_and_data_points() {
     for depth in [8, 16, 32] {
         let mut s = session(64, 48, depth);
