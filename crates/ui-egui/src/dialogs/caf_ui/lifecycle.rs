@@ -316,7 +316,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 
     if custom_chosen {
-        let _ = crate::dialogs::alerts::alert_once(app, tl!(CUSTOM_SAMPLING_ALERT), CUSTOM_SAMPLING_PREF);
+        let _ = crate::dialogs::alerts::info_once(app, tl!(CUSTOM_SAMPLING_ALERT), CUSTOM_SAMPLING_PREF);
     }
 }
 
