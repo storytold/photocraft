@@ -350,14 +350,17 @@ impl Compositor {
         self.check_fx(doc, &p)
     }
 
-    /// Half-float accumulation keeps Hard Mix with Transparency Shapes Layer off on the CPU: below
-    /// full Fill its formula divides by `1 − fill`, which the content's alpha is part of, so the
-    /// precision the slots lose shows. A layer with effects takes its alpha through the effect passes
-    /// instead, which this does not refuse.
+    /// Half-float accumulation keeps Color Burn, Color Dodge, Vivid Light and Hard Mix with
+    /// Transparency Shapes Layer off on the CPU: below full Fill their formulas divide by a quantity
+    /// the content's alpha is part of (`plan::fill_divides`), so the precision the slots lose shows.
+    /// A layer with effects takes its alpha through the effect passes instead, which this does not
+    /// refuse.
     pub(crate) fn check_accumulation(&self, p: &Plan<'_>) -> Result<(), Unsupported> {
-        let hard_mix = |pass: &plan::Pass<'_>| pass.flags & plan::F_SHAPELESS != 0 && pass.mode == photocraft_color::BlendMode::HardMix;
-        if self.acc_format == wgpu::TextureFormat::Rgba16Float && p.passes.iter().any(hard_mix) {
-            return Err(Unsupported("Hard Mix with Transparency Shapes Layer off on half-float accumulation (composited on the CPU)".into()));
+        let divides = |pass: &plan::Pass<'_>| pass.flags & plan::F_SHAPELESS != 0 && plan::fill_divides(pass.mode);
+        if self.acc_format == wgpu::TextureFormat::Rgba16Float && p.passes.iter().any(divides) {
+            return Err(Unsupported(
+                "Transparency Shapes Layer off with Color Burn, Color Dodge, Vivid Light or Hard Mix on half-float accumulation (composited on the CPU)".into(),
+            ));
         }
         Ok(())
     }

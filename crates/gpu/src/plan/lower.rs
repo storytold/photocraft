@@ -71,8 +71,8 @@ pub(crate) fn fill_divides(mode: BlendMode) -> bool {
 
 /// One of those modes (`fill_divides`) with Transparency Shapes Layer off in a 16/32-bit document.
 /// The GPU holds such content as half floats, which can't keep a near-opaque alpha (65534/65535,
-/// 1 − 2^-12), and the Fill formula amplifies the loss. Half-float accumulation refuses Hard Mix at
-/// any depth (`Compositor::check_accumulation`).
+/// 1 − 2^-12), and the Fill formula amplifies the loss. Half-float accumulation refuses these modes
+/// at any depth (`Compositor::check_accumulation`).
 pub(super) fn dividing_shapeless_on_cpu(layer: &Layer, depth: SampleType) -> bool {
     depth != SampleType::U8 && fill_divides(layer.blend) && shapeless_blend(layer)
 }

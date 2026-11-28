@@ -29,6 +29,7 @@ mod types;
 
 #[cfg(test)]
 use lower::check_gradient_stops;
+pub(crate) use lower::fill_divides;
 pub use lower::{adjustment_on_gpu, adjustment_program, mode_index, stroke_widths};
 use planner::Planner;
 #[cfg(test)]

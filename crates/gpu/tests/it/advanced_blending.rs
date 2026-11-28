@@ -456,7 +456,8 @@ fn shapeless_special_blends_match_the_cpu() {
 /// Hard Mix without Transparency Shapes Layer around an opaque alpha at 8 bits: where source and
 /// backdrop sit on the threshold (source = 1 − backdrop), an opaque pixel at full Fill takes the
 /// binary branch and gives 1, while any lower alpha (or Fill) divides its way back to the
-/// backdrop. Half-float accumulation leaves the document to the CPU.
+/// backdrop. Half-float accumulation leaves the document to the CPU, as it does the other dividing
+/// modes (`dividing_shapeless_blends_stay_on_the_cpu_with_half_float_accumulation`).
 #[test]
 fn hard_mix_shapeless_near_opaque_matches_the_cpu() {
     let Some(mut g) = gpu() else { return };
@@ -551,6 +552,27 @@ fn dividing_shapeless_blends_at_16_and_32_bits_stay_on_the_cpu() {
             let e = g.comp.supports(&d).expect_err("supports() agrees");
             assert!(e.to_string().contains(mode.label()), "{mode:?} {depth:?}: {e}");
         }
+    }
+}
+
+/// Half-float accumulation slots lose alpha precision at any depth, so the other modes that divide
+/// by it stay on the CPU there too.
+#[test]
+fn dividing_shapeless_blends_stay_on_the_cpu_with_half_float_accumulation() {
+    let Some(g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    for mode in [BlendMode::ColorDodge, BlendMode::VividLight, BlendMode::ColorBurn] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut l = noise_layer("shapeless", d.pixel_format(), Rect::new(6, 5, 42, 35), 3, 0.2);
+        l.blend = mode;
+        l.advanced.transparency_shapes = false;
+        d.layers.push(l);
+        let e = photocraft_gpu::render_to_vec_stats(&mut half, &g.device, &g.queue, &d, d.bounds())
+            .expect_err("half-float accumulation must refuse a dividing blend without transparency shapes");
+        assert!(e.to_string().contains(mode.label()), "{mode:?}: {e}");
+        let e = half.supports(&d).expect_err("supports() agrees");
+        assert!(e.to_string().contains(mode.label()), "{mode:?}: {e}");
     }
 }
 
