@@ -1040,8 +1040,10 @@ fn base_row(s: &mut Session, d: &Document, source: &str, label: &str, now: &str)
     m
 }
 
-fn feature_values(m: &mut Map<String, Value>, f: &Feature, count: usize, factor: f64) {
-    m.insert("count".into(), json!(count));
+fn feature_values(m: &mut Map<String, Value>, f: &Feature, count: Option<usize>, factor: f64) {
+    if let Some(count) = count {
+        m.insert("count".into(), json!(count));
+    }
     m.insert("area".into(), json!(round4(f.area * factor * factor)));
     m.insert("perimeter".into(), json!(round4(f.perimeter * factor)));
     m.insert("circularity".into(), json!(round4(f.circularity())));
@@ -1090,12 +1092,13 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
                 .any(|key| matches!(key.as_str(), "grayMin" | "grayMax" | "grayMean" | "grayMedian" | "integratedDensity" | "histogram"));
             let (sum, feats) = selection_rows(&d, needs_gray)?;
             let mut m = base_row(s, &d, source, &label, &now);
-            feature_values(&mut m, &sum, feats.len(), factor);
+            feature_values(&mut m, &sum, Some(feats.len()), factor);
             rows.push(m);
             if feats.len() > 1 {
                 for (i, f) in feats.iter().enumerate() {
                     let mut m = base_row(s, &d, source, &format!("Feature {}", i + 1), &now);
-                    feature_values(&mut m, f, 1, factor);
+                    // Photoshop leaves Count blank on per-feature rows of a disjoint selection (#16497).
+                    feature_values(&mut m, f, None, factor);
                     rows.push(m);
                 }
             }

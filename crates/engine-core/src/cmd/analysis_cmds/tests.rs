@@ -561,3 +561,21 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert!(b.histogram.is_empty());
     }
 }
+
+#[test]
+fn disjoint_selection_feature_rows_leave_count_empty() {
+    let mut s = session(160, 120, 8);
+    s.execute("image.analysis.selectDataPoints", json!({"reset": true})).unwrap();
+    s.execute("select.rect", json!({"x": 16, "y": 16, "width": 24, "height": 16, "mode": "replace"})).unwrap();
+    s.execute("select.rect", json!({"x": 72, "y": 16, "width": 12, "height": 8, "mode": "add"})).unwrap();
+    s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    let list = s.execute("measurementLog.list", json!({})).unwrap();
+    let rows = list["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["values"]["count"].as_u64(), Some(2));
+    assert_eq!(rows[0]["values"]["area"].as_f64(), Some(480.0));
+    assert!(rows[1]["values"].get("count").is_none(), "Feature 1 Count should be empty: {}", rows[1]);
+    assert_eq!(rows[1]["values"]["area"].as_f64(), Some(384.0));
+    assert!(rows[2]["values"].get("count").is_none(), "Feature 2 Count should be empty: {}", rows[2]);
+    assert_eq!(rows[2]["values"]["area"].as_f64(), Some(96.0));
+}
