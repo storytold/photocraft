@@ -183,6 +183,54 @@ fn batch_all_documented_components_and_compatibility_flags_round_trip() {
     }
 }
 
+/// Photoshop CS6 records each naming item with the list's plural class (#17198): the step imports as Batch, an
+/// unedited save writes the recorded descriptor back, and an edited one writes the singular class.
+#[test]
+fn batch_cs6_plural_naming_item_class_imports_and_saves() {
+    let item_of = |class: &str, key: &str, value: D| D::Descriptor(desc(class).with(key, value));
+    let cs6_items = |class: &str| {
+        D::List(vec![
+            item_of(class, "component", enm("fileNamingComponent", "Nm  ")),
+            item_of(class, "Txt ", text("Raw")),
+            item_of(class, "component", enm("fileNamingComponent", "lowerCaseExtension")),
+        ])
+    };
+    let with_items = |class: &str| {
+        let rules = desc("fileNamingRules")
+            .with("fileNamingComponents", cs6_items(class))
+            .with("Strt", D::Integer(1))
+            .with("Mcnt", D::Boolean(false))
+            .with("Win ", D::Boolean(true))
+            .with("unix", D::Boolean(false));
+        let mut d = batch_descriptor("Nm  ");
+        d.items.retain(|(key, _)| !key.is("fileNamingRules"));
+        d.with("fileNamingRules", D::Descriptor(rules))
+    };
+    let load = |d: &Descriptor| {
+        import(&photocraft_paint::tile::b64_decode(&set_of("S", vec![("Driver", vec![item("Btch", "Batch", Some(d.clone()))])])).unwrap()).unwrap()
+    };
+    let cs6 = with_items("fileNamingComponents");
+    let imported = load(&cs6);
+    assert!(imported.unsupported.is_empty());
+    let step = &imported.actions[0].steps[0];
+    assert_eq!(step.command, "file.automate.batch");
+    assert_eq!(step.params["namingComponents"], json!([{"component":"name"},{"text":"Raw"},{"component":"extension"}]));
+    assert_eq!(step.params["startingSerial"], 1);
+    assert_eq!(step.params["compatibility"], json!({"macintosh":false,"windows":true,"unix":false}));
+    let (out, skipped) = export("S", &[&imported.actions[0]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(cs6));
+    let mut edited = imported.actions[0].clone();
+    edited.steps[0].params["startingSerial"] = json!(2);
+    let (out, skipped) = export("S", &[&edited], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let saved = atn::parse(&out).unwrap().actions[0].items[0].descriptor.clone().unwrap();
+    let Some(D::Descriptor(rules)) = saved.get("fileNamingRules") else { panic!("no naming rules in {saved:?}") };
+    assert_eq!(rules.get("fileNamingComponents"), Some(&cs6_items("fileNamingComponent")));
+    // Any other item class still keeps the whole step.
+    assert_eq!(load(&with_items("fileNamingRule")).actions[0].steps[0].command, PHOTOSHOP_STEP);
+}
+
 /// Batch's Open binding round-trips, but richer Open descriptors must remain whole.
 #[test]
 fn batch_override_open_and_unrepresented_open_settings_round_trip() {

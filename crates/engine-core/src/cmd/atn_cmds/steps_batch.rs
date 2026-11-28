@@ -23,7 +23,8 @@ fn naming_from(rules: &Descriptor) -> Option<Value> {
     let mut components = Vec::new();
     for item in items {
         let D::Descriptor(c) = item else { return None };
-        if !c.class_id.is("fileNamingComponent") || c.items.len() != 1 {
+        // Photoshop CS6 names each item after the list (`fileNamingComponents`); later versions use the singular.
+        if !(c.class_id.is("fileNamingComponent") || c.class_id.is("fileNamingComponents")) || c.items.len() != 1 {
             return None;
         }
         if let Some(D::Text(t)) = c.get("Txt ") {
