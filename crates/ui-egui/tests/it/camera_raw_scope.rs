@@ -4,6 +4,7 @@
 //! region scope, the persisted scope settings and the hover sample.
 use egui::{Pos2, pos2, vec2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, theme::AppTheme};
 use serde_json::{Value, json};
 
@@ -49,6 +50,38 @@ fn fixture(theme: AppTheme) -> Harness<'static, Box<PhotocraftApp>> {
         app.run("layer.new.layer", json!({})).unwrap();
         app.run("edit.fill", json!({"color":"#80ff00"})).unwrap();
     })
+}
+
+#[test]
+fn auto_button_applies_and_restores_the_preview_in_one_click_each() {
+    let mut h = harness(AppTheme::pro(), |app| {
+        app.run("prefs.set", json!({"path":"interface.language","value":"en"})).unwrap();
+        app.run("file.new", json!({"width":96,"height":96,"depth":16})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("grey ramp", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for x in 0..96 {
+                    let v = 0.19 + 0.30 * x as f32 / 95.0;
+                    surface.fill_rect(photocraft_geom::Rect::new(x, 0, x + 1, 96), &[v, v, v, 1.0]);
+                }
+                Ok(())
+            })
+            .unwrap();
+    });
+    let before = inspect(&h);
+    let history = document_steps(&h);
+    h.get_by_label("Auto").click();
+    settle(&mut h);
+    let after = inspect(&h);
+    assert_eq!(after["params"]["pointCurve"].as_array().unwrap().len(), 5);
+    assert_ne!(before["histogram"], after["histogram"]);
+    h.get_by_label("Auto").click();
+    settle(&mut h);
+    let restored = inspect(&h);
+    assert_eq!(restored["params"], before["params"]);
+    assert_eq!(restored["histogram"], before["histogram"]);
+    assert_eq!(document_steps(&h), history);
 }
 /// Waits for the proxy develop the workspace starts on the runtime's job queue, so its frame
 /// can't land, and bump `previewRevision`, after a test has recorded the revision. The workspace

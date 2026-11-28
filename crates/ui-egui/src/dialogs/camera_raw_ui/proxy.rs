@@ -7,6 +7,11 @@ use craft::imaging::ui::raw_develop::RawPreviewRequest;
 use photocraft_algo::camera_raw::DevelopInputs;
 use photocraft_algo::histogram::RgbHistogram;
 
+pub(super) fn retone(px: &mut [[f32; 4]], w: usize, h: usize, curve: &[[f32; 2]], p: &mut CameraRaw) {
+    photocraft_io::raw::retone(px, w, h, curve, raw_stage(p));
+    (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
+}
+
 /// What every develop of one open raw shares: the proxy and the inputs the source keeps between
 /// requests. A request adds the settings.
 #[derive(Clone)]
@@ -72,12 +77,9 @@ impl ProxyJob {
         // proxy as it is and uploads it once.
         let retoned = raw_curve.as_ref().map(|curve| {
             let mut px = proxy.to_vec();
-            photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
+            retone(&mut px, pw, ph, curve, &mut p);
             px
         });
-        if retoned.is_some() {
-            (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        }
         let develop_start = crate::gpu_canvas::now_ms();
         let key = retoned.is_none().then_some(source_key);
         let input = retoned.as_deref().unwrap_or(&proxy);

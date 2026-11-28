@@ -954,23 +954,71 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
 }
 
 #[test]
-fn auto_sets_the_light_sliders_from_the_image() {
+fn raw_defaults_still_apply_auto_tone_on_open() {
     let (mut app, dng) = raw_app();
     let ctx = app.ctx().clone();
-    app.open_bytes("IMG_0006.dng", &dng).unwrap();
-    let raw = take_queued(&mut app).unwrap();
-    open_raw(&mut app, &ctx, raw).unwrap();
-    assert!(shown(&app).is_identity());
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true}})).unwrap().unwrap();
-    let p = shown(&app);
-    assert!(!p.is_identity(), "Auto chose something: {p:?}");
-    assert!(p.saturation == 0.0 && p.hsl_hue == [0.0; 8], "only the Light panel: {p:?}");
-    // The preference does the same when a raw opens without a sidecar.
     app.run("prefs.set", json!({"path": "rawDefaults.applyAutoTone", "value": true})).unwrap();
     app.open_bytes("IMG_0007.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    assert_eq!(shown(&app), p, "Apply auto tone opens the dialog with Auto's settings");
+    let mut expected = CameraRaw::default();
+    photocraft_algo::camera_raw::auto_tone(&app.raw.as_ref().unwrap().source.proxy, &mut expected);
+    assert!(!expected.is_identity());
+    assert_eq!(shown(&app), expected);
+}
+
+#[test]
+fn full_auto_in_the_framework_is_one_undoable_edit_and_keeps_a_manual_curve() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    app.run("file.new", json!({"width": 96, "height": 96, "depth": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("grey ramp", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for x in 0..96 {
+                let v = 0.19 + 0.30 * x as f32 / 95.0;
+                surface.fill_rect(Rect::new(x, 0, x + 1, 96), &[v, v, v, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    let mut update = |ui| menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": ui})).unwrap().unwrap();
+    let initial = update(json!({"set":{"exposure":0.15}}));
+    let estimated = update(json!({"auto":true}));
+    assert_eq!(estimated["params"]["pointCurve"].as_array().unwrap().len(), 5);
+    let undo = update(json!({"undo":true}));
+    assert_eq!(undo["params"], initial["params"]);
+    let redo = update(json!({"redo":true}));
+    assert_eq!(redo["params"], estimated["params"]);
+    let restored = update(json!({"auto":true}));
+    assert_eq!(restored["params"], initial["params"]);
+    assert_eq!(update(json!({"undo":true}))["params"], estimated["params"]);
+
+    let manual = json!([[0.0, 0.0], [128.0, 115.0], [255.0, 255.0]]);
+    update(json!({"set":{"pointCurve":manual}}));
+    let auto = update(json!({"auto":true}));
+    assert_eq!(auto["params"]["pointCurve"], manual);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
+fn full_auto_settings_stay_with_their_raw_in_the_filmstrip() {
+    let (mut app, dng) = raw_app();
+    let ctx = app.ctx().clone();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"auto":true}})).unwrap().unwrap();
+    let estimated = shown(&app);
+    assert!(!estimated.is_identity());
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    assert!(shown(&app).is_identity());
+    filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
+    assert_eq!(shown(&app), estimated);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"auto":true}})).unwrap().unwrap();
+    assert!(shown(&app).is_identity());
 }
 
 #[test]

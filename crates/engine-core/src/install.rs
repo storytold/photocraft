@@ -73,6 +73,7 @@ const TABLES: &[Table] = &[
     ("sample_cmds", crate::sample_cmds::specs),
     ("photo_cmds", crate::photo_cmds::specs),
     ("lens_cmds", crate::lens_cmds::specs),
+    ("raw_auto_cmds", crate::cmd::raw_auto_cmds::specs),
     ("vp_cmds", crate::vp_cmds::specs),
     ("channel_cmds", crate::channel_cmds::specs),
     ("adjust_cmds", crate::adjust_cmds::specs),
