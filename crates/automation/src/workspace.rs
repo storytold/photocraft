@@ -1,6 +1,6 @@
 //! Capability-based filesystem policy for untrusted automation paths.
 
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Components, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
@@ -206,7 +206,7 @@ impl AuthorizedWorkspace {
         if exists && root.dir.metadata(&relative).is_ok_and(|m| !m.is_file()) {
             return Err(AutomationError::BadRequest(format!("automation write refused: `{path}` already exists and is not a regular file")));
         }
-        if exists && !written_kind(&leaf) && !holds_image(&root.dir, &relative) {
+        if exists && !written_kind(&leaf) && (opened_kind(&leaf) || !holds_image(&root.dir, &relative)) {
             return Err(AutomationError::BadRequest(format!(
                 "automation write refused: `{path}` already exists and is not an image or document file PhotoCraft writes; save to a new name"
             )));
@@ -270,26 +270,102 @@ impl Drop for TempRemoval<'_> {
     }
 }
 
-/// Whether `name`'s extension is one of the formats PhotoCraft saves or exports. The image codec
-/// registry, not `photocraft_formats`: that one also names text and office files PhotoCraft only
-/// reads (`txt`, `md`, `csv`, `rtf`…), and notes must never be replaced (#14355). A codec counts
-/// only if this build writes it: PCX, XPM, DICOM and HEIF are read-only.
+/// Whether `name`'s extension is one of the formats PhotoCraft saves or exports. Only the
+/// `photocraft_formats` entries with a raster codec count: that registry also names text and office
+/// files PhotoCraft only reads (`txt`, `md`, `csv`, `rtf`…), and notes must never be replaced
+/// (#14355). A codec counts only if this build writes it: PCX, XPM, DICOM and HEIF are read-only.
 fn written_kind(name: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else { return false };
     let ext = ext.to_ascii_lowercase();
-    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str())
-        || photocraft_codecs::from_extension(&ext).is_some_and(|format| format.caps().write)
+    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || exported_codec(&ext)
 }
 
-/// Whether the file at `relative` starts like an image PhotoCraft writes (PSD/PSB or a writable
-/// codec's magic). Containers that also hold other things (zip, PDF) are judged by name only.
-fn holds_image(dir: &Dir, relative: &Path) -> bool {
-    let mut head = [0u8; 64];
-    let Ok(mut file) = dir.open(relative) else { return false };
-    let Ok(n) = file.read(&mut head) else { return false };
-    let head = &head[..n];
-    photocraft_io::is_psd(head) || photocraft_codecs::detect(head).is_some_and(|format| format.caps().write)
+/// Whether `name`'s extension names an image format PhotoCraft opens: a codec's or a camera raw's.
+/// A file with such a name that is not a [`written_kind`] is refused whatever its bytes: a camera
+/// raw (`.dng`, `.nef`) starts like a TIFF and is not written.
+fn opened_kind(name: &str) -> bool {
+    let Some((_, ext)) = name.rsplit_once('.') else { return false };
+    matches!(photocraft_formats::from_extension(ext), Some(photocraft_formats::Format::Raw)) || photocraft_codecs::from_extension(ext).is_some()
 }
+
+/// Whether export writes files with extension `ext` through an image codec. Export looks the
+/// extension up in `photocraft_formats` and takes that format's raster codec, so a codec the
+/// registry has no entry for is not written even when the codec can encode it.
+fn exported_codec(ext: &str) -> bool {
+    photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec).is_some_and(|format| format.caps().write)
+}
+
+/// Whether the file at `relative` starts like an image PhotoCraft writes (PSD/PSB or a written
+/// codec's magic). Containers that also hold other things (zip, PDF) are judged by name only.
+/// A JPEG-LS file starts like a JPEG and can carry metadata segments ahead of its frame header,
+/// so a file that starts like a JPEG is judged by its frame marker (see [`jpeg_frame_format`]).
+fn holds_image(dir: &Dir, relative: &Path) -> bool {
+    let Ok(file) = dir.open(relative) else { return false };
+    let mut file = BufReader::new(file);
+    let mut head = Vec::new();
+    if (&mut file).take(64).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    if photocraft_io::is_psd(&head) {
+        return true;
+    }
+    let format = match photocraft_codecs::detect(&head) {
+        Some(photocraft_codecs::Format::Jpeg) => jpeg_frame_format(&mut file),
+        format => format,
+    };
+    format.is_some_and(|format| format.extensions().iter().any(|ext| exported_codec(ext)))
+}
+
+/// The format of a file that starts with a JPEG start-of-image marker: JPEG or JPEG-LS, by the
+/// first frame marker after the start of the file. Marker segments ahead of it are skipped by
+/// their length without being read, and stray bytes between segments are skipped as JPEG
+/// decoders skip them. `None` when the frame marker is missing, a scan, the end of the image or
+/// a broken marker comes first, a marker has more than [`MAX_JPEG_PADDING`] stray and fill bytes
+/// ahead of it, or more than [`MAX_JPEG_SEGMENTS`] markers come before it.
+fn jpeg_frame_format(file: &mut BufReader<impl Read + Seek>) -> Option<photocraft_codecs::Format> {
+    file.seek(SeekFrom::Start(2)).ok()?;
+    let mut byte = [0u8; 1];
+    for _ in 0..=MAX_JPEG_SEGMENTS {
+        let mut padding = 0;
+        file.read_exact(&mut byte).ok()?;
+        while byte[0] != 0xFF {
+            padding += 1;
+            if padding > MAX_JPEG_PADDING {
+                return None;
+            }
+            file.read_exact(&mut byte).ok()?;
+        }
+        file.read_exact(&mut byte).ok()?;
+        while byte[0] == 0xFF {
+            padding += 1;
+            if padding > MAX_JPEG_PADDING {
+                return None;
+            }
+            file.read_exact(&mut byte).ok()?;
+        }
+        match byte[0] {
+            0xF7 => return Some(photocraft_codecs::Format::JpegLs),
+            0xC0..=0xCF if !matches!(byte[0], 0xC4 | 0xC8 | 0xCC) => return Some(photocraft_codecs::Format::Jpeg),
+            0x01 | 0xD0..=0xD7 => {}
+            0x00 | 0xD8 | 0xD9 | 0xDA => return None,
+            _ => {
+                let mut length = [0u8; 2];
+                file.read_exact(&mut length).ok()?;
+                let skip = u16::from_be_bytes(length).checked_sub(2)?;
+                file.seek_relative(i64::from(skip)).ok()?;
+            }
+        }
+    }
+    None
+}
+
+/// How many markers [`jpeg_frame_format`] skips before giving up: 4,096 segments of the largest
+/// size cover 256 MiB of metadata.
+const MAX_JPEG_SEGMENTS: usize = 4096;
+
+/// How many stray bytes and `0xFF` fill bytes together [`jpeg_frame_format`] accepts ahead of one
+/// marker.
+const MAX_JPEG_PADDING: usize = 64;
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
     // Do not reserve from a potentially stale or attacker-controlled metadata length. Read in

@@ -206,15 +206,19 @@ pub(super) fn process_tree(
 /// PhotoCraft opens but can't write, camera raws above all (#5799: a folder of ARWs failed on
 /// every file), GIMP files (`gz` is the last extension of `.xcf.gz`), Photoshop templates and the
 /// codec formats without a writer in this build. Those are saved as PSD, the format Photoshop's
-/// Save As offers for a raw. An input whose file name has no extension (a dot in a folder name
-/// doesn't count) is saved as PNG.
+/// Save As offers for a raw. Formats the codecs read that are missing from `photocraft_formats`,
+/// the registry export looks writers up in (JPEG 2000), are saved as PSD too.
+/// An input whose file name has no extension (a dot in a folder name doesn't count) is saved as PNG.
 /// The format Batch's "Save in the same format" writes for `path`: its own, or PSD for a file
 /// PhotoCraft only opens.
 pub fn same_format(path: &str) -> String {
     const IMPORT_ONLY: &[&str] =
         &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
-    let no_writer = photocraft_formats::from_extension(&ext).is_some_and(|f| f.capabilities().write != photocraft_formats::Availability::Available);
+    let no_writer = match photocraft_formats::from_extension(&ext) {
+        Some(f) => f.capabilities().write != photocraft_formats::Availability::Available,
+        None => photocraft_codecs::from_extension(&ext).is_some_and(|f| f.caps().read),
+    };
     if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
 }
 
@@ -236,6 +240,17 @@ fn same_format_takes_the_file_names_extension() {
     }) {
         for ext in f.extensions() {
             assert_eq!(same_format(&format!("/in/a.{ext}")), "psd", "{f:?} .{ext}");
+        }
+    }
+    // A folder batch opens every format the codecs read; those export has no registry entry for,
+    // such as JPEG 2000, are saved as PSD. JPEG-LS has a registry entry that writes.
+    assert_eq!(same_format("/in/scan.jls"), "jls");
+    assert_eq!(same_format("/in/scan.jp2"), "psd");
+    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+        for ext in f.extensions() {
+            if photocraft_formats::from_extension(ext).is_none() {
+                assert_eq!(same_format(&format!("/in/a.{ext}")), "psd", "{f:?} .{ext}");
+            }
         }
     }
     assert_eq!(same_format("/in/a.pam"), "pam");

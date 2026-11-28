@@ -6595,6 +6595,7 @@ dependencies = [
  "cap-std",
  "clap",
  "craft",
+ "craft-file-formats",
  "craft-image-codecs",
  "craft-psd",
  "getrandom 0.3.4",
