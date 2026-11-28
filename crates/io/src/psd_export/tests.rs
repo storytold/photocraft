@@ -4,6 +4,84 @@ fn document(width: u32, height: u32) -> Document {
     Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
 }
 
+fn color_overlay_document() -> Document {
+    let mut doc = document(8, 8);
+    let mut layer = Layer::raster("Paint", doc.pixel_format());
+    layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(1, 1, 5, 5), &[0.0, 0.0, 0.0, 1.0]);
+    layer.effects.enabled = true;
+    layer.effects.items.push(photocraft_doc::Effect::ColorOverlay {
+        common: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        color: photocraft_color::Color::rgb(1.0, 0.0, 0.0),
+    });
+    doc.layers.push(layer);
+    doc
+}
+
+fn written_psd(doc: &Document) -> PsdFile {
+    let out = crate::export(doc, "effects.psd", &crate::ExportOptions::default()).unwrap();
+    PsdFile::from_bytes(&out.bytes).unwrap()
+}
+
+#[test]
+fn effects_export_aligns_layer_blocks() {
+    let mut doc = color_overlay_document();
+    let format = doc.pixel_format();
+    doc.layers.push(Layer::group("Group", vec![Layer::raster("Child", format)]));
+    let file = written_psd(&doc);
+    assert!(file.layers().iter().any(|layer| layer.block(b"lfx2").is_some()));
+    for layer in file.layers() {
+        for block in &layer.blocks {
+            assert!(block.data.len().is_multiple_of(4), "{}: {:?} has {} bytes", layer.name(), block.key, block.data.len());
+            assert!(block.padding.is_none());
+        }
+    }
+}
+
+#[test]
+fn effects_export_flags_layers_and_groups_with_disabled_styles() {
+    let mut doc = color_overlay_document();
+    let mut group = Layer::group("Group", vec![Layer::raster("Child", doc.pixel_format())]);
+    group.effects = doc.layers[0].effects.clone();
+    group.effects.enabled = false;
+    doc.layers.push(group);
+    let file = written_psd(&doc);
+    let layers = file.layers();
+    assert!(layers.iter().any(|layer| layer.block(b"lfxs").is_some()));
+    for layer in layers {
+        assert_eq!(layer.flags.0 & 0x20 != 0, layer.block(b"lfx2").is_some() || layer.block(b"lfxs").is_some(), "{}", layer.name());
+    }
+}
+
+#[test]
+fn effects_export_drops_a_legacy_block_when_writing_modern_effects() {
+    let mut doc = color_overlay_document();
+    let mut group = Layer::group("Group", vec![Layer::raster("Child", doc.pixel_format())]);
+    group.effects = doc.layers[0].effects.clone();
+    doc.layers.push(group);
+    let mut file = written_psd(&doc);
+    let legacy = vec![0; 4];
+    for layer in &mut file.layer_info.as_mut().unwrap().layers {
+        if layer.block(b"lfx2").is_some() || layer.block(b"lfxs").is_some() {
+            layer.blocks.push(TaggedBlock::new(*b"lrFX", legacy.clone()));
+        }
+    }
+    let mut opened = crate::import("effects.psd", &file.to_bytes().unwrap()).unwrap().document;
+    // Native documents saved before the import fix can still carry both blocks.
+    for layer in &mut doc.layers {
+        layer.psd_blocks.push((*b"lrFX", std::sync::Arc::new(legacy.clone())));
+    }
+    let file = written_psd(&doc);
+    for name in ["Paint", "Group"] {
+        let layer = file.layers().iter().find(|l| l.name() == name).unwrap();
+        assert!(layer.block(b"lfx2").is_some() || layer.block(b"lfxs").is_some());
+        assert!(layer.block(b"lrFX").is_none(), "{name}");
+    }
+    for layer in &mut opened.layers {
+        layer.effects = Default::default();
+    }
+    assert!(written_psd(&opened).layers().iter().all(|l| l.block(b"lrFX").is_none()));
+}
+
 /// Photoshop opens a PSD's bottom layer as its Background only when that layer has no
 /// transparency channel (measured on Photoshop 27.11: with the channel written, re-exported
 /// files reopened with the Background as an ordinary layer).
@@ -329,7 +407,7 @@ fn light_adjustment_is_kept_verbatim_and_warned() {
         .with("Exps", Value::Double(-2.3))
         .with("Hghl", Value::Integer(-64))
         .with("useLegacy", Value::Boolean(false));
-    let cged = VersionedDescriptor::new(d).to_bytes();
+    let mut cged = VersionedDescriptor::new(d).to_bytes();
     let adjustment = crate::adjust_map::parse(b"brit", &brit, Some(&cged), crate::adjust_map::Channels::Rgb);
     assert_eq!(adjustment, photocraft_doc::Adjustment::Unsupported { psd_key: "brit".into(), raw: brit.clone().into() });
     let mut doc = Document::with_background("Light", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8, photocraft_doc::Color::WHITE);
@@ -343,8 +421,9 @@ fn light_adjustment_is_kept_verbatim_and_warned() {
     let file = PsdFile::from_bytes(&document_to_psd(&doc).unwrap().to_bytes().unwrap()).unwrap();
     let (restored, warnings) = crate::psd_import::psd_to_document(&file);
     assert!(warnings.iter().any(|w| w.contains("\"Light 1\"") && w.contains("Light settings")), "{warnings:?}");
-    // Saved again unchanged, both blocks are written back byte for byte.
+    // Saving again preserves both payloads and includes zero padding in the CgEd length.
     let again = PsdFile::from_bytes(&document_to_psd(&restored).unwrap().to_bytes().unwrap()).unwrap();
+    cged.resize(cged.len().next_multiple_of(4), 0);
     assert_eq!(block(&again, b"brit").as_deref(), Some(&brit[..]));
     assert_eq!(block(&again, b"CgEd").as_deref(), Some(&cged[..]));
     // A plain Brightness/Contrast descriptor still reads as Brightness/Contrast.

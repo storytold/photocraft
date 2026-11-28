@@ -266,7 +266,7 @@ fn gradient_maps_with_cmyk_lab_gray_stops_import_and_keep_their_space() {
     let gray_white = (8u16, [0, 0, 0, 0]);
     for depth in SampleType::ALL {
         for (mode, stops) in [(ColorMode::Cmyk, (cmyk_stop, paper)), (ColorMode::Lab, (lab_dark, lab_red)), (ColorMode::Grayscale, (gray_white, gray_black))] {
-            let block = grdm_block(stops.0, stops.1);
+            let mut block = grdm_block(stops.0, stops.1);
             let mut doc = Document::new("map", photocraft_geom::Size::new(4, 2), mode, depth);
             if mode == ColorMode::Cmyk {
                 doc.icc_profile = Some(profile.to_bytes());
@@ -301,7 +301,8 @@ fn gradient_maps_with_cmyk_lab_gray_stops_import_and_keep_their_space() {
             let mut hidden = back.clone();
             hidden.layers[1].visible = false;
             assert!(max_diff(&with_map, &photocraft_compose::flatten(&hidden).px) > 0.01, "{mode:?} {depth:?}");
-            // Saving again keeps the block (and so the stops' colour space) byte for byte...
+            // Saving again keeps the stops' colour space and payload, with zero padding.
+            block.resize(block.len().next_multiple_of(4), 0);
             let again = export(&back, "x.psd", &ExportOptions::default()).unwrap().bytes;
             assert_eq!(saved_grdm(&again), block, "{mode:?} {depth:?}");
             // ...and so does toggling Reverse and Dither, which only flip their flags.

@@ -66,7 +66,12 @@ fn assert_structurally_equal(a: &PsdFile, b: &PsdFile) {
         assert_eq!(ra.fill_opacity(), rb.fill_opacity(), "{n}: fill");
         assert_eq!(ra.is_visible(), rb.is_visible(), "{n}: visible");
         assert_eq!(ra.clipping, rb.clipping, "{n}: clipping");
-        assert_eq!(ra.block(b"lfx2").map(|x| &x.data), rb.block(b"lfx2").map(|x| &x.data), "{n}: lfx2");
+        let effects = ra.block(b"lfx2").map(|block| {
+            let mut data = block.data.clone();
+            data.resize(data.len().next_multiple_of(4), 0);
+            data
+        });
+        assert_eq!(effects.as_ref(), rb.block(b"lfx2").map(|x| &x.data), "{n}: lfx2");
         if ra.section_type().is_folder() {
             continue;
         }
