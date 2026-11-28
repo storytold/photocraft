@@ -603,10 +603,13 @@ fn shared_editor(
 
 /// Alt+Cancel (Reset): engine defaults for the kind and the dialog's mode; Color Balance keeps the user's Preserve
 /// Luminosity (Photoshop 25.4). The dialog stays open, in its context.
-fn reset_target(kind: String) -> impl Fn(&DialogValue, &DialogValue) -> DialogValue + Send + 'static {
+fn reset_target(kind: String, ctx: egui::Context) -> impl Fn(&DialogValue, &DialogValue) -> DialogValue + Send + 'static {
     move |_opening, current| {
         let (mode, isolated) = (current.cx.mode, current.cx.isolated.clone());
         let Ok(defaults) = photocraft_engine::adjust_params::default_for(&kind, mode) else { return current.clone() };
+        if kind == "channelMixer" {
+            adjust_editors::channel_mixer_presets::clear_dialog_status(&ctx);
+        }
         let mut params = photocraft_engine::adjust_params::to_params(&defaults);
         let cx = value_cx(mode, isolated, params.clone());
         if kind == "colorBalance"
@@ -635,6 +638,10 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
     let setup = Arc::new(Mutex::new(build_setup(app, &kind, &seeded.target, seeded.mode, seeded.unresolved)));
     let gray = gray_context(app, &kind, &seeded.target);
     let dynamic = app.session.prefs().interface.dynamic_color_sliders;
+    let ctx = app.ctx().clone();
+    if kind == "channelMixer" {
+        adjust_editors::channel_mixer_presets::clear_dialog_status(&ctx);
+    }
     let value = DialogValue { value: seeded.value, cx: seeded.cx };
     let mut dialog = HostedAdjustDialog::new(
         format!("photocraft.adjust.{kind}"),
@@ -643,7 +650,7 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
         shared_editor(kind.clone(), setup.clone()),
     )
     .context(dynamic, gray)
-    .reset_with(reset_target(kind.clone()))
+    .reset_with(reset_target(kind.clone(), ctx))
     .json_form(json_form)
     .held_ok();
     if let Some(idx) = app.session.active_index() {

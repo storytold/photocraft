@@ -157,6 +157,9 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
     if clicked(&Button::new(tl!("Reset to defaults")).sizing(Sizing::FillWidth).show(ui)) {
         // Photoshop's two-step Reset where measured (Color Balance), else the defaults.
         let params = crate::adjust_editors::layer_reset(app, id, adj);
+        if matches!(adj, photocraft_doc::Adjustment::ChannelMixer { .. }) {
+            crate::adjust_editors::channel_mixer_presets::clear_properties_status(ui);
+        }
         let _ = app.run("layer.setAdjustment", params);
         app.live_adjust = None;
     }

@@ -558,6 +558,79 @@ fn curves_reset_keeps_the_captured_mask_or_native_space_after_retargeting() {
     }
 }
 
+/// The Channel Mixer menu affects the dialog's preview until OK. Manual Monochrome and Reset
+/// update the same menu while keeping the original document and history intact.
+#[test]
+fn channel_mixer_preset_dialog_previews_and_resets() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+
+    let (mut h, id) = open_in_harness(app_with_image(), "image.adjustments.channelMixer");
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let initial = params(h.state_mut(), id);
+    let shown = |h: &Harness<'_, Box<PhotocraftApp>>| h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value();
+    let choose = |h: &mut Harness<'_, Box<PhotocraftApp>>, name| {
+        h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+        h.run_steps(4);
+        h.get_by_label(name).click();
+        h.run_steps(4);
+    };
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+
+    h.get_by_role_and_label(Role::CheckBox, "Monochrome").click();
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    assert_eq!(field(h.state_mut(), id, "monochrome"), json!(true));
+
+    h.get_by_role_and_label(Role::CheckBox, "Monochrome").click();
+    h.run_steps(4);
+    assert_eq!(params(h.state_mut(), id), initial, "the manual toggle returns to the same coefficients");
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    // The dialog enables Reset when its values differ from the opening values. At the opening
+    // values, choosing Default clears the manual selection.
+    choose(&mut h, "Default");
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+
+    let presets = [
+        ("Black & White Infrared (RGB)", [-70.0, 200.0, -30.0, 0.0]),
+        ("Black & White with Blue Filter", [0.0, 0.0, 100.0, 0.0]),
+        ("Black & White with Green Filter", [0.0, 100.0, 0.0, 0.0]),
+        ("Black & White with Orange Filter", [50.0, 50.0, 0.0, 0.0]),
+        ("Black & White with Red Filter", [100.0, 0.0, 0.0, 0.0]),
+        ("Black & White with Yellow Filter", [34.0, 66.0, 0.0, 0.0]),
+    ];
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(4);
+    let options: Vec<_> = h.query_all_by_role(Role::ListBoxOption).filter_map(|node| node.accesskit_node().label()).collect();
+    let expected: Vec<_> = std::iter::once("Default").chain(presets.map(|(name, _)| name)).chain(std::iter::once("Custom")).collect();
+    assert_eq!(options, expected);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    for (name, weights) in presets {
+        choose(&mut h, name);
+        assert_eq!(shown(&h).as_deref(), Some(name));
+        let mixed = params(h.state_mut(), id);
+        assert_eq!(mixed["monochrome"], json!(true), "{name}");
+        assert_eq!(mixed["gray"], json!(weights), "{name}");
+        for output in ["red", "green", "blue"] {
+            assert_eq!(mixed[output], initial[output], "{name} keeps the hidden output {output}");
+        }
+    }
+    assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some());
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+
+    press_reset(&mut h);
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+    assert_eq!(params(h.state_mut(), id), initial);
+    assert!(h.state().framework.dialogs.stack().ids().any(|open| open == id), "Reset keeps the dialog open");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+}
+
 /// #9879: the reference application's Photo Filter reopens at Warming Filter (85) and 25 % after
 /// any OK, but keeps Preserve Luminosity as last confirmed (measured 2026-11-08); ⌥ reopens at all
 /// the last settings; Levels still opens at its neutral settings.
