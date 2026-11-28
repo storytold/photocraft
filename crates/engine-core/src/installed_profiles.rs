@@ -396,6 +396,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color_cmds::ColorExt as _;
     use craft_cms::Builtin;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -511,7 +512,7 @@ mod tests {
             assert_eq!(again["path"], path);
             assert!(installed().iter().any(|p| p.path == path && p.color_space == ColorSpace::Cmyk));
             s.execute("edit.colorSettings", json!({"workingCmyk": path, "monitorProfile": "auto"})).unwrap();
-            assert_eq!(s.color.settings.working_cmyk, path);
+            assert_eq!(s.color().settings.working_cmyk, path);
             s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
             s.execute("view.proofSetup", json!({"profile": path})).unwrap();
 
@@ -522,8 +523,8 @@ mod tests {
             assert!(screen_path.ends_with("Press CMYK 2.icc") || Path::new(screen_path).file_name() != stored.file_name());
             assert!(s.execute("edit.colorSettings", json!({"workingCmyk": screen_path})).is_err());
             s.execute("edit.colorSettings", json!({"workingRgb": screen_path, "monitorProfile": screen_path})).unwrap();
-            assert_eq!(s.color.settings.working_rgb, screen_path);
-            assert_eq!(s.color.settings.monitor_profile, screen_path);
+            assert_eq!(s.color().settings.working_rgb, screen_path);
+            assert_eq!(s.color().settings.monitor_profile, screen_path);
         });
     }
 
