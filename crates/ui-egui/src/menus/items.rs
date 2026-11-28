@@ -338,7 +338,14 @@ pub fn menu_rows(app: &PhotocraftApp) -> Vec<Row> {
     let prefs = app.session.prefs();
     let hidden = prefs.menus.hidden.iter().filter(|id| photocraft_engine::prefs::MenuCustomization::hideable(id)).cloned();
     let colors = if prefs.interface.show_menu_colors {
-        prefs.menus.colors.iter().filter_map(|(id, name)| menu_tint(name).map(|c| (id.clone(), c.into()))).collect::<Vec<_>>()
+        prefs
+            .menus
+            .colors
+            .iter()
+            // A legacy tint for a list position must not follow a different file.
+            .filter(|(id, _)| !id.starts_with("file.openRecent."))
+            .filter_map(|(id, name)| menu_tint(name).map(|c| (id.clone(), c.into())))
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };

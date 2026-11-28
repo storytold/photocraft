@@ -13,3 +13,23 @@ fn the_menus_tab_lists_no_recent_files() {
     assert_eq!(recent, ["file.clearRecent Clear Recent File List"], "Open Recent has one row in the Menus tab");
     assert!(listed_items(&rows).iter().any(|r| r.command.id == "file.open"), "other items stay listed");
 }
+
+#[test]
+fn recent_files_ignore_legacy_position_colors() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    *app.ui.recent_files = vec!["/tmp/a.png".into()];
+    app.run(
+        "prefs.set",
+        serde_json::json!({"values": {
+            "interface.showMenuColors": true,
+            "menus.colors.file.openRecent.0": "red",
+            "menus.colors.file.open": "blue"
+        }}),
+    )
+    .unwrap();
+
+    let rows = crate::menus::menu_rows(&app);
+    let tint = |id| rows.iter().find(|r| r.command.id == id).unwrap().tint;
+    assert!(tint("file.openRecent.0").is_none());
+    assert!(tint("file.open").is_some());
+}
