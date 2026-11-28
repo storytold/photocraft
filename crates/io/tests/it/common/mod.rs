@@ -373,6 +373,11 @@ pub fn strict_block_errors(bytes: &[u8]) -> Vec<String> {
         Ok(f) => f,
         Err(e) => return vec![format!("parse: {e}")],
     };
+    strict_parsed_block_errors(&file)
+}
+
+/// Checks the strict block layout of a PSD/PSB that has already parsed successfully.
+pub fn strict_parsed_block_errors(file: &craft_psd::PsdFile) -> Vec<String> {
     let v = file.header.version;
     let mut errs = Vec::new();
     if !file.layer_mask_trailing.is_empty() {
