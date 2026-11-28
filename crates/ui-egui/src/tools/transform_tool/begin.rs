@@ -442,6 +442,11 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// With Preferences ▸ General ▸ Skip Transform when Placing on, the place stands as it is.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if app.session.prefs().general.skip_transform_when_placing {
+        if let Some(st) = app.session.active()
+            && let Some(layer) = st.active_layer
+        {
+            app.place_action_bar = Some(crate::tools::place_action_bar::PlaceActionBar { layer, doc: st.doc.id });
+        }
         return Ok(());
     }
     begin(app, ctx)?;

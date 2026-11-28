@@ -202,6 +202,9 @@ fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made
     let (Some(made), Some(document)) = (made, document) else { return };
     if landed {
         fold_made(app, document, layer, made);
+        if made == MadeLayer::Place {
+            app.place_action_bar = Some(crate::tools::place_action_bar::PlaceActionBar { layer, doc: document });
+        }
     } else {
         take_back_made(app, document, layer);
     }
