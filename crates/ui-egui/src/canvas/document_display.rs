@@ -546,7 +546,7 @@ fn apply_ctrl_notch(view: &mut View, pass: &CanvasPass<'_>, notch: CtrlNotch) {
     let mut canvas = view.canvas_view(pass.rect, pass.ppp, pass.flip, pass.aspect);
     let action = if notch.snap { WheelAction::SnapZoom(notch.steps) } else { WheelAction::Zoom(WheelNavigation::NOTCH.powi(notch.steps)) };
     let size = Size::new(f64::from(pass.doc.size.width), f64::from(pass.doc.size.height));
-    if WheelNavigation::apply(&mut canvas, action, notch.at, size, pass.ppp) {
+    if WheelNavigation::apply(&mut canvas, action, notch.at, size, pass.ppp, &craft::behavior::canvas::ZoomScheme::PHOTOSHOP) {
         view.set_from(&canvas, pass.ppp);
     }
 }

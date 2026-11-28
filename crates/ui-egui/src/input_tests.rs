@@ -782,7 +782,7 @@ fn ctrl_wheel_zooms_only_when_the_preference_is_on() {
     wheel(&h, -1.0, Modifiers { shift: true, ..ctrl });
     h.run_steps(3);
     let size = craft::behavior::kurbo::Size::new(400.0, 300.0);
-    let want = craft::behavior::canvas::ZoomLadder::step(f64::from(z2), -1, size) as f32;
+    let want = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.step(f64::from(z2), -1, size) as f32;
     assert!((zoom(&h) - want).abs() < 0.05, "Shift+Ctrl takes one ladder step: {} want {want}", zoom(&h));
 }
 
