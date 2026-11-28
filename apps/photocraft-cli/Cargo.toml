@@ -49,7 +49,8 @@ serde = { workspace = true }
 tempfile = "3"
 # Reading back a saved PSD's merged-image flag (#8064).
 craft-psd = { workspace = true }
-# A real ICC profile for the --metadata test (#9466).
+# A real ICC profile for the --metadata test (#9466); synthetic CMYK profiles for the
+# serve --color-settings test.
 craft-cms = { workspace = true }
 # Synthetic camera raws (#7789).
 photocraft-raw = { workspace = true, features = ["testgen"] }
