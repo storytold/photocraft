@@ -75,6 +75,43 @@ fn assert_same(a: &[Layer], b: &[Layer]) {
 }
 
 #[test]
+fn default_filled_raster_layers_round_trip_over_the_whole_canvas() {
+    let mut d = Document::new("default.ora", Size { width: 8, height: 6 }, ColorMode::Rgb, SampleType::U8);
+    let background = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);
+    d.layers = vec![Layer::new("Background", LayerContent::Raster(background))].into();
+
+    let (back, _, _) = round_trip(&d);
+
+    assert_eq!(photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&back).px);
+}
+
+#[test]
+fn alpha_less_black_default_round_trips_as_opaque_canvas() {
+    let mut d = Document::new("gray-default.ora", Size { width: 4, height: 3 }, ColorMode::Rgb, SampleType::U8);
+    let background = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    d.layers = vec![Layer::new("Black", LayerContent::Raster(background))].into();
+
+    let (back, _, _) = round_trip(&d);
+
+    assert_eq!(photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&back).px);
+}
+
+#[test]
+fn sparse_default_pixels_export_without_a_union_sized_float_buffer() {
+    let mut d = Document::new("sparse.ora", Size { width: 1000, height: 1000 }, ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);
+    surface.fill_rect(Rect::from_xywh(8000, 8000, 2, 2), &[1.0, 0.0, 0.0, 1.0]);
+    d.layers = vec![Layer::new("Sparse", LayerContent::Raster(surface))].into();
+
+    let out = export(&d).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
+    let data = archive.entry("data/layer0.png", MAX_ENTRY).unwrap().unwrap();
+    let width = u32::from_be_bytes(data[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(data[20..24].try_into().unwrap());
+    assert_eq!((width, height), (8002, 8002));
+}
+
+#[test]
 fn layers_groups_and_properties_round_trip_at_8_and_16_bit() {
     for depth in [SampleType::U8, SampleType::U16] {
         let d = doc(depth);
