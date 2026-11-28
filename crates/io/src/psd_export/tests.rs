@@ -812,7 +812,8 @@ fn a_cancelled_save_stops_between_the_bands_of_a_layer() {
     let after_two = || std::thread::current().id() == this && banded::BANDS_DONE.get() >= 2;
     let ctl = Interrupt::cancel_only(&after_two);
     for depth in [SampleType::U8, SampleType::F32] {
-        let doc = banding_document(ColorMode::Rgb, depth, 203, 157);
+        // The inset layer has 33 rows, so cancellation interrupts a multi-band write.
+        let doc = banding_document(ColorMode::Rgb, depth, 109, 38);
         let row_bytes = doc.size.width as usize * doc.pixel_format().bytes_per_pixel();
         let bands = |ctl: &Interrupt, run: &dyn Fn(&Interrupt)| {
             banded::BANDS_DONE.set(0);
@@ -827,8 +828,7 @@ fn a_cancelled_save_stops_between_the_bands_of_a_layer() {
                 stage::DIR_FOR_TESTS.with(|d| *d.borrow_mut() = staged.then(|| dir.clone()));
                 let options = PsdExportOptions { force_psb, stage_on_scratch_from: staged.then_some(0), ..Default::default() };
                 let export = |ctl: &Interrupt| drop(document_to_psd_sized(&doc, &options, 0, ctl, PSD_MAX_FILE_SIZE).unwrap());
-                let rows = doc.layers[0].surface().unwrap().content_bounds().height() as usize;
-                assert_eq!(bands(&Interrupt::NONE, &export), rows, "{what}: one band a row");
+                assert_eq!(bands(&Interrupt::NONE, &export), 33, "{what}: one band per row");
                 assert_eq!(bands(&ctl, &export), 2, "{what}: stops at the band after the cancel");
             }
         }
