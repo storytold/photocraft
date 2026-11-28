@@ -30,7 +30,10 @@ use document::document_to_psd_sized;
 pub use document::{document_to_psd, document_to_psd_with};
 use document::{document_to_psd_nested, mask_parameters};
 pub(crate) use estimate::{fit_psd_size, psd_version, sign_global_blocks};
-pub(crate) use resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+pub(crate) use resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, embed_source_hash, masked, size_from_layer, smart_keys, upsert};
 
 /// Blocks that define a layer's content as something other than pixels: fill (`SoCo`, `GdFl`,
@@ -77,6 +80,9 @@ pub struct PsdExportOptions {
     /// pixel bytes (layers and composite) reach this and spilling is on (`None`: never). The
     /// save then holds the file model's structure, not a second copy of its pixels (#5333).
     pub stage_on_scratch_from: Option<u64>,
+    /// Write the document's ICC profile (resource 1039). Off leaves it out of the file only: the
+    /// document's colours are still read through it (a CMYK document's layers and merged image).
+    pub embed_icc: bool,
 }
 
 impl Default for PsdExportOptions {
@@ -90,6 +96,7 @@ impl Default for PsdExportOptions {
             document_path: None,
             read_linked_files: true,
             stage_on_scratch_from: None,
+            embed_icc: true,
         }
     }
 }
@@ -131,6 +138,9 @@ struct Ex<'c> {
     smart: SmartOut,
     /// The document's patterns, which Pattern Fill layers are rendered from.
     patterns: Vec<photocraft_doc::Pattern>,
+    /// How the stored pixels of a Pattern Fill layer take the pattern's colours: as the document
+    /// paints them (the grey profile's greys in a Grayscale document, #14975).
+    pattern_space: photocraft_compose::pattern::PatternSpace,
     /// The layer written as Photoshop's Background (see [`psd_background`]).
     background: Option<photocraft_doc::LayerId>,
     /// Where encoded channels go instead of memory ([`PsdExportOptions::stage_on_scratch_from`]).
@@ -417,10 +427,121 @@ impl Ex<'_> {
         }
     }
 
+    /// The adjustment part of [`Self::content_blocks`] for layer `l` holding `a`: keeps a preserved
+    /// block of `raw` that still decodes to `a` (or a Gradient Map retargeted in place, or the
+    /// verbatim block of an unknown type); otherwise drops the stale blocks from `raw` and pushes
+    /// the regenerated ones onto `regenerated`, warning about anything PSD cannot hold as it is.
+    fn adjustment_blocks(&mut self, l: &Layer, a: &photocraft_doc::Adjustment, raw: &mut Vec<([u8; 4], Vec<u8>)>, regenerated: &mut Vec<([u8; 4], Vec<u8>)>) {
+        let channels = match self.fmt.mode {
+            ColorMode::Rgb => adjust_map::Channels::Rgb,
+            ColorMode::Grayscale => adjust_map::Channels::Gray,
+            ColorMode::Cmyk => adjust_map::Channels::Cmyk,
+            ColorMode::Lab => adjust_map::Channels::Lab,
+            _ => adjust_map::Channels::Other,
+        };
+        let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
+        let keep = raw.iter().any(|(k, d)| {
+            // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
+            // It parses here, but Photoshop requires four-byte alignment, so repair
+            // that legacy record on re-save rather than preserving the broken bytes.
+            let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
+            // Older PhotoCraft builds wrote `grdm` 2 bytes short of four-byte alignment,
+            // which makes Photoshop refuse the file (#8070): regenerate it too.
+            let legacy_grdm = k == b"grdm" && adjust_map::is_unpadded_photocraft_gradient_map(d);
+            !legacy_phfl && !legacy_grdm && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
+        });
+        // A Gradient Map whose stops are unchanged keeps the file's own block (stops in
+        // the document's CMYK/Lab/Gray space, smoothness, method) with Reverse and Dither
+        // updated in place.
+        let keep = keep
+            || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
+                && raw
+                    .iter_mut()
+                    .any(|(k, d)| k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)));
+        // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
+        // never written a second time beside a stale copy.
+        let own = match a {
+            photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
+            _ => None,
+        };
+        let keep =
+            keep || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
+        if !keep {
+            raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
+            // A Channel Mixer whose outputs don't match the document's mode has no
+            // PSD encoding that reads back as it is: save its nearest equivalent.
+            let reshaped = adjust_map::mixer_for(a, channels);
+            let target = reshaped.as_ref().unwrap_or(a);
+            // No Photoshop sample shows a monochrome CMYK `mixr` yet (#8047), so its layout would
+            // be a guess: such a mixer is saved only as the imported block it came from (kept
+            // above), never regenerated, whether it was a CMYK mixer or an RGB one reshaped here.
+            let unconfirmed = matches!(target, photocraft_doc::Adjustment::ChannelMixer { cmyk: Some(_), monochrome: true, .. });
+            if unconfirmed {
+                self.warnings
+                    .push(format!("layer \"{}\": monochrome CMYK Channel Mixer is not written to PSD (its Photoshop layout is not confirmed yet)", l.name));
+                return;
+            }
+            if reshaped.is_some() {
+                let shape = if channels == adjust_map::Channels::Cmyk { "cyan, magenta, yellow and black" } else { "red, green and blue" };
+                self.warnings.push(format!("layer \"{}\": Channel Mixer saved with {shape} outputs, the document mode's own", l.name));
+            }
+            let w = adjust_map::write(target);
+            if w.is_empty() {
+                self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
+            }
+            // Photoshop's `clrL` descriptor has no interpolation setting, so the
+            // reopened layer renders trilinear.
+            if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
+                self.warnings
+                    .push(format!("layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)", l.name));
+            }
+            regenerated.extend(w);
+        }
+    }
+
     /// Content blocks for `l`: preserved raw blocks (with `psd_raw`
     /// overrides) plus regenerated adjustment/fill blocks. A preserved
     /// adjustment or fill block is reused verbatim while it still decodes to
     /// the layer's current parameters; otherwise it is regenerated.
+    /// Sets the `TySh` of type layer `t` (of `l`) in its blocks `raw`, warning when the layer can
+    /// only be written as pixels.
+    fn type_blocks(&mut self, l: &Layer, t: &photocraft_doc::TextLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>) {
+        if matches!(t.shape, photocraft_doc::text::TextShape::Area { .. }) {
+            self.warnings.push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
+        }
+        match self.type_tysh(l, t) {
+            Some(d) => match raw.iter_mut().find(|(k, _)| k == b"TySh") {
+                Some(e) => e.1 = d.to_vec(),
+                None => raw.push((*b"TySh", d.to_vec())),
+            },
+            // No block to write (none generated for a layer without PSD data): drop an imported
+            // one too, or the file would reopen with the text from before the edit.
+            None => raw.retain(|(k, _)| k != b"TySh"),
+        }
+        if !raw.iter().any(|(k, _)| k == b"TySh") {
+            self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
+        }
+    }
+
+    /// The `TySh` block to write for type layer `t` of `l`, or `None` to write it as pixels.
+    fn type_tysh(&self, l: &Layer, t: &photocraft_doc::TextLayer) -> Option<std::sync::Arc<Vec<u8>>> {
+        // Text layers without PSD data (created here) get a generated TySh.
+        let generated = t.psd_raw.is_none().then(|| photocraft_text::psd::build_tysh(t, self.dpi, None)).flatten().map(std::sync::Arc::new);
+        let src = t.psd_raw.as_ref().or(generated.as_ref())?;
+        // Character/paragraph style sheets from the document's styles.
+        let styled = crate::text_styles_map::export_tysh(src, t, &self.text_styles, self.dpi).map(std::sync::Arc::new);
+        // `TextIndex` names the layer's object in the document's `Txt2` (where the
+        // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
+        // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
+        // Duplicate or out-of-range file TextIndex values must be renumbered,
+        // however, even when no style sheet needed rebuilding: otherwise two
+        // layers may read the same Txt2 object and acquire the wrong kerning.
+        let idx = self.text_index.get(&l.id).copied().unwrap_or(0);
+        let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| Some(src).filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
+        let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
+        Some(fresh.or(styled).unwrap_or_else(|| src.clone()))
+    }
+
     fn content_blocks(&mut self, l: &Layer) -> Vec<TaggedBlock> {
         let mut raw: Vec<([u8; 4], Vec<u8>)> = l.psd_blocks.iter().filter(|(k, _)| !REGENERATED.contains(&k)).map(|(k, d)| (*k, d.to_vec())).collect();
         // A stale multi-effects block would override the regenerated lfx2.
@@ -454,58 +575,7 @@ impl Ex<'_> {
             }
         };
         match &l.content {
-            LayerContent::Adjustment(a) => {
-                let channels = match self.fmt.mode {
-                    ColorMode::Rgb => adjust_map::Channels::Rgb,
-                    ColorMode::Grayscale => adjust_map::Channels::Gray,
-                    ColorMode::Cmyk => adjust_map::Channels::Cmyk,
-                    ColorMode::Lab => adjust_map::Channels::Lab,
-                    _ => adjust_map::Channels::Other,
-                };
-                let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
-                let keep = raw.iter().any(|(k, d)| {
-                    // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
-                    // It parses here, but Photoshop requires four-byte alignment, so repair
-                    // that legacy record on re-save rather than preserving the broken bytes.
-                    let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
-                    // Older PhotoCraft builds wrote `grdm` 2 bytes short of four-byte alignment,
-                    // which makes Photoshop refuse the file (#8070): regenerate it too.
-                    let legacy_grdm = k == b"grdm" && adjust_map::is_unpadded_photocraft_gradient_map(d);
-                    !legacy_phfl && !legacy_grdm && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
-                });
-                // A Gradient Map whose stops are unchanged keeps the file's own block (stops in
-                // the document's CMYK/Lab/Gray space, smoothness, method) with Reverse and Dither
-                // updated in place.
-                let keep = keep
-                    || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
-                        && raw.iter_mut().any(|(k, d)| {
-                            k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)
-                        }));
-                // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
-                // never written a second time beside a stale copy.
-                let own = match a {
-                    photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
-                    _ => None,
-                };
-                let keep = keep
-                    || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
-                if !keep {
-                    raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
-                    let w = adjust_map::write(a);
-                    if w.is_empty() {
-                        self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
-                    }
-                    // Photoshop's `clrL` descriptor has no interpolation setting, so the
-                    // reopened layer renders trilinear.
-                    if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
-                        self.warnings.push(format!(
-                            "layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)",
-                            l.name
-                        ));
-                    }
-                    regenerated.extend(w);
-                }
-            }
+            LayerContent::Adjustment(a) => self.adjustment_blocks(l, a, &mut raw, &mut regenerated),
             LayerContent::Fill(f) => fill_rule(&mut raw, &mut regenerated, f),
             LayerContent::Shape(sh) => {
                 if let Some(f) = &sh.fill {
@@ -514,30 +584,7 @@ impl Ex<'_> {
                 let (w, h) = (self.canvas.width(), self.canvas.height());
                 crate::vector_map::shape_blocks(sh, &mut raw, w, h, self.dpi);
             }
-            LayerContent::Text(t) => {
-                if matches!(t.shape, photocraft_doc::text::TextShape::Area { .. }) {
-                    self.warnings
-                        .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
-                }
-                // Text layers without PSD data (created here) get a generated TySh.
-                let generated = t.psd_raw.is_none().then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
-                let src = t.psd_raw.as_ref().or(generated.as_ref());
-                // Character/paragraph style sheets from the document's styles.
-                let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
-                // `TextIndex` names the layer's object in the document's `Txt2` (where the
-                // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
-                // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
-                // Duplicate or out-of-range file TextIndex values must be renumbered,
-                // however, even when no style sheet needed rebuilding: otherwise two
-                // layers may read the same Txt2 object and acquire the wrong kerning.
-                let idx = self.text_index.get(&l.id).copied().unwrap_or(0);
-                let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
-                let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
-                set_principal(&mut raw, &[b"TySh"], fresh.as_ref().or(styled.as_ref().or(src)));
-                if !raw.iter().any(|(k, _)| k == b"TySh") {
-                    self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
-                }
-            }
+            LayerContent::Text(t) => self.type_blocks(l, t, &mut raw),
             LayerContent::Smart(sm) => {
                 if let Some(preview) = self.smart.vector_preview(sm) {
                     raw.push((crate::vector_preview::PSD_KEY, preview.block.clone()));
@@ -593,7 +640,7 @@ impl Ex<'_> {
             None => raw.retain(|(k, _)| k != b"fxrp"),
         }
         // Advanced Blending channel restrictions: written from the field (in place).
-        match crate::blocks::brst_data(l.excluded_channels) {
+        match craft_psd::tagged::channel_restrictions_data(l.excluded_channels) {
             Some(data) => match raw.iter_mut().find(|(k, _)| k == b"brst") {
                 Some(e) => e.1 = data,
                 None => raw.push((*b"brst", data)),
@@ -964,7 +1011,8 @@ impl Ex<'_> {
                 &PsdExportOptions { force_psb: true, document_path: self.document.clone(), read_linked_files: self.read_linked_files, ..Default::default() },
                 self.smart.depth + 1,
                 &Interrupt::NONE,
-            );
+            )
+            .map_err(|e| format!("its annotations cannot be written: {e}"))?;
             let data = file.to_bytes().map_err(|e| format!("its contents can't be written: {e}"))?;
             let stem = file_name.rsplit_once('.').map_or(file_name, |(a, _)| a);
             self.warnings.extend(warnings.into_iter().map(|w| format!("smart object {stem}: {w}")));
@@ -1007,7 +1055,7 @@ impl Ex<'_> {
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
         // fill must be rendered from the document's patterns, not left transparent (#1907).
-        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
+        let buf = photocraft_compose::render_fill_content_in(l, f, self.canvas, &self.patterns, self.pattern_space);
         let mut s = Surface::new(self.fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
         s.write_region(self.canvas, &vals);

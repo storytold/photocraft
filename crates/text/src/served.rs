@@ -144,7 +144,8 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_lowercase().replace('_', "-");
     let mut parts = tag.split('-');
     let lang = parts.next()?;
-    let rest: Vec<&str> = parts.collect();
+    // RFC 5646: a singleton starts extensions/private use; their values do not choose the script.
+    let rest: Vec<&str> = parts.take_while(|part| part.len() != 1).collect();
     Some(match lang {
         "ar" | "fa" | "ur" | "ps" | "ckb" | "sd" | "ug" => "Arab",
         "he" | "iw" | "yi" => "Hebr",
@@ -156,6 +157,8 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
         "ka" => "Geor",
         "ja" => "Jpan",
         "ko" => "Kore",
+        // An explicit script takes precedence over regional defaults.
+        "zh" if rest.contains(&"hans") => "Hans",
         "zh" if rest.iter().any(|r| matches!(*r, "hant" | "tw" | "hk" | "mo")) => "Hant",
         "zh" => "Hans",
         _ => return None,
@@ -168,22 +171,7 @@ fn sri(hex: &str) -> Option<String> {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..32).map(|i| hex.get(2 * i..2 * i + 2).and_then(|h| u8::from_str_radix(h, 16).ok())).collect();
-    Some(format!("sha256-{}", base64(&bytes?)))
-}
-
-/// Standard base64 (RFC 4648, with padding).
-fn base64(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut s = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = |i: usize| u32::from(chunk.get(i).copied().unwrap_or(0));
-        let n = (b(0) << 16) | (b(1) << 8) | b(2);
-        for k in 0..4 {
-            let six = ((n >> (18 - 6 * k)) & 63) as usize;
-            s.push(if k <= chunk.len() { TABLE.get(six).map_or('=', |&c| char::from(c)) } else { '=' });
-        }
-    }
-    s
+    Some(format!("sha256-{}", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes?)))
 }
 
 struct State {
@@ -503,7 +491,19 @@ mod tests {
             ("ja-JP", Some("Jpan")),
             ("zh-CN", Some("Hans")),
             ("zh-TW", Some("Hant")),
+            ("zh-HK", Some("Hant")),
+            ("zh-MO", Some("Hant")),
+            ("zh-Hans-TW", Some("Hans")),
+            ("zh-Hans-HK", Some("Hans")),
+            ("zh-Hans-MO", Some("Hans")),
+            ("zh-Hant-CN", Some("Hant")),
             ("zh-Hant-HK", Some("Hant")),
+            ("zh-Hant-TW-u-nu-hans", Some("Hant")),
+            ("zh-TW-u-nu-hans", Some("Hant")),
+            ("zh-CN-u-nu-hant", Some("Hans")),
+            ("zh-cmn-Hans-TW", Some("Hans")),
+            ("zh-cmn-Hant-CN", Some("Hant")),
+            ("zh-TW-x-hans", Some("Hant")),
             ("ko", Some("Kore")),
             ("en-US", None),
             ("ru", None),

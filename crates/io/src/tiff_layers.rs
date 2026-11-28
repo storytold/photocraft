@@ -368,6 +368,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
         read_linked_files: opts.read_linked_files,
         // The layered TIFF reads the merged image's bytes directly: they stay in memory.
         stage_on_scratch_from: None,
+        embed_icc: opts.encode.embed_icc,
     };
     // TIFF has no palette, bitmap or duotone layout: the PSD model of an Indexed Color, Bitmap
     // or Duotone document is made in its pixel format (RGB or Grayscale), which the PSD exporter
@@ -380,7 +381,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     } else {
         doc
     };
-    let (mut file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl));
+    let (mut file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl))?;
     // A cancelled conversion stops early with an incomplete model: never encode it.
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
@@ -391,7 +392,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let (layers, w) = match tiff_image_source(doc, &mut file, save_transparency && has_alpha).into_bytes(order) {
         Err(craft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
             let psb_opts = PsdExportOptions { force_psb: true, ..psd_opts };
-            let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl));
+            let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl))?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
             warnings.extend(w);
             warnings.push("layer data exceeds 4 GB; written with PSB-sized lengths, which some readers do not open".into());
