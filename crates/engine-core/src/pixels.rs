@@ -250,11 +250,13 @@ fn adjusted_with_transfer(
     let orig = buf.clone();
     // 32-bit documents get the float behaviour of an adjustment layer there (Levels doesn't clip);
     // integer depths keep the unrounded, clipped curves, except that 16-bit Posterize and
-    // Threshold use the 16-bit rules an adjustment layer measures against Photoshop, so the
-    // command matches its live preview (an adjustment layer) and Photoshop.
+    // Threshold use the 16-bit rules an adjustment layer measures against Photoshop, and 8-bit
+    // Hue/Saturation the measured 8-bit colour range edges (#14744), so the command matches its
+    // live preview (an adjustment layer) and Photoshop.
     let depth = match (fmt.sample, adj) {
         (photocraft_color::SampleType::F32, _) => Some(fmt.sample),
         (photocraft_color::SampleType::U16, Adjustment::Posterize { .. } | Adjustment::Threshold { .. }) => Some(fmt.sample),
+        (photocraft_color::SampleType::U8, Adjustment::HueSaturation { .. }) => Some(fmt.sample),
         _ => None,
     };
     adjust::apply_in(adj, &mut buf, transfer, depth, mode);

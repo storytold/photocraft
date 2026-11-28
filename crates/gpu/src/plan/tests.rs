@@ -480,7 +480,7 @@ fn cached_adjustment_rows_match_freshly_built_tables() {
         for a in row_cached_adjustments() {
             let fresh: Vec<Vec<f32>> = match &a {
                 Adjustment::Levels { .. } | Adjustment::Curves { .. } => adjust::tone_luts_depth(&a, Some(depth)).into_iter().take(3).collect(),
-                Adjustment::HueSaturation { ranges, .. } => adjust::hue_range_tables(ranges).into_iter().collect(),
+                Adjustment::HueSaturation { ranges, .. } => adjust::hue_range_tables(ranges, depth == SampleType::U8).into_iter().collect(),
                 Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity } => {
                     let curves = adjust::BalanceCurve::rgb([*shadows, *midtones, *highlights], *preserve_luminosity);
                     (0..3).map(|ch| (0..4096).map(|k| curves[ch].eval(k as f32 / 4095.0)).collect()).collect()
@@ -515,8 +515,10 @@ fn row_keys_cover_exactly_what_the_rows_are_built_from() {
     // Levels and Curves round to the document's quantum, so their keys hold the depth.
     assert_ne!(key(&levels, SampleType::U8), key(&levels, SampleType::U16));
     assert_ne!(key(&curves, SampleType::U16), key(&curves, SampleType::F32));
-    // Hue/Saturation range tables and Color Balance curves don't depend on depth.
-    assert_eq!(key(&hue_sat, SampleType::U8), key(&hue_sat, SampleType::F32));
+    // Hue/Saturation range tables take the measured edges at 8 bits only (#14744); Color Balance
+    // curves don't depend on depth.
+    assert_ne!(key(&hue_sat, SampleType::U8), key(&hue_sat, SampleType::U16));
+    assert_eq!(key(&hue_sat, SampleType::U16), key(&hue_sat, SampleType::F32));
     assert_eq!(key(&balance, SampleType::U8), key(&balance, SampleType::U16));
     // Dragging the master Hue/Saturation sliders leaves the range tables (and their entry) alone.
     let Adjustment::HueSaturation { ranges, .. } = &hue_sat else { panic!("Hue/Saturation") };

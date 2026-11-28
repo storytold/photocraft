@@ -169,7 +169,8 @@ impl HueRange {
         self.hue == 0.0 && self.saturation == 0.0 && self.lightness == 0.0
     }
 
-    /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1.
+    /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1, on the sliders' own
+    /// ramp: depths other than 8 bits, where the reference's edges were not measured (#14744).
     pub fn weight(&self, deg: f32) -> f32 {
         let [a, b, c, d] = self.bounds;
         // Measure from the range's start so wrap-around ranges (reds) work.
@@ -188,7 +189,45 @@ impl HueRange {
             0.0
         }
     }
+
+    /// [`Self::weight`] in an 8-bit document, where the reference application fades in 0.85° and
+    /// out 0.08° later than the sliders say (#14744): the default reds give 0.14 at hue 320.24 and
+    /// 0.84 at hue 20, and the hard-edged 345/345/15/15 takes hue 15.06 in full but leaves 344.94
+    /// alone.
+    pub fn weight_8bit(&self, deg: f32) -> f32 {
+        let [a, b, c, d] = self.bounds;
+        // Measure from the range's start so wrap-around ranges (reds) work.
+        let rel = |x: f32| if x.is_finite() { (x - a).rem_euclid(360.0) } else { 0.0 };
+        let b = rel(b);
+        let c = rel(c).max(b);
+        let d = rel(d).max(c);
+        // Narrower than the lag between fade-in and fade-out, the shifted edges would cross and
+        // take no hue at all; such a range (a dragged handle can make one) keeps the sliders' ramp.
+        if d < FADE_IN_LAG - FADE_OUT_LAG {
+            return self.weight(deg);
+        }
+        let (up, down) = (rel(deg - FADE_IN_LAG), rel(deg - FADE_OUT_LAG));
+        let rise = if up > d {
+            0.0
+        } else if up >= b {
+            1.0
+        } else {
+            up / b
+        };
+        let fall = if down <= c {
+            1.0
+        } else if down <= d {
+            (d - down) / (d - c)
+        } else {
+            0.0
+        };
+        rise.min(fall)
+    }
 }
+
+/// Degrees the reference application's range fade-in and fade-out sit past the sliders.
+const FADE_IN_LAG: f32 = 0.85;
+const FADE_OUT_LAG: f32 = 0.08;
 
 fn default_hue_ranges() -> [HueRange; 6] {
     HueRange::defaults()
@@ -386,6 +425,10 @@ impl Adjustment {
 }
 
 #[cfg(test)]
+#[path = "adjust_hue_range_edges_tests.rs"]
+mod hue_range_edges_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -396,6 +439,8 @@ mod tests {
         assert_eq!(reds.weight(350.0), 1.0);
         assert!((reds.weight(30.0) - 0.5).abs() < 1e-5);
         assert!((reds.weight(330.0) - 0.5).abs() < 1e-5);
+        assert!((reds.weight_8bit(30.08) - 0.5).abs() < 1e-5);
+        assert!((reds.weight_8bit(330.85) - 0.5).abs() < 1e-5);
         assert_eq!(reds.weight(60.0), 0.0);
         assert_eq!(reds.weight(180.0), 0.0);
         let blues = HueRange::neutral(4);
