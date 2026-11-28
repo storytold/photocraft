@@ -355,3 +355,96 @@ fn leaving_the_window_without_a_grab_says_nothing() {
     assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
     assert_ne!(h.state().ui.status, crate::alt_grab::message());
 }
+
+/// The Alt key press alone: the modifier state stays without Alt (what the platform reported).
+fn alt_key(pressed: bool) -> egui::Event {
+    egui::Event::Key { key: egui::Key::AltLeft, physical_key: Some(egui::Key::AltLeft), pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+fn pointer(p: Pos2, pressed: bool, m: Modifiers) -> egui::Event {
+    egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: m }
+}
+
+/// One frame of raw input holding `events`, as the platform sent them. The harness runs the app's
+/// `raw_input_hook`, which folds the Alt key into them.
+fn frame(h: &mut Harness<'static, Box<PhotocraftApp>>, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    h.step();
+}
+
+/// How a touchpad tap with the Alt key down can reach the app: the groupings of the Alt press,
+/// the hover, the press and the release into frames.
+#[derive(Clone, Copy, Debug)]
+enum Touch {
+    /// Alt, then the hover, then press and release in one frame (a quick tap).
+    QuickTap,
+    /// Alt, the press and the release all in one frame.
+    AltAndQuickTap,
+    /// Alt and the hover, then the press in one frame and the release in the next (a click).
+    PressThenRelease,
+    /// Alt let go with the button: its key release arrives in the release's frame.
+    AltReleasedWithTheButton,
+}
+
+const TAPS: [Touch; 4] = [Touch::QuickTap, Touch::AltAndQuickTap, Touch::PressThenRelease, Touch::AltReleasedWithTheButton];
+
+/// Play `tap` at document point (x, y) with the modifier state stale (always `NONE`).
+fn stale_tap(h: &mut Harness<'static, Box<PhotocraftApp>>, tap: Touch, x: f32, y: f32) {
+    let p = screen(h, x, y);
+    let (down, up) = (pointer(p, true, Modifiers::NONE), pointer(p, false, Modifiers::NONE));
+    match tap {
+        Touch::QuickTap => {
+            frame(h, vec![alt_key(true)]);
+            frame(h, vec![egui::Event::PointerMoved(p)]);
+            frame(h, vec![down, up]);
+        }
+        Touch::AltAndQuickTap => {
+            frame(h, vec![egui::Event::PointerMoved(p)]);
+            frame(h, vec![alt_key(true), down, up]);
+        }
+        Touch::PressThenRelease => {
+            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)]);
+            frame(h, vec![down]);
+            frame(h, vec![up]);
+        }
+        Touch::AltReleasedWithTheButton => {
+            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)]);
+            frame(h, vec![down]);
+            frame(h, vec![alt_key(false), up]);
+        }
+    }
+    frame(h, vec![alt_key(false)]);
+    h.run_steps(2);
+}
+
+/// With the modifier state missing Alt (the cause: without the fold in `raw_input_hook` the same
+/// tap paints), the Alt key's own events make every grouping sample.
+#[test]
+fn a_touchpad_tap_with_a_stale_modifier_state_samples_with_the_brush() {
+    for tool in [Tool::Brush, Tool::Pencil] {
+        for tap in TAPS {
+            let mut h = harness(two_colours());
+            h.state_mut().ui.tool = tool;
+            h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+            let rev = h.state().session.active().unwrap().revision;
+            stale_tap(&mut h, tap, 50.0, 50.0);
+            let what = format!("{tool:?} {tap:?}");
+            assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "sampled red: {what}");
+            assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted: {what}");
+        }
+    }
+}
+
+#[test]
+fn a_touchpad_tap_with_a_stale_modifier_state_sets_the_clone_source() {
+    for tap in TAPS {
+        let mut h = harness(two_colours());
+        h.state_mut().ui.tool = Tool::CloneStamp;
+        h.state_mut().ui.tool_options.clone_sample = "all".into();
+        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
+        let rev = h.state().session.active().unwrap().revision;
+        stale_tap(&mut h, tap, 150.0, 50.0);
+        assert!(h.state().session.presets.clone.active().source.is_some(), "⌥-click set the source: {tap:?}");
+        assert_eq!(h.state().session.active().unwrap().revision, rev, "the tap only set the source, it painted nothing: {tap:?}");
+    }
+}

@@ -297,6 +297,9 @@ impl eframe::App for PhotocraftApp {
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         #[cfg(not(target_arch = "wasm32"))]
         self.withdraw_stale_input(ctx);
+        // The Alt key's own press and release decide ⌥ for the pointer events after them: on Windows
+        // a touchpad click can carry a modifier state that misses a held Alt (#10544).
+        crate::alt_keys::fold_alt(ctx, raw_input);
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
