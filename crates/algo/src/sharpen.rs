@@ -50,5 +50,26 @@ pub(crate) fn smart(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32,
 }
 
 pub(crate) fn high_pass(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> {
+    if let Some(boxes) = crate::blur::box_widths(&crate::FilterParams::HighPass { radius }) {
+        let mut blurred = crate::blur::box_passes(src, out, ctx.alpha, &boxes);
+        high_pass_residual(&mut blurred, &src.crop(out), src.ch, ctx.alpha);
+        return blurred;
+    }
     with_blur(src, out, ctx, radius, |o, b| 0.5 + (o - b))
+}
+
+/// Turn straight blurred colours into the residual before mixing the selection.
+pub(crate) fn high_pass_residual(blurred: &mut [f32], original: &[f32], n: usize, alpha: bool) {
+    for (dst, src) in blurred.chunks_exact_mut(n).zip(original.chunks_exact(n)) {
+        if alpha && src[n - 1] <= 0.0 {
+            dst.copy_from_slice(src);
+            continue;
+        }
+        for c in 0..n - usize::from(alpha) {
+            dst[c] = 0.5 + (src[c] - dst[c]);
+        }
+        if alpha {
+            dst[n - 1] = src[n - 1];
+        }
+    }
 }

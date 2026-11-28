@@ -292,6 +292,62 @@ fn high_pass_of_flat_is_mid_gray() {
 }
 
 #[test]
+fn wide_high_pass_stays_close_to_the_gaussian_residual_at_an_edge() {
+    let area = Rect::new(-128, 0, 128, 1);
+    let mut src = flat(SampleType::F32, area, [0.25, 0.25, 0.25, 1.0]);
+    src.fill_rect(Rect::new(0, 0, 128, 1), &[0.75, 0.75, 0.75, 1.0]);
+    let radius = 64.0;
+    let high = apply_in(&src, &FilterParams::HighPass { radius }, area, area, None, area);
+    // A vertical step repeated at the layer edges reduces exact Gaussian convolution to one axis.
+    let k = blur::gaussian_kernel(radius);
+    for x in area.x0..area.x1 {
+        let blurred: f32 = k.iter().enumerate().map(|(i, w)| w * if x + i as i32 >= (k.len() / 2) as i32 { 0.75 } else { 0.25 }).sum();
+        assert!((high.pixel(x, 0)[0] - (0.5 + src.pixel(x, 0)[0] - blurred)).abs() < 0.01, "x={x}");
+    }
+}
+
+#[test]
+fn wide_high_pass_discards_the_last_band_on_cancel() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let src = flat(SampleType::F32, R, [0.9, 0.1, 0.4, 1.0]);
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::Relaxed);
+    // This small image fits in one band. Cancel when its writeback reports progress.
+    let progress = |fraction| {
+        if fraction > 0.0 && fraction < 1.0 {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    };
+    let ctl = photocraft_raster::Interrupt::new(&cancel, &progress);
+    assert!(apply_tiled_with(&src, &FilterParams::HighPass { radius: 64.0 }, R, R, None, 64, Some(R), &ctl).is_none());
+}
+
+#[test]
+fn maximum_high_pass_radius_preserves_alpha_and_mixes_the_residual() {
+    let area = Rect::new(7, 9, 10, 10);
+    let params = FilterParams::HighPass { radius: 1000.0 };
+    // Even this three-pixel layer used to request over a GiB before running the filter.
+    assert!(working_bytes(&params, area, area, 4) < 256 << 20);
+    let mut src = Surface::new(PixelFormat::RGBA32F);
+    src.write_region(area, &[0.2, 0.4, 0.6, 0.5, 0.8, 0.6, 0.4, 1.0, 0.9, 0.8, 0.7, 0.0]);
+    let half = Surface::with_default(PixelFormat::new(photocraft_color::ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+    let low = apply_in(&src, &FilterParams::GaussianBlur { radius: 1000.0 }, area, area, None, area);
+    let high = apply_in(&src, &params, area, area, Some(&half), area);
+    for x in area.x0..area.x1 {
+        let (o, b, h) = (src.pixel(x, 9), low.pixel(x, 9), high.pixel(x, 9));
+        assert_eq!(h[3], o[3]);
+        if o[3] == 0.0 {
+            assert_eq!(h, o);
+            continue;
+        }
+        for c in 0..3 {
+            assert!((h[c] - (o[c] + 0.5 + o[c] - b[c]) * 0.5).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
 fn noise_is_deterministic_monochrome_and_centred() {
     let s = flat(SampleType::F32, R, [0.5, 0.5, 0.5, 1.0]);
     let p = FilterParams::AddNoise { amount: 50.0, distribution: Distribution::Uniform, monochromatic: true, seed: 1 };

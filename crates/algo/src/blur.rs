@@ -175,6 +175,9 @@ const MAX_BOX_RADIUS: f32 = 16384.0;
 /// direct kernel (small radii, where the kernel is quicker).
 pub(crate) fn box_widths(params: &FilterParams) -> Option<Vec<usize>> {
     match *params {
+        // High Pass uses the same wide Gaussian approximation as Gaussian Blur.
+        // Keep its existing direct kernel for ordinary sharpening radii.
+        FilterParams::HighPass { radius } if (64.0..=1000.0).contains(&radius) => Some(boxes_for_gauss(radius, 3)),
         FilterParams::GaussianBlur { radius } if radius > 4.0 => Some(boxes_for_gauss(radius, 3)),
         FilterParams::BoxBlur { radius } => {
             // Capped: the line scratch grows with the radius, and `2 * r + 1` must not overflow
@@ -381,7 +384,7 @@ fn strips(out: Rect) -> impl Iterator<Item = Rect> {
 const _: () = assert!(photocraft_geom::TILE_SIZE % STRIP == 0);
 
 /// [`box_blur`] of an image (edges repeated) into one interleaved buffer for `out`.
-fn box_passes(src: &Image, out: Rect, alpha: bool, boxes: &[usize]) -> Vec<f32> {
+pub(crate) fn box_passes(src: &Image, out: Rect, alpha: bool, boxes: &[usize]) -> Vec<f32> {
     let n = src.ch;
     let read = |r: Rect, buf: &mut Vec<f32>| {
         buf.clear();
