@@ -15,9 +15,10 @@ class TestClear(unittest.TestCase):
         jobs = [{'name': 'gate / lint (ubuntu-24.04)'}, {'name': 'gate / build (ubuntu-24.04)'}]
         self.assertEqual(clear.build_job(jobs), jobs[1])
 
-    def test_only_rolling_crates_entries_are_deleted(self):
+    def test_only_linux_rolling_crates_entries_are_deleted(self):
         caches = [
             {'key': 'v2-rust-ab-gate-crates-Linux-x64-1-1-Linux-x64-d8-99'},
+            {'key': 'v2-rust-ab-gate-crates-Windows_NT-x64-1-1-Windows_NT-x64-ae-88'},
             {'key': 'v2-rust-ab-gate-Windows_NT-x64-ae-88'},
             {'key': 'v1-rust-corpus-corpus-Linux-x64-62-99'},
         ]
