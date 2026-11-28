@@ -1960,15 +1960,17 @@ fn quilt_of(d: &Descriptor) -> Option<&Descriptor> {
     get_desc(d, "quiltWarp")
 }
 
-/// A split warp of more patches along a side than a `quiltWarp` is read with (Warp Grid 64,
-/// then one more split) is written as no warp, with a message, framed by the source rect, so
+/// A split warp with more patches along a side than `quiltWarp` supports is written
+/// without a warp, with a warning, framed by the source rect, so
 /// the layer reopens where it was. Before, its `quiltWarp` was refused on reopen while `Trnf`
 /// still framed its control box: the layer came back stretched and shifted.
 #[test]
 fn a_split_warp_past_the_quilt_limit_keeps_its_placement() {
     use photocraft_geom::warp::BezierMesh;
-    let mut mesh = BezierMesh::identity([0.0, 0.0, 50.0, 25.0], crate::blocks::QUILT_MAX_PATCHES, 1);
-    assert!(mesh.split_u(0.005));
+    // Build oversized input directly because the editor now refuses splits at the limit.
+    let cols = crate::blocks::QUILT_MAX_PATCHES + 1;
+    let us = (0..=cols).map(|i| i as f64 / cols as f64).collect();
+    let mut mesh = BezierMesh::fit(&|s, t| [50.0 * s, 25.0 * t], us, vec![0.0, 1.0]);
     mesh.points[0] = [-10.0, -5.0];
     let warp = Warp::custom(mesh, [0.0, 0.0, 50.0, 25.0]);
     let transform = Affine { m: [2.0, 0.0, 0.0, 2.0, 120.0, 210.0] };
