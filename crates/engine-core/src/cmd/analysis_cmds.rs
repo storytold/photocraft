@@ -1104,6 +1104,10 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             let r = d.measurement.ruler.ok_or_else(|| EngineError::Other("no ruler line to measure".into()))?;
             let info = ruler_info(&r, &d.measurement.scale);
             let mut m = base_row(s, &d, source, &label, &now);
+            // The protractor needs its own summary and per-leg rows (#16511).
+            if r.protractor.is_none() {
+                m.insert("count".into(), json!(1));
+            }
             m.insert("length".into(), info["length"].clone());
             m.insert("angle".into(), info["angle"].clone());
             rows.push(m);
