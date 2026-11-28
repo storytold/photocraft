@@ -3,7 +3,8 @@ use super::*;
 use photocraft_color::{PixelFormat, SampleType};
 
 // Retain the previous traversal as a value oracle, including its alpha math.
-fn legacy_mosaic(src: &Image, out: Rect, ctx: &Ctx, cell: f32) -> Vec<f32> {
+// CLONE_CACHE keeps the historical per-pixel clone in the ignored performance comparison.
+fn legacy_mosaic<const CLONE_CACHE: bool>(src: &Image, out: Rect, ctx: &Ctx, cell: f32) -> Vec<f32> {
     let n = src.ch;
     let cs = cell.max(1.0).round() as i32;
     let b = ctx.bounds;
@@ -39,7 +40,11 @@ fn legacy_mosaic(src: &Image, out: Rect, ctx: &Ctx, cell: f32) -> Vec<f32> {
                 }
                 cache = Some((cx, cy, acc));
             }
-            res.extend_from_slice(&cache.as_ref().map(|c| c.2.clone()).unwrap_or_default());
+            if CLONE_CACHE {
+                res.extend_from_slice(&cache.as_ref().map(|c| c.2.clone()).unwrap_or_default());
+            } else {
+                res.extend_from_slice(cache.as_ref().map_or(&[], |(_, _, samples)| samples.as_slice()));
+            }
         }
     }
     res
@@ -74,7 +79,7 @@ fn mosaic_matches_legacy_for_partial_cells_and_offset_bounds() {
                         Rect::new(b.x0, b.y0, b.x1, b.y0),
                     ] {
                         for size in [0.0, 1.0, 1.5, 2.0, 7.0, 13.0, 50.0, 80.0, 180.0] {
-                            let expected = legacy_mosaic(&src, output, &ctx, size);
+                            let expected = legacy_mosaic::<false>(&src, output, &ctx, size);
                             let got = stylize::mosaic(&src, output, &ctx, size);
                             assert_eq!(got.len(), expected.len());
                             assert!(
@@ -104,7 +109,7 @@ fn mosaic_preserves_depth_color_alpha_and_tile_independence() {
                 for cell_size in [6.0, 13.0, 50.0, 180.0] {
                     let params = FilterParams::Mosaic { cell_size };
                     let mut expected = Surface::new(fmt);
-                    expected.write_region(b, &legacy_mosaic(&src, b, &ctx, cell_size));
+                    expected.write_region(b, &legacy_mosaic::<false>(&src, b, &ctx, cell_size));
                     let bytes = expected.to_interleaved(b);
                     for tile in [17, 256] {
                         for extent in [None, Some(b)] {
@@ -146,7 +151,7 @@ fn mosaic_row_reads_preserve_hdr_alpha_and_partial_source_bits() {
         for alpha in [false, true] {
             let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha };
             for cell in [2.0, 4.0, 10.0, 50.0, 180.0] {
-                let expected = legacy_mosaic(&src, bounds, &ctx, cell);
+                let expected = legacy_mosaic::<false>(&src, bounds, &ctx, cell);
                 let got = stylize::mosaic(&src, bounds, &ctx, cell);
                 assert_eq!(got.len(), expected.len());
                 assert!(got.iter().zip(&expected).all(|(a, b)| a.to_bits() == b.to_bits()));
@@ -164,7 +169,7 @@ fn mosaic_24mp_release_comparison() {
     let ctx = Ctx { bounds: rect, mode: ColorMode::Rgb, alpha: true };
     for cell in [50.0, 180.0] {
         let start = Instant::now();
-        let expected = legacy_mosaic(&src, rect, &ctx, cell);
+        let expected = legacy_mosaic::<true>(&src, rect, &ctx, cell);
         let old_ms = start.elapsed().as_secs_f64() * 1000.0;
         let start = Instant::now();
         let got = stylize::mosaic(&src, rect, &ctx, cell);
