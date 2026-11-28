@@ -18,6 +18,7 @@ use craft::keymap::{Chord, Key, Mods};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
 use craft::ui::runtime::env::Label;
+use craft::ui::runtime::windows::WindowHost;
 use photocraft_engine::float_cmds::Floating;
 use serde_json::json;
 
@@ -37,6 +38,8 @@ enum Kind {
 /// The gesture in progress, from the press to the release.
 struct Run {
     kind: Kind,
+    /// Ctrl started this move and has been held continuously since the press.
+    move_ctrl_held: bool,
     /// The ⇧ lock over the pointer's travel; `None` for a marquee or a refused press.
     gesture: Option<MoveGesture>,
     /// The press, in document units.
@@ -57,7 +60,18 @@ struct Run {
 
 impl Run {
     fn plain(kind: Kind, start: [f64; 2]) -> Self {
-        Run { kind, gesture: None, start, box_rect: None, delta: [0.0; 2], offset: (0, 0), moved: false, prompted: false, floating_before: None }
+        Run {
+            kind,
+            move_ctrl_held: false,
+            gesture: None,
+            start,
+            box_rect: None,
+            delta: [0.0; 2],
+            offset: (0, 0),
+            moved: false,
+            prompted: false,
+            floating_before: None,
+        }
     }
 }
 
@@ -245,6 +259,7 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
         return (ToolAction::Claimed, Some(Run::plain(Kind::Refused, p)));
     }
     let gesture = MoveGesture::press(&style, Point::new(p[0], p[1]), mods, Directions::Eight);
+    let move_ctrl_held = mods.cmd && !WindowHost::of(app.ctx()).shell().os.is_mac();
     // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating piece,
     // from anywhere.
     if crate::move_ui::moves_selected_pixels_with(app, Tool::Move) {
@@ -254,6 +269,7 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
         }
         crate::move_mods::begin(app, mods.alt);
         let mut run = Run::plain(Kind::Pixels, p);
+        run.move_ctrl_held = move_ctrl_held;
         run.gesture = Some(gesture);
         run.box_rect = moving_box(app, true);
         run.floating_before = before;
@@ -262,6 +278,7 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
     // PLAN: assumed `move_mods::begin(app, alt)` (tools-w65) latches ⌥ for the duplicate.
     crate::move_mods::begin(app, mods.alt);
     let mut run = Run::plain(Kind::Layers, p);
+    run.move_ctrl_held = move_ctrl_held;
     run.gesture = Some(gesture);
     run.box_rect = moving_box(app, false);
     (ToolAction::Claimed, Some(run))
@@ -282,7 +299,13 @@ fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mu
     }
     let mut delta = gesture.value().delta;
     if let Some(b) = run.box_rect {
+        // The initial Ctrl belongs to Move/Auto-Select. Mask it only for the snap call.
+        let mods = cx.mods;
+        if run.move_ctrl_held {
+            cx.mods.cmd = false;
+        }
         delta += cx.snap_rect(kurbo::Rect::new(b[0] + delta.x, b[1] + delta.y, b[2] + delta.x, b[3] + delta.y));
+        cx.mods = mods;
     }
     if run.kind == Kind::Layers {
         // PLAN: assumed `move_mods::moved(app, screen_len)` (tools-w65) duplicates once past its threshold.
@@ -301,6 +324,13 @@ fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mu
 }
 
 impl CanvasTool for MoveRun<'_> {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        if let Some(run) = self.state.run.as_mut() {
+            // A release can happen without moving the pointer.
+            run.move_ctrl_held &= cx.mods.cmd;
+        }
+    }
+
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         let Some(space) = cx.space() else { return ToolAction::Ignored };
         let at = space.view.to_doc(pointer.pos);
