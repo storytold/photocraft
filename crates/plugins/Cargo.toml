@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 # Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0). Without `wat` (text parsing is test-only)
 # and memory64; `validate` keeps full module validation on.
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
+wasmi_core = { version = "2.0.0", default-features = false, features = ["std"] }
 
 # Bands run in parallel on native; wasm builds stay single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
