@@ -1,4 +1,4 @@
-use craft::ui::dialog::{DialogId, StackDialog as _};
+use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::HostedImageSize;
 use craft::ui::runtime::env::UnitKind;
 use serde_json::{Value, json};
@@ -216,4 +216,29 @@ fn image_size_draws_width_and_height_with_values_and_unit() {
     h.run_steps(4);
     assert!(value_of(&h, "Width").iter().any(|v| v == "800"), "Width: {:?}", value_of(&h, "Width"));
     assert!(value_of(&h, "Height").iter().any(|v| v == "500"), "Height follows: {:?}", value_of(&h, "Height"));
+}
+
+#[test]
+fn canvas_size_reopens_a_percent_step_against_the_current_canvas() {
+    let mut app = app_with(22, 12, 72);
+    let id = open_with(&mut app, CANVAS_COMMAND, &json!({"units":"percent", "height":150})).unwrap();
+    let fields = app.framework.dialogs.get_by_id::<HostedCanvasSize>(id).unwrap().json_fields().unwrap();
+    assert_eq!(fields["unit"], unit(UnitKind::Percent));
+    assert_eq!(fields["height"].as_f64(), Some(150.0));
+    confirm_by_id(&mut app, id);
+    assert_eq!(doc_size(&app), photocraft_doc::Size::new(22, 18));
+}
+
+#[test]
+fn canvas_size_records_percent_units() {
+    let mut app = app_with(30, 20, 72);
+    app.run("actions.record", json!({"name":"Resize"})).unwrap();
+    let id = open_with(&mut app, CANVAS_COMMAND, &json!({"units":"percent", "height":150})).unwrap();
+    confirm_by_id(&mut app, id);
+    app.run("actions.stop", json!({})).unwrap();
+    let action = app.session.actions.list.action(0).unwrap();
+    assert_eq!(action.name, "Resize");
+    let step = action.steps.iter().find(|step| step.command == CANVAS_COMMAND).unwrap();
+    assert_eq!(step.params["units"], "percent");
+    assert_eq!(step.params["height"].as_f64(), Some(150.0));
 }

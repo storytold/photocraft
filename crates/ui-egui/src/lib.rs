@@ -482,6 +482,7 @@ pub struct PhotocraftApp {
     pub(crate) vanishing: Option<vp_ui::VpApp>,
     /// The Layer Style, Select and Mask and parameter dialogs' open targets, one field per family,
     /// keyed by the dialog.
+    pub(crate) canvas_size_percent: Option<[f64; 2]>,
     pub(crate) layer_style_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId)>,
     pub(crate) select_mask_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId, std::sync::Arc<select_mask_ui::PcSelectMaskSource>)>,
     /// The Guide Layout dialog's document.

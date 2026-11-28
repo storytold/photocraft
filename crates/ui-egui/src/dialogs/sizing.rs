@@ -6,7 +6,7 @@
 
 use craft::behavior::{Anchor9, PixelSize};
 use craft::ui::contract::Bind;
-use craft::ui::dialog::{DialogId, DialogResult, dialog_id};
+use craft::ui::dialog::{DialogId, DialogResult, StackDialog, dialog_id};
 use craft::ui::patterns::form_dialogs::{
     CanvasExtension, CanvasSize, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize, HostedImageSize, ImageSize, ImageSizeResult, ImageSizeValues, Resample,
 };
@@ -148,9 +148,15 @@ pub(crate) fn open(app: &mut PhotocraftApp, command: &str) -> Option<DialogId> {
 pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) -> Option<DialogId> {
     let prefs = app.session.prefs();
     let ur = &prefs.units_and_rulers;
-    let seeded = params.get("width").is_some() || params.get("height").is_some();
-    // A recorded size is in pixels, whatever the ruler unit.
-    let unit = if seeded { UnitKind::Pixels } else { pref_unit(ur.rulers) };
+    let seeded = params.get("width").is_some() || params.get("height").is_some() || params.get("units").is_some();
+    let percent = command == CANVAS_COMMAND && params.get("units").and_then(Value::as_str) == Some("percent");
+    let unit = if percent {
+        UnitKind::Percent
+    } else if seeded {
+        UnitKind::Pixels
+    } else {
+        pref_unit(ur.rulers)
+    };
     let points = ur.point_size.per_inch();
     let columns = ColumnSize::new(ur.column_width, ur.gutter);
     let interpolation = prefs.general.image_interpolation;
@@ -173,9 +179,10 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
     } else {
         let values =
             CanvasSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).has_background(d.background().is_some()).column_size(columns);
+        app.canvas_size_percent = None;
         app.framework
             .dialogs
-            .open(HostedCanvasSize::new(values, move |values: Bind<'_, CanvasSizeValues>| CanvasSize::new(values).bytes_per_pixel(bytes_per_pixel)))
+            .open(HostedCanvasSize::new(values, move |values: Bind<'_, CanvasSizeValues>| CanvasSize::new(values).bytes_per_pixel(bytes_per_pixel)).held_ok())
     };
     seed(app, id, command == IMAGE_COMMAND, params);
     Some(id)
@@ -187,7 +194,7 @@ fn seed(app: &mut PhotocraftApp, id: DialogId, image: bool, params: &Value) {
     // Resample first: it decides which fields take input.
     let keys: &[&str] = if image { &["resample", "resolution", "width", "height"] } else { &["width", "height"] };
     for key in keys {
-        let Some(value) = params.get(*key) else { continue };
+        let Some(value) = params.get(*key).filter(|value| !value.is_null() || *key == "resample") else { continue };
         let value = match (*key, value.as_str()) {
             ("resample", Some("none")) => Value::Null,
             ("resample", Some(name)) => resample_from_key(name).and_then(|m| serde_json::to_value(m).ok()).unwrap_or_else(|| value.clone()),
@@ -209,7 +216,15 @@ fn answer_held(app: &mut PhotocraftApp) {
     }
     let id = dialog_id(HostedCanvasSize::KEY);
     if let Some(result) = app.framework.dialogs.get_mut_by_id::<HostedCanvasSize>(id).and_then(HostedCanvasSize::take_ok) {
-        let answer = crate::actions::check_editor(app, id, CANVAS_COMMAND, &canvas_params(&result));
+        // The result reports the shared unit. The width row may independently show Columns.
+        app.canvas_size_percent = app.framework.dialogs.get_by_id::<HostedCanvasSize>(id).and_then(StackDialog::json_fields).and_then(|fields| {
+            let width_unit = serde_json::from_value::<UnitKind>(fields["widthUnit"].clone()).ok()?;
+            if width_unit != UnitKind::Percent || result.unit != UnitKind::Percent || result.relative {
+                return None;
+            }
+            Some([fields["width"].as_f64()?, fields["height"].as_f64()?])
+        });
+        let answer = crate::actions::check_editor(app, id, CANVAS_COMMAND, &canvas_params(&result, app.canvas_size_percent));
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedCanvasSize>(id) {
             dialog.answer_ok(answer.map_err(Label::from));
         }
@@ -229,9 +244,10 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     }
     if let Some(result) = app.framework.dialogs.take::<HostedCanvasSize>() {
         let params = match result {
-            DialogResult::Ok(r) => Some(canvas_params(&r)),
+            DialogResult::Ok(r) => Some(canvas_params(&r, app.canvas_size_percent)),
             _ => None,
         };
+        app.canvas_size_percent = None;
         finish(app, dialog_id(HostedCanvasSize::KEY), CANVAS_COMMAND, params);
     }
 }
@@ -250,14 +266,20 @@ fn image_params(app: &PhotocraftApp, r: &ImageSizeResult) -> Value {
 }
 
 /// The `image.canvasSize` parameters of a result: the size is absolute.
-fn canvas_params(r: &CanvasSizeResult) -> Value {
-    json!({
+fn canvas_params(r: &CanvasSizeResult, percent: Option<[f64; 2]>) -> Value {
+    let mut params = json!({
         "width": r.size.width,
         "height": r.size.height,
         "relative": false,
         "anchor": anchor_key(r.anchor),
         "extensionColor": extension_param(&r.extension),
-    })
+    });
+    if let Some([width, height]) = percent {
+        params["units"] = json!("percent");
+        params["width"] = json!(width);
+        params["height"] = json!(height);
+    }
+    params
 }
 
 /// Runs `command` with `params` (`None`: the dialog was cancelled), then continues or abandons the
