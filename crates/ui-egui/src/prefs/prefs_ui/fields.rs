@@ -222,6 +222,7 @@ fn label_override(key: &str) -> Option<&'static str> {
         "automaticallyCheckUpdates" => "Automatically Check for Updates",
         // Units & Rulers › Column Size (in points), as translated for New Guide Layout.
         "columnWidth" => "Column width",
+        "ctrlWheelZooms" => "Zoom with Ctrl + Scroll Wheel",
         // These controls appear only for WebP, so they reuse the translated labels.
         "webpLossless" => "Lossless",
         "webpQuality" => "Quality",

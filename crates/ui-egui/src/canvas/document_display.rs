@@ -9,7 +9,8 @@ use craft::behavior::{CanvasView, PixelSize};
 use craft::imaging::ui::SelectionOverlay;
 use craft::ui::canvas::{
     Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, Extent, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor, PixelRect,
-    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, WheelScheme, canvas_space, easing_view, ruler_guide, tool_pass,
+    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, WheelAction, WheelNavigation, WheelScheme, canvas_space, easing_view,
+    ruler_guide, tool_pass,
 };
 use craft::ui::canvas_controls::{GuidesOutput, SelectionOutline};
 use craft::ui::contract::{Bind, Props, Show, ShowContainer};
@@ -319,6 +320,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     // What the tool host did; none in a measuring run, where it does not run.
     let mut hosted: Option<ToolHostResponse> = None;
     let mut overlay_context = None;
+    let saved_zoom = view.zoom;
+    let saved_center = view.center;
     let shown = canvas.show_at(ui, rect, |ui, body| {
         let Some(space) = canvas_space(&body.env) else { return };
         pasteboards(app, ui, body.rect, idx, border, label.clone());
@@ -454,6 +457,21 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         super::rulers::run_rulers(app, rulers);
     }
     let canvas_output = shown.output;
+    // Preferences › General › Zoom with Ctrl + Scroll Wheel. Off, the canvas keeps Photoshop's
+    // sideways pan. On, a whole Windows/Linux Ctrl notch zooms about the pointer and Shift+Ctrl
+    // takes one zoom-ladder step. A fractional Ctrl wheel stays the canvas's pinch or pan.
+    // The notch is recorded only when this canvas's settle moved the view sideways: that is the
+    // shared wheel service handing the wheel to this canvas (`take_wheel`). A modal, a popup, or a
+    // focused control that kept the wheel leaves the view where it was, so the document does not zoom.
+    // Navigator, Liquify and Camera Raw use their own canvases, so they keep the sideways pan.
+    // A measuring pass can be the one that sees the wheel. The notch is remembered per canvas and
+    // applied on the pass that keeps the view.
+    if app.session.prefs().general.ctrl_wheel_zooms
+        && canvas_output.view.as_ref().is_some_and(|after| canvas_took_the_ctrl_pan(&given, after))
+        && let Some(notch) = ctrl_mouse_notch_this_pass(pass.ctx, rect)
+    {
+        pass.ctx.data_mut(|data| data.insert_temp(ctrl_notch_id(id), notch));
+    }
     let response = hosted.unwrap_or_default();
     // The host also echoes the canvas's view (for example when rulers inset its rect). Only an actual tool
     // edit takes precedence over the scroll bars or compass.
@@ -461,7 +479,76 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     if let Some(next) = tool_view.or(turned).or(canvas_output.view) {
         view.set_from(&next, ppp);
     }
+    // After every other writer, so a scrollbar or tool copy of the pre-zoom view cannot put it back.
+    if !measuring && let Some(notch) = pass.ctx.data_mut(|data| data.remove_temp::<CtrlNotch>(ctrl_notch_id(id))) {
+        view.zoom = saved_zoom;
+        view.center = saved_center;
+        apply_ctrl_notch(view, pass, notch);
+    }
     Shown { output: canvas_output, response, guides, overlay_context }
+}
+
+/// A whole Ctrl mouse notch this pass, when every wheel event is one: `steps` notches (positive zooms
+/// in) and whether Shift asks for the zoom ladder. A fraction, Alt, or Mac ⌘ is not this gesture.
+fn ctrl_mouse_notch_this_pass(ctx: &egui::Context, rect: Rect) -> Option<CtrlNotch> {
+    ctx.input(|input| {
+        let at = input.pointer.hover_pos().filter(|pos| rect.contains(*pos))?;
+        let mut steps = 0i32;
+        let mut snap = None;
+        let mut saw = false;
+        for event in &input.raw.events {
+            let egui::Event::MouseWheel { unit, delta, modifiers, .. } = event else { continue };
+            if *unit != egui::MouseWheelUnit::Line || !modifiers.ctrl || modifiers.mac_cmd || modifiers.alt {
+                return None;
+            }
+            if !delta.x.is_finite() || !delta.y.is_finite() || delta.x.fract() != 0.0 || delta.y.fract() != 0.0 {
+                return None;
+            }
+            let lines = delta.x + delta.y;
+            if lines == 0.0 || !(-10.0..=10.0).contains(&lines) {
+                return None;
+            }
+            let this_snap = modifiers.shift;
+            if snap.is_some_and(|held| held != this_snap) {
+                return None;
+            }
+            snap = Some(this_snap);
+            steps = steps.saturating_add(lines as i32);
+            saw = true;
+        }
+        if !saw || steps == 0 { None } else { Some(CtrlNotch { steps, snap: snap.unwrap_or(false), at }) }
+    })
+}
+
+/// One opt-in Ctrl notch over the document canvas.
+#[derive(Clone, Copy, Default)]
+struct CtrlNotch {
+    steps: i32,
+    snap: bool,
+    at: Pos2,
+}
+
+fn ctrl_notch_id(canvas: egui::Id) -> egui::Id {
+    egui::Id::unique("pc-ctrl-wheel-notch").with(canvas)
+}
+
+/// The canvas settle moved `before` sideways and left the zoom alone: a Ctrl or Shift+Ctrl wheel
+/// the shared wheel service gave this canvas. Another view change (a fit, a vertical pan, a pinch)
+/// is not this gesture.
+fn canvas_took_the_ctrl_pan(before: &CanvasView, after: &CanvasView) -> bool {
+    let zoom_held = (after.zoom - before.zoom).abs() <= 1e-9 * after.zoom.max(1.0);
+    let sideways = (after.center.x - before.center.x).abs() > 1e-3;
+    zoom_held && sideways
+}
+
+/// Zooms `view` by `notch`, about the pointer, undoing the canvas's own Ctrl pan or pinch for this pass.
+fn apply_ctrl_notch(view: &mut View, pass: &CanvasPass<'_>, notch: CtrlNotch) {
+    let mut canvas = view.canvas_view(pass.rect, pass.ppp, pass.flip, pass.aspect);
+    let action = if notch.snap { WheelAction::SnapZoom(notch.steps) } else { WheelAction::Zoom(WheelNavigation::NOTCH.powi(notch.steps)) };
+    let size = Size::new(f64::from(pass.doc.size.width), f64::from(pass.doc.size.height));
+    if WheelNavigation::apply(&mut canvas, action, notch.at, size, pass.ppp, &craft::behavior::canvas::ZoomScheme::PHOTOSHOP) {
+        view.set_from(&canvas, pass.ppp);
+    }
 }
 
 /// The document's pasteboard, and for an artboard document a second one over the boards that leaves the shown layers

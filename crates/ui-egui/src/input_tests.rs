@@ -757,6 +757,68 @@ fn wheel_zoom_over_the_pasteboard_keeps_the_image_in_view() {
     }
 }
 
+/// Ctrl + a whole mouse notch pans sideways until Preferences › General › Zoom with Ctrl + Scroll
+/// Wheel is on. Then the notch zooms ×1.1 about the pointer and Shift+Ctrl takes one ladder step.
+#[test]
+fn ctrl_wheel_zooms_only_when_the_preference_is_on() {
+    let mut h = harness();
+    let canvas = h.state().last_canvas_rect;
+    h.hover_at(canvas.center());
+    h.run_steps(2);
+    let z0 = zoom(&h);
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    wheel(&h, 1.0, ctrl);
+    h.run_steps(3);
+    assert!((zoom(&h) - z0).abs() < 1e-3, "Ctrl+wheel still pans until the preference is on: {z0} -> {}", zoom(&h));
+
+    h.state_mut().session.edit_prefs(|p| p.general.ctrl_wheel_zooms = true);
+    let z1 = zoom(&h);
+    wheel(&h, 1.0, ctrl);
+    h.run_steps(3);
+    let ratio = zoom(&h) / z1;
+    assert!((ratio - 1.1).abs() < 0.02, "a Ctrl notch zooms ×1.1: {ratio}");
+
+    let z2 = zoom(&h);
+    wheel(&h, -1.0, Modifiers { shift: true, ..ctrl });
+    h.run_steps(3);
+    let size = craft::behavior::kurbo::Size::new(400.0, 300.0);
+    let want = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.step(f64::from(z2), -1, size) as f32;
+    assert!((zoom(&h) - want).abs() < 0.05, "Shift+Ctrl takes one ladder step: {} want {want}", zoom(&h));
+}
+
+/// A modal that holds the wheel leaves the document view where it is. The same Ctrl notch zooms
+/// once that modal is gone and the canvas receives the wheel.
+#[test]
+fn ctrl_wheel_zoom_waits_until_the_canvas_receives_the_wheel() {
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| p.general.ctrl_wheel_zooms = true);
+    let canvas = h.state().last_canvas_rect;
+    // The alert is a modal over the middle of the window. The pointer stays on the document, off that dialog.
+    h.hover_at(pos2(canvas.left() + 24.0, canvas.top() + 24.0));
+    h.run_steps(2);
+    let z0 = zoom(&h);
+    let center = h.state().ui.views[0].center;
+    crate::dialogs::alerts::alert(h.state_mut(), "The wheel belongs to this dialog.");
+    h.run_steps(3);
+    assert!(h.state().dialog_open(), "the alert is the modal over the canvas");
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    wheel(&h, 1.0, ctrl);
+    h.run_steps(3);
+    assert!((zoom(&h) - z0).abs() < 1e-3, "a modal that kept the wheel does not zoom the document: {z0} -> {}", zoom(&h));
+    assert_eq!(h.state().ui.views[0].center, center, "the document does not pan under the modal either");
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().dialog_open(), "Escape dismisses the alert");
+    h.hover_at(canvas.center());
+    h.run_steps(2);
+    let z1 = zoom(&h);
+    wheel(&h, 1.0, ctrl);
+    h.run_steps(3);
+    let ratio = zoom(&h) / z1;
+    assert!((ratio - 1.1).abs() < 0.02, "the same notch zooms once the canvas has the wheel: {ratio}");
+}
+
 #[test]
 fn assignable_pick_layer_shortcut_follows_transformed_canvas_without_editing() {
     let mut h = harness();
