@@ -12,11 +12,11 @@ The existing canvas eyedropper continues to sample the document while the Color 
 
 ## Pick a color outside PhotoCraft
 
-**Pick screen color** is available in full Color Pickers and compact color-selection popups, including fills, shapes, gradients, layer effects, guides and preferences.
+**Pick screen color** is available in compact color-selection popups, including fills, shapes, gradients, layer effects, guides and preferences. The full Color Picker dialog has no screen button, as in the reference application: while it is open, a click on the canvas samples the image into its new colour.
 
 On X11, Windows and macOS, clicking it takes one snapshot of the connected screens and opens a sampling viewport on each monitor. Move the crosshair over a pixel, use the wheel to change the 11 × 11 pixel loupe from 4× to 24×, then click to select. **Esc** cancels. The center pixel has a black/white outline and its sampled hex value is displayed below the loupe.
 
-A full dialog receives the new color for inspection; **OK** is still required to apply it. Compact popups retain their normal immediate-edit behavior. Existing alpha and additive blending are preserved; float RGB widgets retain their linear RGB storage.
+Compact popups retain their normal immediate-edit behavior. Existing alpha and additive blending are preserved; float RGB widgets retain their linear RGB storage.
 
 Screen snapshots are held in memory, are never written or transmitted by the picker, and are released after selection, cancellation, or a change of document, layer or dialog. The combined capture budget is 64 × 1024 × 1024 pixels (about 67 MP) across at most 16 displays, subject to the GPU's texture-size limit. These limits affect screen sampling only, not document dimensions.
 
@@ -28,7 +28,7 @@ Screen snapshots are held in memory, are never written or transmitted by the pic
 - **macOS:** safe CoreGraphics bindings capture the composed screen and use the snapshot's own ICC profile when available. Screen Recording permission may be required. The existing macOS 11 deployment target is preserved. The window-list capture API is deprecated by Apple, so current macOS releases require explicit manual validation; migration to modern native sampling must also preserve older-app compatibility.
 - **Web:** browsers exposing the standard EyeDropper API use the browser's native sampling/magnification UI. Browser support and zoom controls vary. Unsupported browsers retain document sampling and color fields; external screen sampling is unavailable.
 
-The implementation follows publicly documented Photoshop behavior for the full Type Color Picker and outside-image sampling. PhotoCraft uses an explicit screen-pick action and frozen snapshots rather than Photoshop's press-and-drag gesture.
+The implementation follows publicly documented Photoshop behavior for the full Type Color Picker and outside-image sampling. PhotoCraft's popups use an explicit screen-pick action and frozen snapshots rather than the reference application's press-and-drag gesture; dragging from the canvas to outside the document is tracked in #11755.
 
 ## Verification
 

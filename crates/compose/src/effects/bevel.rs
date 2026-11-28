@@ -281,11 +281,12 @@ pub(super) fn satin_map(shape: &Map, s: &photocraft_doc::effects::Satin) -> Map 
         tent(&mut a, s.size);
         tent(&mut b, s.size);
     }
-    let mut m = Map { w: shape.w, h: shape.h, v: a.v.iter().zip(&b.v).map(|(x, y)| (x - y).abs()).collect() };
+    let m = Map { w: shape.w, h: shape.h, v: a.v.iter().zip(&b.v).map(|(x, y)| (x - y).abs()).collect() };
+    let mut m = apply_lut(m, satin_lut(&s.contour));
     if s.invert {
+        // #14981: Photoshop inverts after the contour, so Invert is the exact opposite of the same Satin without it.
         m = m.map(|v| 1.0 - v);
     }
-    let mut m = apply_lut(m, satin_lut(&s.contour));
     for (v, a) in m.v.iter_mut().zip(&shape.v) {
         *v *= a;
     }

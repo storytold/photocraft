@@ -1,10 +1,19 @@
 use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
-use craft::ui::contract::Bind;
+use crate::dialogs::image_processor_ui;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+
+#[path = "artboard_export_options.rs"]
+mod artboard_export_options;
+pub(crate) use artboard_export_options::nest as nest_artboard_export_options;
+#[path = "artboard_name_options.rs"]
+mod artboard_name_options;
+pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
 // ---------- dialogs and pickers in front of engine commands ----------
 
@@ -48,9 +57,37 @@ fn opened(id: DialogId) -> Value {
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
+    let image_processor = id == image_processor_ui::COMMAND;
+    let calculations = id == crate::dialogs::calculations_ui::COMMAND;
+    if image_processor {
+        image_processor_ui::settings_opened(app.ctx());
+    }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        derive(&key, fields);
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        if image_processor {
+            image_processor_ui::settings_footer(dialog)
+        } else if calculations {
+            dialog.previews(true)
+        } else {
+            dialog
+        }
     })
+}
+
+/// Brings a form's shell keys up to date with the values they follow, before each pass, OK and automation write (the
+/// form's builder runs at each): a row takes one `visible_when` condition, so a row shown by two values is shown by a
+/// shell key that combines them.
+fn derive(id: &str, fields: &mut DialogFields) {
+    if id == artboard_export_options::COMMAND {
+        artboard_export_options::derive(fields);
+    }
+    if id == artboard_name_options::COMMAND {
+        artboard_name_options::derive(fields);
+    }
+    if id == "image.applyImage" {
+        apply_image_mask_derive(fields);
+    }
 }
 
 /// Choice options from `(id, label)` pairs whose labels are `tl!` literals at the call site.
@@ -87,6 +124,12 @@ fn choice(key: &str, label: &'static str, options: Vec<(String, Label)>, default
 /// The file formats the exports to files write.
 fn export_formats() -> Vec<(String, Label)> {
     opts(&[("png", tl!("PNG")), ("jpg", tl!("JPEG")), ("psd", tl!("PSD")), ("tiff", tl!("TIFF")), ("webp", tl!("WebP")), ("bmp", tl!("BMP"))])
+}
+
+/// The reference application's File Type list of Artboards to Files, in its order (#13635). Format names, not
+/// translated.
+fn artboard_formats() -> Vec<(String, Label)> {
+    opts(&[("bmp", "BMP"), ("jpg", "JPEG"), ("pdf", "PDF"), ("psd", "PSD"), ("tga", "Targa"), ("tiff", "TIFF"), ("png8", "PNG-8"), ("png24", "PNG-24")])
 }
 
 /// The blending modes of the channel dialogs.
@@ -140,6 +183,41 @@ fn folder(key: &str, label: &'static str, default: impl Into<String>) -> Param {
 /// export writes what the command writes with no quality (a quality would also make a WebP lossy).
 fn export_quality() -> Param {
     Param::new("quality", tl!("Quality"), ParamKind::optional_number(0.0, 12.0, None, 10.0, 0)).enabled_when("format", "jpg")
+}
+
+/// The boards Export Selected Artboards exports: the selected top-level artboards while an artboard is the active
+/// layer, else none (the checkbox is greyed and every board is exported).
+fn selected_artboards(app: &PhotocraftApp) -> Vec<u64> {
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let is_board = |id: &photocraft_doc::LayerId| st.doc.layers.iter().any(|l| l.id == *id && l.artboard().is_some());
+    if !st.active_layer.as_ref().is_some_and(is_board) {
+        return Vec::new();
+    }
+    st.selected_layers().iter().copied().filter(is_board).map(|id| id.0).collect()
+}
+
+/// Artboards to PDF's Export Selected Artboards (#13647): a checkbox over the command's own `artboards`, the ids of
+/// `selected`. It opens ticked when there are any, else greyed and unticked, and it is set from the selection at every
+/// open (a host-drawn row remembers nothing). Unticked, `artboards` is null and the command exports every board.
+fn export_selected_artboards(selected: Vec<u64>) -> Param {
+    let label = Label::from(tl!("Export Selected Artboards"));
+    let ids = Value::from(selected.clone());
+    let any = !selected.is_empty();
+    let opening = ids.clone();
+    let row = Param::custom("artboards", Label::Empty, move |ui, fields, _| {
+        let ticked = any && matches!(fields.get("artboards"), Some(FieldValue::Json(Value::Array(_))));
+        let out = Checkbox::new(Bind::given(ticked)).label(label.clone()).enabled(any).show(ui);
+        match out.value().copied() {
+            Some(true) if any => fields.set("artboards", FieldValue::Json(ids.clone())),
+            // Kept as null, not removed: a missing key opens ticked again. The command takes null as every board.
+            Some(false) => fields.set("artboards", FieldValue::Json(Value::Null)),
+            _ => {}
+        }
+        out.response().clone()
+    })
+    // Without a row label, so the checkbox names itself, as a check box row does.
+    .full_width();
+    if any { row.opens_with(FieldValue::Json(opening)) } else { row }
 }
 
 /// A document's name without its extension.
@@ -221,21 +299,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered(),
             ])
         }
-        "file.automate.conditionalModeChange" => {
-            let modes = opts(&[
-                ("any", tl!("Any")),
-                ("rgb", tl!("RGB Color")),
-                ("grayscale", tl!("Grayscale")),
-                ("cmyk", tl!("CMYK Color")),
-                ("lab", tl!("Lab Color")),
-                ("indexed", tl!("Indexed Color")),
-                ("bitmap", tl!("Bitmap")),
-                ("duotone", tl!("Duotone")),
-                ("multichannel", tl!("Multichannel")),
-            ]);
-            let targets = opts(&[("rgb", tl!("RGB Color")), ("grayscale", tl!("Grayscale")), ("cmyk", tl!("CMYK Color")), ("lab", tl!("Lab Color"))]);
-            plain(vec![choice("from", tl!("From"), modes, "any"), choice("to", tl!("To"), targets, "rgb")])
-        }
+        crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows()),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             plain(vec![
@@ -244,6 +308,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("visibleOnly", tl!("Visible Layers Only"), ParamKind::bool(true)),
                 choice("format", tl!("File Type"), export_formats(), "png"),
                 export_quality(),
+                // Shown for every file type (#13973).
+                Param::new("iccProfile", tl!("Include ICC Profile"), ParamKind::bool(true)),
                 Param::new("trim", tl!("Trim Layers"), ParamKind::bool(false)),
             ])
         }
@@ -259,7 +325,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
         }
         "file.export.artboardsToFiles" => {
             let (_, _, name) = doc?;
-            plain(vec![
+            let mut rows = vec![
                 folder("dir", tl!("Destination"), dir),
                 Param::new("prefix", tl!("File Name Prefix"), ParamKind::text(stem(&name))),
                 // Include Overlapping Areas / Artboard Content Only, right below the prefix, with no caption (#13629).
@@ -271,15 +337,52 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
-                choice("format", tl!("File Type"), export_formats(), "png"),
-                export_quality(),
-            ])
+                // Include Background in Export, ticked, the last control before the file type (#13631). Unticked, each board's
+                // white fill is left out of PNG, TIFF and WebP files.
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
+                // The reference application's list, PSD chosen when the dialog opens (#13635).
+                choice("format", tl!("File Type"), artboard_formats(), "psd"),
+            ];
+            // Export Options and each file type's settings (#13636; the JPEG quality is one of them), then Include Artboard
+            // Name and its Name Options (#13637). A section's body runs to the next section and hides with it, so both
+            // checkboxes come before the Options section: after it, Include Artboard Name would show only with Export Options.
+            let mut export = artboard_export_options::rows().into_iter();
+            let mut name = artboard_name_options::rows(&crate::type_tool::families()).into_iter();
+            rows.extend(export.next());
+            rows.extend(name.next());
+            rows.extend(export);
+            rows.extend(name);
+            plain(rows)
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             plain(vec![
                 Param::new("path", tl!("File"), ParamKind::text(format!("{dir}/{}.pdf", stem(&name)))),
-                Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
+                export_selected_artboards(selected_artboards(app)),
+                // Include Overlapping Areas / Artboard Content Only, below Export Selected Artboards, with no caption (#13646).
+                Param::new(
+                    "content",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("overlapping", tl!("Include Overlapping Areas")), ("artboard", tl!("Artboard Content Only"))]),
+                        Some("overlapping".to_owned()),
+                    ),
+                ),
+                // Ticked on first open (#13648).
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
+                Param::new("encoding", tl!("Encoding"), ParamKind::radio(opts(&[("zip", tl!("ZIP")), ("jpeg", tl!("JPEG"))]), Some("jpeg".to_owned()))),
+                Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)).enabled_when("encoding", "jpeg"),
+                // The page mode, a radio pair with no caption, Multi-Page Document first and selected (#13649).
+                Param::new(
+                    "mode",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("multiPage", tl!("Multi-Page Document")), ("perArtboard", tl!("Document Per Artboard"))]),
+                        Some("multiPage".to_owned()),
+                    ),
+                ),
+                // Unticked on first open; the form remembers it as the last run left it (#13644).
+                Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),
             ])
         }
         "file.export.dataSetsAsFiles" => {
@@ -374,32 +477,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("detail", tl!("Detail"), ParamKind::number(None, None, 30.0, 1.0, 0)),
             Param::new("saturation", tl!("Saturation"), ParamKind::number(None, None, 20.0, 1.0, 0)),
         ]),
-        "file.automate.lensCorrection" => plain(vec![
-            folder("input", tl!("Source Folder"), dir.clone()),
-            folder("output", tl!("Destination"), format!("{dir}/corrected")),
-            choice(
-                "format",
-                tl!("File Type"),
-                opts(&[("same", tl!("Same as Source")), ("png", tl!("PNG")), ("jpg", tl!("JPEG")), ("psd", tl!("PSD")), ("tiff", tl!("TIFF"))]),
-                "same",
-            ),
-            choice("profile", tl!("Lens Profile"), opts(&[("auto", tl!("Auto")), ("generic", tl!("Generic")), ("none", tl!("None"))]), "auto"),
-            Param::new("correctDistortion", tl!("Geometric Distortion"), ParamKind::bool(true)),
-            Param::new("correctVignette", tl!("Vignette"), ParamKind::bool(true)),
-            Param::new("correctCA", tl!("Chromatic Aberration"), ParamKind::bool(true)),
-            Param::new("autoScale", tl!("Auto Scale Image"), ParamKind::bool(true)),
-            choice(
-                "edge",
-                tl!("Edge"),
-                opts(&[
-                    ("transparency", tl!("Transparency")),
-                    ("edgeExtension", tl!("Edge Extension")),
-                    ("black", tl!("Black Color")),
-                    ("white", tl!("White Color")),
-                ]),
-                "transparency",
-            ),
-        ]),
+        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(dir.clone())),
         "file.scripts.imageProcessor" => plain(vec![
             choice(
                 "source",
@@ -610,8 +688,6 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             ]
         }
         "image.applyImage" => {
-            let mut masks = vec!["none".to_string()];
-            masks.extend(load.iter().cloned());
             // Source layer: Merged, then the pixel layers top to bottom (the engine takes
             // the topmost layer of a name), shown by their own names.
             let mut layers = vec!["merged".to_string()];
@@ -621,7 +697,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 }
             }
             // Scale and Offset only affect Add and Subtract.
-            vec![
+            let mut rows = vec![
                 choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),
                 choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0]),
                 Param::new("sourceInvert", tl!("Invert"), ParamKind::bool(false)),
@@ -630,26 +706,308 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
                 Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-                choice("maskChannel", tl!("Mask Channel"), channels(&masks), "none"),
+            ];
+            rows.extend(apply_image_mask_rows(app));
+            rows
+        }
+        "image.calculations" => {
+            // Image ▸ Calculations lists the channels of the source it reads (#14521), not the shared
+            // list: the form sends no source layer yet, which is Merged, and a merged source has no
+            // Layer Mask or Transparency of its own. Colour modes the issue marks not measured keep the
+            // shared list, as they keep its default - and so does a Merged source on a document without
+            // a Background, which the issue marks not measured as well (whether Transparency is listed
+            // there).
+            let alpha_names: Vec<String> = d.channels.iter().map(|c| c.name.clone()).collect();
+            let (list, default) =
+                calculations_channels(mode, None, d.background().is_some(), &alpha_names).unwrap_or_else(|| (channels(&load), chans[0].clone()));
+            vec![
+                choice("source1Channel", tl!("Source 1 Channel"), list.clone(), &default),
+                Param::new("source1Invert", tl!("Invert Source 1"), ParamKind::bool(false)),
+                choice("source2Channel", tl!("Source 2 Channel"), list, &default),
+                Param::new("source2Invert", tl!("Invert Source 2"), ParamKind::bool(false)),
+                choice("blending", tl!("Blending"), blend_modes(), "multiply"),
+                Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
+                choice(
+                    "result",
+                    tl!("Result"),
+                    opts(&[("newChannel", tl!("New Channel")), ("newDocument", tl!("New Document")), ("selection", tl!("Selection"))]),
+                    "newChannel",
+                ),
             ]
         }
-        _ => vec![
-            choice("source1Channel", tl!("Source 1 Channel"), channels(&load), &chans[0]),
-            Param::new("source1Invert", tl!("Invert Source 1"), ParamKind::bool(false)),
-            choice("source2Channel", tl!("Source 2 Channel"), channels(&load), &chans[0]),
-            Param::new("source2Invert", tl!("Invert Source 2"), ParamKind::bool(false)),
-            choice("blending", tl!("Blending"), blend_modes(), "multiply"),
-            Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
-            choice(
-                "result",
-                tl!("Result"),
-                opts(&[("newChannel", tl!("New Channel")), ("newDocument", tl!("New Document")), ("selection", tl!("Selection"))]),
-                "newChannel",
-            ),
-        ],
+        // `params_for` routes only the four ids above here, so this asks for a new arm instead of
+        // letting a fifth channel command quietly take the Calculations rows.
+        _ => return None,
     };
     Some((rows, DialogFields::new()))
 }
+
+/// Apply Image's Mask... checkbox (#14489): off by default; ticked, it shows the mask group below it.
+const MASK_ON: &str = "__mask";
+/// The mask group's Source: the index of one of [`apply_image_documents`].
+const MASK_SOURCE: &str = "__maskSource";
+/// The mask group's Invert.
+const MASK_INVERT: &str = "__maskInvert";
+
+/// The mask Layer row of the source document `index`: each candidate document has its own Layer and Channel rows,
+/// as their lists are that document's, and only the chosen document's pair is shown.
+fn mask_layer_key(index: usize) -> String {
+    format!("__maskLayer/{index}")
+}
+
+/// The mask Channel row of the source document `index`.
+fn mask_channel_key(index: usize) -> String {
+    format!("__maskChannel/{index}")
+}
+
+/// The shell key that shows the Layer and Channel rows of document `index`: the mask ticked and that document chosen
+/// (a row takes one `visible_when` condition).
+fn mask_shown_key(index: usize) -> String {
+    format!("__maskShown/{index}")
+}
+
+/// The open documents Apply Image can read from (#14480, #14489): those with the target's pixel size and bit depth,
+/// whatever their colour mode, in the order they were opened, as `(index, document)`. The target is among them.
+pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocraft_doc::Document)> {
+    let Some(target) = app.session.active() else { return Vec::new() };
+    let (size, depth) = (target.doc.size, target.doc.depth);
+    let mut documents: Vec<(usize, &photocraft_doc::Document)> =
+        app.session.documents().iter().enumerate().filter(|(_, st)| st.doc.size == size && st.doc.depth == depth).map(|(i, st)| (i, &*st.doc)).collect();
+    // Document ids are handed out as documents open, so they keep the opening order when tabs are dragged.
+    documents.sort_by_key(|(_, d)| d.id.0);
+    documents
+}
+
+/// The option id prefix of a layer the engine would not read by its plain name: one named "merged" (the composite) or
+/// with no name, and so that no plain name is mistaken for one, any name with this prefix. The rest of the id is the
+/// name, sent as `{"name": …}` ([`apply_image_layer_selector`]).
+const LAYER_NAMED: &str = "layer#";
+/// The option id prefix of an alpha channel the engine would not read by its plain name: one named as a built-in
+/// channel ("Red", "RGB", "selection"…), a later one of a repeated name, one named as a channel value the source and
+/// mask paths read as no channel ([`NO_CHANNEL`]), or one with this prefix. The rest of the id is its index, sent as
+/// `{"alpha": index}` ([`apply_image_channel_selector`]).
+const ALPHA_AT: &str = "alpha#";
+/// Channel values the engine reads as no channel: a mask channel "none" is no mask, and an empty channel is dropped
+/// from a flat source or mask (the source then reads the composite, the mask is off).
+const NO_CHANNEL: [&str; 2] = ["", "none"];
+
+/// The option id of the layer `name`: the name itself, unless the engine would read it as something else.
+fn apply_image_layer_option(name: &str) -> String {
+    if name.is_empty() || name == "merged" || name.starts_with(LAYER_NAMED) { format!("{LAYER_NAMED}{name}") } else { name.to_owned() }
+}
+
+/// The layer selector an Apply Image Layer option sends: `{"name": …}` for a [`LAYER_NAMED`] id, else the id.
+fn apply_image_layer_selector(id: &str) -> Value {
+    id.strip_prefix(LAYER_NAMED).map_or_else(|| json!(id), |name| json!({"name": name}))
+}
+
+/// The channel selector an Apply Image Channel option sends: `{"alpha": index}` for an [`ALPHA_AT`] id, else the id.
+fn apply_image_channel_selector(id: &str) -> Value {
+    id.strip_prefix(ALPHA_AT).and_then(|i| i.parse::<u64>().ok()).map_or_else(|| json!(id), |i| json!({"alpha": i}))
+}
+
+/// A selector as a dialog field: a plain id as text, an explicit selector as JSON.
+fn selector_field(selector: Value) -> FieldValue {
+    match selector {
+        Value::String(id) => FieldValue::Text(id),
+        other => FieldValue::Json(other),
+    }
+}
+
+/// The alpha channel options of a source document, labelled by name: an alpha whose name the engine reads as itself
+/// keeps it as its id, any other is [`ALPHA_AT`] and its index, so no option shares an id with a built-in channel or
+/// another alpha.
+fn apply_image_alpha_options(doc: &photocraft_doc::Document) -> Vec<(String, Label)> {
+    use photocraft_engine::channel_cmds::{ChanRef, parse_ref};
+    doc.channels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let plain = !c.name.starts_with(ALPHA_AT) && !NO_CHANNEL.contains(&c.name.as_str()) && parse_ref(&json!(c.name), doc) == Some(ChanRef::Alpha(i));
+            (if plain { c.name.clone() } else { format!("{ALPHA_AT}{i}") }, Label::from(c.name.clone()))
+        })
+        .collect()
+}
+
+/// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom (the engine takes
+/// the topmost layer of a name), Merged first; a single-layer document lists only that layer. A layer keeps its own
+/// option beside Merged whatever its name ([`apply_image_layer_option`]).
+fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, String) {
+    let all = doc.walk();
+    if let [(_, _, only)] = all.as_slice() {
+        let id = apply_image_layer_option(&only.name);
+        return (vec![(id.clone(), Label::from(only.name.clone()))], id);
+    }
+    let mut names: Vec<&str> = Vec::new();
+    let mut layers = vec![("merged".to_string(), Label::from(tl!("Merged")))];
+    for (_, _, l) in all.iter().rev() {
+        if l.surface().is_some() && !names.contains(&l.name.as_str()) {
+            names.push(&l.name);
+            layers.push((apply_image_layer_option(&l.name), Label::from(l.name.clone())));
+        }
+    }
+    (layers, "merged".to_string())
+}
+
+/// The mask Channel list of a source document and its default (#14489): its composite, read as luminosity and so named
+/// Gray, the colour channels of a colour document, then its alpha channels (and Selection while it has one). A colour
+/// document starts at its first colour channel, a one-channel document at Gray. The reference draws a rule before the
+/// alpha channels; the hosted choice row takes no separators.
+fn apply_image_mask_channels(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, String) {
+    let mode = doc.pixel_format().mode;
+    let composite = photocraft_engine::channel_cmds::composite_name(mode).to_string();
+    let mut list = vec![(composite.clone(), Label::from(tl!("Gray")))];
+    let mut default = composite;
+    if mode.color_channels() > 1 {
+        let colors = photocraft_engine::channel_cmds::color_names(mode);
+        if let Some(first) = colors.first() {
+            default = (*first).to_string();
+        }
+        list.extend(colors.iter().map(|n| (n.to_string(), Label::from(n.to_string()))));
+    }
+    list.extend(apply_image_alpha_options(doc));
+    if doc.selection.is_some() {
+        list.extend(channels(&["selection".to_string()]));
+    }
+    (list, default)
+}
+
+/// Apply Image's Mask... checkbox and the group it opens (#14489): Source (the documents of [`apply_image_documents`],
+/// the first by default), then that document's Layer and Channel, and Invert.
+fn apply_image_mask_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let documents = apply_image_documents(app);
+    let shown = |row: Param| row.visible_when(MASK_ON, true);
+    let names: Vec<(String, Label)> = documents.iter().map(|(i, d)| (i.to_string(), Label::from(d.name.clone()))).collect();
+    let first = names.first().map(|(id, _)| id.clone()).unwrap_or_default();
+    let mut rows = vec![Param::new(MASK_ON, tl!("Mask…"), ParamKind::bool(false)), shown(choice(MASK_SOURCE, tl!("Source"), names, &first))];
+    for (i, doc) in documents {
+        let (layers, layer) = apply_image_layers(doc);
+        let (list, channel) = apply_image_mask_channels(doc);
+        rows.push(choice(&mask_layer_key(i), tl!("Layer"), layers, &layer).visible_when(mask_shown_key(i), true));
+        rows.push(choice(&mask_channel_key(i), tl!("Channel"), list, &channel).visible_when(mask_shown_key(i), true));
+    }
+    rows.push(shown(Param::new(MASK_INVERT, tl!("Invert"), ParamKind::bool(false))));
+    rows
+}
+
+/// Brings the mask group's shell keys and the `mask*` parameters of `image.applyImage` up to date: the chosen
+/// document's Layer and Channel rows are shown, and OK sends `maskDocument`, `maskLayer`, `maskChannel` and, only when
+/// Invert is ticked, `maskInvert`. With Mask unticked it sends no mask at all. A layer or alpha the engine would read as
+/// something else by its name goes as an explicit selector.
+fn apply_image_mask_derive(fields: &mut DialogFields) {
+    let on = fields.bool(MASK_ON) == Some(true);
+    let source = fields.text(MASK_SOURCE).and_then(|s| s.parse::<usize>().ok());
+    let documents: Vec<usize> = fields.iter().filter_map(|(k, _)| k.strip_prefix("__maskLayer/").and_then(|i| i.parse().ok())).collect();
+    for i in documents {
+        fields.set(mask_shown_key(i), on && source == Some(i));
+    }
+    for key in ["maskDocument", "maskLayer", "maskChannel", "maskInvert"] {
+        fields.remove(key);
+    }
+    let Some(i) = source.filter(|_| on) else { return };
+    let Some(channel) = fields.text(&mask_channel_key(i)).map(apply_image_channel_selector) else { return };
+    let layer = apply_image_layer_selector(fields.text(&mask_layer_key(i)).unwrap_or("merged"));
+    fields.set("maskDocument", FieldValue::Int(i64::try_from(i).unwrap_or(i64::MAX)));
+    fields.set("maskLayer", selector_field(layer));
+    fields.set("maskChannel", selector_field(channel));
+    if fields.bool(MASK_INVERT) == Some(true) {
+        fields.set("maskInvert", true);
+    }
+}
+
+#[cfg(test)]
+#[path = "../../dialogs/apply_image_mask_group_tests.rs"]
+mod apply_image_mask_group_tests;
+
+/// The Channel options of one Image ▸ Calculations source (#14521), in the reference application's
+/// order: the composite read as "Gray", the mode's colour channels, then the source layer's Layer
+/// Mask and Transparency — Layer Mask only when that layer has one — and then the document's alpha
+/// channels in channel order. The option ids stay the ids `image.calculations` reads, so the params
+/// the form sends on OK are unchanged for every entry that stays. The reference application draws a
+/// rule before the alpha channels; the hosted choice row builds its entries from `(id, label)` pairs
+/// and takes no separators (only the blend row draws group lines, from the mode keys), so this list
+/// carries that group as an order and the drawn rule waits on the framework.
+///
+/// `layer` is the source layer the dialog chose. The form sends no layer until #14520 adds its Layer
+/// dropdown, which is Merged, so it offers neither Layer Mask nor Transparency. `None` is returned
+/// for the colour modes the issue marks *not measured* (CMYK, Lab, Indexed and the rest), and for a
+/// Merged source on a document without a Background, which the issue marks *not measured* too
+/// (`has_background`): whether that source lists Transparency is unknown, so its list and default
+/// stay the shared ones of [`channel_form`]. A row starts at the source's first colour channel,
+/// "Red" on an RGB document; a one-channel source starts at its composite.
+fn calculations_channels(
+    mode: photocraft_doc::ColorMode,
+    layer: Option<&photocraft_doc::Layer>,
+    has_background: bool,
+    alphas: &[String],
+) -> Option<(Vec<(String, Label)>, String)> {
+    if !matches!(mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale) || (layer.is_none() && !has_background) {
+        return None;
+    }
+    let composite = photocraft_engine::channel_cmds::composite_name(mode);
+    let colors = photocraft_engine::channel_cmds::color_names(mode);
+    // The composite is the Gray entry, and a one-channel mode has no colour rows of its own.
+    let mut options: Vec<(String, Label)> = vec![(composite.to_string(), Label::from(tl!("Gray")))];
+    if colors.len() > 1 {
+        options.extend(colors.iter().map(|n| (n.to_string(), Label::from(tl!(*n)))));
+    }
+    if layer.is_some_and(|l| l.mask.is_some()) {
+        options.push(("mask".to_string(), Label::from(tl!("Layer Mask"))));
+    }
+    if layer.is_some() {
+        options.push(("transparency".to_string(), Label::from(tl!("Transparency"))));
+    }
+    options.extend(alphas.iter().map(|n| (n.clone(), Label::from(n.clone()))));
+    // `color_names` returns at least one name for every mode, so `first` is never none.
+    let first_color = colors.first().copied().unwrap_or(composite);
+    Some((options, if colors.len() > 1 { first_color } else { composite }.to_string()))
+}
+
+/// Batch's OK with Source: Folder and no source folder chosen (#13669).
+pub(crate) const NO_SOURCE_FOLDER: &str = "You must choose a source folder.";
+/// Batch's OK with a folder destination and no destination folder chosen (#13669).
+pub(crate) const NO_DESTINATION_FOLDER: &str = "You must choose a destination folder.";
+
+/// Does a Batch folder field name a folder? No value and an empty or blank path count as nothing chosen.
+fn batch_folder_chosen(path: Option<&str>) -> bool {
+    path.is_some_and(|path| !path.trim().is_empty())
+}
+
+/// The first of the reference's OK checks the Batch dialog's values fail, in its order: the source folder, then the
+/// destination folder. Only a folder source has either: Opened Files reads no folder, and without an output it leaves
+/// the documents open.
+fn batch_missing_choice(fields: &DialogFields) -> Option<&'static str> {
+    if fields.text("source").is_some_and(|source| source != "folder") {
+        return None;
+    }
+    if !batch_folder_chosen(fields.text("input")) {
+        return Some(NO_SOURCE_FOLDER);
+    }
+    let folder_destination = fields.text("destination").is_none_or(|destination| destination == "folder");
+    (folder_destination && !batch_folder_chosen(fields.text("output"))).then_some(NO_DESTINATION_FOLDER)
+}
+
+/// The `ParamFamily::check` of the Batch dialog (#13669): OK, from the button or a confirm through the control channel,
+/// is refused while a folder source or its destination names no folder. As in the reference, a one-button alert
+/// titled "Batch" shows the message; the dialog stays open with its values (the refusal also shows under its rows and
+/// answers a control-channel confirm), and nothing runs.
+pub(crate) fn batch_check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let message = match batch_missing_choice(&result.fields) {
+        Some(NO_SOURCE_FOLDER) => tl!("You must choose a source folder."),
+        Some(_) => tl!("You must choose a destination folder."),
+        None => return Ok(()),
+    };
+    crate::dialogs::alerts::show(app, craft::ui::dialog::Alert::new(tl!("Batch"), message));
+    Err(Label::from(message))
+}
+
+#[cfg(test)]
+#[path = "batch_ok_validation_tests.rs"]
+mod batch_ok_validation_tests;
+
+#[cfg(test)]
+#[path = "layers_to_files_tests.rs"]
+mod layers_to_files_tests;
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -686,6 +1044,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     if !no_params(params) {
         return None;
     }
+    if id == "file.export.layersToFiles"
+        && let Some(st) = app.session.active()
+        && photocraft_engine::file_cmds::layers_to_files_needs_more_layers(&st.doc)
+    {
+        let message = tl!("Layers to Files needs a document with multiple layers.");
+        crate::dialogs::alerts::alert(app, message);
+        return Some(Err(message.to_owned()));
+    }
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
@@ -700,8 +1066,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 Err(e) => return Some(Err(e)),
             };
             let linked = id == "file.placeLinked";
-            let ctx = ctx.clone();
-            Some(app.pick_file_bytes(move |app, name, bytes| {
+            let (ctx, queue_ctx) = (ctx.clone(), ctx.clone());
+            let place = move |app: &mut PhotocraftApp, name: String, bytes: Vec<u8>| {
                 if app.ui.transform.is_some() {
                     return Err("Commit or cancel the transform first".into());
                 }
@@ -713,6 +1079,27 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     crate::transform_tool::begin_placed(app, &ctx)?;
                 }
                 Ok(result)
+            };
+            if linked {
+                return Some(app.pick_file_bytes(place));
+            }
+            // Place Embedded takes several files (#14107) and names its picker (#14110); one file is placed as before.
+            Some(app.pick_files_bytes(Some(tl!("Place Embedded").to_string()), move |app, files| {
+                match <[crate::file_dialog::PickedFile; 1]>::try_from(files) {
+                    Ok([file]) => {
+                        let (name, bytes) = file.read()?;
+                        place(app, name, bytes)
+                    }
+                    Err(files) => {
+                        if app.ui.transform.is_some() {
+                            return Err("Commit or cancel the transform first".into());
+                        }
+                        app.refocus(doc)?;
+                        let count = files.len();
+                        app.place_picked(&queue_ctx, doc, files);
+                        Ok(json!({ "files": count }))
+                    }
+                }
             }))
         }
         "layer.smartObjects.replaceContents" => {
@@ -812,7 +1199,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let has_file = app.session.active().is_some_and(|d| d.path.is_some());
     let suggested = suggested_copy_name(&doc.name, has_file, app.session.prefs().file_handling.copy_suffix());
     // The copy is of the document as it was when asked.
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_save_copy(&suggested, doc.mode, doc.depth, move |app, path| {
         // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
         // JPEG for its JPEG Options and a TIFF for its TIFF Options; the copy is written from the
         // prompt.
@@ -880,3 +1267,13 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "artboards_to_pdf_mode_tests.rs"]
+mod artboards_to_pdf_mode_tests;
+#[cfg(test)]
+#[path = "../../artboards_to_pdf_selected_tests.rs"]
+mod artboards_to_pdf_selected_tests;
+#[cfg(test)]
+#[path = "calculations_channel_list_tests.rs"]
+mod calculations_channel_list_tests;

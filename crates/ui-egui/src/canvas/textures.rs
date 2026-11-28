@@ -138,6 +138,16 @@ pub(crate) fn damage_since(
     if seen.1 == now.1 ^ display_key && in_span {
         return last_damage;
     }
+    // A canvas can miss several revisions between passes. Use their accumulated engine damage
+    // only when the preview and display key stayed the same; an unknown span forces a full read.
+    // Each recorded rectangle already includes the effect reach at the time it was changed.
+    if seen.1 == now.1 ^ display_key
+        && seen.0 < now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = st.damage_since(seen.0)
+    {
+        return Some(r);
+    }
     // Opening, canceling or committing a Free Transform box: the moving layer and the layers
     // drawn over the box, not the whole document (a gigapixel canvas took over a second).
     if let Some(st) = app.session.documents().get(idx)
@@ -307,8 +317,6 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         app.navigator_gpu.remove(&id);
     }
     let size = [doc.size.width, doc.size.height];
-    // A full CPU redraw running in the background: show the blocks it has finished.
-    crate::background_redraw::poll(app, &gpu, id);
     let cache = app.canvases.entry((id, GPU_OUTPUT)).or_default();
     let present = cache.on_gpu && gpu.has(id.0, size);
     let current = cache.revision == revision && cache.preview_key == preview_key;

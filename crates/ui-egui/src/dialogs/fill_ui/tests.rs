@@ -277,3 +277,56 @@ fn open_fill_preserves_channel_targets() {
         );
     }
 }
+
+/// Closing a Fill must not lend its native inks to a later same-RGB foreground choice.
+#[test]
+fn reopening_fill_uses_the_new_same_rgb_ink_selection() {
+    use craft::color_ui::ui::{ColorPickerDialog, PickedColor};
+    use craft::theme::Srgba;
+    use craft::ui::runtime::requests::ColorRequest;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":4,"height":4,"mode":"cmyk","depth":32})).unwrap();
+    app.run("tools.setColors", json!({"foreground":"#000000","foregroundCmyk":[0.,0.,0.,1.]})).unwrap();
+    let first = open(&mut app);
+    let child = crate::color_picker_ui::open_for_request(&mut app, first, ColorRequest::new("color", Srgba::rgb(0., 0., 0.)));
+    app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(child).unwrap().set_color(PickedColor::cmyk(Srgba::rgb(0., 0., 0.), [50., 50., 50., 100.]));
+    crate::dialogs::testing::confirm(&mut app, child).unwrap();
+    crate::dialogs::testing::cancel(&mut app, first).unwrap();
+    let inks = [0.2, 0.3, 0.4, 1.];
+    app.run("tools.setColors", json!({"foreground":"#000000","foregroundCmyk":inks})).unwrap();
+    let id = open(&mut app);
+    set(&mut app, id, "contents", json!("color"));
+    confirm(&mut app, id);
+    let pixel = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1);
+    assert!(pixel.iter().zip(inks).all(|(a, b)| (a - b).abs() < 1e-6), "{pixel:?}");
+    // A successful Color fill remembers its inks even if the foreground changes to another separation.
+    app.run("tools.setColors", json!({"foreground":"#000000","foregroundCmyk":[0.7,0.6,0.5,1.]})).unwrap();
+    let reopened = open(&mut app);
+    let dialog = app.framework.dialogs.get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(reopened).unwrap();
+    assert_eq!(crate::color_picker_ui::request_inks(dialog.fields(), "color", Srgba::rgb(0., 0., 0.)), Some(inks));
+}
+
+/// Reset must undo a same-RGB ink change, as well as the dialog's visible fields.
+#[test]
+fn reset_fill_restores_the_original_native_inks_for_the_same_rgb() {
+    use craft::theme::Srgba;
+    use craft::ui::testing::Fixture;
+    use std::{cell::RefCell, rc::Rc};
+    let original = [0., 0., 0., 1.];
+    let reset = defaults([0.; 3], None, Some(original), None);
+    let rows = rows(&app(), [0.; 3], None, None);
+    let fields = Rc::new(RefCell::new(reset.clone()));
+    let shown = fields.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        ParamDialog::new(COMMAND, "Fill", rows.clone()).values(Bind::bound(&mut *shown.borrow_mut())).reset_to(reset.clone()).show(ui);
+    });
+    fixture.settle();
+    fields.borrow_mut().set("contents", "color");
+    fields.borrow_mut().set(crate::color_picker_ui::ink_field("color"), crate::color_picker_ui::ink_value(Srgba::rgb(0., 0., 0.), Some([0.5, 0.5, 0.5, 1.])));
+    fixture.hold(egui::Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Reset button");
+    fixture.click(&reset).idle(2);
+    fixture.hold(egui::Modifiers::NONE).settle();
+    fields.borrow_mut().set("contents", "color");
+    assert_eq!(params(&fields.borrow(), &json!({}))["colorCmyk"], json!(original));
+}

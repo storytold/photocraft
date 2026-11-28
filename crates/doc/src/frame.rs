@@ -4,7 +4,7 @@ use crate::{Path, ShapeLayer, ShapeStroke};
 use photocraft_geom::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Frame {
     pub path: Path,
     pub transform: Affine,
@@ -50,6 +50,16 @@ impl Frame {
     }
     pub fn stroke_shape(&self) -> Option<ShapeLayer> {
         let stroke = self.stroke.clone()?;
-        Some(ShapeLayer { path: self.outline(), fill: None, stroke: Some(stroke), cache: None, psd_raw: None, live: None, density: 1.0, feather: 0.0 })
+        Some(ShapeLayer {
+            path: self.outline(),
+            fill: None,
+            stroke: Some(stroke),
+            use_aligned_rendering: false,
+            cache: None,
+            psd_raw: None,
+            live: None,
+            density: 1.0,
+            feather: 0.0,
+        })
     }
 }

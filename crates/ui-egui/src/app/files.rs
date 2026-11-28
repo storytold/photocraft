@@ -1,5 +1,6 @@
 use craft::behavior::PixelSize;
 use craft::ui::patterns::form_dialogs::DocumentOptions;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::{
     DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, file_open, jobs_ui, json, notices, open_prompt, plain_raster,
@@ -19,7 +20,7 @@ impl PhotocraftApp {
         r.insert(0, path.to_string());
         let evicted: Vec<String> = if r.len() > cap { r[cap..].to_vec() } else { Vec::new() };
         r.truncate(cap);
-        self.ui.recent_files = r.clone();
+        *self.ui.recent_files = r.clone();
         self.session.prefs.edit(|p| p.file_handling.recent_files = r);
         let mut cache = self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.invalidate(path);
@@ -56,7 +57,7 @@ impl PhotocraftApp {
         let stored = &self.session.prefs().file_handling.recent_files;
         let want = stored.get(..cap.min(stored.len())).unwrap_or_default();
         if self.ui.recent_files.as_slice() != want {
-            self.ui.recent_files = want.to_vec();
+            *self.ui.recent_files = want.to_vec();
         }
     }
 
@@ -86,7 +87,6 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
-        let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
@@ -121,6 +121,12 @@ impl PhotocraftApp {
             let (doc, warnings) = import(name, bytes, &opts)?;
             (doc, warnings, false)
         };
+        // Decode under the source name; only a successfully opened template becomes untitled.
+        let opened_name = self.open_name(name);
+        if opened_name != name {
+            doc.name = opened_name.clone();
+        }
+        let name = &opened_name;
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -129,7 +135,7 @@ impl PhotocraftApp {
         let warnings = file_open::with_missing_fonts_of(&doc, warnings);
         // A developed raw has no embedded profile to ask about.
         let developed = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-        let question = self.session.color.open_question(&doc).filter(|_| !developed);
+        let question = self.session.color().open_question(&doc).filter(|_| !developed);
         let wants_raw = camera_raw_ui::wants_open_dialog(self, &warnings);
         open_prompt::arrive(
             self,
@@ -542,7 +548,7 @@ impl PhotocraftApp {
             settings.webp_lossless = e.webp_lossless.unwrap_or(settings.webp_lossless);
             settings.webp_quality = e.webp_quality.map(|q| q.min(100));
             settings.document_path = st.path.as_deref().map(std::path::PathBuf::from);
-            settings.pcraft_cache = Some(st.pcraft_cache.clone());
+            settings.pcraft_cache = self.session.pcraft_cache(st.doc.id).cloned();
         }
         settings
     }
@@ -676,12 +682,12 @@ impl PhotocraftApp {
             // A background save may finish while another document is active (or after its
             // document was closed, when there is nothing left to record).
             let _ = self.with_document(doc, |app| {
-                if let Some(st) = app.session.active_mut()
-                    && arm
-                {
-                    st.saved_to(path.to_string());
+                if arm && app.session.active().is_some() {
+                    app.session.saved_to(path.to_string());
                     // The job locked the document, but record the revision that was written.
-                    st.saved_revision = revision;
+                    if let Some(st) = app.session.active_mut() {
+                        st.saved_revision = revision;
+                    }
                     app.remember_stamp(doc, path);
                     // History Options › Automatically Create New Snapshot When Saving (#2966).
                     photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);

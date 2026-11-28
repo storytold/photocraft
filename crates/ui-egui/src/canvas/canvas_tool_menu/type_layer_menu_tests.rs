@@ -103,7 +103,7 @@ fn menu_harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftA
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

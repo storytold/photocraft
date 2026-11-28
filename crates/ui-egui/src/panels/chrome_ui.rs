@@ -84,7 +84,13 @@ pub(crate) fn set_status_item(chrome: &mut ChromeState, item: StatusItem) {
 /// What the status bar readout knows about the active document. Items without a value here show a dash.
 /// The document's values are computed once per document revision and language.
 pub(crate) fn status_values(app: &PhotocraftApp) -> StatusValues {
-    let Some(st) = app.session.active() else { return StatusValues::default() };
+    app.session.active_index().map_or_else(StatusValues::default, |doc| status_values_of(app, doc))
+}
+
+/// [`status_values`] for document `doc`, whichever is active: a floating document window's status bar reads its own
+/// document (#16415).
+pub(crate) fn status_values_of(app: &PhotocraftApp, doc: usize) -> StatusValues {
+    let Some(st) = app.session.documents().get(doc) else { return StatusValues::default() };
     let mut values = app.doc_queries.status(&app.session, st, || {
         let doc: &Document = &st.doc;
         let mut values = StatusValues::default();
@@ -335,6 +341,25 @@ mod tests {
         off.home = Some(0);
         assert!(off.shows_home(0, false));
         assert!(!off.shows_home(1, false));
+    }
+
+    #[test]
+    fn closing_a_tab_does_not_return_to_home() {
+        use crate::PhotocraftApp;
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Keep"})).unwrap();
+        let n = app.session.documents().len();
+        app.ui.chrome.home = Some(n);
+        assert!(app.ui.chrome.shows_home(n, true));
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Other"})).unwrap();
+        assert!(!app.ui.chrome.shows_home(app.session.documents().len(), true));
+        app.run("file.close", json!({"document": 1})).unwrap();
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(!app.ui.chrome.shows_home(1, true), "Home must stay dismissed after closing the extra tab");
+        assert_eq!(app.session.documents()[0].doc.name, "Keep");
     }
 
     #[test]

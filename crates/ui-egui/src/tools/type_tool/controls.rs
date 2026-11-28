@@ -99,7 +99,7 @@ pub(crate) fn canvas_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas
     let ctx = ui.ctx().clone();
     crate::type_box_preview::wake(app, &ctx);
     let Some(view) = crate::type_transform::view_of(ui) else { return };
-    let transform_shown = crate::type_transform::visible(app, craft::ui::runtime::pointer::frame(&ctx).mods);
+    let transform_shown = crate::type_transform::visible(app, craft::ui::runtime::pointer::mods(&ctx));
     if ed.mask {
         mask_tint(app, ui, canvas, id);
     }
@@ -228,7 +228,7 @@ fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &craft::behavior::Ca
     // A primary press on the canvas background is what makes the editor commit (editor.rs: `background().pressed`);
     // the same press reaches the tool, which then starts no new text.
     let background_press = canvas_space(&Env::of(ui).view()).is_some_and(|space| space.background().pressed == Some(PointerButton::Primary));
-    let held = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+    let held = craft::ui::runtime::pointer::mods(ui.ctx());
     if let Some(at) = out.context {
         app.canvas_tools.type_tool.context = Some((at, held));
     }
