@@ -507,6 +507,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for e in app.session.poll_jobs() {
         on_event(app, ctx, e);
     }
+    app.poll_os_clipboard_export(ctx);
     // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
     if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {
         app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
@@ -678,6 +679,13 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     // interface can read after a background run.
     let smart_object_edits = matches!(&e.outcome, JobOutcome::Done(v) if e.command == "paint.remove" && crate::retouch_ui::removal_edits_a_smart_object(v));
     match e.outcome {
+        JobOutcome::Done(_) if matches!(e.command.as_str(), "edit.copy" | "edit.copyMerged") => {
+            // As for an inline copy: the clip is ours now, and goes to the OS clipboard.
+            app.clip_external = false;
+            app.export_os_clipboard();
+            app.ui.status = e.label;
+            app.ui.status_error = false;
+        }
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
