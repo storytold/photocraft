@@ -1072,6 +1072,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.deleteComponents"
             | "path.mergeShapeComponents"
             | "path.setOperation"
+            | "path.alignComponents"
+            | "path.distributeComponents"
             | "path.clippingPath.set"
             | "path.rename"
             | "path.stroke"

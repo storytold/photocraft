@@ -808,29 +808,41 @@ pub(crate) fn path_op_field(app: &mut PhotocraftApp) -> &mut String {
     if super::shapes::is_shape_tool(app.ui.tool) { &mut app.ui.tool_options.shape_path_op } else { &mut app.ui.tool_options.pen_path_op }
 }
 
+/// The path a drawing tool's menus act on, as `path.*` target params: in Shape mode the selected
+/// shape layer's; in Path mode the path the Pen draws into (a targeted vector mask, the selected
+/// path, else the Work Path).
+pub(super) fn drawn_path(app: &PhotocraftApp) -> Option<(Value, &Path)> {
+    let st = app.session.active()?;
+    if tool_in_shape_mode(app) {
+        let id = st.active_layer?;
+        let LayerContent::Shape(sh) = &st.doc.layer(id)?.content else { return None };
+        return Some((json!({"name": "layer", "layer": id.0}), &sh.path));
+    }
+    let mask = targeted_vector_mask_id(app).and_then(|id| Some((id, &st.doc.layer(photocraft_doc::LayerId(id))?.vector_mask.as_ref()?.path)));
+    if let Some((id, path)) = mask {
+        return Some((json!({"name": "layer", "layer": id}), path));
+    }
+    let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
+    let path = doc_path(&st.doc, &name)?;
+    Some((json!({"name": name}), path))
+}
+
 /// What the Path Operations menu's Merge Shape Components merges, as a command, its params and
 /// the number of shape components there: with Path Selection or Direct Selection the path they
-/// select in (with Direct Selection the one with selected anchors first); in Shape mode the
-/// selected shape layer; in Path mode the path the Pen draws into (a targeted vector mask, the
-/// selected path, else the Work Path).
+/// select in (with Direct Selection the one with selected anchors first); otherwise the tool's
+/// [`drawn_path`], a shape layer through its own Combine Shapes command.
 pub(super) fn merge_target(app: &PhotocraftApp) -> Option<(&'static str, Value, usize)> {
     if matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection) {
         let anchored = crate::path_components::selected(app).filter(|_| app.ui.tool == Tool::DirectSelection).map(|(r, p, _)| (r, p));
         let (r, p) = anchored.or_else(|| crate::direct_select::active_paths(app).into_iter().next())?;
         return Some(("path.mergeShapeComponents", r.params(app), p.components().len()));
     }
-    let st = app.session.active()?;
+    let (params, path) = drawn_path(app)?;
+    let n = path.components().len();
     if tool_in_shape_mode(app) {
-        let id = st.active_layer?;
-        let LayerContent::Shape(sh) = &st.doc.layer(id)?.content else { return None };
-        return Some(("layer.combineShapes.mergeShapeComponents", json!({"layer": id.0}), sh.path.components().len()));
+        return Some(("layer.combineShapes.mergeShapeComponents", json!({"layer": params["layer"]}), n));
     }
-    if let Some((id, p)) = targeted_vector_mask(app) {
-        return Some(("path.mergeShapeComponents", json!({"name": "layer", "layer": id}), p.components().len()));
-    }
-    let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
-    let path = if name == "work" { st.doc.work_path.as_ref() } else { st.doc.paths.iter().find(|p| p.name == name).map(|p| &p.path) }?;
-    Some(("path.mergeShapeComponents", json!({"name": name}), path.components().len()))
+    Some(("path.mergeShapeComponents", params, n))
 }
 
 // ---------------------------------------------------------------------------------------------
