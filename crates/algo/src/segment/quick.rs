@@ -14,7 +14,10 @@
 //! - Colours elsewhere in the image make no difference (no global colour model).
 //! - It works on the whole document when it has at most 512 x 512 pixels and at exactly half
 //!   resolution above (any size, any brush), aligned to the document's corner; the mask is then
-//!   scaled up bilinearly (edges show a 25 % / 75 % step).
+//!   scaled up bilinearly inside the selected working pixels only, so a hard edge ends where the
+//!   shape does, with a 75 % rim inside it and nothing outside (#12920). 32-bit documents were not
+//!   measured for that and keep the plain bilinear scale-up, a 25 % ring outside the edge
+//!   ([`Tuning::for_depth`]).
 //!
 //! The model reproducing this is one min cut (Boykov & Jolly, ICCV 2001; max-flow by Boykov &
 //! Kolmogorov, PAMI 2004) over the working image minimising
@@ -51,6 +54,11 @@ pub struct Tuning {
     /// band around that boundary (Lombaert, Sun, Grady & Xu, "A Multilevel Banded Graph Cuts
     /// Method for Fast Image Segmentation", ICCV 2005).
     pub direct_px: usize,
+    /// Whether the half-resolution result is scaled up inside its selected working pixels only,
+    /// so a hard edge's soft rim lies inside the shape and nothing outside it is selected (8- and
+    /// 16-bit documents, #12920). Off, the plain bilinear scale-up also spreads 25 % onto the
+    /// pixels just outside (32-bit documents, not measured, as before #12920).
+    pub rim_inside: bool,
 }
 
 impl Default for Tuning {
@@ -65,7 +73,16 @@ impl Default for Tuning {
             grow: 1.69371,
             grow_frac: 0.103003,
             direct_px: 300_000,
+            rim_inside: true,
         }
+    }
+}
+
+impl Tuning {
+    /// The fit for a document of 32-bit (`float`) or 8- and 16-bit samples: only the edge's
+    /// scale-up differs ([`Tuning::rim_inside`]).
+    pub fn for_depth(float: bool) -> Self {
+        Self { rim_inside: !float, ..Self::default() }
     }
 }
 
@@ -182,7 +199,7 @@ pub(super) fn quick_select_batched<const OPTIMIZED: bool>(
                 // first in this order, so a cancelled attempt is never reached.
                 Attempt::Touches | Attempt::Cancelled => continue,
                 Attempt::Done { window, low, lw, lh } => {
-                    let mask = upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize);
+                    let mask = upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize, t.rim_inside);
                     return super::trim_region(Region { bbox: window, mask }).map(|region| (region, sizes));
                 }
             }
@@ -343,9 +360,14 @@ pub fn stroke_mask(pts: &[(f32, f32)], radius: f32, w: usize, h: usize) -> Vec<b
     m
 }
 
-/// Bilinear upsampling (pixel centres aligned, edges clamped) of a working-resolution selection
-/// to 8-bit coverage, as Photoshop scales its half-resolution result.
-pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: usize) -> Vec<u8> {
+/// Upsampling of a working-resolution selection to 8-bit coverage, as Photoshop scales its
+/// half-resolution result: bilinear (pixel centres aligned, edges clamped) inside the selected
+/// working pixels, and nothing in the unselected ones. So the soft rim of an edge lies inside
+/// the shape (75 % on its edge pixels, 56 % at a corner) and no ring of 25 % lies outside it
+/// (#12920, measured on hard-edged rectangles in RGB, Lab, CMYK and Grayscale documents).
+/// Without `rim_inside` (32-bit documents, not measured) it is bilinear everywhere, so the
+/// unselected pixels next to an edge get 25 %.
+pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: usize, rim_inside: bool) -> Vec<u8> {
     if step == 1 {
         return low.iter().map(|b| if *b { 255 } else { 0 }).collect();
     }
@@ -356,6 +378,10 @@ pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: us
         let fy = (y as f32 + 0.5) / s - 0.5;
         let (iy, ty) = (fy.floor() as i64, fy - fy.floor());
         for x in 0..w {
+            // The working pixel this pixel lies in (`low` covers `w` x `h` in `step` cells).
+            if rim_inside && !low[(y / step).min(lh - 1) * lw + (x / step).min(lw - 1)] {
+                continue;
+            }
             let fx = (x as f32 + 0.5) / s - 0.5;
             let (ix, tx) = (fx.floor() as i64, fx - fx.floor());
             let v = (at(ix, iy) * (1.0 - tx) + at(ix + 1, iy) * tx) * (1.0 - ty) + (at(ix, iy + 1) * (1.0 - tx) + at(ix + 1, iy + 1) * tx) * ty;
@@ -364,3 +390,7 @@ pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: us
     }
     out
 }
+
+#[cfg(test)]
+#[path = "quick_edge_ring_tests.rs"]
+mod edge_ring_tests;

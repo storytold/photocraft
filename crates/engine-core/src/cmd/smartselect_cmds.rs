@@ -85,6 +85,13 @@ impl Sampler for FlatSampler {
 /// and Sample All Layers off it reads a flat area, so a click selects only the brush disc instead
 /// of the composite's shapes, as the reference application does (#12933). Artboards and frames,
 /// groups too but not measured, keep reading the composite.
+/// A Quick Selection stroke on `doc`: `points` in document pixels, brush diameter `size`. A 32-bit
+/// document keeps the plain bilinear edge (#12920 measured the others only).
+pub(crate) fn quick_select(smp: &dyn Sampler, doc: &Document, points: &[(f32, f32)], size: f32) -> Option<Region> {
+    let tuning = quick::Tuning::for_depth(doc.depth == photocraft_color::SampleType::F32);
+    quick::quick_select_with(smp, doc.bounds(), points, size, &tuning)
+}
+
 fn with_quick_sampler<R>(s: &Session, all_layers: bool, f: impl FnOnce(&dyn Sampler, &Document) -> R) -> Result<R> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let plain_group = |l: &Layer| l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.artboard.is_none());
@@ -250,7 +257,7 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let region = with_quick_sampler(s, all_layers, |smp, doc| {
         let canvas = doc.bounds();
-        let Some(r) = quick::quick_select(smp, canvas, &pts, size) else { return Ok(None) };
+        let Some(r) = quick_select(smp, doc, &pts, size) else { return Ok(None) };
         let surface = matting::region_surface(&r);
         if !enhance {
             return Ok(Some(surface));
@@ -922,3 +929,6 @@ mod object_mode_refusal_tests;
 
 #[cfg(test)]
 mod quick_mode_refusal_tests;
+
+#[cfg(test)]
+mod quick_edge_ring_depth_tests;
