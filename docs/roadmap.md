@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-12 · **Change:** minor (M11: the desktop app connects to MCP clients from Edit › Preferences › AI Integrations, no terminal, no restart; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-17 · **Change:** minor (release history completed: all 27 published releases now listed through v0.23.1 (2026-11-12); milestones 0.7/0.8/0.9 moved from "What's next" to history (shipped as v0.7.0, v0.8.2 and v0.9.0, 0.8 released as 0.8.2); alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
 
 - UI.5: Panels can detach, join other tab groups, split, resize and redock through shared docking transactions. Custom layouts persist with workspaces, respect workspace locking, and retain collapse flags for intact native groups.
 
@@ -60,8 +60,44 @@ real work is ~45%, inside the alpha band (~40–75%), but close to its floor.
 | M11 Automation + formats | 🟡 | MCP (headless + live bridge), batch, Image Processor, prefs over MCP; DoD test passes (10 agent tasks over MCP, `automation/tests/it/agent_tasks.rs`); since 2026-10-07 the CLI rejects unknown flags and answers `<subcommand> --help`, batch runs report same-name outputs instead of overwriting them, MCP `command_batch` steps can start background jobs, and headless saves never flatten over the opened file; JP2 / DICOM / DPX / C2PA pending |
 | M12 Pro parity | 🟡 | CMYK / Lab / Indexed / Bitmap / Duotone, ICC + soft proofing, channels + Quick Mask, smart-object stack modes, artboards, layer comps; print, HDR, timeline pending; Photomerge is implemented, with real-world quality validation still open |
 
-Releases: 0.1.0 (2026-10-02), 0.2.0 (2026-10-05, first signed and notarized), 0.3.0 (10-07),
-0.5.0 (10-08), 0.6.0 (10-10).
+Releases, as published on [GitHub Releases](https://github.com/storytold/photocraft/releases),
+oldest first (dates from the release entries; every published release name maps 1:1 to its tag):
+
+| Version | Released | Notes |
+|---|---|---|
+| v0.1.0 | 2026-10-02 | |
+| v0.1.1-rc.4 | 2026-10-02 | |
+| v0.1.1-rc.5 | 2026-10-02 | |
+| v0.1.1 | 2026-10-03 | |
+| v0.2.0 | 2026-10-05 | first signed and notarized |
+| v0.3.0 | 2026-10-07 | |
+| v0.5.0 | 2026-10-08 | no 0.4.x was released |
+| v0.6.0 | 2026-10-10 | |
+| v0.7.0 | 2026-10-11 | |
+| v0.8.2 | 2026-10-12 | 0.8 shipped as 0.8.2; no 0.8.0 or 0.8.1 was released |
+| v0.9.0 | 2026-10-14 | |
+| v0.10.0 | 2026-10-18 | |
+| v0.11.1 | 2026-10-20 | no 0.11.0 was released |
+| v0.12.0 | 2026-10-21 | |
+| v0.13.0 | 2026-10-22 | |
+| v0.14.0 | 2026-10-23 | |
+| v0.15.1 | 2026-10-23 | no 0.15.0 was released |
+| v0.16.0 | 2026-10-25 | |
+| v0.17.0 | 2026-10-28 | |
+| v0.18.0 | 2026-10-31 | |
+| v0.19.0 | 2026-11-01 | |
+| v0.20.1 | 2026-11-03 | no 0.20.0 was released |
+| v0.20.2 | 2026-11-05 | |
+| v0.21.0 | 2026-11-06 | |
+| v0.22.0 | 2026-11-09 | |
+| v0.23.0 | 2026-11-11 | |
+| v0.23.1 | 2026-11-12 | latest published release |
+
+The planned milestones 0.7 "files you can trust", 0.8 "fast enough" and 0.9 "feels like
+Photoshop" are history as version numbers: they shipped as v0.7.0, v0.8.2 and v0.9.0 (one
+milestone with different numbering: 0.8 was released as 0.8.2, skipping 0.8.0 and 0.8.1).
+Each release's own notes list what it carried; the parts of those plans those releases did
+not finish stay under "What's next" below, without a version number.
 
 ## Current focus
 
@@ -84,11 +120,17 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 
 ## What's next, with estimates
 
-| Next milestone | Scope | Estimate |
+The 0.7 / 0.8 / 0.9 rows that stood here before are no longer upcoming milestones: their
+versions shipped (v0.7.0, v0.8.2, v0.9.0, see Releases above). What those plans promised
+beyond what those releases carried stays below as unversioned work, and two scope items
+did ship since: detachable floating panels (UI.5, top of this page) and the Color panel
+spectrum field (v0.9.0 release notes).
+
+| Next work | Scope | Estimate |
 |---|---|---:|
-| 0.7 "files you can trust" | Current focus 1 plus JPEG Options, AVIF read, Photoshop PDF read | 200–320 h |
-| 0.8 "fast enough" | Current focus 2; GPU tiling past the texture limit (#49); complex layout documents | 200–350 h |
-| 0.9 "feels like Photoshop" | Current focus 4 and 5; transform context menu; floating panels; Color panel | 300–500 h |
+| "files you can trust" (planned as 0.7) | Current focus 1 plus JPEG Options, AVIF read, Photoshop PDF read | 200–320 h |
+| "fast enough" (planned as 0.8) | Current focus 2; GPU tiling past the texture limit (#49); complex layout documents | 200–350 h |
+| "feels like Photoshop" (planned as 0.9) | Current focus 4 and 5; transform context menu | 300–500 h |
 | Beta | All of the above, type depth, Select and Mask / Content-Aware Fill workspaces, Hindi/Arabic/Vietnamese + RTL, bug backlog under 100 | 1,100–1,800 h total |
 | Later, needs owner decisions | AI backend (#41), plug-in hosting (.8BF / UXP), scripting compatibility | 550–1,050 h |
 
@@ -116,6 +158,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Release history completed: all 27 published releases listed (latest v0.23.1, 2026-11-12); milestones 0.7/0.8/0.9 moved from "What's next" to history (shipped as v0.7.0, v0.8.2 and v0.9.0, 0.8 released as 0.8.2); unfinished scope kept as unversioned work; alpha gate and estimates unchanged |
 | 2026-11-12 | minor | M11: Edit › Preferences › AI Integrations connects MCP clients to the running app without a terminal or restart; milestones, alpha gate and estimates unchanged |
 | 2026-10-11 | minor | Linked adaptive Unsharp Mask performance and quality evidence; milestones, alpha gate and estimates unchanged |
 | 2026-10-10 | minor | Photomerge is implemented; real-world quality validation remains open |
