@@ -21,10 +21,12 @@ enum After {
 
 /// Serve connections until `max_connections` were seen. Each connection authenticates,
 /// then serves requests until it closes; every served request is recorded, and `accepted`
-/// counts connections as they arrive.
+/// counts connections as they arrive. With `in_turn`, a connection answers its requests only
+/// after the connection before it has closed and sent its report.
 async fn fake_server(
     max_connections: usize,
     after: After,
+    in_turn: bool,
     seen: tokio::sync::mpsc::UnboundedSender<Vec<Value>>,
     accepted: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) -> String {
@@ -32,12 +34,15 @@ async fn fake_server(
     let addr = listener.local_addr().unwrap().to_string();
     tokio::spawn(async move {
         let mut connections = 0;
+        let mut previous_closed: Option<tokio::sync::oneshot::Receiver<()>> = None;
         while connections < max_connections {
             let Ok((socket, _)) = listener.accept().await else { break };
             connections += 1;
             accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let seen = seen.clone();
             let after = after;
+            let (closed_tx, closed_rx) = tokio::sync::oneshot::channel::<()>();
+            let mut wait_for = previous_closed.replace(closed_rx).filter(|_| in_turn);
             tokio::spawn(async move {
                 let mut served = Vec::new();
                 let mut socket = socket;
@@ -53,6 +58,9 @@ async fn fake_server(
                     }
                     let Ok(request) = serde_json::from_str::<Value>(&line) else { continue };
                     served.push(request.clone());
+                    if let Some(previous) = wait_for.take() {
+                        let _ = previous.await;
+                    }
                     let reply = json!({"id": request["id"], "ok": true, "result": {"served": served.len()}});
                     if write.write_all(format!("{reply}\n").as_bytes()).await.is_err() {
                         break;
@@ -62,6 +70,7 @@ async fn fake_server(
                     }
                 }
                 let _ = seen.send(served);
+                let _ = closed_tx.send(());
             });
         }
     });
@@ -99,7 +108,7 @@ async fn read_retries_on_a_dropped_connection_and_edits_do_not() {
     // #1007 wording and never open connection 3.
     let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
     let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let addr = fake_server(2, After::Close, seen_tx, accepted).await;
+    let addr = fake_server(2, After::Close, false, seen_tx, accepted).await;
     let bridge = BridgeClient::new(&addr, CONTROL_TOKEN).unwrap();
 
     let first = bridge.call_read("document.inspect", json!({})).await.expect("read served before the connection dies");
@@ -114,8 +123,10 @@ async fn read_retries_on_a_dropped_connection_and_edits_do_not() {
     assert!(error.contains("inspect state before retrying"), "{error}");
     assert!(!error.contains("retried"), "{error}");
 
+    // Each connection task reports after it sees the socket close, which can trail the client's
+    // error. The channel closes once both tasks and the accept loop are done.
     let mut all = Vec::new();
-    while let Ok(served) = seen_rx.try_recv() {
+    while let Some(served) = seen_rx.recv().await {
         all.extend(served);
     }
     assert_eq!(all.len(), 2, "one request per connection, no edit resend: {all:?}");
@@ -128,16 +139,24 @@ async fn an_idle_connection_is_replaced_before_the_next_call() {
     // authenticate a new connection before sending.
     let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
     let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let addr = fake_server(2, After::KeepOpen, seen_tx, std::sync::Arc::clone(&accepted)).await;
+    let addr = fake_server(2, After::KeepOpen, true, seen_tx, std::sync::Arc::clone(&accepted)).await;
     let bridge = BridgeClient::new(&addr, CONTROL_TOKEN).unwrap().with_idle_reconnect(Duration::from_millis(100));
 
     bridge.call_read("document.inspect", json!({})).await.expect("first call connects");
     tokio::time::sleep(Duration::from_millis(250)).await;
+    // The server answers connection 2 only after connection 1 has closed and reported, so a bridge
+    // that keeps connection 1 open fails this call at its own call timeout.
     bridge.call_read("document.inspect", json!({})).await.expect("second call reconnects after idling");
 
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "the idle connection was replaced, not reused");
-    let first = seen_rx.try_recv().expect("the replaced connection closed, reporting what it served");
-    assert_eq!(first.len(), 1, "each connection served only the request that followed its auth: {first:?}");
+    let first = seen_rx.recv().await.expect("connection 1 closed and reported while the bridge is still alive");
+    assert_eq!(first.len(), 1, "connection 1 served only the first call: {first:?}");
+
+    // Connection 2 reports once the bridge, which holds it, is dropped.
+    drop(bridge);
+    let second = seen_rx.recv().await.expect("connection 2 closed and reported");
+    assert_eq!(second.len(), 1, "connection 2 served only the second call: {second:?}");
+    assert!(seen_rx.recv().await.is_none(), "no third connection reported");
 }
 
 #[tokio::test(flavor = "multi_thread")]
