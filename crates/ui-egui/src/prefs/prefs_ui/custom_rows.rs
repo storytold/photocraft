@@ -113,13 +113,11 @@ impl CustomSettings<PrefPages> for PrefsCustom {
     }
 }
 
-/// The GPU memory budget lines of Performance › Graphics.
+/// Performance › Graphics: the GPU memory budgets and their inputs (Help › System Info's lines,
+/// less the preferences this page shows as rows) and whether the active document's layers fit
+/// (the GPU Memory preference sets it).
 fn gpu_memory_lines(app: &PhotocraftApp) -> Vec<String> {
-    let mut v = Vec::new();
-    if app.perf.gpu_budget_mb > 0 {
-        let budget = crate::chrome_ui::fmt_bytes(app.perf.gpu_budget_mb.saturating_mul(1 << 20));
-        v.push(crate::i18n::fmt(tl!("GPU memory budget: {budget}"), &[("budget", &budget)]));
-    }
+    let mut v = crate::gpu_status::budget_lines_beside_prefs(&crate::gpu_status::BudgetInputs::of(app));
     let doc = app.session.active().map(|st| st.doc.id.0);
     if let Some(fit) = app.perf.gpu_layer_fit.filter(|f| Some(f.doc) == doc) {
         let args = [("needed", crate::chrome_ui::fmt_bytes(fit.needed)), ("budget", crate::chrome_ui::fmt_bytes(fit.budget))];
