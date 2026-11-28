@@ -2,6 +2,7 @@
 //! position, previews and the commit they match. They drive the canvas through `canvas::testing`.
 
 use craft::draw::ui::pattern::PatternFillDialog;
+use craft::ui::canvas::ToolHost;
 use craft::ui::dialog::StackDialog;
 use egui::Modifiers;
 use photocraft_doc::{Document, Fill, LayerContent, LayerId, Pattern};
@@ -291,6 +292,51 @@ fn the_dialog_tool_serves_only_the_active_documents_canvas() {
     assert!(dialog_tool(&scope, &mut state, CanvasHost::main(active)).is_some(), "the active document's canvas runs the dialog tool");
     let mut state = DialogTools::default();
     assert!(dialog_tool(&scope, &mut state, CanvasHost::main(1 - active)).is_none(), "another document's canvas does not");
+    cancel(&mut app, dialog);
+}
+
+#[test]
+fn switching_documents_ends_a_held_pattern_drag() {
+    let (mut app, dialog, _) = pattern_drag_app(8, false);
+    let start = [20.0, 15.0];
+    let other = [15.0, 10.0];
+    app.run("file.new", json!({"width": 30, "height": 20})).unwrap();
+    assert_eq!(app.session.active_index(), Some(1));
+    clear_of_dialogs(&mut app, other);
+    assert!(app.session.set_active(0));
+    clear_of_dialogs(&mut app, start);
+    let owner = CanvasHost::primary(&app, 0).canvas_id();
+    let before = [0, 1].map(|i| {
+        let st = &app.session.documents()[i];
+        (st.doc.clone(), st.history.entries().len())
+    });
+
+    move_to(&mut app, start, NONE);
+    press(&mut app, start, NONE);
+    move_to(&mut app, off(start, [5.0, 0.0]), NONE);
+    assert!(ToolHost::in_gesture(app.ctx(), owner), "the first canvas owns the ongoing drag");
+    let shown = [7.5, -3.25];
+    assert_phase(phase(&mut app), shown, "the drag moved the draft phase");
+
+    assert!(app.session.set_active(1));
+    frame(&mut app);
+    assert!(!ToolHost::in_gesture(app.ctx(), owner), "switching documents drops the old canvas capture");
+    move_to(&mut app, off(other, [9.0, 0.0]), NONE);
+    assert_phase(phase(&mut app), shown, "moving in the other document leaves the draft unchanged");
+
+    assert!(app.session.set_active(0));
+    let end = off(start, [12.0, 0.0]);
+    move_to(&mut app, end, NONE);
+    release(&mut app, end, NONE);
+    assert_phase(phase(&mut app), shown, "returning during the same press does not restart the drag");
+
+    drag(&mut app, start, [2.0, 0.0]);
+    assert_phase(phase(&mut app), [9.5, -3.25], "a fresh press moves the draft again");
+    for (i, (doc, steps)) in before.into_iter().enumerate() {
+        let st = &app.session.documents()[i];
+        assert!(std::sync::Arc::ptr_eq(&doc, &st.doc), "the drag only changed the preview");
+        assert_eq!(st.history.entries().len(), steps);
+    }
     cancel(&mut app, dialog);
 }
 
