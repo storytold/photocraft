@@ -3,7 +3,7 @@
 //! Eraser they set the brush's Opacity (⇧: Flow, swapped while airbrush build-up is on; the Pencil has no Flow, so its ⇧
 //! digits set Opacity too, #11967); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
-//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907); with Color
+//! selected layers' Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907); with Color
 //! Replacement its Tolerance (#11927); with Magic Eraser its Opacity (#11999). Tools whose number
 //! is a strength or exposure are left alone.
 //! The `tools.smoothing.N` commands (⌥+digit) set the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892).
@@ -38,7 +38,7 @@ enum Target {
     CrTolerance,
     /// The Magic Eraser's Opacity option.
     MagicEraserOpacity,
-    /// The active layer's opacity (⇧: fill).
+    /// The selected layers' opacity (⇧: fill).
     Layer,
     None,
 }
@@ -122,14 +122,17 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
         (Target::CrTolerance, false) if percent >= 1.0 => app.ui.tool_options.cr_tolerance = percent,
         (Target::MagicEraserOpacity, _) if percent >= 1.0 => app.ui.tool_options.magic_eraser_opacity = percent,
         (Target::Layer, _) => {
-            // The locked Background has no opacity or fill.
             let Some(st) = app.session.active() else { return };
-            let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return };
-            if crate::doc_props_ui::is_background(&st.doc, layer) {
-                return;
-            }
+            // The locked Background has no opacity or fill. Batch the other layers into one undo step.
+            let ids: Vec<u64> = st.selected_layers().iter().copied().filter(|id| !st.doc.is_background(*id)).map(|id| id.0).collect();
             let key = if shift { "fill" } else { "opacity" };
-            let _ = app.run("layer.setProps", json!({ "layer": layer.id.0, key: v }));
+            let params = match ids.as_slice() {
+                [] => return,
+                // The recorder can make the single-layer target portable.
+                [id] => json!({ "layer": id, key: v }),
+                _ => json!({ "layers": ids, key: v }),
+            };
+            let _ = app.run("layer.setProps", params);
         }
         _ => {}
     }
@@ -311,6 +314,94 @@ mod tests {
         assert!(!fire(&mut m, CommandRef::new("tools.smoothing.5"), 0.0));
         assert_eq!(m.session.tools.brush.smoothing.amount, before.amount);
         assert_eq!(m.session.tools.brush.smoothing.enabled, before.enabled);
+    }
+
+    #[test]
+    fn a_single_layer_opacity_key_records_a_portable_action_step() {
+        let mut a = app(Tool::Move);
+        a.run("actions.record", json!({ "name": "Set layer opacity" })).unwrap();
+        assert!(fire(&mut a, D::OpacityFive, 0.0));
+        a.run("actions.stop", json!({})).unwrap();
+
+        let action = a.run("actions.get", json!({ "action": "Set layer opacity" })).unwrap();
+        assert_eq!(action["steps"], json!([["layer.setProps", { "opacity": 0.5 }]]));
+    }
+
+    #[test]
+    fn layer_digit_keys_set_all_selected_groups_in_one_step() {
+        use crate::shortcut_dispatch::tests::tap;
+        use egui::Modifiers;
+        use egui_kittest::Harness;
+        use photocraft_doc::LayerId;
+
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app_on(cc.egui_ctx.clone(), Tool::Move)
+        });
+        let a = h.state_mut();
+        let st = a.session.active().unwrap();
+        let anchor = st.active_layer.unwrap();
+        let background = st.doc.layers[0].id;
+        let groups = [("First", 70), ("Second", 80), ("Unselected", 90)].map(|(name, opacity)| {
+            // Add each group beside the same raster layer, so the groups are siblings.
+            a.run("layer.select", json!({ "layer": anchor.0 })).unwrap();
+            LayerId(a.run("layer.new.group", json!({ "name": name, "opacity": opacity })).unwrap()["layer"].as_u64().unwrap())
+        });
+        let [first, second, unselected] = groups;
+        a.run("layer.select", json!({ "layer": first.0 })).unwrap();
+        for id in [background, second] {
+            a.run("layer.select", json!({ "layer": id.0, "mode": "add" })).unwrap();
+        }
+        h.run_steps(4);
+
+        let values = |h: &Harness<'_, Box<PhotocraftApp>>| {
+            let st = h.state().session.active().unwrap();
+            assert!(st.doc.is_background(background), "the selected Background stays locked");
+            [first, second, unselected, background].map(|id| {
+                let layer = st.doc.layer(id).unwrap();
+                (layer.opacity, layer.fill_opacity)
+            })
+        };
+        let history = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.past_len();
+        let original = [(0.7, 1.0), (0.8, 1.0), (0.9, 1.0), (1.0, 1.0)];
+        assert_eq!(values(&h), original);
+        let before = history(&h);
+
+        tap(&mut h, Key::Num4, Modifiers::NONE);
+        assert_eq!(values(&h), [(0.4, 1.0), (0.4, 1.0), (0.9, 1.0), (1.0, 1.0)], "both selected groups change opacity");
+        assert_eq!(history(&h), before + 1);
+        tap(&mut h, Key::Z, Modifiers::COMMAND);
+        assert_eq!(values(&h), original, "one Undo restores both opacities");
+
+        tap(&mut h, Key::Num6, Modifiers::SHIFT);
+        assert_eq!(values(&h), [(0.7, 0.6), (0.8, 0.6), (0.9, 1.0), (1.0, 1.0)], "Shift changes Fill for both selected groups");
+        assert_eq!(history(&h), before + 1);
+        tap(&mut h, Key::Z, Modifiers::COMMAND);
+        assert_eq!(values(&h), original, "one Undo restores both Fill values");
+    }
+
+    #[test]
+    fn layer_digit_keys_apply_to_more_than_ten_thousand_selected_layers() {
+        use photocraft_doc::{ColorMode, Document, Layer, SampleType, Size};
+
+        let mut a = app(Tool::Move);
+        let mut doc = Document::new("Large selection", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        doc.layers.extend((0..10_002).map(|_| Layer::group("Group", Vec::new())));
+        let selected: Vec<_> = doc.layers.iter().take(10_001).map(|layer| layer.id).collect();
+        a.session.add_document(doc, None);
+        let st = a.session.active_mut().unwrap();
+        st.set_active_layer(selected.last().copied());
+        *st.selection_mut() = selected;
+        let before = st.history.past_len();
+
+        assert!(fire(&mut a, D::OpacityFive, 0.0));
+        let st = a.session.active().unwrap();
+        assert!(st.doc.layers.iter().take(10_001).all(|layer| layer.opacity == 0.5));
+        assert_eq!(st.doc.layers.last().unwrap().opacity, 1.0);
+        assert_eq!(st.history.past_len(), before + 1);
+
+        assert!(a.session.undo());
+        assert!(a.session.active().unwrap().doc.layers.iter().all(|layer| layer.opacity == 1.0));
     }
 
     /// Through the whole app: number keys and ⇧[ ⇧] from the canvas (no widget focused).

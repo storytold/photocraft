@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::cmd::{
     Adjustment, Color, ColorMode, CommandSpec, EngineError, Fill, Layer, LayerContent, LayerId, LayerMask, Result, Session, Value, adjustment_kind, arrange,
     bad, cmyk_param, color_param, has_doc, has_layer, has_selection, json, layer_copy, layer_panel_option, layer_param, mask_new_layer, merge_group, move_mask,
@@ -414,11 +416,15 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
         // one that changes its look turns it into a normal layer ("Layer 0") first.
         let num = |k: &str| p.get(k).and_then(Value::as_f64).is_some_and(|v| v < 1.0);
         let blends = p.get("blend").and_then(Value::as_str).and_then(parse_blend).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
-        for &id in &ids {
-            if num("opacity") || num("fill") || blends {
-                crate::extra_cmds::background_to_layer(doc, id);
+        // These edits leave the tree structure unchanged. Resolve every path before the first
+        // write, which invalidates the document's layer index.
+        let targets = ids.iter().map(|&id| doc.path_of(id).map(|path| (id, path)).ok_or(EngineError::NoLayer(id))).collect::<Result<Vec<_>>>()?;
+        let background = doc.background().map(|layer| layer.id);
+        for (id, path) in targets {
+            let l = doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))?;
+            if background == Some(id) && (num("opacity") || num("fill") || blends) {
+                crate::extra_cmds::unlock_background(l);
             }
-            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
             apply_props(l, p, opacity, fill)?;
         }
         Ok(())
@@ -435,15 +441,22 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
 fn prop_targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
     match p.get("layers") {
         None | Some(Value::Null) => Ok(vec![layer_param(s, p)?]),
-        Some(Value::Array(a)) if !a.is_empty() && a.len() <= 10_000 => {
+        Some(Value::Array(a)) if !a.is_empty() => {
             let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            // Keep the allowance for scripted calls with repeated ids and let large documents
+            // edit their entire selection as one history step.
+            let limit = 10_000.max(doc.layer_count());
+            if a.len() > limit {
+                return Err(bad("layer.setProps", format!("`layers` allows up to {limit} entries, got {}", a.len())));
+            }
             let mut ids = Vec::with_capacity(a.len());
+            let mut seen = HashSet::with_capacity(a.len());
             for v in a {
                 let id = v.as_u64().map(LayerId).ok_or_else(|| bad("layer.setProps", format!("`layers` holds layer ids, got {v}")))?;
                 if doc.layer(id).is_none() {
                     return Err(EngineError::NoLayer(id));
                 }
-                if !ids.contains(&id) {
+                if seen.insert(id) {
                     ids.push(id);
                 }
             }
