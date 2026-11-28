@@ -19,7 +19,7 @@ About 80% of the work parallelizes.
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **~76%** | partly measured: menus 628/628, tools 56/68, panels 30/35, formats 13+4 of 31 |
+| **Feature breadth** | **~79%** | partly measured: menus 628/628, tools 68/68, panels 30/35, formats 13+4 of 31 |
 | **Ready for real work** | **~45%** (40–50%) | estimated: weighted by dimension below |
 | Mainstream practitioner | ~43% (38–48%) | estimated: weekly areas of a typical pro, with discounts ([method](docs/target-app-parity.md#mainstream-practitioner-43)) |
 | Essentials user | ~61% (55–67%) | estimated: core features only ([method](docs/target-app-parity.md#essentials-user-61)) |
@@ -50,7 +50,7 @@ four are partial in depth, none blocked.
 
 | Dimension | % ready | Hours to full | Doc |
 |---|---:|---:|---|
-| Features (depth) | 55% (breadth 76%) | 600–1,000 | [target-app-parity](docs/target-app-parity.md#feature-areas) |
+| Features (depth) | 55% (breadth 79%) | 600–1,000 | [target-app-parity](docs/target-app-parity.md#feature-areas) |
 | UI/UX fidelity (tools, handles, modifiers, brush feel, panels) | 40% | 350–600 | [ui-parity](docs/ui-parity.md), [brush-parity](docs/brush-parity.md), [context-menu-parity](docs/context-menu-parity.md) |
 | File formats | 60% (presence ~80%) | 300–500 | [file-format-parity](docs/file-format-parity.md) |
 | Hardware (GPU, pen, displays) | 50% | 80–150 | [hardware-parity](docs/hardware-parity.md) |
@@ -115,7 +115,7 @@ Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/lo
 | 2 | Performance budgets: the 22 over-budget scenarios and the 150-layer GPU crash | 200–350 h |
 | 3 | User bug backlog to under 100 open | 250–400 h |
 | 4 | Brush and transform feel (brush-parity, ui-parity rows) | 160–290 h |
-| 5 | The 12 missing tools | 60–100 h |
+| 5 | The missing tools: 0 fully missing (all 68 toolbox tools present, 1 partial: the Art History Brush) | 60–100 h |
 
 Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 

@@ -24,7 +24,7 @@ what an agent can't finish alone.
 | G3 | User-reported bug backlog | stability, UI | blocks beta | 250–400 h | [target-app-parity](target-app-parity.md) |
 | G4 | Brush feel | UI / painting | high | 100–180 h | [brush-parity](brush-parity.md) |
 | G5 | Transform, handles and modifiers | UI | high | 60–110 h | [ui-parity](ui-parity.md) |
-| G6 | Missing tools (12) | features | high | 60–100 h | [ui-parity](ui-parity.md#tools) |
+| G6 | Missing tools (0 fully missing, 1 partial) | features | high | 60–100 h | [ui-parity](ui-parity.md#tools) |
 | G7 | Workspaces shown as parameter dialogs | features | high | 80–140 h | [target-app-parity](target-app-parity.md#feature-areas) |
 | G8 | Type depth | features | high | 120–200 h | [target-app-parity](target-app-parity.md#feature-areas) |
 | G9 | Panels, preferences and workspace | UI | medium-high | 150–250 h | [ui-parity](ui-parity.md#panels-and-workspace) |
@@ -67,15 +67,17 @@ what an agent can't finish alone.
   scripted check there) is the only real oracle.
 
 ### G6. Missing tools
-- **Missing (0 of 68):** Art History Brush landed as partial (TOOL-213-20: 8 of 10 styles, Area
+- **Missing (0 of 68 fully missing tools, not counting partials):** Art History Brush landed as partial (TOOL-213-20: 8 of 10 styles, Area
   scales spacing, no Mode on the options bar). Convert Point landed (#3204). Freeform
   Pen and Curvature Pen landed (#1054); Color Sampler landed (#1046, `view.colorSamplers.*`); Horizontal and Vertical Type Mask landed (#1055,
   `type.createSelection`); Perspective Crop landed (#1043, `image.perspectiveCrop`); Frame landed
   (#2914).
 - **Evidence:** `Tool` enum (`crates/ui-egui/src/state.rs`) against the 67 `<tool>` entries of
-  Photoshop's `Default Keyboard Shortcuts.kys` plus Remove, Triangle and Curvature Pen.
+  Photoshop's `Default Keyboard Shortcuts.kys` plus Remove, Triangle and Curvature Pen, minus
+  legacy Rounded Rectangle and Targeted Adjustment.
 - **Impact:** users look for them by name and shortcut; several are daily tools for designers.
-- **Estimate:** 60–100 h (2–9 h each, per the calibration).
+- **Estimate:** 60–100 h (2–9 h each, per the calibration); the hours are now depth work on the
+  one partial tool (Art History Brush), not missing-tool builds.
 
 ### G7. Workspaces shown as parameter dialogs
 - **Missing:** Select and Mask's Refine Hair (#2671), Object Aware refine mode (#2788) and Presets
@@ -257,7 +259,7 @@ what an agent can't finish alone.
   ~150 UI/panels/menus/shortcuts, 94 file/format, 87 layers, 54 painting, 54 selection,
   46 type, 41 performance, 34 transform/move, 25 Linux/Wayland, 24 Windows, 20 macOS.
 - **Impact:** each is a place where a Photoshop user hits something different from what they
-  expect; together they are why ready-for-real-work is ~45% while breadth is ~76%.
+  expect; together they are why ready-for-real-work is ~45% while breadth is ~79%.
 - **Estimate:** 250–400 h (many overlap with other gaps; count each fix once).
 
 ### G4. Brush feel
