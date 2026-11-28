@@ -443,7 +443,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Color Lookup Tables…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.cube; omit to return the text),"size":2..129=33,"title":str?,"scope":"all|selected"="all","layers":[id,…]?} (selected layer IDs use original document stacking; masks are spatial and omitted)"##,
+            r##"{"path":str? (.cube; omit to return the text),"size":7..256=32,"title":str?,"scope":"all|selected"="all","layers":[id,…]?} (selected layer IDs use original document stacking; masks are spatial and omitted)"##,
             has_adjustments,
             color_lookup_tables
         ),

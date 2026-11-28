@@ -128,7 +128,7 @@ pub(crate) mod params {
     }
 
     /// The scope a family's dialog remembers its values under, and the scope [`move_memories`] moves the old value to.
-    pub(super) fn memory_scope(key: &str) -> String {
+    pub(crate) fn memory_scope(key: &str) -> String {
         format!("photocraft.{key}")
     }
 

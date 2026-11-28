@@ -392,18 +392,40 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> Result<String> {
     Ok(bake_cube_layers(size, title, &layers, doc.depth))
 }
 
+/// The grid points `file.export.colorLookupTables` writes, measured on the reference application
+/// (#13749): 32 by default, 7 to 256 accepted. These are the export's own bounds and deliberately
+/// not the reader's `craft_cms::lutfile::MAX_SIZE`: a CUBE written here may hold a grid that
+/// `image.adjustments.colorLookup` will not load.
+const GRID_POINTS_DEFAULT: u64 = 32;
+const GRID_POINTS_MIN: u64 = 7;
+const GRID_POINTS_MAX: u64 = 256;
+
+/// The `size` param as grid points: the default when the row is unset, decimals truncated rather
+/// than rounded (the reference exports 9.6 as 9 points), and the 7..=256 range above. A value that
+/// is not a number keeps today's message; one outside the range is a bad param, never a panic.
+/// The command's rule and the form's rule are different on purpose: the form's whole-number row
+/// rounds what is typed (9.6 in the field exports 10), the issue measures truncation for the param.
+fn grid_points(size: Option<&Value>) -> Result<u64> {
+    const CMD: &str = "file.export.colorLookupTables";
+    let Some(size) = size.filter(|size| !size.is_null()) else { return Ok(GRID_POINTS_DEFAULT) };
+    let Some(typed) = size.as_f64() else {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "size must be an integer".into() });
+    };
+    let points = typed.trunc();
+    // The range is checked on the number itself, before any cast, so nothing that does not fit a
+    // `u64` grid ever reaches one.
+    if !(GRID_POINTS_MIN as f64..=GRID_POINTS_MAX as f64).contains(&points) {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("size must be {GRID_POINTS_MIN}..={GRID_POINTS_MAX}") });
+    }
+    Ok(points as u64)
+}
+
 /// Export either the whole visible stack (backward-compatible default), the Layers panel's
 /// current selection, or an explicit list supplied by scripts/CLI/automation.
 pub(super) fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.export.colorLookupTables";
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let size = match p.get("size") {
-        None | Some(Value::Null) => 33,
-        Some(v) => v.as_u64().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "size must be an integer".into() })?,
-    };
-    if !(2..=craft_cms::lutfile::MAX_SIZE as u64).contains(&size) {
-        return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("size must be 2..={}", craft_cms::lutfile::MAX_SIZE) });
-    }
+    let size = grid_points(p.get("size"))?;
     let scope = match p.get("scope") {
         None | Some(Value::Null) => "all",
         Some(Value::String(s)) => s.as_str(),
@@ -457,3 +479,7 @@ pub(super) fn push_unique(v: &mut Vec<f64>, x: f64) {
 #[cfg(test)]
 #[path = "export_clut_stack_tests.rs"]
 mod export_clut_stack_tests;
+
+#[cfg(test)]
+#[path = "export_clut_grid_tests.rs"]
+mod export_clut_grid_tests;
