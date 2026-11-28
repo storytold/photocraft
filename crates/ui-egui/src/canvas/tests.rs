@@ -919,7 +919,7 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).with_context(app.ctx().clone()).build_ui_state(
             |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
-                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| testing::document_area(app, ui));
                 }
             },
             (app, false),
@@ -990,7 +990,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| testing::document_area(app, ui));
                 extra_windows(app, ui);
             }
         },
@@ -1028,7 +1028,7 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
             |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
-                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| testing::document_area(app, ui));
                 }
             },
             (app, false),

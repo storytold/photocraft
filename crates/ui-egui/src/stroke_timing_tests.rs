@@ -19,7 +19,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );
@@ -356,7 +356,7 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
             let moves = ctx.input(|i| i.raw.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count());
             app.perf.stage.start(t0, moves);
             app.perf.stage.ui_start(t0, Some(0.004));
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
             app.finish_frame(&ctx, crate::gpu_canvas::now_ms() - t0);
         },
         app,

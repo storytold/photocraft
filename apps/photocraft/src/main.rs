@@ -495,6 +495,8 @@ fn main() -> eframe::Result {
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
+    // The git commit of a dev build's checkout, for `--version` and About (build.rs, #5247).
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();

@@ -324,6 +324,14 @@ fn target_on_click(app: &mut PhotocraftApp, l: &Layer, was_active: bool, part: O
         return;
     }
     match part {
+        // A second click on the targeted vector mask un-targets it: the pixels take the target and
+        // Paths drops the mask's path (#16783). The layer mask stays targeted instead.
+        Some(LayerPart::VectorMask) if was_active && app.ui.vector_mask_target => {
+            if app.ui.selected_path.as_deref() == Some("layer") {
+                app.ui.selected_path = None;
+            }
+            actions.push(("ui.vectorMaskTarget".into(), json!(false)));
+        }
         Some(LayerPart::VectorMask) => {
             app.ui.selected_path = Some("layer".into());
             actions.push(("ui.vectorMaskTarget".into(), json!(true)));
@@ -371,7 +379,11 @@ fn activate(
             let command = match on {
                 ActivateOn::Thumbnail(LayerPart::LayerMask | LayerPart::VectorMask) => {
                     let kind = if on == ActivateOn::Thumbnail(LayerPart::VectorMask) { MaskKind::Vector } else { MaskKind::Pixel };
-                    actions.push((if kind == MaskKind::Vector { "ui.vectorMaskTarget" } else { "ui.maskTarget" }.into(), json!(true)));
+                    // A plain double click's first click has already targeted the vector mask, or un-targeted the
+                    // targeted one, which this leaves as it is (#16783).
+                    if kind == MaskKind::Pixel || !ctx.input(|i| i.modifiers.is_none()) {
+                        actions.push((if kind == MaskKind::Vector { "ui.vectorMaskTarget" } else { "ui.maskTarget" }.into(), json!(true)));
+                    }
                     match crate::mask_thumbs_ui::double_click_command(app, kind) {
                         Some((cmd, val)) => actions.push((cmd.into(), val)),
                         None => actions.push(("ui.properties".into(), json!(true))),
@@ -669,3 +681,7 @@ pub(crate) fn run_actions(app: &mut PhotocraftApp, ctx: &egui::Context, actions:
         let _ = app.run(&id, p);
     }
 }
+
+#[cfg(test)]
+#[path = "layers_vector_mask_click_tests.rs"]
+mod layers_vector_mask_click_tests;

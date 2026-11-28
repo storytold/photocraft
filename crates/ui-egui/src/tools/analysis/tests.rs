@@ -444,7 +444,7 @@ fn count_number_height(label_size: u32) -> f32 {
     app.sync_views();
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 600.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

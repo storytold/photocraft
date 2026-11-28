@@ -2,7 +2,7 @@
 
 use craft::behavior::IconId;
 use craft::ui::buttons::{Button, IconButton};
-use craft::ui::contract::{Entry, Props as _, Show as _, Trigger, clicked};
+use craft::ui::contract::{Entry, Props as _, Show as _, Trigger, bind_tracked, clicked};
 use craft::ui::display::Divider;
 use craft::ui::menu::Menu;
 use craft::ui::runtime::access::PopupKind;
@@ -24,9 +24,9 @@ fn select_subject(ui: &mut egui::Ui, app: &mut PhotocraftApp, empty: &str) {
 
 /// Quick Selection's options.
 pub(super) fn quick_selection(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let o = &mut app.ui.tool_options;
-    check(ui, tl!("Sample All Layers"), &mut o.sample_all.quick_selection, true, None);
-    check(ui, tl!("Enhance Edge"), &mut o.enhance_edge, true, None);
+    let (sample_all, enhance_edge) = bind_tracked!(app.ui.tool_options => sample_all.quick_selection, enhance_edge);
+    check(ui, tl!("Sample All Layers"), sample_all, true, None);
+    check(ui, tl!("Enhance Edge"), enhance_edge, true, None);
     hint(ui, crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
     Divider::vertical().show(ui);
     select_subject(ui, app, tl!("No subject found — try Object Selection or the Lasso"));
@@ -57,13 +57,14 @@ fn finder_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Entry::new(GearOption::Manual, tl!("Manual Refresh").to_string()).checked(!auto),
     ];
     let picked = Menu::new(label).opened_by(&button, Trigger::Press).pick(ui, &entries).picked;
-    let o = &mut app.ui.tool_options;
-    match picked {
-        Some(GearOption::Finder) => o.object_finder = !o.object_finder,
-        Some(GearOption::Subtract) => o.object_subtract = !o.object_subtract,
-        Some(GearOption::Auto) => o.object_finder_mode = ObjectFinderMode::Auto,
-        Some(GearOption::Manual) => o.object_finder_mode = ObjectFinderMode::Manual,
-        None => {}
+    if let Some(picked) = picked {
+        let o = &mut app.ui.tool_options;
+        match picked {
+            GearOption::Finder => o.object_finder = !o.object_finder,
+            GearOption::Subtract => o.object_subtract = !o.object_subtract,
+            GearOption::Auto => o.object_finder_mode = ObjectFinderMode::Auto,
+            GearOption::Manual => o.object_finder_mode = ObjectFinderMode::Manual,
+        }
     }
     if clicked(&refresh) {
         crate::object_finder::refresh(app);
@@ -76,9 +77,9 @@ pub(super) fn object_selection(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Op
     crate::panels::options_bar::selection::operation_segments(app, ui, true);
     Divider::vertical().show(ui);
     finder_buttons(app, ui);
-    let o = &mut app.ui.tool_options;
-    check(ui, tl!("Sample All Layers"), &mut o.sample_all.object_selection, true, None);
-    check(ui, tl!("Hard Edge"), &mut o.object_hard_edge, true, None);
+    let (sample_all, hard_edge) = bind_tracked!(app.ui.tool_options => sample_all.object_selection, object_hard_edge);
+    check(ui, tl!("Sample All Layers"), sample_all, true, None);
+    check(ui, tl!("Hard Edge"), hard_edge, true, None);
     Divider::vertical().show(ui);
     select_subject(ui, app, tl!("No subject found — try a rectangle around the object"));
     None

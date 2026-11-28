@@ -29,6 +29,7 @@ use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::FacePaint;
 use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::env::Env;
+use craft::ui::runtime::memory::{SaveKey, run_value, set_run_value};
 use egui::{ColorImage, Pos2, Rect, pos2};
 use photocraft_doc::effects::{FxPaint, GlowSource, GlowTechnique, StrokePosition};
 use photocraft_doc::{Document, Effect, Layer, LayerId};
@@ -49,6 +50,8 @@ mod drop_shadow_last_values_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod outer_glow_last_values_tests;
 #[cfg(test)]
 mod pattern_overlay_picker_tests;
 
@@ -204,6 +207,11 @@ fn values_of(e: &Effect, light: f32) -> Value {
             if let Some(source) = interpolation {
                 set(&mut v, "method", json!(source.method));
                 set(&mut v, "smoothness", json!(source.smoothness));
+            } else {
+                // No recorded method (a baked PSD curve): the factory Smooth (#14900) must not
+                // rebuild it on an unchanged OK, so the page shows its stops as they are.
+                set(&mut v, "method", json!("custom"));
+                drop_keys(&mut v, &["smoothness"]);
             }
             let (stops, opacity) = gradient_field::stops_to_json(&gradient_field::stops_of_doc(stops, &g.opacity_stops));
             set(&mut v, gradient_field::KEY, stops);
@@ -494,6 +502,11 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let keys = blend_keys();
     let mut specs = specs(&keys, &user, light);
     start_from_last_committed(app, &mut specs, light);
+    if let Some(spec) = specs.iter_mut().find(|spec| spec.kind == EffectKind::OuterGlow)
+        && let Some(values) = run_value::<Option<Value>>(app.ctx(), &OUTER_GLOW_SESSION)
+    {
+        spec.defaults = style_params(spec.kind, &values, None).over(&spec.defaults);
+    }
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
     match select {
         None => {
@@ -584,7 +597,29 @@ fn keep_last_committed(app: &PhotocraftApp, style: &LayerStyle) {
     }
 }
 
+/// The starting values of a new Outer Glow live only in this app session (#14945).
+const OUTER_GLOW_SESSION: SaveKey = SaveKey::new("photocraft.layerStyle.outerGlow.session");
+
+/// Remember the last enabled glow added or edited by this confirmation, in the units shown by
+/// the page. The original snapshot distinguishes an edit from an unchanged layer effect.
+fn keep_outer_glow(app: &PhotocraftApp, layer: LayerId, style: &LayerStyle) {
+    let Some(layer) = app.session.active().and_then(|state| state.doc.layer(layer)) else { return };
+    let light = style.global_light;
+    let last = style.effects.iter().zip(&layer.effects.items).rev().find_map(|(draft, applied)| {
+        if draft.kind != EffectKind::OuterGlow || !applied.enabled() {
+            return None;
+        }
+        let values = values_of(applied, light);
+        let original = fx_of(&draft.params).and_then(|fx| serde_json::from_value::<Effect>(fx).ok());
+        original.is_none_or(|original| !original.enabled() || values_of(&original, light) != values).then_some(values)
+    });
+    if let Some(values) = last {
+        set_run_value(app.ctx(), &OUTER_GLOW_SESSION, Some(values));
+    }
+}
+
 /// The effect pages with the user's defaults (Make Default) over the factory ones.
+/// Outer Glow starts at factory values after a restart; Reset still uses the saved default.
 fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) -> Vec<EffectSpec> {
     KINDS
         .iter()
@@ -601,7 +636,8 @@ fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) 
                     spec.fields.insert(after + 1, field);
                 }
             }
-            spec.defaults = style_params(kind, &fresh_params(key, light, user.get(*key)), None).over(&spec.defaults);
+            let saved = if kind == EffectKind::OuterGlow { None } else { user.get(*key) };
+            spec.defaults = style_params(kind, &fresh_params(key, light, saved), None).over(&spec.defaults);
             Some(spec)
         })
         .collect()
@@ -978,8 +1014,12 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
             LayerStyleAsk::NewStyle => save_new_style(app, id, layer),
             LayerStyleAsk::MakeDefault(kind, params) => {
                 // The stored defaults reach new instances from the next open and, through `set_defaults`, the open dialog.
-                match app.run("layer.layerStyle.makeDefault", json!({"kind": kind.key(), "params": style_params_json(&params)})) {
+                let values = style_params_json(&params);
+                match app.run("layer.layerStyle.makeDefault", json!({"kind": kind.key(), "params": values})) {
                     Ok(_) => {
+                        if kind == EffectKind::OuterGlow {
+                            set_run_value(app.ctx(), &OUTER_GLOW_SESSION, Some(values));
+                        }
                         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(id) {
                             dialog.set_defaults(kind, params);
                         }
@@ -1006,6 +1046,7 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
         return fail(app, error);
     }
     keep_last_committed(app, style);
+    keep_outer_glow(app, layer, style);
 }
 
 /// Applies a style preset to the draft without touching the document: Cancel leaves the document
@@ -1056,6 +1097,10 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
     };
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
     let mut values = v["params"].clone();
+    if kind == EffectKind::OuterGlow {
+        // A partial saved default should clear every field seeded from the last OK.
+        values = with_defaults(kind.key(), &values);
+    }
     drop_from_to(&mut values);
     if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
         && let Some(o) = values.as_object_mut()

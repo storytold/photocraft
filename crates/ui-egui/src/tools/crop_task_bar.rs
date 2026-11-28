@@ -36,6 +36,8 @@ pub fn eligible(app: &PhotocraftApp) -> bool {
 
 /// Shows the bar under the active document's crop frame, inside `area` (the canvas body's rect).
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
+    // The canvas run that shows the bar reports where; a replay of that run shows it there still.
+    app.ui.task_bar_shown = None;
     if !wanted(app) {
         return;
     }

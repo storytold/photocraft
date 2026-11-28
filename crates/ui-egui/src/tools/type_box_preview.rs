@@ -375,7 +375,7 @@ pub(crate) fn wake(app: &mut PhotocraftApp, ctx: &egui::Context) {
         p.ctx = Some(ctx.clone());
     }
     if p.running.is_some() {
-        ctx.request_repaint_after(std::time::Duration::from_millis(POLL_MS));
+        craft::ui::runtime::frame::request_repaint_after(ctx, std::time::Duration::from_millis(POLL_MS).as_secs_f64());
     }
 }
 
