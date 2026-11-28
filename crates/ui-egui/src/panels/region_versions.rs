@@ -51,7 +51,9 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let gesture = crate::canvas::tools::in_gesture(app);
     let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
     let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), hidden);
-    version(app, (bar_view(app), sessions, shown, brush(app), colours(app), gesture, paths))
+    // The Search button at the bar's right end shows whether the search is open; Escape closes it without a command.
+    let right_end = app.ui.palette.open;
+    version(app, (bar_view(app), sessions, shown, brush(app), colours(app), gesture, paths, right_end))
 }
 
 /// The version of the status bar: the readout's item and the zoom of the active canvas, the status message, the
