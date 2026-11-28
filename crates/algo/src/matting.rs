@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use crate::segment::{RgbImage, Sampler};
 use crate::selection::{Region, edt};
 
+/// Largest feather (pixels) the refinement honours; larger values would build a Gaussian kernel
+/// thousands of times wider than any image.
+const MAX_FEATHER: f32 = 1000.0;
+
 /// Select and Mask parameters (Photoshop's units).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -61,7 +65,8 @@ impl RefineParams {
         self.smooth.clamp(0.0, 100.0) / 100.0 * 4.0
     }
     fn feather_sigma(&self) -> f32 {
-        self.feather.max(0.0) / 2.0
+        // The same bound the Select and Mask command applies; `clamp` would pass a NaN through.
+        if self.feather.is_nan() { 0.0 } else { self.feather.clamp(0.0, MAX_FEATHER) / 2.0 }
     }
     /// The factor Shift Edge multiplies each pixel's odds by: `49^(shift / 100)`, 1 at 0%.
     fn shift_odds(&self) -> f32 {
@@ -79,14 +84,14 @@ impl RefineParams {
         } else {
             0
         };
-        edge + (3.0 * self.smooth_sigma()).ceil() as i32 + (3.0 * self.feather_sigma()).ceil() as i32 + 2
+        edge.saturating_add((3.0 * self.smooth_sigma()).ceil() as i32).saturating_add((3.0 * self.feather_sigma()).ceil() as i32).saturating_add(2)
     }
     /// How far the refined mask can extend beyond the original.
     pub fn spread(&self) -> i32 {
         (if self.uses_image() { self.radius.ceil() as i32 } else { 0 })
-            + (3.0 * self.smooth_sigma()).ceil() as i32
-            + (3.0 * self.feather_sigma()).ceil() as i32
-            + 1
+            .saturating_add((3.0 * self.smooth_sigma()).ceil() as i32)
+            .saturating_add((3.0 * self.feather_sigma()).ceil() as i32)
+            .saturating_add(1)
     }
 }
 
@@ -437,7 +442,7 @@ fn refine_mask_with(
     if bbox.is_empty() {
         return None;
     }
-    let halo = p.halo() + brush.map_or(0, |b| i32::try_from(b.window() * 4).unwrap_or(i32::MAX));
+    let halo = p.halo().saturating_add(brush.map_or(0, |b| i32::try_from(b.window() * 4).unwrap_or(i32::MAX)));
     let mut tiles = Vec::new();
     let mut y = bbox.y0;
     while y < bbox.y1 {
@@ -1430,6 +1435,33 @@ mod tests {
         assert_eq!(c.format(), PixelFormat::GRAYA8);
         assert_eq!(c.pixel(3, 1)[1], 0.0);
         assert!((c.pixel(1, 1)[0] - 0.5).abs() < 0.01 && c.pixel(1, 1)[1] == 1.0);
+    }
+
+    // refine_mask and refine_mask_brushed are test-only, so these live here, not in tests/it.
+    #[test]
+    fn brushed_refine_survives_extreme_params() {
+        let canvas = Rect::new(0, 0, 64, 64);
+        let img = RgbImage::new(64, 64);
+        let sampler = ImageSampler { img: &img, origin: (0, 0) };
+        let stroke = EdgeStroke { points: vec![(32.0, 32.0)], size: 20.0, add: true };
+        let brush = EdgeBrush::new(&[stroke], canvas);
+        let mask = |r: Rect| vec![1.0_f32; r.width() as usize * r.height() as usize];
+        let p = RefineParams { radius: 1e30, feather: f32::MAX, smooth: f32::MAX, ..RefineParams::default() };
+        let _ = refine_mask_brushed(&sampler, &mask, Rect::new(16, 16, 48, 48), canvas, &p, brush.as_ref());
+    }
+
+    #[test]
+    fn feather_nan_leaves_the_mask_unblurred() {
+        // A NaN feather must act as no feather, not turn every refined pixel into NaN (unselected).
+        let canvas = Rect::new(0, 0, 64, 64);
+        let img = RgbImage::new(64, 64);
+        let sampler = ImageSampler { img: &img, origin: (0, 0) };
+        // A selected square on an unselected canvas, so the tiles are mixed and actually refined.
+        let content = Rect::new(16, 16, 48, 48);
+        let mask = |r: Rect| (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| if content.contains(x, y) { 1.0_f32 } else { 0.0 })).collect();
+        let p = RefineParams { radius: 0.0, smooth: 0.0, feather: f32::NAN, ..RefineParams::default() };
+        let out = refine_mask(&sampler, &mask, content, canvas, &p).expect("refined mask");
+        assert!(out.at(32, 32) > 0.99, "centre coverage {}", out.at(32, 32));
     }
 }
 
