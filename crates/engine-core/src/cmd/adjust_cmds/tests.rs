@@ -200,25 +200,6 @@ fn color_lookup_builtin_data_and_errors() {
         }
     }
     assert!(s.execute("image.adjustments.colorLookup", json!({"lut": "nope"})).is_err());
-    // A custom input domain is rejected with the reason instead of silently shifting the look.
-    // (A fresh pixel layer: this `s` still has the adjustment layer active, and the command is
-    // disabled there - the domain rejection itself needs a pixel layer to reach.)
-    s.execute("layer.new.layer", json!({})).unwrap();
-    let domained = "TITLE \"d\"
-DOMAIN_MIN 0.1 0.1 0.1
-DOMAIN_MAX 0.9 0.9 0.9
-LUT_3D_SIZE 2
-0 0 0
-0 0 1
-0 1 0
-0 1 1
-1 0 0
-1 0 1
-1 1 0
-1 1 1
-";
-    let e = s.execute("image.adjustments.colorLookup", json!({"data": domained, "fileName": "log.cube"})).unwrap_err();
-    assert!(e.to_string().contains("DOMAIN_MIN"), "{e}");
     assert!(s.execute("image.adjustments.colorLookup", json!({"data": "LUT_3D_SIZE 3\n0 0 0\n"})).is_err());
     assert!(s.execute("layer.newAdjustmentLayer.colorLookup", json!({"file": "/nonexistent/x.cube"})).is_err());
     let looks = s.execute("image.adjustments.colorLookup.list", json!({})).unwrap();
@@ -296,6 +277,69 @@ fn color_lookup_file_round_trips_psd_in_its_own_format() {
     let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
     s.execute("layer.setAdjustment", json!({"layer": id.0, "lut": "none"})).unwrap();
     assert!(matches!(adjustment_of(&s, id), Adjustment::ColorLookup { source: None, lut: None, .. }));
+}
+
+/// #11620: a `.cube`'s declared input domain is carried into the layer and applied (it used to be
+/// refused): an identity table over 0.25..0.75 maps 0.25 to 0, 0.5 to 0.5 and 0.75 to 1.
+#[test]
+fn color_lookup_carries_the_cube_input_domain() {
+    let cube = "TITLE \"d\"\nDOMAIN_MIN 0.25 0.25 0.25\nDOMAIN_MAX 0.75 0.75 0.75\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    let bands = |x: i32| {
+        if x < 16 {
+            0.25
+        } else if x < 32 {
+            0.5
+        } else {
+            0.75
+        }
+    };
+    let probes = [(5, 0.0), (20, 0.5), (40, 1.0)];
+    // Destructive, at every depth.
+    for depth in DEPTHS {
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |x, _| [bands(x), bands(x), bands(x), 1.0]);
+        s.execute("image.adjustments.colorLookup", json!({"data": cube, "fileName": "log.cube"})).unwrap();
+        for (x, want) in probes {
+            let got = rgba(&s, x, 5);
+            for c in 0..3 {
+                assert!((got[c] - want).abs() < 2.0 / 255.0, "{depth}-bit x={x}: {got:?}");
+            }
+        }
+    }
+    // As an adjustment layer: stored on the layer, rendered, kept by settings edits.
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| [bands(x), bands(x), bands(x), 1.0]);
+    let r = s.execute("layer.newAdjustmentLayer.colorLookup", json!({"data": cube, "fileName": "log.cube"})).unwrap();
+    let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+    let domain_of = |s: &Session| match adjustment_of(s, id) {
+        Adjustment::ColorLookup { domain_min, domain_max, .. } => (domain_min, domain_max),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(domain_of(&s), ([0.25; 3], [0.75; 3]));
+    for (x, want) in probes {
+        let px = photocraft_compose::render(doc(&s), Rect::from_xywh(x, 5, 1, 1)).px[0];
+        for c in 0..3 {
+            assert!((px[c] - want).abs() < 2.0 / 255.0, "x={x}: {px:?}");
+        }
+    }
+    s.execute("layer.setAdjustment", json!({"layer": id.0, "interpolation": "tetrahedral", "dither": true})).unwrap();
+    assert_eq!(domain_of(&s), ([0.25; 3], [0.75; 3]), "settings edits keep the table's domain");
+    // Saved as PSD and reopened: the embedded file brings its domain back.
+    let psd = photocraft_io::export(doc(&s), "psd", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+    let back = photocraft_io::import("x.psd", &psd).unwrap().document;
+    let layer = back.walk().into_iter().map(|(_, _, l)| l).find(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::ColorLookup { .. }))).unwrap();
+    assert!(
+        matches!(&layer.content, LayerContent::Adjustment(Adjustment::ColorLookup { domain_min, domain_max, .. }) if *domain_min == [0.25; 3] && *domain_max == [0.75; 3]),
+        "{:?}",
+        layer.content.kind_name()
+    );
+    // A built-in look (plain 0..1) replaces the table and its domain; so does "none".
+    s.execute("layer.setAdjustment", json!({"layer": id.0, "lut": "dayForNight"})).unwrap();
+    assert_eq!(domain_of(&s), ([0.0; 3], [1.0; 3]));
+    s.execute("layer.setAdjustment", json!({"layer": id.0, "data": cube, "fileName": "log.cube"})).unwrap();
+    assert_eq!(domain_of(&s), ([0.25; 3], [0.75; 3]));
+    s.execute("layer.setAdjustment", json!({"layer": id.0, "lut": "none"})).unwrap();
+    assert_eq!(domain_of(&s), ([0.0; 3], [1.0; 3]));
 }
 
 fn adjustment_of(s: &Session, id: photocraft_doc::LayerId) -> Adjustment {

@@ -42,10 +42,8 @@ fn read(d: &Descriptor) -> Option<(&[u8], &'static str, String, bool)> {
         "look" => craft_cms::lutfile::Format::Look,
         _ => craft_cms::lutfile::Format::Cube,
     };
-    let lut = craft_cms::lutfile::parse_as(parser, bytes).ok()?;
-    if !lut.domain_is_default() {
-        return None;
-    }
+    // The native command carries a declared input domain (#11620), so any parseable table replays.
+    craft_cms::lutfile::parse_as(parser, bytes).ok()?;
     Some((bytes, format, get_text(d, "LUT3DFileName")?, get_bool(d, "Dthr")?))
 }
 
