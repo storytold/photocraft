@@ -223,3 +223,106 @@ fn percent_is_of_the_selected_artboard_and_stays_percent() {
     let id = open_dialog(&mut h);
     assert_eq!(fields(&h, id)["columns"]["size"]["value"], 50.0);
 }
+
+/// Preferences ▸ Units & Rulers ▸ Gutter: the first layout starts from the preferred gutter;
+/// once the dialog has been used, its remembered values win.
+#[test]
+fn the_first_layout_starts_from_the_units_and_rulers_gutter() {
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["columns"]["gutter"]["value"], 12.0, "the preference's default, in points, shown in the ruler unit");
+    assert!(!h.state().ui.view.guide_layout_saved, "nothing confirmed yet");
+    assert!(confirm(&mut h, id));
+    assert!(h.state().ui.view.guide_layout_saved, "confirming marks the layout saved");
+    // The dialog has been used: its remembered values win, not the new preference.
+    h.state_mut().session.prefs.edit(|p| p.units_and_rulers.gutter = 8.0);
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["columns"]["gutter"]["value"], 12.0, "remembered values stay");
+}
+
+/// A layout saved with exactly the factory defaults still counts as remembered: a
+/// later Units & Rulers gutter change must not reseed its gutter (#3549 review).
+#[test]
+fn a_saved_default_layout_is_not_reseeded_from_the_gutter_preference() {
+    let mut app = app();
+    app.ui.view.guide_layout = crate::view_cmds::default_guide_layout();
+    app.ui.view.guide_layout_saved = true;
+    app.session.prefs.edit(|p| p.units_and_rulers.gutter = 8.0);
+    let mut h = harness(app);
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["columns"]["gutter"]["value"], 20.0, "the remembered default gutter wins over the changed preference");
+}
+
+/// A first layout with no remembered values still starts from the gutter preference,
+/// not the factory default: only a confirmed layout counts as remembered.
+#[test]
+fn an_unsaved_default_layout_still_starts_from_the_gutter_preference() {
+    let mut app = app();
+    app.session.prefs.edit(|p| p.units_and_rulers.gutter = 8.0);
+    let mut h = harness(app);
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["columns"]["gutter"]["value"], 8.0, "first use seeds from the preference");
+}
+
+/// A typed gutter converts at the document's resolution: the "12 pt" seeded from the
+/// preference is 50 px at 300 dpi and 12 px at 72 dpi (option B, #3549 review). The
+/// dialog's fields keep the stored points value; the guides carry the conversion.
+#[test]
+fn a_typed_gutter_converts_at_the_documents_resolution() {
+    for (resolution, gap) in [(300.0, 50.0), (72.0, 12.0)] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 1200, "height": 800, "resolution": resolution})).unwrap();
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let mut h = harness(app);
+        let id = open_dialog(&mut h);
+        assert_eq!(fields(&h, id)["columns"]["gutter"]["value"], 12.0, "seeded from the preference, in points");
+        assert_eq!(fields(&h, id)["columns"]["gutter"]["unit"], "points");
+        set_group(&mut h, id, "columns", |c| c["number"] = json!(2));
+        assert!(confirm(&mut h, id));
+        // Two columns across 1200 px with the gutter between them.
+        let col = (1200.0 - gap) / 2.0;
+        assert_eq!(guides(&h).vertical, vec![0.0, col, col + gap, 1200.0], "at {resolution} dpi");
+    }
+}
+
+/// A typed gutter is read in its own unit and converted at the document's resolution.
+#[test]
+fn typed_gutters_convert_to_pixels_on_confirm() {
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| {
+        c["number"] = json!(2);
+        c["gutter"]["value"] = json!(12.0);
+        c["gutter"]["unit"] = json!("points");
+    });
+    set_group(&mut h, id, "rows", |r| {
+        r["enabled"] = json!(true);
+        r["number"] = json!(2);
+        r["gutter"]["value"] = json!(2.0);
+        r["gutter"]["unit"] = json!("centimetres");
+    });
+    assert!(confirm(&mut h, id));
+    assert_eq!(guides(&h).vertical, vec![0.0, 594.0, 606.0, 1200.0], "12 pt is 12 px at 72 dpi");
+    let remembered = &h.state().ui.view.guide_layout;
+    assert!((remembered["rowGutter"].as_f64().unwrap() - 2.0 / 2.54 * 72.0).abs() < 1e-6, "2 cm remembered as pixels: {remembered}");
+}
+
+/// An unparseable gutter is rejected on confirm, not silently treated as zero.
+#[test]
+fn an_unparseable_gutter_keeps_the_dialog_open() {
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    let expected = shown(&h).unwrap().0;
+    let mut group = fields(&h, id)["columns"].clone();
+    group["number"] = json!(2);
+    group["gutter"]["value"] = json!("banana");
+    assert!(set(&mut h, id, "columns", group).is_err(), "an unparseable gutter is rejected");
+    assert!(h.state().framework.dialogs.is_open::<HostedGuideLayoutDialog>(), "the dialog stays open");
+    assert_eq!(shown(&h).unwrap().0, expected, "the last valid preview is kept");
+    // A valid typed value confirms fine from the same state.
+    set_group(&mut h, id, "columns", |c| {
+        c["gutter"]["value"] = json!(12.0);
+        c["gutter"]["unit"] = json!("points");
+    });
+    assert!(confirm(&mut h, id));
+}

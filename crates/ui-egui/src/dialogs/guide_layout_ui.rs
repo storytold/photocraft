@@ -213,6 +213,17 @@ pub fn open(app: &mut PhotocraftApp) -> Option<DialogId> {
     let units = guide_units(app);
     let document = GuideRect::new(0.0, 0.0, units.width_px, units.height_px);
     let mut options = options_of(&app.ui.view.guide_layout, &units);
+    // Preferences ▸ Units & Rulers ▸ Gutter: the first layout starts from the preferred
+    // gutter, as in Photoshop — but only when nothing has been remembered yet. A layout
+    // confirmed once wins even when it equals the factory defaults (the saved flag
+    // marks that), and a primed-but-unsaved layout wins too (it differs from the
+    // factory defaults), so first use is unsaved AND equal to the defaults. The
+    // preference is in points (see UnitsAndRulers::gutter), so seed it as a points
+    // length: it is shown in the ruler unit on open and converted at the document's
+    // resolution, instead of a bare number silently meaning pixels.
+    if !app.ui.view.guide_layout_saved && options == GuideLayoutOptions::default() {
+        options.columns.gutter = GuideLength::new(app.session.prefs().units_and_rulers.gutter, UnitKind::Points);
+    }
     // A remembered Selected Artboards target needs a selected artboard.
     if options.target == GuideTarget::SelectedArtboards && artboards.is_empty() {
         options.target = GuideTarget::Document;
@@ -274,6 +285,7 @@ fn apply(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, result: &GuideLayo
     let hex = format!("#{r:02x}{g:02x}{b:02x}");
     app.session.prefs.edit(|prefs| prefs.guides_grid_and_slices.guide_color = hex);
     app.ui.view.guide_layout = remembered_json(&result.options, &units);
+    app.ui.view.guide_layout_saved = true;
     Ok(())
 }
 

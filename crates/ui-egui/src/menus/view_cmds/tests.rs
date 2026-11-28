@@ -552,7 +552,8 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let first = open_form(&mut app, &ctx, "view.newGuideLayout");
     let shown = fields(&app, first);
     assert_eq!(shown["columns"]["number"], 8);
-    assert_eq!(shown["columns"]["gutter"]["value"], 20.0);
+    // First use seeds the gutter from the Units & Rulers preference (12 pt, 12 px at 72 dpi).
+    assert_eq!(shown["columns"]["gutter"]["value"], 12.0);
     set(&mut app, &ctx, first, "columns", guide_group(&shown, "columns", 2, 0.0));
     set(&mut app, &ctx, first, "rows", guide_group(&shown, "rows", 2, 0.0));
     confirm(&mut app, &ctx, first).unwrap();
