@@ -10,28 +10,34 @@ use crate::control::dialogs::workspace_ui;
 
 /// A textured layer (a checker of two colours over a gradient) with a 20 px square selected.
 fn app_with_selection() -> Box<PhotocraftApp> {
+    textured_app_with_selection(200, 160, 20)
+}
+
+fn textured_app_with_selection(width: i32, height: i32, side: i32) -> Box<PhotocraftApp> {
+    let x0 = (width - side) / 2;
+    let y0 = (height - side) / 2;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.session.execute("file.new", json!({"width": 200, "height": 160, "depth": 8})).unwrap();
+    app.session.execute("file.new", json!({"width": width, "height": height, "depth": 8})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
     app.session
         .edit("paint", |doc, active| {
             let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
-            for y in 0..160 {
-                for x in 0..200 {
-                    let v = ((x / 6 + y / 6) % 2) as f32 * 0.5 + x as f32 / 400.0;
+            for y in 0..height {
+                for x in 0..width {
+                    let v = ((x / 6 + y / 6) % 2) as f32 * 0.5 + x as f32 / (2.0 * width as f32);
                     s.write_pixel(x, y, &[v, 0.3, 1.0 - v, 1.0]);
                 }
             }
             // A red blemish to remove.
-            for y in 72..88 {
-                for x in 92..108 {
+            for y in y0 + 2..y0 + side - 2 {
+                for x in x0 + 2..x0 + side - 2 {
                     s.write_pixel(x, y, &[1.0, 0.0, 0.0, 1.0]);
                 }
             }
             Ok(())
         })
         .unwrap();
-    app.session.execute("select.rect", json!({"x": 90, "y": 70, "width": 20, "height": 20})).unwrap();
+    app.session.execute("select.rect", json!({"x": x0, "y": y0, "width": side, "height": side})).unwrap();
     app.sync_views();
     app
 }
@@ -301,7 +307,8 @@ fn a_refused_fill_keeps_the_last_remembered_settings() {
 #[test]
 fn a_background_fill_remembers_its_settings_only_when_its_job_is_applied() {
     use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
-    let mut app = app_with_selection();
+    // This test needs a real fill, not a large sampling window. Leave room for 7 px donor patches.
+    let mut app = textured_app_with_selection(48, 40, 8);
     let saved = |app: &PhotocraftApp| app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS).cloned();
     open(&mut app).unwrap();
     ui(&mut app, json!({"output": "current", "colorAdaptation": "none", "apply": true})).unwrap();
