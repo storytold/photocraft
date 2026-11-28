@@ -46,6 +46,8 @@ pub mod layer_row_ui;
 pub(super) mod layer_transfer;
 mod layers;
 pub(crate) mod layers_events;
+#[cfg(test)]
+mod layers_group_ctrl_click_tests;
 pub mod layers_panel_ui;
 pub(crate) mod layers_tree;
 pub(super) mod mask_props_ui;
