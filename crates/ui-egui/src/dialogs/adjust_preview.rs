@@ -254,7 +254,7 @@ pub(crate) fn targets_channel(app: &PhotocraftApp, idx: usize, kind: &str, param
 fn cheap(app: &PhotocraftApp, doc: &Document) -> bool {
     match &app.gpu {
         Some(g) => g.supports(doc),
-        None => crate::proxy::preview_factor(doc, crate::proxy::reduced_previews(app)) <= 1,
+        None => crate::proxy::app_factor(app, doc) <= 1,
     }
 }
 
@@ -426,15 +426,16 @@ pub fn gpu_proxy(app: &mut PhotocraftApp, idx: usize, zoom: f32) -> Option<Proxy
     }
     let gpu = app.gpu.clone()?;
     update(app, idx)?;
-    let p = app.adjust_preview.as_mut()?;
-    p.shown.as_ref()?;
+    let p = app.adjust_preview.as_ref()?;
+    let (_, key) = p.shown.as_ref()?;
+    let key = *key;
     let base = p.base.clone()?;
-    let key = p.shown.as_ref()?.1;
     // `ProxyPlan::factor` is 1 for a document too small for a proxy, which `k < 2` refuses with the near views.
-    let k = ProxyPlan::factor(zoom, base.size.area(), true);
+    let k = ProxyPlan::factor(zoom, crate::proxy::planning_area(app, &base), true);
     if k < 2 || !photocraft_compose::proxy::proxy_faithful(&base) {
         return None;
     }
+    let p = app.adjust_preview.as_mut()?;
     if p.proxy.as_ref().is_none_or(|g| g.k != k) {
         let d = proxy_base(&base, k);
         if !gpu.supports(&d) {

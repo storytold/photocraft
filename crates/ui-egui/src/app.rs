@@ -92,6 +92,8 @@ impl PhotocraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             control: None,
             live_adjust: None,
+            #[cfg(test)]
+            preview_test_area_multiplier: 1,
             frame: 0,
             notices_live: notices::Live::default(),
             low_memory: crate::memory_warning::Watch::default(),

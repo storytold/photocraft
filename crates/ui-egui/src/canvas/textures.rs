@@ -97,7 +97,7 @@ pub(crate) fn canvas_picture(
     if proxy == ProxyPreview::Document
         && crate::adjust_preview::shown_key(app) == Some(preview_key)
         && let Some(st) = app.session.documents().get(idx)
-        && crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(app)) > 1
+        && crate::proxy::app_factor(app, &st.doc) > 1
     {
         (doc, preview_key) = (st.doc.clone(), 0);
     }
