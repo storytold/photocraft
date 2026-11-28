@@ -142,6 +142,11 @@ fn orientation_6_jpeg_converts_upright_and_rotates_back() {
     for v in [&mut ia, &mut ib] {
         v.as_object_mut().unwrap().remove("name");
         v["snapshots"][0].as_object_mut().unwrap().remove("name");
+        // The History Brush's default source names the open snapshot, which carries the document's
+        // own name as well (#12845); its shape still has to match.
+        if let Some(source) = v["historySource"].as_object_mut() {
+            source.remove("name");
+        }
     }
     assert_eq!(ia, ib);
     let (pa, pb) = (d.join("a.png"), d.join("b.png"));

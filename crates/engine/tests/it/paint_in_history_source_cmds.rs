@@ -31,9 +31,11 @@ fn close(a: [f32; 3], b: [f32; 3]) -> bool {
 }
 
 #[test]
-fn default_source_is_the_oldest_state() {
+fn default_source_is_the_open_snapshot() {
     let mut s = session();
-    assert_eq!(photocraft_engine::inspect::document(s.active().unwrap())["historySource"], json!({"state": 0, "label": "New"}));
+    // #12845: the default is the document as opened, not the oldest state held.
+    let name = s.active().unwrap().doc.name.clone();
+    assert_eq!(photocraft_engine::inspect::document(s.active().unwrap())["historySource"], json!({"snapshot": 0, "name": name}));
     brush(&mut s, json!({}));
     assert!(close(rgb(&s), [1.0, 1.0, 1.0]), "{:?}", rgb(&s));
 }
@@ -105,15 +107,17 @@ fn deleting_the_source_state_leaves_no_source() {
 }
 
 /// Edit › Purge › Histories clears the states: the source goes back to the default instead of
-/// leaving every document without one (#3536 review).
+/// leaving every document without one (#3536 review). Since #12845 that default is the open
+/// snapshot, which Purge keeps, so the brush paints the document as opened.
 #[test]
 fn purging_histories_resets_a_state_source() {
     let mut s = session();
     s.execute("history.setSource", json!({"state": 1})).unwrap();
     s.execute("edit.purge.histories", json!({})).unwrap();
-    assert_eq!(photocraft_engine::inspect::document(s.active().unwrap())["historySource"], json!({"state": 0, "label": "Fill"}));
+    let name = s.active().unwrap().doc.name.clone();
+    assert_eq!(photocraft_engine::inspect::document(s.active().unwrap())["historySource"], json!({"snapshot": 0, "name": name}));
     brush(&mut s, json!({}));
-    assert!(close(rgb(&s), [0.0, 1.0, 0.0]), "the only state left: {:?}", rgb(&s));
+    assert!(close(rgb(&s), [1.0, 1.0, 1.0]), "the open snapshot Purge kept: {:?}", rgb(&s));
     s.execute("edit.fill", json!({"contents": "history"})).unwrap();
 }
 

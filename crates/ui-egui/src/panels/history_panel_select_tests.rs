@@ -417,6 +417,43 @@ fn the_first_snapshot_row_follows_the_option() {
     }
 }
 
+/// #12845: the source column marks the open snapshot row by default, still when the states have
+/// filled up and fallen off, and nothing once that row is deleted.
+#[test]
+fn the_source_icon_starts_on_the_open_snapshot_row() {
+    let mut app = app();
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::Snapshot(0))), "the open snapshot row");
+    app.session.active_mut().unwrap().history.max_states = 2;
+    for _ in 0..4 {
+        app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    }
+    let st = app.session.active().unwrap();
+    assert!(st.history.entries().first().is_some_and(|label| label != "New"), "older states fell off: {:?}", st.history.entries());
+    assert!(matches!(history::source_key(st), Some(HistoryKey::Snapshot(0))), "still the open snapshot row");
+    assert!(rows(st).iter().any(|r| matches!(r.key, HistoryKey::Snapshot(0))), "the row is listed");
+    // Deleting that row leaves the panel with no source icon at all.
+    app.run("history.deleteSnapshot", json!({"snapshot": 0})).unwrap();
+    assert_eq!(history::source_key(app.session.active().unwrap()), None, "no source until one is set");
+    app.run("history.setSource", json!({"state": 0})).unwrap();
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::State(_))), "a state row again");
+}
+
+/// #12845: the source column answers a click. Clicking a snapshot row's source box sends
+/// `history.setSource {snapshot}` and the panel marks that row; a state row wins again when it is
+/// clicked.
+#[test]
+fn a_click_on_a_snapshot_source_box_makes_it_the_source() {
+    let mut app = app();
+    let state_row = state_key(&app, 1);
+    apply(&mut app, HistoryEvent::SetSource(state_row));
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::State(_))), "a state row first");
+    apply(&mut app, HistoryEvent::SetSource(HistoryKey::Snapshot(0)));
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::Snapshot(0))), "the open snapshot row");
+    let current_row = current_key(&app);
+    apply(&mut app, HistoryEvent::SetSource(current_row));
+    assert!(matches!(history::source_key(app.session.active().unwrap()), Some(HistoryKey::State(_))), "the current state row");
+}
+
 /// Snapshot thumbnails belong to the snapshot's document (#6087): a document reopened with the same id (a
 /// `.pcraft` keeps it) gets fresh ones rather than the closed document's, even before the views are synced.
 #[test]

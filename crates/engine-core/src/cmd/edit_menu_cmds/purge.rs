@@ -40,6 +40,9 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
         if s.documents().iter().any(|d| d.history.can_undo() || d.history.can_redo()) {
             for st in &mut s.docs {
                 st.history.clear();
+                // The state source went back to the default with the states (#2966), so the
+                // engine's record of that choice goes with it (#12845).
+                st.source_state_id = None;
                 st.coalesce = None;
             }
             freed += b;

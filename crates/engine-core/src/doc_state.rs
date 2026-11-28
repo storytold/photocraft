@@ -64,8 +64,17 @@ pub struct DocState {
     /// When Saving), so saving an unchanged document again doesn't add a duplicate row.
     pub(crate) save_snapshot: Option<u64>,
     /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
-    /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
+    /// the source is a state ([`DocState::source_state_id`]) or the default
+    /// ([`crate::history_source_cmds::source`]).
     pub(crate) source_snapshot: Option<u64>,
+    /// The state id chosen as the History Brush's source (`history.setSource {state}`); `None`: no
+    /// state was set, so the default applies (#12845). The history keeps the state it names past its
+    /// own time; Edit › Purge › Histories clears it along with the states it removed.
+    pub(crate) source_state_id: Option<u64>,
+    /// The snapshot holding the document as opened (`DocState::new`), `None` when History Options ›
+    /// Automatically Create First Snapshot was off when the document was admitted. It is the
+    /// History Brush's default source (#12845); deleting that snapshot leaves the default empty.
+    pub(crate) open_snapshot: Option<u64>,
     /// Names the user gave layers (Rename Layer, Duplicate Layer's Name, `type.edit`'s name): a
     /// type layer keeps such a name although it looks like a copy's ("Title copy 2"), while a
     /// name Duplicate Layer made still follows the text (#9023). Kept for the session only.
@@ -130,7 +139,8 @@ impl DocState {
         };
         let doc = Arc::new(doc);
         // Photoshop's first snapshot: the document as opened, named after it, so the History
-        // panel's top row can always bring it back (#2966).
+        // panel's top row can always bring it back (#2966). It is also the History Brush's default
+        // source (#12845).
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
             inputs: DocStateInputs { doc, active_layer, selected_layers: active_layer.into_iter().collect() },
@@ -159,6 +169,10 @@ impl DocState {
             next_snapshot: 1,
             save_snapshot: None,
             source_snapshot: None,
+            source_state_id: None,
+            // The id `DocState::new` gives the document-as-opened snapshot above; session's
+            // `add_document` clears it when Automatically Create First Snapshot is off.
+            open_snapshot: Some(0),
             typed_names: Default::default(),
             pixel_revision: 0,
         }

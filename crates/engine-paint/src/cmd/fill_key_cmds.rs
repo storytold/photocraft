@@ -1,6 +1,7 @@
 //! Photoshop's fill keys (#249): ⌥⌫ fills the selection (or the whole layer) with the foreground
 //! colour, ⌘⌫ with the background colour, and with ⇧ added they preserve transparency. ⌘⌥⌫ fills
-//! from history: the History Brush's source state (the oldest state still held). Photoshop
+//! from history: the History Brush's source (by default its open snapshot, the document as
+//! opened; #12845). Photoshop
 //! has no menu item for them; here they are ordinary commands with default shortcuts, so they
 //! appear in Edit › Keyboard Shortcuts (Tools) and can be rebound, recorded and driven by agents.
 //!
@@ -156,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Fill from History",
             menu: &[],
             shortcut: Some("Cmd+Alt+Backspace"),
-            params: r##"{"state":n? (default: the History Brush's source, the oldest state still held),"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?,"preserveTransparency":bool?}"##,
+            params: r##"{"state":n? (default: the History Brush's source, by default its open snapshot - the document as opened),"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?,"preserveTransparency":bool?}"##,
             enabled: fill_enabled,
             run: fill_history,
             journal: true,
@@ -262,7 +263,8 @@ mod tests {
         s.execute("edit.fillForeground", json!({})).unwrap();
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 6})).unwrap();
         s.execute("edit.fillHistory", json!({})).unwrap();
-        // The oldest state (the new, transparent layer) comes back inside the selection only.
+        // The open snapshot (the new, transparent document; #12845) comes back inside the
+        // selection only.
         assert_eq!(px(&s, 1, 1)[3], 0.0);
         assert_eq!(px(&s, 6, 1), [1.0, 0.0, 0.0, 1.0]);
         // A named state, and refused ones change nothing.

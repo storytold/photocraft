@@ -58,8 +58,8 @@ fn current_key(app: &PhotocraftApp) -> Option<HistoryKey> {
     st.history.row_id(st.history.past_len()).map(HistoryKey::State)
 }
 
-/// The row that is the History Brush's source.
-fn source_key(st: &photocraft_engine::DocState) -> Option<HistoryKey> {
+/// The row that is the History Brush's source: the open snapshot by default (#12845).
+pub(crate) fn source_key(st: &photocraft_engine::DocState) -> Option<HistoryKey> {
     match photocraft_engine::history_source_cmds::source(st)? {
         HistorySource::State(row) => st.history.row_id(row).map(HistoryKey::State),
         HistorySource::Snapshot(id) => Some(HistoryKey::Snapshot(id)),

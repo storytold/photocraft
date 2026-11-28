@@ -225,9 +225,11 @@ impl Session {
         st.history.max_bytes = self.prefs.get().performance.history_cap_bytes();
         st.history.non_linear = self.prefs.get().history_options.allow_non_linear_history;
         // History Options › Automatically Create First Snapshot off: no snapshot of the document
-        // as opened, so the History panel starts at the opening state (#2966).
+        // as opened, so the History panel starts at the opening state (#2966) and the History
+        // Brush's default stays the oldest state held (#12845).
         if !self.prefs.get().history_options.automatically_create_first_snapshot {
             st.snapshots_mut().clear();
+            st.open_snapshot = None;
         }
         self.pcraft_caches.insert(st.doc.id, Default::default());
         self.docs.push(craft_tracked::Tracked::new(st));
