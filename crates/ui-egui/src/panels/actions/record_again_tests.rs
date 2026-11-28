@@ -257,3 +257,16 @@ fn filter_and_adjustment_previews_retain_permissions_before_evaluation() {
         assert_eq!(h.state().session.actions().list, original);
     }
 }
+
+/// A Record Again editor of Define Pattern holds OK on a blank name like the menu dialog does (#14302), and a name
+/// accepts it.
+#[test]
+fn record_again_define_pattern_refuses_a_blank_name() {
+    let mut h = harness("edit.definePattern", json!({"name": "Dots"}));
+    let id = open(&mut h);
+    set_field(&mut h, id, "name", json!("   "));
+    assert!(confirm(&mut h, id).is_err(), "a blank name is refused");
+    assert!(is_open(&h, id), "the editor stays open");
+    set_field(&mut h, id, "name", json!("Dots"));
+    assert!(confirm(&mut h, id).is_ok(), "a named pattern is accepted");
+}
