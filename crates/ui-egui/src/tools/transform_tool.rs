@@ -21,6 +21,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::state::{FreeTransform, MadeLayer, SessionWarp, Tool};
+use crate::transform_fx::BackdropCache;
 
 mod begin;
 mod commit;
@@ -115,6 +116,7 @@ pub struct OpenPreview {
     pub doc: Arc<Document>,
     pub textures: PreviewTextures,
     pub opacity: f32,
+    pub(crate) backdrop_cache: Arc<std::sync::Mutex<BackdropCache>>,
     /// The layers stacked over the moving one, drawn over its pixels ([`Above`]).
     above: Option<Above>,
     /// A layer with a style: its pixels composited with the style as the box has them now,
@@ -153,6 +155,7 @@ impl OpenPreview {
             doc,
             textures,
             opacity: 1.0,
+            backdrop_cache: Arc::new(std::sync::Mutex::new(BackdropCache::default())),
             above: None,
             styled: None,
             split: None,

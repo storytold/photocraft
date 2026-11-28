@@ -8,7 +8,7 @@ use craft::behavior::kurbo::{CubicBez, ParamCurve, Point, Rect};
 use craft::draw::ui::pen::{AnchorsShown, BezierOverlay, BezierTool, EditPath, EditSubpath, Knot, PathSelection};
 use craft::draw::ui::transform::{ApplyBy, Interpolation, TransformEdit, TransformOverlay, TransformPhase, TransformRequest};
 use craft::imaging::ui::selection::PointMap;
-use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, TransformPreview};
+use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, StyledPreview, TransformPreview};
 use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
 use craft::ui::contract::{Bind, Props as _, Show as _};
@@ -58,6 +58,7 @@ struct Shown {
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
 pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+    ensure_styled_preview_for_live_blend_mode(app);
     if let Some(pv) = app.transform_preview.as_mut() {
         pv.warp_grid.sync(app.ui.transform.as_ref().and_then(|t| t.session.warp()));
     }
@@ -103,6 +104,28 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
     // with it the picture.
     let picture = if app.transform_preview.is_some() { picture } else { Vec::new() };
     SessionShown { shown: true, snapped, picture }
+}
+
+/// Arm the styled preview if a layer changes from Normal to a styled/non-Normal mode while its
+/// whole-layer transform is open. The initial raw texture is already suitable: this only creates
+/// the compositor's cached preview state when the mode actually needs it.
+fn ensure_styled_preview_for_live_blend_mode(app: &mut PhotocraftApp) {
+    let Some(t) = app.ui.transform.as_ref() else { return };
+    if crate::frame_tool::frame_transform(t) || t.session.phase() != TransformPhase::Box {
+        return;
+    }
+    let id = photocraft_doc::LayerId(t.layer);
+    let Some(pv) = app.transform_preview.as_mut() else { return };
+    if pv.styled.is_some() || !pv.follow.as_ref().is_some_and(|f| f.hidden.contains(&id)) {
+        return;
+    }
+    let Some(layer) = app.session.active().and_then(|st| st.doc.layer(id)) else { return };
+    if layer.visible
+        && (photocraft_compose::effects::has_effects(layer)
+            || !matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough))
+    {
+        pv.styled = Some(StyledPreview::new(format!("transform-{}-styled", pv.session)));
+    }
 }
 
 /// The pass's shows, in paint order.
