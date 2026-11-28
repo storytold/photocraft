@@ -296,9 +296,19 @@ fn malformed_inputs_and_allocations_stop_gracefully() {
 #[test]
 fn maximum_supported_radius_matches_the_frozen_kernel() {
     let out = Rect::new(0, 0, 1, 1);
-    let src = Image { rect: out, ch: 1, data: vec![0.75] };
+    let sample = 0.75;
+    let radius = 1000.0;
+    let amount = 500.0;
+    let src = Image { rect: out, ch: 1, data: vec![sample] };
     let ctx = Ctx { bounds: out, mode: ColorMode::Grayscale, alpha: false };
-    same_bits(&unsharp(&src, out, &ctx, 500.0, 1000.0, 8.0), &reference::unsharp(&src, out, &ctx, 500.0, 1000.0, 8.0));
+
+    // Zero extension leaves only the center tap in each pass of the frozen Gaussian.
+    let kernel = reference::gaussian_kernel(radius);
+    let center = kernel[kernel.len() / 2];
+    let blurred = (sample * center) * center;
+    // The difference for this sample clears the threshold of 8 / 255.
+    let expected = [sample + (amount / 100.0) * (sample - blurred)];
+    same_bits(&unsharp(&src, out, &ctx, amount, radius, 8.0), &expected);
 }
 
 #[test]
