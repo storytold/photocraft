@@ -192,7 +192,12 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
     if !matches!(info.cpp, 1 | 3) {
         return Err(RawError::unsupported(format!("{} samples per pixel", info.cpp)));
     }
-    let image = craft_raw::decode_with(bytes, &shared_limits).map_err(shared_error)?;
+    let mut image = craft_raw::decode_with(bytes, &shared_limits).map_err(shared_error)?;
+    // With an OpcodeList1 the shared decoder leaves the LinearizationTable unapplied. PhotoCraft
+    // applies OpcodeList1's gain maps and polynomials to the stored codes, then the table, and the
+    // other lists' gain maps and polynomials while it develops.
+    crate::shared::apply_opcode_list1(&mut image);
+    image.apply_linearization();
     Ok(crate::shared::adapt(image))
 }
 

@@ -26,59 +26,118 @@ fn rect(r: craft_raw::Rect) -> Rect {
     Rect::new(r.x, r.y, r.width, r.height)
 }
 
+fn gain_map(op: &craft_raw::Opcode) -> Option<GainMap> {
+    let craft_raw::Opcode::GainMap { area, points_v, points_h, spacing, origin, map_planes, gains } = op else { return None };
+    Some(GainMap {
+        top: area.top as usize,
+        left: area.left as usize,
+        bottom: area.bottom as usize,
+        right: area.right as usize,
+        plane: area.plane as usize,
+        planes: area.planes as usize,
+        row_pitch: area.row_pitch as usize,
+        col_pitch: area.col_pitch as usize,
+        points_v: *points_v as usize,
+        points_h: *points_h as usize,
+        spacing_v: spacing[0],
+        spacing_h: spacing[1],
+        origin_v: origin[0],
+        origin_h: origin[1],
+        map_planes: *map_planes as usize,
+        gains: gains.clone(),
+    })
+}
+
+fn polynomial(op: &craft_raw::Opcode) -> Option<MapPolynomial> {
+    let craft_raw::Opcode::MapPolynomial { area, coefficients } = op else { return None };
+    Some(MapPolynomial {
+        top: area.top as usize,
+        left: area.left as usize,
+        bottom: area.bottom as usize,
+        right: area.right as usize,
+        plane: area.plane as usize,
+        planes: area.planes as usize,
+        row_pitch: area.row_pitch as usize,
+        col_pitch: area.col_pitch as usize,
+        coefficients: coefficients.clone(),
+    })
+}
+
 fn gain_maps(image: &craft_raw::RawImage) -> Vec<GainMap> {
-    image
-        .opcodes
-        .list1
-        .iter()
-        .chain(&image.opcodes.list2)
-        .chain(&image.opcodes.list3)
-        .filter_map(|op| {
-            let craft_raw::Opcode::GainMap { area, points_v, points_h, spacing, origin, map_planes, gains } = op else { return None };
-            Some(GainMap {
-                top: area.top as usize,
-                left: area.left as usize,
-                bottom: area.bottom as usize,
-                right: area.right as usize,
-                plane: area.plane as usize,
-                planes: area.planes as usize,
-                row_pitch: area.row_pitch as usize,
-                col_pitch: area.col_pitch as usize,
-                points_v: *points_v as usize,
-                points_h: *points_h as usize,
-                spacing_v: spacing[0],
-                spacing_h: spacing[1],
-                origin_v: origin[0],
-                origin_h: origin[1],
-                map_planes: *map_planes as usize,
-                gains: gains.clone(),
-            })
-        })
-        .collect()
+    image.opcodes.list1.iter().chain(&image.opcodes.list2).chain(&image.opcodes.list3).filter_map(gain_map).collect()
 }
 
 fn polynomials(image: &craft_raw::RawImage) -> Vec<MapPolynomial> {
-    image
-        .opcodes
-        .list1
-        .iter()
-        .chain(&image.opcodes.list2)
-        .chain(&image.opcodes.list3)
-        .filter_map(|op| {
-            let craft_raw::Opcode::MapPolynomial { area, coefficients } = op else { return None };
-            Some(MapPolynomial {
-                top: area.top as usize,
-                left: area.left as usize,
-                bottom: area.bottom as usize,
-                right: area.right as usize,
-                plane: area.plane as usize,
-                planes: area.planes as usize,
-                row_pitch: area.row_pitch as usize,
-                col_pitch: area.col_pitch as usize,
-                coefficients: coefficients.clone(),
-            })
-        })
-        .collect()
+    image.opcodes.list1.iter().chain(&image.opcodes.list2).chain(&image.opcodes.list3).filter_map(polynomial).collect()
+}
+
+/// Apply the OpcodeList1 GainMap and MapPolynomial opcodes of integer data to the stored codes,
+/// in list order, and drop them from the list so development does not apply them again. This runs
+/// only when a nonempty LinearizationTable is still to be applied; without one, the opcodes stay in
+/// the list and development applies them to the normalized values.
+///
+/// DNG applies OpcodeList1 to the raw image as read from the file, before the LinearizationTable
+/// and the black and white levels (DNG 1.7, chapter 7). Its areas and gain-map positions are in
+/// the stored image's coordinates, and its values run from 0 to 1 over the 16-bit code range.
+/// A GainMap with a gain, spacing or origin that is not finite, or a spacing that is not positive,
+/// stays in the list and is handed on to development with the other lists' maps. Other opcodes
+/// stay in the list, where [`warnings`] reports them. Floating-point data is left as it is.
+pub(crate) fn apply_opcode_list1(image: &mut craft_raw::RawImage) {
+    if image.linearized || image.linearization_table.as_deref().is_none_or(<[u16]>::is_empty) {
+        return;
+    }
+    let craft_raw::RawData::U16(data) = &mut image.data else { return };
+    let (width, height, cpp) = (image.width, image.height, image.cpp);
+    if width == 0 || height == 0 || cpp == 0 || data.len() != width * height * cpp {
+        return;
+    }
+    let max = f64::from(u16::MAX);
+    image.opcodes.list1.retain(|op| {
+        if let Some(p) = polynomial(op) {
+            let map = |v: u16| (p.eval(f64::from(v) / max) * max).round() as u16;
+            let (rows, cols) = (p.bottom.min(height).saturating_sub(p.top), p.right.min(width).saturating_sub(p.left));
+            let span = rows.saturating_mul(cols).saturating_mul(p.plane.saturating_add(p.planes).min(cpp).saturating_sub(p.plane));
+            // A table of every code pays off only when the area holds more samples than there are codes.
+            let table: Option<Vec<u16>> = (span > usize::from(u16::MAX)).then(|| (0..=u16::MAX).map(map).collect());
+            for y in p.top..p.bottom.min(height) {
+                for x in p.left..p.right.min(width) {
+                    for s in p.plane..p.plane.saturating_add(p.planes).min(cpp) {
+                        if p.covers(x, y, s) {
+                            let v = &mut data[(y * width + x) * cpp + s];
+                            *v = table.as_ref().and_then(|t| t.get(usize::from(*v)).copied()).unwrap_or_else(|| map(*v));
+                        }
+                    }
+                }
+            }
+            false
+        } else if let Some(m) = gain_map(op).filter(|m| {
+            m.gains.iter().all(|g| g.is_finite())
+                && [m.spacing_v, m.spacing_h, m.origin_v, m.origin_h].iter().all(|v| v.is_finite())
+                && m.spacing_v > 0.0
+                && m.spacing_h > 0.0
+        }) {
+            for y in m.top..m.bottom.min(height) {
+                let rv = (y as f64 + 0.5) / height as f64;
+                for x in m.left..m.right.min(width) {
+                    if !m.covers(x, y) {
+                        continue;
+                    }
+                    let rh = (x as f64 + 0.5) / width as f64;
+                    for s in m.plane..m.plane.saturating_add(m.planes).min(cpp) {
+                        let v = &mut data[(y * width + x) * cpp + s];
+                        // In f64 a finite gain times a 16-bit code stays finite; the code saturates.
+                        let out = f64::from(*v) * f64::from(m.at_rv(rv, s - m.plane, rh));
+                        if !out.is_nan() {
+                            *v = out.round().clamp(0.0, max) as u16;
+                        }
+                    }
+                }
+            }
+            false
+        } else {
+            true
+        }
+    });
 }
 
 fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
