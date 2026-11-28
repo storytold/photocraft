@@ -84,7 +84,7 @@ fn ruler_line(r: &Ruler) -> RulerLine {
 fn ruler(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Document) {
     let factor = doc.measurement.scale.factor();
     let can_straighten = app.session.is_enabled("image.analysis.straightenLayer");
-    let line = doc.measurement.ruler.as_ref().map(ruler_line);
+    let line = super::canvas::live_ruler(app).as_ref().map(ruler_line);
     // PLAN: assumed `RulerBar::show(ui)` returns an output with `straighten_layer: bool` and `clear: bool`.
     let out = RulerBar::new(line, Bind::bound(&mut app.ui.analysis.use_measurement_scale)).factor(factor).can_straighten(can_straighten).show(ui);
     if out.straighten_layer

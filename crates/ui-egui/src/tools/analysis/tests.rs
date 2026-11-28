@@ -533,3 +533,24 @@ fn a_note_made_with_a_click_takes_the_keyboard() {
     h.run_steps(3);
     assert_eq!(h.state().session.active().unwrap().doc.notes[2].text, "hello", "typing goes into the new note");
 }
+
+#[test]
+fn ruler_drag_commits_line_and_shows_live_preview() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::Ruler;
+    assert!(ruler(&app).is_none(), "starts with no ruler line");
+
+    down(&mut app, 20.0, 30.0, egui::Modifiers::NONE);
+    mv(&mut app, 80.0, 50.0, egui::Modifiers::NONE);
+    // Mid-drag: the live draft is visible to the Info panel without committing an engine step yet.
+    assert!(ruler(&app).is_none(), "mid-drag does not commit to the document yet");
+    let live = crate::panels::info::ruler_rows(&app).expect("Info panel shows live ruler readings while dragging");
+    assert_eq!(live.point, [20.0, 30.0]);
+    assert_eq!(live.size, Some([60.0, 20.0]));
+
+    up(&mut app, 120.0, 30.0);
+    let committed = ruler(&app).expect("releasing a Ruler drag commits the line to the document");
+    assert_eq!(committed.start, [20.0, 30.0]);
+    assert_eq!(committed.end, [120.0, 30.0]);
+    assert_eq!(committed.protractor, None);
+}

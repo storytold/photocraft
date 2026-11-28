@@ -75,7 +75,7 @@ pub(crate) fn ruler_rows(app: &PhotocraftApp) -> Option<RulerRows> {
         return None;
     }
     let doc = &app.session.active()?.doc;
-    let r = doc.measurement.ruler?;
+    let r = crate::analysis::canvas::live_ruler(app)?;
     // A unit scale: the Info panel reads pixels converted to the ruler unit, never the scale.
     let info = photocraft_engine::analysis_cmds::ruler_info(&r, &Default::default());
     let g = |k: &str| info[k].as_f64();
