@@ -31,6 +31,8 @@ photocraft-algo = { workspace = true }
 craft-psd = { workspace = true }
 craft = { workspace = true, features = ["imaging"] }
 photocraft-codecs = { workspace = true }
+# File › Open's EXR layer tree (#14062): part listing with the multiView views, one decode per part.
+craft-exr = { git = "https://github.com/storytold/craft-libs", rev = "5e00a073a85527fc9eb198d5be6b631ee57a99d4", features = ["decode"] }
 photocraft-formats = { workspace = true }
 photocraft-raw = { workspace = true }
 craft-affinity = { workspace = true }
@@ -67,6 +69,8 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
+# Builds the multi-part, multi-view and channel-grouped EXR fixtures (the version the codecs use).
+exr = { version = "1.73", default-features = false }
 lopdf = { version = "0.38", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"

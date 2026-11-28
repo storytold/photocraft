@@ -1702,6 +1702,18 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=3eb5b528b08211844bc5c95c5a4fd169894d52ff#3eb5b528b08211844bc5c95c5a4fd169894d52ff"
 
 [[package]]
+name = "craft-exr"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=5e00a073a85527fc9eb198d5be6b631ee57a99d4#5e00a073a85527fc9eb198d5be6b631ee57a99d4"
+dependencies = [
+ "exr",
+ "flate2",
+ "half",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-file-formats"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=3eb5b528b08211844bc5c95c5a4fd169894d52ff#3eb5b528b08211844bc5c95c5a4fd169894d52ff"
@@ -6881,6 +6893,7 @@ dependencies = [
  "craft-cms",
  "craft-crs",
  "craft-docpath",
+ "craft-exr",
  "craft-file-formats",
  "craft-image-codecs",
  "craft-kra",
@@ -6893,6 +6906,7 @@ dependencies = [
  "craft-xcf",
  "craft-xml",
  "crc32fast",
+ "exr",
  "flate2",
  "kurbo 0.13.1",
  "lopdf",

@@ -1,19 +1,11 @@
 //! Native OpenEXR blocks go straight into original-depth tiled storage.
+use crate::exr_parts::ram_tile_capacity;
 use crate::{ImportResult, IoError};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{Interrupt, Surface};
 use std::io::{Read, Seek};
-
-/// Tiles the decoded image would add must fit the RAM tile budget when no scratch disk can
-/// take cold tiles.
-fn ram_tile_capacity(resident: u64, budget: u64, growth: u64) -> Result<(), IoError> {
-    if resident.checked_add(growth).is_none_or(|required| required > budget) {
-        return Err(IoError::OutOfMemory("decoded image tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
-    }
-    Ok(())
-}
 
 /// A scratch disk that was on when the import started must still be on: its tiles may
 /// already have moved there.
@@ -107,7 +99,9 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     require_scratch(scratch_expected)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut document = Document::new("", Size::new(info.width, info.height), mode, SampleType::F32);
-    let mut layer = Layer::new("Background", LayerContent::Raster(surface));
+    // Named after the file's channels, not the document's mode: `Y` + `A` is `YA` (#14062).
+    let name = if info.has_alpha { crate::exr_parts::single_layer_name(info.gray) } else { "Background" };
+    let mut layer = Layer::new(name, LayerContent::Raster(surface));
     if !info.has_alpha {
         layer.locks.transparency = true;
         layer.locks.position = true;

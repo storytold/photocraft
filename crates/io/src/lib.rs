@@ -892,12 +892,16 @@ pub fn import_file_for_open_verified(
         // layouts, and EXR headers the band decoder refuses, are read whole below.
         let mut streamed = None;
         let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
-        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
+        // One whose parts, views or channel groups open as a layer tree is read whole (#14062).
+        let exr = photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr);
+        let layered = exr && exr_layered(&mut file, opts).map_err(read_failed)?;
+        let changed = || IoError::Read(format!("{}: the file changed while it was being opened; open it again", path.display()));
+        if exr && !layered {
             let before = photocraft_raster::spill::read_error_generation();
             if let Some(mut result) = exr_native::import(&mut file, ctl)? {
                 // A rewrite in place while the blocks were read must not become the document.
                 if FileIdentity::of_handle(&watch).map_err(read_failed)? != identity {
-                    return Err(IoError::Read(format!("{}: the file changed while it was being opened; open it again", path.display())));
+                    return Err(changed());
                 }
                 photocraft_raster::spill::check_since(before).map_err(IoError::Read)?;
                 ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -910,7 +914,14 @@ pub fn import_file_for_open_verified(
         match streamed {
             Some(result) => Ok((result, false)),
             None => {
+                #[cfg(test)]
+                before_whole_read();
                 let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
+                // The tree was chosen from the headers read before this: a rewrite in place since
+                // then must not become the document, as for the EXR decoded block by block.
+                if layered && FileIdentity::of_handle(&watch).map_err(read_failed)? != identity {
+                    return Err(changed());
+                }
                 import_for_open_with(name, &bytes, opts, ctl)
             }
         }
@@ -1079,8 +1090,51 @@ fn import_stages(
             }
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
-        Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
+        Route::Flat => match exr_parts::open_layered(name, bytes, opts, ctl)? {
+            Some(layered) => Ok(layered),
+            None => flat::import_flat_with_options(name, bytes, opts, ctl),
+        },
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Called on this thread just before a path open reads its file whole, after the file's
+    /// identity was taken (and an EXR's headers were read). A test rewrites the file there.
+    static TEST_BEFORE_WHOLE_READ: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with `hook` called on this thread just before a path open reads its file whole.
+#[cfg(test)]
+fn with_before_whole_read<R>(hook: std::rc::Rc<dyn Fn()>, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<std::rc::Rc<dyn Fn()>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_BEFORE_WHOLE_READ.with(|h| *h.borrow_mut() = self.0.take());
+        }
+    }
+    let prev = TEST_BEFORE_WHOLE_READ.with(|h| h.borrow_mut().replace(hook));
+    let _reset = Reset(prev);
+    f()
+}
+
+/// Runs the test hook installed by [`with_before_whole_read`], if any.
+#[cfg(test)]
+fn before_whole_read() {
+    if let Some(hook) = TEST_BEFORE_WHOLE_READ.with(|h| h.borrow().clone()) {
+        hook();
+    }
+}
+
+/// Whether the EXR at the start of `file` opens as a layer tree ([`exr_parts::open_layered`]),
+/// from its headers alone; `file` is rewound afterwards.
+#[cfg(any(unix, windows))]
+fn exr_layered(file: &mut &std::fs::File, opts: &ImportOptions) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut prefix = Vec::new();
+    Read::by_ref(file).take(exr_parts::HEADER_PREFIX_BYTES).read_to_end(&mut prefix)?;
+    std::io::Seek::rewind(file)?;
+    Ok(exr_parts::opens_layered(&prefix, opts))
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
@@ -1607,6 +1661,47 @@ mod tests {
         assert_eq!((opened.document.size.width, opened.document.size.height), (2, 3));
         assert!(!damaged);
         assert_eq!(identity, Some(super::FileIdentity::of_path(&path).unwrap()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An EXR that opens as a layer tree is read whole (#14062), and keeps the check the block
+    /// decoder makes: a file that changes after its identity was taken and its headers chose
+    /// the tree is refused, not opened from bytes of two versions.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_layered_exr_that_changes_while_it_is_read_whole_is_refused() {
+        use exr::prelude::{
+            AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, Image, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder,
+            WritableImage,
+        };
+        // One scan-line part with a channel group: the block decoder would take it, the tree does.
+        let scan_lines = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+        let channels = ["R", "G", "B", "diffuse.R", "diffuse.G", "diffuse.B"].iter().map(|c| AnyChannel::new(*c, FlatSamples::F32(vec![0.5; 4]))).collect();
+        let part = Layer::new((2, 2), LayerAttributes::default(), scan_lines, AnyChannels::sort(channels));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (2, 2))), vec![part]).write().to_buffered(&mut bytes).unwrap();
+        let dir = std::env::temp_dir().join(format!("photocraft-layered-exr-changed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("render.exr");
+        std::fs::write(&path, bytes.into_inner()).unwrap();
+        let open = || {
+            let mut identity = None;
+            super::import_file_for_open_verified("render.exr", &path, None, &ImportOptions::default(), &photocraft_raster::Interrupt::NONE, &mut identity)
+        };
+        let (unchanged, _) = open().unwrap();
+        let names: Vec<&str> = unchanged.document.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["diffuse", "RGB"], "the file opens as a tree, so it takes the whole-file read");
+        // One byte appended between the header read and the whole read: another length, so
+        // another identity on every platform, whatever the clock's resolution.
+        let grow = {
+            let path = path.clone();
+            std::rc::Rc::new(move || std::io::Write::write_all(&mut std::fs::OpenOptions::new().append(true).open(&path).unwrap(), &[0]).unwrap())
+        };
+        match super::with_before_whole_read(grow, open) {
+            Err(super::IoError::Read(reason)) => assert!(reason.contains("the file changed while it was being opened"), "{reason}"),
+            other => panic!("a changed file must be refused, got {:?}", other.map(|(r, _)| r.document.layers.len())),
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -53,7 +53,7 @@ fn before_composite_decode() {}
 
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
-fn decode_limits(opts: &crate::ImportOptions) -> codecs::Limits {
+pub(crate) fn decode_limits(opts: &crate::ImportOptions) -> codecs::Limits {
     let mut limits = codecs::Limits::default();
     if opts.flat_max_pixel_bytes > 0 {
         limits.max_alloc = limits.max_alloc.min(opts.flat_max_pixel_bytes);
@@ -422,6 +422,13 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
             ColorMode::Grayscale => Some(craft_cms::builtin::linear_gray().to_bytes()),
             _ => None,
         };
+    }
+    // An EXR that opens as one layer with transparency names it after its channels (#14062).
+    if format == Some(Format::OpenExr)
+        && let [layer] = &mut d.layers[..]
+        && !layer.has_background_traits()
+    {
+        layer.name = crate::exr_parts::single_layer_name(d.mode == ColorMode::Grayscale).into();
     }
     if d.icc_profile.is_none() && d.mode == ColorMode::Rgb {
         // Only an image the whole-image path decoded can carry a CICP description (a PNG never does).
