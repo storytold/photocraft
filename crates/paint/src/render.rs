@@ -113,16 +113,16 @@ const NOISE_SALT: u64 = 0x006E_6F69_7365;
 #[inline]
 /// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
 /// grid: the centre of the pixel holding the point for odd diameters, the nearest pixel corner
-/// for even ones. Its footprint is then a whole-pixel block around that point, the same square
-/// the Pencil cursor shows ([`grid_square`]).
+/// for even ones. Its footprint is then whole pixels around that point, which the Pencil's
+/// cursor outlines ([`crate::outline::aliased_outline`]).
 pub fn grid_center(x: f64, y: f64, diameter: f32) -> (f32, f32) {
     let n = if diameter.is_finite() { diameter.round().max(1.0) as i64 } else { 1 };
     let snap = |v: f64| if n % 2 == 1 { grid_cell(v, 0.5) } else { v.round() };
     (snap(x) as f32, snap(y) as f32)
 }
 
-/// The whole-pixel square `[x0, y0, x1, y1]` an aliased dab of `diameter` pixels at (`x`, `y`)
-/// can touch (see [`grid_center`]): the Pencil's cursor.
+/// The whole-pixel square `[x0, y0, x1, y1]` around an aliased dab of `diameter` pixels at
+/// (`x`, `y`) (see [`grid_center`]): what the Eraser's Block fills, and the bounds of a round tip.
 pub fn grid_square(x: f64, y: f64, diameter: f32) -> [f64; 4] {
     let n = if diameter.is_finite() { f64::from(diameter.round().clamp(1.0, 100_000.0)) } else { 1.0 };
     let (cx, cy) = grid_center(x, y, n as f32);
@@ -243,6 +243,28 @@ pub(crate) fn rect_around(d: &Dab, reach: f32) -> Rect {
     Rect::new(cx.saturating_sub(rr), cy.saturating_sub(rr), cx.saturating_add(rr).saturating_add(1), cy.saturating_add(rr).saturating_add(1))
 }
 
+/// Trims `square` to the rotated sampled area of a tip bitmap of `dims` (`(width, height)`),
+/// keeping `square` when Brush Projection is active or any intermediate value is non-finite.
+pub(crate) fn trim_sampled_dab_rect(square: Rect, dims: (usize, usize), d: &Dab, dual: bool) -> Rect {
+    if !dual && d.proj_scale < 0.999 {
+        return square;
+    }
+    let (tw, th) = (dims.0 as f32, dims.1 as f32);
+    let r = d.radius;
+    let ro = d.roundness.max(0.5 / r).min(1.0);
+    let inv_scale = tw.max(th) / (2.0 * r);
+    // |u| and |v| in the dab's pixels (`px`, `py` of `rasterize_into` within [-1, size + 1]).
+    let (u, v) = ((tw / 2.0 + 1.0) / inv_scale, (th / 2.0 + 1.0) * ro / inv_scale);
+    let (sn, cs) = d.angle.sin_cos();
+    let (rx, ry) = (u * cs.abs() + v * sn.abs(), u * sn.abs() + v * cs.abs());
+    if !(rx.is_finite() && ry.is_finite()) {
+        return square;
+    }
+    let (rx, ry) = ((rx.ceil() as i32).saturating_add(2), (ry.ceil() as i32).saturating_add(2));
+    let (cx, cy) = (d.center.x.floor() as i32, d.center.y.floor() as i32);
+    Rect::new(cx.saturating_sub(rx), cy.saturating_sub(ry), cx.saturating_add(rx).saturating_add(1), cy.saturating_add(ry).saturating_add(1)).intersect(&square)
+}
+
 impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
@@ -288,37 +310,13 @@ impl BrushContext {
         };
         let square = rect_around(d, reach);
         let mips = if dual { self.dual_tip.as_deref() } else { self.tip.as_deref() };
-        match mips.and_then(|m| self.sampled_extent(m, d, dual)) {
-            // The square fits the tip at any angle; the rotated tip's own box is often far smaller
-            // (a long or squashed tip, an angle near a right angle). Every pixel outside it
-            // rasterises to 0, so it only trims the empty part of the square.
-            Some((rx, ry)) => {
-                let (rx, ry) = ((rx.ceil() as i32).saturating_add(2), (ry.ceil() as i32).saturating_add(2));
-                let (cx, cy) = (d.center.x.floor() as i32, d.center.y.floor() as i32);
-                Rect::new(cx.saturating_sub(rx), cy.saturating_sub(ry), cx.saturating_add(rx).saturating_add(1), cy.saturating_add(ry).saturating_add(1))
-                    .intersect(&square)
+        match mips {
+            Some(m) => {
+                let (w0, h0, _) = &m.levels[0];
+                trim_sampled_dab_rect(square, (*w0, *h0), d, dual)
             }
             None => square,
         }
-    }
-
-    /// Half the width and height of the pixels a sampled dab can paint: the tip's sampled area
-    /// (its texels and one more each side, see `rasterize_into`) rotated and flipped as the dab is.
-    /// `None` with Brush Projection or values that aren't finite (the dab keeps its square).
-    fn sampled_extent(&self, m: &Mips, d: &Dab, dual: bool) -> Option<(f32, f32)> {
-        if !dual && d.proj_scale < 0.999 {
-            return None;
-        }
-        let (w0, h0, _) = &m.levels[0];
-        let (tw, th) = (*w0 as f32, *h0 as f32);
-        let r = d.radius;
-        let ro = d.roundness.max(0.5 / r).min(1.0);
-        let inv_scale = tw.max(th) / (2.0 * r);
-        // |u| and |v| in the dab's pixels (`px`, `py` of `rasterize_into` within [-1, size + 1]).
-        let (u, v) = ((tw / 2.0 + 1.0) / inv_scale, (th / 2.0 + 1.0) * ro / inv_scale);
-        let (sn, cs) = d.angle.sin_cos();
-        let (rx, ry) = (u * cs.abs() + v * sn.abs(), u * sn.abs() + v * cs.abs());
-        (rx.is_finite() && ry.is_finite()).then_some((rx, ry))
     }
 
     /// Rasterise a dab over `rect` into `out` (tip shape × noise × per-tip texture × wet edges × flow).

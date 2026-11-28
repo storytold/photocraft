@@ -6,7 +6,7 @@
 //! [`cursor`] builds it per call.
 
 use craft::behavior::kurbo::Rect;
-use craft::behavior::{Cursor, CursorIcon, PointerSample};
+use craft::behavior::{Cursor, CursorIcon, PaintedCursor, PointerSample};
 use craft::keymap::Mods;
 use craft::ui::canvas::ToolContext;
 use craft::ui::canvas_controls::brush::{BrushCursor, BrushCursorOptions, BrushTip, BrushTipOutline, PaintingCursor, TipPose, TipRings};
@@ -22,6 +22,8 @@ use crate::state::Tool;
 #[derive(Clone, PartialEq)]
 pub(crate) struct TipKey {
     tip: TipShape,
+    /// Stored tips compare equal by key before their full bitmap finishes loading (#1843).
+    stored_full: bool,
     angle: f32,
     roundness: f32,
     hardness: f32,
@@ -35,6 +37,7 @@ impl TipKey {
     fn of(b: &BrushSettings) -> Self {
         Self {
             tip: (*b.tip).clone(),
+            stored_full: matches!(&*b.tip, TipShape::Stored(s) if s.full.is_some()),
             angle: b.angle,
             roundness: b.roundness,
             hardness: b.hardness,
@@ -62,7 +65,7 @@ fn aliased(app: &PhotocraftApp, tool: Tool) -> Option<(f32, bool)> {
 /// Builds the held tip for the active brush when its outline changed; a size change alone only updates the
 /// diameter. Runs once per pass before the tool host, so [`cursor`] only reads.
 pub(crate) fn sync_tip(app: &mut PhotocraftApp) {
-    if aliased(app, app.ui.tool).is_some() {
+    if crate::eraser_ui::block_mode(app, app.ui.tool) {
         return;
     }
     let brush = &app.session.tools.brush;
@@ -150,6 +153,16 @@ pub(crate) fn cursor(app: &PhotocraftApp, cx: &ToolContext<'_>) -> Cursor {
     if let Some((size, block)) = aliased(app, tool) {
         // The whole-pixel cell the dab fills at the pointer; without a pointer there is nothing to outline.
         let Some(pointer) = cx.pointer.as_ref() else { return arrow };
+        if crate::pencil_cursor::owns_cursor(app, &space.view, pointer.pos, painting, cx.caps_lock, option) {
+            return Cursor::Painted(PaintedCursor::Hidden);
+        }
+        if !block && let Some((_, tip)) = &app.brush_tip {
+            return BrushCursor::new(tip).pose(pose(brush, Some(pointer.sample))).centre(centre).painting(painting).icon(icon).cursor(
+                cx,
+                &options,
+                &space.view,
+            );
+        }
         let at = space.view.to_doc(pointer.pos);
         let [x0, y0, x1, y1] = photocraft_engine::paint::grid_square(at.x, at.y, size);
 

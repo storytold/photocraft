@@ -4,6 +4,7 @@
 //! its input is absent, so a pass without a stroke, marker, finder, ⇧ or resize costs only the
 //! checks. The module is `brush_feedback` because `crate::tool_feedback` is the canvas's own.
 
+use craft::behavior::CanvasView;
 use craft::behavior::geometry::Homography;
 use craft::behavior::kurbo::Point;
 use craft::ui::canvas::RasterDisplay;
@@ -17,7 +18,7 @@ use crate::state::Tool;
 /// Shows the brush feedback over the canvas body. `rect` is the body's rect and `pointer` its
 /// hover position this pass; the parts that follow the pointer show only on the active document's
 /// main canvas. Called once per pass after the displays, in the order the parts stack.
-pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect, pointer: Option<egui::Pos2>) {
+pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect, view: &CanvasView, pointer: Option<egui::Pos2>) {
     crate::stroke_trail::show(ui, app, rect);
     show_source_marker(ui, app, rect);
     let at = pointer.filter(|p| rect.contains(*p)).and_then(|p| crate::canvas::document_display::doc_point_at(app, p));
@@ -37,6 +38,7 @@ pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect,
         crate::stroke_constraint::show_line_preview(ui, app, at, tool, shift);
     }
     app.brush_resize.show_preview(ui, app, rect);
+    crate::pencil_cursor::show(ui, app, rect, view, pointer);
 }
 
 /// The Clone Source crosshair, while a Clone Stamp or Healing Brush stroke paints.

@@ -579,7 +579,7 @@ fn canvas_controls(
         crate::frame_tool::task_bar::show(ui, app, bar_area);
     }
     crate::vector_ui::shapes::show_preview(app, ui, rect, &space.view);
-    crate::tools::brush_feedback::show(ui, app, rect, pointer);
+    crate::tools::brush_feedback::show(ui, app, rect, &space.view, pointer);
     if shown != space.view {
         *turned = Some(shown);
     }
