@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 import yaml
 
@@ -74,6 +75,36 @@ verify_appimagetool_override() { return 1; }
     for key in ("CROSS_TARGET", "CROSS_COMPILE", "EMULATOR", "APPIMAGETOOL", "CRAFT_FONTS_DIR"):
         env.pop(key, None)
     env.update(CARGO_TARGET_DIR=str(target), DIST=str(temp / "dist"), CROSS_ARCH="x86_64", PHOTOCRAFT_BUILD_DATE="2026-01-01")
+
+    # Tiny prebuilt web artifacts exercise font copying without compiling Rust.
+    web = fixture / "dist/web"
+    for site in (web, fixture / "dist/web-boot"):
+        site.mkdir(parents=True)
+        (site / "index.html").write_text("<html></html>")
+    (web / "font-fixture_bg.wasm").write_bytes(b"\0asm\x01\0\0\0")
+    (web / "font-fixture.js").write_bytes(b"")
+    font_source = temp / "served fonts"
+    (font_source / "fonts").mkdir(parents=True)
+    font_files = {"fonts/plain.ttf": b"plain font", "fonts/licensed.ttf": b"licensed font", "fonts/OFL.txt": b"licence"}
+    for name, data in font_files.items():
+        (font_source / name).write_bytes(data)
+    font_manifest = (
+        b"# Served fonts\n\n"
+        b"Plain | Regular | fonts/plain.ttf\n"
+        b"Licensed | Regular | fonts/licensed.ttf | Latn | OFL-1.1 | fonts/OFL.txt\n"
+    )
+    web_name = "photocraft-web-1.2.3-font-test"
+    web_env = dict(env, PHOTOCRAFT_VERSION="1.2.3-font-test", PHOTOCRAFT_BUILD_SHA="fixture", PHOTOCRAFT_WEB_FONTS_DIR=str(font_source))
+    for ending in (b"\n", b"\r\n"):
+        manifest_bytes = font_manifest.replace(b"\n", ending)
+        (font_source / "fonts/manifest.txt").write_bytes(manifest_bytes)
+        run(["bash", "packaging/web/package.sh", "--skip-build"], fixture, web_env)
+        with zipfile.ZipFile(temp / "dist" / f"{web_name}.zip") as package:
+            assert package.read(f"{web_name}/fonts/manifest.txt") == manifest_bytes
+            for name, data in font_files.items():
+                assert package.read(f"{web_name}/{name}") == data, f"changed packaged font or licence: {name}"
+    print("PASS: web packaging imports three/six-field font manifests with LF and CRLF")
+
     run(["bash", "packaging/linux/package.sh", "--skip-build", "--formats", "tar appimage"], fixture, env)
     assert_docs(target / "linux-package/root/usr/share/doc/photocraft")
     assert_docs(target / "linux-package/PhotoCraft.AppDir/usr/share/doc/photocraft")
