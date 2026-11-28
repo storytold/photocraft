@@ -289,6 +289,9 @@ path.deleteSegment
 path.mergeShapeComponents
 path.deleteComponents
 path.setOperation
+path.copy
+path.cut
+path.paste
 select.quick
 select.object
 select.subject

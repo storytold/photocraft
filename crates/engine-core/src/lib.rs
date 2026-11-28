@@ -234,6 +234,10 @@ pub struct Session {
     batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: craft_tracked::Tracked<Option<state::Clip>>,
+    /// Path components copied with Edit › Copy / Cut while the Path Selection tool has a
+    /// component selected (`path.copy` / `path.cut`): like one real clipboard, a path clip
+    /// replaces the pixel clipboard and is replaced by it (`path_clip_cmds`).
+    pub path_clipboard: Option<photocraft_doc::Path>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
     pub style_clipboard: craft_tracked::Tracked<Option<CopiedStyle>>,

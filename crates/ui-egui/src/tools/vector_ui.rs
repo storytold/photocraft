@@ -21,6 +21,7 @@ mod freeform;
 pub(crate) mod host;
 mod options;
 pub(crate) mod overlay;
+mod path_clip;
 mod path_menus;
 mod path_ops;
 mod paths_panel;
@@ -35,6 +36,7 @@ pub use options::{options_bar, shape_properties};
 #[cfg(test)]
 pub(crate) use overlay::selected_saved_path;
 pub(crate) use overlay::selected_saved_path_index;
+pub(crate) use path_clip::{intercept as path_clip_intercept, live_selection};
 pub use path_ops::{
     active_path_name, make_shape, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path,
 };

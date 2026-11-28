@@ -13,6 +13,7 @@ use crate::{Result, Session};
 const TABLES: &[Table] = &[
     ("type_mask_cmds", crate::type_mask_cmds::specs),
     ("path_edit_cmds", crate::path_edit_cmds::specs),
+    ("path_clip_cmds", crate::path_clip_cmds::specs),
     ("smart_svg_cmds", crate::smart_svg_cmds::specs),
     ("type_area_cmds", crate::type_area_cmds::specs),
     ("type_styles_cmds", crate::type_styles_cmds::specs),

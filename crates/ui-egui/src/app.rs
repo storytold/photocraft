@@ -21,6 +21,14 @@ mod targets;
 pub(crate) mod thumbs;
 mod view;
 
+/// The last observed OS bitmap, or an explicit unknown after an SVG import without a readable
+/// accompanying bitmap. Unknown never equals a real bitmap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OsClipSignature {
+    Bitmap(u64),
+    Unknown,
+}
+
 pub(crate) use targets::adjustment_layer_active;
 pub(crate) use thumbs::layer_thumb_frame;
 

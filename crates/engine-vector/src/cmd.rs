@@ -7,6 +7,7 @@ pub mod layer_xmp_cmds;
 pub mod notes_cmds;
 #[cfg(test)]
 mod notes_stored_values_tests;
+pub mod path_clip_cmds;
 pub mod path_edit_cmds;
 pub mod rasterize_style_cmds;
 pub mod smart_svg_cmds;

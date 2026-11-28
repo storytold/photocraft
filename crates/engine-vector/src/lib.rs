@@ -24,6 +24,7 @@ pub use cmd::comps_cmds;
 pub use cmd::layer_css_cmds;
 pub use cmd::layer_xmp_cmds;
 pub use cmd::notes_cmds;
+pub use cmd::path_clip_cmds;
 pub use cmd::path_edit_cmds;
 pub use cmd::rasterize_style_cmds;
 pub use cmd::smart_svg_cmds;
