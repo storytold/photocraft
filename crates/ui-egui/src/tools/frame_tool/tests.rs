@@ -36,7 +36,7 @@ fn app() -> Box<PhotocraftApp> {
 }
 
 /// A Frame-tool app over a document in `mode`, for the mode refusals (#13886).
-fn app_with_mode(mode: ColorMode) -> PhotocraftApp {
+fn app_with_mode(mode: ColorMode) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.add_document(Document::with_background("mode", Size::new(400, 300), mode, SampleType::U8, Color::rgb(0.5, 0.5, 0.5)), None);
     app.sync_views();

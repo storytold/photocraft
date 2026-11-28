@@ -7,7 +7,7 @@ use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::Size;
 
 fn session(mode: ColorMode, depth: SampleType) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.add_document(Document::with_background("mode", Size::new(80, 60), mode, depth, Color::rgb(0.5, 0.5, 0.5)), None);
     s
 }
@@ -62,7 +62,7 @@ fn other_modes_keep_making_frames_at_every_depth() {
 
 #[test]
 fn no_document_still_refuses_without_a_panic() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert!(!s.is_enabled("layer.new.frame"));
     let err = s.execute("layer.new.frame", request()).unwrap_err().to_string();
     assert!(err.contains("no document open"), "{err}");
