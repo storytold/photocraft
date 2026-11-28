@@ -71,8 +71,8 @@ pub(crate) use save::encode;
 use save::save_a_copy;
 pub use save::save_doc;
 pub use save::{
-    dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, pdf_spot_plates_param,
-    tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
+    dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, pdf_downsample_ppi_param,
+    pdf_spot_plates_param, tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
 };
 
 mod batch_naming;
@@ -307,7 +307,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save a Copy…",
             &["File"],
             Some("Cmd+Alt+S"),
-            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"jpegFormat":"baseline|optimized|progressive"? (JPEG; default baseline),"layers":bool=true,"overwrite":bool=false (replace the document's own file),"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tiffCompression":"none|lzw|zip"? (TIFF: image compression; unset, none),"tiffTransparency":bool? (TIFF: Save Transparency; off composites over white; unset, kept unless the document has alpha or spot channels),"tiffPyramid":bool=false (TIFF: Save Image Pyramid, half-size copies after the image),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"pcraftFullComposite":bool? (.pcraft: request the flattened document at its canvas size as composite/full.png; it may be omitted; check the manifest's full_composite member; unset, Preferences › File Handling)}"##,
+            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"jpegFormat":"baseline|optimized|progressive"? (JPEG; default baseline),"layers":bool=true,"overwrite":bool=false (replace the document's own file),"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tiffCompression":"none|lzw|zip"? (TIFF: image compression; unset, none),"tiffTransparency":bool? (TIFF: Save Transparency; off composites over white; unset, kept unless the document has alpha or spot channels),"tiffPyramid":bool=false (TIFF: Save Image Pyramid, half-size copies after the image),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"pdfDownsamplePpi":1..30000? (PDF: bicubic-downsample the image to this resolution when the document's is higher; unset, every pixel is kept),"pcraftFullComposite":bool? (.pcraft: request the flattened document at its canvas size as composite/full.png; it may be omitted; check the manifest's full_composite member; unset, Preferences › File Handling)}"##,
             native_doc,
             save_a_copy
         ),
@@ -504,6 +504,10 @@ mod open_as_error_name_tests;
 #[cfg(test)]
 #[path = "file_cmds/place_resolution_tests.rs"]
 mod place_resolution_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/pdf_downsample_tests.rs"]
+mod pdf_downsample_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

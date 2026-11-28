@@ -193,6 +193,47 @@ fn the_page_measures_at_the_document_resolution() {
     assert!(has(&out.bytes, "/MediaBox [0 0 72.00 36.00]"), "300 px at 300 dpi is one inch");
 }
 
+/// Downsampling (#9642) halves the image's pixels, keeps the page and doesn't fade its border.
+#[test]
+fn a_downsampled_image_keeps_the_page_and_its_edges() {
+    let mut d = doc(ColorMode::Rgb);
+    d.size = Size { width: 8, height: 4 };
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    d.layers = vec![Layer::new("Red", LayerContent::Raster(solid(fmt, 0, 0, 8, 4, &[1.0, 0.0, 0.0, 1.0])))].into();
+    d.resolution_dpi = 144.0;
+    let out = export_with(&d, true, Some(72.0), None, &Interrupt::NONE).unwrap();
+    assert!(has(&out.bytes, "/Width 4 /Height 2"), "half the pixels at half the resolution");
+    assert!(has(&out.bytes, "/MediaBox [0 0 4.00 2.00]"), "8 × 4 px at 144 ppi is still 4 × 2 pt");
+    assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), [255, 0, 0].repeat(4 * 2), "solid red up to the border");
+}
+
+/// A downsampled artboard's image size depends on the board's size, not where it sits: at
+/// (1, 1) an 8 × 4 board's edges round outwards about the document origin to 5 × 3 at ×0.5.
+#[test]
+fn a_downsampled_artboard_image_does_not_depend_on_the_board_position() {
+    let image_size = |x0: i32, y0: i32| {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+        let mut d = Document::new("moved.pdf", Size { width: 10, height: 6 }, ColorMode::Rgb, SampleType::F32);
+        d.resolution_dpi = 144.0;
+        let rect = Rect::new(x0, y0, x0 + 8, y0 + 4);
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, rect.y0, rect.x1, rect.y1, &[1.0, 0.0, 0.0, 1.0])));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers = vec![Layer::new("Page", LayerContent::Group(group))].into();
+        let out = export_with(&d, true, Some(72.0), None, &Interrupt::NONE).unwrap();
+        let pdf = lopdf::Document::load_mem(&out.bytes).unwrap();
+        let id = *pdf.get_pages().values().next().expect("one page");
+        let samples = page_image(&pdf, id);
+        let page = pdf.get_dictionary(id).unwrap();
+        let xobjects = page.get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap();
+        let image = pdf.get_object(xobjects.get(b"Im0").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
+        let dim = |key: &[u8]| image.dict.get(key).unwrap().as_i64().unwrap();
+        (dim(b"Width"), dim(b"Height"), samples)
+    };
+    let at_origin = image_size(0, 0);
+    assert_eq!((at_origin.0, at_origin.1), (4, 2), "half of 8 × 4");
+    assert_eq!(image_size(1, 1), at_origin, "the same board one pixel in gives the same image");
+}
+
 #[test]
 fn an_embedded_profile_travels_as_iccbased() {
     let mut d = doc(ColorMode::Rgb);

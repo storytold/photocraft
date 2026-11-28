@@ -471,6 +471,7 @@ impl PhotocraftApp {
                         | "tiffCompression"
                         | "tiffTransparency"
                         | "tiffPyramid"
+                        | "pdfDownsamplePpi"
                 )
             })
         {

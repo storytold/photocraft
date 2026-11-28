@@ -126,6 +126,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod pdf_downsample_tests;
+
 pub(super) const METHODS: &[&str] = &[
     "app.open",
     "app.quit",

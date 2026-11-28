@@ -781,7 +781,7 @@ fn batch_quiet_raw_applies_the_sidecar_crop() {
     assert_eq!((actual.size.width, actual.size.height), (12, 8), "the 24x16 frame cropped to x 3..15, y 4..12");
 }
 
-fn tmp(name: &str) -> String {
+pub(super) fn tmp(name: &str) -> String {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let d = std::env::temp_dir().join(format!("photocraft-file-cmds-{}-{name}-{id}", std::process::id()));
