@@ -202,6 +202,8 @@ enum Method {
     Automatic,
 }
 
+/// An Image Size `resample` name as a method: `none` (keep the pixels), `automatic`, or a filter;
+/// an unknown name is Bicubic, Image Size's own default.
 fn parse_resample(s: &str) -> Method {
     Method::Filter(match s {
         "none" => return Method::None,
@@ -211,8 +213,17 @@ fn parse_resample(s: &str) -> Method {
         "bicubicSmoother" => Resample::BicubicSmoother,
         "bicubicSharper" => Resample::BicubicSharper,
         "bicubicAutomatic" => Resample::BicubicAutomatic,
-        "lanczos" => Resample::Lanczos,
+        "lanczos" | "lanczos3" => Resample::Lanczos,
         "preserveDetails" => Resample::PreserveDetails,
+        "lanczos2" => Resample::Lanczos2,
+        "lanczos4" => Resample::Lanczos4,
+        "mitchell" => Resample::Mitchell,
+        "catmullRom" => Resample::CatmullRom,
+        "bSpline" => Resample::BSpline,
+        "gaussian" => Resample::Gaussian,
+        "hermite" => Resample::Hermite,
+        "spline16" => Resample::Spline16,
+        "spline36" => Resample::Spline36,
         _ => Resample::Bicubic,
     })
 }
@@ -1275,7 +1286,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.imageSize",
             "Image Size…",
             ["Image"],
-            r##"{"width":number,"height":number,"units":"px|pt"="px" (points use the document's current resolution),"percent":%? (both sides; an explicit side wins),"resolution":ppi,"keepPrintSize":bool=false (with only a resolution: resample the pixels to keep the print size),"scaleStyles":bool=true (scale layer effects with the pixels),"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
+            r##"{"width":number,"height":number,"units":"px|pt"="px" (points use the document's current resolution),"percent":%? (both sides; an explicit side wins),"resolution":ppi,"keepPrintSize":bool=false (with only a resolution: resample the pixels to keep the print size),"scaleStyles":bool=true (scale layer effects with the pixels),"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
             has_doc,
             image_size
         ),
@@ -1291,7 +1302,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (x/y/width/height, all four or none: without them the selection's bounds are cropped to; targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (x/y/width/height, all four or none: without them the selection's bounds are cropped to; targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
             has_doc,
             crop
         ),

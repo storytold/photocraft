@@ -1,5 +1,34 @@
 use super::*;
 
+/// Every name Image Size accepted before the new filters still means the same method, the
+/// Lanczos alias is kept, and an unknown name still falls back to Bicubic. Export As keeps
+/// Bicubic Automatic as its default.
+#[test]
+fn existing_resample_names_keep_their_meaning() {
+    let filter = |n: &str| match parse_resample(n) {
+        Method::Filter(r) => Some(r),
+        _ => None,
+    };
+    assert!(matches!(parse_resample("none"), Method::None));
+    assert!(matches!(parse_resample("automatic"), Method::Automatic));
+    for (n, r) in [
+        ("nearest", Resample::Nearest),
+        ("bilinear", Resample::Bilinear),
+        ("bicubic", Resample::Bicubic),
+        ("bicubicSmoother", Resample::BicubicSmoother),
+        ("bicubicSharper", Resample::BicubicSharper),
+        ("bicubicAutomatic", Resample::BicubicAutomatic),
+        ("lanczos", Resample::Lanczos),
+        ("lanczos3", Resample::Lanczos),
+        ("preserveDetails", Resample::PreserveDetails),
+        ("sinc", Resample::Bicubic),
+    ] {
+        assert_eq!(filter(n), Some(r), "{n}");
+    }
+    assert_eq!(crate::export_preset_cmds::DEFAULT_RESAMPLE, "bicubicAutomatic");
+    assert!(crate::export_preset_cmds::RESAMPLE.iter().any(|(k, _)| *k == crate::export_preset_cmds::DEFAULT_RESAMPLE));
+}
+
 #[test]
 fn crop_rejects_rectangles_that_would_wrap() {
     let mut s = session();
@@ -142,7 +171,26 @@ fn image_size_keep_print_size_resamples_to_the_resolution() {
 
 #[test]
 fn image_size_scales_everything() {
-    for resample in ["bicubic", "bicubicSmoother", "bicubicSharper", "bicubicAutomatic", "automatic", "bilinear", "nearest", "lanczos", "preserveDetails"] {
+    for resample in [
+        "bicubic",
+        "bicubicSmoother",
+        "bicubicSharper",
+        "bicubicAutomatic",
+        "automatic",
+        "bilinear",
+        "nearest",
+        "lanczos",
+        "preserveDetails",
+        "lanczos2",
+        "lanczos4",
+        "mitchell",
+        "catmullRom",
+        "bSpline",
+        "gaussian",
+        "hermite",
+        "spline16",
+        "spline36",
+    ] {
         let mut s = session();
         s.execute("image.imageSize", json!({"width": 80, "resample": resample})).unwrap();
         let d = doc(&s);

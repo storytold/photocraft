@@ -221,6 +221,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"preset": s.presets().export_presets[index]}))
 }
 
+/// The Export As preset commands: list, get, save, rename and delete.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

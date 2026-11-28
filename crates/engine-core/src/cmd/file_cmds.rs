@@ -267,6 +267,7 @@ fn remember_fit_image(s: &mut Session, p: &Value) {
     }
 }
 
+/// The File-menu command specs this module adds (see the module docs), including Fit Image.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -375,7 +376,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fit Image…",
             &["File", "Automate"],
             None,
-            r##"{"width":px,"height":px,"dontEnlarge":bool=false,"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos"="bicubic"}"##,
+            r##"{"width":px,"height":px,"dontEnlarge":bool=false,"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36"="bicubic"}"##,
             has_doc,
             |s, p| {
                 let r = fit_image(s, p)?;

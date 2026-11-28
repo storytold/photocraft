@@ -9,11 +9,21 @@ fn ramp(sample: SampleType) -> Surface {
     s
 }
 
+/// The fixed-channel row kernels give exactly what the generic one does, for every kernel
+/// (Photoshop's and the added shapes), scale and edge mode.
 #[test]
 fn fixed_channel_rows_match_dynamic_resampling() {
     fn check<const N: usize>() {
         for scale in [0.12, 0.5, 1.0, 2.3] {
-            for filter in [Kernel::Nearest, Kernel::Bilinear, keys(Resample::Bicubic, scale), keys(Resample::BicubicSharper, scale), Kernel::Lanczos] {
+            for filter in [
+                Kernel::Nearest,
+                Kernel::Bilinear,
+                keys(Resample::Bicubic, scale),
+                keys(Resample::BicubicSharper, scale),
+                Kernel::Window(Shape::Lanczos(3.0)),
+                Kernel::Window(Shape::Spline16),
+                Kernel::Window(Shape::Hermite),
+            ] {
                 for clamp in [None, Some((-3, 31))] {
                     let ts = taps(-5, 41, scale, filter, clamp, (-3, 31));
                     let row: Vec<f32> = (0..35 * N).map(|i| ((i * 73) % 251) as f32 / 250.0).collect();
@@ -401,15 +411,18 @@ fn nearest_neighbor_reduction_does_not_average() {
     }
 }
 
-/// A reduction beyond 4096x by Lanczos must not build a weight per covered source sample.
+/// A reduction beyond 4096x by Lanczos (or any of the added windowed filters, widest first) must
+/// not build a weight per covered source sample.
 #[test]
 fn a_tiny_lanczos_scale_keeps_its_weights_small() {
     let scale = 1.0e-7;
-    for o in [0, 1] {
-        let (_, w) = weights(o, scale, Kernel::Lanczos, None, (0, 63));
-        assert!(w.len() < 1024, "{} weights", w.len());
-        let sum: f64 = w.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-6, "{sum}");
+    for shape in [Shape::Lanczos(3.0), Shape::Lanczos(4.0), Shape::Spline36, Shape::Gaussian, Shape::Hermite] {
+        for o in [0, 1] {
+            let (_, w) = weights(o, scale, Kernel::Window(shape), None, (0, 63));
+            assert!(w.len() < 1024, "{shape:?}: {} weights", w.len());
+            let sum: f64 = w.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-6, "{shape:?}: {sum}");
+        }
     }
 }
 
@@ -514,7 +527,7 @@ fn steps_equal_resize_surface() {
         let src = noisy(150, 130, mode, sample, alpha);
         // Up, down, one axis each way, and enough output rows for several bands.
         for (sx, sy) in [(0.6, 0.6), (1.7, 1.7), (0.4, 2.2), (1.0, 0.5)] {
-            for filter in [Resample::Bicubic, Resample::Lanczos, Resample::BicubicAutomatic, Resample::Nearest] {
+            for filter in [Resample::Bicubic, Resample::Lanczos, Resample::BicubicAutomatic, Resample::Nearest, Resample::Mitchell, Resample::Spline36] {
                 let expected = resize_surface(&src, sx, sy, filter);
                 for per_call in [0, 1, 7] {
                     let (got, _) = drive(ResizeSteps::new(src.clone(), sx, sy, filter, None), per_call);
@@ -604,4 +617,128 @@ fn sparse_resize_final_pruning(sample: SampleType) {
     assert!(closing_polls >= unpruned.div_ceil(4), "{unpruned} tiles were scanned in {closing_polls} closing polls");
     assert!(actual == expected, "stepped pruning must preserve pixels and remove the same empty tiles");
     assert!(actual.tile_count() < unpruned, "the fixture must include default-filled output tiles");
+}
+
+/// Adding the new kernels left Lanczos 3 (and Preserve Details, which enlarges with it)
+/// exactly as it was: its weights match, bit for bit, the code it replaced (copied here from
+/// main before the change, including the box average past a 4096x reduction) at every scale,
+/// offset and edge mode.
+#[test]
+fn lanczos3_weights_are_unchanged() {
+    let old = |o: i32, scale: f64, edge: Option<(i32, i32)>, content: (i32, i32)| {
+        if scale < 1.0 / 4096.0 {
+            return weights(o, scale, Kernel::Bilinear, edge, content);
+        }
+        let stretch = if scale < 1.0 { 1.0 / scale } else { 1.0 };
+        let u = (o as f64 + 0.5) / scale - 0.5;
+        let u = edge.map_or(u, |(a, b)| u.clamp(a as f64, b.max(a) as f64));
+        let lo = (u - 3.0 * stretch).ceil() as i32;
+        let hi = (u + 3.0 * stretch).floor() as i32;
+        let w: Vec<f64> = (lo..=hi).map(|i| lanczos_weight((i as f64 - u) / stretch)).collect();
+        let sum: f64 = w.iter().sum();
+        let k = if sum.abs() > 1e-12 { 1.0 / sum } else { 1.0 };
+        (lo, w.into_iter().map(|v| v * k).collect::<Vec<f64>>())
+    };
+    for scale in [1.0e-7, 0.07, 0.12, 0.5, 0.75, 1.0, 1.5, 2.3, 8.0] {
+        for o in -3..40 {
+            for edge in [None, Some((0, 31)), Some((5, 5))] {
+                let content = (0, 63);
+                assert_eq!(weights(o, scale, Kernel::Window(Shape::Lanczos(3.0)), edge, content), old(o, scale, edge, content), "scale {scale}, o {o}, edge {edge:?}");
+            }
+        }
+    }
+    assert_eq!(format!("{:?}", plan(Resample::Lanczos, 2.0, 2.0)), format!("{:?}", plan(Resample::PreserveDetails, 2.0, 2.0)));
+}
+
+/// Saved choices keep their meaning: the existing methods keep their serialized names and
+/// Bicubic stays the default; the new ones only add names.
+#[test]
+fn saved_method_names_and_default_are_unchanged() {
+    assert_eq!(Resample::default(), Resample::Bicubic);
+    for (m, name) in [
+        (Resample::Nearest, "nearest"),
+        (Resample::Bilinear, "bilinear"),
+        (Resample::Bicubic, "bicubic"),
+        (Resample::BicubicSmoother, "bicubicSmoother"),
+        (Resample::BicubicSharper, "bicubicSharper"),
+        (Resample::BicubicAutomatic, "bicubicAutomatic"),
+        (Resample::Lanczos, "lanczos"),
+        (Resample::PreserveDetails, "preserveDetails"),
+    ] {
+        assert_eq!(serde_json::to_value(m).unwrap(), serde_json::json!(name));
+        assert_eq!(serde_json::from_value::<Resample>(serde_json::json!(name)).unwrap(), m);
+    }
+}
+
+/// The added filters never take Preserve Details' sharpening or deringing, whatever the bit
+/// depth or scale (both stay Preserve Details' own).
+#[test]
+fn extra_filters_are_not_sharpened_or_deringed() {
+    for f in [Resample::Lanczos2, Resample::Lanczos4, Resample::Mitchell, Resample::CatmullRom, Resample::BSpline, Resample::Gaussian, Resample::Hermite, Resample::Spline16, Resample::Spline36] {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let fmt = PixelFormat::new(ColorMode::Rgb, sample, true);
+            assert!(!sharpens(f, 2.0, 2.0) && !derings(fmt, f, 2.0, 2.0), "{f:?} {sample:?}");
+        }
+    }
+}
+
+/// The added filters: every one keeps a flat image flat and its size at any scale, the
+/// interpolating ones reproduce a ramp when enlarging, and a hard edge stays in range only
+/// for the ones that never ring.
+#[test]
+fn extra_filters_keep_flat_images_flat_and_ramps_straight() {
+    let extras = [
+        Resample::Lanczos2,
+        Resample::Lanczos4,
+        Resample::Mitchell,
+        Resample::CatmullRom,
+        Resample::BSpline,
+        Resample::Gaussian,
+        Resample::Hermite,
+        Resample::Spline16,
+        Resample::Spline36,
+    ];
+    for f in extras {
+        for scale in [0.1, 0.37, 0.5, 1.0, 1.7, 3.0] {
+            for o in -2..30 {
+                let (_, w) = weights(o, scale, plan(f, scale, scale)[0].kx, Some((0, 63)), (0, 63));
+                let sum: f64 = w.iter().sum();
+                assert!((sum - 1.0).abs() < 1e-9, "{f:?} at scale {scale}: weights sum to {sum}");
+                assert!(w.iter().all(|v| v.is_finite()));
+            }
+        }
+        // serde round trip by the camelCase name
+        let name = serde_json::to_value(f).unwrap();
+        assert_eq!(serde_json::from_value::<Resample>(name.clone()).unwrap(), f, "{name}");
+    }
+    // interpolating kernels: zero at the other integers, one at zero
+    for sh in [Shape::Lanczos(2.0), Shape::Lanczos(4.0), Shape::CatmullRom, Shape::Hermite, Shape::Spline16, Shape::Spline36] {
+        assert!((sh.weight(0.0) - 1.0).abs() < 1e-12, "{sh:?}");
+        for k in 1..=4 {
+            assert!(sh.weight(k as f64).abs() < 1e-9, "{sh:?} at {k}");
+        }
+    }
+    // continuous at the spline knots, nothing past the support
+    for sh in [Shape::Mitchell, Shape::CatmullRom, Shape::BSpline, Shape::Spline16, Shape::Spline36] {
+        for k in [1.0, 2.0] {
+            assert!((sh.weight(k - 1e-6) - sh.weight(k + 1e-6)).abs() < 1e-4, "{sh:?} jumps at {k}");
+        }
+    }
+    for sh in [
+        Shape::Lanczos(2.0),
+        Shape::Lanczos(4.0),
+        Shape::Mitchell,
+        Shape::CatmullRom,
+        Shape::BSpline,
+        Shape::Gaussian,
+        Shape::Hermite,
+        Shape::Spline16,
+        Shape::Spline36,
+    ] {
+        assert_eq!(sh.weight(sh.support() + 0.01), 0.0, "{sh:?}");
+    }
+    // Lanczos-3 is the same as before, weight for weight
+    for x in [0.0, 0.3, 1.0, 1.5, 2.7, 3.2] {
+        assert_eq!(Shape::Lanczos(3.0).weight(x), lanczos_weight(x));
+    }
 }

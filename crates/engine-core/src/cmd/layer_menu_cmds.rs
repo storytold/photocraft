@@ -1044,6 +1044,7 @@ fn export_as_params() -> &'static str {
     ))
 }
 
+/// The Layer-menu command specs this module adds (see the module docs), including Export Layer.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?}"##, has_raster_with_mask, apply_mask),
