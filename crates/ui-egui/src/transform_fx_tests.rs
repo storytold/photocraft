@@ -4,6 +4,7 @@
 
 use egui::ColorImage;
 use photocraft_doc::{Layer, LayerId};
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -71,7 +72,7 @@ fn styled_texture_tracks_monitor_changes_without_recoloring_effect_inputs() {
     begin(&mut app);
     let raw = composite(&app, 1.0).unwrap().0;
     for monitor in ["srgb", "display-p3", "srgb"] {
-        app.session.color.settings.monitor_profile = monitor.into();
+        app.session.color_mut().settings.monitor_profile = monitor.into();
         crate::canvas::testing::frame(&mut app);
         assert_eq!(composite(&app, 1.0).unwrap().0.pixels, raw.pixels, "monitor={monitor}: effects still use document colors");
     }

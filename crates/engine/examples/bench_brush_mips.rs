@@ -1,6 +1,7 @@
 //! Sampled-tip preparation and live strokes on a materialized 24 MP layer. This harness also
 //! builds against the pre-cache revision for alternating before/after runs on the same runner.
 //! `cargo run --release -p photocraft-engine --example bench_brush_mips`
+use photocraft_engine::brush_cmds::LiveStrokeExt;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -51,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // A fresh allocation makes every cold preparation a genuine miss. Copying
                 // samples and materializing the document are outside all measured stages.
                 for trial in 0..8 {
-                    s.tools.brush.tip = original
+                    *s.tools.brush.tip = original
                         .as_ref()
                         .map_or(TipShape::Round, |t| TipShape::Sampled(GrayTile { width: t.width, height: t.height, data: t.data.as_ref().to_vec().into() }));
                     let t = Instant::now();

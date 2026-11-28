@@ -47,6 +47,10 @@ mod paint_thread;
 #[cfg(test)]
 mod paint_thread_tests;
 pub(crate) mod paint_tool;
+#[cfg(test)]
+mod pasteboard_menu_separator_tests;
+#[cfg(test)]
+mod pasteboard_menu_tools_tests;
 pub mod patch_preview;
 pub mod quick_pick;
 mod raster_source;
@@ -67,6 +71,7 @@ pub mod tool_feedback;
 pub(crate) mod tools;
 mod transform_controls;
 pub(crate) mod viewport_pages;
+mod window_drop;
 
 pub(crate) use cursor_policy::alt_samples;
 pub(crate) use display::GPU_OUTPUT;
@@ -172,6 +177,10 @@ pub fn canvas_view(
     primary: bool,
 ) -> (View, craft::ui::canvas::CanvasOutput) {
     let ctx = ui.ctx().clone();
+    // What the canvas shows follows the pointer (the tool's cursor, the rulers' marks, the Info panel and status bar
+    // readouts), so every pointer move over it runs a pass; elsewhere a move that changes nothing runs none (#17148).
+    let on_screen = ctx.layer_transform_to_global(ui.layer_id()).map_or(rect, |to_screen| to_screen * rect);
+    craft::ui::runtime::pointer::follows_pointer(&ctx, on_screen);
     let idx = host.idx;
     // The primary canvas keeps its view in `app.ui.views`: the pass starts from the stored view and stores the one it
     // ends with, unless something stored another view while the pass ran (a tool's commit that moved it), which then
@@ -201,14 +210,6 @@ pub fn canvas_view(
         // A document switched while a button is down ends the gesture of the document it began on.
         tools::end_foreign_gesture(app, &ctx, doc.id.0);
     }
-    // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools › Use Tablet Pressure
-    // is off; the pen's eraser end selects the Eraser.
-    app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
-    let curve = app.session.prefs().tools.pressure_curve.clone();
-    app.stylus.set_pressure_curve(&curve);
-    crate::stylus::Stylus::sync_eraser_tool(app);
-    // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
-    crate::layer_picker::prune(app);
     let flip = app.ui.view.flip_horizontal;
     let pass = document_display::CanvasPass { ctx: &ctx, host, doc: &doc, output, rect, ppp, flip, aspect };
     let shown = document_display::show(app, ui, &mut view, &pass);
@@ -237,7 +238,13 @@ mod pattern_drag_tests;
 mod tabs_tests;
 
 #[cfg(test)]
+mod canvas_settle_trials;
+
+#[cfg(test)]
 mod doc_window_dialog_tests;
+
+#[cfg(test)]
+mod document_window_title_tests;
 
 #[cfg(test)]
 mod tests;
@@ -247,6 +254,10 @@ mod transform_controls_tests;
 
 #[cfg(test)]
 mod layer_edges_tests;
+
+#[cfg(test)]
+#[path = "canvas/move_readout_arrows_tests.rs"]
+mod move_readout_arrows_tests;
 
 #[cfg(test)]
 mod live_frame_tests;
@@ -259,12 +270,14 @@ mod art_history_shift_click_tests;
 mod rotation_preview_isolation_tests {
     use craft::ui::dialog::DialogId;
     use photocraft_engine::channel_cmds::ChannelTarget;
+    use photocraft_engine::color_cmds::ColorExt;
 
     use super::*;
 
-    /// Opens the filter dialog of `command` and returns its id.
+    /// Opens the filter dialog of `command` with its Preview box and returns its id. Rotate Canvas has no Preview
+    /// (#14462); its size-changing preview (#1436) is reached through `open_previewing`.
     fn open(app: &mut PhotocraftApp, command: &str) -> DialogId {
-        let id = crate::filter_dialog::open(app, command).expect("the dialog opens");
+        let id = crate::filter_dialog::open_previewing(app, command).expect("the dialog opens");
         // The Preview box is on from the dialog's first drawn pass.
         for _ in 0..2 {
             crate::smart_filter_dialog::tests::pass(app);
@@ -480,8 +493,8 @@ mod rotation_preview_isolation_tests {
     #[test]
     fn profile_dialogs_preview_through_the_profile_they_choose() {
         let mut session = photocraft_engine::Session::new();
-        session.color.settings.monitor_profile = "srgb".into();
-        session.color.settings.working_rgb = "display-p3".into();
+        session.color_mut().settings.monitor_profile = "srgb".into();
+        session.color_mut().settings.working_rgb = "display-p3".into();
         session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
         session.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
         session

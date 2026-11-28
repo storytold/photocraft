@@ -11,6 +11,7 @@
 use craft::keymap::Mods;
 use photocraft_engine::BrushSettings;
 use photocraft_engine::prefs::RightClickPaint;
+use photocraft_engine::preset_store::PresetStoreExt;
 
 use crate::PhotocraftApp;
 use crate::canvas_tool_menu::MenuKind;
@@ -32,9 +33,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     }
     // The live brush is the outgoing tool's, so save it there before the new one takes over: any
     // edit it made since it was last active is in it, so its copy never goes stale.
-    let current = app.session.tools.brush.clone();
+    let current = (*app.session.tools.brush).clone();
     save_brush(app, app.ui.brush_tool, current.clone());
-    app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
+    *app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
         Some((_, b)) => {
             // A brush remembered from the previous run holds its stored tips as references:
             // load their full bitmaps (a missing one keeps painting with its preview).
@@ -45,12 +46,26 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
-        // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
-        // opacity and flow (#12616): those fields are their own.
+        // The Pattern Stamp also starts at full opacity and flow (#12616): those fields are its own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
-        // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
-        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
+        // Stamp, the Smudge tool, the Adjustment Brush and the Art History Brush start with their own measured tips
+        // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684,
+        // #13029, #12601, #12964, #12631); the Art History Brush's is at full opacity (#10263).
+        // The Art History Brush's Angle and pressure toggles are its own bar controls, so they
+        // start at 0° and off too, whatever the outgoing brush has (#12629).
+        None if matches!(
+            tool,
+            Tool::BackgroundEraser
+                | Tool::Healing
+                | Tool::Burn
+                | Tool::Dodge
+                | Tool::Sponge
+                | Tool::CloneStamp
+                | Tool::Smudge
+                | Tool::AdjustmentBrush
+                | Tool::ArtHistoryBrush
+        ) =>
+        {
             fresh_brush(tool, &current)
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
@@ -62,7 +77,6 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         None => {
             let fresh = BrushSettings::default();
             let (opacity, flow) = match tool {
-                Tool::ArtHistoryBrush => (fresh.opacity, current.flow),
                 Tool::PatternStamp => (fresh.opacity, fresh.flow),
                 _ => (current.opacity, current.flow),
             };
@@ -95,6 +109,8 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
 /// The Brush tool's tip after Reset Tool, as the reference measures it (#11810): size, hardness
 /// and spacing of a 13 px soft round at 25 % spacing.
 const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Mixer Brush's tip after Reset Tool (#11945): a 35 px soft round at 25 % spacing.
+const MIXER_BRUSH_TIP: (f32, f32, f32) = (35.0, 0.0, 0.25);
 /// The Eraser's tip after Reset Tool (#11936): a 13 px hard round at 25 % spacing, with no
 /// smoothing.
 const ERASER_TOOL_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
@@ -110,23 +126,40 @@ const PENCIL_TOOL_TIP: (f32, f32, f32) = (1.0, 1.0, 0.25);
 const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
 /// The Clone Stamp's tip after Reset Tool (#12601): a 21 px soft round at 25 % spacing.
 const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
+/// The Art History Brush's tip after Reset Tool (#12631): a 21 px soft round at 25 % spacing.
+const ART_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 /// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
 /// measured, so they stay the default brush's.
 const REMOVE_TOOL_SIZE: f32 = 19.0;
 /// The Smudge tool's tip after Reset Tool (#12964): a 13 px soft round at 25 % spacing.
 const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Adjustment Brush's starting tip (#12519): a 100 px soft round (hardness 0 %). Its spacing
+/// was not measured, so it stays the default brush's.
+const ADJUSTMENT_BRUSH_TIP: (f32, f32) = (100.0, 0.0);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
-/// [`BRUSH_TOOL_TIP`], the Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
+/// [`BRUSH_TOOL_TIP`], the Mixer Brush's [`MIXER_BRUSH_TIP`] and measured mixer settings, the
+/// Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
-/// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
+/// [`CLONE_STAMP_TIP`] and the Art History Brush's [`ART_HISTORY_BRUSH_TIP`], both with no
+/// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
 /// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
 /// default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
         Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
+        Tool::MixerBrush => {
+            (brush.size, brush.hardness, brush.spacing) = MIXER_BRUSH_TIP;
+            brush.mixer.wet = 0.8;
+            brush.mixer.load = 0.75;
+            brush.mixer.mix = 0.9;
+            brush.mixer.flow = 1.0;
+            brush.mixer.load_after_stroke = true;
+            brush.mixer.clean_after_stroke = true;
+            brush.mixer.sample_all_layers = false;
+        }
         Tool::Eraser => {
             (brush.size, brush.hardness, brush.spacing) = ERASER_TOOL_TIP;
             brush.smoothing.amount = 0.0;
@@ -140,7 +173,12 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
             brush.smoothing.amount = 0.0;
         }
+        Tool::ArtHistoryBrush => {
+            (brush.size, brush.hardness, brush.spacing) = ART_HISTORY_BRUSH_TIP;
+            brush.smoothing.amount = 0.0;
+        }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
+        Tool::AdjustmentBrush => (brush.size, brush.hardness) = ADJUSTMENT_BRUSH_TIP,
         _ => {}
     }
     session_fields(current, &brush)
@@ -235,13 +273,17 @@ pub(crate) enum ContextPopup {
 /// menus come from the guides' own output and transform menus from the transform box.
 pub(crate) fn context_popup(app: &mut PhotocraftApp, tool: Tool, mods: Mods, doc: [f64; 2]) -> Option<ContextPopup> {
     use crate::canvas_tool_menu as menu;
+    // Puppet Warp's pin menu, opened earlier in the pass, takes the right-click (#16734).
+    if crate::puppet_ui::menu_open(app) {
+        return None;
+    }
     if crate::brush_mode_menu::opens_on(app, tool, mods, Some(doc)) {
         return Some(ContextPopup::Menu(MenuKind::BrushMode { plain: !crate::brush_mode_menu::is_gesture(tool, mods) }));
     }
     if crate::layer_pick_ui::is_gesture(tool, mods) {
         let layers = crate::layer_pick_ui::layers_at(app, doc[0], doc[1]);
         if !layers.is_empty() {
-            return Some(ContextPopup::Menu(MenuKind::Layers { layers }));
+            return Some(ContextPopup::Menu(MenuKind::Layers { layers, depth: Vec::new(), isolate: false }));
         }
         return (!mods.cmd && menu::pasteboard_at(app, tool, doc)).then_some(ContextPopup::Menu(MenuKind::Pasteboard));
     }

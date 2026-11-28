@@ -16,6 +16,7 @@ use crate::PhotocraftApp;
 use crate::shape_paint_ui::paint_param;
 use crate::state::{Tool, ToolOptions};
 
+pub(crate) mod alignment;
 mod freeform;
 pub(crate) mod host;
 mod options;
@@ -118,6 +119,18 @@ pub struct PenPath {
     /// The open draft as it was before the press that closed it: a close drag pulls the first anchor's handles in the
     /// closed path only, so Undo gives the path back as this.
     pub(crate) before_close: Option<EditSubpath>,
+    /// The draft's shape layer was made on its first anchor (#12909) and takes its anchors as they are placed;
+    /// `resumes` names that layer and its subpath.
+    pub(crate) live_layer: bool,
+    /// The draft's Work Path was made on its first anchor (#12890) and takes each click as its own History step;
+    /// `resumes` names that path and its subpath.
+    pub(crate) live_path: bool,
+    /// The ids of the History states this draft's own live writes minted (#16686 review), oldest first.
+    /// A step's name is not proof of who wrote it - `path.set` takes a Pen step name from any caller - while a
+    /// History state id (`History::row_id`) is minted by History, never reused, and no parameter can carry one.
+    /// A live draft follows its path only onto a state it minted itself, or one whose successor is waiting to be
+    /// redone; anything else the document moved to is a step from elsewhere and makes the draft stale.
+    pub(crate) live_steps: Vec<u64>,
 }
 
 /// The subpath a Pen path carries on: where it is and what it was when drawing resumed. The
@@ -180,6 +193,12 @@ mod pen_draw_tests;
 mod pen_path_ops_tests;
 
 #[cfg(test)]
+mod pen_indexed_shape_tests;
+
+#[cfg(test)]
+mod pen_shape_mode_options_tests;
+
+#[cfg(test)]
 mod pen_rubber_band_tests;
 
 #[cfg(test)]
@@ -200,6 +219,9 @@ mod pen_enter_deselects_tests;
 mod ellipse_path_menus_tests;
 
 #[cfg(test)]
+mod curvature_delete_key_tests;
+
+#[cfg(test)]
 mod shape_properties_tests;
 
 #[cfg(test)]
@@ -210,6 +232,11 @@ mod line_shift_snap_tests;
 
 #[cfg(test)]
 mod ellipse_shift_circle_tests;
+
+#[cfg(test)]
+mod polygon_align_edges_tests;
+#[cfg(test)]
+mod rectangle_align_edges_tests;
 
 #[cfg(test)]
 mod triangle_align_edges_tests;
@@ -278,12 +305,21 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
     } else {
         PenTarget::Path { name: "work".into(), append: false }
     };
+    let mut options = (*app.ui.tool_options).clone();
+    // Combining or resuming starts with the layer's displayed setting without replacing the user's
+    // New Layer default merely because a different target was selected.
+    if options.vector_mode == VectorMode::Shape
+        && (pen::pen_path_op(&options).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.resumes.as_ref().is_some_and(|r| r.layer.is_some())))
+        && let Some(LayerContent::Shape(shape)) = st.active_layer.and_then(|id| st.doc.layer(id)).map(|layer| &layer.content)
+    {
+        options.align_edges = shape.use_aligned_rendering;
+    }
     Some(PenOwner {
         document: st.doc.id,
         revision: st.revision,
         source: Arc::downgrade(&st.doc),
         target,
-        options: app.ui.tool_options.clone(),
+        options,
         layer: st.active_layer,
         vector_mask: app.ui.vector_mask_target,
         foreground: app.session.tools.foreground,
@@ -357,6 +393,8 @@ pub(crate) fn pen_can_undo(app: &PhotocraftApp) -> bool {
 
 /// Commit a valid source-owned draft on a tab switch; otherwise cancel with an actionable diagnostic.
 pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
+    // A live shape layer's draft follows the document through Undo, Redo and History (#12909).
+    pen::sync_live_draft_from_layer(app);
     let Some(pen) = app.ui.pen.as_ref() else { return false };
     if pen.owner.as_ref().is_some_and(|o| o.valid(app)) {
         return false;

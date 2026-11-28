@@ -247,7 +247,7 @@ fn memory_confirmation_dialog_and_cancel_lifecycle() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, None, 7 * gb, Some(10 * gb), false, false);
     let dlg_id = memory_dialog(&mut app);
 
     assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dlg_id}))["ok"], true);
@@ -390,6 +390,7 @@ fn memory_confirmation_refuses_when_source_changed_inline() {
         Some(path.to_string_lossy().to_string()),
         None,
         None,
+        None,
         1000,
         Some(100_000),
         false,
@@ -441,6 +442,7 @@ fn memory_confirmation_refuses_when_source_changed_async() {
         Some(path.to_string_lossy().to_string()),
         None,
         None,
+        None,
         1000,
         Some(100_000),
         false,
@@ -490,7 +492,7 @@ fn memory_decline_advances_queue_and_cleans_batch() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "declined.psd".into(), None, None, Some(order), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "declined.psd".into(), None, None, None, Some(order), 1000, Some(4000), false, false);
     let dlg_id = memory_dialog(&mut app);
 
     let res = call(&mut app, "ui.dialog.cancel", json!({"dialog": dlg_id}));
@@ -538,8 +540,8 @@ fn batch_single_file_cancel_preserves_other_held_memory_orders() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, p0, "first.psd".into(), None, None, Some(order0), 1000, Some(4000), false, false);
-    crate::open_prompt::arrive_memory(&mut app, p1, "second.psd".into(), None, None, Some(order1), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, p0, "first.psd".into(), None, None, None, Some(order0), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, p1, "second.psd".into(), None, None, None, Some(order1), 1000, Some(4000), false, false);
 
     // Cancel first file:
     let dlg0 = memory_dialog(&mut app);
@@ -578,7 +580,7 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, None, 7 * gb, Some(10 * gb), false, false);
 
     crate::open_prompt::arrive(
         &mut app,
@@ -645,7 +647,7 @@ fn mixed_prompts_follow_arrival_order_fifo() {
             confirm_damage: true,
         })
         .unwrap();
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "second_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "second_mem.psd".into(), None, None, None, None, 7 * gb, Some(10 * gb), false, false);
 
     // First prompt shown must be damage (since it arrived first)!
     let dlg_id = damage_dialog(&mut app);
@@ -739,6 +741,7 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
         job: photocraft_engine::jobs::JobId(1),
         name: "unknown.psd".into(),
         path: Some("/pics/unknown.psd".into()),
+        error_source: None,
         slot: None,
         order: None,
     };
@@ -761,7 +764,8 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
 
     // A measured capacity shows the number and drops the uncertainty warning.
     let id = store_preflight(&mut app, "known.psd", 3 * gb, Some(5 * gb));
-    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(2), name: "known.psd".into(), path: None, slot: None, order: None };
+    let tab =
+        crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(2), name: "known.psd".into(), path: None, error_source: None, slot: None, order: None };
     crate::jobs_ui::finish_open_tab(
         &mut app,
         &tab,
@@ -787,7 +791,8 @@ fn memory_prompt_warns_when_little_memory_would_be_left() {
     let mut app = app();
     let available = 3 * gb + gb / 2;
     let id = store_preflight(&mut app, "tight.psd", 3 * gb, Some(available));
-    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, slot: None, order: None };
+    let tab =
+        crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, error_source: None, slot: None, order: None };
     crate::jobs_ui::finish_open_tab(
         &mut app,
         &tab,
@@ -808,7 +813,7 @@ fn reopening_a_file_whose_memory_prompt_waits_does_not_queue_a_duplicate() {
     let gb = 1u64 << 30;
     let mut app = app();
     let id = store_preflight(&mut app, "slow.psd", 3 * gb, Some(5 * gb));
-    crate::open_prompt::arrive_memory(&mut app, id, "slow.psd".into(), Some("/pics/slow.psd".into()), None, None, 3 * gb, Some(5 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, id, "slow.psd".into(), Some("/pics/slow.psd".into()), None, None, None, 3 * gb, Some(5 * gb), false, false);
     assert_eq!(app.held_memory_prompts.len(), 1);
     assert!(alerts::prompt_tagged::<MemoryTag>(&app).is_some());
     assert!(app.show_if_open("/pics/slow.psd"), "the waiting prompt is shown");
@@ -817,7 +822,7 @@ fn reopening_a_file_whose_memory_prompt_waits_does_not_queue_a_duplicate() {
 
     // The template exception: a repeat open still creates another Untitled.
     let id = store_preflight(&mut app, "card.psdt", 3 * gb, Some(5 * gb));
-    crate::open_prompt::arrive_memory(&mut app, id, "card.psdt".into(), Some("/pics/card.psdt".into()), None, None, 3 * gb, Some(5 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, id, "card.psdt".into(), Some("/pics/card.psdt".into()), None, None, None, 3 * gb, Some(5 * gb), false, false);
     assert_eq!(app.held_memory_prompts.len(), 2);
     assert!(!app.show_if_open("/pics/card.psdt"), "a template reopens instead of reusing the waiting prompt");
     assert_eq!(app.held_memory_prompts.len(), 2);
@@ -1023,4 +1028,107 @@ fn confirmed_damaged_smart_object_opens_are_admitted_as_smart_objects_with_disti
         assert_eq!(st.history.entries(), ["Open As Smart Object"]);
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A real inline decode after consent fails on a tiny recognized PSD header. Its raw approval
+/// error is unchanged; typed UI confirmation acknowledges delivery. The alert names the source
+/// and the next prompt retains its batch.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_error_reply() {
+    for (name, file_name) in [("failed.psd", None), ("failed.psd", Some("failed.psd")), ("Untitled-1", Some("template.psdt"))] {
+        for typed in [false, true] {
+            check_failed_memory_approval_case(name, file_name, typed);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn check_failed_memory_approval_case(name: &str, file_name: Option<&str>, typed: bool) {
+    // File-backed decoding reads the complete 26-byte header before parsing it. Give both
+    // routes that same header so the unsupported version, rather than EOF, is the failure.
+    let header = [
+        b'8', b'B', b'P', b'S', 0, 0, // unsupported version
+        0, 0, 0, 0, 0, 0, // reserved
+        0, 3, // channels
+        0, 0, 0, 1, // height
+        0, 0, 0, 1, // width
+        0, 8, // depth
+        0, 3, // RGB
+    ];
+    let mut app = app();
+    let temp = tempfile::tempdir().unwrap();
+    let path = file_name.map(|file| {
+        let path = temp.path().join(file);
+        std::fs::write(&path, header).unwrap();
+        path.to_string_lossy().into_owned()
+    });
+    let source = path.as_ref().map_or_else(
+        || photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.to_vec())),
+        |path| photocraft_engine::jobs::OpenSource::Path(path.clone()),
+    );
+    let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
+    let first = app
+        .session
+        .store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+            id: 0,
+            name: name.into(),
+            source,
+            fingerprint,
+            required: 1000,
+            soft_limit: 500,
+            hard_limit: 2000,
+            available_ram: Some(4000),
+            confirm_damage: true,
+        })
+        .unwrap();
+    let second = store_preflight(&mut app, "next.psd", 1000, Some(4000));
+    let batch = crate::jobs_ui::begin_batch(&mut app);
+    let first_order = crate::jobs_ui::OpenOrder { batch, seq: 0 };
+    let second_order = crate::jobs_ui::OpenOrder { batch, seq: 1 };
+    crate::open_prompt::arrive_memory(&mut app, first, name.into(), path.clone(), None, None, Some(first_order), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, second, "next.psd".into(), None, None, None, Some(second_order), 1000, Some(4000), false, false);
+    let dialog = alerts::prompt_tagged::<MemoryTag>(&app).unwrap();
+    if typed {
+        let reply = call(&mut app, "ui.dialog.confirm", json!({"dialog": dialog.value()}));
+        assert_eq!(reply["ok"], true, "typed confirmation acknowledges delivery; the real consumer presents the approval failure");
+    } else {
+        let error = crate::open_prompt::answer_memory(&mut app, true).unwrap_err();
+        assert_eq!(error, format!("{name}: {name}: PSD: unsupported file version 0"), "keep the approval's original raw error");
+        let ctx = app.ctx().clone();
+        ctx.run_ui(Default::default(), |ui| crate::dialogs::run(&mut app, ui)).textures_delta.clear();
+    }
+    let source_name = file_name.unwrap_or(name);
+    let wanted = format!("Couldn't open {source_name}: PSD: unsupported file version 0");
+    let errors: Vec<_> = app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert")).collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].fields.as_ref().unwrap()["message"], wanted);
+    let error_id = errors[0].id;
+    assert_eq!(app.ui.status, wanted);
+    assert_eq!(app.ui.status.matches(source_name).count(), 1);
+    if name != source_name {
+        assert!(!app.ui.status.contains(name));
+    }
+    assert!(app.ui.status_error);
+    assert!(app.ui.notices.is_empty());
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.recent_files.is_empty());
+    assert!(app.jobs.opens.is_empty());
+    assert!(app.session.take_pending_preflight(first).is_none());
+    assert_eq!(app.held_memory_prompts.len(), 1);
+    assert_eq!(app.held_memory_prompts[0].id, second);
+    assert_eq!(app.prompt_order.len(), 1);
+    assert_eq!(app.jobs.batches.len(), 1, "the waiting successor still owns this batch");
+    let next = alerts::prompt_tagged::<MemoryTag>(&app).unwrap();
+    crate::open_prompt::advance_memory(&mut app);
+    assert_eq!(app.framework.dialogs.open_dialogs().len(), 2, "neither the alert nor the successor prompt is duplicated");
+    assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": error_id.value()}))["ok"], true);
+    assert_eq!(app.framework.dialogs.open_dialogs().len(), 1);
+    assert_eq!(app.framework.dialogs.open_dialogs()[0].id, next);
+    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": next.value()}))["ok"], true);
+    assert!(app.session.take_pending_preflight(second).is_none());
+    assert!(app.framework.dialogs.open_dialogs().is_empty());
+    assert!(app.held_memory_prompts.is_empty());
+    assert!(app.prompt_order.is_empty());
+    assert!(app.jobs.batches.is_empty());
 }

@@ -32,11 +32,11 @@ pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect,
     show_smoothing_string(ui, app, rect);
     crate::object_finder::show(ui, app, at);
     if let Some(at) = at {
-        let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
+        let shift = craft::ui::runtime::pointer::mods(ui.ctx()).shift;
         let tool = app.ui.tool;
         crate::stroke_constraint::show_line_preview(ui, app, at, tool, shift);
     }
-    app.brush_resize.show_preview(ui, app);
+    app.brush_resize.show_preview(ui, app, rect);
 }
 
 /// The Clone Source crosshair, while a Clone Stamp or Healing Brush stroke paints.
@@ -54,7 +54,7 @@ fn show_clone_overlay(ui: &mut egui::Ui, app: &mut PhotocraftApp, at: Option<Poi
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
         return;
     }
-    if app.brush_resize.active() || craft::ui::runtime::pointer::frame(ui.ctx()).mods.alt {
+    if app.brush_resize.active() || craft::ui::runtime::pointer::mods(ui.ctx()).alt {
         return;
     }
     let Some(source) = crate::canvas::strokes::clone_source(app, [at.x, at.y]) else { return };

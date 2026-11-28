@@ -271,6 +271,34 @@ fn exact_palette_and_failure() {
 }
 
 #[test]
+fn exact_palette_counts_forced_colours_without_dropping_image_colours() {
+    let pixels = |count: u16| (0..count).map(|r| [f32::from(r) / 255.0, 42.0 / 255.0, 7.0 / 255.0, 1.0]).collect::<Vec<_>>();
+    let px = pixels(256);
+    let error = build_palette(&px, PaletteKind::Exact, 256, Forced::BlackWhite).unwrap_err();
+    assert!(error.contains("258") && error.contains("forced"), "{error}");
+
+    let boundary = pixels(254);
+    let palette = build_palette(&boundary, PaletteKind::Exact, 256, Forced::BlackWhite).unwrap();
+    assert_eq!(palette.len(), 256);
+    assert_eq!(&palette[..2], &[[0, 0, 0], [255, 255, 255]], "forced colours retain their order");
+    for r in 0..254u8 {
+        assert!(palette.contains(&[r, 42, 7]), "the source colour {r} was dropped");
+    }
+
+    let mut overlap = boundary;
+    overlap.extend([[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]]);
+    let palette = build_palette(&overlap, PaletteKind::Exact, 256, Forced::BlackWhite).unwrap();
+    assert_eq!(palette.len(), 256, "forced colours already in the image count only once");
+    for colors in [2, 256] {
+        let palette = build_palette(&px, PaletteKind::Exact, colors, Forced::None).unwrap();
+        assert_eq!(palette.len(), 256, "Exact still retains every image colour regardless of the requested count");
+        for r in 0..=255u8 {
+            assert!(palette.contains(&[r, 42, 7]), "the source colour {r} was dropped");
+        }
+    }
+}
+
+#[test]
 fn adaptive_and_perceptual_respect_count_and_forced() {
     let px = gradient(40, 40);
     for kind in [PaletteKind::Adaptive, PaletteKind::Perceptual, PaletteKind::Selective] {

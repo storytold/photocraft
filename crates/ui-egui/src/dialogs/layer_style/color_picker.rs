@@ -48,8 +48,9 @@ pub(super) fn open_request(app: &mut PhotocraftApp, parent: DialogId, request: C
     }
     let opening = color_at(app, parent, &request.key)?;
     let key = request.key.clone();
-    // An instance keeps the picker's result apart from the other pickers' (`take_by_id` only).
-    let picker = ColorPickerDialog::from_request(request).instance(parent);
+    // An instance keeps the picker's result apart from the other pickers' (`take_by_id` only). No screen eyedropper
+    // button, as in the reference application (#17017).
+    let picker = ColorPickerDialog::from_request(request).eyedropper(false).instance(parent);
     let id = app.framework.dialogs.open_child(picker, parent);
     app.layer_style_child = Some((parent, Child::Picker { id, key, opening }));
     Ok(id)

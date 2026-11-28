@@ -411,35 +411,42 @@ stored descriptor no longer describes it.
 
 ### Content-Aware Fill recordings
 
-`cafWorkspace` maps Rectangular / Default color adaptation / None rotation with New Layer or
-Current Layer output to `edit.contentAwareFill`, retaining all seven keys and the three booleans:
-Sample All Layers, Scale and Mirror. The selection comes from the preceding selection step.
-New Layer is in the measured reference; Current Layer and the enumeration type IDs are explicit
-in [Stephen Marsh's published Action Manager example](https://community.adobe.com/questions-712/expand-and-content-aware-fill-functions-are-not-working-via-javascript-1172085).
+`cafWorkspace` maps every value the reference workspace shows to `edit.contentAwareFill`,
+retaining all seven keys and the three booleans: Sample All Layers, Scale and Mirror. The
+selection comes from the preceding selection step. The values were measured by playing each
+step with dialogs on (#14254); the enumeration type IDs are explicit in
+[Stephen Marsh's published Action Manager example](https://community.adobe.com/questions-712/expand-and-content-aware-fill-functions-are-not-working-via-javascript-1172085).
 
-| Recorded key, in order | Supported value | Native parameter |
+| Recorded key, in order | Supported values | Native parameter |
 |---|---|---|
-| `cafSamplingRegion` | `cafSamplingRegionRectangular` | `sampling: "rectangular"` |
+| `cafSamplingRegion` | `cafSamplingRegionAuto`, `…Rectangular`, `…Custom` | `sampling: "auto"`, `"rectangular"`, `"custom"` |
 | `cafSampleAllLayers` | boolean | `sampleAllLayers` |
-| `cafColorAdaptationLevel` | `cafColorAdaptationDefault` | `colorAdaptation: "default"` |
-| `cafRotationAmount` | `cafRotationAmountNone` | `rotationAdaptation: "none"` |
+| `cafColorAdaptationLevel` | `cafColorAdaptationNone`, `…Default`, `…High`, `…VeryHigh` | `colorAdaptation: "none"`, `"default"`, `"high"`, `"veryHigh"` |
+| `cafRotationAmount` | `cafRotationAmountNone`, `…Low`, `…Medium`, `…High`, `…Full` | `rotationAdaptation: "none"`, `"low"`, `"medium"`, `"high"`, `"full"` |
 | `cafScale` | boolean | `scale` |
 | `cafMirror` | boolean | `mirror` |
-| `cafOutput` | `cafOutputToNewLayer`, `cafOutputToCurrentLayer` | `output: "new"`, `"current"` |
+| `cafOutput` | `cafOutputToCurrentLayer`, `…NewLayer`, `…DuplicateLayer` | `output: "current"`, `"new"`, `"duplicate"` |
+
+An empty descriptor (no keys) plays with the settings the fill workspace remembers
+(`prefs.dialogs["edit.contentAwareFill.workspace"]`), New Layer before any are remembered; it
+imports as `{"_atnCafRemembered": true}`, which `playback_params` resolves, and saves back
+empty. Playing a step never changes what is remembered. When the remembered sampling is Custom,
+the step stops with a message instead of filling: the workspace doesn't remember the painted
+Custom area (Custom reopens empty), and the step must not sample another area instead.
 
 Descriptor types, source identity and key order survive save while its native settings are
 unchanged. Editing a supported setting exports the new values in canonical form instead of
 restoring stale source values; malformed preservation data still refuses export.
-Native export writes the seven keys explicitly; the known native boolean, color
-adaptation, rotation and Current Layer output defaults are supported when sampling is explicitly
-Rectangular. A native call using the Auto sampling default cannot yet be exported.
+Native export writes the seven keys explicitly, including the command's own defaults (Auto
+sampling, Current Layer output). A native step without `sampleAllLayers` refuses export: on an
+empty layer the command then samples the visible composite, which neither recorded value says.
 
-The reference's ellipses do not establish additional enum forms. Auto/Custom sampling,
-other adaptation levels, Duplicate Layer output, absent keys, unknown settings and
-malformed or repeated fields remain complete kept steps. Native layer targets, sampling/fill
-edits and nondefault seeds also refuse export rather than lose their settings. Playback uses
-the existing native fill and its selection, authorization, job and Undo/Redo behavior. The
-remaining CAF forms and the other recorded tools in #10710 are still separate work.
+Steps that carry only some of the seven keys (not measured), unknown settings and malformed
+or repeated fields remain complete kept steps. Native layer targets, sampling/fill edits and
+nondefault seeds also refuse export rather than lose their settings. Playback uses the existing
+native fill and its selection, authorization, job and Undo/Redo behavior; Custom sampling
+without a painted sampling area fails the step with the command's error. The other recorded
+tools in #10710 are still separate work.
 
 ### Layer Style menu recordings
 
@@ -486,6 +493,9 @@ This is another implemented subset of #10723, not support for its remaining even
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
+- Black & White exports store coefficients as signed 32-bit integers. Strict export refuses
+  fractional coefficients; `skipUnsupported:true` reports the omitted step. Native commands
+  retain fractional coefficients.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension
   colours use `FrgC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
@@ -514,7 +524,9 @@ The Vibrance event and adjustment-opacity handling incorporate [@bommerts' contr
 
 - Image Size preserves `scaleStyles`. Native calls default to true; an absent ATN flag means
   false (the reference application plays both alike), so Save writes the key only when it is true.
-  Crop and resolution-only resizing retain their existing behavior.
+  Explicit pixel dimensions take precedence over `percent`; a side without an explicit size
+  keeps its percentage. Strict export refuses an invalid supplied percentage even when explicit
+  dimensions would override it. Crop and resolution-only resizing retain their existing behavior.
 - Convert to Profile preserves `Dthr`, `Fltt` and `rasterizePlaced`, defaulting to false.
   `sdwM` is written as the reference application records it (-1); other values and malformed
   flags remain kept steps. Absolute intent writes `AClr`, with `AbsC` still accepted on import.
@@ -1154,17 +1166,18 @@ Measured with a folder `in` holding `a.png`, `b.png`, `notes.txt` and `sub/a.png
 - **Errors, Stop For Errors** (no `Log ` key): the batch stops at the failing file; files before it are
   saved, nothing after it is processed.
 - **Errors, Log Errors To File:** the batch goes on, and at the end a message says an error occurred and
-  the details are in the log. The log file is **UTF-16 LE with BOM and CRLF**, and is written even when
-  nothing failed. In German the lines are (the application's own language):
+  the details are in the log. The log file is **UTF-16 BE with BOM (`FE FF`) and CRLF**, and is written even when
+  nothing failed. The first line is `Start Batch` and the last is `End Batch` followed by CRLF; `File:` paths
+  use the platform separators (backslashes on Windows). The measured layout:
 
   ```
-  Stapelanfang
+  Start Batch
   <blank>
-  Datei: "<full path, or the document's name for open documents>"
-  Fehler: <message> (<error code>)
+  File: "<full path, or the document's name for open documents>"
+  Error: <message>
   <blank>
   …one pair per failed file…
-  Stapelende
+  End Batch
   ```
 - **Cancel:** Esc during a batch stops the running command and asks "A command was cancelled or stopped
   during batch processing. Continue with the next file or stop?" (Continue / Stop). Stop ends the batch
@@ -1182,7 +1195,7 @@ Batch cancellation conformance (Photoshop 2026 observation above; PhotoCraft's p
 | Ask Continue or Stop | Continue skips the interrupted input; Stop returns prior outputs and skips the rest | Implemented and tested in engine and UI |
 | Keep headless cancellation direct | `jobs.cancel` returns partial results without an interactive question | Implemented and tested, including a worker waiting for a desktop decision |
 | No progress bar | The desktop Batch preview is the visible feedback | Implemented, UI tested and visually checked |
-| Preserve error policy and log | Continue retains earlier errors and writes one final UTF-16 LE log | Implemented and tested with errors before and after Esc |
+| Preserve error policy and log | Continue retains earlier errors and writes one final UTF-16 BE log | Implemented and tested with errors before and after Esc |
 
 - **Return value:** when any file failed, the Batch step itself reports "cancelled" (the dialog returns no
   descriptor); a script run with Stop For Errors reports success even though it stopped.
