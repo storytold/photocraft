@@ -149,8 +149,23 @@ fn set(h: &mut H, field: &str, value: Value) {
     h.run_steps(3);
 }
 
+fn camera_value_node(node: &egui_kittest::kittest::AccessKitNode<'_>, label: &str) -> bool {
+    use egui::accesskit::Role;
+
+    fn value_input(node: egui_kittest::kittest::AccessKitNode<'_>) -> bool {
+        (node.role() == Role::MultilineTextInput && node.is_hidden()) || node.children().any(value_input)
+    }
+
+    // The selectable value part owns both this label and its folded text input.
+    // A side caption has only its label; stay inside the immediate part container.
+    node.role() == Role::Label
+        && node.label().as_deref() == Some(label)
+        && node.value().is_some()
+        && node.parent().is_some_and(|part| part.role() == Role::GenericContainer && part.children().any(value_input))
+}
+
 fn camera_value(h: &H, label: &str) -> String {
-    h.get_by(|node| node.role() == Role::Label && node.label().as_deref() == Some(label) && node.value().is_some() && node.data().supports_action(egui::accesskit::Action::SetTextSelection)).accesskit_node().value().unwrap().to_owned()
+    h.get_by(|node| camera_value_node(node, label)).accesskit_node().value().unwrap().to_owned()
 }
 
 #[test]
@@ -218,7 +233,7 @@ fn camera_page_shows_ten_empty_rows_and_keeps_existing_camera_formatting() {
         h.run_steps(4);
         let mut last = f32::NEG_INFINITY;
         for (key, label) in CAMERA {
-            let node = h.get_by(|node| node.role() == Role::Label && node.label().as_deref() == Some(label) && node.value().is_some() && node.data().supports_action(egui::accesskit::Action::SetTextSelection));
+            let node = h.get_by(|node| camera_value_node(node, label));
             assert!(node.rect().top() >= last, "camera order {label}");
             last = node.rect().top();
             assert_eq!(camera_value(&h, label), info["camera"][key].as_str().unwrap_or_default(), "{label}");
@@ -283,10 +298,10 @@ fn switching_category_resets_only_the_page_scroll_and_keeps_the_footer_fixed() {
     open(&mut h);
     h.get_by_role_and_label(Role::ListItem, "Camera Data").click();
     h.run_steps(8);
-    let make_y = h.get_by(|node| node.role() == Role::Label && node.label().as_deref() == Some("Make") && node.value().is_some() && node.data().supports_action(egui::accesskit::Action::SetTextSelection)).rect().top();
+    let make_y = h.get_by(|node| camera_value_node(node, "Make")).rect().top();
     let footer = h.get_by_role_and_label(Role::Button, "OK").rect();
     let categories = h.get_by_role_and_label(Role::ListItem, "Basic").rect();
-    h.hover_at(h.get_by(|node| node.role() == Role::Label && node.label().as_deref() == Some("Lens") && node.value().is_some() && node.data().supports_action(egui::accesskit::Action::SetTextSelection)).rect().center());
+    h.hover_at(h.get_by(|node| camera_value_node(node, "Lens")).rect().center());
     for _ in 0..12 {
         h.event(egui::Event::MouseWheel {
             source: egui::MouseWheelSource::Unknown,
@@ -298,7 +313,7 @@ fn switching_category_resets_only_the_page_scroll_and_keeps_the_footer_fixed() {
         h.run_steps(1);
     }
     let moved_y =
-        h.query_by(|node| node.role() == Role::Label && node.label().as_deref() == Some("Make") && node.value().is_some() && node.data().supports_action(egui::accesskit::Action::SetTextSelection)).map(|node| node.rect().top());
+        h.query_by(|node| camera_value_node(node, "Make")).map(|node| node.rect().top());
     assert_ne!(moved_y, Some(make_y), "the page really scrolled");
     assert_eq!(h.get_by_role_and_label(Role::Button, "OK").rect(), footer);
     assert_eq!(h.get_by_role_and_label(Role::ListItem, "Basic").rect(), categories);
@@ -306,7 +321,7 @@ fn switching_category_resets_only_the_page_scroll_and_keeps_the_footer_fixed() {
     h.run_steps(4);
     h.get_by_role_and_label(Role::ListItem, "Camera Data").click();
     h.run_steps(32);
-    let reset = h.get_by(|node| node.role() == Role::Label && node.label().as_deref() == Some("Make") && node.value().is_some() && node.data().supports_action(egui::accesskit::Action::SetTextSelection)).rect().top();
+    let reset = h.get_by(|node| camera_value_node(node, "Make")).rect().top();
     assert!((reset - make_y).abs() < 1.0, "returned to page top: {make_y} -> {reset}");
     assert_eq!(h.get_by_role_and_label(Role::Button, "OK").rect(), footer);
 }
