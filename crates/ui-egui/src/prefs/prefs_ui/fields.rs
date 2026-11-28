@@ -175,6 +175,12 @@ pub(super) fn rules(ctx: &egui::Context) -> Vec<SettingRule> {
     ] {
         tweak(&mut rules, path, |r| r.custom());
     }
+    // The Actions discovery folder is a native path row (Browse plus Open Location). The web build has no folder.
+    if cfg!(target_arch = "wasm32") {
+        tweak(&mut rules, "fileHandling.actionsFolder", |r| r.hidden());
+    } else {
+        tweak(&mut rules, "fileHandling.actionsFolder", |r| r.label("").custom());
+    }
     // Rows that draw their own label or heading, so the window adds none: the Appearance page (Appearance Mode, the
     // themes), Rendering Mode's select and the Memory Usage block.
     for path in ["interface.appearanceMode", "performance.renderingMode", "performance.memoryUsageMb"] {

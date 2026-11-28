@@ -95,6 +95,8 @@ impl CustomSettings<PrefPages> for PrefsCustom {
             "tools.pressureCurve" => pressure_curve_row(ui, draft),
             "tools.tabletInput" => tablet_input_row(ui, draft),
             APPEARANCE_MODE => self.appearance_row(ui, draft),
+            #[cfg(not(target_arch = "wasm32"))]
+            "fileHandling.actionsFolder" => actions_folder_row(ui, draft),
             _ => {}
         }
         false
@@ -386,6 +388,22 @@ fn pressure_curve_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
     let events = crate::pressure_curve_ui::editor(ui, tl!("Pressure Curve"), &mut points);
     if let Some(next) = events.value() {
         draft.set("tools.pressureCurve", next);
+    }
+}
+
+/// File Handling › Actions Folder: a folder of `.atn` sets the Actions panel can load.
+#[cfg(not(target_arch = "wasm32"))]
+fn actions_folder_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
+    const KEY: &str = "fileHandling.actionsFolder";
+    let current: String = draft.get(KEY).unwrap_or_default();
+    let mut request = craft::host::PickRequest::folder("actions-folder");
+    if !current.trim().is_empty() {
+        request = request.directory(current);
+    }
+    PathSetting::new(tl!("Actions Folder"), KEY, draft, request).show(ui);
+    let current: String = draft.get(KEY).unwrap_or_default();
+    if !current.trim().is_empty() && Button::new(tl!("Open Location")).show(ui).clicked() {
+        crate::actions_folder::request_open(ui.ctx(), &current);
     }
 }
 

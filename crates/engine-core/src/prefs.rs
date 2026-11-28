@@ -649,6 +649,8 @@ pub struct FileHandling {
     /// A folder whose `.cube`, `.3dl` and `.look` files Color Lookup lists under its built-in
     /// looks (native only, #6558). Empty lists none.
     pub lut_folder: String,
+    /// Discovery folder for Photoshop action sets; the stored action library stays in Presets.
+    pub actions_folder: String,
 }
 
 /// The autosave choice nearest to `minutes`, the larger one on a tie: 1-4 read as 5, 45 as 60 and
@@ -695,6 +697,7 @@ impl Default for FileHandling {
             recent_file_count: 20,
             recent_files: Vec::new(),
             lut_folder: String::new(),
+            actions_folder: String::new(),
         }
     }
 }

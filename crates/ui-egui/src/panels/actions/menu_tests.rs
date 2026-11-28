@@ -161,6 +161,34 @@ fn load_actions_row_greys_while_a_recording_or_playback_holds_the_library() {
     assert!(enabled(&app, C::Load), "and is on again when the playback ends");
 }
 
+/// An Actions Folder row loads through `actions.load`, so it greys with Load Actions… while a
+/// recording or a paced playback holds the library.
+#[test]
+fn actions_folder_rows_grey_while_a_recording_or_playback_holds_the_library() {
+    let mut app = app();
+    let path = "/tmp/photocraft-actions/Set.atn";
+    crate::actions_folder::stage_scan(&mut app, "/tmp/photocraft-actions", vec![path.into()]);
+    let folder = |app: &crate::PhotocraftApp| {
+        menu::states(app).into_iter().find(|(command, _)| command.id == "ui.actionsFolder.load").map(|(_, state)| state).expect("a folder row")
+    };
+    assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
+    app.run("actions.record", json!({"name": "Rec"})).unwrap();
+    assert_eq!(folder(&app), CommandState::new().enabled(false).title("Set.atn"), "a folder load would replace the set being recorded");
+    app.run("actions.stop", json!({})).unwrap();
+    assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
+    app.run("actions.setPlayback", json!({"performance": "step", "seconds": 1, "singleState": true})).unwrap();
+    play(&mut app, &json!({"action": "A"})).unwrap();
+    assert!(playback::pending(&app));
+    assert_eq!(folder(&app), CommandState::new().enabled(false).title("Set.atn"), "a folder load waits for playback too");
+    assert!(playback::stop(&mut app));
+    assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
+}
+
 #[test]
 fn new_set_names_the_first_free_set_and_new_action_records_into_it() {
     let mut app = app();

@@ -55,6 +55,19 @@ pub(super) fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) ->
     Ok(r)
 }
 
+/// The configured Actions folder once a scan has found it, else none (the web build has no folder).
+fn actions_directory(app: &PhotocraftApp) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::actions_folder::directory(app)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = app;
+        None
+    }
+}
+
 /// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 pub(super) fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     // The panel menu greys this row while a recording or a paced playback holds the library (see
@@ -64,7 +77,7 @@ pub(super) fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }
     let mut request = PickRequest::open_many("actions").filter("Actions", &["atn"]);
-    if let Some(dir) = crate::file_dialog::last_used_dir(&app.ui.recent_files) {
+    if let Some(dir) = actions_directory(app).or_else(|| crate::file_dialog::last_used_dir(&app.ui.recent_files)) {
         request = request.directory(dir);
     }
     app.ask_file(request, |app, picked| {
@@ -171,6 +184,7 @@ pub(super) fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Resul
     }
     stem.truncate(cut);
     let file = format!("{stem}.atn");
+    let file = actions_directory(app).map(|dir| std::path::Path::new(&dir).join(&file).to_string_lossy().into_owned()).unwrap_or(file);
     app.pick_save(&file, move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;

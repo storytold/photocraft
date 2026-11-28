@@ -37,6 +37,8 @@ pub struct Runtime {
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) actions_folder: crate::actions_folder::Runtime,
     pub(crate) tool_colors: Option<[[[f32; 4]; 2]; 2]>,
     pub(crate) tool_cmyk_picks: crate::tool_memory::CmykPicks,
     pub(crate) tool_cmyk_roles: Option<crate::tool_memory::CmykRoles>,
