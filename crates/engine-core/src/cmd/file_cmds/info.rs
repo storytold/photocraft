@@ -90,28 +90,17 @@ fn li_values(inner: &str) -> Vec<String> {
     out
 }
 
-/// Attribute form `prop="value"` on an `rdf:Description`.
-fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
-    let key = format!(" {prop}=\"");
-    let i = xmp.find(&key)?;
-    let v0 = i + key.len();
-    let v1 = xmp[v0..].find('"')? + v0;
-    Some((i, v1 + 1, &xmp[v0..v1]))
-}
-
 /// The packet's `xmpRights:Marked` value, as an element or an attribute.
 fn rights_marked(xmp: &str) -> Option<&str> {
-    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| marked_attr(xmp).map(|(_, _, v)| v))
+    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| find_attr(xmp, "xmpRights:Marked").map(|(_, _, v)| v))
 }
 
-/// Attribute form `xmpRights:Marked="…"` with either quote, any XML whitespace before the name
-/// and around the `=`, as XMP writers lay attributes out on their own lines. Only names inside a
-/// tag count, not text in another attribute's value, element text, a comment or CDATA. Returns
-/// (start, end, value) with the whitespace before the name in the span, as [`find_attr`] does, so
-/// a rewrite removes every form it reads.
-fn marked_attr(xmp: &str) -> Option<(usize, usize, &str)> {
+/// Attribute form `prop="…"` with either quote and XML whitespace before the name and around `=`.
+/// Only names inside a tag count, not text in another attribute's value, element text, a comment
+/// or CDATA. The span includes the whitespace before the name, so rewriting removes what is read.
+fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
     // The tab title asks every frame, and packets can be megabytes: walk only when the name is there.
-    if !xmp.contains("xmpRights:Marked") {
+    if !xmp.contains(prop) {
         return None;
     }
     let b = xmp.as_bytes();
@@ -132,7 +121,7 @@ fn marked_attr(xmp: &str) -> Option<(usize, usize, &str)> {
                 b'>' => in_tag = false,
                 b'"' | b'\'' => quote = Some(c),
                 _ if c.is_ascii_whitespace() => {
-                    if let Some((end, v)) = marked_value(xmp, i + 1) {
+                    if let Some((end, v)) = attr_value(xmp, i + 1, prop) {
                         return Some((i, end, v));
                     }
                 }
@@ -144,9 +133,9 @@ fn marked_attr(xmp: &str) -> Option<(usize, usize, &str)> {
     None
 }
 
-/// `xmpRights:Marked = "value"` starting at byte `at`: (end after the closing quote, value).
-fn marked_value(xmp: &str, at: usize) -> Option<(usize, &str)> {
-    let rest = xmp.get(at..)?.strip_prefix("xmpRights:Marked")?.trim_start().strip_prefix('=')?.trim_start();
+/// `prop = "value"` starting at byte `at`: (end after the closing quote, value).
+fn attr_value<'a>(xmp: &'a str, at: usize, prop: &str) -> Option<(usize, &'a str)> {
+    let rest = xmp.get(at..)?.strip_prefix(prop)?.trim_start().strip_prefix('=')?.trim_start();
     let quote = rest.chars().next().filter(|&c| c == '"' || c == '\'')?;
     let v0 = xmp.len() - rest.len() + 1;
     let v1 = xmp[v0..].find(quote)? + v0;
@@ -575,10 +564,8 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
         while let Some((a, b, _)) = find_element(&x, prop) {
             x.replace_range(a..b, "");
         }
-        // Marked is removed in every attribute form it is read in, and only from tags (#13821).
-        loop {
-            let attr = if prop == "xmpRights:Marked" { marked_attr(&x) } else { find_attr(&x, prop) };
-            let Some((a, b, _)) = attr else { break };
+        // Remove the same attribute forms the reader recognizes, and only from tags (#13821).
+        while let Some((a, b, _)) = find_attr(&x, prop) {
             x.replace_range(a..b, "");
         }
     }

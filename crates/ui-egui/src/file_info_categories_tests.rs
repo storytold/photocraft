@@ -312,8 +312,7 @@ fn switching_category_resets_only_the_page_scroll_and_keeps_the_footer_fixed() {
         });
         h.run_steps(1);
     }
-    let moved_y =
-        h.query_by(|node| camera_value_node(node, "Make")).map(|node| node.rect().top());
+    let moved_y = h.query_by(|node| camera_value_node(node, "Make")).map(|node| node.rect().top());
     assert_ne!(moved_y, Some(make_y), "the page really scrolled");
     assert_eq!(h.get_by_role_and_label(Role::Button, "OK").rect(), footer);
     assert_eq!(h.get_by_role_and_label(Role::ListItem, "Basic").rect(), categories);
@@ -427,5 +426,42 @@ fn no_op_basic_confirmation_preserves_dates_and_matches_the_current_command_hist
     let xmp = actual.doc.metadata.xmp.as_deref().unwrap();
     for unchanged in ["2024-02-17T12:40:19+01:00", "2024-02-17T12:41:20+01:00", "2024-02-17T12:42:21+01:00", "preserve-me"] {
         assert!(xmp.contains(unchanged), "kept {unchanged}: {xmp}");
+    }
+}
+
+#[test]
+fn xmp_attribute_forms_supply_camera_values_and_are_removed_when_basic_fields_change() {
+    // Our own synthetic XML: ordinary double quotes, single quotes, and XML whitespace variants.
+    for (before, around, quote) in [(" ", "", '"'), (" ", "", '\''), ("\t", " \t ", '"'), ("\n", "\r\n", '\''), ("\r", " ", '"')] {
+        let other = if quote == '"' { '\'' } else { '"' };
+        let note = format!("fixture:note={other} aux:OwnerName={quote}quoted-decoy{quote}{other}");
+        let packet = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><!-- aux:OwnerName={quote}comment-decoy{quote} --><rdf:Description rdf:about="" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/" xmlns:fixture="https://example.invalid/metadata-fixture/" {note}{before}aux:OwnerName{around}={around}{quote}Ada &amp; Co{quote}{before}tiff:Make{around}={around}{quote}Fixture make{quote}{before}photoshop:AuthorsPosition{around}={around}{quote}Old role{quote}{before}xmpRights:Marked{around}={around}{quote}True{quote} fixture:opaque="preserve-me"/></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        session
+            .edit("XMP attribute fixture", |doc, _| {
+                doc.metadata.xmp = Some(packet.clone().into());
+                Ok(())
+            })
+            .unwrap();
+        let original = session.active().unwrap().doc.metadata.xmp.clone();
+        let read = session.execute("file.fileInfo", json!({})).unwrap();
+        assert_eq!(read["camera"]["owner"], "Ada & Co", "{before:?} {around:?} {quote}");
+        assert_eq!(read["camera"]["make"], "Fixture make");
+        assert_eq!(read["authorTitle"], "Old role");
+        assert_eq!(read["copyrightStatus"], "copyrighted", "existing Marked behavior");
+        assert_eq!(session.active().unwrap().doc.metadata.xmp, original, "reading must not edit metadata");
+
+        let changed = session.execute("file.fileInfo", json!({"authorTitle": "New role"})).unwrap();
+        assert_eq!(changed["authorTitle"], "New role");
+        assert_eq!(changed["camera"], read["camera"], "a Basic edit keeps Camera Data");
+        assert_eq!(changed["copyrightStatus"], "copyrighted");
+        let xmp = session.active().unwrap().doc.metadata.xmp.as_deref().unwrap();
+        assert!(!xmp.contains("Old role"), "the old attribute span must be removed, not merely shadowed");
+        assert!(xmp.contains(&note), "unrelated quoted attribute content survives");
+        assert!(xmp.contains("fixture:opaque=\"preserve-me\""));
+        assert!(xmp.contains(&format!("<!-- aux:OwnerName={quote}comment-decoy{quote} -->")));
     }
 }
