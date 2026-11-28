@@ -18,6 +18,7 @@
 //! so they are scanned like any other source, as the scorecard's prefs audit does.
 
 use photocraft_engine::prefs::{HIDDEN_UNTIL_IMPLEMENTED, Preferences};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 fn snake(camel: &str) -> String {
@@ -135,11 +136,19 @@ fn every_preference_is_read_or_hidden() {
     sources.push(inherent_impls(&production(&prefs_rs), "Session"));
     // A module split into child files (`foo.rs` + `foo/*.rs`) counts as one file too, so a section
     // named in the parent and a field read in a child still count as a read.
+    let mut children_by_module: HashMap<PathBuf, Vec<&str>> = files.iter().map(|(path, _)| (path.with_extension(""), Vec::new())).collect();
     for (path, text) in &files {
-        let dir = path.with_extension("");
-        let children: Vec<&str> = files.iter().filter(|(p, _)| p.starts_with(&dir)).map(|(_, t)| t.as_str()).collect();
+        // A path starts with each of its ancestors. Keep the original file order within each group.
+        for ancestor in path.ancestors() {
+            if let Some(children) = children_by_module.get_mut(ancestor) {
+                children.push(text);
+            }
+        }
+    }
+    for (path, text) in &files {
+        let children = &children_by_module[&path.with_extension("")];
         if !children.is_empty() {
-            sources.push([text.as_str()].into_iter().chain(children).collect::<Vec<_>>().join("\n"));
+            sources.push([text.as_str()].into_iter().chain(children.iter().copied()).collect::<Vec<_>>().join("\n"));
         }
     }
     assert!(sources.len() > 100, "found only {} source files under {}", sources.len(), root.display());
