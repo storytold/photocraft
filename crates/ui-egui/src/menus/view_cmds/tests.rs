@@ -974,3 +974,30 @@ fn rotate_view_params_set_add_reset_and_reject() {
     run(&mut app, json!({"angle": 1.0e20})).unwrap();
     assert!(angle(&app).is_finite() && angle(&app).abs() <= 180.0);
 }
+
+#[test]
+fn flip_horizontal_mirrors_view_center_across_document_width() {
+    let (mut app, ctx) = app_with(1);
+    let doc_width = app.session.active().unwrap().doc.size.width as f32;
+    app.ui.views[0].center = [35.0, 91.0];
+
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(app.ui.view.flip_horizontal);
+    assert_eq!(app.ui.views[0].center, [doc_width - 35.0, 91.0]);
+
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(!app.ui.view.flip_horizontal);
+    assert_eq!(app.ui.views[0].center, [35.0, 91.0]);
+}
+
+#[test]
+fn flip_horizontal_does_not_change_document_history() {
+    let (mut app, ctx) = app_with(1);
+    let history = app.session.active().unwrap().history.past_len();
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(app.ui.view.flip_horizontal);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(!app.ui.view.flip_horizontal);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
