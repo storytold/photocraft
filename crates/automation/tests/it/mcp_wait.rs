@@ -88,7 +88,7 @@ impl Wire {
         self.reply(id, None).await["history"].as_array().unwrap().clone()
     }
 
-    /// A document whose blur takes seconds even in an optimized build (about 2s here).
+    /// A document whose blur remains active long enough to observe and cancel.
     async fn big_document(&mut self) {
         self.call(2, "doc_new", json!({"width": 6000, "height": 6000}), None).await;
         self.reply(2, None).await;
@@ -115,7 +115,7 @@ impl Wire {
     }
 }
 
-const BLUR: fn() -> Value = || json!({"id": "filter.blur.gaussianBlur", "params": {"radius": 1000}});
+const BLUR: fn() -> Value = || json!({"id": "filter.blur.gaussianBlur", "params": {"radius": 50}});
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_waited_command_reports_progress_serves_other_calls_and_cancels_cleanly() {
