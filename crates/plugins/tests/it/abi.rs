@@ -96,6 +96,51 @@ fn example_invert_inverts_colour_at_every_depth() {
     }
 }
 
+/// Call the real fixture directly: the normal host only supplies correctly sized buffers.
+#[test]
+fn example_invert_rejects_mismatched_buffer_length() {
+    let engine = wasmi::Engine::default();
+    let module = wasmi::Module::new(&engine, INVERT).unwrap();
+    let mut store = wasmi::Store::new(&engine, ());
+    let instance = wasmi::Linker::new(&engine).instantiate_and_start(&mut store, &module).unwrap();
+    let memory = instance.get_memory(&store, "memory").unwrap();
+    let alloc = instance.get_typed_func::<i32, i32>(&store, "pc_alloc").unwrap();
+    let filter = instance.get_typed_func::<(i32, i32, i32, i32, i32, i32, i32, i32), i32>(&store, "pc_filter").unwrap();
+    // Allocate enough for the longest invalid buffer too, so rejection cannot rely on a trap.
+    let buf = alloc.call(&mut store, 68).unwrap();
+    assert_ne!(buf, 0);
+    let input: Vec<u8> = (0..17).flat_map(|_| 0.25_f32.to_le_bytes()).collect();
+    let alpha = 1 << 8;
+    for (name, len, width, height, channels, format) in [
+        ("one sample short", 60, 2, 2, 4, alpha),
+        ("one sample long", 68, 2, 2, 4, alpha),
+        ("unaligned length", 63, 2, 2, 4, alpha),
+        // 65536 * 65536 wraps to zero on wasm32 without checked multiplication.
+        ("pixel count overflow", 0, 65536, 65536, 4, alpha),
+        ("sample count overflow", 0, 32768, 32768, 4, alpha),
+        ("alpha with one channel", 16, 2, 2, 1, alpha),
+        ("zero channels", 0, 2, 2, 0, 0),
+    ] {
+        memory.write(&mut store, buf as usize, &input).unwrap();
+        assert_eq!(filter.call(&mut store, (buf, len, width, height, channels, format, 0, 0)).unwrap(), 1, "{name}");
+        let mut after = vec![0; input.len()];
+        memory.read(&store, buf as usize, &mut after).unwrap();
+        assert_eq!(after, input, "{name}: rejection must leave the buffer untouched");
+    }
+    // Positive controls use the same ABI and fixture as the rejected cases.
+    assert_eq!(filter.call(&mut store, (0, 0, 0, 2, 4, alpha, 0, 0)).unwrap(), 0, "empty image");
+    memory.write(&mut store, buf as usize, &input).unwrap();
+    assert_eq!(filter.call(&mut store, (buf, 64, 2, 2, 4, alpha, 0, 0)).unwrap(), 0, "valid 2x2 RGBA");
+    let mut output = [0; 64];
+    memory.read(&store, buf as usize, &mut output).unwrap();
+    for pixel in output.as_chunks::<16>().0 {
+        for channel in pixel[..12].as_chunks::<4>().0 {
+            assert_eq!(channel, &0.75_f32.to_le_bytes());
+        }
+        assert_eq!(&pixel[12..], &0.25_f32.to_le_bytes(), "alpha is preserved");
+    }
+}
+
 #[test]
 fn bands_are_seamless_and_selection_blends() {
     // Tiny bands: many instances, same result as one band.

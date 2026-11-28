@@ -164,8 +164,9 @@ position-dependent filters (gradients, vignettes) are seamless across bands.
 (no allocator, under 1 KiB built). Build it with:
 
 ```sh
-rustup target add wasm32-unknown-unknown
-examples/plugins/invert-rs/build.sh      # cargo build --release --target wasm32-unknown-unknown
+rustup toolchain install 1.95.0 --profile minimal
+rustup target add --toolchain 1.95.0 wasm32-unknown-unknown
+examples/plugins/invert-rs/build.sh      # cargo +1.95.0 build --release --target wasm32-unknown-unknown
 ```
 
 The script also refreshes `crates/plugins/tests/fixtures/invert.wasm`, the test fixture built from
