@@ -287,7 +287,24 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             rect_ratio_height,
             rect_from_center,
         ),
-        Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+        // The Triangle tool's own radius (#13355) resets with that tool only, not with its siblings.
+        Tool::Triangle => reset!(
+            shape_mode,
+            shape_path_op,
+            shape_fill,
+            stroke_width,
+            shape_stroke,
+            shape_fill_gradient,
+            shape_stroke_gradient,
+            corner_radius,
+            align_edges,
+            polygon_sides,
+            star_points,
+            polygon_corner_radius,
+            triangle_corner_radius,
+            line_weight
+        ),
+        Tool::EllipseShape | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(
                 shape_mode,
                 shape_path_op,
