@@ -89,6 +89,97 @@ fn canvas_pixels(s: &Session) -> Vec<f32> {
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(d.doc.bounds())
 }
 
+#[test]
+fn average_uses_the_colours_of_a_small_pixel_layer() {
+    for depth in [8, 16, 32] {
+        for smart in [false, true] {
+            let mut s = crate::session();
+            s.execute("file.new", json!({"width": 48, "height": 32, "depth": depth, "background": "transparent"})).unwrap();
+            s.edit("two pixels", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                surface.write_pixel(12, 8, &[1.0, 0.0, 0.0, 1.0]);
+                surface.write_pixel(13, 8, &[0.0, 0.0, 1.0, 0.5]);
+                Ok(())
+            })
+            .unwrap();
+            if smart {
+                s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+            }
+
+            let before = canvas_pixels(&s);
+            s.execute("filter.blur.average", json!({})).unwrap();
+            let after = canvas_pixels(&s);
+            let tolerance = match depth {
+                8 => 1.0 / 255.0,
+                16 => 1.0 / 65535.0,
+                _ => 1e-6,
+            };
+            for x in [12, 13] {
+                let index = (8 * 48 + x) * 4;
+                let p = &after[index..index + 4];
+                assert!((p[0] - 0.5).abs() <= tolerance && (p[2] - 0.5).abs() <= tolerance, "{depth}-bit, smart={smart}: {p:?}");
+                assert_eq!(p[1], 0.0);
+                assert_eq!(p[3], before[index + 3]);
+            }
+            assert_eq!(&after[..(8 * 48 + 12) * 4], &before[..(8 * 48 + 12) * 4]);
+            assert_eq!(&after[(8 * 48 + 14) * 4..], &before[(8 * 48 + 14) * 4..]);
+        }
+    }
+}
+
+#[test]
+fn average_intersects_the_selection_with_the_layer_and_keeps_hidden_colour() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 48, "height": 32, "background": "transparent"})).unwrap();
+    s.edit("three pixels", |doc, active| {
+        let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        surface.write_pixel(12, 8, &[1.0, 0.0, 0.0, 1.0]);
+        surface.write_pixel(13, 8, &[0.0, 0.0, 1.0, 0.0]);
+        surface.write_pixel(14, 8, &[0.0, 1.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 8, "height": 5})).unwrap();
+
+    let before = canvas_pixels(&s);
+    s.execute("filter.blur.average", json!({})).unwrap();
+    let after = canvas_pixels(&s);
+    let start = (8 * 48 + 12) * 4;
+    let end = start + 8;
+    for (pixel, original) in after[start..end].as_chunks::<4>().0.iter().zip(before[start..end].as_chunks::<4>().0) {
+        assert!((pixel[0] - 0.5).abs() <= 1.0 / 255.0 && (pixel[2] - 0.5).abs() <= 1.0 / 255.0, "{pixel:?}");
+        assert_eq!(pixel[1], 0.0);
+        assert_eq!(pixel[3], original[3]);
+    }
+    assert_eq!(&after[..start], &before[..start]);
+    assert_eq!(&after[end..], &before[end..]);
+
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 3, "height": 3})).unwrap();
+    s.execute("filter.blur.average", json!({})).unwrap();
+    assert_eq!(canvas_pixels(&s), after, "a disjoint selection leaves the layer alone");
+}
+
+#[test]
+fn average_includes_implicit_opaque_pixels() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 2, "height": 1, "background": "transparent"})).unwrap();
+    s.edit("one white pixel", |doc, active| {
+        let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        *surface = photocraft_raster::Surface::with_default(surface.format(), &[0.0, 0.0, 0.0, 1.0]);
+        surface.write_pixel(0, 0, &[1.0, 1.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+
+    s.execute("filter.blur.average", json!({})).unwrap();
+    let d = s.active().unwrap();
+    let surface = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+    let pixels = surface.read_region(d.doc.bounds());
+    let (left, right) = pixels.split_at(surface.channels());
+    assert_eq!(left, right);
+    assert!(left[..3].iter().all(|sample| (sample - 0.5).abs() <= 1.0 / 255.0), "{left:?}");
+}
+
 fn paint_pattern(s: &mut Session) {
     s.edit("pattern", |doc, active| {
         let l = doc.layer_mut(active.unwrap()).unwrap();

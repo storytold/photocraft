@@ -8,6 +8,8 @@ use photocraft_algo::{
     self as algo, Distribution, FilterParams, PolarMode, Preserve, RadialMethod, RadialQuality, RippleSize, SpherizeMode, UndefinedAreas, WaveType,
 };
 use photocraft_doc::{Layer, LayerContent, SmartFilter};
+use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -242,8 +244,19 @@ pub(crate) fn apply_filter_to_surface_in(
     }
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
-    let area = algo::output_area(&fp, content, bounds, sel_bounds);
+    let area = pixel_filter_area(surf, &fp, content, bounds, sel_bounds);
     algo::try_apply_in_with(surf, &fp, area, bounds, selection, canvas.union(&content), &ctl).map(Some).map_err(filter_error)
+}
+
+/// Average uses the layer's pixel rectangle inside the canvas or selection. The implicit
+/// transparent black beyond it would dilute the mean and write colour into empty padding.
+fn pixel_filter_area(surf: &Surface, params: &FilterParams, content: Rect, bounds: Rect, selection: Option<Rect>) -> Rect {
+    let bounds = if matches!(params, FilterParams::Average) && surf.format().alpha && surf.default_pixel().iter().all(|&sample| sample == 0.0) {
+        bounds.intersect(&content)
+    } else {
+        bounds
+    };
+    algo::output_area(params, content, bounds, selection)
 }
 
 /// Preserve checked native diagnostics; legacy kernels retain their working-data failure.
@@ -383,7 +396,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 let extent = doc_bounds.union(&content);
                 let opaque_default = !surf.format().alpha || surf.default_pixel().last().is_some_and(|alpha| *alpha > 0.0);
                 let support = if opaque_default { extent } else { content };
-                let mut area = algo::output_area(&fp, support, bounds, sel_bounds).intersect(&extent);
+                let mut area = pixel_filter_area(surf, &fp, support, bounds, sel_bounds).intersect(&extent);
                 // Colour-only writes cannot create opacity, so generators need not materialize
                 // invisible samples across empty parts of a transparent layer.
                 if !opaque_default && fp.renders_from_nothing() {
@@ -398,7 +411,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             }
             let before = locks.transparency.then(|| surf.clone());
             let content = surf.content_bounds();
-            let area = algo::output_area(&fp, content, bounds, sel_bounds);
+            let area = pixel_filter_area(surf, &fp, content, bounds, sel_bounds);
             *surf = filter(surf, &fp, area, bounds, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
             if let Some(before) = &before {
                 keep_alpha(before, surf, &|| ctx.cancelled())?;
