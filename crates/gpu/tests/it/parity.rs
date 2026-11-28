@@ -858,6 +858,12 @@ fn adjustment_layers() {
         let hs = Adjustment::HueSaturation { hue: 40.0, saturation: 25.0, lightness: -10.0, colorize: false, ranges: HueRange::defaults() };
         d.layers.push(Layer::new("hs2", LayerContent::Adjustment(hs)));
         check(&mut g, &d, &format!("hue/saturation {depth:?}"));
+        // A range's saturation multiplies the master's factor (#14741).
+        let hs = Adjustment::HueSaturation { hue: 0.0, saturation: 60.0, lightness: 0.0, colorize: false, ranges: hue_ranges() };
+        d.layers.push(Layer::new("hs3", LayerContent::Adjustment(hs)));
+        check(&mut g, &d, &format!("hue/saturation ranges {depth:?}"));
+        // Off again: stacked under Threshold, it puts a 16-bit sample on the level's edge.
+        d.layers.pop();
         // Threshold: whole 16-bit samples against the level in 16 bits, or the float luminosity.
         d.layers.push(Layer::new("th", LayerContent::Adjustment(Adjustment::Threshold { level: 0.5 })));
         check(&mut g, &d, &format!("threshold {depth:?}"));

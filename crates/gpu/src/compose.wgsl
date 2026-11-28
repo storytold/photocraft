@@ -479,6 +479,20 @@ fn rgb_to_hsl(c: vec3<f32>) -> vec3<f32> {
     }
     return vec3(h / 6.0, s, l);
 }
+
+// compose::adjust::hue_saturation_in at 8/16 bits.
+fn scale_saturation(v: f32, s: f32) -> f32 {
+    if (s > 0.0) { return v / max(1.0 - s, 1.0 / 512.0); }
+    return v * (1.0 + s);
+}
+
+// compose::adjust::color::hdr_saturation_factor, in whole numbers.
+fn hdr_saturation_factor(s: f32) -> f32 {
+    if (s <= 0.0) { return 1.0 - floor(-s * 256.0 + 1e-4) / 256.0; }
+    let steps = min(u32(floor(s * 254.0 + 1e-4)), 254u);
+    return f32(min(65280u / (255u - steps), 32767u)) / 256.0;
+}
+
 fn hue_ch(p: f32, q: f32, t0: f32) -> f32 {
     let t = rem_euclid(t0, 1.0);
     if (t < 1.0 / 6.0) { return p + (q - p) * 6.0 * t; }
@@ -677,7 +691,8 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
                 ds = lut(1, hsl.x);
                 dl = lut(2, hsl.x);
             }
-            let sat = clamp(p0.y + ds, -1.0, 1.0);
+            let sat = clamp(p0.y, -1.0, 1.0);
+            let rs = clamp(ds, -1.0, 1.0);
             let light = clamp(p0.z, -1.0, 1.0);
             if (p0.w > 0.5) {
                 // compose::adjust::hue_saturation: Colorize at the lightened / darkened lightness.
@@ -694,24 +709,13 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             if (hdr) {
                 // 32-bit: the chroma scaled around the lightness, unclipped, by Photoshop's factor
                 // in whole numbers (compose::adjust::hue_saturation_in, hdr_saturation_factor).
-                var k: f32;
-                if (sat <= 0.0) {
-                    k = 1.0 - floor(-sat * 256.0 + 1e-4) / 256.0;
-                } else {
-                    let steps = min(u32(floor(sat * 254.0 + 1e-4)), 254u);
-                    k = f32(min(65280u / (255u - steps), 32767u)) / 256.0;
-                }
+                let k = hdr_saturation_factor(sat) * hdr_saturation_factor(rs);
                 let d = (max(max(lc.r, lc.g), lc.b) - min(min(lc.r, lc.g), lc.b)) * k;
                 let lo = lh.z - d / 2.0;
                 let hi = lh.z + d / 2.0;
                 rgb = vec3(hue_ch(lo, hi, hh + 1.0 / 3.0), hue_ch(lo, hi, hh), hue_ch(lo, hi, hh - 1.0 / 3.0));
             } else {
-                // Raising saturation divides by 1 - s; lowering it multiplies by 1 + s.
-                if (sat > 0.0) {
-                    ss = clamp(lh.y / max(1.0 - sat, 1.0 / 512.0), 0.0, 1.0);
-                } else {
-                    ss = clamp(lh.y * (1.0 + sat), 0.0, 1.0);
-                }
+                ss = clamp(scale_saturation(scale_saturation(lh.y, sat), rs), 0.0, 1.0);
                 rgb = hsl_to_rgb(hh, ss, lh.z);
             }
             // compose::adjust::range_lightness: towards the brightest channel when raised, the darkest when lowered.

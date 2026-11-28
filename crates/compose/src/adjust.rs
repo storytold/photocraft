@@ -191,8 +191,8 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                     }
                     None => (0.0, 0.0, 0.0),
                 };
-                let sat = colorize_saturation((*saturation / 100.0 + ds).clamp(-1.0, 1.0), *lightness / 100.0, *colorize, depth);
-                let out = hue_saturation_in(c, *hue + dh, sat, (*lightness / 100.0).clamp(-1.0, 1.0), *colorize, depth);
+                let sat = colorize_saturation((*saturation / 100.0).clamp(-1.0, 1.0), *lightness / 100.0, *colorize, depth);
+                let out = hue_saturation_in(c, *hue + dh, sat, ds.clamp(-1.0, 1.0), (*lightness / 100.0).clamp(-1.0, 1.0), *colorize, depth);
                 range_lightness(out, dl)
             })
         }
@@ -433,6 +433,9 @@ mod curves_channel_composite_tests;
 mod gradient_map_grayscale_tests;
 #[cfg(test)]
 mod tone_tests;
+
+#[cfg(test)]
+mod hue_saturation_range_multiply_tests;
 
 /// Legacy Brightness/Contrast scales contrast around 128 of 255 (contrast 80 keeps 128 at 128,
 /// measured on Photoshop 27.11; a 0.5 pivot moved it to 130).
