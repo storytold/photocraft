@@ -4980,3 +4980,5 @@ fn align_edges_toggle_rerenders_a_shape_under_a_layer_effect() {
     assert!(!close4(at(&on, 10), at(&on, 11)), "stroke, then fill");
     assert!(!close4(at(&off, 9), [1.0; 4]), "unaligned the stroke covers half of column 9");
 }
+
+mod fx_move;
