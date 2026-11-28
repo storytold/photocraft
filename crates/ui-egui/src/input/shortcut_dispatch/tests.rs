@@ -852,6 +852,52 @@ fn keyboard_zoom_works_with_a_dialog_open() {
     h.state_mut().framework.dialogs.cancel_by_id(&ctx, dialog);
 }
 
+#[test]
+fn opacity_keys_leave_the_layer_unchanged_at_puppet_warp_boundaries() {
+    let mut app = PhotocraftApp::new(realistic(), services());
+    app.run("select.deselect", json!({})).unwrap();
+    app.ui.tool = Tool::Move;
+    let mut h = app_harness(app);
+    let st = h.state().session.active().unwrap();
+    let layer = st.active_layer.unwrap();
+    let before = st.doc.clone();
+    let steps = st.history.past_len();
+    assert_eq!(before.layer(layer).unwrap().opacity, 1.0);
+    let unchanged = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&st.doc, &before), "the digit leaves the source document unchanged");
+        assert_eq!(st.history.past_len(), steps);
+    };
+    let one_input_frame = |h: &mut Harness<'_, Box<PhotocraftApp>>| {
+        let digit = |pressed| egui::Event::Key { key: Key::Num3, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+        h.input_mut().events.extend([digit(true), digit(false)]);
+        h.run_steps(1);
+    };
+
+    // Open the warp after the runtime has matched the key and before the app runs it.
+    one_input_frame(&mut h);
+    unchanged(h.state());
+    let ctx = h.ctx.clone();
+    crate::distort_ui::menu(h.state_mut(), &ctx, "edit.puppetWarp", &json!({})).unwrap().unwrap();
+    h.run_steps(3);
+    assert!(h.state().distort.puppet.is_some());
+    unchanged(h.state());
+
+    // Cancel the warp after matching the same key under it and before the app drains that output.
+    one_input_frame(&mut h);
+    assert!(h.state().distort.puppet.is_some());
+    crate::distort_ui::menu(h.state_mut(), &ctx, "edit.puppetWarp", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+    h.run_steps(3);
+    assert!(h.state().distort.puppet.is_none());
+    unchanged(h.state());
+
+    one_input_frame(&mut h);
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    assert!((st.doc.layer(layer).unwrap().opacity - 0.3).abs() < 1e-6, "the same digit outside the warp sets 30% opacity");
+    assert_eq!(st.history.past_len(), steps + 1);
+}
+
 /// A frame can run two passes. The fired commands are taken by the first pass that runs them, so a second pass in the
 /// same frame runs only what its own input fired: ⌘J duplicates the layer once.
 #[test]

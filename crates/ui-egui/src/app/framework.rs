@@ -142,6 +142,8 @@ pub struct Framework {
     files: Option<Arc<dyn Files>>,
     /// The commands the runtime's keys and surfaces fired since `shortcuts::handle` last ran.
     pub(crate) fired: Vec<Fired>,
+    /// Whether a canvas warp owned the active document when the last runtime input began.
+    warp_on_last_input: bool,
     /// Whether a component refused its input in the frames since the last alert: the frame plays
     /// its alert once.
     pub(crate) refused: bool,
@@ -351,6 +353,7 @@ impl Framework {
             held_states: HeldStates::default(),
             files,
             fired: Vec::new(),
+            warp_on_last_input: false,
             refused: false,
             delivered: Vec::new(),
             suite: SuiteClient::memory(),
@@ -764,9 +767,12 @@ impl PhotocraftApp {
         self.framework.held_states = held;
         let gate = crate::menus::command_gate(self);
         let latched = self.ui.shell.latched;
+        let warp_active = crate::shortcut_dispatch::warp_on_active_document(self);
         embed::before_input(ctx, |output: FrameOutput| {
             crate::shortcut_dispatch::record_chrome_toggles(ctx, &output.chrome_toggles);
-            self.framework.fired.extend(output.fired);
+            // The previous frame may have closed its warp after the shortcut was matched.
+            let warp_was_active = std::mem::replace(&mut self.framework.warp_on_last_input, warp_active);
+            self.framework.fired.extend(output.fired.into_iter().filter(|fired| !warp_was_active || !crate::shortcut_dispatch::is_opacity_or_blend_key(fired)));
             self.framework.delivered.extend(output.delivered);
             self.framework.refused |= output.refused;
             self.framework.frame_input(&mut self.session, ctx, &self.ui.theme, gate, latched)
