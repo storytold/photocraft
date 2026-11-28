@@ -14,6 +14,49 @@ use std::sync::Arc;
 /// Writes recorded by the fake writer: (path, bytes).
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
+#[test]
+fn vectorcraft_place_shows_import_warnings_from_bytes_and_commands() {
+    let pdf = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut bytes = format!(
+        r#"{{"format":"vectorcraft","version":4,"pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+        pdf.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(b"\n\0VCBLOBS\0");
+    bytes.extend_from_slice(pdf);
+    let dir = std::env::temp_dir().join(format!("photocraft-place-warnings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Pages.vectorcraft");
+    std::fs::write(&path, &bytes).unwrap();
+    for command in ["bytes", "file.placeEmbedded", "file.placeLinked"] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        if command != "bytes" {
+            app.run("actions.record", json!({})).unwrap();
+        }
+        let r = if command != "bytes" {
+            app.run(command, json!({"path": path})).unwrap()
+        } else {
+            app.place_bytes("Pages.vectorcraft", bytes.clone(), None).unwrap()
+        };
+        assert!(r["warnings"].as_array().is_some_and(|w| !w.is_empty()), "{r}");
+        assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
+        assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+        if command != "bytes" {
+            app.run("actions.stop", json!({})).unwrap();
+            app.ui.notices.clear();
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            let played = app.run("actions.play", json!({"action": 0})).unwrap();
+            assert!(played.get("failed").is_none(), "{played}");
+            assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
+            assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+            assert!(app.ui.status_error, "{}", app.ui.status);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// An app whose importer names the document after the file (like `photocraft-io`) and reports a
 /// warning for names containing "warn", and fails for bytes "bad"; the exporter warns for ".png"
 /// and the writer records what it wrote. Its file picks answer with `answers`, in order; a pick past the
@@ -1903,4 +1946,30 @@ fn synchronous_svg_place_displays_omitted_image_warning() {
     app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("omitted.svg".into(), svg.to_vec())));
     app.place_next_dropped(&egui::Context::default());
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))));
+}
+
+/// A file dropped on the canvas and placed synchronously reports its import warnings in one
+/// notice, whether it is placed from its bytes or from its path on disk.
+#[test]
+fn synchronous_drop_place_reports_its_warnings_once() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="#ff0000"/><image width="2" height="2" href="data:image/png,broken"/></svg>"##;
+    let dir = std::env::temp_dir().join(format!("photocraft-drop-warn-once-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("omitted.svg");
+    std::fs::write(&path, svg).unwrap();
+    let drops = [
+        crate::file_open::DropPlace::Bytes("omitted.svg".into(), svg.to_vec()),
+        crate::file_open::DropPlace::File(dropped(path, Err("egui's reader must not be used".into()))),
+    ];
+    for drop in drops {
+        let mut app = app_with_canvas();
+        app.background_jobs = false;
+        app.ui.notices.clear();
+        let doc = app.session.active().unwrap().doc.id;
+        app.drop_places.push_back((doc, drop));
+        app.place_next_dropped(&egui::Context::default());
+        let reported = app.ui.notices.iter().filter(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))).count();
+        assert_eq!(reported, 1, "{:?}", app.ui.notices.iter().map(|n| &n.title).collect::<Vec<_>>());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

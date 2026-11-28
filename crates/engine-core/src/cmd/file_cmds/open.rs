@@ -231,7 +231,8 @@ pub fn open_bytes_as_with_options(
 }
 
 /// Extensions Open As reads besides the codec formats, the camera raw formats
-/// (`photocraft_io::raw::EXTENSIONS`) and the Affinity ones (`photocraft_io::affinity::EXTENSIONS`):
+/// (`photocraft_io::raw::EXTENSIONS`), the Affinity ones (`photocraft_io::affinity::EXTENSIONS`)
+/// and the VectorCraft ones (`photocraft_io::vectorcraft::EXTENSIONS`):
 /// the document and vector formats `photocraft_io::import` handles, and `raw`, the Open As type
 /// for any camera raw.
 const OPEN_AS_EXTRA: &[&str] = &["raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf", "ai"];
@@ -243,6 +244,7 @@ fn is_open_as_format(ext: &str) -> bool {
     OPEN_AS_EXTRA.contains(&ext)
         || photocraft_io::raw::EXTENSIONS.contains(&ext)
         || photocraft_io::affinity::EXTENSIONS.contains(&ext)
+        || photocraft_io::vectorcraft::EXTENSIONS.contains(&ext)
         || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read)
 }
 
@@ -332,6 +334,7 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// `linked` makes it a linked smart object that refers to that path instead of embedding the bytes.
 /// With Preferences ▸ General ▸ Always Create Smart Objects When Placing off, an embedded place
 /// lands as a plain pixel layer instead (an explicit `"smartObject": false` asks for one).
+/// The reply includes the import warnings, such as artboards or artwork that were omitted.
 ///
 /// The decoding and resampling are a background job when the command was started with
 /// [`Session::start`] (see [`crate::jobs`]); inline otherwise. The layer is inserted by the apply
@@ -379,9 +382,17 @@ pub(crate) struct PlaceInput {
     /// The document as the job sees it, for rendering a vector source at its placement scale. A
     /// path isn't read yet, so whether it is a vector source is decided once it is.
     pub(super) doc: Option<Arc<Document>>,
+    /// The document a plain pixel placement lands in, whose color profile and mode a VectorCraft
+    /// file's sRGB pixels are converted to. None when the place is a smart object or fills a frame.
+    pub(super) target: Option<Arc<Document>>,
     /// The frame the image goes into: the active layer's, `"frame"` in the params, or none
     /// (`"frame": false`). Its image renders through a smart object.
     pub(super) frame: Option<(LayerId, photocraft_doc::Frame)>,
+}
+
+/// Whether a placed file is a vector source (SVG, VectorCraft) that renders at its placement scale.
+pub(super) fn is_vector_input(name: &str, bytes: &[u8]) -> bool {
+    photocraft_io::is_svg_input(name, bytes) || photocraft_io::vectorcraft::is_vectorcraft(bytes)
 }
 
 impl PlaceInput {
@@ -425,6 +436,9 @@ impl PlaceInput {
         let mut opts = crate::jobs::import_options(prefs);
         opts.psd_high_memory_approved = approve;
         opts.psd_approved_estimate = None;
+        // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
+        // an embedded place lands as a plain pixel layer.
+        let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing);
         Ok(Self {
             name: name.to_string(),
             canvas,
@@ -434,13 +448,12 @@ impl PlaceInput {
             opts,
             // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
             fit: p.get("fit").and_then(Value::as_bool).unwrap_or(prefs.general.resize_image_during_place),
-            // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
-            // an embedded place lands as a plain pixel layer.
-            smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
+            smart,
             doc: match &file {
-                PlaceFile::Bytes(bytes) => (frame.is_some() || photocraft_io::is_svg_input(name, bytes)).then(|| Arc::clone(&d.doc)),
+                PlaceFile::Bytes(bytes) => (frame.is_some() || is_vector_input(name, bytes)).then(|| Arc::clone(&d.doc)),
                 PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),
             },
+            target: (!smart && frame.is_none()).then(|| Arc::clone(&d.doc)),
             frame,
             params: p.clone(),
             file,
@@ -477,6 +490,7 @@ fn selection_centre(doc: &Document) -> Option<(f64, f64)> {
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
 pub(crate) struct Prepared {
+    /// What the import left out, such as artboards or artwork, reported with the place.
     pub(super) warnings: Vec<String>,
     pub(super) content: LayerContent,
     pub(super) layer_name: String,

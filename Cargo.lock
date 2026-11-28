@@ -1670,6 +1670,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-doc"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3eb5b528b08211844bc5c95c5a4fd169894d52ff#3eb5b528b08211844bc5c95c5a4fd169894d52ff"
+dependencies = [
+ "craft-ecproj-format",
+ "craft-pcraft-format",
+ "craft-vectorcraft-format",
+ "flate2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=3eb5b528b08211844bc5c95c5a4fd169894d52ff#3eb5b528b08211844bc5c95c5a4fd169894d52ff"
@@ -1694,6 +1708,16 @@ dependencies = [
  "kurbo 0.13.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-ecproj-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3eb5b528b08211844bc5c95c5a4fd169894d52ff#3eb5b528b08211844bc5c95c5a4fd169894d52ff"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2550,6 +2574,17 @@ dependencies = [
  "winreg",
  "winsafe",
  "zip",
+]
+
+[[package]]
+name = "craft-vectorcraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3eb5b528b08211844bc5c95c5a4fd169894d52ff#3eb5b528b08211844bc5c95c5a4fd169894d52ff"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6880,6 +6915,7 @@ dependencies = [
  "craft-affinity",
  "craft-cms",
  "craft-crs",
+ "craft-doc",
  "craft-docpath",
  "craft-file-formats",
  "craft-image-codecs",

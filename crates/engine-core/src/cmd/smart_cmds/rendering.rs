@@ -1,6 +1,7 @@
 use super::filters::smart;
 use super::source::{
     SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    vectorcraft_source_image_in,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -23,6 +24,14 @@ fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode:
     key.0 = *blake3::hash(&[&key.0[..], b"stack-source-v3:", blake3::hash(file_name.as_bytes()).as_bytes(), mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
+    }
+    // A VectorCraft artboard opens as one layer, drawn at up to 64 million pixels: its float frame
+    // and the combined one are checked against 1 GiB from the PDF's page size, before it is drawn.
+    if photocraft_io::vectorcraft::is_vectorcraft(bytes) {
+        let (w, h) = photocraft_io::vectorcraft::drawn_size(bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))?;
+        if u64::from(w).saturating_mul(u64::from(h)).saturating_mul(32) > 1 << 30 {
+            return Err(EngineError::Other("the VectorCraft artboard is too large for Stack Mode".into()));
+        }
     }
     let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
     let doc = super::decode_source_classified(file_name, bytes, svg)?;
@@ -198,20 +207,34 @@ fn place_with_svg(
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
+    // A VectorCraft source is drawn again from its PDF the same way, relative to the size it opens
+    // at (the source's own frame), at most at the scale the PDF rasterizer can draw it at.
+    let scaled = if sm.stack_mode.is_some() || sm.warp.is_some() {
+        None
+    } else if is_svg {
         let k = vector_scale(sm);
-        let img = svg(bytes, k)?;
+        Some((svg(bytes, k)?, k))
+    } else if photocraft_io::vectorcraft::is_vectorcraft(bytes) {
+        let limit = photocraft_io::vectorcraft::scale_limit(bytes).map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?;
+        let k = vector_scale(sm).min(f64::from(limit));
+        // The drawn artboard and the placed result are both checked against the budget before
+        // drawing: a placement stretched along one axis draws more than it places.
+        let check = |bounds: Rect| {
+            crate::transform_cmds::check_budget(bounds, &Homography::IDENTITY, "smart object", fmt)?;
+            crate::transform_cmds::check_budget(bounds, &scaled_placement(sm, k), "smart object", fmt)
+        };
+        Some((vectorcraft_source_image_in(name, bytes, doc, k, check)?, k))
+    } else {
+        None
+    };
+    if let Some((img, k)) = scaled {
+        let h = scaled_placement(sm, k);
+        crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
         return Ok(match &sm.perspective {
-            Some(p) => {
-                let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
-                let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
-                crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
-                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
-            }
+            Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?,
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
-                crate::transform_cmds::check_budget(img.bounds, &affine_homography(&t), "smart object", fmt)?;
                 photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
             }
         });
@@ -219,6 +242,12 @@ fn place_with_svg(
     let img = match sm.stack_mode {
         Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg))?, doc)?,
         None if is_svg => svg(bytes, 1.0)?,
+        Some(mode) if photocraft_io::vectorcraft::is_vectorcraft(bytes) => {
+            convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA8, mode, Some(false))?, doc)?
+        }
+        None if photocraft_io::vectorcraft::is_vectorcraft(bytes) => vectorcraft_source_image_in(name, bytes, doc, 1.0, |bounds| {
+            crate::transform_cmds::check_budget(bounds, &Homography::IDENTITY, "smart object", fmt)
+        })?,
         Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg))?,
         None => super::source::source_image_classified(name, bytes, fmt, is_svg)?,
     };
@@ -231,6 +260,21 @@ fn place_with_svg(
         Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, sm.warp.as_ref())?,
         None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
     })
+}
+
+/// The placement of a source drawn at `k` times its own size: the smart object's placement with
+/// its scale divided by `k`.
+fn scaled_placement(sm: &SmartObject, k: f64) -> Homography {
+    match &sm.perspective {
+        Some(p) => {
+            let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
+            Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8])
+        }
+        None => {
+            let [a, b, c, d, e, f] = sm.transform.m;
+            affine_homography(&Affine { m: [a / k, b / k, c / k, d / k, e, f] })
+        }
+    }
 }
 
 /// Work the smart-object source caches have done on the calling thread. Each field counts a
@@ -347,13 +391,18 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// An SVG (or a native source's SVG preview) without Stack Mode is rendered by the bounded
 /// whole-drawing path, so its box only needs the canvas bounds: no editable layer caches are
 /// built, and a drawing whose layer caches exceed the budget still gets a warp frame. Stack Mode
-/// keeps the strict layered import it renders with.
+/// keeps the strict layered import it renders with. A VectorCraft source without Stack Mode gets
+/// its box from the carried PDF's page size, without drawing the artboard.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
+        None if photocraft_io::vectorcraft::is_vectorcraft(&bytes) => {
+            let (w, h) = photocraft_io::vectorcraft::drawn_size(&bytes).ok()?;
+            Rect::new(0, 0, i32::try_from(w).ok()?, i32::try_from(h).ok()?)
+        }
         Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
         None => super::source::source_image(&name, &bytes, fmt).ok()?.bounds,
     };
@@ -519,7 +568,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     h.update(b"smart-placement-v3:");
     h.update(&stack_cache::placed_key(&bytes, fmt, sm, canvas));
     h.update(blake3::hash(name.as_bytes()).as_bytes());
-    if is_svg {
+    if is_svg || photocraft_io::vectorcraft::is_vectorcraft(&bytes) {
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());
     }
     let placed_key: StageKey = *h.finalize().as_bytes();

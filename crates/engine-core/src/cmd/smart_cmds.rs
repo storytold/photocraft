@@ -204,6 +204,8 @@ pub use rendering::{SourceCacheStatistics, source_cache_statistics};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 pub(crate) use rendering::{render_with_warnings, source_box};
 #[cfg(test)]
+pub(crate) use source::VECTORCRAFT_DRAWS;
+#[cfg(test)]
 use source::svg_source_image_in;
 pub use source::vector_scale;
 pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};

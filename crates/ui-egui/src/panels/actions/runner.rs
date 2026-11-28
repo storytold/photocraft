@@ -445,6 +445,7 @@ impl ShellRunner<'_> {
             Ok(value) => value,
             Err(error) => return StepOutcome::Failed(error),
         };
+        report_replayed_place(self.app, id, &value);
         match called(self.app, &action.name, i, id, &value, target) {
             // Step by Step and Pause For: the canvas shows this step before the next one runs.
             Called::Done => match wait_after(self.app, action, i) {
@@ -562,6 +563,13 @@ impl ActionRunner for ShellRunner<'_> {
         };
         // A called action that paused for a dialog continues here after it once confirmed.
         self.after_call(action, i, id, result, target)
+    }
+}
+
+/// Show the import warnings of a replayed Place step, as File › Place does.
+fn report_replayed_place(app: &mut PhotocraftApp, id: &str, value: &Value) {
+    if matches!(id, "file.placeEmbedded" | "file.placeLinked") {
+        app.report_place_warnings(value, id == "file.placeLinked");
     }
 }
 

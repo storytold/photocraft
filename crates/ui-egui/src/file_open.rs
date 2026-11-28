@@ -654,8 +654,8 @@ impl PhotocraftApp {
             match placed {
                 // Running in the background: Free Transform starts when the layer has landed.
                 Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
+                // `run` and `place_bytes_with` have already reported the place's warnings.
                 Ok(result) => {
-                    crate::notices::io_result_warnings(self, &result, &name);
                     if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
                         continue;
                     }
@@ -753,13 +753,24 @@ impl PhotocraftApp {
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
     /// places run in the background, else synchronously.
     fn place_bytes_with(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let is_linked = linked.is_some();
         let r = if crate::jobs_ui::place_in_background(self) {
             crate::jobs_ui::start_place_bytes(self, name, bytes, linked, params)
         } else {
             photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, params).map_err(|e| e.to_string())
         };
         self.sync_views();
+        if let Ok(result) = &r {
+            self.report_place_warnings(result, is_linked);
+        }
         r
+    }
+
+    /// Keep Place's import warnings visible, as Open's warnings are.
+    pub(crate) fn report_place_warnings(&mut self, result: &serde_json::Value, linked: bool) {
+        let warnings: Vec<String> = result["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_owned)).collect();
+        let what = if linked { tl!("Place Linked") } else { tl!("Place Embedded") };
+        notices::io_warnings(self, what, &warnings);
     }
 
     /// Handle the OS requests queued since the last frame.
