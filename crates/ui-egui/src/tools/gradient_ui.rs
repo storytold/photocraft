@@ -133,7 +133,8 @@ fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
 /// Opens the Color Picker on colour stop `i`; OK runs `gradient.fill.stop` (one history step).
 pub(crate) fn edit_stop_color(app: &mut PhotocraftApp, layer: LayerId, i: usize) {
     let Some(st) = app.session.active() else { return };
-    let Some(Fill::Gradient { stops, .. }) = st.doc.layer(layer).and_then(fill_of) else { return };
+    // Photoshop's own stops when the fill keeps them (#13557).
+    let Some(Fill::Gradient { stops, .. }) = st.doc.layer(layer).and_then(fill_of).map(cmds::source_view) else { return };
     let mut sorted = stops.clone();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
     let Some((_, c)) = sorted.get(i) else { return };

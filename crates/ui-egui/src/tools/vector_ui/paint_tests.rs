@@ -482,6 +482,7 @@ fn test_gradient() -> photocraft_doc::Fill {
         offset: (0.125, -0.25),
         dither: true,
         align: false,
+        interpolation: None,
     }
 }
 

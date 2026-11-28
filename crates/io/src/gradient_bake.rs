@@ -187,6 +187,58 @@ pub fn bake_source(src: &photocraft_doc::adjust::GradientSource) -> Vec<(f32, [f
     bake(stops, &mids, unit(src.smoothness), method).into_iter().map(|(t, c)| (t, c.to_rgb())).collect()
 }
 
+/// Clamps a hostile unit value (from a file or a command) to `0..=1`; NaN is 0.
+fn unit(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// One midpoint per segment between `n` stops: the given ones clamped to `0.05..=0.95`, a
+/// missing or non-finite one halfway.
+fn segment_mids(mids: &[f32], n: usize) -> Vec<f32> {
+    (0..n.saturating_sub(1)).map(|k| mids.get(k).copied().filter(|m| m.is_finite()).map_or(0.5, |m| m.clamp(0.05, 0.95))).collect()
+}
+
+/// The [`Method`] a kept gradient names (`None` for an unknown name).
+pub fn interpolation_method(src: &photocraft_doc::effects::GradientInterpolation) -> Option<Method> {
+    Method::from_name(&src.method)
+}
+
+/// A kept Photoshop gradient (Gradient Overlay or Gradient Fill layer, #13557) baked into the
+/// dense linear stops the compositors render. Hostile values are clamped: locations to `0..=1`,
+/// Smoothness to `0..=100`, midpoints to `0.05..=0.95` (a missing one is halfway); an unknown
+/// method is Classic.
+pub fn bake_interpolation(src: &photocraft_doc::effects::GradientInterpolation) -> Vec<(f32, Color)> {
+    let mut stops: Vec<(f32, Color)> = src.stops.iter().map(|(t, c)| (unit(*t), *c)).collect();
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mids = segment_mids(&src.midpoints, stops.len());
+    let smooth = if src.smoothness.is_finite() { src.smoothness.clamp(0.0, 100.0) / 100.0 } else { 0.0 };
+    bake(stops, &mids, smooth, interpolation_method(src).unwrap_or(Method::Classic))
+}
+
+/// The opacity stops of a kept Photoshop gradient baked as [`bake_interpolation`] bakes its
+/// colours; `None` when it records no opacity stops of its own.
+pub fn bake_interpolation_opacity(src: &photocraft_doc::effects::GradientInterpolation) -> Option<Vec<(f32, f32)>> {
+    if src.opacity_stops.is_empty() {
+        return None;
+    }
+    let mut stops: Vec<(f32, f32)> = src.opacity_stops.iter().map(|(t, o)| (unit(*t), unit(*o))).collect();
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mids = segment_mids(&src.opacity_midpoints, stops.len());
+    let smooth = if src.smoothness.is_finite() { src.smoothness.clamp(0.0, 100.0) / 100.0 } else { 0.0 };
+    Some(bake_opacity(stops, &mids, smooth, interpolation_method(src).unwrap_or(Method::Classic)))
+}
+
+/// Whether `stops` (and `opacity`) are still `src` baked: a writer saves Photoshop's own gradient
+/// only then, and the render stops when something replaced them without updating the record.
+/// Opacity stops that are all 100 % count as none.
+pub fn interpolation_matches(src: &photocraft_doc::effects::GradientInterpolation, stops: &[(f32, Color)], opacity: &[(f32, f32)]) -> bool {
+    let opaque = |o: &[(f32, f32)]| o.iter().all(|s| s.1 >= 1.0 - 1e-4);
+    src.stops.len() >= 2
+        && interpolation_method(src).is_some()
+        && bake_interpolation(src) == stops
+        && bake_interpolation_opacity(src).is_none_or(|o| o == opacity || (opaque(&o) && opaque(opacity)))
+}
+
 /// Dense linear stops reproducing Photoshop's interpolation. Returns the input unchanged when it
 /// already interpolates linearly in sRGB.
 pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, Color)> {

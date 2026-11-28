@@ -6,6 +6,7 @@
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value, VersionedDescriptor};
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;
+use photocraft_doc::effects::GradientInterpolation;
 use photocraft_doc::{
     Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, Satin,
     Shadow, StrokeFx, StrokePosition,
@@ -306,7 +307,17 @@ fn parse_one(key: &str, d: &Descriptor) -> Option<Effect> {
         "FrFX" => Effect::Stroke(parse_stroke(d)),
         "SoFi" => Effect::ColorOverlay { common: common(d, BlendMode::Normal, 1.0), color: color(d, "Clr ") },
         "GrFl" => {
-            Effect::GradientOverlay { common: common(d, BlendMode::Normal, 1.0), gradient: gradient_from(d), dither: bool_of(d, "Dthr"), interpolation: None }
+            let mut gradient = gradient_from(d);
+            // Photoshop's own gradient (stops, midpoints, Smoothness, method) behind the baked
+            // stops, so the Layer Style editor shows and a save writes it (#13557).
+            let interpolation = get_desc(d, "Grad").and_then(|g| crate::blocks::gradient_interpolation(g, crate::blocks::gradient_method(d), false));
+            if let Some(src) = &interpolation {
+                gradient.stops = crate::gradient_bake::bake_interpolation(src);
+                if let Some(opacity) = crate::gradient_bake::bake_interpolation_opacity(src) {
+                    gradient.opacity_stops = opacity;
+                }
+            }
+            Effect::GradientOverlay { common: common(d, BlendMode::Normal, 1.0), gradient, dither: bool_of(d, "Dthr"), interpolation }
         }
         "patternFill" => {
             let (name, id) = pattern_ref(d);
@@ -396,9 +407,18 @@ fn with_common(d: Descriptor, c: &FxCommon) -> Descriptor {
         .with("Opct", unit(b"#Prc", c.opacity * 100.0))
 }
 
-fn gradient_keys(mut d: Descriptor, g: &Gradient) -> Descriptor {
+/// The gradient keys of an effect: Photoshop's own gradient (`source`, with its method as `gs99`)
+/// while `g`'s stops are still it baked (#13557), else `g`'s stops.
+fn gradient_keys(mut d: Descriptor, g: &Gradient, source: Option<&GradientInterpolation>) -> Descriptor {
+    match source.filter(|src| crate::gradient_bake::interpolation_matches(src, &g.stops, &g.opacity_stops)) {
+        Some(src) => {
+            d = d
+                .with("Grad", Value::Descriptor(crate::blocks::gradient_desc_source(src, &g.opacity_stops)))
+                .with("gs99", crate::blocks::interpolation_method_value(src));
+        }
+        None => d = d.with("Grad", Value::Descriptor(gradient_desc(&g.stops, &g.opacity_stops))),
+    }
     d = d
-        .with("Grad", Value::Descriptor(gradient_desc(&g.stops, &g.opacity_stops)))
         .with("Angl", unit(b"#Ang", g.angle))
         .with("Type", gradient_style_value(g.style))
         .with("Rvrs", Value::Boolean(g.reverse))
@@ -430,7 +450,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             let inner = matches!(e, Effect::InnerGlow(_));
             let mut d = with_common(Descriptor::new(if inner { "IrGl" } else { "OrGl" }), &g.common);
             d = match &g.paint {
-                FxPaint::Gradient(gr) => gradient_keys(d, gr),
+                FxPaint::Gradient(gr) => gradient_keys(d, gr, None),
                 FxPaint::Color(c) => d.with("Clr ", Value::Descriptor(color_to_desc(c))),
                 FxPaint::Pattern { .. } => d.with("Clr ", Value::Descriptor(color_to_desc(&Color::WHITE))),
             };
@@ -466,7 +486,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
                 FxPaint::Color(c) => {
                     d.with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("SClr") }).with("Clr ", Value::Descriptor(color_to_desc(c)))
                 }
-                FxPaint::Gradient(g) => gradient_keys(d.with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("GrFl") }), g),
+                FxPaint::Gradient(g) => gradient_keys(d.with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("GrFl") }), g, None),
                 FxPaint::Pattern { name, id, scale } => d
                     .with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("Ptrn") })
                     .with(
@@ -482,8 +502,9 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             ("FrFX", d)
         }
         Effect::ColorOverlay { common: c, color } => ("SoFi", with_common(Descriptor::new("SoFi"), c).with("Clr ", Value::Descriptor(color_to_desc(color)))),
-        Effect::GradientOverlay { common: c, gradient, dither, .. } => {
-            ("GrFl", gradient_keys(with_common(Descriptor::new("GrFl"), c), gradient).with("Dthr", Value::Boolean(*dither)))
+        Effect::GradientOverlay { common: c, gradient, dither, interpolation } => {
+            let d = gradient_keys(with_common(Descriptor::new("GrFl"), c), gradient, interpolation.as_ref()).with("Dthr", Value::Boolean(*dither));
+            ("GrFl", d)
         }
         Effect::PatternOverlay { common: c, name, id, scale, angle, link, phase } => (
             "patternFill",

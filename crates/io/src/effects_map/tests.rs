@@ -428,3 +428,66 @@ fn a_point_on_a_tiny_straight_span_is_not_a_bend() {
     assert_eq!(kept.len(), 16);
     assert!(!kept.contains(&3), "the point on the tiny straight span was kept over a real bend: {kept:?}");
 }
+
+/// A Gradient Overlay `lfx2` with three colour stops (red, green at 50 %, blue; the first
+/// segment's midpoint at `mid` %, stored on the stop that ends it), opaque, Smoothness `intr` (0..4096) and the method `gs99` code.
+fn three_stop_overlay_lfx2(mid: i32, intr: f64, method: &str) -> Vec<u8> {
+    let rgb = |r: f64, g: f64, b: f64| Descriptor::new("RGBC").with("Rd  ", Value::Double(r)).with("Grn ", Value::Double(g)).with("Bl  ", Value::Double(b));
+    let clr = |loc: i32, c: Descriptor, mid: i32| {
+        Value::Descriptor(
+            Descriptor::new("Clrt")
+                .with("Clr ", Value::Descriptor(c))
+                .with("Type", Value::Enumerated { type_id: Id::new("Clry"), value: Id::new("UsrS") })
+                .with("Lctn", Value::Integer(loc))
+                .with("Mdpn", Value::Integer(mid)),
+        )
+    };
+    let trn = |loc: i32| {
+        Value::Descriptor(Descriptor::new("TrnS").with("Opct", unit(b"#Prc", 100.0)).with("Lctn", Value::Integer(loc)).with("Mdpn", Value::Integer(50)))
+    };
+    let grad = Descriptor::new("Grdn")
+        .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("CstS") })
+        .with("Intr", Value::Double(intr))
+        .with("Clrs", Value::List(vec![clr(0, rgb(255.0, 0.0, 0.0), 50), clr(2048, rgb(0.0, 255.0, 0.0), mid), clr(4096, rgb(0.0, 0.0, 255.0), 50)]))
+        .with("Trns", Value::List(vec![trn(0), trn(4096)]));
+    let fx = Descriptor::new("GrFl")
+        .with("enab", Value::Boolean(true))
+        .with("Grad", Value::Descriptor(grad))
+        .with("Angl", unit(b"#Ang", 90.0))
+        .with("gs99", Value::Enumerated { type_id: Id::new("gradientInterpolationMethodType"), value: Id::new(method) });
+    let d = Descriptor::new("null").with("masterFXSwitch", Value::Boolean(true)).with("GrFl", Value::Descriptor(fx));
+    let mut data = 0u32.to_be_bytes().to_vec();
+    data.extend(VersionedDescriptor { version: 16, descriptor: d }.to_bytes());
+    data
+}
+
+fn overlay_of(data: &[u8]) -> Effect {
+    let (_, fx) = parse_lfx2(data).unwrap();
+    fx.into_iter().next().unwrap()
+}
+
+/// #13557: a Gradient Overlay keeps Photoshop's own stops, midpoints, Smoothness and method
+/// (Smoothness 100 Classic, Smoothness 0 Perceptual) next to the stops it renders, and a save
+/// writes them back: read → write → read gives the same effect. Smoothness 0 Classic with plain
+/// midpoints needs nothing kept and stays its three stops.
+#[test]
+fn gradient_overlay_keeps_photoshops_stops_midpoints_and_smoothness() {
+    for (intr, method, name, smooth) in [(4096.0, "Gcls", "classic", 100.0), (0.0, "Perc", "perceptual", 0.0)] {
+        let fx = overlay_of(&three_stop_overlay_lfx2(30, intr, method));
+        let Effect::GradientOverlay { gradient, interpolation: Some(src), .. } = &fx else { panic!("{fx:?}") };
+        assert!(gradient.stops.len() > 3, "{name}: renders the baked stops");
+        assert_eq!(src.stops.len(), 3, "{name}");
+        assert_eq!((src.method.as_str(), src.smoothness), (name, smooth));
+        assert!((src.midpoints[0] - 0.3).abs() < 1e-6, "{name}: {:?}", src.midpoints);
+        let written = write_lfx2(true, std::slice::from_ref(&fx));
+        assert_eq!(overlay_of(&written), fx, "{name}: read → write → read");
+    }
+    // A midpoint off the middle is baked into an overlay's stops (they have no midpoints), so
+    // even a plain Classic gradient keeps its source then.
+    let fx = overlay_of(&three_stop_overlay_lfx2(30, 0.0, "Gcls"));
+    assert!(matches!(&fx, Effect::GradientOverlay { interpolation: Some(src), .. } if src.stops.len() == 3 && src.smoothness == 0.0));
+    assert_eq!(overlay_of(&write_lfx2(true, std::slice::from_ref(&fx))), fx);
+    let plain = overlay_of(&three_stop_overlay_lfx2(50, 0.0, "Gcls"));
+    let Effect::GradientOverlay { gradient, interpolation: None, .. } = &plain else { panic!("{plain:?}") };
+    assert_eq!(gradient.stops.len(), 3);
+}

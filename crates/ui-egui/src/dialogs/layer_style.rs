@@ -213,7 +213,9 @@ fn values_of(e: &Effect, light: f32) -> Value {
                 set(&mut v, "method", json!("custom"));
                 drop_keys(&mut v, &["smoothness"]);
             }
-            let (stops, opacity) = gradient_field::stops_to_json(&gradient_field::stops_of_doc(stops, &g.opacity_stops));
+            // Photoshop's own opacity stops when the overlay keeps them (#13557).
+            let opacity = interpolation.as_ref().filter(|source| !source.opacity_stops.is_empty()).map_or(&g.opacity_stops, |source| &source.opacity_stops);
+            let (stops, opacity) = gradient_field::stops_to_json(&gradient_field::stops_of_doc(stops, opacity));
             set(&mut v, gradient_field::KEY, stops);
             set(&mut v, gradient_field::OPACITY_KEY, opacity);
             set(&mut v, "reverse", json!(g.reverse));

@@ -969,8 +969,32 @@ fn convert_color(c: &mut Color, from: ColorMode, to: ColorMode, t: &Transform) {
 fn convert_fill(f: &mut Fill, cc: &mut dyn FnMut(&mut Color)) {
     match f {
         Fill::Solid(c) => cc(c),
-        Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|s| cc(&mut s.1)),
+        Fill::Gradient { stops, opacity_stops, interpolation, .. } => convert_gradient(stops, opacity_stops, interpolation.as_deref_mut(), cc),
         Fill::Pattern { .. } => {}
+    }
+}
+
+/// Converts a gradient's rendered stops and Photoshop's own gradient kept with them (#13557).
+/// While the rendered stops are still that gradient baked, they are baked again from the
+/// converted gradient, so a save still writes it: converting the dense baked stops one by one
+/// does not give exactly the converted gradient baked. Otherwise (no kept gradient, or stops
+/// edited since) both are converted as they are.
+fn convert_gradient(
+    stops: &mut Vec<(f32, Color)>,
+    opacity: &[(f32, f32)],
+    source: Option<&mut photocraft_doc::effects::GradientInterpolation>,
+    cc: &mut dyn FnMut(&mut Color),
+) {
+    let Some(source) = source else {
+        stops.iter_mut().for_each(|s| cc(&mut s.1));
+        return;
+    };
+    let baked = photocraft_io::gradient_bake::interpolation_matches(source, stops, opacity);
+    source.stops.iter_mut().for_each(|s| cc(&mut s.1));
+    if baked {
+        *stops = photocraft_io::gradient_bake::bake_interpolation(source);
+    } else {
+        stops.iter_mut().for_each(|s| cc(&mut s.1));
     }
 }
 
@@ -986,10 +1010,7 @@ fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
             Effect::Stroke(s) => paint_colors(&mut s.paint, cc),
             Effect::ColorOverlay { color, .. } => cc(color),
             Effect::GradientOverlay { gradient, interpolation, .. } => {
-                gradient.stops.iter_mut().for_each(|s| cc(&mut s.1));
-                if let Some(source) = interpolation {
-                    source.stops.iter_mut().for_each(|s| cc(&mut s.1));
-                }
+                convert_gradient(&mut gradient.stops, &gradient.opacity_stops, interpolation.as_mut(), cc);
             }
             Effect::Satin(s) => cc(&mut s.color),
             Effect::BevelEmboss(b) => {
@@ -2272,6 +2293,10 @@ mod settings_tests {
         assert!(s.execute("color.profileMismatch", json!({"action": "explode"})).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "convert_gradient_tests.rs"]
+mod convert_gradient_tests;
 
 #[cfg(test)]
 mod convert_profile_bitmap_tests;
