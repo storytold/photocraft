@@ -3,7 +3,7 @@ use super::{
     screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds,
 };
 use craft::ui::contract::Bind;
-use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::env::{BodyMode, WindowKey};
 use craft::ui::runtime::windows::WindowHost;
 use craft::ui::shell::AppShell;
 
@@ -240,6 +240,16 @@ impl PhotocraftApp {
                 } else {
                     // Shift+Tab hides the panels and keeps the tools: the toolbar is a panel of the dock.
                     let panels_hidden = cx.shell().is_some_and(|shell| shell.panels_hidden());
+                    // Auto-show hidden panels (#4096): record how the shell hid the panels this
+                    // pass, for the peek below. Tab hides everything (body-only mode) unless a
+                    // reveal is showing the slots; Shift+Tab hides the panels.
+                    if let Some(shell) = cx.shell() {
+                        let revealed = shell.revealed();
+                        crate::peek::record_hide_state(
+                            ui.ctx(),
+                            crate::peek::HideState { tab: shell.body_mode() == BodyMode::Only && !revealed, shift: panels_hidden, revealed },
+                        );
+                    }
                     crate::panel_docking::show(app, ui, panels_hidden);
                 }
                 notices::show(app, ui);
@@ -247,6 +257,15 @@ impl PhotocraftApp {
             })
             .show(ui, self);
         self.ui.view.screen_mode = mode;
+        // Auto-show hidden panels (#4096 rework): the pointer at the canvas edge brings back
+        // panels Tab or Shift+Tab hid, as an overlay over the canvas. The peek only draws
+        // when the main dock does not (dock hidden, not revealed), so the two DockAreas
+        // never draw in the same frame. Home has no panels to bring back.
+        let chrome = !self.ui.view.hides_chrome();
+        let peek = crate::peek::compute_peek(self, &ctx, chrome && !home);
+        if peek.toolbar || peek.dock {
+            crate::peek::draw_peek(self, &ctx, &peek);
+        }
         // The Properties Reset session starts anew once the panel was not shown (`properties_hidden`).
         // Home shows no dock, so no Properties panel either.
         if home || !crate::panel_docking::is_front(self, "properties") {
