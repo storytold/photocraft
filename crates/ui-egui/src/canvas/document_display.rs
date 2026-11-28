@@ -514,8 +514,11 @@ fn canvas_controls(
 ) -> Option<(photocraft_doc::LayerId, photocraft_doc::Fill)> {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let now = ui.input(|i| i.time);
+    let primary = host.is_primary(app);
     crate::distort_ui::show_in_canvas(app, ui, rect);
-    crate::blur_pins::overlay(app, ui, rect);
+    if primary && app.session.active_index() == Some(host.idx) {
+        crate::blur_pins::overlay(app, ui, rect);
+    }
     let doc = app.session.documents()[host.idx].doc.id;
     if let Some(shown) = crate::vector_ui::overlay::show_paths(app, ui, rect, doc) {
         let mods = craft::ui::runtime::pointer::mods(ui.ctx());
@@ -525,7 +528,6 @@ fn canvas_controls(
     crate::type_path_placement::show(app, ui, rect);
     // Only the document's own canvas shows and drives the open Free Transform (production's `paint_primary_overlays`):
     // a New Window copy of the document shows no box, and its tool keeps its presses.
-    let primary = host.is_primary(app);
     let session = if primary { crate::transform_tool::show_in_canvas(app, ui, rect, now) } else { crate::transform_tool::SessionShown::default() };
     let session_box_shown = session.shown;
     reported.transform_snapped = session.snapped;
