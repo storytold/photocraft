@@ -6772,6 +6772,7 @@ name = "photocraft-engine-paint"
 version = "0.23.1"
 dependencies = [
  "craft-cms",
+ "craft-image-codecs",
  "photocraft-algo",
  "photocraft-color",
  "photocraft-compose",
