@@ -11,7 +11,7 @@ use craft::ui::contract::{Bind, Props as _, Show as _};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::state::{FreeTransform, Tool};
+use crate::state::{FreeTransform, TaskBarContext, Tool};
 
 enum Action {
     Preset(&'static str),
@@ -67,6 +67,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
         return;
     };
     let (session, corners) = (transform.id, transform.session.quad());
+    if let Some(doc) = app.session.active().map(|d| d.doc.id.0) {
+        app.ui.enter_task_bar_context(TaskBarContext::Transform { doc, session });
+    }
     let ctx = ui.ctx().clone();
     let mut place = app.ui.panels.task_bar;
     let shown = TaskBar::new(tl!("Contextual Task Bar"), &corners, Bind::bound(&mut place)).show(ui, area, |ui, cx| {
