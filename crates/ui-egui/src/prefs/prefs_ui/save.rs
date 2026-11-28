@@ -276,7 +276,10 @@ pub fn autosave_now(app: &mut PhotocraftApp) {
     app.autosave.autosave_now();
 }
 
-/// History Log preference: append executed commands to a text file.
+/// Consume each new journal batch once and append the configured text representation.
+/// Disabled, filtered and failed batches stay consumed: a failed append may have written
+/// a prefix already. Report its path and I/O error without rolling back successful edits;
+/// successful or skipped writes leave unrelated status messages untouched.
 fn history_log(app: &mut PhotocraftApp) {
     let n = app.session.journal.len();
     if n <= app.prefs_rt.log_len {
@@ -303,7 +306,18 @@ fn history_log(app: &mut PhotocraftApp) {
             prefs::LogDetail::Detailed => text.push_str(&format!("{label}  {id} {params}\n")),
         }
     }
-    if !text.is_empty() {
-        let _ = append(&hl.file_path, &text);
+    if !text.is_empty()
+        && let Err(e) = append(&hl.file_path, &text)
+    {
+        // Keep the batch consumed: the append may already have written part of it.
+        // Even in an LTR interface, adjacent RTL directory names can swap across a separator.
+        let direction =
+            hl.file_path.split(['/', '\\']).filter_map(craft_i18n::base_direction).find(|d| d.is_rtl()).unwrap_or_else(|| crate::i18n::current().dir());
+        let path = craft_i18n::path(&hl.file_path, direction);
+        app.ui.status = craft_i18n::fmt(tl!("{log} ({path}): {error}"), &[("log", tl!("History Log")), ("path", &path), ("error", &e)]);
+        app.ui.status_error = true;
     }
 }
+
+#[cfg(test)]
+mod history_log_tests;
