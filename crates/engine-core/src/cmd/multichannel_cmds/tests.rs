@@ -161,3 +161,87 @@ fn pcraft_round_trip() {
     assert_eq!(back.channels, d.channels);
     assert_eq!(photocraft_compose::flatten(&back), photocraft_compose::flatten(&d));
 }
+
+#[test]
+fn printed_rgb_result_is_tagged_and_a_bad_profile_changes_nothing() {
+    let tag = |s: &Session| doc(s).icc_profile.as_ref().and_then(|b| craft_cms::Profile::parse(b).ok());
+    let mut s = session("rgb", 8);
+    s.execute("image.mode.multichannel", json!({})).unwrap();
+    s.edit("drop", |doc, _| {
+        doc.channels.truncate(2);
+        Ok(())
+    })
+    .unwrap();
+    // An RGB profile built on a lookup table has no tone curves to mix the inks in.
+    let dir = tempfile::tempdir().unwrap();
+    let lut = dir.path().join("lut-rgb.icc");
+    std::fs::write(&lut, lut_rgb_profile().to_bytes().as_slice()).unwrap();
+    let lut = lut.to_string_lossy().into_owned();
+    assert!(craft_cms::Profile::parse(&std::fs::read(&lut).unwrap()).unwrap().a2b[0].is_some());
+    for bad in [json!({"profile": "no-such-profile"}), json!({"profile": "coated-cmyk"}), json!({"profile": lut})] {
+        assert!(s.execute("image.mode.rgb", bad.clone()).is_err(), "{bad}");
+        assert_eq!(doc(&s).mode, ColorMode::Multichannel, "{bad}");
+        assert_eq!(doc(&s).channels.len(), 2, "{bad}");
+    }
+    let r = s.execute("image.mode.rgb", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    assert_eq!(r["converted"], "appearance");
+    assert!(tag(&s).unwrap().same_colors(craft_cms::Builtin::AdobeRgbCompat.profile()));
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("image.mode.rgb", json!({})).unwrap();
+    assert!(tag(&s).unwrap().same_colors(&s.color().working(ColorMode::Rgb)));
+    // A non-RGB target ignores `profile` as before.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.execute("image.mode.grayscale", json!({"profile": "coated-cmyk"})).is_ok());
+
+    let mut s = session("rgb", 8);
+    s.execute("image.mode.multichannel", json!({})).unwrap();
+    let before = doc(&s).icc_profile.clone();
+    assert_eq!(s.execute("image.mode.rgb", json!({"profile": "adobe-rgb-compat"})).unwrap()["converted"], "channels");
+    assert_eq!(doc(&s).icc_profile, before);
+}
+
+/// Adobe RGB (1998) with an A2B0 table (identity curves around a 2³ grid of the matrix's XYZ).
+fn lut_rgb_profile() -> craft_cms::Profile {
+    use craft_cms::Curve;
+    use craft_cms::pipeline::Stage;
+    use craft_cms::profile::{Lut, LutKind};
+    let mut p = craft_cms::Builtin::AdobeRgbCompat.profile().clone();
+    let m = p.matrix.unwrap();
+    let mut data = Vec::new();
+    for r in 0..2 {
+        for g in 0..2 {
+            for b in 0..2 {
+                let rgb = [r as f64, g as f64, b as f64];
+                data.extend((0..3).map(|i| ((0..3).map(|j| m[i][j] * rgb[j]).sum::<f64>() / 2.0) as f32));
+            }
+        }
+    }
+    let ident = || Stage::Curves(vec![Curve::Identity; 3]);
+    let clut = craft_cms::Clut::new(vec![2, 2, 2], 3, data).unwrap();
+    p.a2b[0] = Some(Lut { kind: LutKind::Lut16, inputs: 3, outputs: 3, stages: vec![ident(), Stage::Clut(clut), ident()] });
+    p.description = "LUT RGB".into();
+    p.with_encoded_bytes()
+}
+
+/// CMYK, Lab and Grayscale results are built from sRGB values, so their inks mix in sRGB light
+/// whatever the working RGB; an RGB result mixes in the working RGB's light.
+#[test]
+fn only_an_rgb_result_mixes_in_the_working_rgb_light() {
+    let converted = |working: &str, to: &str| {
+        let mut s = session("rgb", 16);
+        s.execute("edit.colorSettings", json!({"workingRgb": working})).unwrap();
+        s.execute("image.mode.multichannel", json!({})).unwrap();
+        s.edit("drop", |doc, _| {
+            doc.channels.truncate(2);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(s.execute(&format!("image.mode.{to}"), json!({})).unwrap()["converted"], "appearance");
+        pixels(&s)
+    };
+    let close = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1e-4);
+    for to in ["cmyk", "lab", "grayscale"] {
+        assert!(close(&converted("adobe-rgb-compat", to), &converted("srgb", to)), "{to}");
+    }
+    assert!(!close(&converted("adobe-rgb-compat", "rgb"), &converted("srgb", "rgb")));
+}

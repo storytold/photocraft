@@ -4,7 +4,9 @@ use super::refs::{ChanRef, alpha_index, bad, gray_plane, native_pixels};
 use super::view::{ChannelTarget, ChannelView, color_names};
 use super::{AlphaChannel, ColorMode, DocState, Document, EngineError, Layer, Result, Session, Value, from_rgba, json};
 
-/// Merge Spot Channel: flattens the image and prints the spot ink into the colour channels.
+/// Merge Spot Channel: flattens the image and prints the spot ink into the colour channels, as
+/// the canvas previews it (`photocraft_compose::multichannel`: the Spot dot gain, mixed in linear
+/// light).
 pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "channel.mergeSpot";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -15,26 +17,25 @@ pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
             _ => doc.channels.iter().position(|c| c.spot.is_some()).ok_or_else(|| bad(cmd, "no spot channel"))?,
         },
     };
-    let (ink, solidity) = doc.channels[i].spot.ok_or_else(|| bad(cmd, "not a spot channel"))?;
+    if doc.channels.get(i).and_then(|c| c.spot).is_none() {
+        return Err(bad(cmd, "not a spot channel"));
+    }
     s.edit("Merge Spot Channel", |doc, active| {
         let area = doc.bounds();
         let fmt = doc.pixel_format();
-        let comp = photocraft_compose::render(doc, area);
-        let k = read_plane(&doc.channels[i].surface, area);
-        let ink = ink.to_rgb();
+        let mut comp = photocraft_compose::render(doc, area);
+        let ch = doc.channels.get(i).ok_or_else(|| bad(cmd, "not a spot channel"))?;
+        let k = read_plane(&ch.surface, area);
+        // The image is flattened onto white paper first, as the preview shows it: the inks print
+        // over opaque pixels.
+        for p in &mut comp.px {
+            let a = if p[3].is_nan() { 0.0 } else { p[3].clamp(0.0, 1.0) };
+            *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
+        }
         // Ink over the image: opaque at 100% solidity, multiplied (transparent ink) at 0%.
-        let data: Vec<f32> = comp
-            .px
-            .iter()
-            .zip(&k)
-            .flat_map(|(c, &v)| {
-                let rgb: [f32; 3] = std::array::from_fn(|j| {
-                    let over = solidity * ink[j] + (1.0 - solidity) * c[j] * ink[j];
-                    c[j] + (over - c[j]) * v.clamp(0.0, 1.0)
-                });
-                from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0])
-            })
-            .collect();
+        let space = photocraft_compose::multichannel::InkSpace::of(doc);
+        space.press(&mut comp.px, photocraft_compose::multichannel::spot_dot_gain()).print(&space.ink(ch), k.iter().map(|v| v.clamp(0.0, 1.0)));
+        let data: Vec<f32> = comp.px.iter().flat_map(|c| from_rgba(&fmt, [c[0], c[1], c[2], 1.0])).collect();
         let mut bg = Layer::raster("Background", fmt);
         bg.locks.transparency = true;
         bg.locks.position = true;
