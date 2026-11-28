@@ -1261,7 +1261,7 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
     // over the canvas, so the picker's own controls would take the synthetic events as clicks. A gesture
     // the canvas is already running keeps its tool to its release (the picker's pick begins at the next press).
     if button == PointerButton::Primary
-        && !crate::canvas::tools::in_gesture(app)
+        && !ToolHost::in_gesture(ctx, canvas)
         && crate::dialogs::canvas_input::armed(app) == Some(crate::dialogs::canvas_input::DialogPick::Color)
     {
         let mut held = false;
