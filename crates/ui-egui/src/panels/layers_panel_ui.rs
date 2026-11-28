@@ -127,7 +127,10 @@ fn report(app: &mut PhotocraftApp, result: Result<(), String>) {
 pub(crate) fn panel_rows(app: &PhotocraftApp) -> Vec<PanelRow> {
     let command = |id: &str| PanelRow::Command(CommandRef::new(id));
     let any_hidden = app.session.active().is_some_and(|st| st.selected_layers().iter().any(|id| st.doc.layer(*id).is_some_and(|l| !l.visible)));
-    let mut rows = vec![
+    // With the Background active the menu starts with Layer from Background…, the Layer › New entry (#16765).
+    let background_active = app.session.active().is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.is_background(id)));
+    let mut rows = if background_active { vec![command("layer.new.layerFromBackground"), PanelRow::Separator] } else { Vec::new() };
+    rows.extend([
         command("layer.new.layer"),
         command("layer.new.group"),
         // Duplicate Layer… opens the Duplicate Layer dialog, like Layer › Duplicate Layer… (#14615).
@@ -142,7 +145,7 @@ pub(crate) fn panel_rows(app: &PhotocraftApp) -> Vec<PanelRow> {
         PanelRow::Separator,
         command("layer.new.artboard"),
         PanelRow::Separator,
-    ];
+    ]);
     let words = Env::of_root(app.ctx()).words::<LayersPanelWords>();
     rows.extend(craft::layers::ui::panel::panel_rows(&words));
     rows
@@ -163,6 +166,27 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
         states.push((CommandRef::new(DUPLICATE), duplicate));
     }
     states
+}
+
+/// What [`command_states`] reads: the rules (the document's selection among them), the filter bar, the clip
+/// preference's value and the UI language, which Duplicate Layers…' title is translated into.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    rules: crate::menus::facts::RuleFacts<'a>,
+    language: &'static str,
+    show_filters: bool,
+    clip: bool,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts {
+        rules: crate::menus::facts::RuleFacts::of(app),
+        language: crate::i18n::current().code(),
+        show_filters: app.ui.layers_settings.show_filters,
+        clip: app.session.prefs().interface.clip_thumbnails_to_layer_bounds,
+    };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
 }
 
 /// Runs a fired settings command of the panel menu. `false` for every other command: PhotoCraft's `layer.arrange.*`
@@ -301,6 +325,10 @@ pub(crate) fn display_reorder(app: &PhotocraftApp, index: usize) -> Option<(std:
 #[cfg(test)]
 #[path = "layers_menu_duplicate_tests.rs"]
 mod layers_menu_duplicate_tests;
+
+#[cfg(test)]
+#[path = "flyout_layer_from_background_tests.rs"]
+mod flyout_layer_from_background_tests;
 
 #[cfg(test)]
 mod tests {

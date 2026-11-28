@@ -155,6 +155,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
+            use_aligned_rendering: s.use_aligned_rendering,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
             live: match &s.live {
@@ -275,7 +276,14 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
         patterns: d
             .patterns
             .iter()
-            .map(|p| PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) })
+            .map(|p| PatternM {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                width: p.width,
+                height: p.height,
+                source_mode: p.source_mode,
+                surface: surface_m(&p.surface, sink),
+            })
             .collect(),
         color_table: d.color_table.clone(),
         // Only while they hold for the layer saved here (and the document is Indexed Color): on
@@ -505,21 +513,24 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, triangle_live, density, feather } => LayerContent::Shape(ShapeLayer {
-                path: path.clone(),
-                fill: fill.clone(),
-                stroke: stroke.clone(),
-                live: arrow_live
-                    .as_ref()
-                    .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
-                    .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
-                    .cloned()
-                    .or_else(|| live.clone()),
-                cache: self.opt_surface(cache)?,
-                psd_raw: self.opt_blob(psd_raw)?,
-                density: *density,
-                feather: *feather,
-            }),
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, live, arrow_live, triangle_live, density, feather } => {
+                LayerContent::Shape(ShapeLayer {
+                    path: path.clone(),
+                    fill: fill.clone(),
+                    stroke: stroke.clone(),
+                    use_aligned_rendering: *use_aligned_rendering,
+                    live: arrow_live
+                        .as_ref()
+                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                        .cloned()
+                        .or_else(|| live.clone()),
+                    cache: self.opt_surface(cache)?,
+                    psd_raw: self.opt_blob(psd_raw)?,
+                    density: *density,
+                    feather: *feather,
+                })
+            }
             ContentM::Smart {
                 contents_id,
                 source,
@@ -672,7 +683,14 @@ impl Loader<'_> {
             if p.width > max || p.height > max {
                 return Err(FormatError::LimitExceeded(format!("pattern `{}` is {}×{} px (max {max} per side)", p.name, p.width, p.height)));
             }
-            patterns.push(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: self.surface(&p.surface)? });
+            patterns.push(Pattern {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                width: p.width,
+                height: p.height,
+                source_mode: p.source_mode,
+                surface: self.surface(&p.surface)?,
+            });
         }
         let layer_comps = m.layer_comps.iter().map(|c| self.comp(c)).collect::<Result<Vec<_>>>()?;
         let last_document_state = m.last_document_state.as_ref().map(|c| self.comp(c)).transpose()?;

@@ -2,9 +2,13 @@
 //! spill configuration, simulated memory, global caches, compositor settings). They live apart from
 //! `it` so plain `cargo test` runs them without the rest of the suite.
 
+mod artboard_export_scratch;
+mod color_settings_presets;
+mod color_settings_text_gamma;
 mod lut_row_cache_purge;
 mod mask_cache_purge;
 mod memory_gate;
+mod render_video_scratch;
 mod scratch_disk;
 mod scratch_pause;
 mod scratch_release;

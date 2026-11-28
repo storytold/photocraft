@@ -27,6 +27,7 @@ fn pen_knots(app: &PhotocraftApp) -> usize {
 fn pen_app(points: &[[f64; 2]]) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
     app.ui.tool = Tool::Pen;
     for at in points {
         testing::click(&mut app, *at, Modifiers::NONE);
@@ -45,22 +46,35 @@ fn pen_command_z_and_backspace_retract_points_before_document_undo() {
     }
     assert_eq!(pen_knots(&app), 3);
 
+    // #12890: the clicks are History steps of their own, so ⌘Z takes back exactly one of them and stops there: the
+    // rectangle's step, made before the path was started, is untouched.
     testing::key(&mut app, Key::Z, Modifiers::COMMAND);
     assert_eq!(pen_knots(&app), 2);
-    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history + 2);
     testing::key(&mut app, Key::Backspace, Modifiers::NONE);
     assert_eq!(pen_knots(&app), 1);
     testing::key(&mut app, Key::Delete, Modifiers::NONE);
     assert_eq!(pen_knots(&app), 0);
-    assert_eq!(app.session.active().unwrap().history.past_len(), history);
-    // No unfinished Pen points remain, so regular Undo can now affect the document.
+    assert_eq!(app.session.active().unwrap().history.past_len(), history + 2, "the draft's own deletions add no step");
+    // The Work Path's steps go one at a time, and only then does regular Undo reach the rectangle.
+    for want in [history + 1, history] {
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), want);
+    }
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(app.session.active().unwrap().history.past_len(), history - 1);
+    assert!(app.session.active().unwrap().doc.work_path.is_none(), "the Work Path went with its own steps");
 }
 
 #[test]
 fn pen_custom_undo_binding_and_menu_retract_pending_points() {
-    let mut app = pen_app(&[[10.0, 10.0], [50.0, 10.0]]);
+    let mut app = pen_app(&[]);
+    // A path operation, not the plain New Layer a click makes (#12890): with one, the anchors stay pending in the
+    // draft until the finish, which is what this routing test is about.
+    app.ui.tool_options.pen_path_op = "subtract".into();
+    for at in [[10.0, 10.0], [50.0, 10.0]] {
+        testing::click(&mut app, at, Modifiers::NONE);
+    }
     // A library change older than the Pen points: Undo retracts the points first, then reaches the library.
     app.run("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
     app.session.prefs.edit(|p| p.shortcuts.insert("edit.undo".into(), "Cmd+Shift+Y".into()));

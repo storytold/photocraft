@@ -122,6 +122,7 @@ fn banded_fields_match_whole_region_within_reach() {
         FieldKind::ChokeInside,
         FieldKind::StrokeOutside,
         FieldKind::StrokeInside,
+        FieldKind::StrokeInsideRaster,
         FieldKind::StrokeOutsideExact,
         FieldKind::StrokeOutsideVector,
         FieldKind::StrokeOutsideVectorChamfer,
@@ -266,7 +267,7 @@ fn a_stroke_uses_the_chamfer_narrow_and_the_exact_field_wide() {
     let vector_wide = program(&stroke(40.0, StrokePosition::Outside), &light, true);
     assert!(vector_wide.fields.iter().any(|(k, _)| *k == FieldKind::StrokeOutsideVector), "{:?}", vector_wide.fields);
     let inner = program(&stroke(40.0, StrokePosition::Inside), &light, false);
-    assert!(inner.fields.iter().any(|(k, _)| *k == FieldKind::StrokeInside), "{:?}", inner.fields);
+    assert!(inner.fields.iter().any(|(k, _)| *k == FieldKind::StrokeInsideRaster), "{:?}", inner.fields);
     // The shadow / softer-glow spread is unchanged: still the chamfer.
     let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
     s.spread = 0.5;
@@ -316,6 +317,53 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!(bands.len(), 2, "{bands:?}");
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
+}
+
+#[test]
+fn group_key_tracks_uncached_shape_alignment() {
+    use photocraft_doc::ShapeLayer;
+    let mut group = Layer::group("g", vec![Layer::new("shape", LayerContent::Shape(ShapeLayer::default()))]);
+    let light = GlobalLight::default();
+    let before = group_key(&group, &light, &mut |_| {});
+    let LayerContent::Group(g) = &mut group.content else { unreachable!() };
+    let LayerContent::Shape(sh) = &mut g.children[0].content else { unreachable!() };
+    sh.use_aligned_rendering = true;
+    assert_ne!(before, group_key(&group, &light, &mut |_| {}));
+}
+
+/// #14933: the Size 1 Inner Shadow program convolves the ¼–½–¼ taps the CPU's `shadow_map`
+/// applies, instead of dropping the identity width-1 blur, so both compositors build the same map.
+/// A Size 6 inner shadow still takes the tent of its own size, untouched.
+#[test]
+fn size_one_inner_shadow_convolves_the_cpus_kernel() {
+    use crate::plan::Kernel;
+    let light = GlobalLight::default();
+    let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+    s.distance = 0.0;
+    s.spread = 0.0;
+    let mut blurs = |size: f32| {
+        s.size = size;
+        program(&Effect::InnerShadow(s.clone()), &light, false)
+            .stages
+            .into_iter()
+            .filter(|st| st.kernel == Kernel::MBlur)
+            .map(|st| (st.radius, st.lut.map(|l| (*l).clone()).unwrap_or_default()))
+            .collect::<Vec<_>>()
+    };
+    let one = blurs(1.0);
+    assert_eq!(one.len(), 2, "two separable passes over the Size 1 inner shadow map");
+    let (r1, w1) = photocraft_compose::effects::size_one_kernel();
+    for (radius, lut) in &one {
+        assert_eq!(*radius, r1, "the Size 1 kernel radius");
+        assert_eq!(lut.as_slice(), w1.as_slice(), "the taps the CPU map applies");
+    }
+    let (r6, w6) = photocraft_compose::effects::tent_kernel(6.0);
+    let six = blurs(6.0);
+    assert_eq!(six.len(), 2, "a Size 6 inner shadow still blurs twice");
+    for (radius, lut) in &six {
+        assert_eq!(*radius, r6);
+        assert_eq!(lut.as_slice(), w6.as_slice(), "Size 6 stays on the tent");
+    }
 }
 
 /// #14934: the GPU's Inner Shadow program takes the same sub-pixel source offset as the CPU's

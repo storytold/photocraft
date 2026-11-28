@@ -32,7 +32,7 @@ pub(crate) struct PropertiesAdjust {
     pub channel: usize,
     /// The Levels clipping display.
     pub clipping: Option<LevelsClip>,
-    /// A tone for Color Balance to show, given once: the Reset to defaults shows Midtones again.
+    /// The tone Color Balance shows, as the editor last reported it; the Reset to defaults sets Midtones.
     pub tone: Option<ColorBalanceTone>,
     /// The Color Picker a colour well opened, while it is open.
     pub pick: Option<ColorPick>,
@@ -158,6 +158,12 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     let vcx = value_cx(mode, &committed_params);
     let committed = match values::from_params(kind, &committed_params, &vcx) {
         Ok(value) => value,
+        // A CMYK Channel Mixer has no framework editor yet (#8047): say so in the panel, like an unsupported adjustment
+        // above, rather than in the status bar on every frame the layer is shown. The layer is kept as it is.
+        Err(err) if err == values::CMYK_MIXER_UNAVAILABLE => {
+            ui.label(egui::RichText::new(tl!(values::CMYK_MIXER_UNAVAILABLE)).color(t.text_faint));
+            return;
+        }
         Err(err) => {
             app.ui.status = err;
             return;
@@ -177,7 +183,10 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     };
     let session = photoshop_session(kind);
     if session {
-        record.session.track(session_target(doc, id), ui.ctx().cumulative_pass_nr(), &committed);
+        // The panel's body is a memoized view, so a frame that replays it runs no pass of it: the session follows the
+        // count of passes the panel showed something else or nothing (`PhotocraftApp::properties_hidden`), which stays
+        // put while it shows this layer, replays included.
+        record.session.track(session_target(doc, id), app.properties_hidden, &committed);
     }
     follow_color_pick(app, id, &mut record, &committed, &vcx);
     let mut value = match &app.live_adjust {
@@ -197,7 +206,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         },
         gradients: if kind == "gradientMap" { gradient_presets(app) } else { Vec::new() },
         swatches: swatches(app),
-        tone: record.tone.take(),
+        tone: record.tone,
         ..Default::default()
     };
     let armed = crate::layer_picker::armed(app).filter(|(layer, _)| *layer == id).map(|(_, picker)| picker);
@@ -209,6 +218,9 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     };
     if picker != armed {
         crate::layer_picker::arm(app, id, picker);
+    }
+    if out.tone.is_some() {
+        record.tone = out.tone;
     }
 
     for event in out.edit {

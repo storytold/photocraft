@@ -38,15 +38,23 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 }
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
-/// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
+/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Burn tool (#12672), the Healing Brush (#12111), the Art History Brush
+/// (#12638), the Paint Bucket (#12537) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
+        // The Magic Eraser's click (#12020).
+        Tool::MagicEraser => Some(tl!("magic eraser")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
+        // The Spot Healing Brush (#12581).
+        Tool::SpotHealing => Some(tl!("spot healing brush")),
+        Tool::Burn => Some(tl!("burn tool")),
+        Tool::Healing => Some(tl!("healing brush")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
+        // The Paint Bucket's click (#12537).
+        Tool::PaintBucket => Some(tl!("paint bucket")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
     }
@@ -80,9 +88,35 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         let pixel_layer = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
+    // A Spot Healing press on a hidden empty pixel layer, Sample All Layers off, is refused quietly (#12581).
+    if hidden && spot_healing_quiet(app, tool) {
+        return None;
+    }
     let name = tool_name(app, tool)?;
+    // The Art History Brush's hidden alert was measured on a layer's pixels only (#12638): a
+    // hidden mask or channel target keeps the status bar.
+    if hidden && tool == Tool::ArtHistoryBrush && !pixels_target(&crate::canvas::paint_target(app)) {
+        return None;
+    }
+    // A group is the Healing Brush's no-source alert (#12109), hidden or not: it keeps today's
+    // messages (the status bar for a hidden one, `refuse_group`'s alert for a shown one).
+    if tool == Tool::Healing && app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(photocraft_doc::Layer::is_group) {
+        return None;
+    }
     let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
+}
+
+/// Whether `target`, a `canvas::paint_target` value, is a layer's pixels as the engine reads it
+/// (`channel_cmds::target_of`): not a layer or filter mask, the Quick Mask or an alpha channel. A
+/// set of colour channels edits the layer's pixels.
+pub(crate) fn pixels_target(target: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match target {
+        Value::String(s) => !matches!(s.as_str(), "mask" | "filterMask" | "quickMask"),
+        Value::Object(o) => o.get("channel").and_then(Value::as_u64).is_none(),
+        _ => true,
+    }
 }
 
 /// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels.
@@ -100,16 +134,38 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge and Smudge tools and the
-/// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
-/// behaviour there).
+/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge, Smudge and Burn tools, the
+/// Art History Brush, the Magic Eraser and the Paint Bucket (#12537) Lock Image Pixels as well
+/// (measured for them; the Brush keeps today's behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush) && locks.pixels)
+    locks.all
+        || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::Burn | Tool::ArtHistoryBrush | Tool::MagicEraser | Tool::PaintBucket)
+            && locks.pixels)
 }
+
+/// A Spot Healing press on an empty pixel layer with Sample All Layers off (#12581): when that layer is hidden, the
+/// press does nothing and says nothing, as in Photoshop; there is nothing to heal from.
+pub(crate) fn spot_healing_quiet(app: &PhotocraftApp, tool: Tool) -> bool {
+    if tool != Tool::SpotHealing || app.ui.tool_options.sample_all.spot_healing || crate::canvas::paint_target(app) != json!("pixels") {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    st.active_layer
+        .and_then(|id| st.doc.layer(id))
+        .is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)) && l.surface().is_some_and(|s| s.content_bounds().is_empty()))
+}
+
+#[cfg(test)]
+#[path = "../magic_eraser_refusal_alerts_tests.rs"]
+mod magic_eraser_refusal_alerts_tests;
 
 #[cfg(test)]
 #[path = "../brush_refusal_alert_tests.rs"]
 pub(super) mod brush_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../spot_healing_refusal_alert_tests.rs"]
+mod spot_healing_refusal_alert_tests;
 
 #[cfg(test)]
 #[path = "../retouch_mode_refusal_alert_tests.rs"]
@@ -126,3 +182,15 @@ mod remove_hidden_layer_tests;
 #[cfg(test)]
 #[path = "art_history_refusal_alert_tests.rs"]
 mod art_history_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../burn_refusal_alert_tests.rs"]
+mod burn_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../healing_refusal_alert_tests.rs"]
+mod healing_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../paint_bucket_refusal_alerts_tests.rs"]
+mod paint_bucket_refusal_alerts_tests;

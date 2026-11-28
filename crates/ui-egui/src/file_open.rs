@@ -3,9 +3,10 @@
 //! and the OS's "open these documents" requests (macOS Finder double-click, Open With, drops on the
 //! Dock icon) all go through [`PhotocraftApp::open_file`], so each one names the document after the
 //! file, remembers its path (File › Save writes back to it) and adds it to Open Recent. Failures
-//! are shown as errors (status bar + notice); import warnings as a notice.
+//! are shown as modal alerts and in the status bar; import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use craft::ui::dialog::{Alert, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog};
 use craft::ui::runtime::drag::OsFile;
 use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use photocraft_doc::DocId;
@@ -59,7 +60,7 @@ pub enum DropRoute {
 /// Where a web-build drop at `at` lands, from what the last frame drew: the canvas (a drop is
 /// placed only while a document is open) and whether `at` is free of windows and dialogs above
 /// the workspace (`uncovered`). No pointer, a covered one, or no canvas means [`DropTo::Window`].
-/// The web build's own drop path until FW-264; native drops arrive through framework drop targets.
+/// The web build's own drop path until FW-264, and native drops the tab strip does not take (`canvas::window_drop`).
 pub(crate) fn target_at(at: Option<egui::Pos2>, uncovered: bool, canvas: Option<egui::Rect>, has_document: bool) -> DropTo {
     let Some(p) = at.filter(|_| uncovered) else {
         return DropTo::Window;
@@ -100,7 +101,8 @@ pub(crate) fn log_drag_over(ctx: &egui::Context, hovering: usize) {
 }
 
 /// A file dropped on the canvas, waiting its turn to be placed in the document it was dropped on
-/// (queued with its [`DocId`] in `drop_places`).
+/// (queued with its [`DocId`] in `drop_places`), or one of several files chosen at once in File ›
+/// Place Embedded's dialog, waiting its turn in the document the command was given in.
 pub(crate) enum DropPlace {
     /// Destination captured when the file is dropped, before a later pointer move.
     At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId> },
@@ -109,6 +111,10 @@ pub(crate) enum DropPlace {
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
+    /// Chosen in File › Place Embedded's dialog (desktop), by its full path: read when its turn
+    /// comes and placed as that dialog places a single file. The web's picks carry their contents
+    /// and wait as [`Self::Bytes`].
+    Path(String),
 }
 
 impl DropPlace {
@@ -117,6 +123,7 @@ impl DropPlace {
         match self {
             Self::At { source, .. } => source.queued_bytes(),
             Self::File(f) => f.bytes.as_ref().map_or(0, |b| b.len()),
+            Self::Path(_) => 0,
             Self::Bytes(_, bytes) => bytes.len(),
         }
     }
@@ -127,6 +134,7 @@ impl DropPlace {
         match self {
             Self::At { source, .. } => source.holds_bytes(),
             Self::File(f) => f.bytes.is_some(),
+            Self::Path(_) => false,
             Self::Bytes(..) => true,
         }
     }
@@ -199,6 +207,64 @@ pub fn display_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| path.to_string())
 }
 
+// Named PSD/PSB/templates deliberately keep the PSD parser's errors for direct callers. Only
+// its missing file-header signature means unrecognized content; damaged internal signatures
+// (8BIM, etc.) and a recognized 8BPS file's other parse errors must retain their reasons.
+fn unrecognized_open_reason(reason: &str) -> bool {
+    if reason == "codec: unrecognized image format" {
+        return true;
+    }
+    let Some(signature) = reason.strip_prefix("PSD: invalid signature [").and_then(|s| s.strip_suffix("], expected 8BPS")) else {
+        return false;
+    };
+    let mut values = signature.split(", ");
+    let mut found = [0u8; 4];
+    for byte in &mut found {
+        let Some(text) = values.next() else { return false };
+        let Ok(value) = text.parse::<u8>() else { return false };
+        if text != value.to_string() {
+            return false;
+        }
+        *byte = value;
+    }
+    values.next().is_none() && &found != b"8BPS"
+}
+
+/// One failed file, rendered by the shared alert. Distinct instances keep a multi-file open's
+/// errors separate; a plain HostedAlert has one fixed identity and would replace the earlier file.
+struct OpenFailureAlert {
+    id: DialogId,
+    alert: HostedAlert,
+}
+
+impl StackDialog for OpenFailureAlert {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+    fn instance(&self) -> Option<DialogId> {
+        Some(self.id)
+    }
+    fn key(&self) -> Option<&str> {
+        self.alert.key()
+    }
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        self.alert.json_fields()
+    }
+    fn confirm(&mut self, ctx: &egui::Context) -> Option<()> {
+        self.alert.confirm(ctx)
+    }
+    fn show(&mut self, ui: &mut egui::Ui, stack: &DialogStack) -> Option<DialogResult<()>> {
+        ui.push_id(self.id, |ui| self.alert.show(ui, stack)).inner
+    }
+}
+
+/// Acknowledgements contain no command; drain every completed occurrence without reopening it.
+pub(crate) fn take_open_alerts(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    while app.framework.dialogs.take_keyed::<OpenFailureAlert>().is_some() {}
+}
+
 impl PhotocraftApp {
     /// Open `bytes` read from the file at `path`: the document is named after the file, keeps
     /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
@@ -230,6 +296,13 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        self.opened_from_listed(path, Some(path));
+    }
+
+    /// [`Self::opened_from`], with `recent` the path Open Recent lists for it (`None`: not listed).
+    /// An automation open is requested by a root-relative path, which names nothing outside
+    /// automation, so it lists where the file is on disk instead.
+    pub(crate) fn opened_from_listed(&mut self, path: &str, recent: Option<&str>) {
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -238,7 +311,9 @@ impl PhotocraftApp {
             let doc = st.doc.id;
             self.remember_stamp(doc, path);
         }
-        self.push_recent(path);
+        if let Some(recent) = recent {
+            self.push_recent(recent);
+        }
     }
 
     /// The name a file called `name` opens under: its own, or the first free "Untitled-N" for a
@@ -321,7 +396,7 @@ impl PhotocraftApp {
             // prompt that is answered later all place the file at its place in the set.
             match self.open_path_placed(abs, None, Some(order)) {
                 Ok(_) => opened += 1,
-                Err(e) => self.open_failed(&display_name(abs), &e),
+                Err(e) => self.open_failed(abs, &e),
             }
         }
         crate::jobs_ui::end_batch(self);
@@ -355,12 +430,31 @@ impl PhotocraftApp {
         true
     }
 
-    /// Show "Couldn't open <name>: <error>" as an error (status bar + notice).
-    pub fn open_failed(&mut self, name: &str, err: &str) {
-        self.failed({
+    /// Report one failed open in an OK alert, naming its source file once. Pass the source path
+    /// when available so its exact prefix can be removed from filesystem read errors too.
+    pub fn open_failed(&mut self, source: &str, err: &str) {
+        let name = display_name(source);
+        let source_prefix = format!("{source}: ");
+        let name_prefix = format!("{name}: ");
+        // The native background importer wraps its path-prefixed read error in the file name.
+        let wrapped_source_prefix = format!("{name}: {source}: ");
+        let reason = (source != name)
+            .then(|| err.strip_prefix(&wrapped_source_prefix))
+            .flatten()
+            .or_else(|| err.strip_prefix(&source_prefix))
+            .or_else(|| err.strip_prefix(&name_prefix))
+            .unwrap_or(err);
+        let msg = if unrecognized_open_reason(reason) {
+            crate::i18n::fmt(tl!("Could not open \"{name}\" because PhotoCraft does not recognize this type of file."), &[("name", &name)])
+        } else {
             let template = "Couldn't open {name}: {error}";
-            crate::i18n::fmt(tl!(template), &[("name", name), ("error", err)])
-        });
+            crate::i18n::fmt(tl!(template), &[("name", &name), ("error", reason)])
+        };
+        log::warn!("{msg}");
+        self.ui.status = msg.clone();
+        self.ui.status_error = true;
+        let id = crate::jobs_ui::open_failure_id(self);
+        self.framework.dialogs.open(OpenFailureAlert { id, alert: HostedAlert::new(Alert::new("PhotoCraft", msg)) });
     }
 
     /// Show "Couldn't place <name>: <error>" as an error (status bar + notice).
@@ -401,11 +495,13 @@ impl PhotocraftApp {
         }
         for f in files {
             let name = dropped_name(&f);
+            let source = f.path.as_deref().filter(|path| path.is_absolute()).map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| name.clone());
             let route = to.route(&name);
+
             if let Some(why) = f.path.as_deref().and_then(folder_error) {
                 match route {
                     DropRoute::Place => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &why)])),
-                    DropRoute::Open => self.open_failed(&name, &why),
+                    DropRoute::Open => self.open_failed(&source, &why),
                 }
                 continue;
             }
@@ -418,12 +514,12 @@ impl PhotocraftApp {
             match self.open_dropped_file(&f, &name, slot) {
                 Ok(true) => slot = slot.map(|s| s + 1),
                 Ok(false) => {}
-                Err(e) => self.open_failed(&name, &e),
+                Err(e) => self.open_failed(&source, &e),
             }
         }
     }
 
-    /// The pointer position (the web build's drop path until FW-264), from the OS cursor service when available, falling back to egui's
+    /// The pointer position (where a web or window-wide drop lands), from the OS cursor service when available, falling back to egui's
     /// last-known pointer position (e.g. on Wayland).
     pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
         self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
@@ -448,10 +544,14 @@ impl PhotocraftApp {
         places
     }
 
-    /// Where a web-build drop at `at` lands (the web build's own drop path until FW-264). Over a
+    /// Where a web-build or window-wide drop at `at` lands (`canvas::window_drop`). Over a
     /// window or dialog it's not the canvas. On the canvas it carries the document point under `at`.
     pub(crate) fn drop_to(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTo {
-        let uncovered = at.is_some_and(|p| ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background));
+        let uncovered = at.is_some_and(|p| {
+            ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+                && (self.ui.document_windows.arrangement != Some(craft::behavior::dock::Arrangement::Tile)
+                    || crate::canvas::arranged_cells(self, self.last_canvas_rect).is_none_or(|cells| cells.iter().any(|(_, rect)| rect.contains(p))))
+        });
         match target_at(at, uncovered, self.drop_canvas_rect, self.session.active().is_some()) {
             DropTo::Canvas { .. } => DropTo::Canvas {
                 at: at.and_then(|p| {
@@ -544,6 +644,12 @@ impl PhotocraftApp {
                     let placed = self.place_bytes_with(&name, bytes, None, &params);
                     (name, placed)
                 }
+                DropPlace::Path(path) => {
+                    let placed = photocraft_format::read_file(std::path::Path::new(&path))
+                        .map_err(|e| e.to_string())
+                        .and_then(|bytes| self.place_bytes_with(&path, bytes, None, &params));
+                    (display_name(&path), placed)
+                }
             };
             match placed {
                 // Running in the background: Free Transform starts when the layer has landed.
@@ -560,6 +666,32 @@ impl PhotocraftApp {
                 Err(e) => self.place_failed(&name, &e),
             }
         }
+    }
+
+    /// File › Place Embedded with several files chosen (#14107): as in the reference application,
+    /// each is placed in `doc` in turn, in the order the dialog returned them, with its own Free
+    /// Transform and its own history state. They wait in the queue of files dropped on the canvas,
+    /// so the next one is placed once the previous one's transform is committed or cancelled (Esc
+    /// takes back only that file), and with Skip Transform when Placing all of them are placed at
+    /// once. A file that can't be read or placed is reported and the next one placed.
+    ///
+    /// Every chosen file is queued: the drop queue's admission limits ([`queue_takes_drop`]) are
+    /// not applied to them. A desktop pick waits as its path, and a web pick's contents were
+    /// already read by the browser when the dialog answered, so refusing it would free nothing
+    /// and only lose a file the user chose. Each is released as soon as it is placed, and while
+    /// they wait they count against the limit for later drops.
+    ///
+    /// None of them fills a selected Frame layer (`"frame": false`), as a single file would: each
+    /// would replace the previous one's image there, without a box or a layer of its own.
+    pub(crate) fn place_picked(&mut self, ctx: &egui::Context, doc: DocId, files: Vec<crate::file_dialog::PickedFile>) {
+        for file in files {
+            let place = match file {
+                crate::file_dialog::PickedFile::Path(path) => DropPlace::Path(path),
+                crate::file_dialog::PickedFile::Contents(name, bytes) => DropPlace::Bytes(name, bytes),
+            };
+            self.drop_places.push_back((doc, DropPlace::At { source: Box::new(place), frame: None }));
+        }
+        self.place_next_dropped(ctx);
     }
 
     /// Queue the web drops onto the canvas that the shell has read since the last frame
@@ -607,8 +739,15 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read. With background jobs
     /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
+    ///
+    /// As in the reference application, Place Embedded centres the file on a selection, removing
+    /// it (#14102); otherwise a place centres it on the part of the canvas in view (#14103).
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
+        let mut params = serde_json::json!({"centerOnSelection": linked.is_none()});
+        if let Some(centre) = visible_canvas_centre(self) {
+            params["center"] = serde_json::json!(centre);
+        }
+        self.place_bytes_with(name, bytes, linked, &params)
     }
 
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
@@ -640,6 +779,31 @@ impl PhotocraftApp {
             }
         }
     }
+}
+
+/// Where a place lands when only part of the canvas is in view (#14103): the centre of the part
+/// of the canvas the active view shows, in document pixels. `None` (the canvas centre) when the
+/// whole canvas is in view, and in the cases not measured in the reference application: a
+/// rotated view, or one that shows the canvas whole on one axis. `None` too when the place fills
+/// the active layer's frame, whose `center` is in the frame's own space.
+fn visible_canvas_centre(app: &PhotocraftApp) -> Option<[f64; 2]> {
+    let view = crate::canvas::document_display::active_view(app)?;
+    if view.rotation.abs() > 1e-6 {
+        return None;
+    }
+    let st = app.session.active()?;
+    if st.active_layer.is_some_and(|id| photocraft_engine::frame_cmds::frame_of(&st.doc, id).is_some()) {
+        return None;
+    }
+    let size = st.doc.size;
+    let shown = view.visible();
+    // The shown span of the canvas on one axis, if the view cuts it there.
+    let cut = |(lo, hi): (f64, f64), len: u32| {
+        let len = f64::from(len);
+        let (lo, hi) = (lo.max(0.0), hi.min(len));
+        (lo < hi && (lo > 0.0 || hi < len)).then_some((lo + hi) / 2.0)
+    };
+    Some([cut((shown.x0, shown.x1), size.width)?, cut((shown.y0, shown.y1), size.height)?])
 }
 
 /// Order names like a file browser does: runs of digits by their value (`File_2` before
@@ -716,4 +880,10 @@ fn same_file(p: &str, path: &str, canon: Option<&std::path::Path>) -> bool {
 #[cfg(test)]
 mod dialog_order_tests;
 #[cfg(test)]
+#[path = "place_multiple_files_tests.rs"]
+mod place_multiple_files_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod unreadable_alert_tests;

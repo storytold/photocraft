@@ -1,9 +1,11 @@
 //! The Brush, Pencil, Eraser and Mixer Brush members of the options bar: the host's preset picker
 //! and settings toggle, the framework's `PaintBar`, and the symmetry menu.
 
-use craft::draw::ui::{EraserMode, MixerValues, PaintBar, PaintTool, PaintValues, Smoothing};
+use craft::draw::ui::symmetry::SymmetryCommand;
+use craft::draw::ui::{EraserMode, MixerLoad, MixerValues, PaintBar, PaintTool, PaintValues, Smoothing};
 use craft::theme::Srgba;
-use craft::ui::contract::Entry;
+use craft::ui::choice::SwatchImage;
+use craft::ui::contract::{Entry, MemoProps, MemoView, Outbox};
 use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::runtime::env::{Env, Label};
@@ -18,14 +20,17 @@ use crate::state::Tool;
 
 /// The blend key of the Brush's and Pencil's Mode list: a blend mode, or one of the two
 /// painting-only modes the brush stores apart from its blend mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, MemoProps)]
 pub(crate) enum PaintMode {
     /// A blend mode.
-    Blend(BlendMode),
+    Blend(#[memo_props(hash = "a field-less enum: its derived Hash is its variant")] BlendMode),
     /// Paint behind the layer's pixels.
     Behind,
     /// Paint transparency.
     Clear,
+    /// The Healing Brush's Replace (#12101): copy the source without healing. A tool option, not a
+    /// brush value; only the Healing Brush's Mode list offers it.
+    HealingReplace,
 }
 
 impl PaintMode {
@@ -35,6 +40,7 @@ impl PaintMode {
             PaintMode::Blend(m) => m.label(),
             PaintMode::Behind => "Behind",
             PaintMode::Clear => "Clear",
+            PaintMode::HealingReplace => "Replace",
         }
     }
 }
@@ -107,8 +113,6 @@ fn paint_values(app: &PhotocraftApp, tool: Tool, b: &BrushSettings) -> PaintValu
         PaintMode::Blend(b.mode)
     };
     let mut v = PaintValues::new(mode);
-    v.size = f64::from(b.size);
-    v.hardness = f64::from(b.hardness);
     v.opacity = f64::from(b.opacity);
     v.flow = f64::from(b.flow);
     let mut smoothing = Smoothing::default();
@@ -132,10 +136,30 @@ fn paint_values(app: &PhotocraftApp, tool: Tool, b: &BrushSettings) -> PaintValu
     mixer.flow = f64::from(b.mixer.flow);
     mixer.sample_all_layers = b.mixer.sample_all_layers;
     mixer.combination = o.mixer_combination;
-    mixer.load_color = app.session.tools.mixer.next_load(app.session.tools.foreground).map(Srgba::from_array);
+    mixer.current_load = mixer_load(app);
     mixer.solid_colors_only = b.mixer.solid_colors_only;
     v.mixer = mixer;
     v
+}
+
+/// What the Mixer Brush holds, as the Current Brush Load swatch shows it: the sampled tip image of an Alt-click while
+/// the foreground stays, else the loaded colour, else nothing (a clean brush).
+fn mixer_load(app: &PhotocraftApp) -> MixerLoad {
+    let mixer = &app.session.tools.mixer;
+    let foreground = app.session.tools.foreground;
+    match mixer.next_load(foreground) {
+        None => MixerLoad::Clean,
+        Some(color) => match mixer.spatial.as_deref().filter(|load| load.len() == 64 * 64 && mixer.color == Some(foreground)) {
+            Some(load) => MixerLoad::Image(SwatchImage::new(mixer_load_image(load))),
+            None => MixerLoad::Color(Srgba::from_array(color)),
+        },
+    }
+}
+
+/// The sampled tip image of a Mixer Brush load (64 x 64 straight RGBA cells, row by row) as the swatch draws it.
+pub(crate) fn mixer_load_image(load: &[[f32; 4]]) -> egui::ColorImage {
+    let bytes: Vec<u8> = load.iter().flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+    egui::ColorImage::from_rgba_unmultiplied([64, 64], &bytes)
 }
 
 /// Writes the bar's `after` values onto `brush` and the tool options. Only what differs from
@@ -145,8 +169,6 @@ fn apply_values(app: &mut PhotocraftApp, tool: Tool, brush: &mut BrushSettings, 
     // PLAN: PaintBar's Opacity and Flow fields range over 0..=100, so a typed 0 on the Eraser reports no
     // `out_of_range` and shows no alert (the old bar's range started at 1); pn.C18's owner decides the range.
     const MIN_FRACTION: f32 = 0.01;
-    brush.size = after.size as f32;
-    brush.hardness = after.hardness as f32;
     brush.opacity = (after.opacity as f32).max(MIN_FRACTION);
     if tool != Tool::MixerBrush {
         brush.flow = (after.flow as f32).max(MIN_FRACTION);
@@ -191,6 +213,9 @@ fn apply_values(app: &mut PhotocraftApp, tool: Tool, brush: &mut BrushSettings, 
                 brush.mode = BlendMode::Normal;
             }
             PaintMode::Clear => brush.behind = false,
+            // Replace is the Healing Brush's row; a paint-bar tool's list never shows it, so
+            // `after.mode` is never this here.
+            PaintMode::HealingReplace => {}
         }
     }
 }
@@ -203,11 +228,41 @@ fn open_range_alert(app: &mut PhotocraftApp, ui: &egui::Ui, range: &RangeAlert) 
     let _ = app.framework.dialogs.open_unless_open(HostedAlert::new(alert));
 }
 
-/// Shows the members of `tool`'s bar; false for a tool without a paint bar.
+/// Every input of the paint members' view: what `PaintBar` and the symmetry menu show.
+#[derive(MemoProps)]
+struct PaintProps<'a> {
+    tool: PaintTool,
+    values: PaintValues<PaintMode>,
+    /// The Eraser's mode; `None` for the other tools.
+    eraser: Option<EraserMode>,
+    /// The symmetry menu, for the Brush, Pencil and Eraser.
+    symmetry: Option<crate::symmetry_ui::MenuInput>,
+    out: Outbox<'a, PaintEvent>,
+}
+
+/// What a run of the paint members' view reports.
+enum PaintEvent {
+    /// The run's edits of the values: the last edit's history key, and the values before and after the run.
+    Edited { key: Option<String>, before: Box<PaintValues<PaintMode>>, after: Box<PaintValues<PaintMode>> },
+    /// The Eraser's mode changed.
+    EraserMode(EraserMode),
+    /// Load Brush was chosen.
+    MixerLoad,
+    /// Clean Brush was chosen.
+    MixerClean,
+    /// A value was typed out of range.
+    OutOfRange(RangeAlert),
+    /// The symmetry menu picked a command.
+    Symmetry(SymmetryCommand),
+}
+
+/// Shows the members of `tool`'s bar; false for a tool without a paint bar. The picker field, the settings toggle and
+/// the bar's members are memoized views, so a pass where none of their inputs changed and no input reaches them
+/// replays them.
 ///
-/// A pass applies only its own edits: the values are read from the app at the start of each pass
-/// and `PaintBar` reports an edit only in the pass that read the input, so a second pass in the
-/// same frame sees the stored result and writes nothing.
+/// A pass applies only its own edits: the values are read from the app at the start of each pass and `PaintBar`
+/// reports an edit only in the run that read the input, so a second pass in the same frame sees the stored result and
+/// writes nothing.
 pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     let Some(paint) = paint_tool(tool) else { return false };
     // The picker and its settings toggle are the host's; a Block-mode Eraser has no brush behind them.
@@ -215,46 +270,76 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) ->
     crate::brush_picker::show_field(ui, app, !block);
     crate::brush_picker::settings_toggle(ui, app);
 
-    let brush_before = app.session.tools.brush.clone();
-    let before = paint_values(app, tool, &brush_before);
-    let mut values = before.clone();
-    let mut eraser = eraser_mode_of(&app.ui.tool_options.eraser_mode);
-    let modes = if matches!(tool, Tool::Brush | Tool::Pencil) { mode_entries() } else { Vec::new() };
-    let mut bar = PaintBar::new(paint, &mut values).modes(&modes);
-    if tool == Tool::Eraser {
-        bar = bar.eraser_mode(&mut eraser);
-    }
-    let out = bar.show(ui);
+    let mut sent = Vec::new();
+    let props = PaintProps {
+        tool: paint,
+        values: paint_values(app, tool, &app.session.tools.brush),
+        eraser: (tool == Tool::Eraser).then(|| eraser_mode_of(&app.ui.tool_options.eraser_mode)),
+        symmetry: matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser).then(|| crate::symmetry_ui::menu_input(app, ui)),
+        out: Outbox::new(&mut sent),
+    };
+    let _ = MemoView::new("paint-members", props, paint_view).show(ui);
 
-    if out.eraser_mode.is_some() {
-        app.ui.tool_options.eraser_mode = eraser_mode_name(eraser).into();
-    }
-    // One pass is one `tools.setBrush`, keyed by the pass's last edit event, so one gesture is one history step.
-    // PLAN: assumed `crate::history_keys::coalesce(&str, &EditEvent<T>) -> Option<String>` (tl.P12's key rule).
-    if let Some(last) = out.edits.iter().next_back() {
-        let key = crate::history_keys::coalesce("brush", last);
-        let mut brush = brush_before.clone();
-        apply_values(app, tool, &mut brush, &before, &values);
-        crate::brush_panel::commit_keyed(app, &brush_before, &brush, key);
-    }
-    if out.mixer_load {
-        let result = app.run("brush.mixer.load", json!({}));
-        report(app, result);
-    }
-    if out.mixer_clean {
-        let result = app.run("brush.mixer.clean", json!({}));
-        report(app, result);
-    }
-    // Only the Eraser alerts; the Brush and Pencil clamp silently (#11938).
-    if tool == Tool::Eraser
-        && let Some(range) = out.out_of_range
-    {
-        open_range_alert(app, ui, &range);
-    }
-    if matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) {
-        crate::symmetry_ui::menu(ui, app);
+    for event in sent {
+        match event {
+            PaintEvent::Edited { key, before, after } => {
+                let brush_before = (*app.session.tools.brush).clone();
+                let mut brush = brush_before.clone();
+                apply_values(app, tool, &mut brush, &before, &after);
+                crate::brush_panel::commit_keyed(app, &brush_before, &brush, key);
+            }
+            PaintEvent::EraserMode(mode) => app.ui.tool_options.eraser_mode = eraser_mode_name(mode).into(),
+            PaintEvent::MixerLoad => {
+                let result = app.run("brush.mixer.load", json!({}));
+                report(app, result);
+            }
+            PaintEvent::MixerClean => {
+                let result = app.run("brush.mixer.clean", json!({}));
+                report(app, result);
+            }
+            // Only the Eraser alerts; the Brush and Pencil clamp silently (#11938).
+            PaintEvent::OutOfRange(range) => {
+                if tool == Tool::Eraser {
+                    open_range_alert(app, ui, &range);
+                }
+            }
+            PaintEvent::Symmetry(command) => crate::symmetry_ui::pick(app, ui.ctx(), command),
+        }
     }
     true
+}
+
+/// The paint members' view: `PaintBar` and the symmetry menu.
+fn paint_view(props: &mut PaintProps<'_>, ui: &mut egui::Ui) {
+    let before = props.values.clone();
+    let modes = if matches!(props.tool, PaintTool::Brush | PaintTool::Pencil) { mode_entries() } else { Vec::new() };
+    let mut bar = PaintBar::new(props.tool, &mut props.values).modes(&modes);
+    if let Some(eraser) = props.eraser.as_mut() {
+        bar = bar.eraser_mode(eraser);
+    }
+    let out = bar.show(ui);
+    if let (Some(_), Some(mode)) = (out.eraser_mode, props.eraser) {
+        props.out.send(PaintEvent::EraserMode(mode));
+    }
+    // One run is one `tools.setBrush`, keyed by the run's last edit event, so one gesture is one history step.
+    if let Some(last) = out.edits.iter().next_back() {
+        let key = crate::history_keys::coalesce("brush", last);
+        props.out.send(PaintEvent::Edited { key, before: Box::new(before), after: Box::new(props.values.clone()) });
+    }
+    if out.mixer_load {
+        props.out.send(PaintEvent::MixerLoad);
+    }
+    if out.mixer_clean {
+        props.out.send(PaintEvent::MixerClean);
+    }
+    if let Some(range) = out.out_of_range {
+        props.out.send(PaintEvent::OutOfRange(range));
+    }
+    if let Some(input) = &props.symmetry
+        && let Some(command) = crate::symmetry_ui::show_menu(input, ui)
+    {
+        props.out.send(PaintEvent::Symmetry(command));
+    }
 }
 
 /// Puts a command's error on the status line.
@@ -272,3 +357,26 @@ mod mixer_blend_combination_tests;
 #[cfg(test)]
 #[path = "../../mixer_load_solid_colors_tests.rs"]
 mod mixer_load_solid_colors_tests;
+
+#[cfg(test)]
+mod mixer_load_image_tests {
+    use super::mixer_load_image;
+
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+    #[test]
+    fn the_sampled_image_keeps_its_left_right_top_and_bottom() {
+        let load: Vec<[f32; 4]> = (0..64 * 64).map(|i| if i % 64 < 32 { GREEN } else { BLUE }).collect();
+        let image = mixer_load_image(&load);
+        assert_eq!(image.size, [64, 64]);
+        assert_eq!(image[(10, 32)], egui::Color32::from_rgb(0, 255, 0));
+        assert_eq!(image[(54, 32)], egui::Color32::from_rgb(0, 0, 255));
+        // Row 0 is the tip's top, as `load_at` reads it; alpha is kept and values past 0..1 clamp.
+        let load: Vec<[f32; 4]> = (0..64 * 64).map(|i| if i < 32 * 64 { [1.0, 0.0, 0.0, 0.5] } else { [1.5, -0.2, 0.0, 1.0] }).collect();
+        let image = mixer_load_image(&load);
+        let (top, bottom) = (image[(32, 10)], image[(32, 54)]);
+        assert_eq!((top.r() > 0, top.g(), top.b(), top.a()), (true, 0, 0, 128), "top of the image {top:?}");
+        assert_eq!(bottom, egui::Color32::from_rgb(255, 0, 0), "bottom of the image");
+    }
+}

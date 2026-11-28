@@ -132,7 +132,7 @@ fn lock(cache: &Mutex<ThumbnailCache>) -> MutexGuard<'_, ThumbnailCache> {
 /// The recent files' thumbnail source for one pass: the open documents (their live pictures), the shared version
 /// cache and whether the window gained focus this pass.
 pub(crate) struct RecentThumbs<'a> {
-    docs: &'a [photocraft_engine::DocState],
+    docs: &'a [craft::ui::contract::Tracked<photocraft_engine::DocState>],
     cache: &'a Mutex<ThumbnailCache>,
     ctx: egui::Context,
     focus_gained: bool,
@@ -154,7 +154,7 @@ pub(crate) fn thumbnails(ctx: &egui::Context) -> Thumbnails<ThumbKey> {
 impl RecentThumbs<'_> {
     /// The open document whose path is `path`.
     fn open_doc(&self, path: &str) -> Option<&photocraft_engine::DocState> {
-        self.docs.iter().find(|d| d.path.as_deref().is_some_and(|p| paths_match(p, path)))
+        self.docs.iter().find(|d| d.path.as_deref().is_some_and(|p| paths_match(p, path))).map(|st| &**st)
     }
 }
 
@@ -210,7 +210,7 @@ pub(crate) fn act(app: &mut PhotocraftApp, action: &StartAction) -> bool {
         StartAction::OpenRecent(path) => {
             let path = path.to_string_lossy();
             if let Err(e) = open_recent_gate(app, &path).and_then(|()| app.open_path(&path)) {
-                app.open_failed(&crate::file_open::display_name(&path), &e);
+                app.open_failed(&path, &e);
             }
             true
         }
@@ -472,6 +472,7 @@ fn open_recent_gate(app: &PhotocraftApp, path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use photocraft_engine::color_cmds::ColorExt;
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

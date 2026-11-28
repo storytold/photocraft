@@ -308,3 +308,7 @@ mod tests;
 #[cfg(test)]
 #[path = "path_selection_enter_escape_tests.rs"]
 mod path_selection_enter_escape_tests;
+
+#[cfg(test)]
+#[path = "path_selection_delete_key_tests.rs"]
+mod path_selection_delete_key_tests;

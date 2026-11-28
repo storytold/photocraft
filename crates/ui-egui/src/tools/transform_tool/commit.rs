@@ -2,7 +2,7 @@ use craft::behavior::EditEvent;
 use craft::behavior::kurbo::Point;
 use craft::draw::ui::transform::{TransformEdit, TransformRequest};
 
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
+use super::begin::{fold_made, moves_group, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
 use super::{
     Arc, DocId, FreeTransform, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, OpenPreview, PhotocraftApp, SessionWarp, Several, json,
     preset_for_command, swap_mode_texels,
@@ -46,7 +46,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
     let Some(result) = result else { return };
     let rect = [result.rect.x0, result.rect.y0, result.rect.x1, result.rect.y1];
-    let quad = result.state.quad.map(|p| [p.x, p.y]);
+    let quad = result.state.quad.map(|p| [whole_if_noise(p.x), whole_if_noise(p.y)]);
     let interpolation = result.interpolation.id();
     let warp = result.warp.map(|w| w.warp);
     if t.selection {
@@ -113,6 +113,19 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
 }
 
+/// How far from a whole pixel a box corner may be and still count as on it. The box turns by
+/// sine and cosine, so Rotate 90° and 180° leave a few ulps (about 1e-13 px) on corners that
+/// belong on the grid, and the warp then gives the layer an extra empty row or column (#16759).
+/// A drag at the highest zoom moves the box by hundredths of a pixel, far above this.
+const GRID_NOISE: f64 = 1e-9;
+
+/// `v` rounded to the nearest whole pixel when it is only float noise away from it; any real
+/// fraction is kept.
+fn whole_if_noise(v: f64) -> f64 {
+    let whole = v.round();
+    if (v - whole).abs() < GRID_NOISE { whole } else { v }
+}
+
 /// A click outside the box, at `at` in document units (`ApplyBy::ClickOutside`): clicking the pasteboard or
 /// another layer's pixels commits; a click outside the box where only the Background has pixels does nothing and
 /// the box stays open (#11100). The commit doesn't pick the layer under the click: as in the reference
@@ -138,9 +151,21 @@ pub fn auto_commit(app: &mut PhotocraftApp, edits: &[TransformEdit<SessionWarp>]
     true
 }
 
-/// Whether a document point is outside the document, on the pasteboard around the canvas.
+/// Whether a document point is on the pasteboard: outside the document, or in an artboard document
+/// outside the bounding box of its visible boards, also within the canvas size (#17019).
 fn on_pasteboard(app: &PhotocraftApp, p: [f64; 2]) -> bool {
-    app.session.active().is_some_and(|st| p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height))
+    let Some(st) = app.session.active() else { return false };
+    if let Some(span) = boards_span(&st.doc) {
+        return p[0].is_finite() && p[1].is_finite() && !span.contains(p[0].floor() as i32, p[1].floor() as i32);
+    }
+    p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height)
+}
+
+/// The bounding box of the visible artboards, `None` without one. Measured in the reference
+/// application (#17019): with boards shown, a click applies the box only outside it; a click inside
+/// keeps the box open, on a board, in a gap between boards, and on a loose layer's pixels there.
+fn boards_span(doc: &photocraft_doc::Document) -> Option<photocraft_geom::Rect> {
+    doc.layers.iter().filter(|l| l.visible).filter_map(|l| l.artboard()).map(|a| a.rect).reduce(|a, b| a.union(&b))
 }
 
 /// Whether a document point lands on pixels of a layer the box doesn't move: the frontmost hit
@@ -156,6 +181,10 @@ fn on_other_layer(app: &PhotocraftApp, t: &FreeTransform, p: [f64; 2]) -> bool {
     }
     let Some(st) = app.session.active() else { return false };
     let doc = &st.doc;
+    // With boards shown only the pasteboard applies the box (#17019).
+    if boards_span(doc).is_some() {
+        return false;
+    }
     // The layers the commit moves: `edit.transform` takes the link group along as it is then, so a
     // layer linked after the box opened counts as moved too.
     let moved = photocraft_engine::transform_cmds::box_targets(doc, &moving_layers(t));
@@ -318,7 +347,7 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
         let now = Several::shown(&st.doc, &sv.ids, &sv.lifted);
         if now.layers != sv.moving.layers {
             sv.moving = now;
-            pv.textures = sv.render();
+            pv.textures = sv.render(&mut app.texture_serials);
         }
     }
     if t.layers.is_empty()
@@ -369,6 +398,20 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(false);
     }
     let t = app.ui.transform.as_ref()?;
+    // One box over several layers doesn't warp (#6501), nor one over a group (#16731), and not
+    // while its commit runs either.
+    if matches!(
+        id,
+        "edit.transform.warp"
+            | "layer.smartObjects.warp"
+            | "edit.transform.splitWarpCrosswise"
+            | "edit.transform.splitWarpHorizontally"
+            | "edit.transform.splitWarpVertically"
+            | "edit.transform.removeWarpSplit"
+    ) && (!t.layers.is_empty() || moves_group(app, t))
+    {
+        return Some(false);
+    }
     if committing(app).is_some() {
         return box_command(id).then_some(false);
     }
@@ -385,17 +428,6 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         SAVE_FOR_WEB | COPY_CSS => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if preset_for_command(id).is_some() => Some(t.session.warp().is_none()),
-        // One box over several layers doesn't warp (#6501).
-        "edit.transform.warp"
-        | "layer.smartObjects.warp"
-        | "edit.transform.splitWarpCrosswise"
-        | "edit.transform.splitWarpHorizontally"
-        | "edit.transform.splitWarpVertically"
-        | "edit.transform.removeWarpSplit"
-            if !t.layers.is_empty() =>
-        {
-            Some(false)
-        }
         // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
         "edit.transform.distort" | "edit.transform.perspective" if moves_type(app, t) => Some(false),
         _ => None,
