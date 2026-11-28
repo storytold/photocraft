@@ -16,6 +16,12 @@ fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
     doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents_id).then_some(l.id)).collect()
 }
 
+/// True while `contents_id` in `parent` has an open Edit Contents document; commands that remove
+/// its layers would strand the child's commit path.
+pub(super) fn contents_editor_open(s: &Session, parent: DocId, contents_id: SmartContentsId) -> bool {
+    s.smart_links.iter().any(|l| l.parent == parent && l.contents_id == contents_id && s.documents().iter().any(|d| d.doc.id == l.child))
+}
+
 /// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
 pub(super) fn set_source(
     s: &mut Session,
