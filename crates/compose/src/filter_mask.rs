@@ -348,7 +348,13 @@ mod tests {
     #[test]
     /// Verify inverse scratch reuse clears skipped outputs and matches fresh pixels across sparse native formats.
     fn reused_unmix_scratch_matches_fresh_pixels_and_clears_early_continue_outputs() {
+        use std::collections::HashMap;
+
         use photocraft_geom::Rect;
+
+        // A single worker reuses the same scratch across the populated tiles.
+        #[cfg(not(target_arch = "wasm32"))]
+        let serial = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
 
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
             for sample in SampleType::ALL {
@@ -422,7 +428,11 @@ mod tests {
                         }
                     }
                     let before = (base.clone(), mixed.clone(), mask.clone());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let result = serial.install(|| unmix(&base, &mixed, &mask));
+                    #[cfg(target_arch = "wasm32")]
                     let result = unmix(&base, &mixed, &mask);
+                    let mut fresh_pixels = HashMap::new();
                     for y in [-1, 0, 1, 128, 255, 256, 257, 258] {
                         for x in [-2, -1, 0, 1, 128, 255, 256, 511, 512, 767, 768, 769, 770] {
                             let point = Rect::new(x, y, x + 1, y + 1);
@@ -431,20 +441,25 @@ mod tests {
                                 assert_eq!(result.pixel(x, y), mixed.default_pixel(), "{fmt:?} bare ({x}, {y})");
                                 continue;
                             }
-                            let mut isolated_base = Surface::new(fmt);
-                            let mut isolated_mixed = Surface::new(fmt);
-                            isolated_base.write_pixel(0, 0, &base.pixel(x, y));
-                            isolated_mixed.write_pixel(0, 0, &mixed.pixel(x, y));
-                            let mut isolated_mask = LayerMask::reveal_all();
-                            isolated_mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[mask.value(x, y)]);
-                            let expected = unmix(&isolated_base, &isolated_mixed, &isolated_mask).pixel(0, 0);
+                            let base_pixel = base.pixel(x, y);
+                            let mixed_pixel = mixed.pixel(x, y);
+                            let coverage = mask.value(x, y);
+                            // Each distinct input gets a fresh scratch oracle. Use the stored
+                            // bits so signed zero and subnormal values retain their identity.
+                            let bits = |pixel: &[f32]| pixel.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                            let key = (bits(&base_pixel), bits(&mixed_pixel), coverage.to_bits());
+                            let expected = fresh_pixels.entry(key).or_insert_with(|| {
+                                let mut isolated_base = Surface::new(fmt);
+                                let mut isolated_mixed = Surface::new(fmt);
+                                isolated_base.write_pixel(0, 0, &base_pixel);
+                                isolated_mixed.write_pixel(0, 0, &mixed_pixel);
+                                let mut isolated_mask = LayerMask::reveal_all();
+                                isolated_mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[coverage]);
+                                bits(&unmix(&isolated_base, &isolated_mixed, &isolated_mask).pixel(0, 0))
+                            });
                             let actual = result.pixel(x, y);
                             assert!(actual.iter().all(|v| v.is_finite()), "{fmt:?} ({x}, {y}): {actual:?}");
-                            assert_eq!(
-                                actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                                expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                                "{fmt:?} ({x}, {y})"
-                            );
+                            assert_eq!(bits(&actual), *expected, "{fmt:?} ({x}, {y})");
                         }
                     }
                     if alpha {
