@@ -203,6 +203,67 @@ fn an_embedded_profile_travels_as_iccbased() {
 }
 
 #[test]
+fn the_export_profile_flag_changes_tagging_without_changing_samples_or_the_document() {
+    use craft_cms::Builtin;
+
+    for (mode, profile, device) in [
+        (ColorMode::Rgb, Builtin::DisplayP3, "DeviceRGB"),
+        (ColorMode::Grayscale, Builtin::SGray, "DeviceGray"),
+        (ColorMode::Cmyk, Builtin::CoatedCmyk, "DeviceCMYK"),
+    ] {
+        let mut d = doc(mode);
+        let profile = profile.profile().to_bytes();
+        d.icc_profile = Some(profile.clone());
+        let rect = Rect::new(0, 0, 4, 2);
+        let before = photocraft_compose::composite_to_surface(&d, rect, d.pixel_format(), None).read_region(rect);
+        let mut off = crate::ExportOptions::default();
+        off.encode.embed_icc = false;
+        let tagged = crate::export(&d, "out.pdf", &crate::ExportOptions::default()).unwrap();
+        let untagged = crate::export(&d, "out.pdf", &off).unwrap();
+
+        assert!(has(&tagged.bytes, "[/ICCBased "), "{mode:?} image uses its profile");
+        let marker = format!("/N {} /Alternate", d.pixel_format().channels() - 1);
+        assert_eq!(stream_after(&tagged.bytes, &marker), *profile, "the document's exact profile");
+        assert!(!has(&untagged.bytes, "/ICCBased"), "OFF writes no profile reference");
+        assert!(!has(&untagged.bytes, "/Alternate"), "OFF writes no profile object");
+        assert!(has(&untagged.bytes, &format!("/ColorSpace /{device}")), "OFF uses the matching device space");
+        assert_eq!(stream_after(&tagged.bytes, "/Subtype /Image"), stream_after(&untagged.bytes, "/Subtype /Image"), "embedding must not convert the samples");
+        assert_eq!(d.icc_profile.as_deref(), Some(profile.as_ref()), "the source profile remains");
+        assert_eq!(photocraft_compose::composite_to_surface(&d, rect, d.pixel_format(), None).read_region(rect), before, "source samples remain");
+        assert_eq!(d.layers.len(), 1);
+        assert_eq!(d.layers[0].name, "Paper");
+    }
+}
+
+#[test]
+fn the_export_profile_flag_applies_to_every_artboard_without_changing_plates() {
+    let mut d = artboard_doc(&["Front", "Back"]);
+    let profile = craft_cms::Builtin::DisplayP3.profile().to_bytes();
+    d.icc_profile = Some(profile.clone());
+    d.channels.push(spot("Varnish", photocraft_color::Color::WHITE, &[0.0, 0.0, 1.0, 0.5, 0.0, 0.0, 1.0, 0.5]));
+    let mut off = crate::ExportOptions::default();
+    off.encode.embed_icc = false;
+    let tagged = crate::export(&d, "out.pdf", &crate::ExportOptions::default()).unwrap();
+    let untagged = crate::export(&d, "out.pdf", &off).unwrap();
+    let on_pdf = lopdf::Document::load_mem(&tagged.bytes).unwrap();
+    let off_pdf = lopdf::Document::load_mem(&untagged.bytes).unwrap();
+    assert_eq!(on_pdf.get_pages().len(), 2);
+    assert_eq!(off_pdf.get_pages().len(), 2);
+    assert_eq!(tagged.bytes.windows(11).filter(|w| *w == b"[/ICCBased ").count(), 2, "every composite is tagged");
+    assert!(!has(&untagged.bytes, "/ICCBased"));
+    assert!(!has(&untagged.bytes, "/Alternate"));
+    assert_eq!(untagged.bytes.windows(22).filter(|w| *w == b"/ColorSpace /DeviceRGB").count(), 2, "every composite uses device RGB");
+    for (on, off) in on_pdf.get_pages().values().zip(off_pdf.get_pages().values()) {
+        assert_eq!(page_image(&on_pdf, *on), page_image(&off_pdf, *off), "the artboard samples remain");
+        assert_eq!(page_xobject(&on_pdf, *on, b"Sp0"), page_xobject(&off_pdf, *off, b"Sp0"), "spot density remains");
+    }
+    assert_eq!(xmp_of(&tagged.bytes), xmp_of(&untagged.bytes), "spot descriptions remain");
+    assert_eq!(d.icc_profile.as_deref(), Some(profile.as_ref()));
+    assert_eq!(d.layers.len(), 2);
+    assert_eq!(d.channels[0].surface.read_region(Rect::new(0, 0, 4, 2)), vec![0.0, 0.0, 1.0, 0.5, 0.0, 0.0, 1.0, 0.5]);
+}
+
+#[test]
 fn other_modes_are_refused_with_an_actionable_error() {
     let d = doc(ColorMode::Lab);
     let e = export(&d, true, &Interrupt::NONE).unwrap_err().to_string();
