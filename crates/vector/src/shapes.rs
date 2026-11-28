@@ -248,6 +248,13 @@ pub fn line(a: (f64, f64), b: (f64, f64), weight: f64) -> Path {
 /// toward the tip (positive) or away from it (negative); 0 is flat. Values outside are clamped, so
 /// documents saved with the old 0..100 range still open (#13258). The shaft stops where the bent
 /// rear edge crosses the shaft's edge, so a concave head stays open after filling.
+///
+/// The result is one closed outline of corner points, the shaft joined to each head (#13260): the
+/// shaft's start side, the start head (where its rear edge meets the shaft, the outer corner, the
+/// tip, the other outer corner), the shaft's other side and the end head the same way. So a stroke
+/// follows only the outer outline. Heads that together reach past each other along the line, or a
+/// head bent so far away from its tip that its rear middle lies past the other endpoint, keep the
+/// older separate shaft and head subpaths.
 // The arguments correspond to the stored LiveShape::ArrowLine parameters.
 #[allow(clippy::too_many_arguments)]
 pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: bool, width: f64, length: f64, concavity: f64) -> Path {
@@ -274,7 +281,9 @@ pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: b
     // the shaft's edge it is bent by `notch` times how far that edge is from the corner; a head no
     // wider than the shaft meets it at its base. A head bent away from its tip reaches past its
     // base, so the shaft is capped to never turn inside out.
-    let inner = (size * (1.0 - notch * (1.0 - (hw / half).min(1.0)))).min(if start && end { distance / 2.0 } else { distance });
+    let reach = size * (1.0 - notch * (1.0 - (hw / half).min(1.0)));
+    let cap = if start && end { distance / 2.0 } else { distance };
+    let inner = reach.min(cap);
     let shaft_a = if start { (a.0 + ux * inner, a.1 + uy * inner) } else { a };
     let shaft_b = if end { (b.0 - ux * inner, b.1 - uy * inner) } else { b };
     let side = |p: (f64, f64), d: f64| (p.0 + vx * d, p.1 + vy * d);
@@ -286,22 +295,47 @@ pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: b
         [tip, side(base, half), rear_middle, side(base, -half)]
     };
     let (start_head, end_head) = (start.then(|| head(a, 1.0)), end.then(|| head(b, -1.0)));
-    // A base bent toward the tip leaves a wedge between the shaft's end and the head that the
-    // reference fills: the shaft's end follows the bent base to its middle, so it fills the wedge
-    // without reaching past the head's flanks. A base bent away lies under the head already.
-    let wedge = |h: [(f64, f64); 4], from: usize, to: usize| -> Vec<(f64, f64)> {
-        if notch <= 0.0 {
-            return Vec::new();
+    // A head bent away from its tip puts its rear middle `size * (1 - notch)` behind the tip. One
+    // outline only covers the line from `a` to `b`, so it holds only while that middle stays on it.
+    let within = size * (1.0 - notch) <= distance;
+    let pieces = if reach <= cap && within {
+        // One outline. Where the shaft meets a head lies on the head's rear edge (or, for a head
+        // no wider than the shaft, at its base), so the rear edge's middle and the shaft's end
+        // under the head are inside the outline and are no anchors.
+        let mut outline = vec![side(shaft_a, hw)];
+        outline.extend(start_head.map_or_else(Vec::new, |h| vec![h[1], h[0], h[3]]));
+        outline.extend([side(shaft_a, -hw), side(shaft_b, -hw)]);
+        outline.extend(end_head.map_or_else(Vec::new, |h| vec![h[3], h[0], h[1]]));
+        outline.push(side(shaft_b, hw));
+        // A head as wide as the shaft puts its corner on the shaft's edge: one anchor, not two.
+        let same = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).abs() <= 1e-9 && (p.1 - q.1).abs() <= 1e-9;
+        outline.dedup_by(|p, q| same(*p, *q));
+        if outline.len() > 1 && outline.first().zip(outline.last()).is_some_and(|(f, l)| same(*f, *l)) {
+            outline.pop();
         }
-        let corners = hw > half;
-        [(corners, h[from]), (true, h[2]), (corners, h[to])].into_iter().filter_map(|(keep, p)| keep.then_some(p)).collect()
+        vec![Subpath::polygon(&outline)]
+    } else {
+        // Heads bent away from their tips that together reach past each other, or a head whose
+        // bent rear middle reaches past the unheaded end (not measured in the reference): keep
+        // the shaft and each head as separate subpaths.
+        // A base bent toward the tip leaves a wedge between the shaft's end and the head that the
+        // reference fills: the shaft's end follows the bent base to its middle, so it fills the
+        // wedge without reaching past the head's flanks. A base bent away lies under the head.
+        let wedge = |h: [(f64, f64); 4], from: usize, to: usize| -> Vec<(f64, f64)> {
+            if notch <= 0.0 {
+                return Vec::new();
+            }
+            let corners = hw > half;
+            [(corners, h[from]), (true, h[2]), (corners, h[to])].into_iter().filter_map(|(keep, p)| keep.then_some(p)).collect()
+        };
+        let mut shaft = vec![side(shaft_a, hw), side(shaft_b, hw)];
+        shaft.extend(end_head.map_or_else(Vec::new, |h| wedge(h, 1, 3)));
+        shaft.extend([side(shaft_b, -hw), side(shaft_a, -hw)]);
+        shaft.extend(start_head.map_or_else(Vec::new, |h| wedge(h, 3, 1)));
+        let mut pieces = vec![Subpath::polygon(&shaft)];
+        pieces.extend([start_head, end_head].into_iter().flatten().map(|h| Subpath::polygon(&h)));
+        pieces
     };
-    let mut shaft = vec![side(shaft_a, hw), side(shaft_b, hw)];
-    shaft.extend(end_head.map_or_else(Vec::new, |h| wedge(h, 1, 3)));
-    shaft.extend([side(shaft_b, -hw), side(shaft_a, -hw)]);
-    shaft.extend(start_head.map_or_else(Vec::new, |h| wedge(h, 3, 1)));
-    let mut pieces = vec![Subpath::polygon(&shaft)];
-    pieces.extend([start_head, end_head].into_iter().flatten().map(|h| Subpath::polygon(&h)));
     // Never return non-finite arrow geometry.
     // Large but valid scaled arrowheads remain unchanged.
     if pieces.iter().flat_map(|sp| &sp.knots).any(|k| !k.anchor.x.is_finite() || !k.anchor.y.is_finite()) {
@@ -339,9 +373,11 @@ mod tests {
     #[test]
     fn preserves_scaled_head_dimensions_above_ui_limit() {
         let path = arrow_line((0.0, 0.0), (20000.0, 0.0), 8.0, false, true, 5200.0, 5200.0, 0.0);
-        let head = &path.subpaths[1].knots;
-        assert!((head[1].anchor.x - 14800.0).abs() < 1e-6);
-        assert!((head[1].anchor.y - 2600.0).abs() < 1e-6);
+        // One outline (#13260): the head's outer corner on the +y side follows the tip.
+        let outline = &path.subpaths[0].knots;
+        assert_eq!(outline.len(), 7);
+        assert!((outline[5].anchor.x - 14800.0).abs() < 1e-6);
+        assert!((outline[5].anchor.y - 2600.0).abs() < 1e-6);
     }
 
     #[test]
@@ -349,7 +385,7 @@ mod tests {
         let shape =
             LiveShape::ArrowLine { from: [10.0, 10.0], to: [200.0, 10.0], weight: 4.0, start: false, end: true, width: 31.0, length: 31.0, concavity: 50.0 };
         let before = live_path(&shape);
-        assert_eq!(before.subpaths.len(), 2);
+        assert_eq!(before.subpaths.len(), 1);
         let mut edited = shape;
         if let LiveShape::ArrowLine { width, .. } = &mut edited {
             *width = 60.0;
@@ -457,6 +493,10 @@ mod triangle_box_geometry_tests;
 mod line_arrow_concavity_tests;
 
 #[cfg(test)]
+#[path = "line_arrow_outline_tests.rs"]
+mod line_arrow_outline_tests;
+
+#[cfg(test)]
 mod line_arrow_6408_tests {
     use super::*;
 
@@ -474,9 +514,11 @@ mod line_arrow_6408_tests {
     }
 
     #[test]
-    fn start_end_arrowheads_add_two_vector_subpaths() {
+    fn start_end_arrowheads_join_the_shaft_in_one_outline() {
+        // #13260: the shaft and both heads are one closed outline of 10 corner points.
         let p = arrow_line((0.0, 0.0), (100.0, 0.0), 5.0, true, true, 52.0, 50.0, 25.0);
-        assert_eq!(p.subpaths.len(), 3);
+        assert_eq!(p.subpaths.len(), 1);
+        assert_eq!(p.subpaths[0].knots.len(), 10);
     }
 
     #[test]
