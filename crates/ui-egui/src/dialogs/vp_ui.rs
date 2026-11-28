@@ -24,8 +24,9 @@ use craft::ui::primitives::Revision;
 use craft::ui::runtime::pending::Job;
 use egui::{Color32, ColorImage};
 use photocraft_algo::vanishing::{Edge, PlaneCheck as AlgoCheck, Scene, VpPlane, clone_dabs_from, clone_source};
+use photocraft_compose::{composite_to_surface, effects::has_effects, siblings_of};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
-use photocraft_engine::vp_cmds::{MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, over, paste_onto, visible_image};
+use photocraft_engine::vp_cmds::{MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, over, paste_onto, samples_visible, visible_image};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -176,6 +177,8 @@ struct StampState {
     source: Option<(usize, Surface)>,
     /// The target layer's pixels as painted so far.
     out: Surface,
+    /// On an existing layer: the document with `out` in the target layer's place, which the picture shows.
+    doc: Option<Document>,
     /// The strokes painted, the last one possibly in part.
     painted: Vec<StampStroke>,
 }
@@ -257,12 +260,20 @@ impl Preview {
             {
                 let _ = paste_onto(&sc, &mut out, i, &c.surface, c.rect, at, width);
             }
-            let work = context.new_layer.then(|| {
+            // A new or an empty layer samples the visible image, as OK does (`samples_visible`).
+            let work = samples_visible(context.new_layer, layer).then(|| {
                 let mut w = visible_image(&self.inputs.base);
                 over(&mut w, &out);
                 w
             });
-            *guard = Some(StampState { key, work, source: None, out, painted: Vec::new() });
+            let doc = (!context.new_layer).then(|| {
+                let mut doc = (*self.inputs.base).clone();
+                if let Some(surface) = doc.layer_mut(self.inputs.layer).and_then(Layer::surface_mut) {
+                    *surface = out.clone();
+                }
+                doc
+            });
+            *guard = Some(StampState { key, work, source: None, out, doc, painted: Vec::new() });
         }
         let Some(st) = guard.as_mut() else { return false };
         let first = st.painted.len().saturating_sub(1);
@@ -300,9 +311,28 @@ impl Preview {
                 None => st.painted.push(c.clone()),
             }
         }
-        let shown = st.work.as_ref().unwrap_or(&st.out);
-        let changed = if stale {
-            let image = surface_image(shown, canvas, usize::MAX);
+        if let (Some(doc), false) = (st.doc.as_mut(), area.is_empty())
+            && let Some(surface) = doc.layer_mut(self.inputs.layer).and_then(Layer::surface_mut)
+        {
+            surface.write_region(area, &st.out.read_region(area));
+        }
+        let st = &*st;
+        // The picture shows the document with the strokes in the layer's place, not the layer alone.
+        // An empty layer too: its opacity and the layers above it apply.
+        let shown = |r: Rect| match (&st.doc, &st.work) {
+            (Some(doc), _) => surface_image(&composite_to_surface(doc, r, doc.pixel_format(), None), r, usize::MAX),
+            (None, Some(work)) => surface_image(work, r, usize::MAX),
+            (None, None) => surface_image(&st.out, r, usize::MAX),
+        };
+        // An effect on the layer or on a group around it (a shadow, a glow, an overlay over the layer's frame) reaches
+        // past the dabs, so the whole picture is drawn again.
+        let styled = st
+            .doc
+            .as_ref()
+            .and_then(|doc| siblings_of(doc, self.inputs.layer))
+            .is_some_and(|(layers, k, around)| layers.get(k).into_iter().chain(around.iter().filter_map(|(ls, g)| ls.get(*g))).any(has_effects));
+        let changed = if stale || (styled && !area.is_empty()) {
+            let image = shown(canvas);
             match self.picture.get() {
                 Some(picture) => picture.replace(image),
                 None => {
@@ -311,7 +341,7 @@ impl Preview {
             }
             true
         } else if let (false, Some(picture)) = (area.is_empty(), self.picture.get()) {
-            let sub = surface_image(shown, area, usize::MAX);
+            let sub = shown(area);
             let at = [(area.x0 - canvas.x0) as usize, (area.y0 - canvas.y0) as usize];
             picture.edit(pixel_rect(area), move |image| {
                 let width = image.size[0];
@@ -338,7 +368,7 @@ pub(crate) struct PcVanishingSource {
 }
 
 impl PcVanishingSource {
-    fn new(base: Arc<Document>, layer: LayerId, surface: &Surface, canvas: Rect, clip: Option<Clip>) -> Self {
+    fn new(base: Arc<Document>, layer: LayerId, canvas: Rect, clip: Option<Clip>) -> Self {
         let scene = PcVanishingScene::new(canvas);
         let paste = clip.as_ref().map(|c| SharedPicture::new(surface_image(&c.surface, c.rect, 1024)));
         let preview = Arc::new(Preview {
@@ -349,7 +379,9 @@ impl PcVanishingSource {
             picture: OnceLock::new(),
             shown: AtomicBool::new(false),
         });
-        PcVanishingSource { scene, image: SharedPicture::new(surface_image(surface, canvas, usize::MAX)), paste, preview }
+        // The visible document, so an empty layer still shows the image it paints on.
+        let image = SharedPicture::new(surface_image(&visible_image(&preview.inputs.base), canvas, usize::MAX));
+        PcVanishingSource { scene, image, paste, preview }
     }
 
     /// Whether the clipboard holds an image the paste can use.
@@ -523,9 +555,9 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String
     }
     let st = app.session.active().ok_or("no document")?;
     let layer = st.active_layer.ok_or("no active layer")?;
-    let (name, surface) = match st.doc.layer(layer) {
+    let name = match st.doc.layer(layer) {
         Some(l) => match &l.content {
-            LayerContent::Raster(s) => (l.name.clone(), s.clone()),
+            LayerContent::Raster(_) => l.name.clone(),
             other => return Err(format!("Vanishing Point needs a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())),
         },
         None => return Err("no active layer".into()),
@@ -536,7 +568,7 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String
         let r = c.surface.content_bounds();
         (!r.is_empty()).then(|| Clip { surface: c.surface.clone(), rect: r })
     });
-    let source = Arc::new(PcVanishingSource::new(base, layer, &surface, canvas, clip));
+    let source = Arc::new(PcVanishingSource::new(base, layer, canvas, clip));
     let mut settings = VanishingPointSettings::default();
     settings.paste = source.has_paste();
 
