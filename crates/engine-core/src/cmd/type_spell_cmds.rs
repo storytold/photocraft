@@ -1,7 +1,7 @@
 //! Edit › Check Spelling… and glyph insertion (Window › Glyphs).
 //!
 //! `edit.checkSpelling` checks type layers against the bundled English dictionary
-//! (`photocraft_text::spell`, SCOWL size 50) plus the user dictionary in the preferences
+//! (`photocraft_text::spell`: craft-proof's SCOWL en-US from craft-i18n) plus the user dictionary in the preferences
 //! (`userDictionary`). Headless, it lists misspellings with suggestions and changes, changes all,
 //! or adds words to the dictionary; the UI's dialog drives the same actions. Offsets are
 //! character indices. An action records Check Spelling as one `{"allLayers"}` step with its

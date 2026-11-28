@@ -18,4 +18,4 @@ Screenshots must use famous public-domain artwork (or content made in the app), 
 
 | File | Content | Source / licence |
 |---|---|---|
-| `assets/dict/en_US-scowl-50.txt.gz` | English word list (72,403 words, American spelling) for Edit › Check Spelling | [SCOWL](http://wordlist.aspell.net/) 2020.12.07, size 50, by Kevin Atkinson: permissive licence (use, copy, modify, distribute and sell, keeping the notice); full text and build recipe in `assets/dict/LICENSE-SCOWL.txt`. |
+| `assets/dict/LICENSE-SCOWL.txt` | The SCOWL notice for the English dictionary craft-proof embeds from craft-i18n for Edit › Check Spelling | Copy of craft-i18n's `language-data/en-us/LICENCE-SCOWL.txt` ([SCOWL](http://wordlist.aspell.net/), by Kevin Atkinson: permissive licence, keep the notice). |

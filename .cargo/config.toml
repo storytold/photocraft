@@ -14,3 +14,9 @@ xtask-gate = "run --locked -p xtask --no-default-features -- ci"
 # they must hold for any cargo invocation, also one that never reads this file.
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-Clink-arg=/DELAYLOAD:opengl32.dll", "-Clink-arg=delayimp.lib"]
+
+# craft-proof embeds English only (RFC-0011): PhotoCraft checks English spelling and has no
+# hyphenation, so craft-proof's other carry-over languages (de, pl, pt, it, ru) stay out.
+# `CRAFT_I18N_DIR` comes from CI and releases (craft-common-actions' checkout-craft-i18n).
+[env]
+CRAFT_PROOF_EMBED = "en"
