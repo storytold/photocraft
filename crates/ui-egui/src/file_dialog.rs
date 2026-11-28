@@ -64,16 +64,27 @@ pub enum FileDialogAnswer {
 /// counts as Cancel.
 #[cfg(target_arch = "wasm32")]
 pub struct FileDialogReply {
-    tx: std::sync::mpsc::Sender<Option<FileDialogAnswer>>,
+    tx: std::sync::mpsc::Sender<Delivery>,
     ctx: egui::Context,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct Delivery {
+    answer: Option<FileDialogAnswer>,
+    _guard: Box<dyn Send>,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl FileDialogReply {
     /// Answers the dialog.
     pub fn send(self, answer: Option<FileDialogAnswer>) {
+        self.send_with_guard(answer, ());
+    }
+
+    /// Keep a platform resource reservation alive until the answer is consumed or discarded.
+    pub fn send_with_guard(self, answer: Option<FileDialogAnswer>, guard: impl Send + 'static) {
         // Nothing is waiting any more when the app has quit meanwhile.
-        let _ = self.tx.send(answer);
+        let _ = self.tx.send(Delivery { answer, _guard: Box::new(guard) });
         self.ctx.request_repaint();
     }
 }
@@ -93,7 +104,7 @@ pub(crate) struct Pending {
     id: PickId,
     /// The web dialog's answer.
     #[cfg(target_arch = "wasm32")]
-    answer: std::sync::mpsc::Receiver<Option<FileDialogAnswer>>,
+    answer: std::sync::mpsc::Receiver<Delivery>,
     then: Then,
 }
 
@@ -187,13 +198,13 @@ impl PhotocraftApp {
 
     /// The answer of the web dialog in progress, once it has come.
     #[cfg(target_arch = "wasm32")]
-    fn take_picked(&mut self) -> Option<Picked> {
+    fn take_picked(&mut self) -> Option<(Picked, Box<dyn Send>)> {
         use std::sync::mpsc::TryRecvError;
         match self.file_dialog.as_ref()?.answer.try_recv() {
             Err(TryRecvError::Empty) => None,
-            Ok(answer) => Some(web_picked(answer)),
+            Ok(Delivery { answer, _guard }) => Some((web_picked(answer), _guard)),
             // The reply was dropped unanswered: the dialog couldn't be shown.
-            Err(TryRecvError::Disconnected) => Some(Picked::Cancelled),
+            Err(TryRecvError::Disconnected) => Some((Picked::Cancelled, Box::new(()))),
         }
     }
 
@@ -467,8 +478,17 @@ impl PhotocraftApp {
     /// Called every frame: continues the action that asked once the file service has the answer.
     /// Its errors go to the status bar.
     pub fn poll_file_dialog(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         let Some(picked) = self.take_picked() else { return };
+        #[cfg(target_arch = "wasm32")]
+        let Some((picked, guard)) = self.take_picked() else { return };
+        #[cfg(target_arch = "wasm32")]
+        let previous = self.jobs.place.as_ref().map(|p| p.job);
         let _ = self.finish_file_dialog(picked);
+        #[cfg(target_arch = "wasm32")]
+        if self.jobs.place.as_ref().is_some_and(|p| Some(p.job) != previous) {
+            self.jobs.place_input_guard = Some(guard);
+        }
     }
 
     /// Ends the file dialog in progress: its action continues with `picked`, and its errors go to

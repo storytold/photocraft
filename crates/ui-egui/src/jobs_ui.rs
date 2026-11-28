@@ -187,6 +187,9 @@ pub struct JobsUi {
     /// The file being placed in the background, if any. One at a time: files dropped meanwhile
     /// wait in the app's drop queue.
     pub place: Option<PlaceJob>,
+    /// Input admission reservation held until the browser placement finishes.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) place_input_guard: Option<Box<dyn Send>>,
     /// Content-Aware Fill settings waiting for their background fill: remembered when it is applied (#14254).
     pub(crate) caf_settings: Vec<(JobId, Value)>,
 }
@@ -633,6 +636,8 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     if app.jobs.place.as_ref().is_some_and(|p| p.job == e.id)
         && let Some(place) = app.jobs.place.take()
     {
+        #[cfg(target_arch = "wasm32")]
+        let _guard = app.jobs.place_input_guard.take();
         finish_place(app, ctx, place, e.outcome);
         return;
     }
