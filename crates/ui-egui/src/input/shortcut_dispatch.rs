@@ -616,13 +616,14 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
         let keyed_tool = || (f.source == FireSource::Key).then(|| crate::panels::tool_commands::ToolCommand::from_ref(&f.command)).flatten();
         if let Some(tool) = crate::tool_shortcuts::tool(id).or_else(|| keyed_tool().map(crate::panels::tool_commands::tool_of)) {
             match f.phase {
-                // A key the user gave this tool selects exactly it (#4086); its letter belongs to the group.
-                FirePhase::Press if !crate::tool_shortcuts::uses_default(app, tool) => crate::tool_memory::select(app, tool),
+                // A key the user gave this tool selects exactly it (#4086); its letter belongs to the group. Held, it
+                // springs back as a letter does (#2672).
+                FirePhase::Press if !crate::tool_shortcuts::uses_default(app, tool) => select_assigned(app, tool, f.time),
                 FirePhase::Press => {
                     let step = tool_step(app, f);
                     pick_tool(app, tool.key(), step, true, f.time);
                 }
-                FirePhase::Release => crate::spring_tools::released(app, tool.key(), f.time),
+                FirePhase::Release => crate::spring_tools::released(app, crate::spring_tools::key_id(app, tool), f.time),
                 FirePhase::Repeat => {}
             }
             continue;
@@ -669,6 +670,20 @@ fn pick_tool(app: &mut PhotocraftApp, letter: char, step: PickStep, plain: bool,
     if app.ui.spring.is_none() {
         // Permanent key choices own the tool; held-key switches keep the pen marker.
         app.stylus.tool_before_eraser = None;
+    }
+}
+
+/// Selects `tool` for a key the user gave it, and lets the key spring like a letter: a letter or another assigned key
+/// already held keeps its spring (the newest key wins), and so does the pen's eraser marker while one is held.
+fn select_assigned(app: &mut PhotocraftApp, tool: Tool, at: f64) {
+    let before = app.ui.tool;
+    let held = app.ui.spring.take();
+    let marker = app.stylus.tool_before_eraser;
+    crate::tool_memory::select(app, tool);
+    app.ui.spring = held;
+    crate::spring_tools::pressed(app, crate::spring_tools::key_id(app, tool), before, true, at);
+    if app.ui.spring.is_some() {
+        app.stylus.tool_before_eraser = marker;
     }
 }
 
