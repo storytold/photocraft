@@ -509,6 +509,7 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
         })
         .collect();
     let mut sums = vec![0.0f64; n];
+    let median_scale = if range == 32768.0 { 32768.0 } else { 65535.0 };
     let mut values: Vec<Vec<u16>> = vec![Vec::new(); n];
     for y in 0..h {
         for x in 0..w {
@@ -522,12 +523,14 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
             let r = Rect::new(px, py, px + 1, py + 1);
             f.bounds = if f.bounds.is_empty() { r } else { f.bounds.union(&r) };
             if let Some(gray) = gray {
-                let g = f64::from(gray[y * w + x]);
+                let raw = f64::from(gray[y * w + x]);
+                f.histogram[(raw.clamp(0.0, 1.0) * 255.0).round() as usize] += 1;
+                // Photoshop stores 16-bit channels as integer levels in 0..=32768 (#16518).
+                let g = if range == 32768.0 { (raw.clamp(0.0, 1.0) * 32768.0).round() / 32768.0 } else { raw };
                 f.gray_min = f.gray_min.min(g);
                 f.gray_max = f.gray_max.max(g);
                 sums[l as usize] += g;
-                f.histogram[(g.clamp(0.0, 1.0) * 255.0).round() as usize] += 1;
-                values[l as usize].push((g.clamp(0.0, 1.0) * 65535.0).round() as u16);
+                values[l as usize].push((g.clamp(0.0, 1.0) * median_scale).round() as u16);
             }
         }
     }
@@ -536,12 +539,12 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
         f.gray_mean = sums[i] / f.area.max(1.0) * range;
         f.gray_min *= range;
         f.gray_max *= range;
-        f.gray_median = median(&mut values[i]) * range;
+        f.gray_median = median(&mut values[i], median_scale) * range;
     }
     feats
 }
 
-fn median(v: &mut [u16]) -> f64 {
+fn median(v: &mut [u16], scale: f64) -> f64 {
     if v.is_empty() {
         return 0.0;
     }
@@ -549,7 +552,7 @@ fn median(v: &mut [u16]) -> f64 {
     let (_, m, _) = v.select_nth_unstable(mid);
     let m = f64::from(*m);
     let m = if v.len().is_multiple_of(2) { (m + f64::from(*v[..mid].iter().max().unwrap_or(&0))) / 2.0 } else { m };
-    m / 65535.0
+    m / scale
 }
 
 /// Summary over features (area-weighted mean, pooled median).
@@ -621,11 +624,12 @@ fn selection_rows(d: &Document, needs_gray: bool) -> Result<(Feature, Vec<Featur
     if feats.is_empty() {
         return Err(EngineError::Other("the selection is empty".into()));
     }
+    let median_scale = if range == 32768.0 { 32768.0 } else { 65535.0 };
     let mut all: Vec<u16> = gray
         .as_deref()
-        .map(|gray| mask.iter().zip(gray).filter(|(m, _)| **m).map(|(_, g)| (g.clamp(0.0, 1.0) * 65535.0).round() as u16).collect())
+        .map(|gray| mask.iter().zip(gray).filter(|(m, _)| **m).map(|(_, g)| (f64::from(g.clamp(0.0, 1.0)) * median_scale).round() as u16).collect())
         .unwrap_or_default();
-    let med = median(&mut all) * range;
+    let med = median(&mut all, median_scale) * range;
     Ok((summary(&feats, med), feats))
 }
 

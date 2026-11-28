@@ -561,3 +561,46 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert!(b.histogram.is_empty());
     }
 }
+
+#[test]
+fn grayscale_16_measurements_match_photoshop_32768_levels() {
+    let measure = |cols: [u16; 4]| {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "grayscale", "depth": 16, "background": "white"})).unwrap();
+        s.edit("paint", |doc, _| {
+            let surf = doc.layers[0].surface_mut().unwrap();
+            for (x, raw) in cols.into_iter().enumerate() {
+                surf.fill_rect(Rect::new(x as i32, 0, x as i32 + 1, 4), &[f32::from(raw) / 65535.0, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+        s.execute("measurementLog.list", json!({})).unwrap()["rows"][0]["values"].clone()
+    };
+
+    // Uniform 32768/65535 -> 16384 across min/max/mean/median, density 262144, bin 128: 16.
+    let half = measure([32768, 32768, 32768, 32768]);
+    assert_eq!(half["grayMin"].as_f64(), Some(16384.0));
+    assert_eq!(half["grayMax"].as_f64(), Some(16384.0));
+    assert_eq!(half["grayMean"].as_f64(), Some(16384.0));
+    assert_eq!(half["grayMedian"].as_f64(), Some(16384.0));
+    assert_eq!(half["integratedDensity"].as_f64(), Some(262144.0));
+    assert_eq!(half["histogram"][128].as_u64(), Some(16));
+
+    // Mixed [16384, 49151, 49151, 49151] -> min 8192, max/median 24576, mean 20480, density 327680.
+    let mix = measure([16384, 49151, 49151, 49151]);
+    assert_eq!(mix["grayMin"].as_f64(), Some(8192.0));
+    assert_eq!(mix["grayMax"].as_f64(), Some(24576.0));
+    assert_eq!(mix["grayMean"].as_f64(), Some(20480.0));
+    assert_eq!(mix["grayMedian"].as_f64(), Some(24576.0));
+    assert_eq!(mix["integratedDensity"].as_f64(), Some(327680.0));
+    assert_eq!(mix["histogram"][64].as_u64(), Some(4));
+    assert_eq!(mix["histogram"][191].as_u64(), Some(12));
+
+    // Boundary 385/65535 keeps unquantised histogram bin 1 while reporting 193 in 0..=32768.
+    let edge = measure([385, 385, 385, 385]);
+    assert_eq!(edge["grayMean"].as_f64(), Some(193.0));
+    assert_eq!(edge["histogram"][1].as_u64(), Some(16));
+}
