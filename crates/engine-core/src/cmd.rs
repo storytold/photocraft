@@ -72,6 +72,8 @@ pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 #[cfg(test)]
+mod layer_duplicate_keeps_source_active_tests;
+#[cfg(test)]
 mod layer_duplicate_new_document_history_tests;
 #[cfg(test)]
 mod layer_from_background_name_tests;

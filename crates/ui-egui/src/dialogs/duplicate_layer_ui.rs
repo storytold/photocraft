@@ -155,6 +155,8 @@ fn duplicate(app: &mut PhotocraftApp, fields: &DialogFields) -> Result<Value, St
         Destination::Document(destination) if destination == index => app.run_command("layer.duplicate", Value::Object(params)),
         Destination::Document(destination) => {
             params.insert("document".into(), json!(destination));
+            // Photoshop's Duplicate Layer leaves the source document active.
+            params.insert("activate".into(), json!(false));
             app.run_command("layer.copyToDocument", Value::Object(params))
         }
     }
@@ -219,12 +221,24 @@ mod tests {
         let ctx = app.ctx().clone();
         app.session.execute("file.new", json!({"width":8,"height":8,"name":"Card"})).unwrap();
         app.session.set_active(0);
+        let state = |app: &PhotocraftApp, i: usize| {
+            let st = &app.session.documents()[i];
+            (st.history.entries(), st.active_layer, st.selected_layers().to_vec())
+        };
+        let (source, target) = (state(&app, 0), state(&app, 1).0);
         let dialog = invoke(&mut app);
         let pick = key(&app, 1);
         set(&mut app, dialog, "document", pick).unwrap();
         confirm(&mut app, &ctx, dialog).unwrap();
         assert_eq!(app.session.documents()[0].doc.layer_count(), 2);
         assert!(names(&app, 1).contains(&"Ink".to_string()));
+        assert_eq!(app.session.active_index(), Some(0), "the source document stays active");
+        assert_eq!(state(&app, 0), source, "the source's history, active layer and selected layers are unchanged");
+        let (history, active, _) = state(&app, 1);
+        assert_eq!(history.len(), target.len() + 1, "{history:?}");
+        assert_eq!(history.last().map(String::as_str), Some("Duplicate Layer"));
+        let dest = &app.session.documents()[1].doc;
+        assert_eq!(active.and_then(|id| dest.layer(id)).map(|l| l.name.as_str()), Some("Ink"), "the copy is the destination's active layer");
     }
 
     #[test]
