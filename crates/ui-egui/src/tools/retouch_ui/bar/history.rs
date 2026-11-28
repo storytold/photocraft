@@ -158,12 +158,24 @@ pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Optio
     scale.or(angle)
 }
 
-/// Red Eye: Pupil Size and Darken Amount.
+/// Red Eye: Pupil Size and Darken Amount, whole percents 1..100 with a popup slider each. A value
+/// typed past the range becomes the closest one with the reference's own alert (#12570), so the
+/// bar's generic alert is not returned.
 pub(super) fn red_eye(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let (pupil_size, darken_amount) = bind_tracked!(app.ui.tool_options => red_eye_pupil_size, red_eye_darken);
-    let pupil = number(tl!("Pupil Size"), pupil_size, 1.0..=100.0).show(ui).out_of_range;
-    let darken = number(tl!("Darken Amount"), darken_amount, 0.0..=100.0).show(ui).out_of_range;
-    Divider::vertical().show(ui);
-    hint(ui, tl!("Click a red pupil to neutralize it"));
-    pupil.or(darken)
+    let pupil = number(tl!("Pupil Size:"), bind_tracked!(app.ui.tool_options => red_eye_pupil_size), 1.0..=100.0)
+        .whole()
+        .unit("%")
+        .popup_slider()
+        .show(ui)
+        .out_of_range;
+    let darken =
+        number(tl!("Darken Amount:"), bind_tracked!(app.ui.tool_options => red_eye_darken), 1.0..=100.0).whole().unit("%").popup_slider().show(ui).out_of_range;
+    if pupil.is_some() || darken.is_some() {
+        let _ = crate::dialogs::alerts::alert(app, tl!(RED_EYE_RANGE_ALERT));
+    }
+    None
 }
+
+/// The reference's alert for a Red Eye Pupil Size or Darken Amount typed past 1..100 (#12570).
+/// The framework's own whole-percent alert writes "1 %"; the reference has no space.
+pub(crate) const RED_EYE_RANGE_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
