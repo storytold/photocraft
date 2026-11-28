@@ -229,21 +229,35 @@ fn the_off_path_is_bit_for_bit_unchanged() {
 /// The review's first break: the issue's document with SIZE 1 (Angle 0, Distance 0, Choke 0,
 /// Gaussian, Anti-aliased on). `spread_split(1, 0)` is `(0, 1)`, so `dilate` no-ops at a radius of
 /// 0 and `blur(m, 1.0)` is the identity (`tent_kernel(1).0 == 0`, and `tent` returns at once): the
-/// third-of-a-pixel source offset becomes the whole map. Coverage 1/3 through the Gaussian
-/// contour (0.30) then lands on the bottom and right inner edges only, G 90 where the layer reads
-/// its own 128, and nothing at the top and left - a one-sided black line that no measurement
-/// shows, because Size 1 was never measured with the flag on. Today's Size 1 map is empty and
-/// has to stay empty.
+/// third-of-a-pixel source offset would become the whole map. Coverage 1/3 through the Gaussian
+/// contour (0.30) would then land on the bottom and right inner edges only, G 90 where the layer
+/// reads its own 128, and nothing at the top and left - a one-sided black line that no measurement
+/// shows, because Size 1 was never measured with the flag on. So the offset stays off at Size 1.
+/// (Written when today's Size 1 map was empty; #14933 merged in after it and gave Size 1 the
+/// quarter-strength edge pixel the reference shows - with the flag off as with it on, so the
+/// invariant this test pins, that Anti-aliased does not move the Size 1 map, stands.)
 #[test]
-fn anti_aliased_size_one_keeps_todays_empty_map() {
+fn anti_aliased_size_one_leaves_the_map_the_other_pr_fixed() {
     let off = map(1.0, 0.0, 0.0, 0.0, gaussian(), false);
-    assert!(off.v.iter().all(|v| *v == 0.0), "today's Size 1 inner shadow map is no longer empty");
     let on = map(1.0, 0.0, 0.0, 0.0, gaussian(), true);
-    for (side, x, y) in [("bottom", 200i64, 224), ("right", 299, 150), ("top", 200, 75), ("left", 100, 150)] {
-        let got = g(on.get(x, y));
-        assert_eq!(got.round() as i32, 128, "Anti-aliased Size 1 painted the {side} inner edge: G {got:.1}");
-    }
     assert_eq!(bit_hash(&on), bit_hash(&off), "the Size 1 inner shadow map moved with Anti-aliased on");
+    // The map #14933 fixed: a darkened first pixel inside every edge, the same on all four sides
+    // (the one-sided line the offset would paint is dark on two and clean on the other two), and
+    // the layer's own 128 one pixel deeper. This file's contour is the Gaussian curve, so the
+    // first pixel reads darker than the 96 the Size 1 test's default contour gives.
+    let mut firsts = [0.0f32; 4];
+    for (k, (side, x, y, dx, dy)) in
+        [("bottom", 200i64, 224, 0, -1), ("right", 299, 150, -1, 0), ("top", 200, 75, 0, 1), ("left", 100, 150, 1, 0)].into_iter().enumerate()
+    {
+        let got = g(on.get(x, y));
+        firsts[k] = got;
+        assert!(got < 126.0, "Size 1 left the {side} inner edge clean: G {got:.1}");
+        let deeper = g(on.get(x + dx, y + dy));
+        assert!((deeper - 128.0).abs() <= 2.0, "Size 1 beyond the first pixel at the {side} inner edge: G {deeper:.1}");
+    }
+    for pair in [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
+        assert!((firsts[pair.0] - firsts[pair.1]).abs() < 0.05, "the Size 1 inner shadow is not symmetric: {firsts:?}");
+    }
 }
 
 /// The second degeneracy the review names: Size 2 with Choke 50 %. `spread_split(2, 0.5)` is

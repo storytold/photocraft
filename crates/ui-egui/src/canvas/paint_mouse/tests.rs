@@ -25,7 +25,7 @@ pub(super) fn harness(prefs: Option<&str>) -> Harness<'static, Box<PhotocraftApp
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );
@@ -401,7 +401,7 @@ fn art_history_brush_starts_at_full_opacity() {
 fn each_tool_keeps_its_own_brush() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    let brush = |app: &PhotocraftApp| app.session.tools.brush.clone();
+    let brush = |app: &PhotocraftApp| (*app.session.tools.brush).clone();
     let size = |b: &BrushSettings| b.size;
     let hardness = |b: &BrushSettings| b.hardness;
     let opacity = |b: &BrushSettings| b.opacity;
@@ -509,7 +509,7 @@ fn shift_right_menu_lists_each_tools_own_rows_in_order() {
         (Tool::Sponge, edit(vec!["Desaturate", "Saturate"])),
         (Tool::PaintBucket, with(&["Clear"])),
         (Tool::MixerBrush, vec!["Edit Brush…"]),
-        (Tool::Healing, vec!["Normal", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"]),
+        (Tool::Healing, vec!["Normal", "Replace", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"]),
         (Tool::SpotHealing, vec![]),
         (Tool::MagicEraser, vec![]),
     ] {

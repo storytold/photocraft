@@ -132,7 +132,7 @@ what an agent can't finish alone.
 - **Done 2026-10-31 (#10606):** all twelve Stylize/Pixelate ATN events (Group D) load, play and save with measured defaults, documented clamping and strict export checks. The [event reference](atn.md) now lists 128 supported and 89 unmapped events. Other Actions/scripting gaps remain; no overall readiness percentage or estimate changed.
 - **2026-10-21 evidence (#8304):** Save Actions expands compound layer-property edits into
   separate Photoshop Set events, with rename last so named layer references remain valid.
-  Exported descriptors and native playback at RGB 8/16/32-bit have [regression coverage](../crates/engine/src/atn_cmds/layer_props_tests.rs);
+  Exported descriptors and native playback at RGB 8/16/32-bit have [regression coverage](../crates/engine/src/cmd/atn_cmds/layer_props_tests.rs);
   independent Photoshop replay of the fix is still pending. No readiness percentage or estimate changed.
 - **Done 2026-10-17 (#7101):** `.atn` Apply Layer Comp steps with a named `compsClass`
   reference import as `layerComp.apply` and export to the same Photoshop event. Names resolve
@@ -218,7 +218,7 @@ what an agent can't finish alone.
 - **Evidence:** `crates/raw/src/lib.rs:228` (CR3), scorecard FILE-215-11/12, #50.
 - **Progress (2026-10-27):** File › Edit in Raw Editor and Develop in Raw Editor hand a raw
   to darktable or RapidRAW as separate programs and open the developed 16-bit TIFF
-  (`crates/engine/src/cmd/raw_editor_cmds.rs`).
+  (`crates/engine-core/src/cmd/raw_editor_cmds.rs`).
 - **Progress (2026-10-11):** on the embedded-JPEG rendering work in #2135, Camera Raw
   tuning retains the fitted look and applies user gains afterwards. Three D5100 NEFs
   establish a guarded 4928 × 3264 image area. This is an estimated rendering, not a

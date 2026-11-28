@@ -51,7 +51,11 @@ fn selected_work_and_saved_paths_append_pen_and_curvature_components_once() {
             let (original, other) = (path(&app, name), path(&app, if name == "work" { "Saved drawing" } else { "work" }));
             let n = steps(&app);
             draft(&mut app);
-            assert_eq!(steps(&app), n, "placing anchors is not a history step");
+            // #12890: the Pen draws live into the Work Path it goes into, one step per click; the Curvature Pen and a
+            // selected saved path still keep the draft until the finish.
+            let live = tool == Tool::Pen && name == "work";
+            let clicks = usize::from(live) * 2;
+            assert_eq!(steps(&app), n + clicks, "placing anchors: {tool:?} {name}");
             vector_ui::pen_commit(&mut app, false);
             let after = path(&app, name);
             assert_eq!(after.subpaths.len(), 2, "{tool:?}: {name}");
@@ -60,10 +64,14 @@ fn selected_work_and_saved_paths_append_pen_and_curvature_components_once() {
             assert_eq!(anchors, [[30.0, 60.0], [130.0, 60.0]]);
             assert_eq!(path(&app, if name == "work" { "Saved drawing" } else { "work" }), other);
             assert_eq!(app.ui.selected_path.as_deref(), Some(name));
-            assert_eq!(steps(&app), n + 1);
-            app.run("edit.undo", json!({})).unwrap();
+            assert_eq!(steps(&app), n + clicks + usize::from(!live), "one step for the finish, unless the clicks were them");
+            for _ in 0..clicks + usize::from(!live) {
+                app.run("edit.undo", json!({})).unwrap();
+            }
             assert_eq!(path(&app, name), original);
-            app.run("edit.redo", json!({})).unwrap();
+            for _ in 0..clicks + usize::from(!live) {
+                app.run("edit.redo", json!({})).unwrap();
+            }
             assert_eq!(path(&app, name), after);
         }
     }
@@ -82,7 +90,9 @@ fn deselected_work_path_is_replaced_without_touching_saved_paths() {
     assert_eq!(after.subpaths.len(), 1);
     assert_eq!(after.subpaths[0].knots[0].anchor.y, 60.0);
     assert_eq!(path(&app, "Saved drawing"), saved);
-    assert_eq!(steps(&app), n + 1);
+    // #12890: the two clicks are two steps of their own and the finish adds none.
+    assert_eq!(steps(&app), n + 2);
+    app.run("edit.undo", json!({})).unwrap();
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(path(&app, "work"), before);
 }
@@ -212,7 +222,13 @@ fn sync_views_and_input_apis_discard_unowned_or_closed_document_drafts() {
             // The press may start a new draft in the open document, never carry on the closed one's two anchors.
             let anchors = app.ui.pen.as_ref().map_or(0, |p| p.draft.knots.len());
             assert!(anchors <= 1, "{tool:?}: {entry}");
-            assert!(app.session.active().unwrap().doc.work_path.is_none(), "{tool:?}: {entry}");
+            let work = app.session.active().unwrap().doc.work_path.clone();
+            if tool == Tool::Pen && entry == "press" {
+                // #12890: the Pen's one anchor is the Work Path at once, in the document it was drawn in.
+                assert_eq!(work.as_ref().map_or(0, |p| p.subpaths[0].knots.len()), 1, "{entry}");
+            } else {
+                assert!(work.is_none(), "{tool:?}: {entry}");
+            }
         }
     }
 }
@@ -327,7 +343,9 @@ fn failed_pen_and_curvature_commits_keep_the_exact_draft_and_do_not_retry_each_f
         vector_ui::pen_commit(&mut app, false);
         assert!(app.ui.pen.is_none());
         assert_eq!(path(&app, "work").subpaths[0].knots[1].anchor.x, 130.0);
-        assert_eq!(steps(&app), n + 1);
+        // #12890: the Pen's two clicks were its own steps and the retried finish adds none; the Curvature Pen commits
+        // the whole path in one step.
+        assert_eq!(steps(&app), n + usize::from(tool == Tool::CurvaturePen));
     }
 }
 
@@ -341,7 +359,8 @@ fn ordinary_tool_switch_commits_the_owned_draft_once() {
         testing::frame(&mut app);
         testing::frame(&mut app);
         assert_eq!(path(&app, "work").subpaths[0].knots.len(), 2);
-        assert_eq!(steps(&app), n + 1);
+        // #12890: the Pen's clicks were the one step each; switching to another tool ends the draft without adding one.
+        assert_eq!(steps(&app), n + usize::from(tool == Tool::CurvaturePen));
         assert!(app.ui.pen.is_none());
     }
 }

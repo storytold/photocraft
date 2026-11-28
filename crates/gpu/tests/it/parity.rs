@@ -68,8 +68,8 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
         // 32-bit Photoshop rules: unclipped, legacy pivot 127, the mixer's 1/1024 steps and halved constant.
         Adjustment::BrightnessContrast { brightness: 25.0, contrast: 30.0, legacy: true },
         Adjustment::BrightnessContrast { brightness: -20.0, contrast: -30.0, legacy: true },
-        Adjustment::ChannelMixer { matrix: [[0.8, 0.3, -0.1, 0.0], [0.1, 0.9, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0]], monochrome: false },
-        Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.1], [0.0; 4], [0.0; 4]], monochrome: true },
+        Adjustment::ChannelMixer { matrix: [[0.8, 0.3, -0.1, 0.0], [0.1, 0.9, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0]], monochrome: false, cmyk: None },
+        Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.1], [0.0; 4], [0.0; 4]], monochrome: true, cmyk: None },
         Adjustment::PhotoFilter { color: [0.97, 0.76, 0.0], density: 0.4, preserve_luminosity: true },
         Adjustment::PhotoFilter { color: [0.2, 0.6, 0.9], density: 0.3, preserve_luminosity: false },
         Adjustment::BlackWhite { weights: [70.0, 20.0, 50.0, 10.0, 90.0, 30.0], tint: Some([0.9, 0.7, 0.5]) },
@@ -214,12 +214,25 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
     worst
 }
 
-/// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
-/// tolerance, else the stats of the unpaged render.
-fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+/// One `diff_rect` pass, kept: the whole-texture compositor's pixels and stats and the paged
+/// pass's stats. The CPU reference is computed once and both GPU renders are compared with it;
+/// a test that also wants the whole-texture pixels (a measured ramp) or the paged pass's stats
+/// (a cell count) reuses them from here instead of paying for a second render of the same
+/// document.
+struct Diff {
+    /// The whole-texture compositor's pixels and stats from the pass that checked them.
+    whole: Vec<[f32; 4]>,
+    whole_stats: photocraft_gpu::Stats,
+    paged_stats: photocraft_gpu::Stats,
+}
+
+/// GPU (whole textures, then pages) vs CPU over `rect`, with what a follow-up assert needs:
+/// Err with the worst pixel if over the tolerance.
+fn diff_rect_full(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<Diff, String> {
     let cpu = timed("CPU reference", || photocraft_compose::render(doc, rect));
-    let mut first = None;
-    for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+    let mut whole = None;
+    let mut paged = None;
+    for (label, comp, slot) in [("", &mut g.comp, &mut whole), (" (paged)", &mut g.paged, &mut paged)] {
         let (out, stats) = timed(&format!("{what}{label} GPU render/readback"), || photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect))
             .map_err(|e| format!("{what}{label}: {e}"))?;
         let worst = worst_diff(&cpu.px, &out);
@@ -228,13 +241,27 @@ fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<phot
         if worst.0 > TOL {
             return Err(format!("{what}{label}: max diff {:.2}/255 at ({x},{y}): cpu {:?} gpu {:?}", worst.0 * 255.0, cpu.px[worst.1], out[worst.1]));
         }
-        first.get_or_insert(stats);
+        *slot = Some((out, stats));
     }
-    first.ok_or_else(|| format!("{what}: no render"))
+    match (whole, paged) {
+        (Some((whole, whole_stats)), Some((_, paged_stats))) => Ok(Diff { whole, whole_stats, paged_stats }),
+        _ => Err(format!("{what}: no render")),
+    }
+}
+
+/// GPU vs CPU over `rect`: Err with the worst pixel if over the tolerance, else the stats of
+/// the unpaged render.
+fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+    diff_rect_full(g, doc, rect, what).map(|pass| pass.whole_stats)
 }
 
 fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// [`check`] returning the pass's pixels and stats, for tests that assert more than tolerance.
+fn check_full(g: &mut Gpu, doc: &Document, what: &str) -> Diff {
+    diff_rect_full(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// Growing a layer's tile footprint keeps the old texels in the overlap (`keep_overlap`)
@@ -311,12 +338,11 @@ fn stack_prefix_reuse_matches_uncached_gpu_and_cpu_at_every_depth() {
             top.fill_opacity = fill;
             top.blend = blend;
             top.visible = visible;
-            let stats = diff_rect(&mut g, &doc, doc.bounds(), "top properties").unwrap();
-            assert!(stats.prefix_hits > 0, "{depth:?}");
-            assert!(stats.prefix_passes_skipped > 0);
-            let cached = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+            let pass = diff_rect_full(&mut g, &doc, doc.bounds(), "top properties").unwrap();
+            assert!(pass.whole_stats.prefix_hits > 0, "{depth:?}");
+            assert!(pass.whole_stats.prefix_passes_skipped > 0);
             let cold = render_to_vec(&mut uncached, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
-            assert_eq!(cached, cold, "reuse preserves the GPU accumulator exactly");
+            assert_eq!(pass.whole, cold, "reuse preserves the GPU accumulator exactly");
         }
         let old = doc.clone();
         doc.layers[1].surface_mut().unwrap().write_pixel(5, 5, &[0.8, 0.2, 0.6, 0.7]);
@@ -349,18 +375,17 @@ fn prefix_follows_an_edit_up_the_stack_and_stays_exact() {
             doc.layers.push(if batched { l } else { alone(l) });
         }
         let mut exact = |g: &mut Gpu, doc: &Document, what: &str| -> photocraft_gpu::Stats {
-            let stats = diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
-            let cached = render_to_vec(&mut g.comp, &g.device, &g.queue, doc, doc.bounds()).unwrap();
+            let pass = diff_rect_full(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
             let (cold, cold_stats) = photocraft_gpu::render_to_vec_stats(&mut uncached, &g.device, &g.queue, doc, doc.bounds()).unwrap();
-            assert_eq!(cached, cold, "{depth:?} batched {batched} {what}: reuse preserves the GPU accumulator exactly");
+            assert_eq!(pass.whole, cold, "{depth:?} batched {batched} {what}: reuse preserves the GPU accumulator exactly");
             // Batched and single-layer draws needn't give the same bits on every backend (FXC
             // on D3D12): a render that captures the prefix groups the layers as an uncached one
             // does, wherever its checkpoint is.
-            if stats.prefix_hits == 0 {
-                assert_eq!(stats.layers_batched, cold_stats.layers_batched, "{depth:?} {what}: capturing changed the batches");
+            if pass.whole_stats.prefix_hits == 0 {
+                assert_eq!(pass.whole_stats.layers_batched, cold_stats.layers_batched, "{depth:?} {what}: capturing changed the batches");
             }
             assert_eq!(cold_stats.layers_batched > 0, batched, "{depth:?} {what}");
-            stats
+            pass.whole_stats
         };
         exact(&mut g, &doc, "populate");
         // An edit low in the stack puts the cache there.
@@ -473,20 +498,23 @@ fn root_checkpoints_keep_clipping_groups_and_adjustments_whole() {
 #[test]
 fn disjoint_partial_damages_admit_whole_chunks_not_damage_rects() {
     let Some(mut g) = gpu() else { return };
-    let mut doc = base_doc(600, 300);
+    // 300 x 260 (#15927, was 600 x 300): still one 1024 px chunk, so whole-chunk admission is
+    // what keeps the two stroke series from growing the cache.
+    let mut doc = base_doc(300, 260);
     // Each layer in a pass of its own (`alone`): batched into one run, the stack has no
     // checkpoint below the top layer, so no render would capture and the byte count could not
     // grow whatever the admission did.
     doc.layers.push(alone(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2)));
     doc.layers.push(alone(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2)));
     check(&mut g, &doc, "warm");
-    // Each series paints 8 rectangles. The second series' rectangles are all new (7 px across
-    // and 65 px down from the first's) but in the same chunk (the 600 x 300 document is one
-    // chunk at `CHUNK`), so a cache entry per damage rectangle would add 8 entries. (The four
-    // series of 24 this replaces painted the same 24 rectangles every time.)
+    // Each series paints 8 rectangles. The second series' damage rectangles are distinct from
+    // the first's (5 px across and 65 px down), but their pixels land in the same chunk the
+    // first series already made resident (the 300 x 260 document is one chunk at `CHUNK`), so
+    // only admission could grow the cache: an entry per damage rectangle would add 8 entries.
+    // (The four series of 24 this replaces painted the same 24 rectangles every time.)
     let strokes = |g: &mut Gpu, doc: &Document, pass: i32| {
         for i in 0..8 {
-            let (x, y) = (40 + i * 60 + pass * 7, 30 + pass * 65);
+            let (x, y) = (20 + i * 30 + pass * 5, 20 + pass * 65);
             diff_rect(g, doc, Rect::new(x, y, x + 40, y + 30), "stroke").unwrap();
         }
     };
@@ -514,7 +542,9 @@ fn disjoint_partial_damages_admit_whole_chunks_not_damage_rects() {
 #[test]
 fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     let Some(mut g) = gpu() else { return };
-    let mut doc = base_doc(600, 300);
+    // 300 x 260 (#15927, was 600 x 300): one 1024 px chunk either way; the damage rectangles
+    // keep their relation to the covered chunk and to the document edge.
+    let mut doc = base_doc(300, 260);
     doc.layers.push(alone(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2)));
     doc.layers.push(alone(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2)));
     check(&mut g, &doc, "full prefix");
@@ -524,13 +554,13 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     let region = Rect::new(10, 10, 50, 45);
     doc.layers[2].opacity = 0.4;
     assert!(diff_rect(&mut g, &doc, region, "partial rectangle in a covered chunk").unwrap().prefix_hits > 0);
-    let outside = Rect::new(10, 310, 50, 345);
+    let outside = Rect::new(10, 260, 50, 290);
     assert_eq!(diff_rect(&mut g, &doc, outside, "outside the document").unwrap().prefix_hits, 0);
     doc.layers[2].opacity = 0.7;
     assert!(diff_rect(&mut g, &doc, region, "same partial rectangle").unwrap().prefix_hits > 0);
-    doc.layers[0].surface_mut().unwrap().write_pixel(550, 270, &[1.0, 0.0, 1.0, 0.9]);
+    doc.layers[0].surface_mut().unwrap().write_pixel(280, 245, &[1.0, 0.0, 1.0, 0.9]);
     check(&mut g, &doc, "offscreen lower edit");
-    diff_rect(&mut g, &doc, Rect::new(500, 250, 580, 290), "disjoint damage after invalidation").unwrap();
+    diff_rect(&mut g, &doc, Rect::new(240, 210, 290, 250), "disjoint damage after invalidation").unwrap();
     doc.global_light.angle += 15.0;
     assert_eq!(diff_rect(&mut g, &doc, doc.bounds(), "global context").unwrap().prefix_hits, 0);
     doc.layers.push(Layer::new("opaque cover", LayerContent::Fill(Fill::Solid(Color::WHITE))));
@@ -737,8 +767,8 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::Vibrance { vibrance: 50.0, saturation: -20.0 },
         Adjustment::Vibrance { vibrance: -60.0, saturation: 0.0 },
         Adjustment::Vibrance { vibrance: 0.0, saturation: -100.0 },
-        Adjustment::ChannelMixer { matrix: [[0.5, 0.3, 0.2, 0.0], [0.1, 0.8, 0.1, 0.05], [0.0, 0.2, 0.9, -0.05]], monochrome: false },
-        Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.0], [0.0; 4], [0.0; 4]], monochrome: true },
+        Adjustment::ChannelMixer { matrix: [[0.5, 0.3, 0.2, 0.0], [0.1, 0.8, 0.1, 0.05], [0.0, 0.2, 0.9, -0.05]], monochrome: false, cmyk: None },
+        Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.0], [0.0; 4], [0.0; 4]], monochrome: true, cmyk: None },
         Adjustment::PhotoFilter { color: [0.9, 0.6, 0.2], density: 0.4, preserve_luminosity: true },
         Adjustment::PhotoFilter { color: [0.2, 0.6, 0.9], density: 0.3, preserve_luminosity: false },
         Adjustment::BlackWhite { weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0], tint: None },
@@ -1191,8 +1221,11 @@ fn formats_offsets_and_chunks() {
 #[test]
 fn incremental_updates_follow_the_document() {
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(600, 300);
-    d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 600, 300), 61, 0.0));
+    // 300 x 260 (#15927, was 600 x 300): the top layer still spans a 2 x 2 grid of 256 px tiles,
+    // and the paint below still lands in one tile at the same corner; upload bookkeeping is
+    // per tile.
+    let mut d = base_doc(300, 260);
+    d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 300, 260), 61, 0.0));
     check(&mut g, &d, "initial");
     // Paint into one tile of the top layer: only that tile uploads.
     let top = d.layers[1].surface_mut().unwrap();
@@ -1214,8 +1247,10 @@ fn incremental_updates_follow_the_document() {
 #[test]
 fn duplicates_copy_their_source_texture() {
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(600, 300);
-    let mut src = noise_layer("src", PixelFormat::RGBA8, Rect::new(0, 0, 600, 300), 71, 0.0);
+    // 300 x 260 (#15927, was 600 x 300): four 256 px tiles with one absent from a duplicate —
+    // the copy and COW paths are per tile, and the two painted tiles stay distinct.
+    let mut d = base_doc(300, 260);
+    let mut src = noise_layer("src", PixelFormat::RGBA8, Rect::new(0, 0, 300, 260), 71, 0.0);
     src.opacity = 0.7;
     d.layers.push(src);
     check(&mut g, &d, "source");
@@ -1231,7 +1266,7 @@ fn duplicates_copy_their_source_texture() {
     dup2.blend = BlendMode::Screen;
     dup2.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
     d.layers.push(dup2);
-    d.layers[1].surface_mut().unwrap().fill_rect(Rect::new(300, 100, 310, 110), &[0.0, 0.0, 1.0, 1.0]);
+    d.layers[1].surface_mut().unwrap().fill_rect(Rect::new(260, 100, 270, 110), &[0.0, 0.0, 1.0, 1.0]);
     check(&mut g, &d, "duplicate and source painted");
     // And a tile removed from a duplicate: it reads as transparent again.
     let mut dup3 = d.layers[1].duplicate();
@@ -1249,15 +1284,19 @@ fn duplicates_copy_their_source_texture() {
 #[test]
 fn changed_mask_default_updates_absent_tiles() {
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(600, 300);
-    d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 600, 300), 61, 0.5));
-    // Tiles in opposite corners: the resident texture spans the absent tiles between them.
-    let corners = [Rect::new(0, 0, 70, 70), Rect::new(530, 230, 600, 300)];
-    let data = vec![0.5f32; 70 * 70];
+    // 300 x 260 (#15927, was 600 x 300): the two stored tiles still span a 2 x 2 resident
+    // texture whose other two tiles stay absent. A patch reaching the opposite corner at
+    // (230,190) would store all four tiles and leave the default with nothing to cover.
+    let mut d = base_doc(300, 260);
+    d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 300, 260), 61, 0.5));
+    // Tiles in opposite corners only, the far one starting on the 256 px boundary: the resident
+    // texture spans the absent tile column and the absent tile row between them.
+    let corners = [Rect::new(0, 0, 70, 70), Rect::new(256, 256, 300, 260)];
     for default in [0.0, 1.0] {
         let mut m = LayerMask::reveal_all();
         m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
         for r in corners {
+            let data = vec![0.5f32; r.width() as usize * r.height() as usize];
             m.surface.write_region(r, &data);
         }
         d.layers[1].mask = Some(m);
@@ -1271,7 +1310,10 @@ fn changed_mask_default_updates_absent_tiles() {
 #[test]
 fn shared_tiles_upload_once_and_copy() {
     let Some(mut g) = gpu() else { return };
-    let (w, h) = (1100, 700);
+    // 540 x 540 (#15927, was 1100 x 700): a 3 x 3 grid of 256 px tiles and pages with full
+    // interior tiles and partial right/bottom ones — every branch here is per tile and page,
+    // not per document byte.
+    let (w, h) = (540, 540);
     for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAYA8 }] {
         let mut d = base_doc(w, h);
         let mut l = Layer::raster("fill", fmt);
@@ -1309,32 +1351,35 @@ fn shared_tiles_upload_once_and_copy() {
 #[test]
 fn growing_layer_keeps_its_resident_tiles() {
     let Some(mut g) = gpu() else { return };
-    let (w, h) = (1100, 700);
+    // 540 x 540 (#15927, was 1100 x 700): the layer footprint still grows past 256 px tiles in
+    // all five directions — right, down, towards the origin, inside, and far out — and stays
+    // within the same 2-tiles-uploaded bound per dab.
+    let (w, h) = (540, 540);
     for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA32F] {
         let mut d = base_doc(w, h);
         let mut l = Layer::raster("paint", fmt);
-        l.surface_mut().unwrap().fill_rect(Rect::new(500, 300, 540, 340), &[0.3, 0.6, 0.2, 0.9][..fmt.channels()]);
+        l.surface_mut().unwrap().fill_rect(Rect::new(260, 260, 300, 300), &[0.3, 0.6, 0.2, 0.9][..fmt.channels()]);
         let mut m = LayerMask::reveal_all();
         m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.75]);
-        m.surface.fill_rect(Rect::new(510, 310, 520, 320), &[0.25]);
+        m.surface.fill_rect(Rect::new(265, 265, 275, 275), &[0.25]);
         l.mask = Some(m);
         d.layers.push(l);
         check(&mut g, &d, &format!("{fmt:?} initial"));
         let small = d.clone();
         // Dabs right (over a stored tile too, so it changes as the page grows), down, up-left
         // (the page grows towards the origin), inside, and far out.
-        for (i, r) in [(480, 320, 760, 380), (520, 560, 580, 620), (60, 40, 120, 100), (505, 305, 535, 335), (1040, 640, 1100, 700)].into_iter().enumerate() {
+        for (i, r) in [(280, 270, 540, 330), (300, 340, 360, 530), (40, 40, 100, 100), (265, 265, 295, 295), (516, 516, 540, 540)].into_iter().enumerate() {
             let dab = Rect::new(r.0, r.1, r.2, r.3);
             d.layers[1].surface_mut().unwrap().fill_rect(dab, &[0.9, 0.1, 0.3, 0.7][..fmt.channels()]);
             if i == 2 {
                 d.layers[1].mask.as_mut().unwrap().surface.fill_rect(dab, &[0.5]);
             }
             let what = format!("{fmt:?} dab {i}");
-            let s = diff_rect(&mut g, &d, d.bounds(), &what).unwrap_or_else(|e| panic!("{e}"));
-            assert!(s.tiles_uploaded <= 2, "{what}: only the dab's tiles upload: {s:?}");
+            let pass = diff_rect_full(&mut g, &d, d.bounds(), &what).unwrap_or_else(|e| panic!("{e}"));
+            assert!(pass.whole_stats.tiles_uploaded <= 2, "{what}: only the dab's tiles upload: {:?}", pass.whole_stats);
             let mut fresh = g.comp.sibling();
             let want = render_to_vec(&mut fresh, &g.device, &g.queue, &d, d.bounds()).unwrap();
-            assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap() == want, "{what}: same pixels as a fresh upload");
+            assert!(pass.whole == want, "{what}: same pixels as a fresh upload");
         }
         // Undo back to the small layer: the pages shrink and show its pixels again.
         check(&mut g, &small, &format!("{fmt:?} undone"));
@@ -1420,8 +1465,9 @@ fn small_layers_composite_over_their_bounds() {
     pt.opacity = 0.6;
     d.layers.push(pt);
     check(&mut g, &d, "small layers");
-    // The same over several compositor chunks.
-    let mut big = base_doc(1500, 1200);
+    // The same over several compositor chunks. 1080 x 1080 (#15927, was 1500 x 1200): still a
+    // 2 x 2 grid of 1024 px chunks, and the small layers still straddle the inner chunk border.
+    let mut big = base_doc(1080, 1080);
     for (i, mode) in BlendMode::layer_modes().enumerate() {
         let i = i as i32;
         big.layers.push(small(400 + i as u32, 1010 + (i % 4) * 5, 1010 + (i / 4) * 5, mode));
@@ -1467,17 +1513,19 @@ fn runs_of_plain_layers_blend_in_one_pass() {
     // bounds) and clipping groups. Then an edit in the middle, so the prefix cache resumes
     // part-way up the stack and runs start at its checkpoint.
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(96, 64);
+    // 48 x 32 (#15927, was 96 x 64): batching is decided per layer and per run, not per pixel
+    // count, and the layers that end inside the canvas still overhang its left edge.
+    let mut d = base_doc(48, 32);
     let modes: Vec<BlendMode> = BlendMode::layer_modes().collect();
     for (i, mode) in modes.iter().copied().cycle().take(90).enumerate() {
         let i32_ = i as i32;
-        let rect = if i % 5 == 2 { Rect::from_xywh(-8, 10, 70, 40) } else { Rect::from_xywh(0, 0, 96, 64) };
+        let rect = if i % 5 == 2 { Rect::from_xywh(-4, 5, 35, 20) } else { Rect::from_xywh(0, 0, 48, 32) };
         let mut l = noise_layer("l", PixelFormat::RGBA8, rect, 900 + i as u32, 0.0);
         l.blend = mode;
         l.opacity = 0.35 + 0.05 * (i % 13) as f32;
         l.fill_opacity = if i % 4 == 1 { 0.6 } else { 1.0 };
         if i % 11 == 7 {
-            l.mask = Some(mask(Rect::from_xywh(i32_ % 30, 0, 50, 64), 70 + i as u32, 0.0));
+            l.mask = Some(mask(Rect::from_xywh(i32_ % 15, 0, 25, 32), 70 + i as u32, 0.0));
         }
         if i % 23 == 9 {
             l.clipped = true;
@@ -1489,7 +1537,7 @@ fn runs_of_plain_layers_blend_in_one_pass() {
             d.layers.push(f);
         }
         if i % 17 == 8 {
-            d.layers.push(noise_layer("small", PixelFormat::RGBA8, Rect::from_xywh(20, 20, 6, 5), 40 + i as u32, 0.5));
+            d.layers.push(noise_layer("small", PixelFormat::RGBA8, Rect::from_xywh(10, 10, 6, 5), 40 + i as u32, 0.5));
         }
     }
     let stats = diff_rect(&mut g, &d, d.bounds(), "plain layer runs").unwrap_or_else(|e| panic!("{e}"));
@@ -1510,16 +1558,18 @@ fn runs_of_normal_layers_blend_with_normal_code_alone() {
     for (mode, depth) in
         [(ColorMode::Rgb, SampleType::U8), (ColorMode::Rgb, SampleType::U16), (ColorMode::Rgb, SampleType::F32), (ColorMode::Lab, SampleType::U8)]
     {
-        let mut d = Document::new("normal", Size::new(96, 64), mode, depth);
+        // 48 x 32 (#15927, was 96 x 64): the Normal-run shader is picked per layer and mode, not
+        // per pixel; the runs that end inside the canvas still overhang the left edge.
+        let mut d = Document::new("normal", Size::new(48, 32), mode, depth);
         let fmt = d.pixel_format();
-        d.layers.push(noise_layer("bg", fmt, Rect::from_xywh(0, 0, 96, 64), 5, 0.0));
+        d.layers.push(noise_layer("bg", fmt, Rect::from_xywh(0, 0, 48, 32), 5, 0.0));
         for i in 0..40u32 {
-            let rect = if i % 5 == 3 { Rect::from_xywh(-6, 9, 70, 44) } else { Rect::from_xywh(0, 0, 96, 64) };
+            let rect = if i % 5 == 3 { Rect::from_xywh(-3, 5, 35, 22) } else { Rect::from_xywh(0, 0, 48, 32) };
             let mut l = noise_layer("n", fmt, rect, 600 + i, if i % 3 == 0 { 0.0 } else { 0.4 });
             l.opacity = 0.2 + 0.07 * (i % 11) as f32;
             l.fill_opacity = [1.0, 0.55, 0.0, 0.8][i as usize % 4];
             if i % 7 == 2 {
-                l.mask = Some(mask(Rect::from_xywh(i as i32 % 25, 0, 60, 64), 50 + i, 0.0));
+                l.mask = Some(mask(Rect::from_xywh(i as i32 % 13, 0, 30, 32), 50 + i, 0.0));
             }
             d.layers.push(l);
             if i % 6 == 4 {
@@ -1980,6 +2030,29 @@ fn semi_transparent_normal_stroke_knocks_out_the_layer_beneath_it() {
 }
 
 #[test]
+fn stroke_on_partial_raster_alpha_matches_on_gpu_across_page_boundaries() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::with_background("Partial alpha strokes", Size::new(540, 300), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut layer = Layer::raster("Orange blocks", doc.pixel_format());
+    let surface = layer.surface_mut().unwrap();
+    for (x, alpha) in [(20, 1.0), (236, 0.5), (460, 0.25)] {
+        surface.fill_rect(Rect::from_xywh(x, 40, 44, 220), &[1.0, 128.0 / 255.0, 0.0, alpha]);
+    }
+    doc.layers.push(layer);
+    for (position, size) in [(StrokePosition::Inside, 5.0), (StrokePosition::Center, 6.0), (StrokePosition::Outside, 5.0)] {
+        doc.layers[1].effects.items = vec![Effect::Stroke(stroke(size, position, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0))))];
+        let stats = fx_check(&mut g, &doc, &format!("{position:?} stroke across pages"));
+        assert!(stats.passes > 0, "the GPU rendered the effect");
+    }
+
+    // Retouching the same tile from translucent to opaque must invalidate its inside field.
+    doc.layers[1].effects.items = vec![Effect::Stroke(stroke(5.0, StrokePosition::Inside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0))))];
+    fx_check(&mut g, &doc, "cached inside stroke");
+    doc.layers[1].surface_mut().unwrap().fill_rect(Rect::from_xywh(248, 112, 24, 32), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+    fx_check(&mut g, &doc, "inside stroke after changing partial alpha");
+}
+
+#[test]
 fn exterior_effects_merge_from_the_shape_at_any_fill() {
     // Drop shadows and outer glows alone: the merge builds the layer from its shape (fill inside
     // it, times its alpha) instead of passes of its own. Fill from 0 to 1, opacity, modes
@@ -2165,16 +2238,19 @@ fn layer_effects_on_groups_clipping_and_fills() {
 fn layer_effects_update_incrementally() {
     let Some(mut g) = gpu() else { return };
     let stack = effect_cases().into_iter().find(|(n, _)| *n == "full stack").unwrap().1;
-    let mut d = fx_doc(700, 600, SampleType::U8);
+    // 540 x 500 (#15927, was 700 x 600): the effect layer keeps its size — the partial-rebuild
+    // half-ratio is set by the map area, not by the document margin — and every edit stays on
+    // canvas.
+    let mut d = fx_doc(540, 500, SampleType::U8);
     let mut l = blob("fx", d.pixel_format(), 300.0, 280.0, 200.0, [0.9, 0.4, 0.2]);
     l.effects.items = stack;
     d.layers.push(l);
-    d.layers.push(noise_layer("plain", PixelFormat::RGBA8, Rect::new(500, 20, 650, 120), 5, 0.0));
+    d.layers.push(noise_layer("plain", PixelFormat::RGBA8, Rect::new(460, 20, 530, 120), 5, 0.0));
     let first = fx_check(&mut g, &d, "initial");
     assert!(first.fx_programs > 0 && first.fx_shapes == 1);
     // An unrelated edit (another layer's pixels, the effect layer's opacity and an effect colour)
     // reuses every map.
-    d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(520, 30, 560, 60), &[0.0, 1.0, 0.0, 1.0]);
+    d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(470, 30, 510, 60), &[0.0, 1.0, 0.0, 1.0]);
     d.layers[1].opacity = 0.8;
     if let Effect::ColorOverlay { color, .. } = &mut d.layers[1].effects.items[6] {
         *color = Color::rgb(0.1, 0.9, 0.9);
@@ -2871,7 +2947,7 @@ fn a_pattern_too_large_for_a_gpu_texture_falls_back_to_the_cpu() {
     let mut d = Document::new("big pattern", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
     // 100 MB as RGBA8, 400 MB as an RGBA32F texture.
     let surface = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
-    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, surface };
+    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, source_mode: None, surface };
     assert!(pat.is_paintable());
     d.layers.push(Layer::new(
         "pattern",
@@ -3168,14 +3244,13 @@ fn documents_larger_than_the_texture_limit() {
     let mut d = small_big_doc();
     assert!(g.paged.supports(&d).is_ok());
     // Every pass sees page borders, and effect maps and blurs crossing them.
-    check(&mut g, &d, "big document");
-    let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap().1;
+    let pass = check_full(&mut g, &d, "big document");
+    let s = pass.paged_stats;
     assert!(s.cells >= 9 && s.chunks == s.cells, "{s:?}");
     // A viewport off the page grid covers only its cells (3 x 2).
     let view = Rect::new(200, 230, 530, 430);
-    diff_rect(&mut g, &d, view, "viewport").unwrap_or_else(|e| panic!("{e}"));
-    let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, view).unwrap().1;
-    assert_eq!(s.cells, 6, "{s:?}");
+    let pass = diff_rect_full(&mut g, &d, view, "viewport").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(pass.paged_stats.cells, 6, "{:?}", pass.paged_stats);
     // A dab across a page corner on the effect layer, and an edit elsewhere.
     d.layers[3].surface_mut().unwrap().fill_rect(Rect::new(240, 240, 270, 270), &[0.1, 0.1, 0.9, 1.0]);
     d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(500, 250, 520, 270), &[0.0, 0.0, 0.0, 0.0]);
@@ -3218,9 +3293,11 @@ fn pages_are_evicted_under_the_budget() {
 #[test]
 fn layer_pages_are_admitted_under_a_zero_budget_and_stay_on_the_gpu() {
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(600, 500);
-    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 590, 480), 61, 0.0));
-    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 620, 510), 62, 0.2);
+    // 540 x 260 (#15927, was 600 x 500): still a 3 x 2 grid of 256 px pages, with the two layers
+    // overhanging the canvas left, top, right and bottom — the page-admission path is per cell.
+    let mut d = base_doc(540, 260);
+    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 530, 240), 61, 0.0));
+    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 560, 275), 62, 0.2);
     top.blend = BlendMode::Multiply;
     d.layers.push(top);
     // Exercise page residency itself: lower-stack checkpoints could skip binding the pages.
@@ -3250,9 +3327,10 @@ fn layer_pages_are_admitted_under_a_zero_budget_and_stay_on_the_gpu() {
 #[test]
 fn a_layer_page_out_of_memory_retries_then_ends_only_that_refresh_on_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(600, 500);
-    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 590, 480), 71, 0.0));
-    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 620, 510), 72, 0.2);
+    // 540 x 260 (#15927, was 600 x 500): the same 3 x 2 page grid the failure counts are set for.
+    let mut d = base_doc(540, 260);
+    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 530, 240), 71, 0.0));
+    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 560, 275), 72, 0.2);
     top.blend = BlendMode::Multiply;
     d.layers.push(top);
     g.paged.set_composite_cache_budget(0);
@@ -3673,10 +3751,10 @@ fn anti_aliased_inner_shadow_matches_the_cpu_ramps() {
     let Some(mut g) = gpu() else { return };
     let on = inner_shadow_issue_doc(true);
     let off = inner_shadow_issue_doc(false);
-    check(&mut g, &on, "#14934 inner shadow, Anti-aliased");
-    check(&mut g, &off, "#14934 inner shadow, Anti-aliased off");
-    let gpu_on = render_to_vec(&mut g.comp, &g.device, &g.queue, &on, on.bounds()).expect("gpu render, Anti-aliased");
-    let gpu_off = render_to_vec(&mut g.comp, &g.device, &g.queue, &off, off.bounds()).expect("gpu render, Anti-aliased off");
+    // `check_full` already rendered both documents on the whole-texture compositor: the ramps
+    // read those pixels, no second render per document (#15927).
+    let gpu_on = check_full(&mut g, &on, "#14934 inner shadow, Anti-aliased").whole;
+    let gpu_off = check_full(&mut g, &off, "#14934 inner shadow, Anti-aliased off").whole;
     let tl: &[f32] = &[65.0, 89.0, 107.0, 118.0, 124.0, 126.0, 127.0, 127.0, 128.0];
     let br: &[f32] = &[49.0, 74.0, 96.0, 112.0, 121.0, 125.0, 126.0, 127.0, 128.0];
     for ((side, got), want) in ["top", "left", "bottom", "right"].iter().zip(inner_shadow_ramps(&gpu_on)).zip([tl, tl, br, br]) {
@@ -3714,6 +3792,11 @@ fn anti_aliased_inner_shadow_matches_the_cpu_ramps() {
 #[test]
 fn anti_aliased_inner_shadow_gated_neighbours_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
+    // #15927: the document stays 400 x 300 (crossing the 256 px page is why it is that size),
+    // but an Inner Shadow only moves pixels at the shape's edges. The CPU reference and both
+    // compositors are compared over the shape plus a margin around every measured row — the
+    // gated shift is inside it for every row below.
+    let shape = Rect::new(88, 63, 312, 237);
     for (size, spread, distance, what) in [
         (10.0, 0.5, 0.0, "Size 10 Choke 50 %"),
         (10.0, 0.05, 0.0, "Size 10 Choke 5 %"),
@@ -3724,6 +3807,7 @@ fn anti_aliased_inner_shadow_gated_neighbours_match_the_cpu() {
         (10.0, 0.0, 5.0, "Size 10 Choke 0 at Distance 5 (offset on, whole-pixel light offset)"),
         (10.0, 0.5, 5.0, "Size 10 Choke 50 % at Distance 5 (still gated)"),
     ] {
-        check(&mut g, &inner_shadow_doc(size, spread, distance, true), &format!("#14934 inner shadow, {what}, Anti-aliased"));
+        diff_rect(&mut g, &inner_shadow_doc(size, spread, distance, true), shape, &format!("#14934 inner shadow, {what}, Anti-aliased"))
+            .unwrap_or_else(|e| panic!("{e}"));
     }
 }

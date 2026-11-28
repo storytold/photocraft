@@ -3,7 +3,7 @@ use craft::ui::dialog::{DialogId, DialogResult, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamKind};
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::runtime::requests::PathKind;
-use craft_print::ui::{Duplex, HostedPrint, PrintAnswer, PrintFinish, PrintMarks, PrintSection, PrintSheet, Printer, Settings, State};
+use craft_print::ui::{Destination, Duplex, HostedPrint, PrintAnswer, PrintFinish, PrintMarks, PrintSection, PrintSheet, Printer, Settings, State};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -55,7 +55,7 @@ fn field_value(key: &str, v: &Value) -> Option<FieldValue> {
 fn last_settings(m: &Map<String, Value>) -> Settings {
     let mut settings = Settings::default();
     if let Some(printer) = m.get("printer").and_then(Value::as_str) {
-        settings.printer = printer.to_string();
+        settings.destination = Destination::Printer(printer.to_string());
     }
     if let Some(copies) = m.get("copies").and_then(Value::as_u64) {
         settings.copies = copies.clamp(1, 999) as u32;
@@ -72,7 +72,12 @@ fn last_settings(m: &Map<String, Value>) -> Settings {
 
 /// Writes the panel's settings into the `file.print` fields that carry them.
 fn write_settings(fields: &mut DialogFields, settings: &Settings) {
-    fields.set("printer", FieldValue::Text(settings.printer.clone()));
+    // The image layout lists printers only: Save as PDF is the dialog's own `output` row, not a destination.
+    let printer = match &settings.destination {
+        Destination::Printer(name) => name.clone(),
+        _ => String::new(),
+    };
+    fields.set("printer", FieldValue::Text(printer));
     fields.set("copies", FieldValue::Int(i64::from(settings.copies)));
     match settings.duplex {
         Some(Duplex::Off) => fields.set("duplex", FieldValue::Text("off".into())),
@@ -140,6 +145,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> DialogId {
             fields.set(k, v);
         }
     }
+    write_settings(&mut fields, &state.settings);
     let sections = sections(&fields);
     app.framework.dialogs.open(HostedPrint::new(state, fields, sections).json_form(|fields, listing| {
         if fields.text("paper") == Some("custom") {
@@ -186,11 +192,14 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
 
     // The rows are shown in the section's Units menu; stored values keep their units (paper in points, position in
     // inches). A typed zero reaches the value, and the engine refuses a paper that small.
+    // Points are 1/72 in and picas 12 points, as the reference application's Units menu takes them (#14136).
     let lengths = |per_unit: f64| {
         vec![
+            NumberUnit::new("in", UnitKind::Inches, tl!("Inches"), per_unit),
             NumberUnit::new("cm", UnitKind::Centimetres, tl!("Centimeters"), per_unit / 2.54),
             NumberUnit::new("mm", UnitKind::Millimetres, tl!("Millimeters"), per_unit / 25.4),
-            NumberUnit::new("in", UnitKind::Inches, tl!("Inches"), per_unit),
+            NumberUnit::new("pt", UnitKind::Points, tl!("Points"), per_unit / 72.0),
+            NumberUnit::new("pica", UnitKind::Picas, tl!("Picas"), per_unit / 6.0),
         ]
     };
     let pt = |key: &str, label: &'static str| {
@@ -243,7 +252,15 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
         PrintSection::new(
             tl!("Position and Size"),
             vec![
-                Param::new("units", tl!("Units"), choice(&[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], "cm")),
+                // The reference application's order (#14136); Centimeters stays the default.
+                Param::new(
+                    "units",
+                    tl!("Units"),
+                    choice(
+                        &[("in", tl!("Inches")), ("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("pt", tl!("Points")), ("pica", tl!("Picas"))],
+                        "cm",
+                    ),
+                ),
                 Param::new("paper", tl!("Paper"), ParamKind::choice(papers, Some("letter".into()))),
                 pt("paperWidth", tl!("Paper Width")),
                 pt("paperHeight", tl!("Paper Height")),
@@ -402,9 +419,9 @@ fn fields_set_position(f: &mut DialogFields, left: f64, top: f64) {
 
 /// The document's flattened picture at the preview size, mirrored for Emulsion Down (the sheet
 /// draws the picture unmirrored in the box). The texture lives in the context's memory under the
-/// document's id and revision.
+/// document's id and revision, and the scratch read-error generation (`crate::scratch_reads`).
 fn picture(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u64, mirror: bool) -> egui::load::SizedTexture {
-    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror));
+    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror, crate::scratch_reads::generation()));
     let tex: Option<std::sync::Arc<egui::TextureHandle>> = ctx.data(|d| d.get_temp(key));
     let tex = tex.unwrap_or_else(|| {
         let th = photocraft_compose::thumbnail(doc, 400);
@@ -537,6 +554,8 @@ pub(super) fn print_params(f: &DialogFields) -> Value {
             p.insert(k.to_string(), v);
         }
     }
+    // The ruler unit is the dialog's own display setting; `file.print` takes no `units`.
+    p.remove("units");
     // The driver's printable area belongs to a print to the printer, not to a file or a dry run.
     if f.text("output").is_some_and(|output| !output.is_empty()) || f.bool("dryRun") == Some(true) {
         p.remove("printable");
@@ -569,4 +588,20 @@ pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
         crate::i18n::fmt(tl!(template), &[("path", r["pdf"].as_str().unwrap_or(""))])
     };
     app.ui.status_error = false;
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    /// A tile that fails to read and recovers keeps the document's revision; the preview picture still draws again,
+    /// so it does not keep the zeros it read during the error.
+    #[test]
+    fn the_preview_picture_draws_again_after_a_scratch_read_error_transition() {
+        use photocraft_doc::{ColorMode, Document, SampleType};
+        let ctx = egui::Context::default();
+        let doc = Document::new("Print", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let first = super::picture(&ctx, &doc, 3, false).id;
+        assert_eq!(super::picture(&ctx, &doc, 3, false).id, first, "the same revision keeps its picture");
+        crate::scratch_reads::tests::simulate_read_error_transition();
+        assert_ne!(super::picture(&ctx, &doc, 3, false).id, first, "the picture draws again after the transition");
+    }
 }

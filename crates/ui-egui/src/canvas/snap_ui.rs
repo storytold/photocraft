@@ -42,7 +42,7 @@ pub(crate) struct SnapCache {
 /// tool that hands its press to the Move stand-in. Read before the press so the targets do not
 /// change at it.
 fn moves_as_move_tool(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Move || (crate::canvas::tools::takes_command_stand_in(app.ui.tool) && craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd)
+    app.ui.tool == Tool::Move || (crate::canvas::tools::takes_command_stand_in(app.ui.tool) && craft::ui::runtime::pointer::mods(app.ctx()).cmd)
 }
 
 /// The selected pixels move with the drag, so the selection is not a place to snap to (#6290).
@@ -55,7 +55,8 @@ fn selection_moves(app: &PhotocraftApp) -> bool {
 /// The layers a drag moves or resizes: they are not targets. The selected layers when the Move tool drags and,
 /// unless selected pixels float, what it moves whole (the layers linked to them and everything inside a group, so a
 /// group does not snap to its own layers' starting edges), the type layer being edited (a paragraph-box handle drag
-/// does not snap to the text it resizes, #6819) and the layers of the open Free Transform.
+/// does not snap to the text it resizes, #6819), the layers of the open Free Transform and the shape layers the shape
+/// scale box or a corner widget is pressing.
 fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     let mut set = Vec::new();
     if moves_as_move_tool(app)
@@ -79,6 +80,7 @@ fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     if let Some(t) = app.ui.transform.as_ref() {
         set.extend(crate::transform_tool::moving_layers(t));
     }
+    set.extend(crate::shape_controls::pressed_layers(app));
     set
 }
 
@@ -111,7 +113,9 @@ fn build(st: &photocraft_engine::DocState, options: &SnapOptions, exclude: &[Lay
     let doc = &st.doc;
     let bounds = Rect::new(0.0, 0.0, doc.size.width as f64, doc.size.height as f64);
     let guides = doc.guides.vertical.iter().map(|g| (Axis::Y, *g)).chain(doc.guides.horizontal.iter().map(|g| (Axis::X, *g)));
-    let mut t = SnapTargets::new().with_document(options, bounds, guides, Some(grid));
+    // Layer and selection edges snap a box beside them too, as in the reference application: their spans only shape
+    // the drawn smart guide.
+    let mut t = SnapTargets::new().reach_past_spans().with_document(options, bounds, guides, Some(grid));
     if options.layers {
         for (_, _, l) in doc.walk() {
             if !l.visible || exclude.contains(&l.id) {

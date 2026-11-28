@@ -121,14 +121,14 @@ const READ_BY_THE_FRAMEWORK: &[&str] = &["integrations.controlPort", "integratio
 #[test]
 fn every_preference_is_read_or_hidden() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let prefs_rs = std::fs::read_to_string(root.join("crates/engine/src/prefs.rs")).unwrap();
+    let prefs_rs = std::fs::read_to_string(root.join("crates/engine-core/src/prefs.rs")).unwrap();
     let mut files = Vec::new();
     rust_sources(&root.join("crates"), &mut files);
     rust_sources(&root.join("apps"), &mut files);
-    let prefs_dir = root.join("crates/engine/src/prefs");
+    let prefs_dir = root.join("crates/engine-core/src/prefs");
     let files: Vec<(PathBuf, String)> = files
         .into_iter()
-        .filter(|p| !p.ends_with("engine/src/prefs.rs") && !p.starts_with(&prefs_dir))
+        .filter(|p| !p.ends_with("engine-core/src/prefs.rs") && !p.starts_with(&prefs_dir))
         .filter_map(|p| std::fs::read_to_string(&p).ok().map(|t| (p, production(&t))))
         .collect();
     let mut sources: Vec<String> = files.iter().map(|(_, t)| t.clone()).collect();

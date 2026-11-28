@@ -22,7 +22,6 @@ enum Action {
 #[derive(Clone, Copy)]
 struct ShownRect {
     session: u64,
-    pass: u64,
     rect: [f32; 4],
 }
 
@@ -57,13 +56,16 @@ pub fn eligible(app: &PhotocraftApp) -> bool {
 pub(crate) fn shown_rect(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[f32; 4]> {
     let session = open_box(app)?.id;
     let shown = ctx.data(|data| data.get_temp::<ShownRect>(shown_id()))?;
-    let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
-    (shown.session == session && pass.checked_sub(shown.pass).is_some_and(|age| age <= 1)).then_some(shown.rect)
+    (shown.session == session).then_some(shown.rect)
 }
 
 /// Called on the document's primary canvas, where the framework shows its transform.
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
-    let Some(transform) = open_box(app) else { return };
+    // The canvas run that shows the bar records where; a replay of that run shows it there still.
+    let Some(transform) = open_box(app) else {
+        ui.ctx().data_mut(|data| data.remove::<ShownRect>(shown_id()));
+        return;
+    };
     let (session, corners) = (transform.id, transform.session.quad());
     let ctx = ui.ctx().clone();
     let mut place = app.ui.panels.task_bar;
@@ -106,10 +108,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     if shown.output.hide {
         app.ui.panels.context_task_bar = false;
     }
-    let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
     if open_box(app).is_some_and(|t| t.id == session) {
         let r = shown.output.rect;
-        ctx.data_mut(|data| data.insert_temp(shown_id(), ShownRect { session, pass, rect: [r.min.x, r.min.y, r.max.x, r.max.y] }));
+        ctx.data_mut(|data| data.insert_temp(shown_id(), ShownRect { session, rect: [r.min.x, r.min.y, r.max.x, r.max.y] }));
     } else {
         ctx.data_mut(|data| data.remove::<ShownRect>(shown_id()));
     }

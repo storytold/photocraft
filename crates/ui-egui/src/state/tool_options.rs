@@ -3,11 +3,13 @@ use craft::draw::ui::crop::{CropSettings, CropSizeFields};
 use craft::draw::ui::{PathOptionsSettings, TransformSettings, VectorMode};
 use craft::imaging::ui::select::MagneticSettings;
 
+use craft::ui::contract::PlainData;
+
 use super::tool::Tool;
 use super::{Deserialize, Serialize};
 
 /// Object Selection › gear › Object Finder Mode (#12857).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, PlainData)]
 pub enum ObjectFinderMode {
     /// Auto Refresh: the finder re-analyses the document after every edit.
     #[default]
@@ -17,7 +19,7 @@ pub enum ObjectFinderMode {
 }
 
 /// Options-bar state for tools (Photoshop keeps these per tool).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, PlainData)]
 #[serde(default)]
 pub struct ToolOptions {
     pub tolerance: f32,
@@ -39,6 +41,16 @@ pub struct ToolOptions {
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
+    /// Adjustment Brush: the Adjustment dropdown's entry (`photocraft_engine::adjustment_brush_cmds::ENTRIES`).
+    pub adjustment_brush_kind: String,
+    /// Adjustment Brush: Subtract (paints black into the mask) instead of Add.
+    pub adjustment_brush_subtract: bool,
+    /// Adjustment Brush: the Overlay checkbox (its tint over the mask is #12520).
+    pub adjustment_brush_overlay: bool,
+    /// Adjustment Brush: the active layer the dropdown last followed, so selecting another
+    /// adjustment layer sets it once and a pick in the dropdown sticks.
+    #[serde(skip)]
+    pub adjustment_brush_followed: Option<u64>,
     pub feather: f32,
     /// linear | radial | angle | reflected | diamond
     pub gradient_style: String,
@@ -67,6 +79,7 @@ pub struct ToolOptions {
     /// parameter format. Kept as overrides so saved engine defaults still supply unset fields.
     /// OpenType features and variable-font axes are merged per tag/axis.
     #[serde(default)]
+    #[plain_data(assume = "a JSON map of owned values: no interior mutability")]
     pub type_style_defaults: serde_json::Map<String, serde_json::Value>,
     /// Type tool: paragraph direction of new type, "auto" (from the first strong character),
     /// "ltr" or "rtl" (TYPE-218-2).
@@ -83,6 +96,9 @@ pub struct ToolOptions {
     pub pattern_stamp_angle: f32,
     /// current | currentAndBelow | all
     pub clone_sample: String,
+    /// Healing Brush › Mode: Replace, which copies the source without healing (#12101). Like the
+    /// painting tools' Clear flags it is tool-only: the stroke params carry it, not the brush.
+    pub healing_replace: bool,
     /// Spot Healing: contentAware | createTexture | proximityMatch
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -143,10 +159,21 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
-    /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
-    /// Triangle tool shows it, enabled in Shape mode only (#13370); the other shape tools always snap.
+    /// The shape tools' and the Pen's (Shape mode) one Align Edges checkbox, as in the reference
+    /// application: a drag lands on whole pixels, and the new shape layer gets Align Edges
+    /// (`ShapeLayer::use_aligned_rendering`), which fits it to whole pixels at render time. With it off, the Rectangle (#13346),
+    /// Triangle (#13370) and Polygon (#13326) drags keep their fractions. On by
+    /// default and after Reset Tool; enabled in Shape mode only. Scripted and stored by the
+    /// reference's name, `useAlignedRendering` (`align_edges` in older settings and presets).
+    #[serde(rename = "useAlignedRendering", alias = "align_edges")]
     pub align_edges: bool,
     pub polygon_sides: u32,
+    /// The Star tool's points for the next star (#16867): its own, apart from the Polygon tool's
+    /// [`Self::polygon_sides`]. 3 to 20; 5 to start and after Reset Tool.
+    pub star_points: u32,
+    /// The Polygon tool's corner radius in px for the next polygon (#13302): its own, not the
+    /// Rectangle's [`Self::corner_radius`]. 0 draws sharp corners.
+    pub polygon_corner_radius: f32,
     pub line_weight: f32,
     /// Line arrowheads.
     pub arrow_start: bool,
@@ -356,7 +383,7 @@ pub(super) fn default_brush_tool() -> Tool {
 /// tool, all off by default except the Patch tool's Content-Aware Sample All Layers (#5524,
 /// #12125): turning it on for the Magic Wand must not leave Blur or Smudge copying the composite
 /// onto the active layer. The Mixer Brush keeps its own with the brush (`MixerSettings`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, PlainData)]
 #[serde(default)]
 pub struct SampleAllLayers {
     pub magic_wand: bool,
@@ -392,29 +419,41 @@ impl Default for SampleAllLayers {
     }
 }
 
+/// The field of `SampleAllLayers` that `$tool` keeps, borrowed as `$borrow`.
+macro_rules! sample_all_slot {
+    ($this:ident, $tool:ident, $($borrow:tt)+) => {
+        Some(match $tool {
+            Tool::MagicWand => $($borrow)+ $this.magic_wand,
+            Tool::QuickSelection => $($borrow)+ $this.quick_selection,
+            Tool::ObjectSelection => $($borrow)+ $this.object_selection,
+            Tool::PaintBucket => $($borrow)+ $this.paint_bucket,
+            Tool::MagicEraser => $($borrow)+ $this.magic_eraser,
+            Tool::SpotHealing => $($borrow)+ $this.spot_healing,
+            Tool::Patch => $($borrow)+ $this.patch,
+            Tool::ContentAwareMove => $($borrow)+ $this.content_aware_move,
+            Tool::Remove => $($borrow)+ $this.remove,
+            Tool::Blur => $($borrow)+ $this.blur,
+            Tool::Sharpen => $($borrow)+ $this.sharpen,
+            Tool::Smudge => $($borrow)+ $this.smudge,
+            _ => return None,
+        })
+    };
+}
+
 impl SampleAllLayers {
     /// `tool`'s setting; false for a tool without the option.
-    pub fn get(mut self, tool: Tool) -> bool {
-        self.slot(tool).is_some_and(|v| *v)
+    pub fn get(self, tool: Tool) -> bool {
+        self.slot(tool).unwrap_or(false)
     }
 
     /// `tool`'s setting, or `None` for a tool without the option.
-    pub fn slot(&mut self, tool: Tool) -> Option<&mut bool> {
-        Some(match tool {
-            Tool::MagicWand => &mut self.magic_wand,
-            Tool::QuickSelection => &mut self.quick_selection,
-            Tool::ObjectSelection => &mut self.object_selection,
-            Tool::PaintBucket => &mut self.paint_bucket,
-            Tool::MagicEraser => &mut self.magic_eraser,
-            Tool::SpotHealing => &mut self.spot_healing,
-            Tool::Patch => &mut self.patch,
-            Tool::ContentAwareMove => &mut self.content_aware_move,
-            Tool::Remove => &mut self.remove,
-            Tool::Blur => &mut self.blur,
-            Tool::Sharpen => &mut self.sharpen,
-            Tool::Smudge => &mut self.smudge,
-            _ => return None,
-        })
+    pub fn slot(&self, tool: Tool) -> Option<bool> {
+        sample_all_slot!(self, tool, &).copied()
+    }
+
+    /// `tool`'s setting to write, or `None` for a tool without the option.
+    pub fn slot_mut(&mut self, tool: Tool) -> Option<&mut bool> {
+        sample_all_slot!(self, tool, &mut)
     }
 }
 
@@ -431,6 +470,10 @@ impl Default for ToolOptions {
             object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
+            adjustment_brush_kind: photocraft_engine::adjustment_brush_cmds::DEFAULT_KIND.into(),
+            adjustment_brush_subtract: false,
+            adjustment_brush_overlay: false,
+            adjustment_brush_followed: None,
             feather: 0.0,
             gradient_style: "linear".into(),
             gradient_reverse: false,
@@ -454,6 +497,7 @@ impl Default for ToolOptions {
             pattern_stamp_scale: 100.0,
             pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
+            healing_replace: false,
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
             patch_content_aware: false,
@@ -486,6 +530,8 @@ impl Default for ToolOptions {
             corner_radius: 0.0,
             align_edges: true,
             polygon_sides: 5,
+            star_points: 5,
+            polygon_corner_radius: 0.0,
             line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,

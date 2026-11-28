@@ -88,6 +88,9 @@ fn help_wins_over_later_arguments() {
 fn version_prints_the_long_version() {
     let Run { status, stdout, .. } = run_photocraft(&["--version", "--safegpu"]);
     assert_eq!(status.code(), Some(0));
+    // The binary records its checkout's commit at startup (#5247); the build script hands the
+    // same value to this test.
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     assert_eq!(stdout, format!("photocraft {}\n", photocraft_engine::build_info::long_version()));
 }
 

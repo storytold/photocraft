@@ -1,15 +1,19 @@
 use craft::behavior::EditEvent;
+use craft::behavior::geometry::OutlineDraft;
+use craft::behavior::kurbo::Rect;
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
 use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePanel, StrokeCells, VectorMode, VectorModeSelect};
 use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, bind_tracked, clicked};
 use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
+use photocraft_engine::presets::PresetsExt;
 
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
 use super::path_ops::{active_path_name, indexed_document};
@@ -94,7 +98,7 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
     }
     if is_shape_tool(tool) {
         // Shape draws a shape layer, Path adds the outline to the work path (#9453).
-        VectorModeSelect::new(Bind::bound(&mut app.ui.tool_options.shape_mode), &SHAPE_TOOL_MODES).show(ui);
+        VectorModeSelect::new(bind_tracked!(app.ui.tool_options => shape_mode), &SHAPE_TOOL_MODES).show(ui);
         if draws_path(&app.ui.tool_options) {
             Divider::vertical().show(ui);
             make_buttons(app, ui);
@@ -154,6 +158,13 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
+    // Every shape tool's one Align Edges, at the bar's right end after the gear (#13346, #13370,
+    // #13326, #16869 for the Star tool). Only a shape layer has pixel edges to align: greyed in Path
+    // mode (and in a pixels mode).
+    if is_shape_tool(tool) {
+        Divider::vertical().show(ui);
+        super::alignment::shape_tool_option(app, ui);
+    }
 }
 
 /// The Pen, Freeform Pen and Curvature Pen bar.
@@ -161,7 +172,7 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     // Photoshop's Pen lists Shape, Path and a greyed Pixels; the other pens keep theirs.
     let offered: &[(VectorMode, bool)] = if tool == Tool::Pen { &PEN_MODES } else { &OTHER_PEN_MODES };
     let mode_before = app.ui.tool_options.vector_mode;
-    VectorModeSelect::new(Bind::bound(&mut app.ui.tool_options.vector_mode), offered).show(ui);
+    VectorModeSelect::new(bind_tracked!(app.ui.tool_options => vector_mode), offered).show(ui);
     // #12910 measured: in an Indexed Color document the Pen lists Shape and keeps the entry enabled,
     // but picking it leaves the tool in Path mode. Only a pick through this dropdown counts: a Shape
     // mode that arrived another way (a tool preset, `penMode`) is not measured and keeps today's
@@ -171,17 +182,20 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     }
     Divider::vertical().show(ui);
     if app.ui.tool_options.vector_mode == VectorMode::Shape {
+        // #12907: the row leads with the Fill and Stroke swatches, the shape tools' chips with
+        // their popups; a pick sets the tool defaults the next Pen shape is painted with.
+        crate::shape_options::pen_paint_swatches(app, ui);
         let ppi = document_ppi(app);
-        let o = &mut app.ui.tool_options;
+        let o = &app.ui.tool_options;
         let look = fw::ShapeAppearance::new(Paint::None, Paint::None, f64::from(o.stroke_width)).stroke_style((&o.shape_stroke).into());
         let out = StrokeCells::new(&look, ppi).corners(true).stroke_open(Bind::bound(&mut app.ui.shape_stroke_open)).show(ui);
         for event in &out.events {
             match event.value() {
-                Some(fw::ShapeChange::StrokeWidth(w)) => o.stroke_width = *w as f32,
+                Some(fw::ShapeChange::StrokeWidth(w)) => app.ui.tool_options.stroke_width = *w as f32,
                 Some(fw::ShapeChange::StrokeStyle { style, width, .. }) => {
-                    o.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from_style(style);
+                    app.ui.tool_options.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from_style(style);
                     if let Some(w) = width {
-                        o.stroke_width = *w as f32;
+                        app.ui.tool_options.stroke_width = *w as f32;
                     }
                 }
                 _ => {}
@@ -190,25 +204,49 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         if let Some(alert) = out.out_of_range {
             crate::option_cells::range_alert(app, ui, &alert);
         }
+        // W and H (#12907): 0 px with no shape and the live size of the shape being drawn. What
+        // typing into them does was not measured, so it keeps today's behaviour — there was no
+        // field and no effect: these fields apply no edit (the Shape tools have no size fields
+        // yet either, #2496).
+        let (w, h) = pen_shape_size(app, tool);
+        // The Field shows the "W:" / "H:" caption, as the reference's row prints them; in a bar a
+        // Field already takes its content width. The fields are views: their output applies nothing,
+        // so their label offers no scrub handle either (scrub(false), unlike the editing fields).
+        let _ = Field::new(label(tl!("W:")))
+            .id_salt("pen-w")
+            .side(SideLabel::new().scrub(false))
+            .show(ui, |ui, _| NumberField::new(label(tl!("W:")), Bind::given(Some(w))).unit_kind(UnitKind::Pixels).show(ui));
+        let _ = Field::new(label(tl!("H:")))
+            .id_salt("pen-h")
+            .side(SideLabel::new().scrub(false))
+            .show(ui, |ui, _| NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui));
     }
+    // Align Edges, enabled in Shape mode only (greyed in Path mode).
+    super::alignment::pen_option(app, ui);
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
-    let o = &mut app.ui.tool_options;
     if tool == Tool::Pen {
         Divider::vertical().show(ui);
         // The gear's popover replaces the Rubber Band item (tools-03 D3).
         // PLAN: `PathOptionsOutput::pick_color` (key PATH_OPTIONS_COLOR_KEY) is answered by the owner of the colour picker dialog.
-        let _ = PathOptionsPopover::new(label(tl!("Set additional pen and path options")), Bind::bound(&mut o.path_options)).show(ui, &mut open.path_options);
-        Checkbox::new(Bind::bound(&mut o.pen_auto_add_delete)).label(label(tl!("Auto Add/Delete"))).show(ui);
+        let _ = PathOptionsPopover::new(label(tl!("Set additional pen and path options")), bind_tracked!(app.ui.tool_options => path_options))
+            .show(ui, &mut open.path_options);
+        Checkbox::new(bind_tracked!(app.ui.tool_options => pen_auto_add_delete)).label(label(tl!("Auto Add/Delete"))).show(ui);
     }
     let enter = crate::shortcuts::pretty("Enter");
     match tool {
         Tool::FreeformPen => {
             Divider::vertical().show(ui);
-            let field =
-                NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(o.curve_fit)))).range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui);
-            if let Some(Some(v)) = field.value().copied() {
-                o.curve_fit = v as f32;
+            // In a `Field`: a bare control's label only names it, it is not drawn (#16338).
+            let picked = Field::new(label(tl!("Curve Fit:")))
+                .show(ui, |ui, _| {
+                    let field = NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(app.ui.tool_options.curve_fit))));
+                    field.range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui).value().copied()
+                })
+                .inner
+                .flatten();
+            if let Some(Some(v)) = picked {
+                app.ui.tool_options.curve_fit = v as f32;
             }
             let alt = crate::shortcuts::pretty("Alt");
             hint(ui, &crate::i18n::fmt(tl!("Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close"), &[("alt", &alt)]));
@@ -232,6 +270,35 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         Divider::vertical().show(ui);
         make_buttons(app, ui);
     }
+}
+
+/// The W / H the Pen Shape-mode bar shows (#12907): the size of the shape being drawn, 0 px when
+/// there is none. The Pen and the Curvature Pen draw into `app.ui.pen`, measured with the crate's
+/// one finite-guarded path bounds helper (`photocraft_text::area::path_bounds`, anchors and
+/// handles): the measured shapes are straight (200 × 200 px), and what a handle beyond the anchors
+/// or a typed size does was not measured and changes nothing today. A Freeform Pen trace is not a
+/// path while the pointer is down: the tool keeps its live points in its own outline draft and fits
+/// them into a path only when the pass ends, so that tool's row measures the draft's points and
+/// falls back to `app.ui.pen` (the fitted path of a trace whose commit failed) once no trace is in
+/// progress.
+fn pen_shape_size(app: &PhotocraftApp, tool: Tool) -> (f64, f64) {
+    if tool == Tool::FreeformPen
+        && let Some(size) = freeform_trace_size(&app.canvas_tools.vector.freeform.draft)
+    {
+        return size;
+    }
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| !p.draft.knots.is_empty()) else { return (0.0, 0.0) };
+    photocraft_text::area::path_bounds(&super::pen_path(pen)).map_or((0.0, 0.0), |(x0, y0, x1, y1)| (x1 - x0, y1 - y0))
+}
+
+/// The box the Freeform Pen's live trace covers, from the points the tool paints between presses
+/// (document units); `None` with no trace in progress. One point is the flat 0 x 0 the pen drafts
+/// show. The draft never holds a non-finite point — a non-finite sample is dropped where it comes
+/// in — so this needs no guard of its own.
+fn freeform_trace_size(draft: &OutlineDraft) -> Option<(f64, f64)> {
+    let first = *draft.points().first()?;
+    let box_ = draft.points().iter().fold(Rect::from_points(first, first), |box_, &at| box_.union_pt(at));
+    Some((box_.width(), box_.height()))
 }
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection…, Mask and Shape, from the
@@ -290,6 +357,7 @@ pub(super) fn selected_shape(session: &photocraft_engine::Session) -> Option<pho
 // ---------------------------------------------------------------------------------------------
 // Properties (shape layers)
 
+#[cfg(test)]
 pub(super) fn solid_paint(c: [f32; 4]) -> photocraft_doc::Fill {
     photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
 }
@@ -444,12 +512,14 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let was_linked = app.ui.arrow_default == Some(target);
     let mut linked = was_linked;
     let recent_colors: Vec<Srgba> = crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| Srgba::new(c[0], c[1], c[2], 1.0)).collect();
-    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets.gradients, fg, bg);
-    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    let sampled =
+        [fw::ShapePaint::Fill, fw::ShapePaint::Stroke].into_iter().find_map(|p| crate::screen_picker::take(app, ("shape-properties", p)).map(|c| (p, c)));
+    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
+    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [sh.fill.clone(), sh.stroke.as_ref().map(|s| s.paint.clone())];
     let mut library = crate::shape_paint_ui::ChipLibrary::new(
         &recent_colors,
-        &app.session.presets.swatches,
+        &app.session.presets().swatches,
         &mut app.ui.paint_folders,
         gradients,
         &mut app.ui.shape_gradient_state,
@@ -457,13 +527,15 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     );
     let output = ShapePanel::new(label(tl!("Shape properties")), &shown, &appearance, ppi)
         .sections(true, sh.live.is_some())
+        .sampled(sampled)
         .stroke_open(Bind::bound(&mut app.ui.shape_stroke_open))
         .chips(|which, chip, chip_ui| crate::shape_paint_ui::decorate_chip(chip, which, &mut library, chip_ui))
         .fallbacks(Srgba::new(fg[0], fg[1], fg[2], fg[3]), Srgba::new(bg[0], bg[1], bg[2], bg[3]))
         .arrow_default(Bind::bound(&mut linked))
         .show(ui);
-    let fw::ShapePanelOutput { events, pick_color, out_of_range, .. } = output;
+    let fw::ShapePanelOutput { events, pick_color, screen_pick, out_of_range, .. } = output;
     let paint_gradients = [library.gradient(fw::ShapePaint::Fill), library.gradient(fw::ShapePaint::Stroke)];
+    super::alignment::option(app, ui, Some(id), false, true);
 
     let mut applied = false;
     let mut recent: Option<[f32; 3]> = None;
@@ -515,6 +587,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         };
         let _ = crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
     }
+    if let Some((which, gesture)) = screen_pick {
+        crate::screen_picker::hold(app, ui.ctx(), ("shape-properties", which), gesture);
+    }
     // A Concavity typed past -50..50 % raises the reference's alert (#13258).
     if let Some(alert) = out_of_range {
         crate::option_cells::range_alert(app, ui, &alert);
@@ -528,3 +603,11 @@ mod line_arrow_concavity_field_tests;
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
 mod pen_make_mask_tests;
+
+#[cfg(test)]
+#[path = "custom_shape_path_make_tests.rs"]
+mod custom_shape_path_make_tests;
+
+#[cfg(test)]
+#[path = "triangle_path_make_tests.rs"]
+mod triangle_path_make_tests;

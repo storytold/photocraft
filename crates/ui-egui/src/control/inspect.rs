@@ -127,7 +127,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "typeTransform": crate::type_transform::inspect(app),
         "camTransform": app.ui.cam_transform,
         "layerMenu": menu.zip(kind).and_then(|(menu, kind)| match kind {
-            MenuKind::Layers { layers } => Some(json!({
+            MenuKind::Layers { layers, .. } => Some(json!({
                 "pos": menu.pos,
                 "layers": layers.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
             })),
@@ -167,6 +167,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             "rect": task_bar_rect,
             "pinned": app.ui.panels.task_bar.pinned,
             "at": app.ui.panels.task_bar.at,
+            "offset": app.ui.panels.task_bar.offset,
         }),
         "dockTabs": legacy.get("dockTabs").cloned().unwrap_or(Value::Null),
         "docking": app.ui.docking,
