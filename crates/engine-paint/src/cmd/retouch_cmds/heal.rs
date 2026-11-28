@@ -44,6 +44,64 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
     out
 }
 
+/// The Diffusion the Healing Brush's field holds by default (#12103).
+const DEFAULT_DIFFUSION: u8 = 5;
+
+/// Optional whole-number `diffusion` in 1..7, absent or null being 5. Written here because the
+/// two level readers of the same family, `patch::level` and `content_aware_move::level`, are
+/// private to their own modules (#12103). Unlike those two it refuses a fraction outright: the
+/// field holds whole numbers, so `5.5` is an error rather than a rounded 6.
+fn diffusion_param(p: &Value, cmd: &str) -> Result<u8> {
+    match p.get("diffusion") {
+        None | Some(Value::Null) => Ok(DEFAULT_DIFFUSION),
+        Some(v) => match v.as_f64() {
+            Some(x) if x.is_finite() && x.fract() == 0.0 && (1.0..=7.0).contains(&x) => Ok(x as u8),
+            _ => Err(bad(cmd, "`diffusion` must be a whole number 1..7")),
+        },
+    }
+}
+
+/// Use Legacy (#12103): the older Healing Brush blend. The source texture keeps its own pixels and
+/// takes the destination's average colour over the healed area, instead of the gradient-domain
+/// solve of [`heal_region`] - so the dab keeps its edge rather than melting into its surroundings.
+/// This is our engine's own blend: the reference application's legacy algorithm is a different one
+/// and its output numbers are not something this repository may tune to, so nothing here is fitted
+/// to a measured table. What the tests pin is that Use Legacy gives its own blend of the same
+/// click, inside the same tip.
+fn legacy_heal(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &[bool]) -> Region {
+    let n = src.ch;
+    let alpha = super::alpha_index(fmt);
+    // The mean colour difference between destination and source over the healed area: the level
+    // the texture is brought to. Both regions cover the same rect, and the mask is dense over it.
+    let mut sums = vec![0.0f64; n];
+    let mut count = 0usize;
+    for (i, m) in mask.iter().enumerate() {
+        let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
+        let (Some(want), Some(have)) = (dst.data.get(at..at + n), src.data.get(at..at + n)) else { continue };
+        // `want`, `have` and `sums` all hold one value per channel, so `c` is a channel index.
+        for (c, v) in sums.iter_mut().enumerate() {
+            *v += f64::from(want[c]) - f64::from(have[c]);
+        }
+        count += 1;
+    }
+    let mut out = dst.clone();
+    if count == 0 {
+        return out;
+    }
+    let shift: Vec<f32> = sums.into_iter().map(|v| (v / count as f64) as f32).collect();
+    for (i, m) in mask.iter().enumerate() {
+        let Some(at) = i.checked_mul(n).filter(|_| *m) else { continue };
+        let (Some(tex), Some(want)) = (src.data.get(at..at + n), out.data.get_mut(at..at + n)) else { continue };
+        // `tex`, `want` and `shift` hold one value per channel, and `count` is past its zero guard
+        // above, so every index here is a channel index.
+        for (c, v) in want.iter_mut().enumerate() {
+            *v = if Some(c) == alpha { tex[c] } else { tex[c] + shift[c] };
+        }
+    }
+    clamp_samples(fmt, &mut out.data);
+    out
+}
+
 /// The reference's alert for the Healing Brush in an Indexed Color document (#12112). Bitmap,
 /// Duotone and Multichannel weren't measured and heal as before.
 const INDEXED_REFUSAL: &str = "Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
@@ -55,6 +113,18 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
+    // The options bar's Use Legacy check box and Diffusion field (#12103), read before anything is
+    // sampled so an out-of-range or wrongly typed value costs no work. Both are strict about their
+    // type, as `diffusion` already is: the key absent or null is the default, a supplied value of
+    // another type is an error rather than a silent false. Diffusion is accepted, validated and
+    // remembered - the bar, a preset and an action step all keep it - but its pixels for the values
+    // other than 5 were never measured, so every whole value 1..7 paints today's stroke: the field
+    // costs nothing until that row of the ticket is measured.
+    let legacy = match p.get("legacy") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "`legacy` must be a boolean"))?,
+    };
+    diffusion_param(p, CMD)?;
     let which = sample_layers(p, CMD)?;
     let source = super::clone_sampling::resolve(s, p, CMD)?;
     let mode = blend_param(p, CMD)?;
@@ -93,7 +163,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
             };
             let dst = if fmt.alpha && !surf.format().alpha { super::clone_sampling::opaque_alpha(dst, surf.format()) } else { dst };
             let mask: Vec<bool> = cov.iter().zip(src.data.chunks_exact(fmt.channels())).map(|(c, pixel)| *c > 0.0 && has_source(pixel)).collect();
-            let mut healed = heal_region(&fmt, &src, &dst, &mask);
+            let mut healed = if legacy { legacy_heal(&fmt, &src, &dst, &mask) } else { heal_region(&fmt, &src, &dst, &mask) };
             for (pixel, sample) in healed.data.chunks_exact_mut(fmt.channels()).zip(src.data.chunks_exact(fmt.channels())) {
                 if !has_source(sample) {
                     pixel.fill(0.0);
@@ -333,3 +403,7 @@ mod history_brush_transparency_tests;
 #[cfg(test)]
 #[path = "heal_replace_tests.rs"]
 mod heal_replace_tests;
+
+#[cfg(test)]
+#[path = "heal_diffusion_tests.rs"]
+mod heal_diffusion_tests;

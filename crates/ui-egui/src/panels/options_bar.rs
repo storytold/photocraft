@@ -437,3 +437,7 @@ mod art_history_bar_controls_tests;
 #[cfg(test)]
 #[path = "../healing_mode_menu_tests.rs"]
 mod healing_mode_menu_tests;
+
+#[cfg(test)]
+#[path = "../healing_legacy_diffusion_bar_tests.rs"]
+mod healing_legacy_diffusion_bar_tests;

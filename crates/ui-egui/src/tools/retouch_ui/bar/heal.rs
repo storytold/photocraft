@@ -133,22 +133,37 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
 }
 
 /// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
-/// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
+/// Sample greys at Current Layer and keeps the stored choice for other documents (#12613). The
+/// Healing Brush alone gets Use Legacy and Diffusion (#12103).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let source_unset = app.session.presets().clone.active().source.is_none();
     let clone_stamp = app.ui.tool == Tool::CloneStamp;
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
-    let (aligned, clone_sample) = bind_tracked!(app.ui.tool_options => clone_aligned, clone_sample);
+    // Read before the tracked bindings borrow the options: the Diffusion cell is only shown while
+    // Use Legacy is off (#12103), and it is one pass behind a click on that box, as every other
+    // cell in this bar is.
+    let legacy_on = app.ui.tool_options.healing_legacy;
+    let (aligned, clone_sample, legacy, diffusion) = bind_tracked!(app.ui.tool_options => clone_aligned, clone_sample, healing_legacy, healing_diffusion);
     check(ui, tl!("Aligned"), aligned, true, clone_stamp.then(|| tl!("Keep the same source offset between strokes")));
+    // Use Legacy and Diffusion are the Healing Brush's own cells (#12103); the Clone Stamp's bar
+    // shows neither. Diffusion hides while Use Legacy is on and shows the same value again when it
+    // is turned off.
+    if !clone_stamp {
+        check(ui, tl!("Use Legacy"), legacy, true, Some(tl!("Use the legacy Healing Brush algorithm")));
+    }
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { Bind::bound(&mut greyed) } else { clone_sample };
     choose(ui, tl!("Sample"), sample, &samples, !indexed, clone_stamp.then(|| tl!("Choose which layers to sample")));
+    let mut alert = None;
+    if !clone_stamp && !legacy_on {
+        alert = number(tl!("Diffusion"), diffusion, 1.0..=7.0).whole().tooltip(tl!("Adjust the degree of diffusion")).show(ui).out_of_range;
+    }
     if source_unset {
         Divider::vertical().show(ui);
         hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
     }
-    None
+    alert
 }
 
 #[allow(dead_code)]
