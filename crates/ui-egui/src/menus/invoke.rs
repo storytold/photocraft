@@ -70,8 +70,11 @@ fn keeps_box_drag(id: &str) -> bool {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
-    // The regions that ran before it in this pass show its change in the next one.
-    app.commands_run += 1;
+    // The regions that ran before it in this pass show its change in the next one. A view command changes only what
+    // the view's regions hold in their versions.
+    if !crate::panels::region_versions::changes_only_the_view(app, id) {
+        app.commands_run += 1;
+    }
     ctx.request_repaint();
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
@@ -393,6 +396,9 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 
 /// Dispatch UI actions and dialogs, falling back to the engine for other commands.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    // File › Save and the unsaved-changes prompt's Save write from here without `run`: they must
+    // not write Apply Data Set's Preview either. The dialog shows it again on the next frame.
+    crate::panels::apply_data_set_ui::end_preview(app);
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
     }
@@ -523,9 +529,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "select.findLayers" => crate::layer_filter_ui::find::invoke(app, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
-        "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => {
-            Ok(json!({"dialog": crate::color_range_ui::open(app).map(|dialog| dialog.value().to_string())}))
-        }
+        "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => crate::color_range_ui::open(app).map(dialog_reply),
         // Layer › New Fill Layer › Pattern… from the menu: the Pattern Fill dialog (with params:
         // the engine directly).
         photocraft_engine::pattern_fill_cmds::CREATE if params.as_object().is_none_or(|o| o.is_empty()) => {
@@ -631,6 +635,7 @@ fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> R
                 // Several layers (artboards, say) selected: one file each (#3629).
                 let layers = app.session.active().map(|document| document.selected_layers()).unwrap_or_default();
                 if layers.len() > 1 {
+                    let layers = layers.to_vec();
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?.value()})))
                 } else {
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?.value()})))
@@ -776,6 +781,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         // Image › Adjustments › Equalize with a selection asks what to equalize, as in Photoshop.
         crate::equalize_ui::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::equalize_ui::asks(app) => {
             Some(Ok(dialog_reply(crate::equalize_ui::open(app))))
+        }
+        // Edit › Assign Profile on a document with layers asks first (#14235).
+        "edit.assignProfile" if params.as_object().is_none_or(|object| object.is_empty()) && crate::dialogs::assign_profile_layers_alert::asks(app) => {
+            Some(Ok(dialog_reply(crate::dialogs::assign_profile_layers_alert::open(app))))
         }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|object| object.is_empty()) => {
             Some(crate::filter_dialog::open(app, fl).map(dialog_reply))

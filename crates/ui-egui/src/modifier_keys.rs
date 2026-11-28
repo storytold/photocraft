@@ -1,5 +1,5 @@
 //! The Modifier Keys panel: latching Shift, ⌘ and ⌥ for touch and pen users. Code that needs the held modifiers reads
-//! `craft::ui::runtime::pointer::frame(ctx).mods`, which includes the latched keys.
+//! `craft::ui::runtime::pointer::mods(ctx)`, which includes the latched keys.
 
 use craft::ui::contract::Bind;
 use craft::ui::patterns::panels::ModifierKeysPanel;

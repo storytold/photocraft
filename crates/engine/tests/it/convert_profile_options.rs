@@ -196,7 +196,7 @@ fn smart_scene(children: Vec<Layer>) -> Session {
     doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
     let ordinary = Layer::raster("Ordinary", PixelFormat::RGBA32F);
     let active = ordinary.id;
-    doc.layers = vec![Layer::group("Outer", vec![Layer::group("Inner", children)]), ordinary];
+    doc.layers = vec![Layer::group("Outer", vec![Layer::group("Inner", children)]), ordinary].into();
     from_document(doc, Some(active))
 }
 

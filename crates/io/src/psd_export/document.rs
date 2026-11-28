@@ -1,7 +1,10 @@
 use super::PSD_MAX_FILE_SIZE;
 use super::estimate::{MERGED_RENDERED, MERGED_WEIGHT, fit_psd_size, psd_version, sign_global_blocks};
 use super::merged::{cmyk_of, merged_planes, placeholder_planes};
-use super::resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+use super::resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use super::smart::{SmartOut, link_group_resource};
 use super::{
     ColorMode, Compression, Document, Ex, GlobalLayerMask, Header, ImageData, ImageResource, Interrupt, LayerContent, LayerInfo, LayerInfoPlacement,
@@ -63,7 +66,11 @@ fn document_to_psd_sized_with_patterns(
     if doc.mode == ColorMode::Multichannel {
         return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns);
     }
-    if let Some(file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns)? {
+    if let Some(mut file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns)? {
+        // An Indexed document's RGB profile is written there too; Include ICC Profile off leaves it out.
+        if !opts.embed_icc {
+            file.0.resources.retain(|r| r.id != ids::ICC_PROFILE);
+        }
         return Ok(file);
     }
     let fmt = doc.pixel_format();
@@ -113,6 +120,7 @@ fn export_supported_document(
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),
+        pattern_space: photocraft_compose::pattern::PatternSpace::of_pixels(doc),
         background: psd_background(doc),
         stage: {
             let raw = doc.size.area().saturating_mul(fmt.bytes_per_pixel() as u64).saturating_mul(doc.walk().len() as u64 + 1);
@@ -145,7 +153,7 @@ fn export_supported_document(
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
         ImageResource::new(ids::GLOBAL_ALTITUDE, (doc.global_light.altitude.round() as i32).to_be_bytes().to_vec()),
     ];
-    if let Some(icc) = &doc.icc_profile {
+    if let Some(icc) = doc.icc_profile.as_ref().filter(|_| opts.embed_icc) {
         resources.push(ImageResource::new(ids::ICC_PROFILE, icc.to_vec()));
     }
     if !doc.guides.horizontal.is_empty() || !doc.guides.vertical.is_empty() {
@@ -243,6 +251,7 @@ fn export_supported_document(
     if let Some(warning) = slices_warning {
         ex.warnings.push(warning);
     }
+    let clipping_flatness = imported_clipping_flatness_edit(doc);
     for (id, name, data) in &doc.metadata.psd_resources {
         // Layer comps: the preserved list while unchanged, else regenerated (or dropped) below.
         if *id == crate::comps_map::LAYER_COMPS && comps_resource.is_some() {
@@ -261,7 +270,7 @@ fn export_supported_document(
         if *id == crate::channel_map::ALPHA_IDENTIFIERS {
             continue;
         }
-        let mut r = ImageResource::new(*id, data.to_vec());
+        let mut r = ImageResource::new(*id, imported_resource_data(*id, data, clipping_flatness));
         r.name = legacy_name(name);
         resources.push(r);
     }
@@ -523,7 +532,7 @@ mod pattern_failure_tests {
             for name in ["Retained first", "Refused second"] {
                 let mut surface = Surface::new(PixelFormat::RGBA8);
                 surface.fill_rect(photocraft_geom::Rect::new(0, 0, 2, 2), &[0.25, 0.5, 0.75, 1.]);
-                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, surface });
+                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, source_mode: None, surface });
             }
             let before = doc.clone();
             let error = document_to_psd_with_pattern_limit(&doc, 16).unwrap_err();

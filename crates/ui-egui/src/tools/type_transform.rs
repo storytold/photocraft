@@ -171,14 +171,21 @@ pub(crate) fn quad_of(rect: kurbo::Rect, aff: &Affine) -> Option<[kurbo::Point; 
 }
 
 /// The text's frame: the open transform's, else the layer's bounds mapped by its existing affine (including
-/// rotation and skew). `None` for a locked, hidden or position-locked layer, which cannot be moved.
+/// rotation and skew). `None` for a locked, hidden or position-locked layer, which cannot be moved. The one
+/// exception is a Type Mask session with ⌘/Ctrl held: its text is a hidden working layer, and the reference
+/// application shows the same box over it as over an ordinary type layer (#12082). Without the modifier, and
+/// for an invisible ordinary layer, the frame stays absent, so neither the box nor its move reach exists.
 pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<Frame> {
-    let id = LayerId(app.ui.text_edit.as_ref()?.layer);
+    let ed = app.ui.text_edit.as_ref()?;
+    let (id, mask_session) = (LayerId(ed.layer), ed.mask);
     if let Some(t) = &app.ui.type_transform {
         return Some(Frame { layer: id, rect: t.session.rect(), state: *t.session.state() });
     }
     let layer = app.session.active()?.doc.layer(id)?;
-    if layer.locks.all || layer.locks.position || !layer.visible {
+    // Only the whole-box pass (⌘/Ctrl held, or a capture begun so - the early return above) asks the pointer
+    // frame; the move-reach pass without the modifier keeps a mask session frameless, as before.
+    let mask_frame = mask_session && craft::ui::runtime::pointer::mods(app.ctx()).cmd;
+    if layer.locks.all || layer.locks.position || (!layer.visible && !mask_frame) {
         return None;
     }
     let (rect, aff) = source_rect(app, id)?;
@@ -282,8 +289,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
         return;
     }
     let ctx = ui.ctx().clone();
-    let pointer = craft::ui::runtime::pointer::frame(&ctx);
-    if whole_box(app, pointer.mods) != drawn {
+    let mods = craft::ui::runtime::pointer::mods(&ctx);
+    let press = craft::ui::runtime::pointer::press_state(&ctx).press;
+    if whole_box(app, mods) != drawn {
         return;
     }
     let Some(frame) = frame(app) else { return };
@@ -300,11 +308,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
     let out = TransformOverlay::new(Label::from(&*tl!("Type transform")), session, &settings)
         .reach(reach)
         .rotate_zone(RotateZone::border(ROTATE_REACH_PT))
-        .mods(Some(pointer.mods))
+        .mods(Some(mods))
         .id_salt("type transform")
         .show_at(ui, canvas);
     // The press that went down on the box in this pass, or the box's first edit, starts the capture.
-    let pressed = out.held.is_some() && pointer.press.is_some();
+    let pressed = out.held.is_some() && press.is_some();
     if app.ui.type_transform.is_none() && !pressed && out.edits.is_empty() && out.apply.is_none() && !out.discard {
         return;
     }
@@ -332,6 +340,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
     } else if out.held.is_none() && !dragging {
         // The press ended without a drag (a click), or a key moved the box: the capture ends with it.
         finish(app);
+    }
+    // The editor is not shown while the box holds the pointer, so its focus scope gives the keyboard back to the
+    // canvas. The type session goes on after the box, and so does typing: the editor takes the keyboard again.
+    if app.ui.type_transform.is_none() && app.ui.text_edit.is_some() {
+        crate::tools::type_tool::focus_editor(&ctx);
     }
 }
 
@@ -405,3 +418,7 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, before: u64
     let area = |key| if key == 0 { Some(p.original_area) } else { p.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) };
     Some(area(before)?.union(&area(after)?))
 }
+
+#[cfg(test)]
+#[path = "type_transform_mask_tests.rs"]
+mod mask_tests;

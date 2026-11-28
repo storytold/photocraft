@@ -41,7 +41,7 @@ fn id(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> LayerId {
 }
 
 fn selected(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<LayerId> {
-    h.state().session.active().unwrap().selected_layers()
+    h.state().session.active().unwrap().selected_layers().to_vec()
 }
 
 /// The names the panel's filter lists, top to bottom.

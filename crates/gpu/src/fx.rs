@@ -209,13 +209,14 @@ impl B {
     fn bevel_fields(&mut self, width: f32) -> [In; 2] {
         [FieldKind::BevelInside, FieldKind::BevelOutside].map(|k| self.field(k, width))
     }
-    /// `Map::shifted` by whole pixels (`invert`: of `1 - a`); identity shifts of the plain map
-    /// are skipped.
+    /// `Map::shifted`, whole-pixel or sub-pixel (`invert`: of `1 - a`, per tap as the CPU inverts
+    /// its map before sampling); identity shifts of the plain map are skipped. A sub-pixel shift
+    /// reads the tap beyond its base, so the radius ceils rather than truncates.
     fn shift(&mut self, src: In, dx: f32, dy: f32, outside: f32, invert: bool) -> In {
         if dx == 0.0 && dy == 0.0 && !invert {
             return src;
         }
-        let r = dx.abs().max(dy.abs()) as i32;
+        let r = dx.abs().max(dy.abs()).ceil() as i32;
         self.push(stage(Kernel::MShift, Some(src), None, [dx, dy, outside, f32::from(u8::from(invert))], r))
     }
     /// `dilate(src, r)` given `dist_outside(src)`.
@@ -255,9 +256,10 @@ impl B {
         self.stages.push(s);
     }
 
+    /// `invert` flips the coverage after the contour (`fs_mfinish` mode 2), as the CPU's `satin_map` (#14981).
     fn finish_lut(&mut self, a: In, b: Option<In>, invert: bool, lut: Option<Vec<f32>>, times_shape: bool, out: usize) {
         let flag = |v: bool| f32::from(u8::from(v));
-        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
+        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), 2.0 * flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
         s.lut = lut.map(Arc::new);
         if times_shape {
             s.s = Some(In::Shape);
@@ -296,22 +298,41 @@ fn offset(angle: f32, distance: f32) -> (f32, f32) {
     ((-a.cos() * distance).round(), (a.sin() * distance).round())
 }
 
+/// Which shape supplies the distance fields for a layer style stroke.
+#[derive(Clone, Copy)]
+pub(crate) enum StrokeShape {
+    Raster,
+    VectorOutline,
+    Other,
+}
+
+impl StrokeShape {
+    pub(crate) fn of(layer: &Layer) -> Self {
+        match &layer.content {
+            LayerContent::Raster(_) => Self::Raster,
+            LayerContent::Shape(_) if photocraft_compose::effect_outline(layer).is_none() => Self::VectorOutline,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// The map program of one enabled effect (`build_maps`), without pattern sources.
 #[cfg(test)]
 pub(crate) fn program(e: &Effect, light: &GlobalLight, vector_shape: bool) -> MapProgram {
-    program_with(e, light, vector_shape, &[], (0.0, 0.0))
+    let shape = if vector_shape { StrokeShape::VectorOutline } else { StrokeShape::Raster };
+    program_with(e, light, shape, &[], (0.0, 0.0))
 }
 
 /// The map program of one enabled effect (`build_maps`); bevel textures tile `patterns` from
 /// `anchor` (`effects::TextureCtx`).
-pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, patterns: &[Pattern], anchor: (f64, f64)) -> MapProgram {
+pub(crate) fn program_with(e: &Effect, light: &GlobalLight, stroke_shape: StrokeShape, patterns: &[Pattern], anchor: (f64, f64)) -> MapProgram {
     let mut b = B { stages: Vec::new(), fields: Vec::new() };
     let maps = match e {
         Effect::DropShadow(s) | Effect::InnerShadow(s) => b.shadow(s, light, matches!(e, Effect::InnerShadow(_))),
         Effect::OuterGlow(g) | Effect::InnerGlow(g) => b.glow(g, matches!(e, Effect::InnerGlow(_))),
         Effect::Satin(s) => b.satin(s),
         Effect::BevelEmboss(bv) => b.bevel(bv, light, patterns, anchor),
-        Effect::Stroke(st) => b.stroke(st, vector_shape),
+        Effect::Stroke(st) => b.stroke(st, stroke_shape),
         Effect::ColorOverlay { .. } | Effect::GradientOverlay { .. } | Effect::PatternOverlay { .. } => return MapProgram::empty(),
     };
     MapProgram { key: b.key(maps), maps, stages: b.stages, fields: b.fields }
@@ -552,6 +573,7 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
     }
     fn walk(l: &Layer, h: &mut std::collections::hash_map::DefaultHasher, pin: Pin) {
         l.id.0.hash(h);
+        std::mem::discriminant(&l.content).hash(h);
         (l.visible, l.clipped, l.opacity.to_bits(), l.fill_opacity.to_bits(), format!("{:?}", l.blend)).hash(h);
         match &l.content {
             LayerContent::Group(g) => {
@@ -566,6 +588,13 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
                 }
             }
             LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+            LayerContent::Shape(sh) => {
+                format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(h);
+                (sh.use_aligned_rendering, sh.density.to_bits(), sh.feather.to_bits()).hash(h);
+                if let Some(s) = &sh.cache {
+                    surface_fp(s, h, pin);
+                }
+            }
             _ => {
                 if let Some(s) = l.surface() {
                     surface_fp(s, h, pin);
