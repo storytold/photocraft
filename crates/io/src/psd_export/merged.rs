@@ -303,9 +303,20 @@ mod tests {
             doc.layers.push(l);
         }
         let dfmt = doc.pixel_format();
+        let canvas = doc.bounds();
+        let height = canvas.height() as i32;
+        let band_height = |band_pixels: u64| {
+            let requested = i32::try_from((band_pixels / u64::from(canvas.width().max(1))).max(1)).unwrap_or(i32::MAX);
+            photocraft_compose::band_rows_for(canvas.width(), requested).min(height)
+        };
+        let whole = band_height(photocraft_compose::BAND_PIXELS);
+        assert_eq!(whole, height, "one band");
         let tall = merged_planes_in_bands(&doc, &dfmt, false, true, photocraft_compose::BAND_PIXELS, &Interrupt::NONE);
-        assert!(photocraft_compose::band_rows_for(300, (photocraft_compose::BAND_PIXELS / 300) as i32) >= 1100, "one band");
+        let mut rendered_heights = std::collections::BTreeSet::from([whole]);
         for band_pixels in [1, 300 * 256, 300 * 512, MERGED_BAND_PIXELS] {
+            if !rendered_heights.insert(band_height(band_pixels)) {
+                continue;
+            }
             let banded = merged_planes_in_bands(&doc, &dfmt, false, true, band_pixels, &Interrupt::NONE);
             assert!(banded == tall, "{band_pixels} px bands changed the merged image");
         }
