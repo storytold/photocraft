@@ -229,6 +229,63 @@ mod tests {
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
     }
+
+    /// Hovering the canvas or dragging the Eyedropper updates `hover_doc` and the Info panel's
+    /// colour and position readouts; leaving the canvas clears them (#16654).
+    #[test]
+    fn canvas_hover_and_eyedropper_drag_update_info_readings() {
+        use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
+
+        use crate::canvas::document_display::CanvasHost;
+        use crate::state::{Tool, View};
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = app.ctx().clone();
+        app.run("file.new", json!({"width": 100, "height": 100, "background": "white"})).unwrap();
+        app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "pixels"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.session
+            .edit("blue half", |doc, active| {
+                let id = active.unwrap();
+                let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+                surf.fill_rect(photocraft_geom::Rect::new(50, 0, 100, 100), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        let mut view = View { zoom: 1.0, center: [50.0, 50.0], doc_size: [100, 100], ..Default::default() };
+        view.clear_pending();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let step = |app: &mut PhotocraftApp, events: Vec<Event>| {
+            let input = RawInput { screen_rect: Some(rect), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                crate::canvas::canvas_view(app, ui, CanvasHost::main(0), rect, view.clone(), true);
+            });
+            out.textures_delta.clear();
+        };
+
+        // Hover over the red half: Info reports red and (20, 30).
+        step(&mut app, vec![Event::PointerMoved(pos2(20.5, 30.5))]);
+        let r = readings(&mut app, &[]);
+        assert_eq!(r.color.map(|c| c.rgb), Some([255, 0, 0]), "hovered red pixel");
+        let pos = r.position.expect("hovered position");
+        assert!(pos[0].as_str().starts_with("20") && pos[1].as_str().starts_with("30"), "got {pos:?}");
+
+        // Dragging the Eyedropper into the blue half keeps updating the Info readout.
+        app.ui.tool = Tool::Eyedropper;
+        step(&mut app, vec![Event::PointerButton { pos: pos2(20.5, 30.5), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        step(&mut app, vec![Event::PointerMoved(pos2(75.5, 40.5))]);
+        let r = readings(&mut app, &[]);
+        assert_eq!(r.color.map(|c| c.rgb), Some([0, 0, 255]), "dragged blue pixel");
+        let pos = r.position.expect("dragged position");
+        assert!(pos[0].as_str().starts_with("75") && pos[1].as_str().starts_with("40"), "got {pos:?}");
+
+        // Releasing and leaving the canvas clears the readings.
+        step(&mut app, vec![Event::PointerButton { pos: pos2(75.5, 40.5), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        step(&mut app, vec![Event::PointerGone]);
+        let r = readings(&mut app, &[]);
+        assert_eq!(r.color, None, "cleared after leaving canvas");
+        assert_eq!(r.position, None, "position cleared after leaving canvas");
+    }
 }
 
 #[cfg(test)]
