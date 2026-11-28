@@ -1,4 +1,4 @@
-use super::texels::texels;
+use super::texels::canvas_texels;
 use super::{egui_wgpu, wgpu};
 use crate::render_path::CpuReason;
 
@@ -20,7 +20,7 @@ pub fn display_texels(
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     buf: &photocraft_compose::Buffer,
 ) -> Vec<u8> {
-    texels(format, &texture_buffer(display, buf).px)
+    canvas_texels(format, &texture_buffer(display, buf).px)
 }
 
 /// What a [`GpuCanvas::refresh`] did.

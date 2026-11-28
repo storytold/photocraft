@@ -75,12 +75,14 @@ mod window_drop;
 
 pub(crate) use cursor_policy::alt_samples;
 pub(crate) use display::GPU_OUTPUT;
+
 #[cfg(test)]
 pub(crate) use display::cache_key;
+pub use display::display_image;
 #[cfg(test)]
 use display::sync_display_lut;
 use display::texture_key;
-pub(crate) use display::{canvas_display, display_doc, display_image};
+pub(crate) use display::{canvas_display, display_doc};
 pub(crate) use document_area::arranged_cells;
 pub use document_area::document_area;
 pub(crate) use document_display::view_target;
