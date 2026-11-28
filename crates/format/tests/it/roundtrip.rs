@@ -883,12 +883,14 @@ fn save_is_deterministic() {
 fn save_load_save_gives_the_same_bytes() {
     let mut preview = Rgba8Image::new(4, 3);
     preview.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = i as u8);
-    for opts in [SaveOptions::default(), SaveOptions { thumbnail: Some(preview.clone()), composite: Some(preview.clone()), ..Default::default() }] {
-        for mode in MODES {
-            for depth in SampleType::ALL {
-                let first = save_to_bytes(&rich_doc(mode, depth), &opts).unwrap();
-                let again = save_to_bytes(&load_from_bytes(&first).unwrap(), &opts).unwrap();
-                assert!(first == again, "{mode:?} {depth:?}: the second save differs");
+    let options = [SaveOptions::default(), SaveOptions { thumbnail: Some(preview.clone()), composite: Some(preview), ..Default::default() }];
+    for mode in MODES {
+        for depth in SampleType::ALL {
+            let doc = rich_doc(mode, depth);
+            for opts in &options {
+                let first = save_to_bytes(&doc, opts).unwrap();
+                let again = save_to_bytes(&load_from_bytes(&first).unwrap(), opts).unwrap();
+                assert!(first == again, "{mode:?} {depth:?}, previews={}: the second save differs", opts.thumbnail.is_some());
             }
         }
     }
