@@ -369,6 +369,9 @@ impl DabTool {
             }
             Self::Focus { sharpen, strength, protect, sigma } => {
                 let a = alpha_index(&fmt);
+                // Sharpen sharpens alpha too (#12940), measured at 8 bits only: 16- and 32-bit
+                // layers keep their alpha as before.
+                let keep_alpha = if sharpen && fmt.sample != SampleType::U8 { a } else { None };
                 let mut shares = ProtectDetailShares::default();
                 Box::new(move |work, fp| {
                     let r = fp.rect.intersect(&work.rect);
@@ -401,7 +404,9 @@ impl DabTool {
                             let i = (x - wx0) as usize * n;
                             let px = &mut line[i..i + n];
                             for c in 0..n {
-                                px[c] += (out[o + c] - px[c]) * k;
+                                if Some(c) != keep_alpha {
+                                    px[c] += (out[o + c] - px[c]) * k;
+                                }
                             }
                         }
                     });
@@ -881,6 +886,10 @@ mod smudge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
 mod smudge_mode_tests;
+
+#[cfg(test)]
+#[path = "sharpen_alpha_tests.rs"]
+mod sharpen_alpha_tests;
 
 #[cfg(test)]
 #[path = "dodge_32bit_linear_tests.rs"]

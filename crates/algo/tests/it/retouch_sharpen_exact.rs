@@ -62,7 +62,7 @@ fn scalar_local_sharpen(
             for c in 0..ch {
                 let v = data[i + c];
                 if Some(c) == alpha {
-                    out[o + c] = v;
+                    out[o + c] = if protect_detail { v } else { (v + amount * (v - blur[o + c])).clamp(0.0, 1.0) };
                     continue;
                 }
                 let d = v - blur[o + c];

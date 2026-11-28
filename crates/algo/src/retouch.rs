@@ -301,7 +301,12 @@ const PROTECT_DETAIL_LIMIT: f32 = 6.0 / 255.0;
 /// low halo a few pixels wide, and each difference is soft-limited to `L` = 6 levels:
 /// `v + amount·d·L/(L + |d|)`. Fine detail is sharpened about as much as without it, while a
 /// strong edge or a lone bright pixel moves by less than `L` per pass instead of overshooting.
-/// Uniform areas stay exactly as they are. Alpha is left unchanged.
+/// Uniform areas stay exactly as they are.
+///
+/// Without `protect_detail`, alpha is sharpened by the same rule as colour and clamped to 0..1
+/// (#12940): a semi-transparent edge gets crisper while the colour stays, since the colour is
+/// blurred premultiplied. An opaque pixel next to a transparent one stays as it is, because the
+/// clamp holds both at their limits. With `protect_detail`, alpha is left unchanged (not measured).
 #[allow(clippy::too_many_arguments)]
 pub fn local_sharpen(
     data: &[f32],
@@ -332,7 +337,7 @@ pub fn local_sharpen(
             for c in 0..ch {
                 let v = data[i + c];
                 if Some(c) == alpha {
-                    dst[o + c] = v;
+                    dst[o + c] = if protect_detail { v } else { (v + amount * (v - blur_row[o + c])).clamp(0.0, 1.0) };
                     continue;
                 }
                 let d = v - blur_row[o + c];
