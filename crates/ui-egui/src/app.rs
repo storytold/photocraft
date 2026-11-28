@@ -116,7 +116,6 @@ impl PhotocraftApp {
             adjust_open: None,
             adjust_session: None,
             properties_hidden: 0,
-            properties_tracked: false,
             dialog_dropper: None,
             layer_style_child: None,
             color_targets: HashMap::new(),
@@ -135,6 +134,7 @@ impl PhotocraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
             redraws: Default::default(),
+            redraw_landed: 0,
             kept: Default::default(),
             color_range: None,
             adjust_preview: None,
@@ -164,6 +164,7 @@ impl PhotocraftApp {
             canvas_hover_layer: None,
             clone_preview: None,
             info_sample: None,
+            info_cmyk_sample: None,
             os_clip_sig: None,
             os_clip_svg: None,
             clip_unmirrored: true,
@@ -268,6 +269,9 @@ impl eframe::App for PhotocraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.close_control();
+        if let Some(at_exit) = self.services.at_exit.take() {
+            at_exit();
+        }
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -353,3 +357,6 @@ mod apply_data_set_alert_tests;
 
 #[cfg(test)]
 mod apply_data_set_missing_file_tests;
+
+#[cfg(test)]
+mod exit_hook_tests;

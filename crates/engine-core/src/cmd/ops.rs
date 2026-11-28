@@ -99,7 +99,8 @@ fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask
 
 /// Drag a layer mask's thumbnail onto another layer or group in the Layers panel: the mask moves
 /// there (⌥: a copy goes there and the original stays), as in Photoshop (#10485). A layer that
-/// already has a mask keeps it unless `replace` (Photoshop asks first). One history step.
+/// already has a mask keeps it unless `replace` (Photoshop asks first). One history step, named
+/// `Add Layer Mask` for a move and a copy alike, as Photoshop names the drop (#16786).
 pub(super) fn move_mask(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |m: &str| EngineError::BadParams { cmd: "layer.layerMask.moveTo".into(), msg: m.into() };
     let from = layer_param(s, p)?;
@@ -109,8 +110,7 @@ pub(super) fn move_mask(s: &mut Session, p: &Value) -> Result<Value> {
     if from == to {
         return Err(bad("the mask is already on that layer"));
     }
-    let label = if copy { "Copy Layer Mask" } else { "Move Layer Mask" };
-    s.edit(label, |doc, _| {
+    s.edit("Add Layer Mask", |doc, _| {
         let mask = doc.layer(from).ok_or(EngineError::NoLayer(from))?.mask.clone().ok_or_else(|| bad("the layer has no layer mask"))?;
         if doc.layer(to).ok_or(EngineError::NoLayer(to))?.mask.is_some() && !replace {
             return Err(bad("the layer already has a layer mask (pass `replace`)"));
@@ -156,7 +156,7 @@ fn mask_destination(s: &Session, p: &Value) -> Result<LayerId> {
 
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via
 /// `vector_cmds::translate_vectors`).
-pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
+pub fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
     translate_layer_wrapped(doc, l, dx, dy, None);
 }
 

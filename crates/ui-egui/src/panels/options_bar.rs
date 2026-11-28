@@ -12,8 +12,8 @@ use craft::ui::contract::{Bind, Entry, MemoProps, MemoView, Outbox, Props as _, 
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::menu::Menu;
-use craft::ui::runtime::env::{Env, Label, WheelScope, with_env};
-use craft::ui::text::NumberField;
+use craft::ui::runtime::env::{Env, Label, UnitKind, WheelScope, with_env};
+use craft::ui::text::{NumberField, RangeAlert};
 use photocraft_paint::BrushSettings;
 
 use super::{PhotocraftApp, Tool, Value, icons, json};
@@ -262,34 +262,58 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     // Pattern Stamp's list has Behind, greyed on the Background.
     let entries = fill::mode_entries(tool, crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind), threshold);
     if !entries.is_empty() {
-        let current =
-            if tool == Tool::PatternStamp && brush.behind { PaintMode::Behind } else { PaintMode::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode)) };
-        let picked = labelled(ui, tl!("Mode"), |ui| fill::mode_select(Bind::given(current), &entries).show(ui));
+        let current = if tool == Tool::Healing && app.ui.tool_options.healing_replace {
+            PaintMode::HealingReplace
+        } else if tool == Tool::PatternStamp && brush.behind {
+            PaintMode::Behind
+        } else {
+            PaintMode::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode))
+        };
+        let picked = labelled(ui, tl!("Mode"), |ui| {
+            let select = fill::mode_select(Bind::given(current), &entries);
+            let select = if tool == Tool::CloneStamp { select.tooltip(tl!("Painting Mode")) } else { select };
+            select.show(ui)
+        });
         if let Some(mode) = picked.and_then(|shown| shown.events.value().cloned()) {
-            let mut after = brush.clone();
-            match mode {
-                PaintMode::Blend(blend) => {
-                    after.mode = blend;
-                    if tool == Tool::PatternStamp {
-                        after.behind = false;
-                    }
+            if mode == PaintMode::HealingReplace {
+                // Replace (#12101): a tool option like the painting tools' Clear, with no brush
+                // value to write: the next stroke carries mode:"replace", and picking a Mode adds
+                // no History step.
+                app.ui.tool_options.healing_replace = true;
+            } else {
+                if tool == Tool::Healing {
+                    // Any of the seven blend modes leaves Replace (#12101).
+                    app.ui.tool_options.healing_replace = false;
                 }
-                PaintMode::Behind => after.behind = true,
-                PaintMode::Clear => {}
+                let mut after = brush.clone();
+                match mode {
+                    PaintMode::Blend(blend) => {
+                        after.mode = blend;
+                        if tool == Tool::PatternStamp {
+                            after.behind = false;
+                        }
+                    }
+                    PaintMode::Behind => after.behind = true,
+                    PaintMode::Clear | PaintMode::HealingReplace => {}
+                }
+                // A pick is one step of its own.
+                crate::brush_panel::commit_keyed(app, &brush, &after, None);
             }
-            // A pick is one step of its own.
-            crate::brush_panel::commit_keyed(app, &brush, &after, None);
         }
     }
-    // The Pattern Stamp's Opacity and Flow are whole percents with the Brush's tooltips (#12616).
-    if tool == Tool::PatternStamp {
-        let opacity = whole_percent_field(ui, tl!("Opacity"), brush.opacity, tl!("Set opacity for stroke"));
+    // Both stamps use whole percents. Only Clone Stamp alerts on an out-of-range commit (#12607).
+    if matches!(tool, Tool::CloneStamp | Tool::PatternStamp) {
+        let clone_stamp = tool == Tool::CloneStamp;
+        let (opacity, opacity_alert) = whole_percent_field(ui, tl!("Opacity"), brush.opacity, tl!("Set opacity for stroke"), clone_stamp);
         edit_brush(app, &opacity, |b, v| b.opacity = v);
-        let flow = whole_percent_field(ui, tl!("Flow"), brush.flow, tl!("Set flow rate for stroke"));
+        let (flow, flow_alert) = whole_percent_field(ui, tl!("Flow"), brush.flow, tl!("Set flow rate for stroke"), clone_stamp);
         edit_brush(app, &flow, |b, v| b.flow = v);
+        if clone_stamp && let Some(alert) = opacity_alert.or(flow_alert) {
+            crate::option_cells::range_alert(app, ui, &alert);
+        }
         return;
     }
-    if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
+    if tool == Tool::HistoryBrush {
         let opacity = percent_field(ui, tl!("Opacity"), brush.opacity, 1.0..=100.0);
         edit_brush(app, &opacity, |b, v| b.opacity = v);
     }
@@ -312,7 +336,7 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
             crate::brush_panel::commit_keyed(app, &before, &after, key);
         }
     }
-    if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
+    if tool == Tool::HistoryBrush {
         let flow = percent_field(ui, tl!("Flow"), brush.flow, 1.0..=100.0);
         edit_brush(app, &flow, |b, v| b.flow = v);
     }
@@ -337,8 +361,8 @@ pub(super) fn labelled<R>(ui: &mut egui::Ui, label: &str, mut add: impl FnMut(&m
 }
 
 /// A check box named `label` over `value`.
-pub(super) fn check(ui: &mut egui::Ui, label: &str, value: &mut bool) {
-    Checkbox::new(Bind::bound(value)).label(label.to_owned()).show(ui);
+pub(super) fn check(ui: &mut egui::Ui, label: &str, value: Bind<'_, bool>) {
+    Checkbox::new(value).label(label.to_owned()).show(ui);
 }
 
 /// A number field named `label` over `value` (in `unit` when it is not empty), limited to `range`. The events of this
@@ -366,26 +390,25 @@ pub(super) fn percent_field(ui: &mut egui::Ui, label: &str, fraction: f32, range
     number_field(ui, label, fraction * 100.0, range, "%").map(|percent| percent / 100.0)
 }
 
-/// A whole-percent field 1..100 % over a fraction `fraction`, with `tip`; its events carry fractions. A fraction set
-/// elsewhere (a `tools.setBrush` value) shows as its whole percent; a typed value past the range is clamped silently, as
-/// the Brush's fields do.
-fn whole_percent_field(ui: &mut egui::Ui, label: &str, fraction: f32, tip: &str) -> EditEvents<f32> {
+/// A whole-percent field 1–100 over a fraction, with a tooltip. Its edits carry fractions and a typed clamp reports
+/// the range. When the caller shows that report, use the localized percent symbol next to each bound.
+fn whole_percent_field(ui: &mut egui::Ui, label: &str, fraction: f32, tip: &str, show_range_alert: bool) -> (EditEvents<f32>, Option<RangeAlert>) {
     let percent = f64::from((fraction * 100.0).round());
-    let events = labelled(ui, label, |ui| {
+    let (events, alert) = labelled(ui, label, |ui| {
         let codec = NumberCodec::new(Env::of(ui).units().reader(None), 0);
-        NumberField::new(label.to_owned(), Bind::given(Some(percent)))
+        let field = NumberField::new(label.to_owned(), Bind::given(Some(percent)))
             .range(1.0..=100.0)
             .scrub_by_label()
-            .unit("%")
             .step(1.0)
             .commit_decimals(0)
             .codec(codec)
-            .tooltip(tip.to_owned())
-            .show(ui)
-            .events
-            .clone()
-    });
-    events.unwrap_or_default().filter_map(|v| v.map(|v| v.round() as f32 / 100.0))
+            .tooltip(tip.to_owned());
+        let field = if show_range_alert { field.unit_kind(UnitKind::Percent) } else { field.unit("%") };
+        let shown = field.show(ui);
+        (shown.edit.events, shown.out_of_range)
+    })
+    .unwrap_or_default();
+    (events.filter_map(|v| v.map(|v| v.round() as f32 / 100.0)), alert)
 }
 
 /// The `layer.setProps` edit of a Layers panel Opacity or Fill (`key`) field at `pct` percent. A drag of the pop-up
@@ -404,5 +427,13 @@ pub(super) fn pct_action(target: &Value, key: &str, pct: f32, coalesce: Option<S
 mod pattern_stamp_opacity_flow_tests;
 
 #[cfg(test)]
+#[path = "../clone_stamp_fields_tests.rs"]
+mod clone_stamp_fields_tests;
+
+#[cfg(test)]
 #[path = "art_history_bar_controls_tests.rs"]
 mod art_history_bar_controls_tests;
+
+#[cfg(test)]
+#[path = "../healing_mode_menu_tests.rs"]
+mod healing_mode_menu_tests;

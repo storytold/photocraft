@@ -48,12 +48,27 @@ fn adjust_request(app: &PhotocraftApp) -> Option<(craft::ui::dialog::DialogId, S
     Some((open.id, cmd, params))
 }
 
+/// An open preview dialog's request: the dialog, its command and its parameters.
+type PreviewRequest = (craft::ui::dialog::DialogId, String, String);
+
+/// What the canvas shows of an open filter or adjustment dialog's preview, for the document area's version
+/// (`region_versions::canvas`): the request the dialog asks for (its fields change with no command) and the result
+/// on screen, with whether OK's job is running.
+pub(crate) fn canvas_key(app: &PhotocraftApp) -> (Option<PreviewRequest>, Option<(usize, bool)>) {
+    let request = adjust_request(app).map(|(id, command, params)| (id, command, params.to_string()));
+    let shown = app.filter_preview.as_ref().map(|p| (p.result.as_ref().map_or(0, |doc| std::sync::Arc::as_ptr(doc) as usize), p.committing));
+    (request, shown)
+}
+
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it. With
 /// background jobs (the desktop app) it computes on one background worker
 /// (`filter_preview_worker`); otherwise (web, tests, `PHOTOCRAFT_INLINE_JOBS`) it keeps the
 /// deterministic inline path (#1676), which also lets headless/CPU tests inspect previews
 /// without a GPU texture.
 pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &egui::Context) -> Option<(u32, u64, [u32; 2])> {
+    // Alt+P toggles the Calculations dialog's Preview box: the pinned framework draws the box but keys no
+    // shortcut to it, and the canvas pass is where a live preview is asked for (#14530).
+    crate::dialogs::calculations_ui::preview_shortcut(app, ctx);
     if let Some(held) = committed_filter_preview(app, idx) {
         return held;
     }
@@ -86,6 +101,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             crate::smart_filter_dialog::blend_command(app, &target, &dialog_fields).ok()?
         } else if crate::smart_filter_dialog::is_target(&target) {
             crate::smart_filter_dialog::params_command(app, &target, &key, crate::filter_dialog::params_of(&fields)).ok()?
+        } else if key == crate::dialogs::calculations_ui::COMMAND {
+            // Calculations previews the result channel as a grey image over the whole canvas, not the
+            // (unchanged) post-OK document: the values run as their New Document result (#14530).
+            crate::dialogs::calculations_ui::preview_request(app, &fields)
         } else {
             (key.clone(), app.with_mask_target(&key, crate::filter_dialog::params_of(&fields)))
         };
@@ -177,7 +196,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             }
         }
         if app.filter_preview_worker.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            craft::ui::runtime::frame::request_repaint_after(ctx, std::time::Duration::from_millis(16).as_secs_f64());
         }
         let preview = app.filter_preview.as_ref()?;
         // Keep the last preview during a drag, but never one from another source or dialog. It is

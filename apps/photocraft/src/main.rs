@@ -420,12 +420,21 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, os_window::id_for(os_window::LaunchIdentity::NightlyV1))
 }
 
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hangs in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26). PhotoCraft's own Mac
+/// smoke passed, so this is preventive here.
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
 fn report_launch_profile_error(error: &str) {
     eprintln!("PhotoCraft launch profile: {error}");
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_process_identity() {
             eprintln!("PhotoCraft launch profile: {error}");
             return;
@@ -444,7 +453,9 @@ fn report_launch_profile_error(error: &str) {
 fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     // The trusted Launcher protocol is decided before logger/crash/update/font/prefs access.
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
-    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && build_flavor::version_query(&argv) {
+    // Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root <dir>
+    // --version`: answered before root validation, process identity, IPC or any window.
+    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
         use std::io::Write as _;
         let _ = writeln!(std::io::stdout(), "PhotoCraft {}", build_flavor::version(build_flavor::COMPILED, env!("PHOTOCRAFT_BUILT_VERSION")));
         return None;
@@ -471,12 +482,21 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     Some(early.args)
 }
 
+/// The allocator on Windows: mimalloc instead of the system heap. The UI builds and frees many small values every
+/// frame, and the system heap's alloc and free took about 14 % of the UI thread (#15493). Linux keeps glibc, which
+/// `malloc_tuning` tunes to give closed documents' memory back (#8743); macOS keeps its system allocator.
+#[cfg(windows)]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> eframe::Result {
     let Some(arguments) = prepare_launch() else { return Ok(()) };
 
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
+    // The git commit of a dev build's checkout, for `--version` and About (build.rs, #5247).
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
@@ -658,6 +678,16 @@ fn main() -> eframe::Result {
     // Set once a window has posted the interruption notice; until then the record must survive.
     let unclean_notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let notice_shown_in_callback = unclean_notice_shown.clone();
+    let nightly_session: nightly_session::Shared = std::sync::Arc::new(std::sync::Mutex::new(nightly_session));
+    // The app's exit hook is the controlled return on macOS, where every quit ends the process
+    // inside AppKit's terminate (craft::quit) and `run_native` never returns. Elsewhere the
+    // return path below finishes, as before.
+    #[cfg(target_os = "macos")]
+    let finish_at_exit = {
+        let shared = nightly_session.clone();
+        let shown = unclean_notice_shown.clone();
+        move || nightly_session::finish_once(&shared, shown.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let result = eframe::run_native(
         os_window::name_for(os_window::identity()),
         options,
@@ -691,7 +721,7 @@ fn main() -> eframe::Result {
             let session = Session::new();
             // Before the first pass: the one install of the craft runtime must see every pass from
             // the first (R71); the app then runs on that context.
-            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
+            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision, services::config_dir().as_deref());
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
             app.open_suite(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
@@ -884,6 +914,10 @@ fn main() -> eframe::Result {
                 );
                 notice_shown_in_callback.store(previous_nightly_unclean, std::sync::atomic::Ordering::Relaxed);
             }
+            #[cfg(target_os = "macos")]
+            {
+                app.services.at_exit = Some(Box::new(finish_at_exit));
+            }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], craft::theme::variant::Tone::Neutral, None);
@@ -900,11 +934,8 @@ fn main() -> eframe::Result {
     // health ownership BEFORE primary IPC, so a successor never observes a stale busy owner.
     // A renderer failure before the window (and so before the CPU retry) has not shown an
     // earlier interruption: keep that record so the retry, or the next start, still reports it.
-    if let Some(watch) = nightly_session
-        && let Err(error) = watch.finish(unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed))
-    {
-        log::warn!("Nightly session state was left intact: {error}");
-    }
+    // On macOS a window that was created has already finished in its exit hook; this is then a no-op.
+    nightly_session::finish_once(&nightly_session, unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed));
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
     // the CPU-compatibility relaunch below) becomes the primary instead of handing its files to a
     // process that is exiting.
@@ -1388,5 +1419,19 @@ mod tests {
             assert_eq!(commit.trim().trim_matches(['\'', '"']), rev, "{manifest}");
             assert!(text.contains("CRAFT_I18N_DIR: /run/build/photocraft/craft-i18n"), "{manifest}: the build names the catalogs");
         }
+    }
+}
+
+#[cfg(test)]
+mod refusal_dialog_tests {
+    use super::refusal_dialog;
+    use crate::build_flavor::BuildFlavor;
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }

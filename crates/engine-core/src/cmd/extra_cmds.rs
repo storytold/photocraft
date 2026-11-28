@@ -64,7 +64,7 @@ pub(crate) fn style_targets(s: &Session, p: &Value, fits: impl Fn(&Layer) -> boo
 }
 
 /// A key that makes the sub-commands of one command share a single history step.
-pub(crate) fn step_key(s: &Session, what: &str) -> String {
+pub fn step_key(s: &Session, what: &str) -> String {
     format!("{what}#{}", s.active().map_or(0, |d| d.revision))
 }
 
@@ -144,7 +144,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let width = stroke_width(p);
     let color = color_param("edit.stroke", p, "color", s.tools.foreground)?;
     // A colour picked as CMYK strokes a CMYK document with the picked inks (#4196).
-    let picked = s.tools.picked_cmyk([color[0], color[1], color[2]]);
+    let picked = if p.get("color").is_none_or(Value::is_null) { s.tools.picked_role_cmyk(0) } else { s.tools.matching_cmyk([color[0], color[1], color[2]]) };
     let mode = match p.get("mode") {
         None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
         Some(Value::String(m)) => crate::commands::parse_blend(m)
@@ -169,6 +169,9 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
+    if let Some(st) = s.active() {
+        crate::pixel_fill::check_mode_available("edit.stroke", &st.doc, mode)?;
+    }
     // Stroke keeps its layer behavior for channel views; an explicit mask edits that mask.
     let pixels = Value::Null;
     let target = if crate::commands::is_mask_target(p) { p } else { &pixels };
@@ -224,7 +227,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let (surf, lock) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::fill_cmds::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
+            crate::pixel_fill::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
             surf.prune();
         }
         Ok(())
@@ -492,7 +495,8 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     // `select: false`: the targeted layer stays targeted, as when a Photoshop action's `set`
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
-    let id = s.edit("Layer From Background", |doc, active| {
+    // The reference names the state "Make Layer" however the command runs (#16760).
+    let id = s.edit("Make Layer", |doc, active| {
         let bg = doc.background().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         let (id, name) = (bg.id, lowest_free_layer_name(doc, bg.id));
         // The name is read before the layer is unlocked, from the other layers' names.
@@ -531,14 +535,14 @@ pub(crate) fn unlock_background(l: &mut Layer) {
 
 /// Before `id` gets a layer mask: the Background can't have one, so it becomes a normal layer
 /// first ("Layer 0"), as when adding a mask to it in Photoshop. Other layers are left alone.
-pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
     background_to_layer(doc, id);
 }
 
 /// If `id` is the Background ([`photocraft_doc::Document::background`], whatever its name), turns
 /// it into a normal layer ("Layer 0"), as Photoshop does before an edit the Background can't
 /// take (moving, transforming, exposing transparency, a style). Other layers are left alone.
-pub(crate) fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
     if let Some(l) = doc.background_mut().filter(|l| l.id == id) {
         unlock_background(l);
     }
@@ -546,7 +550,16 @@ pub(crate) fn background_to_layer(doc: &mut photocraft_doc::Document, id: photoc
 
 fn toggle_mask(s: &mut Session, p: &Value, key: &str) -> Result<Value> {
     let id = layer_param(s, p)?;
-    let label = if key == "enabled" { "Enable/Disable Layer Mask" } else { "Link/Unlink Layer Mask" };
+    // A call that says the direction (the Layers panel's ⇧-click and chain) is named by it, as in Photoshop
+    // (#16786); a plain toggle (Layer › Layer Mask) keeps its two-way name.
+    let label = match (key, p.get(key).and_then(Value::as_bool)) {
+        ("enabled", Some(true)) => "Enable Layer Mask",
+        ("enabled", Some(false)) => "Disable Layer Mask",
+        ("enabled", None) => "Enable/Disable Layer Mask",
+        (_, Some(true)) => "Link Mask",
+        (_, Some(false)) => "Unlink Mask",
+        (_, None) => "Link/Unlink Layer Mask",
+    };
     let v = s.edit(label, |doc, _| {
         let m = doc.layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or(EngineError::Other("the layer has no layer mask".into()))?;
         let slot = if key == "enabled" { &mut m.enabled } else { &mut m.linked };
@@ -757,7 +770,7 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     s
 }
 
-pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
+pub fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
     let d = s.active()?;
     Some(match &d.doc.layer(id)?.content {
         LayerContent::Text(_) => "type",
@@ -780,7 +793,7 @@ fn has_rasterize_work(s: &Session, id: LayerId, only: Option<&str>) -> bool {
 /// Rasterize one layer; `only` restricts it to one kind. Without `only` (Rasterize › Layer / All
 /// Layers: "all vector data") a vector mask becomes a pixel mask too; layer effects stay live, as
 /// in Photoshop (Rasterize › Layer Style bakes them). Returns false when there was nothing to do.
-pub(crate) fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
+pub fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
     let vector_mask = has_vector_mask(s, id, only);
     let content = rasterize_content(s, id, only, key)?;
     if vector_mask {
@@ -1218,3 +1231,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "layer_from_background_history_tests.rs"]
+mod layer_from_background_history_tests;

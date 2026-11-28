@@ -21,15 +21,18 @@ mod structure;
 pub use crate::damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use align::{align, distribute};
 use moves::link_groups;
-pub(crate) use moves::shift_surface;
+pub use moves::shift_surface;
 #[cfg(test)]
 pub(crate) use moves::with_links;
 pub use moves::{move_targets, move_to, moved, moved_target, moved_wrapping, moves_mask_alone, preview_move, translate, wrapped_delta};
 pub(crate) use moves::{wrap_path, wrap_surface, wraps_linked_masks};
+pub use selection::targets;
+pub use selection::top_level;
 use selection::{doc_state, find_layers, select_all_layers, select_linked};
-pub(crate) use selection::{mask_targets, recorded_step, reselect, targets, top_level};
+pub(crate) use selection::{mask_targets, recorded_step, reselect};
 pub use selection::{select, selected, set_selection};
-pub(crate) use structure::{check_group_depth, deletion_neighbours, relink_copies};
+pub use structure::deletion_neighbours;
+pub(crate) use structure::{check_group_depth, relink_copies};
 pub use structure::{delete_selected, duplicate_selected, group_layers, set_visible_selected};
 use structure::{link_layers, lock_layers, merge_layers, rename_layer, reverse};
 
@@ -155,8 +158,8 @@ pub fn specs() -> Vec<CommandSpec> {
             &["Layer", "New"],
             None,
             r##"{"layer":id?,"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent)} (no layer: every selected layer; the new group starts collapsed)"##,
-            has_layer,
-            group_layers
+            structure::can_group_from_layers,
+            structure::group_from_layers
         ),
         spec!("layer.arrange.reverse", "Reverse", &["Layer", "Arrange"], None, "{}", two_plus, |s, _| reverse(s)),
         spec!(
@@ -180,3 +183,6 @@ mod layers_panel_parity_tests;
 
 #[cfg(test)]
 mod tile_damage_tests;
+
+#[cfg(test)]
+mod group_from_layers_background_tests;

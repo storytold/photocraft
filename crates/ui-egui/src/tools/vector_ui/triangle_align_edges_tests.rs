@@ -1,5 +1,6 @@
-//! #13370: the Triangle tool's Align Edges checkbox. On (the default) the drawn box snaps to whole
-//! pixels; off it keeps the drag's fractional coordinates. It is greyed outside Shape mode.
+//! #13370: the Triangle tool's Align Edges checkbox, every shape tool's one checkbox as in the
+//! reference application. On (the default) the drawn box snaps to whole pixels; off it keeps the
+//! drag's fractional coordinates. It is greyed outside Shape mode.
 
 use craft::draw::ui::VectorMode;
 use craft::draw::ui::shape_drag::ShapeKind;
@@ -53,10 +54,8 @@ fn align_edges_is_on_by_default_and_saved() {
 
 #[test]
 fn other_shape_tools_always_snap() {
-    for tool in [Tool::Polygon, Tool::EllipseShape, Tool::Rectangle, Tool::Star] {
-        let r = rect(|o| o.align_edges = false, tool, START, END).unwrap();
-        assert!(r.iter().all(|v| v.fract() == 0.0), "{tool:?}: {r:?}");
-    }
+    let r = rect(|o| o.align_edges = false, Tool::EllipseShape, START, END).unwrap();
+    assert!(r.iter().all(|v| v.fract() == 0.0), "EllipseShape: {r:?}");
 }
 
 #[test]
@@ -71,7 +70,7 @@ fn a_greyed_checkbox_keeps_snapping_in_path_mode() {
 }
 
 #[test]
-fn options_bar_shows_align_edges_for_the_triangle_only() {
+fn options_bar_shows_align_edges_for_the_triangle() {
     let mut h = harness(Tool::Triangle);
     let node = h.get_by_label("Align Edges");
     assert!(!node.accesskit_node().is_disabled(), "enabled in Shape mode");
@@ -84,7 +83,28 @@ fn options_bar_shows_align_edges_for_the_triangle_only() {
     h.state_mut().ui.tool_options.shape_mode = VectorMode::Path;
     h.run_steps(4);
     assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
+}
 
-    let h = harness(Tool::Rectangle);
-    assert!(h.query_by_label("Align Edges").is_none());
+/// The reference application has one Align Edges checkbox on every shape tool's and the Pen's
+/// options bar, on after Reset Tool: here too, exactly one, on, enabled in Shape mode.
+#[test]
+fn every_shape_tool_and_the_pen_show_one_align_edges_checkbox() {
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape, Tool::Pen] {
+        let mut h = harness(tool);
+        h.state_mut().ui.tool_options.vector_mode = VectorMode::Shape;
+        h.run_steps(3);
+        assert_eq!(h.query_all_by_label("Align Edges").count(), 1, "{tool:?}");
+        let node = h.get_by_label("Align Edges");
+        assert!(!node.accesskit_node().is_disabled(), "{tool:?}: enabled in Shape mode");
+        assert_eq!(node.accesskit_node().toggled(), Some(Toggled::True), "{tool:?}");
+    }
+    let opts = ToolOptions { align_edges: false, ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    *app.ui.tool_options = opts;
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Line, Tool::Pen] {
+        app.ui.tool = tool;
+        app.ui.tool_options.align_edges = false;
+        crate::menus::invoke(&mut app, &egui::Context::default(), crate::tool_reset::RESET, json!({})).unwrap();
+        assert!(app.ui.tool_options.align_edges, "{tool:?}: Reset Tool turns Align Edges back on");
+    }
 }

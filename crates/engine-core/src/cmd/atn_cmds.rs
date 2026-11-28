@@ -75,8 +75,8 @@ pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, imp
 use convert::{MAX_NAME_CHARS, export_item, normalise};
 #[cfg(test)]
 use descriptors::{
-    PCT, PT, PX, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, layer_ref, long,
-    name_ref, path_text, path_value, pct, px, target_ref, text, trimmed,
+    PCT, PX, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, layer_ref, long, name_ref,
+    path_text, path_value, pct, px, target_ref, text, trimmed,
 };
 use descriptors::{jbool, jstr};
 #[cfg(test)]
@@ -85,6 +85,8 @@ use events::{EVENTS, event_and_descriptor, event_for};
 use fields::Mapped;
 use files::{load, save};
 pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
+pub(crate) use steps_content_aware::caf_remembered;
+pub use steps_content_aware::{CAF_CUSTOM_AREA_NOT_REMEMBERED, CAF_WORKSPACE_PREFS};
 #[cfg(test)]
 use steps_doc::crop_from;
 pub(crate) use steps_gallery::RECORDED_EVENT;
@@ -196,6 +198,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod caf_action_values_tests;
 
 #[cfg(test)]
 mod layer_props_tests;
