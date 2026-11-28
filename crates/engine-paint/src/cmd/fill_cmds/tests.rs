@@ -367,6 +367,59 @@ fn unselected_tiles_stay_shared() {
     }
 }
 
+/// A surface of `fmt` whose every sample over `r` differs from its neighbours' (deterministic).
+fn noise(fmt: photocraft_color::PixelFormat, r: Rect, seed: u32) -> Surface {
+    let n = fmt.channels();
+    let mut px = Vec::with_capacity(r.width() as usize * r.height() as usize * n);
+    for y in r.y0..r.y1 {
+        for x in r.x0..r.x1 {
+            for c in 0..n as u32 {
+                let h = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663) ^ (c + seed).wrapping_mul(83_492_791);
+                px.push((h % 1001) as f32 / 1000.0);
+            }
+        }
+    }
+    let mut s = Surface::new(fmt);
+    s.write_region(r, &px);
+    s
+}
+
+/// #9332: Fill › History reads the history state a tile at a time, with the same result as
+/// reading the whole selected area first, at each depth, through a soft selection, in a blend
+/// mode at part opacity.
+#[test]
+fn history_fill_per_tile_matches_the_area_buffer() {
+    for depth in [8, 16, 32] {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 700, "height": 520, "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let fmt = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().format();
+        s.edit("noise", |doc, _| {
+            *doc.layer_mut(id).unwrap().surface_mut().unwrap() = noise(fmt, Rect::new(0, 0, 700, 520), 4);
+            Ok(())
+        })
+        .unwrap();
+        let state = s.active().unwrap().history.past_len();
+        s.execute(CMD, json!({"color": "#c04020"})).unwrap();
+        s.execute("select.rect", json!({"x": 41, "y": 19, "width": 590, "height": 470, "ellipse": true, "feather": 12})).unwrap();
+        let st = s.active().unwrap();
+        let sel = st.doc.selection.clone().unwrap();
+        let area = sel.content_bounds().intersect(&st.doc.bounds());
+        let source = crate::history_source::paint_source(st, &json!({"state": state}), CMD).unwrap();
+        let mut px = vec![[0.0f32; 4]; area.width() as usize * area.height() as usize];
+        source.layer(id).unwrap().surface().unwrap().read_rgba_into(area, &mut px);
+        let mut expected = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let b = Blend { mode: BlendMode::Multiply, opacity: 0.6, keep_alpha: false, restore: true };
+        blend_into(&mut expected, area, &Source::Pixels(area, px), Some(&sel), b).unwrap();
+
+        s.execute(CMD, json!({"contents": "history", "state": state, "mode": "multiply", "opacity": 60})).unwrap();
+        let got = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
+        let all = Rect::new(0, 0, 700, 520);
+        assert_eq!(got.read_region(all), expected.read_region(all), "{depth}-bit");
+    }
+}
+
 #[test]
 fn injected_fill_result_reservation_failure_keeps_pixels_and_history() {
     let mut s = session();

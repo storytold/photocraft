@@ -14,7 +14,7 @@ use crate::{EngineError, Result};
 
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
 /// RGBA over the sampling window. Only the selected pixels are used.
-pub fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, options: &FillOptions) -> Result<Source> {
+pub fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, options: &FillOptions) -> Result<Source<'static>> {
     let hole_bounds = sel.content_bounds().intersect(&canvas);
     if hole_bounds.is_empty() {
         return Err(EngineError::Other("the selection is outside the canvas".into()));

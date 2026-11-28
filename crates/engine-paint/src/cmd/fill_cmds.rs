@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::commands::{cmyk_param, color_param, layer_param, parse_blend};
 use crate::content_sampling::{content_aware, content_aware_options};
 pub use crate::pixel_fill::greyed_modes;
-use crate::pixel_fill::{Blend, Source, blend_into, check_mode_available, read_rgba};
+use crate::pixel_fill::{Blend, Source, blend_into, check_mode_available};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -82,6 +82,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
     let mut out = json!({ "contents": contents });
     let restore = contents == "history";
+    // The History source document, kept for the fill: its surface is read a tile at a time.
+    let history_doc;
     let source = match contents {
         "foreground" => color_source(s, s.tools.foreground, 0),
         // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
@@ -116,10 +118,10 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "history" => {
             // A History panel row `state` or a `snapshot`, else the History Brush's source.
-            let source_doc = crate::history_source::paint_source(st, p, CMD)?;
-            let src = crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
+            history_doc = crate::history_source::paint_source(st, p, CMD)?;
+            let src = crate::channel_cmds::read_target_surface(history_doc.as_ref(), id, p)
                 .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))?;
-            Source::Pixels(area, read_rgba(src, area, "reading Fill's history source")?)
+            Source::Surface(src)
         }
         "contentAware" => {
             let sel = sel.as_ref().ok_or_else(|| EngineError::Other("Content-Aware fill needs a selection".into()))?;
@@ -157,7 +159,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A fill colour: the inks it was picked as when it was picked as CMYK (#4196), else plain sRGB.
-fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source {
+fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source<'static> {
     match s.tools.picked_role_cmyk(role) {
         Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
         _ => Source::Color(c),
