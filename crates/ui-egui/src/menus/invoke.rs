@@ -313,6 +313,20 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                 r
             })
         }
+        // File > Import > WIA Support… (#13938): with no WIA device, the reference application
+        // answers the menu item with the "WIA Support" error alert instead of nothing. A result
+        // that reports devices stays as silent as it is today, and off Windows the item keeps
+        // today's path whole (the reference was not measured there).
+        #[cfg(target_os = "windows")]
+        "file.import.wiaSupport" => {
+            let r = app.run("file.import.wiaSupport", params.clone())?;
+            if lists_no_wia_device(&r) {
+                let alert = craft::ui::dialog::Alert::new(tl!("WIA Support"), tl!("No WIA-compatible device was found."))
+                    .tone(craft::theme::variant::Tone::Bad, tl!("Check that the device is connected to the computer and switched on."));
+                crate::dialogs::alerts::show(app, alert);
+            }
+            Ok(r)
+        }
         "file.save" => {
             // Writes back only to a layered file that holds the whole document; anything else
             // goes through Save As, so the original is never overwritten with less (#3806).
@@ -392,6 +406,15 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         _ => return Ok(None),
     };
     result.map(Some)
+}
+
+/// Whether a `file.import.wiaSupport` result reports no device: its `devices` list, empty on
+/// today's Windows builds and once real enumeration finds none. A list that names devices, or a
+/// result without one, opens nothing: the no-device alert must not fire once real enumeration
+/// reports a scanner or camera. Only the Windows arm uses it; off Windows that arm is not built.
+#[cfg(target_os = "windows")]
+pub(crate) fn lists_no_wia_device(result: &Value) -> bool {
+    result.get("devices").and_then(Value::as_array).is_some_and(|devices| devices.is_empty())
 }
 
 /// Dispatch UI actions and dialogs, falling back to the engine for other commands.
