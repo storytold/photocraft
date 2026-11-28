@@ -429,6 +429,10 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
 /// that may run again once the piece has dropped, on the pixels and selection it will change).
 /// Then [`before_command`]: the piece drops before any other command, and Undo puts it back.
 pub(crate) fn before_dispatch(s: &mut Session, id: &str, spec: &CommandSpec, params: &Value) -> Result<Option<Value>> {
+    // Artboard from Group run on a layer it doesn't convert (or one not there) changes nothing, so the piece stays (#14560).
+    if id == "layer.new.artboardFromGroup" && crate::artboard_cmds::from_group_does_nothing(s, params) {
+        return Ok(None);
+    }
     if drops_for(s, id) {
         s.admit(id, spec, params)?;
     }
