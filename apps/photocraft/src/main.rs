@@ -1,7 +1,8 @@
 //! PhotoCraft desktop app.
 //!
-//! Usage: `photocraft [options] [--] [files…]`; `photocraft --help` lists the options, which are
-//! declared, with what makes a usage error (exit status 2), in `launch_args`.
+//! Usage: `photocraft [options] [--] [files…]`, where `-` opens the image piped on standard input
+//! (`piped_image`); `photocraft --help` lists the options, which are declared, with what makes a
+//! usage error (exit status 2), in `launch_args`.
 //!
 //! On Windows and Linux a launch hands its files to the PhotoCraft that is already running (new
 //! tabs in its window) and exits; `--new-instance` starts a separate copy instead, as does any
@@ -55,6 +56,7 @@ mod logging;
 mod monitor_profile;
 mod nightly_session;
 mod photoshop_settings;
+mod piped_image;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
@@ -241,14 +243,16 @@ fn attach_log_file(logger: Option<&'static logging::AppLogger>) {
 }
 
 /// One PhotoCraft per user (#3708). Only with the per-user settings folder (a portable copy's may
-/// be shared between users), and not for automation, `--new-instance` or per-process options.
-/// `Break` when the files were handed to the running PhotoCraft and this launch is done.
+/// be shared between users), and not for automation, `--new-instance`, per-process options or an
+/// image piped on standard input (`stdin`). `Break` when the files were handed to the running
+/// PhotoCraft and this launch is done.
 #[cfg(not(target_os = "macos"))]
 fn claim_single_instance(
     files: &[String],
     new_instance: bool,
     control: bool,
     unreadable_paths: bool,
+    stdin: bool,
     mut launch_options: Vec<launch_args::PerProcess>,
 ) -> std::ops::ControlFlow<(), Option<single_instance::Primary>> {
     use std::ops::ControlFlow::{Break, Continue};
@@ -264,6 +268,7 @@ fn claim_single_instance(
         new_instance_env: new_instance_env.as_deref(),
         control: control && !nightly,
         unreadable_paths,
+        stdin,
         launch_options: if nightly { &[] } else { &launch_options },
     };
     match (single_instance::skip_reason(&context), services::config_dir()) {
@@ -516,7 +521,7 @@ fn main() -> eframe::Result {
     // names the argument on standard error and exits 2, so a launcher sees the failure. Neither
     // panics when the stream is closed or a pipe (`photocraft --help | head -1`).
     let launch = launch_args::parse(launch_args::command_for_profile(launch_profile::current().is_nightly()), arguments).unwrap_or_else(|e| e.exit());
-    let launch_args::FileNames { openable: files, unreadable: unreadable_paths } = launch.file_names();
+    let launch_args::FileNames { openable: files, unreadable: unreadable_paths, stdin } = launch.file_names();
     let launch_args::LaunchArgs {
         files: _,
         safe_gpu,
@@ -532,6 +537,10 @@ fn main() -> eframe::Result {
     } = launch;
 
     attach_log_file(logger);
+    // `photocraft -` (#9468): read the piped image to its end now, before the window opens; it
+    // opens once the app is up, and a failed read is shown there. Taken out by then, so the
+    // bytes aren't held for the whole session.
+    let piped = std::cell::Cell::new(stdin.then(piped_image::read));
 
     // The saved preferences the launch needs before the window opens, read once without opening
     // the settings store (the app opens it later).
@@ -546,7 +555,7 @@ fn main() -> eframe::Result {
     // become tabs in its window. Lives until the event loop returns, then `shutdown` lets the next
     // launch become the primary.
     #[cfg(not(target_os = "macos"))]
-    let single_instance = match claim_single_instance(&files, new_instance, control_port.is_some(), !unreadable_paths.is_empty(), launch_options) {
+    let single_instance = match claim_single_instance(&files, new_instance, control_port.is_some(), !unreadable_paths.is_empty(), stdin, launch_options) {
         std::ops::ControlFlow::Break(()) => return Ok(()),
         std::ops::ControlFlow::Continue(primary) => primary,
     };
@@ -686,7 +695,10 @@ fn main() -> eframe::Result {
         let shown = unclean_notice_shown.clone();
         move || nightly_session::finish_once(&shared, shown.load(std::sync::atomic::Ordering::Relaxed))
     };
-    let result = eframe::run_native(
+    // Borrowed, not moved in: when the app is never created, the CPU-compatibility relaunch below
+    // hands the bytes on.
+    let piped_ref = &piped;
+    let mut result = eframe::run_native(
         os_window::name_for(os_window::identity()),
         options,
         Box::new(move |cc| {
@@ -886,6 +898,10 @@ fn main() -> eframe::Result {
             app.services.pen_end = tablet::pen_end_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
+            // `photocraft -`: the image read from standard input before the window opened.
+            if let Some(piped) = piped_ref.take() {
+                piped_image::open(&mut app, piped.as_deref().map_err(String::as_str));
+            }
             if !unreadable_paths.is_empty() {
                 use photocraft_ui_egui::i18n;
                 let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");
@@ -970,14 +986,18 @@ fn main() -> eframe::Result {
         }
         if let Ok(exe) = std::env::current_exe() {
             // `--safe-gpu` first: after a `--`, it would be a file name.
-            let launched = std::process::Command::new(exe)
-                .arg("--safe-gpu")
-                .args(std::env::args_os().skip(1))
-                .env_remove("WGPU_BACKEND")
-                .env("PHOTOCRAFT_GPU_STARTUP_FAILURE", &reason)
-                .spawn();
-            match launched {
-                Ok(_) => return Ok(()),
+            let mut relaunch = std::process::Command::new(exe);
+            relaunch.arg("--safe-gpu").args(std::env::args_os().skip(1)).env_remove("WGPU_BACKEND").env("PHOTOCRAFT_GPU_STARTUP_FAILURE", &reason);
+            // This process read the piped image (`-`): it pipes the same bytes to the new one, or
+            // hands on the read's error so the new one doesn't read what's left of the stream.
+            let handed_on = piped_image::hand_on(&mut relaunch, piped.take());
+            match relaunch.spawn() {
+                // A relaunch that didn't take the piped image won't open it: report that below
+                // rather than exit as if it had.
+                Ok(mut child) => match piped_image::write_handed_on(child.stdin.take(), handed_on) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => result = Err(eframe::Error::AppCreation(format!("{reason}; {error}").into())),
+                },
                 Err(error) => log::error!("could not start CPU compatibility mode: {error}"),
             }
         }
