@@ -577,14 +577,21 @@ fn summary(feats: &[Feature], all_values_median: f64) -> Feature {
 /// pixel, and the label buffer and mask come on top (#933).
 pub const MAX_MEASURE_PIXELS: u64 = 400_000_000;
 
-/// Selection mask (coverage ≥ 0.5) over `r` (`n` pixels), or every pixel when there is no selection.
+/// Selection mask over `r` (`n` pixels), or every pixel when there is no selection.
+///
+/// For 8-bit selections Photoshop includes coverage level 127 (`127/255 ≈ 0.498`) and excludes
+/// 126 (`126/255 ≈ 0.494`) (#16507); higher-bit selections use the 0.5 midpoint.
 fn selection_mask(d: &Document, r: Rect, n: usize) -> Vec<bool> {
     match &d.selection {
         None => vec![true; n],
         Some(sel) => {
             let c = sel.channels().max(1);
             let v = sel.read_region(r);
-            v.chunks_exact(c).map(|p| p[0] >= 0.5).collect()
+            let threshold = match sel.format().sample {
+                photocraft_color::SampleType::U8 => 126.5 / 255.0,
+                _ => 0.5,
+            };
+            v.chunks_exact(c).map(|p| p[0] >= threshold).collect()
         }
     }
 }
