@@ -20,8 +20,8 @@ use craft::ui::dialog::{DialogId, HostedWorkspace};
 use craft::ui::primitives::Revision;
 use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use egui::{Color32, ColorImage};
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
-use photocraft_doc::{DocId, Document, LayerId};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, NativeMaskSamples, PreviewBlend, ProxyImage, auto_cell};
+use photocraft_doc::{DocId, Document, LayerId, LayerMask};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -48,6 +48,7 @@ fn render_components(
     field: &LiquifyField,
     scale: f64,
     target: &Value,
+    blend: &[PreviewBlend],
     bounds: Rect,
     dirty: Rect,
     out: &mut [[u8; 4]],
@@ -55,6 +56,9 @@ fn render_components(
     let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(&json!({"target":target}), source.format().mode.color_channels()) else { return false };
     let width = bounds.width() as usize;
     if source_bounds.is_empty() || bounds.is_empty() || !scale.is_finite() || scale <= 0.0 || width.checked_mul(bounds.height() as usize) != Some(out.len()) {
+        return false;
+    }
+    if !blend.is_empty() && blend.len() != out.len() {
         return false;
     }
     let fmt = source.format();
@@ -78,10 +82,20 @@ fn render_components(
             let alpha_index = fmt.mode.color_channels();
             let alpha = |tx, ty| if fmt.alpha { source.sample_channel(tx, ty, alpha_index) } else { 1.0 };
             let warped_alpha: f32 = taps.iter().map(|(tx, ty, w)| alpha(*tx, *ty) * w).sum();
+            let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
+            let coverage = blend.get(index).map_or(1.0, |sample| sample.coverage.clamp(0.0, 1.0));
+            let original_alpha = alpha(x, y);
+            let mixed_alpha = original_alpha + (warped_alpha - original_alpha) * coverage;
             for (channel, value) in native.iter_mut().enumerate() {
-                *value = if colors.contains(channel) {
-                    if warped_alpha > 0.0 {
-                        taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>() / warped_alpha
+                *value = if colors.contains(channel) && coverage > 0.0 {
+                    let warped = taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>();
+                    if coverage == 1.0 {
+                        if warped_alpha > 0.0 { warped / warped_alpha } else { 0.0 }
+                    } else if mixed_alpha > 0.0 {
+                        // The engine mixes the native premultiplied result through selection,
+                        // then restores untargeted components and the destination opacity.
+                        let original = source.sample_channel(x, y, channel) * original_alpha;
+                        ((original + (warped - original) * coverage) / mixed_alpha).clamp(0.0, 1.0)
                     } else {
                         0.0
                     }
@@ -92,7 +106,6 @@ fn render_components(
             let rgba = photocraft_raster::to_rgba(&fmt, &native);
             let a = rgba[3].clamp(0.0, 1.0);
             let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-            let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
             if let Some(pixel) = out.get_mut(index) {
                 *pixel = encoded;
             }
@@ -190,43 +203,65 @@ fn edits_mask(tool: LiquifyTool) -> bool {
     matches!(tool, LiquifyTool::Freeze | LiquifyTool::Thaw | LiquifyTool::LassoMask)
 }
 
-/// The selection a Liquify preview is shown through, as the engine applies it on OK
-/// (`distort_cmds::mix_by_selection`): the result over the original by its coverage. On a smart
-/// object with a filter mask it is that mask, which the engine shows every filter through.
-struct PreviewSelection {
-    mask: photocraft_doc::LayerMask,
-    /// Coverage at each proxy pixel (row-major, the proxy's size).
-    proxy: Vec<f32>,
-    /// What shows where the mask hides the result, when that isn't the dialog's source: a filter
-    /// mask shows the smart object's placed pixels, without any filter (`filter_mask::mix`). With
-    /// its proxy, the same size as the dialog's.
-    base: Option<(Surface, ProxyImage)>,
-}
-
-impl PreviewSelection {
-    /// `sel` with its coverage sampled at `proxy`'s pixels. Kept even when every proxy pixel is
-    /// selected: a gap narrower than a proxy pixel still shows in the source-resolution crop.
-    fn new(mask: photocraft_doc::LayerMask, proxy: &ProxyImage, base: Option<Surface>) -> Self {
-        let (bx, by, s) = (f64::from(proxy.bounds.x0), f64::from(proxy.bounds.y0), proxy.scale);
-        let mut cov = Vec::with_capacity(proxy.w * proxy.h);
-        for y in 0..proxy.h {
-            let dy = (by + (y as f64 + 0.5) * s).floor() as i32;
-            for x in 0..proxy.w {
-                let dx = (bx + (x as f64 + 0.5) * s).floor() as i32;
-                cov.push(mask.value(dx, dy).clamp(0.0, 1.0));
-            }
-        }
-        let base = base.map(|b| {
-            let p = ProxyImage::new(&b, proxy.bounds, PROXY_SIDE);
-            (b, p)
-        });
-        PreviewSelection { mask, proxy: cov, base }
+/// Full-resolution selection mixing for a zoomed crop. Reserve before reading pixels and reuse
+/// the previous blend allocation, so rebuilding never keeps two crop-sized blends plus a proxy.
+fn try_view_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, out: &mut Vec<PreviewBlend>) -> bool {
+    out.clear();
+    let Some((source, mask)) = selection else { return true };
+    if bounds.is_empty() {
+        return false;
     }
+    let (width, height) = (bounds.width() as usize, bounds.height() as usize);
+    let Some(len) = width.checked_mul(height).filter(|n| *n <= (8 * 1024 * 1024)) else { return false };
+    if out.try_reserve(len).is_err() {
+        return false;
+    }
+    let mut row = Vec::new();
+    if row.try_reserve(width).is_err() {
+        return false;
+    }
+    row.resize(width, [0.0; 4]);
+    for y in bounds.y0..bounds.y1 {
+        source.read_rgba_into(Rect::new(bounds.x0, y, bounds.x1, y + 1), &mut row);
+        for (x, pixel) in row.iter().enumerate() {
+            let alpha = if source.format().alpha { pixel[3] } else { 1.0 };
+            out.push(PreviewBlend { original: [pixel[0] * alpha, pixel[1] * alpha, pixel[2] * alpha, alpha], coverage: mask.value(bounds.x0 + x as i32, y) });
+        }
+    }
+    true
 }
 
-/// `new` over `old` (premultiplied RGBA8) by coverage `c`.
-fn mix(new: [u8; 4], old: [f32; 4], c: f32) -> [u8; 4] {
-    std::array::from_fn(|k| (f32::from(new[k]) * c + old[k].clamp(0.0, 1.0) * 255.0 * (1.0 - c) + 0.5).clamp(0.0, 255.0) as u8)
+fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_side: usize) -> Vec<PreviewBlend> {
+    let Some((original, mask)) = selection else { return Vec::new() };
+    let original = ProxyImage::new(original, bounds, max_side);
+    let (width, scale) = (original.w, original.scale as i32);
+    let mut coverage = Vec::new();
+    let mut row_height = 0;
+    // Read one downsampling strip, not an additional whole RGBA mask proxy. The same box
+    // footprint as the colour proxy preserves fractional selection coverage at fit zoom.
+    original
+        .px
+        .into_iter()
+        .enumerate()
+        .map(|(i, original)| {
+            let (x, y) = (i % width, i / width);
+            if x == 0 {
+                let y0 = bounds.y0 + y as i32 * scale;
+                let y1 = (y0 + scale).min(bounds.y1);
+                row_height = (y1 - y0) as usize;
+                mask.values_into(Rect::new(bounds.x0, y0, bounds.x0 + width as i32 * scale, y1), &mut coverage);
+            }
+            let row_width = width * scale as usize;
+            let mut sum = 0.0;
+            for dy in 0..row_height {
+                for dx in 0..scale as usize {
+                    sum += coverage.get(dy * row_width + x * scale as usize + dx).copied().unwrap_or(0.0);
+                }
+            }
+            let count = row_height * scale as usize;
+            PreviewBlend { original, coverage: if count > 0 { sum / count as f32 } else { 0.0 } }
+        })
+        .collect()
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -272,7 +307,9 @@ struct Engine {
     /// The undisplaced field drawn while Preview is off; it exists only then.
     identity: Option<LiquifyField>,
     preview: bool,
-    selection: Option<PreviewSelection>,
+    selection: Option<(Surface, LayerMask)>,
+    proxy_blend: Vec<PreviewBlend>,
+    native_mask: Option<NativeMaskSamples>,
     running: Option<Running>,
     /// Counts every change of the picture.
     revision: u64,
@@ -325,49 +362,9 @@ impl Engine {
         if let Some(source) = &self.native_proxy {
             let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
             let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
-            render_components(source, bounds, field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+            render_components(source, bounds, field, self.proxy.scale, &self.target, &self.proxy_blend, bounds, dirty, &mut self.out);
         } else {
-            self.proxy.render(field, r, &mut self.out);
-        }
-        let Some(sel) = &self.selection else { return };
-        let w = self.proxy.w;
-        for y in r[1]..r[3].min(self.proxy.h) {
-            for x in r[0]..r[2].min(w) {
-                let i = y * w + x;
-                let old = match &sel.base {
-                    Some((_, p)) => p.px.get(i),
-                    None => self.proxy.px.get(i),
-                };
-                if let (Some(c), Some(old), Some(new)) = (sel.proxy.get(i), old, self.out.get_mut(i))
-                    && *c < 1.0
-                {
-                    *new = mix(*new, *old, *c);
-                }
-            }
-        }
-    }
-
-    /// Mixes the source-resolution preview's `dirty` pixels (document px, within `bounds`) in `buf`
-    /// over the original by the selection.
-    fn select_view(&self, buf: &mut [[u8; 4]], bounds: Rect, dirty: Rect) {
-        let Some(sel) = &self.selection else { return };
-        let (w, dw) = (bounds.width() as usize, dirty.width() as usize);
-        // One row of originals at a time: the crop can be millions of pixels.
-        let mut old = vec![[0.0f32; 4]; dw];
-        for y in dirty.y0..dirty.y1 {
-            sel.base.as_ref().map_or(&self.source, |(b, _)| b).read_rgba_into(Rect::new(dirty.x0, y, dirty.x1, y + 1), &mut old);
-            for x in dirty.x0..dirty.x1 {
-                let c = sel.mask.value(x, y).clamp(0.0, 1.0);
-                if c >= 1.0 {
-                    continue;
-                }
-                let at = ((y - bounds.y0) as usize) * w + (x - bounds.x0) as usize;
-                if let (Some(new), Some(o)) = (buf.get_mut(at), old.get((x - dirty.x0) as usize)) {
-                    // Straight to premultiplied, as the preview's pixels are.
-                    let o = [o[0] * o[3], o[1] * o[3], o[2] * o[3], o[3]];
-                    *new = mix(*new, o, c);
-                }
-            }
+            self.proxy.render_blended_native(field, r, &mut self.out, &self.proxy_blend, self.native_mask.as_ref());
         }
     }
 
@@ -476,14 +473,17 @@ impl Engine {
         if !coarse && !render.is_empty() {
             let mut buf = vec![[0u8; 4]; render.width() as usize * render.height() as usize];
             let field = self.shown_field();
-            let rendered = if self.native_proxy.is_some() {
-                render_components(&self.source, self.canvas, field, 1.0, &self.target, render, render, &mut buf)
+            let mut blend = Vec::new();
+            let rendered = if !try_view_blend(self.selection.as_ref(), render, &mut blend) {
+                false
+            } else if self.native_proxy.is_some() {
+                render_components(&self.source, self.canvas, field, 1.0, &self.target, &blend, render, render, &mut buf)
             } else {
                 let mut scratch = Vec::new();
-                ProxyImage::render_full_resolution(&self.source, field, render, render, &mut buf, &mut scratch)
+                let original = self.native_mask.as_ref().and_then(|_| self.selection.as_ref().map(|(base, _)| base));
+                ProxyImage::render_full_resolution_blended(&self.source, field, render, render, &mut buf, &mut scratch, &blend, original)
             };
             if rendered {
-                self.select_view(&mut buf, render, render);
                 detail = buf;
             }
         }
@@ -749,23 +749,28 @@ fn open_on(
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
     let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), surf.format().mode.color_channels()).map_err(|e| e.to_string())?;
-    let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
-    // A smart object's filter mask shows every filter through it, a new Liquify too, whatever is
-    // selected (`smart_cmds::add_smart_filter`), over the placed pixels without any filter.
-    // Otherwise a new Liquify goes through the selection; a smart filter being edited has none.
+    let selection_mask = || st.doc.selection.clone().filter(|_| smart_filter.is_none()).map(|surface| LayerMask { surface, ..LayerMask::reveal_all() });
     let selection = match st.doc.layer(layer).map(|l| &l.content) {
-        Some(photocraft_doc::LayerContent::Smart(sm)) if sm.filter_mask.is_some() => sm.filter_mask.clone().map(|mask| {
-            let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).ok().flatten();
-            PreviewSelection::new(mask, &proxy, placed)
-        }),
-        _ => st
-            .doc
-            .selection
-            .clone()
-            .filter(|_| smart_filter.is_none())
-            .map(|sel| PreviewSelection::new(photocraft_doc::LayerMask { surface: sel, ..photocraft_doc::LayerMask::reveal_all() }, &proxy, None)),
+        Some(photocraft_doc::LayerContent::Smart(sm)) if !sm.filters_enabled => {
+            let base =
+                photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).map_err(|e| e.to_string())?.ok_or("smart object contents unavailable")?;
+            Some((base, LayerMask { surface: Surface::new(photocraft_doc::PixelFormat::GRAY8), ..LayerMask::reveal_all() }))
+        }
+        Some(photocraft_doc::LayerContent::Smart(sm)) => match sm.filter_mask.clone().or_else(selection_mask) {
+            Some(mask) => {
+                let base = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("smart object contents unavailable")?;
+                Some((base, mask))
+            }
+            None => None,
+        },
+        _ => selection_mask().map(|mask| (surf.clone(), mask)),
     };
+    let proxy_blend = preview_blend(selection.as_ref(), canvas, PROXY_SIDE);
+    let native_mask = if colors.is_none() { selection.as_ref().and_then(|(base, _)| NativeMaskSamples::from_proxy(&surf, base, &proxy)) } else { None };
+    let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
     // Show Backdrop › Use: All Layers or one layer, bottom to top as Photoshop lists them.
     let layers: Vec<(u64, String)> = st.doc.walk().into_iter().map(|(_, _, l)| (l.id.0, l.name.clone())).collect();
     // A remembered Use that names a layer this document lacks (another document's) opens on All Layers.
@@ -794,6 +799,8 @@ fn open_on(
         identity: None,
         preview: true,
         selection,
+        proxy_blend,
+        native_mask,
         running: None,
         revision: 0,
         floor: 0,

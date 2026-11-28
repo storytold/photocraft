@@ -95,8 +95,12 @@ fn sweep(app: &mut PhotocraftApp, y: f64) {
 }
 
 fn app_with_layer() -> Box<PhotocraftApp> {
+    app_with_layer_at_depth(8)
+}
+
+fn app_with_layer_at_depth(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.session.execute("file.new", json!({"width": 120, "height": 80, "depth": 8})).unwrap();
+    app.session.execute("file.new", json!({"width": 120, "height": 80, "depth": depth})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
     app.session
         .edit("paint", |doc, active| {
@@ -132,7 +136,7 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
                     let mut field = LiquifyField::new(bounds, 8.0);
                     field.d.fill([2.0, 0.0]);
                     let mut out = vec![[0; 4]; 64 * 48];
-                    assert!(render_components(&before, bounds, &field, 1.0, &e.target, bounds, bounds, &mut out));
+                    assert!(render_components(&before, bounds, &field, 1.0, &e.target, &[], bounds, bounds, &mut out));
                     for y in 0..48 {
                         for x in 0..64 {
                             let mut native = before.pixel(x, y);
@@ -149,7 +153,7 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
                 {
                     let e = eng(&app);
                     let mut detail = vec![[0; 4]; 64 * 48];
-                    assert!(render_components(&before, bounds, &e.field, 1.0, &e.target, bounds, bounds, &mut detail));
+                    assert!(render_components(&before, bounds, &e.field, 1.0, &e.target, &[], bounds, bounds, &mut detail));
                     assert_eq!(e.out, detail, "proxy at 100% equals the detail path");
                 }
                 app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
@@ -749,4 +753,329 @@ fn the_preview_on_a_smart_object_follows_its_filter_mask() {
         }
     }
     assert!(masked > 0 && shown_changed > 0, "masked {masked}, changed inside the mask {shown_changed}");
+}
+
+#[test]
+fn preview_mask_downsampling_preserves_partial_coverage_and_density_5989() {
+    let bounds = Rect::new(0, 0, 4, 2);
+    let mut original = Surface::new(photocraft_doc::PixelFormat::RGBA8);
+    original.fill_rect(bounds, &[1.0, 0.0, 0.0, 0.5]);
+    let mut surface = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+    surface.fill_rect(Rect::new(0, 0, 1, 2), &[1.0]);
+    let mut selected = (original, LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    let blend = preview_blend(Some(&selected), bounds, 2);
+    assert_eq!(blend.len(), 2);
+    assert_eq!(blend[0].coverage, 0.5);
+    assert_eq!(blend[1].coverage, 0.0);
+    assert_eq!(blend[0].original[0], blend[0].original[3], "red remains premultiplied");
+    selected.1.density = 0.5;
+    let blend = preview_blend(Some(&selected), bounds, 2);
+    assert_eq!(blend[0].coverage, 0.75);
+    assert_eq!(blend[1].coverage, 0.5);
+    selected.1.enabled = false;
+    assert!(preview_blend(Some(&selected), bounds, 2).iter().all(|p| p.coverage == 1.0));
+    assert!(preview_blend(None, bounds, 2).is_empty());
+}
+
+#[test]
+fn zoomed_blend_reuses_storage_and_matches_full_resolution_reference() {
+    let bounds = Rect::new(-3, 5, 7, 9);
+    let mut original = Surface::new(photocraft_doc::PixelFormat::RGBA8);
+    original.fill_rect(bounds, &[0.8, 0.4, 0.2, 0.5]);
+    let mut surface = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+    surface.fill_rect(Rect::new(-3, 5, 2, 9), &[1.0]);
+    let mut selected = (original, LayerMask { surface, enabled: true, linked: true, density: 0.5, feather: 0.0 });
+    let mut out = Vec::new();
+    for enabled in [true, false] {
+        selected.1.enabled = enabled;
+        assert!(try_view_blend(Some(&selected), bounds, &mut out));
+        let expected = preview_blend(Some(&selected), bounds, usize::MAX);
+        assert_eq!(out.len(), 40);
+        for (got, want) in out.iter().zip(expected) {
+            assert_eq!(got.original, want.original);
+            assert_eq!(got.coverage, want.coverage);
+        }
+    }
+    let allocation = out.as_ptr();
+    assert!(try_view_blend(Some(&selected), Rect::new(-2, 6, 4, 8), &mut out));
+    assert_eq!(out.len(), 12);
+    assert_eq!(out.as_ptr(), allocation, "panning reuses the crop blend allocation");
+    assert!(!try_view_blend(Some(&selected), Rect::new(0, 0, i32::MAX, i32::MAX), &mut out));
+    assert!(out.is_empty(), "refused crops leave no stale blend entries");
+    assert!(try_view_blend(None, bounds, &mut out));
+    assert!(out.is_empty(), "no selection uses the unblended renderer");
+}
+
+#[test]
+fn downsampled_native_component_preview_uses_averaged_selection_coverage() {
+    let app = crate::distort_ui::component_tests::app("cmyk", 32);
+    let st = app.session.active().unwrap();
+    let source = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    let canvas = st.doc.bounds();
+    let mut mask = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+    // Every reduced pixel straddles selected and unselected columns.
+    for x in (0..64).step_by(2) {
+        mask.fill_rect(Rect::new(x, 0, x + 1, 48), &[1.0]);
+    }
+    let selection = (source.clone(), LayerMask { surface: mask, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    let blend = preview_blend(Some(&selection), canvas, 32);
+    assert!(blend.iter().all(|sample| sample.coverage == 0.5));
+    let reduced = crate::gallery_ui::reduce(source, canvas, 2);
+    let bounds = Rect::new(0, 0, 32, 24);
+    let mut field = LiquifyField::new(canvas, 8.0);
+    field.d.fill([2.0, 0.0]);
+    let mut out = vec![[0; 4]; 32 * 24];
+    assert!(render_components(&reduced, bounds, &field, 2.0, &json!({"colors":[0,2]}), &blend, bounds, bounds, &mut out));
+    for y in 0..24 {
+        for x in 0..32 {
+            let mut native = reduced.pixel(x, y);
+            let warped = reduced.pixel((x + 1).min(31), y);
+            for k in [0, 2] {
+                native[k] = (native[k] + warped[k]) * 0.5;
+            }
+            let rgba = photocraft_raster::to_rgba(&reduced.format(), &native);
+            let expected = [rgba[0] * rgba[3], rgba[1] * rgba[3], rgba[2] * rgba[3], rgba[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            assert!(out[(y * 32 + x) as usize].iter().zip(expected).all(|(actual, expected)| actual.abs_diff(expected) <= 1));
+        }
+    }
+}
+
+#[test]
+fn opening_masked_smart_liquify_keeps_native_colors_across_formats() {
+    use photocraft_color::{ColorMode, SampleType};
+    let mut failures = Vec::new();
+    for (name, mode, a, b) in [
+        ("rgb", ColorMode::Rgb, vec![0.1, 0.2, 0.3, 1.0], vec![0.9, 0.8, 0.7, 1.0]),
+        ("grayscale", ColorMode::Grayscale, vec![0.1, 1.0], vec![0.9, 1.0]),
+        ("cmyk", ColorMode::Cmyk, vec![0.1, 0.2, 0.3, 0.1, 1.0], vec![0.9, 0.8, 0.7, 0.9, 1.0]),
+    ] {
+        for depth in [8, 16, 32] {
+            for coverage in [0.0, 0.5, 1.0] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.session.execute("file.new", json!({"width": 32, "height": 32, "mode": name, "depth": depth})).unwrap();
+                app.session.execute("layer.new.layer", json!({})).unwrap();
+                app.session
+                    .edit("two native colors", |doc, active| {
+                        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                        surf.fill_rect(Rect::new(0, 0, 16, 32), &a);
+                        surf.fill_rect(Rect::new(16, 0, 32, 32), &b);
+                        Ok(())
+                    })
+                    .unwrap();
+                app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                app.session.execute("filter.blur.gaussianBlur", json!({"radius": 2.0})).unwrap();
+                app.session
+                    .edit("filter mask coverage", |doc, active| {
+                        let id = active.unwrap();
+                        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else {
+                            return Err(photocraft_engine::EngineError::Other("expected smart object".into()));
+                        };
+                        sm.filter_mask = Some(LayerMask {
+                            surface: Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[coverage]),
+                            enabled: true,
+                            linked: true,
+                            density: 1.0,
+                            feather: 0.0,
+                        });
+                        if !photocraft_engine::smart_cmds::refresh(doc, id)? {
+                            return Err(photocraft_engine::EngineError::Other("smart object refresh failed".into()));
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                let (_, before, _) = crate::distort_ui::active_pixels(&app).unwrap();
+                assert_eq!(before.format().mode, mode);
+                assert_eq!(
+                    before.format().sample,
+                    match depth {
+                        8 => SampleType::U8,
+                        16 => SampleType::U16,
+                        _ => SampleType::F32,
+                    }
+                );
+                let canvas = app.session.active().unwrap().doc.bounds();
+                let proxy = ProxyImage::new(&before, canvas, PROXY_SIDE);
+                assert_eq!(proxy.scale, 1.0);
+                let mut expected = vec![[0; 4]; proxy.w * proxy.h];
+                proxy.render(&LiquifyField::new(canvas, auto_cell(canvas)), [0, 0, proxy.w, proxy.h], &mut expected);
+                open_ws(&mut app).unwrap();
+                let dialog = eng(&app);
+
+                assert_eq!(dialog.out.len(), expected.len());
+                let center = 16 * proxy.w + 15;
+                assert_eq!(dialog.out[center][3], 255);
+                assert_eq!(expected[center][3], 255);
+                let max_rgb_delta = dialog.out.iter().zip(&expected).flat_map(|(got, want)| (0..3).map(move |c| got[c].abs_diff(want[c]))).max().unwrap_or(0);
+                if max_rgb_delta > 1 {
+                    failures.push((name, depth, coverage, max_rgb_delta));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "opening Liquify changed cached native colors: {failures:?}");
+}
+
+#[test]
+fn native_component_preview_blends_selection_before_color_conversion() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            for has_alpha in [false, true] {
+                let fixture = crate::distort_ui::component_tests::app(mode, depth);
+                let mut app = if has_alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
+                app.session
+                    .edit("Selection and varying opacity", |doc, id| {
+                        let surface = doc.layer_mut(id.unwrap()).unwrap().surface_mut().unwrap();
+                        if has_alpha {
+                            for y in 0..48 {
+                                for x in 0..64 {
+                                    let mut pixel = surface.pixel(x, y);
+                                    let alpha = pixel.last_mut().unwrap();
+                                    *alpha = match x % 6 {
+                                        0 | 1 => 0.0,
+                                        2 => 0.25,
+                                        3 => 0.75,
+                                        _ => 1.0,
+                                    };
+                                    surface.write_pixel(x, y, &pixel);
+                                }
+                            }
+                        }
+                        let mut mask = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                        mask.fill_rect(Rect::new(20, 0, 40, 48), &[0.5]);
+                        mask.fill_rect(Rect::new(40, 0, 64, 48), &[1.0]);
+                        doc.selection = Some(mask);
+                        Ok(())
+                    })
+                    .unwrap();
+                open_ws(&mut app).unwrap();
+                let mut d = eng(&app);
+                d.field.d.fill([1.0, 0.0]);
+                d.dirty = Some([0, 0, 64, 48]);
+                d.render_dirty();
+                let source = &d.source;
+                let fmt = source.format();
+                for y in 0..48 {
+                    for x in 0..64 {
+                        let mut expected = source.pixel(x, y);
+                        let warped = source.pixel((x + 1).min(63), y);
+                        let coverage = d.selection.as_ref().unwrap().1.value(x, y);
+                        let a = if has_alpha { *expected.last().unwrap() } else { 1.0 };
+                        let wa = if has_alpha { *warped.last().unwrap() } else { 1.0 };
+                        let mixed_alpha = a + (wa - a) * coverage;
+                        for k in [0, 2] {
+                            expected[k] = if coverage == 0.0 {
+                                expected[k]
+                            } else if mixed_alpha > 0.0 {
+                                (expected[k] * a * (1.0 - coverage) + warped[k] * wa * coverage) / mixed_alpha
+                            } else {
+                                0.0
+                            };
+                        }
+                        let rgba = photocraft_raster::to_rgba(&fmt, &expected);
+                        let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+                        assert!(
+                            d.out[(y * 64 + x) as usize].iter().zip(encoded).all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+                            "{mode}@{depth}, alpha={has_alpha}, {x},{y}"
+                        );
+                    }
+                }
+                let crop = Rect::new(12, 10, 52, 30);
+                let mut blend = Vec::new();
+                assert!(try_view_blend(d.selection.as_ref(), crop, &mut blend));
+                let mut detail = vec![[0; 4]; 40 * 20];
+                assert!(render_components(source, d.canvas, &d.field, 1.0, &d.target, &blend, crop, crop, &mut detail));
+                for y in 0..20 {
+                    assert_eq!(&detail[y * 40..(y + 1) * 40], &d.out[(y + 10) * 64 + 12..(y + 10) * 64 + 52]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn feathered_translucent_selection_preview_matches_commit_5989() {
+    for depth in [8, 16, 32] {
+        for components in [false, true] {
+            let mut app = app_with_layer_at_depth(depth);
+            app.session
+                .edit("smooth translucent pixels", |doc, active| {
+                    let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for y in 0..80 {
+                        for x in 0..120 {
+                            s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 65, "height": 80})).unwrap();
+            app.session.execute("select.modify.feather", json!({"radius": 4})).unwrap();
+            let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+            let coverage = |x| {
+                let mut pixel = [0.0];
+                selection.read_pixel(x, 40, &mut pixel);
+                pixel[0]
+            };
+            let edge = coverage(64);
+            assert!(edge > 0.0 && edge < 1.0, "actual feathered edge: {edge}");
+            assert!(coverage(50) > edge);
+            assert!(coverage(80) < edge);
+            if components {
+                app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+            }
+            open_ws(&mut app).unwrap();
+            let before = eng(&app).out.clone();
+            perform(&mut app, stroke_with(StepTool::ForwardWarp, 24.0, &[[60.0, 40.0], [70.0, 40.0]]));
+            let preview = eng(&app).out.clone();
+            assert_ne!(before, preview, "fractional selection must still show the warp");
+            ctl(&mut app, json!({"commit": true})).unwrap();
+            let (_, committed, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            let expected = ProxyImage::new(&committed, Rect::new(0, 0, 120, 80), PROXY_SIDE);
+            for (p, expected) in preview.iter().zip(expected.px) {
+                for c in 0..4 {
+                    let expected = (expected[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    // Commit uses bicubic sampling and the layer depth; the preview is bilinear RGBA8.
+                    assert!(p[c].abs_diff(expected) <= 2, "preview {p:?}, committed channel {c}: {expected}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn smart_selection_preview_follows_existing_mask_and_stack_enablement_5989() {
+    for mode in 0..4 {
+        let mut app = app_with_layer();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.session
+            .edit("mask setup", |doc, active| {
+                let mut left = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                left.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                let mut right = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                right.fill_rect(Rect::new(60, 0, 120, 80), &[1.0]);
+                doc.selection = Some(if mode == 1 || mode == 2 { right } else { left.clone() });
+                if let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
+                    if mode == 1 || mode == 3 {
+                        sm.filter_mask = Some(LayerMask { surface: left, enabled: mode != 3, linked: true, density: 1.0, feather: 0.0 });
+                    }
+                    sm.filters_enabled = mode != 2;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let (_, before, _) = crate::distort_ui::active_pixels(&app).unwrap();
+        open_ws(&mut app).unwrap();
+        let preview_before = eng(&app).out.clone();
+        perform(&mut app, stroke_with(StepTool::ForwardWarp, 24.0, &[[80.0, 40.0], [90.0, 40.0]]));
+        let preview_after = eng(&app).out.clone();
+        assert_eq!(preview_after != preview_before, mode == 3, "preview mode {mode}");
+        undo(&mut app);
+        assert_eq!(eng(&app).out, preview_before, "undo mode {mode}");
+        redo(&mut app);
+        assert_eq!(eng(&app).out, preview_after, "redo mode {mode}");
+        ctl(&mut app, json!({"commit": true})).unwrap();
+        let (_, after, _) = crate::distort_ui::active_pixels(&app).unwrap();
+        let canvas = app.session.active().unwrap().doc.bounds();
+        assert_eq!(before.read_region(canvas) != after.read_region(canvas), mode == 3, "commit mode {mode}");
+    }
 }
