@@ -4,7 +4,7 @@ use super::source::{
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
-    SmartSource, Stage, StageKey, Surface, Value, affine_homography, other, placement, stack_cache,
+    SmartSource, Stage, StageKey, Surface, Value, affine_homography, interp_of, other, placement, stack_cache,
 };
 use std::collections::VecDeque;
 use std::sync::{Mutex, Weak};
@@ -206,13 +206,13 @@ fn place_with_svg(
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
                 let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
                 crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
-                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
+                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None, interp_of(sm.interpolation))?
             }
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
                 crate::transform_cmds::check_budget(img.bounds, &affine_homography(&t), "smart object", fmt)?;
-                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
+                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None, interp_of(sm.interpolation))?
             }
         });
     }
@@ -228,8 +228,8 @@ fn place_with_svg(
     crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
-        Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, sm.warp.as_ref())?,
-        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
+        Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, sm.warp.as_ref(), interp_of(sm.interpolation))?,
+        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref(), interp_of(sm.interpolation))?,
     })
 }
 
@@ -516,7 +516,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     // file import and native-size pixels, as existing saved objects expect.
     let is_svg = photocraft_io::svg::is_svg(&bytes);
     let mut h = blake3::Hasher::new();
-    h.update(b"smart-placement-v3:");
+    h.update(b"smart-placement-v4:");
     h.update(&stack_cache::placed_key(&bytes, fmt, sm, canvas));
     h.update(blake3::hash(name.as_bytes()).as_bytes());
     if is_svg {

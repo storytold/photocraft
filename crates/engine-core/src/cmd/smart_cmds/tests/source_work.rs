@@ -48,7 +48,7 @@ fn saved_svgz_refresh_keeps_native_size_pixels_and_place_reports_omissions() {
     let source = crate::file_cmds::import(name, &encoded).unwrap();
     let bounds = source.bounds();
     let source = super::super::source::flattened_source(&source, format).unwrap();
-    let expected = photocraft_algo::warp::place_source(&source, bounds, &sm.transform, None).unwrap();
+    let expected = photocraft_algo::warp::place_source(&source, bounds, &sm.transform, None, photocraft_algo::transform::Interp::Bicubic).unwrap();
     assert_eq!(source_box(&doc, sm), Some([0., 0., 8., 8.]));
     assert!(refresh_layer(&doc, &mut changed).unwrap());
     let LayerContent::Smart(sm) = &mut changed.content else { panic!("refreshed SVGZ smart object") };

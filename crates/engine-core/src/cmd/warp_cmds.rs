@@ -249,7 +249,13 @@ fn warp_layer(
                 WarpStyle::Cylinder => cylinder_in_source(w, &inv, sb),
                 _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
             };
-            sm.warp = src_warp.filter(|w| !w.is_identity());
+            // Judge identity on the request: a rotated or flipped placement can make its source-space grid fail `is_identity`.
+            let stored = if w.is_identity() { None } else { src_warp.filter(|sw| !sw.is_identity()) };
+            // An identity warp over no stored warp resamples nothing: keep the interpolation.
+            if stored.is_some() || sm.warp.is_some() {
+                sm.interpolation = crate::smart_cmds::placement_interp(interp);
+            }
+            sm.warp = stored;
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
                 *c = warp_mesh_surface_with(c, rect, &map, Fold::IN_PLACE, interp, ctl).ok_or(EngineError::Cancelled)?;

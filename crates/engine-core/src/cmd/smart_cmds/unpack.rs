@@ -8,12 +8,11 @@ use crate::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft_cms::Intent;
-use photocraft_algo::transform::Interp;
 use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Knockout, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
-use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
+use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, interp_of, other, placement, shift_layer, smart};
 use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
@@ -97,7 +96,7 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
         check_destination_shapes(layers, transform, doc.size, doc.pixel_format().bytes_per_pixel()).map_err(other)?;
     }
     for l in layers {
-        released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
+        released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, interp_of(sm.interpolation)))?;
         crate::transform_cmds::refresh_text(doc, l);
     }
     Ok(())

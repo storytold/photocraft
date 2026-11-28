@@ -443,6 +443,7 @@ fn smart_object_records_smart_filter() {
                 warp: None,
                 stack_mode: None,
                 perspective: None,
+                interpolation: Default::default(),
             }),
         );
         *active = Some(doc.insert_above(*active, l));

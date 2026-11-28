@@ -785,11 +785,20 @@ impl Ex<'_> {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
             let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
                 (None, Some((img, img_bounds))) => {
+                    let interp = match sm.interpolation {
+                        photocraft_doc::PlacementInterpolation::Bicubic => photocraft_algo::transform::Interp::Bicubic,
+                        photocraft_doc::PlacementInterpolation::Bilinear => photocraft_algo::transform::Interp::Bilinear,
+                        photocraft_doc::PlacementInterpolation::Nearest => photocraft_algo::transform::Interp::Nearest,
+                    };
                     let unfiltered = match &sm.perspective {
-                        Some(p) => {
-                            photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
-                        }
-                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
+                        Some(p) => photocraft_algo::warp::place_source_projective(
+                            &img,
+                            img_bounds,
+                            &photocraft_algo::transform::Homography(*p),
+                            sm.warp.as_ref(),
+                            interp,
+                        ),
+                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref(), interp),
                     };
                     match unfiltered {
                         Ok(unfiltered) => {

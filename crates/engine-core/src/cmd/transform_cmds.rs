@@ -472,6 +472,16 @@ fn transform_layer_with(
     apply_transform(doc_sel, group, l, h, affine, interp, ctl)
 }
 
+/// Whether `a` maps whole pixels onto whole pixels: a signed axis permutation (flips, quarter
+/// turns) with a whole-pixel offset.
+fn resamples_nothing(a: &Affine) -> bool {
+    let [a, b, c, d, e, f] = a.m;
+    let is = |v: f64, w: f64| (v - w).abs() < 1e-9;
+    let unit = |v: f64| is(v.abs(), 1.0);
+    let axes = (unit(a) && unit(d) && is(b, 0.0) && is(c, 0.0)) || (is(a, 0.0) && is(d, 0.0) && unit(b) && unit(c));
+    axes && is(e, e.round()) && is(f, f.round())
+}
+
 fn apply_transform(
     doc_sel: Option<&Surface>,
     group: Locks,
@@ -531,6 +541,11 @@ fn apply_transform(
             match affine {
                 Some(a) => crate::smart_cmds::transform_placement(sm, &a),
                 None => crate::smart_cmds::set_placement(sm, h.mul(&crate::smart_cmds::placement(sm))),
+            }
+            // A whole-pixel move, flip or quarter turn resamples nothing, so it keeps the
+            // interpolation the object was last scaled or rotated with.
+            if !affine.is_some_and(|a| resamples_nothing(&a)) {
+                sm.interpolation = crate::smart_cmds::placement_interp(interp);
             }
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {

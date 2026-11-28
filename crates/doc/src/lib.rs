@@ -565,6 +565,17 @@ pub struct VectorPreview {
     pub svg: Arc<Vec<u8>>,
 }
 
+/// How a smart object's source is resampled into place: the Interpolation of the transform that
+/// last placed it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
+#[serde(rename_all = "camelCase")]
+pub enum PlacementInterpolation {
+    #[default]
+    Bicubic,
+    Bilinear,
+    Nearest,
+}
+
 #[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
@@ -596,6 +607,8 @@ pub struct SmartObject {
     /// full projective map from source pixels to document pixels, row-major 3×3. It overrides
     /// `transform`, which then holds its affine approximation at the source origin.
     pub perspective: Option<[f64; 9]>,
+    /// How the source is resampled when re-rendered into place.
+    pub interpolation: PlacementInterpolation,
 }
 
 impl SmartObject {
@@ -614,6 +627,7 @@ impl SmartObject {
             warp: None,
             stack_mode: None,
             perspective: None,
+            interpolation: PlacementInterpolation::default(),
         }
     }
 

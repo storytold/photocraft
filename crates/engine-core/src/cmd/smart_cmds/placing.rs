@@ -18,6 +18,24 @@ pub fn placement(sm: &SmartObject) -> Homography {
     sm.perspective.map(Homography).unwrap_or_else(|| affine_homography(&sm.transform))
 }
 
+/// The resampling a smart object's placement uses, as the transform commands' `Interp`.
+pub(crate) fn interp_of(p: photocraft_doc::PlacementInterpolation) -> Interp {
+    match p {
+        photocraft_doc::PlacementInterpolation::Bicubic => Interp::Bicubic,
+        photocraft_doc::PlacementInterpolation::Bilinear => Interp::Bilinear,
+        photocraft_doc::PlacementInterpolation::Nearest => Interp::Nearest,
+    }
+}
+
+/// The inverse of [`interp_of`].
+pub(crate) fn placement_interp(i: Interp) -> photocraft_doc::PlacementInterpolation {
+    match i {
+        Interp::Bicubic => photocraft_doc::PlacementInterpolation::Bicubic,
+        Interp::Bilinear => photocraft_doc::PlacementInterpolation::Bilinear,
+        Interp::Nearest => photocraft_doc::PlacementInterpolation::Nearest,
+    }
+}
+
 pub(crate) fn affine_homography(a: &Affine) -> Homography {
     let [a, b, c, d, e, f] = a.m;
     Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0])

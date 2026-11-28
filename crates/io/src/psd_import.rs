@@ -730,6 +730,7 @@ impl Ctx<'_> {
             warp,
             stack_mode: None,
             perspective,
+            interpolation: Default::default(),
         };
         crate::smart_map::pin_puppet_meshes(&mut sm);
         LayerContent::Smart(sm)
