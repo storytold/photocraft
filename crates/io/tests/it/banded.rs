@@ -43,13 +43,11 @@ fn layered_png_export_spans_bands() {
             let r = export(&d, "x.png", &ExportOptions::default()).unwrap();
             let img = photocraft_codecs::decode(&r.bytes).unwrap();
             assert_eq!(img.layout().has_alpha(), alpha < 1.0, "{depth:?} alpha {alpha}");
-            let got: Vec<f32> = img
-                .to_rgba_f32(&photocraft_codecs::Limits::default())
-                .expect("the fixture fits the default decoded-image limits")
-                .iter()
-                .map(|v| (v * scale).round())
-                .collect();
-            assert!(got == composite_q(&d, scale), "{depth:?} alpha {alpha}: pixels differ");
+            let got = img.to_rgba_f32(&photocraft_codecs::Limits::default()).expect("the fixture fits the default decoded-image limits");
+            let expected = photocraft_compose::flatten(&d);
+            assert_eq!(got.len(), expected.px.len() * 4, "{depth:?} alpha {alpha}: sample count differs");
+            let same = got.iter().zip(expected.px.iter().flatten()).all(|(&a, &b)| (a * scale).round() == (b.clamp(0.0, 1.0) * scale).round());
+            assert!(same, "{depth:?} alpha {alpha}: pixels differ");
         }
     }
 }
