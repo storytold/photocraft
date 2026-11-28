@@ -857,6 +857,233 @@ fn batch_stop_on_error_reports_skipped_inputs_and_writes_the_error_log() {
     assert!(!std::path::Path::new(&join(&output, "good.png")).exists());
 }
 
+/// Stop For Errors on a desktop run (#13667): the worker parks on the failing input and asks;
+/// Continue records the error in the report and the errorLog and processes the remaining inputs.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn stop_for_errors_asks_about_the_failing_input_and_continue_runs_the_rest() {
+    use std::time::Duration;
+
+    let dir = tmp("batch-stop-ask-continue");
+    let first = png(&dir, "first.png", 8, 6, "#ff0000");
+    let second = png(&dir, "second.png", 8, 6, "#00ff00");
+    let third = png(&dir, "third.png", 8, 6, "#0000ff");
+    let outputs =
+        vec![(first.clone(), join(&dir, "out/first.png")), (second.clone(), join(&dir, "out/second.png")), (third.clone(), join(&dir, "out/third.png"))];
+    let first_out = join(&dir, "out/first.png");
+    let third_out = join(&dir, "out/third.png");
+    let log = join(&dir, "errors.txt");
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.enable_batch_questions();
+    let worker_ctx = ctx.clone();
+    let worker_log = log.clone();
+    let worker = std::thread::spawn(move || {
+        let policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: Some(worker_log) };
+        super::batch_run::process_batch_outputs(72.0, outputs, "png", SaveOpts::default(), &policy, &worker_ctx, &|_, out| {
+            if out.ends_with("second.png") {
+                return Err(EngineError::Other("The command \"Invert\" is not currently available.".into()));
+            }
+            Ok(false)
+        })
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ctx.batch_waiting_for_decision() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(ctx.batch_waiting_for_decision(), "the failing input parked the run instead of ending it");
+    let (input, message) = ctx.batch_failure_question().expect("the question names the failing file and shows its error");
+    assert_eq!(input, second, "the question carries the failing file");
+    assert_eq!(message, "The command \"Invert\" is not currently available.", "the question shows the step error");
+    assert!(!ctx.request_batch_interrupt(), "Esc while the failure question is open changes nothing");
+    assert!(ctx.decide_batch_interrupt(true), "Continue answers through the existing interrupt channel");
+    let result = worker.join().unwrap().unwrap();
+    assert_eq!(result["errors"], json!([{"file": second, "error": "The command \"Invert\" is not currently available."}]), "{result}");
+    assert_eq!(result["files"], json!([first_out, third_out]), "{result}");
+    assert!(result.get("stopped").is_none(), "Continue goes on with the next file: {result}");
+    assert!(result.get("skipped").is_none(), "{result}");
+    let text = batch_log(&log);
+    assert!(text.contains("second.png") && text.contains("The command \"Invert\""), "{text}");
+}
+
+/// Continue on the first failure question leads to the same question again when the next
+/// input fails too; each failure keeps its own entry (#13667).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn stop_for_errors_asks_again_when_the_next_input_fails() {
+    use std::time::Duration;
+
+    let dir = tmp("batch-stop-ask-twice");
+    let first = png(&dir, "first.png", 8, 6, "#ff0000");
+    let second = png(&dir, "second.png", 8, 6, "#00ff00");
+    let third = png(&dir, "third.png", 8, 6, "#0000ff");
+    let outputs =
+        vec![(first.clone(), join(&dir, "out/first.png")), (second.clone(), join(&dir, "out/second.png")), (third.clone(), join(&dir, "out/third.png"))];
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.enable_batch_questions();
+    let worker_ctx = ctx.clone();
+    let worker = std::thread::spawn(move || {
+        let policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: None };
+        super::batch_run::process_batch_outputs(72.0, outputs, "png", SaveOpts::default(), &policy, &worker_ctx, &|_, out| {
+            if out.ends_with("second.png") || out.ends_with("third.png") {
+                return Err(EngineError::Other(format!("step failed on {out}")));
+            }
+            Ok(false)
+        })
+    });
+    let waited = |ctx: &crate::jobs::JobCtx| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ctx.batch_waiting_for_decision() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        ctx.batch_waiting_for_decision()
+    };
+    assert!(waited(&ctx), "the first failing input parked the run");
+    assert_eq!(ctx.batch_failure_question().expect("first question").0, second, "{ctx:?}");
+    assert!(ctx.decide_batch_interrupt(true));
+    assert!(waited(&ctx), "the second failing input asks the same question again");
+    assert_eq!(ctx.batch_failure_question().expect("second question").0, third, "{ctx:?}");
+    assert!(ctx.decide_batch_interrupt(true));
+    let result = worker.join().unwrap().unwrap();
+    assert_eq!(result["errors"].as_array().map(Vec::len), Some(2), "{result}");
+    assert_eq!(result["files"], json!([join(&dir, "out/first.png")]), "{result}");
+    assert!(result.get("stopped").is_none(), "{result}");
+}
+
+/// Stop on the failure question ends the run with today's partial result: the same report a
+/// run that could not ask produced (#13667).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn stop_for_errors_stop_answers_with_the_partial_result_of_an_unasked_run() {
+    use std::time::Duration;
+
+    let dir = tmp("batch-stop-ask-stop");
+    let inputs = [png(&dir, "first.png", 8, 6, "#ff0000"), png(&dir, "second.png", 8, 6, "#00ff00"), png(&dir, "third.png", 8, 6, "#0000ff")];
+    let outputs = |dir: &str| inputs.iter().cloned().zip(["first", "second", "third"].map(|name| join(dir, &format!("out/{name}.png")))).collect::<Vec<_>>();
+    let failing = |out: &str| out.ends_with("second.png");
+
+    let asked_ctx = crate::jobs::JobCtx::new();
+    asked_ctx.enable_batch_questions();
+    let worker_ctx = asked_ctx.clone();
+    let asked_outputs = outputs(&dir);
+    let worker = std::thread::spawn(move || {
+        let policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: None };
+        super::batch_run::process_batch_outputs(72.0, asked_outputs, "png", SaveOpts::default(), &policy, &worker_ctx, &|_, out| {
+            if failing(out) {
+                return Err(EngineError::Other("boom".into()));
+            }
+            Ok(false)
+        })
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !asked_ctx.batch_waiting_for_decision() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(asked_ctx.batch_waiting_for_decision(), "the failing input parked the run");
+    assert!(asked_ctx.decide_batch_interrupt(false), "Stop answers through the same channel");
+    let asked = worker.join().unwrap().unwrap();
+
+    let plain_policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: None };
+    let plain_ctx = crate::jobs::JobCtx::new();
+    let plain = super::batch_run::process_batch_outputs(72.0, outputs(&dir), "png", SaveOpts::default(), &plain_policy, &plain_ctx, &|_, out| {
+        if failing(out) {
+            return Err(EngineError::Other("boom".into()));
+        }
+        Ok(false)
+    })
+    .unwrap();
+    assert_eq!(asked, plain, "Stop leaves today's stopped-and-skipped report");
+    assert_eq!(asked["stopped"], json!(inputs[1]), "{asked}");
+    assert_eq!(asked["skipped"], json!([inputs[2]]), "{asked}");
+}
+
+/// A jobs.cancel landing while the worker is parked on the failure question wakes it
+/// instead of hanging it: the run ends like the Stop answer does and its report says the
+/// run was cancelled as well (#13667).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cancelling_while_parked_on_the_failure_question_ends_the_run_and_says_so() {
+    use std::time::Duration;
+
+    let dir = tmp("batch-stop-ask-cancel");
+    let first = png(&dir, "first.png", 8, 6, "#ff0000");
+    let second = png(&dir, "second.png", 8, 6, "#00ff00");
+    let third = png(&dir, "third.png", 8, 6, "#0000ff");
+    let outputs =
+        vec![(first.clone(), join(&dir, "out/first.png")), (second.clone(), join(&dir, "out/second.png")), (third.clone(), join(&dir, "out/third.png"))];
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.enable_batch_questions();
+    let worker_ctx = ctx.clone();
+    let worker = std::thread::spawn(move || {
+        let policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: None };
+        super::batch_run::process_batch_outputs(72.0, outputs, "png", SaveOpts::default(), &policy, &worker_ctx, &|_, out| {
+            if out.ends_with("second.png") {
+                return Err(EngineError::Other("boom".into()));
+            }
+            Ok(false)
+        })
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ctx.batch_waiting_for_decision() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(ctx.batch_waiting_for_decision(), "the failing input parked the run");
+    ctx.cancel();
+    let result = worker.join().expect("the parked worker wakes on cancel instead of hanging").unwrap();
+    assert_eq!(result["stopped"], json!(second), "{result}");
+    assert_eq!(result["skipped"], json!([third]), "{result}");
+    assert_eq!(result["errors"].as_array().map(Vec::len), Some(1), "{result}");
+    assert_eq!(result["cancelled"], json!(true), "{result}");
+}
+
+/// A run no desktop can answer (the CLI, the control channel's `engine.execute`, MCP):
+/// Stop For Errors keeps today's behaviour and ends at the first failure without parking.
+#[test]
+fn stop_for_errors_without_a_question_channel_ends_at_the_first_failure() {
+    let dir = tmp("batch-stop-no-channel");
+    let first = png(&dir, "first.png", 8, 6, "#ff0000");
+    let second = png(&dir, "second.png", 8, 6, "#00ff00");
+    let ctx = crate::jobs::JobCtx::new();
+    let policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: None };
+    let result = super::batch_run::process_batch_outputs(
+        72.0,
+        vec![(first, join(&dir, "out/first.png")), (second.clone(), join(&dir, "out/second.png"))],
+        "png",
+        SaveOpts::default(),
+        &policy,
+        &ctx,
+        &|_, out| {
+            if out.ends_with("second.png") {
+                return Err(EngineError::Other("boom".into()));
+            }
+            Ok(false)
+        },
+    )
+    .unwrap();
+    assert!(ctx.batch_failure_question().is_none(), "no question was parked");
+    assert_eq!(result["stopped"], json!(second), "{result}");
+    assert_eq!(result["errors"].as_array().map(Vec::len), Some(1), "{result}");
+}
+
+/// The Opened Files source runs synchronously on the caller's thread, so its Stop For Errors
+/// branch keeps today's end-at-first-failure: the failing document is reported, the rest
+/// skipped, and nothing parks (#13667).
+#[test]
+fn stop_for_errors_open_documents_batch_ends_at_the_first_failure() {
+    let dir = tmp("batch-stop-open-docs");
+    let mut s = crate::session();
+    s.execute("file.new", json!({"name": "first", "width": 2, "height": 2})).unwrap();
+    s.execute("file.new", json!({"name": "second", "width": 2, "height": 2})).unwrap();
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({"source": "open", "output": join(&dir, "out"), "format": "png", "stopOnError": true, "steps": [["layer.select", {"layer": "does not exist"}]]}),
+        )
+        .unwrap();
+    assert_eq!(result["stopped"], json!("first"), "{result}");
+    assert_eq!(result["errors"].as_array().map(Vec::len), Some(1), "{result}");
+    assert_eq!(result["skipped"], json!(["second"]), "{result}");
+}
+
 #[test]
 fn batch_writes_a_utf16_error_log_even_when_every_file_succeeds() {
     let dir = tmp("batch-clean-log");

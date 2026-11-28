@@ -144,6 +144,7 @@ impl PhotocraftApp {
             input_queued_for: None,
             automation_input: false,
             programmatic_playback: false,
+            control_invoked: false,
             run_depth: 0,
             paused_playbacks: Default::default(),
             type_layout: None,

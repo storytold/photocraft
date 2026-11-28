@@ -1686,3 +1686,88 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #13667: the Stop For Errors question opt-in belongs to the dispatch that armed it. A later
+/// threaded spawn (a `Session::start` from the control channel or a test, with its `wait_job`)
+/// must start without it: a worker parked there has no question channel, and `wait_job` has
+/// already taken the job out of the running list, so nothing could release it.
+#[test]
+fn batch_failure_questions_opt_in_serves_one_dispatch() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.set_batch_failure_questions(true);
+    let first = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| Ok(json!({"asked": ctx.batch_pause_for_error("broken.png", "The command \"Invert\" is not currently available.")})),
+            |_, v| Ok(v),
+        )
+        .unwrap());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.batch_interrupt_waiting(first) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(s.batch_interrupt_waiting(first), "the armed dispatch parks on its failed input");
+    assert!(s.decide_batch_interrupt_job(first, true), "the desktop answers through the existing channel");
+    let e = wait_event(&mut s, first);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert_eq!(v["asked"], json!(true), "the armed dispatch got its question");
+
+    let second = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| Ok(json!({"asked": ctx.batch_pause_for_error("also broken.png", "boom")})),
+            |_, v| Ok(v),
+        )
+        .unwrap());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !s.batch_interrupt_waiting(second) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let parked = s.batch_interrupt_waiting(second);
+    if parked {
+        // Release the parked worker so its thread ends while the failure is reported.
+        s.decide_batch_interrupt_job(second, false);
+    }
+    let e = wait_event(&mut s, second);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert!(!parked, "the question opt-in leaked into a later dispatch, where no UI can answer its pause");
+    assert_eq!(v["asked"], json!(null), "an un-armed dispatch keeps the stop-at-first-failure answer");
+    assert!(s.jobs().is_empty());
+}
+
+/// The parked Batch question read in one locked look (#13667): the pause and its payload come
+/// from the same observation, so the desktop can never word the failure question for an Esc
+/// pause (or the reverse) after a `jobs.cancel` cleared the payload in between.
+#[test]
+fn batch_question_reads_the_pending_question_as_one_snapshot() {
+    let ctx = JobCtx::new();
+    ctx.enable_batch_questions();
+    let worker_ctx = ctx.clone();
+    let worker = std::thread::spawn(move || worker_ctx.batch_pause_for_error("broken.png", "boom"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ctx.batch_waiting_for_decision() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        ctx.batch_question(),
+        Some(BatchQuestion::Failure { input: "broken.png".into(), message: "boom".into() }),
+        "a worker parked on a failure reads as that failure question"
+    );
+    assert!(ctx.decide_batch_interrupt(true));
+    assert_eq!(worker.join().unwrap(), Some(true));
+    assert_eq!(ctx.batch_question(), None, "no question after the answer");
+
+    let esc = JobCtx::new();
+    assert!(esc.request_batch_interrupt(), "an accepted Esc request");
+    assert!(esc.batch_take_interrupt(), "the worker checkpoint moves it to the question");
+    assert_eq!(esc.batch_question(), Some(BatchQuestion::Esc), "a parked Esc pause reads as the plain question");
+    assert!(esc.decide_batch_interrupt(false));
+    assert_eq!(esc.batch_question(), None, "and it is gone after the answer");
+}

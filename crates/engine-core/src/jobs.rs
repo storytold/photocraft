@@ -29,7 +29,7 @@
 
 use crate::color_cmds::ColorExt;
 use std::any::Any;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 use photocraft_doc::{DocId, Document, LayerId};
@@ -105,6 +105,11 @@ struct Shared {
     message: Mutex<String>,
     batch: Mutex<BatchInterrupt>,
     batch_decision: Condvar,
+    /// A desktop started this Batch worker and will answer its Stop For Errors question.
+    batch_questions: AtomicBool,
+    /// A Batch parked on a failed input with Stop For Errors: the failing file and its
+    /// error, read by the desktop to word the Continue/Stop question (#13667).
+    batch_failure: Mutex<Option<(String, String)>>,
     batch_preview: Mutex<Option<BatchPreview>>,
     batch_preview_generation: std::sync::atomic::AtomicU64,
 }
@@ -119,7 +124,8 @@ pub struct BatchPreview {
 }
 
 /// The desktop Batch Esc handshake. The worker alone enters `Waiting` at a pre-save
-/// checkpoint; only the UI supplies a decision. Programmatic cancellation uses the separate
+/// checkpoint or, for a Stop For Errors failure, at a failed input ([`JobCtx::batch_pause_for_error`]);
+/// only the UI supplies a decision. Programmatic cancellation uses the separate
 /// atomic flag above and wakes a waiting worker without asking a question.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum BatchInterrupt {
@@ -132,6 +138,14 @@ enum BatchInterrupt {
     Saving,
     /// Every input has been handled; Esc is no longer accepted.
     Closed,
+}
+
+/// The question a parked Batch worker waits on the desktop to answer (#13667): the plain Esc
+/// pause, or a Stop For Errors failure with the failing file and the step's error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BatchQuestion {
+    Esc,
+    Failure { input: String, message: String },
 }
 
 /// Cancelled before it committed.
@@ -260,6 +274,59 @@ impl JobCtx {
     /// Whether an action should stop before its next step because Esc was requested.
     pub fn batch_interrupt_requested(&self) -> bool {
         *self.shared.batch.lock().unwrap_or_else(PoisonError::into_inner) == BatchInterrupt::Requested
+    }
+
+    /// The desktop started this worker and watches its questions; only a Batch worker marked
+    /// this way may pause on a failed input (see [`Self::batch_pause_for_error`], #13667).
+    pub fn enable_batch_questions(&self) {
+        self.shared.batch_questions.store(true, Ordering::Release);
+    }
+
+    /// A Stop For Errors Batch reached an input that failed on its own: park the worker like
+    /// an Esc interruption does and let the desktop answer Continue (go on with the next
+    /// input) or Stop (end with the partial result). The question text — the failing file and
+    /// the error — is readable with [`Self::batch_failure_question`] until the answer lands.
+    /// `None` when no desktop can answer this run (inline, scripted, the web build), so the
+    /// caller keeps its stop-at-first-failure policy; `Some(true)` answered Continue and
+    /// `Some(false)` answered Stop or cancelled the run while it waited.
+    pub fn batch_pause_for_error(&self, input: &str, message: &str) -> Option<bool> {
+        if !self.shared.batch_questions.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut phase = self.shared.batch.lock().unwrap_or_else(PoisonError::into_inner);
+        // Only a worker between inputs can ask; a save past its checkpoint or a parked Esc stands.
+        if *phase != BatchInterrupt::Processing {
+            return None;
+        }
+        *self.shared.batch_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some((input.to_string(), message.to_string()));
+        *phase = BatchInterrupt::Waiting;
+        while *phase == BatchInterrupt::Waiting && !self.cancelled() {
+            phase = self.shared.batch_decision.wait(phase).unwrap_or_else(PoisonError::into_inner);
+        }
+        let continue_next = *phase == BatchInterrupt::Continue && !self.cancelled();
+        *phase = BatchInterrupt::Processing;
+        *self.shared.batch_failure.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        Some(continue_next)
+    }
+
+    /// The Stop For Errors question this parked worker shows, if it is parked on one.
+    pub fn batch_failure_question(&self) -> Option<(String, String)> {
+        self.shared.batch_failure.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// What a parked Batch worker is asking, in one locked look: `None` when the worker is not
+    /// parked, the failing file and its error for a Stop For Errors failure, the plain Esc
+    /// question otherwise. Reading the pause and the payload separately could disagree when a
+    /// `jobs.cancel` wakes the worker in between (#13667).
+    pub fn batch_question(&self) -> Option<BatchQuestion> {
+        let phase = self.shared.batch.lock().unwrap_or_else(PoisonError::into_inner);
+        if *phase != BatchInterrupt::Waiting {
+            return None;
+        }
+        match self.shared.batch_failure.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            Some((input, message)) => Some(BatchQuestion::Failure { input: input.clone(), message: message.clone() }),
+            None => Some(BatchQuestion::Esc),
+        }
     }
 
     /// Move an accepted Esc request to the question at a worker checkpoint.
@@ -625,6 +692,9 @@ pub struct Jobs {
     draining: Vec<Draining>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    /// The next spawned Batch worker may pause on a Stop For Errors failure and ask the
+    /// desktop ([`Session::set_batch_failure_questions`], #13667).
+    batch_failure_questions: bool,
     /// No worker threads: [`StepWork`] jobs are stepped by [`Session::poll_jobs`], everything else
     /// runs inline. On for wasm; see [`Session::set_cooperative_jobs`].
     cooperative: bool,
@@ -647,6 +717,7 @@ impl Default for Jobs {
             #[cfg(not(target_arch = "wasm32"))]
             draining: Vec::new(),
             inline: None,
+            batch_failure_questions: false,
             cooperative: cfg!(target_arch = "wasm32"),
             step_budget: STEP_BUDGET,
         }
@@ -767,6 +838,13 @@ pub fn run<T: Send + 'static>(
         return apply(s, t);
     }
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
+    // A desktop that watches its jobs can answer this worker's Stop For Errors question;
+    // an inline or scripted run never parks (#13667). The opt-in belongs to the dispatch
+    // that armed it: the spawn consumes it, so a later [`Session::start`] (a control-channel
+    // wait, a test) never inherits a question channel its caller cannot answer.
+    if std::mem::take(&mut s.jobs.batch_failure_questions) {
+        job.ctx.enable_batch_questions();
+    }
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1058,6 +1136,15 @@ impl Session {
     /// default, a context nothing can cancel.
     pub fn set_inline_job_ctx(&mut self, ctx: Option<JobCtx>) {
         self.jobs.inline = ctx;
+    }
+
+    /// Let the next spawned Batch worker pause on a failed input under Stop For Errors and ask
+    /// the desktop Continue or Stop (see [`JobCtx::batch_pause_for_error`], #13667). The desktop
+    /// turns this on for runs the user started, where its frame loop can show the question;
+    /// scripted, control-channel, MCP and inline runs leave it off and keep stopping at the
+    /// first failure.
+    pub fn set_batch_failure_questions(&mut self, on: bool) {
+        self.jobs.batch_failure_questions = on;
     }
 
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
@@ -1614,6 +1701,14 @@ impl Session {
     /// Whether a Batch worker has acknowledged Esc and is waiting for the desktop decision.
     pub fn batch_interrupt_waiting(&self, id: JobId) -> bool {
         self.jobs.running.iter().find(|job| job.id == id && job.command == "file.automate.batch").is_some_and(|job| job.ctx.batch_waiting_for_decision())
+    }
+
+    /// The question this session's parked Batch waits on: its pause and its payload in one
+    /// locked look, so a `jobs.cancel` waking the worker in between cannot make the desktop
+    /// word the next pass of its dialog from a stale pair of reads (#13667). `None` when no
+    /// such job is parked.
+    pub fn batch_question(&self, id: JobId) -> Option<BatchQuestion> {
+        self.jobs.running.iter().find(|job| job.id == id && job.command == "file.automate.batch").and_then(|job| job.ctx.batch_question())
     }
 
     /// Continue with the next input or stop a Batch paused by the desktop Esc key.
