@@ -80,7 +80,7 @@ pub(crate) use display::cache_key;
 #[cfg(test)]
 use display::sync_display_lut;
 use display::texture_key;
-pub(crate) use display::{canvas_display, display_doc, display_image};
+pub(crate) use display::{canvas_display, color_pixel, display_doc, display_image};
 pub(crate) use document_area::arranged_cells;
 pub use document_area::document_area;
 pub(crate) use document_display::view_target;

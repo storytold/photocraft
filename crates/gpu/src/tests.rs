@@ -315,8 +315,7 @@ fn convert_tiles_converts_each_distinct_tile_once() {
     assert_eq!((converted, n), (CONVERT_BATCH + 5, CONVERT_BATCH + 5));
 }
 
-/// The 16-bit and 32-bit float RGB/gray fast paths give exactly the general path's half
-/// floats (32-bit samples above 1 and below 0 included).
+/// The RGB and gray fast paths match the general conversion at their texture precision.
 #[test]
 fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
     for fmt in [
@@ -332,21 +331,23 @@ fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
         let mut s = Surface::new(fmt);
         let r = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
         let n = (TILE_SIZE * TILE_SIZE) as usize * fmt.channels();
-        let hdr = if fmt.sample == SampleType::F32 { 4.0 } else { 1.0 };
+        let hdr = if fmt.sample == SampleType::F32 { 2.0 * 524_288.0 } else { 1.0 };
         let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32 * hdr - (hdr - 1.0) / 4.0).collect();
         s.write_region(r, &data);
         let t = s.tile(TileCoord::new(0, 0)).expect("written").clone();
-        let fast = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, &t.bytes())).expect("fast path");
+        let fast = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f32(&fmt, &t.bytes())).expect("fast path");
         let raw = s.read_region(r);
+        let kind = TexKind::for_surface(Role::Content, fmt);
+        let rgba = raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px));
         let general: Vec<u8> =
-            raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|x| f32_to_f16(x).to_le_bytes())).flatten().collect();
+            if fmt.sample == SampleType::F32 { rgba.flat_map(f32::to_le_bytes).collect() } else { rgba.flat_map(|x| f32_to_f16(x).to_le_bytes()).collect() };
         assert_eq!(fast, general, "{fmt:?}");
-        assert_eq!(convert_tile(&s, Some(&t), TexKind::Rgba16F, TileCoord::new(0, 0)), general, "{fmt:?}");
+        assert_eq!(convert_tile(&s, Some(&t), kind, TileCoord::new(0, 0)), general, "{fmt:?}");
     }
     assert!(rgb_gray16_to_f16(&PixelFormat::RGBA8, &[]).is_none());
     assert!(rgb_gray16_to_f16(&PixelFormat { sample: SampleType::U16, ..PixelFormat::CMYKA8 }, &[]).is_none());
-    assert!(rgb_gray32_to_f16(&PixelFormat::RGBA16, &[]).is_none());
-    assert!(rgb_gray32_to_f16(&PixelFormat { sample: SampleType::F32, ..PixelFormat::CMYKA8 }, &[]).is_none());
+    assert!(rgb_gray32_to_f32(&PixelFormat::RGBA16, &[]).is_none());
+    assert!(rgb_gray32_to_f32(&PixelFormat { sample: SampleType::F32, ..PixelFormat::CMYKA8 }, &[]).is_none());
 }
 
 /// CMYK and Lab tiles convert in parallel bands of rows, each run of equal pixels once

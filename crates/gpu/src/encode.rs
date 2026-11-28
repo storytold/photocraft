@@ -133,6 +133,13 @@ impl Compositor {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
+        // An isolated bright pixel at very low coverage can stay above the half-float range
+        // in the straight-alpha accumulator, even if it composites to an ordinary colour.
+        let emission = doc.depth == photocraft_color::SampleType::F32
+            || plan.passes.iter().any(|pass| pass.tex.as_ref().is_some_and(|tex| tex.surface.get().format().sample == photocraft_color::SampleType::F32));
+        if self.acc_format == wgpu::TextureFormat::Rgba16Float && emission {
+            return Err(Unsupported("32-bit layer compositing requires a full-float GPU target".into()));
+        }
         self.check_fx(doc, &plan)?;
         self.pattern_space = photocraft_compose::pattern::PatternSpace::of(doc);
         self.pattern_doc = doc.id;
@@ -183,7 +190,7 @@ impl Compositor {
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
-        let fr = self.frame_res(device, queue, canvas, &plan)?;
+        let fr = self.frame_res(device, queue, canvas, &plan, emission)?;
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -408,7 +415,7 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>) -> Result<FrameRes, Unsupported> {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, emission: bool) -> Result<FrameRes, Unsupported> {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
         let areas = plan
@@ -418,6 +425,6 @@ impl Compositor {
             .collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
         let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat)).transpose()).collect::<Result<_, _>>()?;
-        Ok(FrameRes { areas, luts, patterns })
+        Ok(FrameRes { emission, areas, luts, patterns })
     }
 }

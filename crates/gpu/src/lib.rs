@@ -154,7 +154,7 @@ pub use consts::{ACC_FORMAT, CHUNK, FX_BUDGET, PAGE, PATTERN_BUDGET, PATTERN_IDL
 pub use context::{GpuContextError, NativeContext, NativeContextOptions};
 use convert::W;
 #[cfg(test)]
-use convert::{CONVERT_BATCH, colour_managed, convert_tile, convert_tiles, rgb_gray16_to_f16, rgb_gray32_to_f16};
+use convert::{CONVERT_BATCH, colour_managed, convert_tile, convert_tiles, rgb_gray16_to_f16, rgb_gray32_to_f32};
 pub use convert::{f16_to_f32, f32_to_f16};
 pub use kit::SHADER;
 use kit::{Kit, tex_entry};

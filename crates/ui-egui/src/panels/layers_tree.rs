@@ -722,8 +722,32 @@ impl<'a> PhotoThumbs<'a> {
     }
 }
 
-fn rgba8(c: [f32; 4]) -> [u8; 4] {
-    c.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+fn raster_thumbnail(surface: &photocraft_raster::Surface, frame: photocraft_geom::Rect, side: u32) -> egui::ColorImage {
+    let (width, height) = (frame.width().max(1), frame.height().max(1));
+    let scale = f64::from(side.max(1)) / f64::from(width.max(height));
+    let scaled = |extent| (f64::from(extent) * scale).round().max(1.0) as u32;
+    let (w, h) = (scaled(width), scaled(height));
+    let centre = |i, source, output, origin| {
+        let offset = (2 * u64::from(i) + 1) * u64::from(source) / (2 * u64::from(output));
+        (i64::from(origin) + offset as i64) as i32
+    };
+    let format = surface.format();
+    let mut pixels = Vec::with_capacity(w as usize * h as usize);
+    let mut sample = [0.0; 8];
+    let Some(sample) = sample.get_mut(..format.channels()) else {
+        return egui::ColorImage::filled([w as usize, h as usize], egui::Color32::TRANSPARENT);
+    };
+    // Match the framework thumbnail's centre sampling while retaining the float alpha marker.
+    for y in 0..h {
+        let sy = centre(y, height, h, frame.y0);
+        for x in 0..w {
+            surface.read_pixel(centre(x, width, w, frame.x0), sy, sample);
+            let rgba = photocraft_raster::to_rgba(&format, sample);
+            let bytes = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            pixels.push(crate::canvas::color_pixel(bytes, rgba[3]));
+        }
+    }
+    egui::ColorImage::new([w as usize, h as usize], pixels)
 }
 
 impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
@@ -792,13 +816,7 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
                 _ => {
                     let Some(surface) = l.surface() else { return ThumbRender::Blank };
                     let frame = crate::app::layer_thumb_frame(l, canvas, key.contents == ThumbContents::LayerBounds);
-                    let n = surface.channels();
-                    let mut px = [0.0f32; 8];
-                    ThumbRender::Ready(thumb_image(size(frame), request.side, |x, y| {
-                        let Some(px) = px.get_mut(..n) else { return [0; 4] };
-                        surface.read_pixel(frame.x0 + x as i32, frame.y0 + y as i32, px);
-                        rgba8(photocraft_raster::to_rgba(&surface.format(), px))
-                    }))
+                    ThumbRender::Ready(raster_thumbnail(surface, frame, request.side))
                 }
             },
         }

@@ -49,7 +49,7 @@ impl Kit {
         queue.write_buffer(&ubuf, 0, &data);
         let bg0 = uniform_group(device, &self.bgl0, &ubuf);
         for (i, d) in draws.iter().enumerate() {
-            let pipeline = self.pipelines.get(device, d.kernel, d.format)?;
+            let pipeline = self.pipelines.get(device, d.kernel, d.format, false)?;
             let lut = d.lut.as_ref().map(|l| {
                 let mut row = [0.0f32; 4096];
                 row[..l.len().min(4096)].copy_from_slice(&l[..l.len().min(4096)]);
@@ -141,6 +141,7 @@ pub(crate) struct Bound {
 
 /// Pass-level resources shared by every cell of a frame.
 pub(crate) struct FrameRes {
+    pub(crate) emission: bool,
     /// Tile area of each pass's (texture, mask) surface within the canvas tile grid.
     pub(crate) areas: Vec<(Rect, Rect)>,
     pub(crate) luts: Vec<Option<(wgpu::Texture, wgpu::TextureView)>>,

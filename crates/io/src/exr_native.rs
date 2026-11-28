@@ -43,7 +43,8 @@ fn gray_alpha_to_rgba(data: &[u8]) -> Vec<u8> {
 /// chromaticities, over its block limits or malformed by its stricter checks); the caller
 /// falls back to the whole-file decoder. Once pixels are being decoded any failure fails the
 /// open, so no partial document is published.
-pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<Option<ImportResult>, IoError> {
+pub(crate) fn import<R: Read + Seek>(mut source: R, ctl: &Interrupt<'_>) -> Result<Option<ImportResult>, IoError> {
+    let premultiplied = premultiplied_scanlines(&mut source, ctl)?;
     let mut decoder = match photocraft_codecs::exr_stream::Decoder::new(source, &|| ctl.cancelled()) {
         Ok(decoder) => decoder,
         Err(_) if ctl.cancelled() => return Err(IoError::Cancelled),
@@ -78,7 +79,7 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
         ctl.check().map_err(|_| IoError::Cancelled)?;
         require_scratch(scratch_expected)?;
         let band = decoder.next_band(&|| ctl.cancelled()).map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { e.into() })?;
-        let Some(band) = band else {
+        let Some(mut band) = band else {
             break;
         };
         let rect = Rect::from_xywh(band.x as i32, band.y as i32, band.width, band.height);
@@ -89,6 +90,9 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
                 photocraft_raster::memory::stats().1.tile_bytes,
                 missing.saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(fmt.bytes_per_pixel() as u64),
             )?;
+        }
+        if info.has_alpha {
+            crate::exr_alpha::prepare_import_f32(&mut band.data, if info.gray { 2 } else { 4 }, premultiplied);
         }
         if info.gray {
             surface.write_interleaved(rect, &gray_alpha_to_rgba(&band.data));
@@ -117,4 +121,25 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     let warnings = if info.all_half { vec!["16-bit float samples are stored as 32-bit float".into()] } else { Vec::new() };
     ctl.progress(1.0);
     Ok(Some(ImportResult { document, warnings, source_read_only: false, preview_only: false }))
+}
+
+/// Read only a bounded prefix for the channel types. The stream decoder promotes UINT and
+/// FLOAT to the same output type and owns the subsequent seeks and block validation.
+fn premultiplied_scanlines(source: &mut impl Read, ctl: &Interrupt<'_>) -> Result<bool, IoError> {
+    const MAX_HEADER_BYTES: usize = 8 << 20; // the streaming decoder's header limit
+    let mut prefix = Vec::new();
+    let mut limit = 8 << 10;
+    loop {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let read = (limit - prefix.len()) as u64;
+        source.take(read).read_to_end(&mut prefix).map_err(|error| IoError::Read(error.to_string()))?;
+        let parts = crate::exr_alpha::parts(&prefix);
+        if !parts.is_empty() {
+            return Ok(crate::exr_alpha::ordinary_import(&parts));
+        }
+        if prefix.len() < limit || limit == MAX_HEADER_BYTES {
+            return Ok(false);
+        }
+        limit *= 2;
+    }
 }

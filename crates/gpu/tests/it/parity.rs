@@ -85,6 +85,186 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
     }
 }
 
+#[test]
+fn hdr_low_coverage_preserves_associated_colour() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("HDR emission", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    let mut layer = Layer::raster("emission", PixelFormat::RGBA32F);
+    layer.surface_mut().unwrap().write_region(doc.bounds(), &[131_072.0, 0.0, 0.0, 1.0 / 16_384.0, 524_288.0, 0.0, 0.0, 1.0 / 1_048_576.0]);
+    doc.layers.push(layer);
+
+    let cpu = photocraft_compose::flatten(&doc);
+    for comp in [&mut g.comp, &mut g.paged] {
+        let actual = render_to_vec(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        assert_eq!(actual.len(), 2);
+        for ((pixel, reference), expected) in actual.iter().zip(&cpu.px).zip([8.0, 0.5]) {
+            assert!(pixel[0].is_finite(), "{pixel:?}");
+            assert_eq!(pixel[3], reference[3]);
+            assert!((pixel[0] * pixel[3] - expected).abs() < TOL, "{pixel:?}");
+        }
+    }
+
+    let mut half = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba16Float).unwrap();
+    let error = render_to_vec(&mut half, &g.device, &g.queue, &doc, doc.bounds()).unwrap_err();
+    assert!(error.to_string().contains("requires a full-float GPU target"), "{error}");
+}
+
+#[test]
+fn hdr_zero_coverage_emission_does_not_obscure_the_backdrop() {
+    let Some(mut g) = gpu() else { return };
+    let red = f32::MAX / 2.0;
+    let mut doc = Document::new("Zero coverage emission", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+    let bounds = doc.bounds();
+    emitter.surface_mut().unwrap().write_region(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA, 0.5, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
+    doc.layers.push(emitter);
+
+    let transparent = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, bounds).unwrap();
+    assert_eq!(transparent[0][0], red);
+    assert!(photocraft_color::is_emissive_alpha(transparent[0][3]));
+    assert_eq!(transparent[1][0], 0.5);
+    assert!(photocraft_color::is_emissive_alpha(transparent[1][3]));
+
+    let mut background = Layer::raster("white", PixelFormat::RGBA32F);
+    background.surface_mut().unwrap().fill_rect(bounds, &[1.0; 4]);
+    doc.layers.insert(0, background);
+    let expected = photocraft_compose::flatten(&doc);
+    assert_eq!(expected.px[0], [red, 1.0, 1.0, 1.0]);
+    assert_eq!(expected.px[1], [1.5, 1.0, 1.0, 1.0]);
+    for comp in [&mut g.comp, &mut g.paged] {
+        let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap();
+        assert_eq!(actual, expected.px);
+    }
+}
+
+#[test]
+fn compositing_emission_does_not_change_the_next_ordinary_render() {
+    let Some(mut g) = gpu() else { return };
+    let mut ordinary = Document::with_background("Ordinary", Size::new(2, 1), ColorMode::Rgb, SampleType::U8, Color::rgba(0.25, 0.5, 0.75, 1.0));
+    let mut layer = Layer::raster("translucent", PixelFormat::RGBA8);
+    layer.surface_mut().unwrap().fill_rect(ordinary.bounds(), &[1.0, 0.0, 0.0, 0.5]);
+    ordinary.layers.push(layer);
+    check(&mut g, &ordinary, "ordinary before emission");
+
+    let mut hdr = Document::new("Emission", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    let mut light = Layer::raster("light", PixelFormat::RGBA32F);
+    light.surface_mut().unwrap().fill_rect(hdr.bounds(), &[0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA]);
+    hdr.layers.push(light);
+    for comp in [&mut g.comp, &mut g.paged] {
+        let actual = render_to_vec(comp, &g.device, &g.queue, &hdr, hdr.bounds()).unwrap();
+        assert_eq!(actual[0], [0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA]);
+    }
+
+    check(&mut g, &ordinary, "ordinary after emission");
+}
+
+#[test]
+fn hdr_emission_survives_group_opacity_masks_and_clipping() {
+    let Some(mut g) = gpu() else { return };
+    for clipped in [false, true] {
+        let mut doc = Document::new("Emission groups", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+        let bounds = doc.bounds();
+        let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+        emitter.surface_mut().unwrap().fill_rect(bounds, &[0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA]);
+        if clipped {
+            let mut base = Layer::raster("base", PixelFormat::RGBA32F);
+            base.surface_mut().unwrap().fill_rect(bounds, &[0.2, 0.4, 0.6, 0.5]);
+            emitter.clipped = true;
+            doc.layers = vec![base, emitter].into();
+        } else {
+            let mut group = Layer::group("group", vec![emitter]);
+            group.opacity = 0.5;
+            group.mask = Some(photocraft_doc::LayerMask {
+                surface: photocraft_raster::Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]),
+                ..photocraft_doc::LayerMask::reveal_all()
+            });
+            doc.layers.push(group);
+        }
+        let cpu = photocraft_compose::flatten(&doc);
+        let expected = if clipped { [0.7, 0.65, 0.725, 0.5] } else { [0.125, 0.0625, 0.03125, photocraft_color::EMISSIVE_ALPHA] };
+        for comp in [&mut g.comp, &mut g.paged] {
+            let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap();
+            for pixel in actual.iter().chain(&cpu.px) {
+                for (got, want) in pixel.iter().zip(expected) {
+                    assert!((*got - want).abs() <= TOL, "clipped={clipped}: {pixel:?} != {expected:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_pass_through_groups_preserve_light_when_clipping_changes_nothing() {
+    let Some(mut g) = gpu() else { return };
+    for red in [2.0, f32::MAX / 2.0 + f32::MAX / 4.0] {
+        for covered in [false, true] {
+            let mut doc = Document::new("HDR clipping", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+            let bounds = doc.bounds();
+            let mut emitter = Layer::raster("Light", PixelFormat::RGBA32F);
+            emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
+            let mut group = Layer::group("Group", vec![emitter]);
+            group.blend = BlendMode::PassThrough;
+            if covered {
+                let mut backdrop = Layer::raster("Black", PixelFormat::RGBA32F);
+                backdrop.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, 1.0]);
+                doc.layers.push(backdrop);
+            }
+            doc.layers.push(group);
+            let mut clip = Layer::raster("Empty clip", PixelFormat::RGBA32F);
+            clip.clipped = true;
+            doc.layers.push(clip);
+            let cpu = photocraft_compose::flatten(&doc).get(0, 0);
+            assert_eq!(cpu, [red, 0.0, 0.0, if covered { 1.0 } else { photocraft_color::EMISSIVE_ALPHA }]);
+            for comp in [&mut g.comp, &mut g.paged] {
+                assert_eq!(render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap()[0], cpu);
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_dissolve_keeps_binary_coverage_over_zero_coverage_light() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("HDR dissolve", Size::new(64, 1), ColorMode::Rgb, SampleType::F32);
+    let bounds = doc.bounds();
+    let red = [2.0, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let mut emitter = Layer::raster("Light", PixelFormat::RGBA32F);
+    emitter.surface_mut().unwrap().fill_rect(bounds, &red);
+    let mut dissolve = Layer::raster("Dissolve", PixelFormat::RGBA32F);
+    dissolve.surface_mut().unwrap().fill_rect(bounds, &blue);
+    dissolve.blend = BlendMode::Dissolve;
+    dissolve.opacity = 0.5;
+    doc.layers = vec![emitter, dissolve].into();
+    let cpu = photocraft_compose::flatten(&doc);
+    assert!(cpu.px.contains(&red) && cpu.px.contains(&blue));
+    assert!(cpu.px.iter().all(|pixel| *pixel == red || *pixel == blue));
+    for comp in [&mut g.comp, &mut g.paged] {
+        assert_eq!(render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap(), cpu.px);
+    }
+}
+
+#[test]
+fn hdr_emission_overflow_retains_associated_light() {
+    let Some(mut g) = gpu() else { return };
+    for (alpha, red) in [(1e-10, f32::MAX / 2.0), (0.25, f32::MAX / 2.0), (f32::MIN_POSITIVE, 8.0)] {
+        let mut doc = Document::new("Emission overflow", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        let bounds = doc.bounds();
+        let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+        emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
+        let mut cover = Layer::raster("coverage", PixelFormat::RGBA32F);
+        cover.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, alpha]);
+        doc.layers = vec![emitter, cover].into();
+        let expected = f64::from(red) * f64::from(1.0 - alpha);
+        for comp in [&mut g.comp, &mut g.paged] {
+            let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap()[0];
+            assert!(actual[0].is_finite());
+            let light = f64::from(actual[0]) * f64::from(actual[3]);
+            assert!((light / expected - 1.0).abs() < 1e-6, "{actual:?} at {alpha}");
+        }
+    }
+}
+
 /// Phase timings for diagnosing expensive parity checks; nextest shows them only for the
 /// selected slow Windows tests, without changing their timeout or pass criteria.
 fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
@@ -2674,7 +2854,7 @@ fn blend_mode_extremes() {
 
 /// Colours for the non-separable modes: in gamut, greys and near-greys above 1 (lum ≈ max, where
 /// ClipColor divided by rounding noise), saturated colours above 1, negatives and mixes. All are
-/// exact in half floats (the GPU's layer textures of 16/32-bit documents), so both compositors
+/// exact in half floats (the GPU's layer textures of 16-bit documents), so both compositors
 /// see the same inputs.
 const NONSEP_COLORS: [[f32; 3]; 12] = [
     [0.25, 0.5, 0.75],

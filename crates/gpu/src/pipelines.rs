@@ -40,6 +40,7 @@ pub(crate) struct KernelPipelines {
     pub(crate) formats: Vec<wgpu::TextureFormat>,
     /// Per format, the pipeline or the error building it raised.
     built: OnceLock<Vec<Result<wgpu::RenderPipeline, String>>>,
+    emission: OnceLock<Vec<Result<wgpu::RenderPipeline, String>>>,
 }
 
 /// Held by every pipeline build in the process (see [`Pipelines`]).
@@ -68,15 +69,18 @@ impl Pipelines {
     /// The pipeline drawing `kernel` into `format`, built now if no draw needed it before. A
     /// pipeline the device can't build is an [`Unsupported`] for every draw that needs it, so
     /// that refresh uses the CPU compositor.
-    pub(crate) fn get(&self, device: &wgpu::Device, kernel: Kernel, format: wgpu::TextureFormat) -> Result<&wgpu::RenderPipeline, Unsupported> {
+    pub(crate) fn get(&self, device: &wgpu::Device, kernel: Kernel, format: wgpu::TextureFormat, emission: bool) -> Result<&wgpu::RenderPipeline, Unsupported> {
         let missing = || Unsupported(format!("the compositor has no {kernel:?} pipeline for {format:?}"));
         let k = self.kernels.iter().find(|k| k.kernel == kernel).ok_or_else(missing)?;
         let i = k.formats.iter().position(|&f| f == format).ok_or_else(missing)?;
-        let built = match k.built.get() {
+        // Specialize HDR emission so ordinary documents do not run the associated-light
+        // path in every blend or inflate the DX12 shaders for the ordinary case.
+        let slot = if emission { &k.emission } else { &k.built };
+        let built = match slot.get() {
             Some(built) => built,
             None => {
                 let _building = building();
-                k.built.get_or_init(|| self.build(device, k))
+                slot.get_or_init(|| self.build(device, k, emission))
             }
         };
         built[i].as_ref().map_err(|e| {
@@ -98,7 +102,7 @@ impl Pipelines {
         let _building = building();
         let missing: Vec<&KernelPipelines> = self.kernels.iter().filter(|k| k.built.get().is_none()).collect();
         let build = |k: &KernelPipelines| {
-            k.built.get_or_init(|| self.build(device, k));
+            k.built.get_or_init(|| self.build(device, k, false));
         };
         if sequential {
             missing.into_iter().for_each(build);
@@ -116,7 +120,8 @@ impl Pipelines {
 
     /// `k`'s pipelines, each inside its own error scope on the calling thread (wgpu's scopes are
     /// per thread). The caller holds [`building`].
-    fn build(&self, device: &wgpu::Device, k: &KernelPipelines) -> Vec<Result<wgpu::RenderPipeline, String>> {
+    fn build(&self, device: &wgpu::Device, k: &KernelPipelines, emission: bool) -> Vec<Result<wgpu::RenderPipeline, String>> {
+        let constants: &[(&str, f64)] = if emission { &[("EMISSION", 1.0)] } else { &[] };
         k.formats
             .iter()
             .map(|&format| {
@@ -132,7 +137,7 @@ impl Pipelines {
                             module: &self.module,
                             entry_point: Some(k.entry),
                             targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-                            compilation_options: Default::default(),
+                            compilation_options: wgpu::PipelineCompilationOptions { constants, ..Default::default() },
                         }),
                         multiview_mask: None,
                         cache: None,
@@ -173,6 +178,7 @@ pub(crate) fn table(acc_format: wgpu::TextureFormat) -> Vec<KernelPipelines> {
             vertex: format!("vs_{i}"),
             formats: if kernel.is_map() { vec![MAP32, MAP16] } else { vec![acc_format] },
             built: OnceLock::new(),
+            emission: OnceLock::new(),
         })
         .collect()
 }

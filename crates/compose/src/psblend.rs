@@ -162,6 +162,9 @@ pub fn blend_rgb_fill(mode: BlendMode, cb: [f32; 3], cs: [f32; 3], fill: f32) ->
 /// `opacity` and the blend is [`blend_rgb_fill`]; over transparency, Fill stays coverage, so a
 /// layer over nothing looks as it did.
 pub fn composite_fill(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, fill: f32, gamma: f32) -> [f32; 4] {
+    if let Some(pixel) = composite_emission(backdrop, source, opacity * fill.clamp(0.0, 1.0)) {
+        return pixel;
+    }
     if fill >= 1.0 || !fill_is_special(mode) {
         return composite_gamma(mode, backdrop, source, opacity * fill.clamp(0.0, 1.0), gamma);
     }
@@ -195,6 +198,9 @@ pub fn composite_fill(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opa
 /// formula) using [`blend_rgb`].
 #[inline]
 pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    if let Some(pixel) = composite_emission(backdrop, source, opacity) {
+        return pixel;
+    }
     let ab = backdrop[3];
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
@@ -227,9 +233,77 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
     out
 }
 
+/// Mask coverage scales the light of a zero-coverage emitter without changing its coverage.
+pub(crate) fn mask_pixel(pixel: &mut [f32; 4], weight: f32) {
+    if photocraft_color::is_emissive_alpha(pixel[3]) {
+        for channel in &mut pixel[..3] {
+            *channel *= weight;
+        }
+    } else {
+        pixel[3] *= weight;
+    }
+}
+
+/// Associated light and coverage, including the zero-coverage emission representation.
+pub(crate) fn associated(pixel: [f32; 4]) -> [f64; 4] {
+    let coverage = pixel[3].max(0.0);
+    let weight = if photocraft_color::is_emissive_alpha(pixel[3]) { 1.0 } else { coverage };
+    [f64::from(pixel[0]) * f64::from(weight), f64::from(pixel[1]) * f64::from(weight), f64::from(pixel[2]) * f64::from(weight), f64::from(coverage)]
+}
+
+/// Store associated light in the straight-alpha buffer. If straight float32 cannot hold it,
+/// increase coverage only as far as necessary, as float32 EXR import does.
+pub(crate) fn from_associated(pixel: [f64; 4]) -> [f32; 4] {
+    let max = f64::from(f32::MAX);
+    let light = [pixel[0].clamp(-max, max), pixel[1].clamp(-max, max), pixel[2].clamp(-max, max)];
+    let mut coverage = pixel[3].clamp(0.0, 1.0) as f32;
+    if coverage <= 0.0 {
+        return if light.iter().any(|&v| v != 0.0) { [light[0] as f32, light[1] as f32, light[2] as f32, photocraft_color::EMISSIVE_ALPHA] } else { [0.0; 4] };
+    }
+    let peak = light.into_iter().map(f64::abs).fold(0.0, f64::max);
+    if peak > max * f64::from(coverage) {
+        coverage = (peak / max) as f32;
+        if max * f64::from(coverage) < peak {
+            coverage = coverage.next_up();
+        }
+    }
+    let channel = |i: usize| (light[i] / f64::from(coverage)).clamp(-max, max) as f32;
+    [channel(0), channel(1), channel(2), coverage]
+}
+
+/// Mix associated light separately from coverage when either input is emissive.
+pub(crate) fn mix_emission(a: [f32; 4], b: [f32; 4], k: f32) -> Option<[f32; 4]> {
+    if !photocraft_color::is_emissive_alpha(a[3]) && !photocraft_color::is_emissive_alpha(b[3]) {
+        return None;
+    }
+    let (a, b, k) = (associated(a), associated(b), f64::from(k));
+    Some(from_associated(std::array::from_fn(|i| a[i] * (1.0 - k) + b[i] * k)))
+}
+
+/// Zero-coverage light is additive for every blend mode: there is no covered area to blend.
+/// This rule is shared by ordinary, clipped and grouped composition.
+pub(crate) fn composite_emission(backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> Option<[f32; 4]> {
+    use photocraft_color::is_emissive_alpha;
+    if !is_emissive_alpha(backdrop[3]) && !is_emissive_alpha(source[3]) {
+        return None;
+    }
+    if opacity <= 0.0 || (!is_emissive_alpha(source[3]) && source[3] <= 0.0) {
+        return Some(backdrop);
+    }
+    let (b, s) = (associated(backdrop), associated(source));
+    let opacity = f64::from(opacity);
+    let over = s[3] * opacity;
+    let mut out = std::array::from_fn(|i| b[i] * (1.0 - over) + s[i] * opacity);
+    out[3] = over + b[3] * (1.0 - over);
+    Some(from_associated(out))
+}
+
 /// Normal mixing outside Lab, for callers that select the blend space once per buffer.
 #[inline]
 pub(crate) fn composite_normal_rgb(backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    if let Some(pixel) = composite_emission(backdrop, source, opacity) {
+        return pixel;
+    }
     let ab = backdrop[3];
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
@@ -246,11 +320,19 @@ pub(crate) fn composite_normal_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], 
     let (dc, dt) = dst[..n].as_chunks_mut::<LANES>();
     let (sc, st) = src[..n].as_chunks::<LANES>();
     for (b, s) in dc.iter_mut().zip(sc) {
-        normal_lanes(b, s, opacity);
+        if b.iter().chain(s).any(|p| photocraft_color::is_emissive_alpha(p[3])) {
+            for (b, s) in b.iter_mut().zip(s) {
+                if s[3] <= 0.0 && !photocraft_color::is_emissive_alpha(s[3]) {
+                    continue;
+                }
+                *b = composite_normal_rgb(*b, *s, opacity);
+            }
+        } else {
+            normal_lanes(b, s, opacity);
+        }
     }
     for (b, s) in dt.iter_mut().zip(st) {
-        // Not `s[3] > 0`: a NaN alpha is blended (into NaN), as the scalar loop does.
-        if s[3] <= 0.0 {
+        if s[3] <= 0.0 && !photocraft_color::is_emissive_alpha(s[3]) {
             continue;
         }
         *b = composite_normal_rgb(*b, *s, opacity);
@@ -356,6 +438,9 @@ pub fn text_decode(v: f32, gamma: f32) -> f32 {
 /// ([`text_encode`]; `gamma == 1` is [`composite`], the setting switched off).
 #[inline]
 pub fn composite_gamma(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, gamma: f32) -> [f32; 4] {
+    if let Some(pixel) = composite_emission(backdrop, source, opacity) {
+        return pixel;
+    }
     if gamma == 1.0 {
         return composite(mode, backdrop, source, opacity);
     }

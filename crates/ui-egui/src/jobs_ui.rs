@@ -910,13 +910,19 @@ pub(crate) fn batch_preview(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool 
     // The store keeps the texture under the job and the snapshot's generation, so it decodes once per input. The
     // thumbnail is flattened onto white, as the canvas shows a transparent document.
     let image = || {
-        let thumb = photocraft_compose::thumbnail(&preview.document, 1024);
+        let comp = photocraft_compose::thumbnail_buffer(&preview.document, 1024);
+        let thumb = comp.to_rgba8();
         let flat: Vec<u8> = thumb
             .pixels
             .as_chunks::<4>()
             .0
             .iter()
-            .flat_map(|px| {
+            .zip(&comp.px)
+            .flat_map(|(px, sample)| {
+                if photocraft_color::is_emissive_alpha(sample[3]) {
+                    let over_white = |c: f32| ((1.0 + c).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    return [over_white(sample[0]), over_white(sample[1]), over_white(sample[2]), 255];
+                }
                 let alpha = u32::from(px[3]);
                 let over_white = |c: u8| ((u32::from(c) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
                 [over_white(px[0]), over_white(px[1]), over_white(px[2]), 255]

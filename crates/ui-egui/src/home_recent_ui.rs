@@ -177,8 +177,8 @@ impl ThumbSource<ThumbKey> for RecentThumbs<'_> {
         let ThumbKey::Recent(path) = key else { return ThumbRender::Blank };
         let path = path.to_string_lossy();
         if let Some(st) = self.open_doc(&path) {
-            let rgba = photocraft_compose::thumbnail(&st.doc, request.side);
-            return ThumbRender::Ready(ColorImage::from_rgba_unmultiplied([rgba.width as usize, rgba.height as usize], &rgba.pixels));
+            let comp = photocraft_compose::thumbnail_buffer(&st.doc, request.side);
+            return ThumbRender::Ready(crate::canvas::display_image(None, &comp));
         }
         // The size comes from the stat the revision was made from: the job decodes the file that stat saw. A missing
         // file has none, and the web has no files to decode.

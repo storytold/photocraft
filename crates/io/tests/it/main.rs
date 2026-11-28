@@ -26,6 +26,7 @@ mod effects_multi;
 mod exif_resolution;
 mod export_progress;
 mod exr_open_luminance_rgb_tests;
+mod exr_open_premultiplied_tests;
 mod exr_part_profile;
 mod flat;
 mod flat_export_renderer;

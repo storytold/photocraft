@@ -120,8 +120,13 @@ fn import_flat_impl_with_options(
         Some(r) => (r, None),
         None => {
             let limits = decode_limits(opts);
-            let img = codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
+            let mut img =
+                codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
+            if format == Some(Format::OpenExr) && img.layout().has_alpha() {
+                let associated = img.sample_type() == CSample::F32 && crate::exr_alpha::ordinary_import(&crate::exr_alpha::parts(bytes));
+                crate::exr_alpha::prepare_import(&mut img, associated);
+            }
             ctl.progress(0.6);
             (image_to_document_with(name, &img, ctl)?, Some(img))
         }
@@ -1996,6 +2001,9 @@ fn prepare_flat(mut img: Image, format: Format, warnings: &mut Vec<String>) -> R
         } else if let Some(linear) = convert_gray(&img, craft_cms::builtin::linear_gray(), CSample::F32)? {
             img = linear;
         }
+        if format == Format::OpenExr {
+            crate::exr_alpha::premultiply_image(&mut img);
+        }
     } else if !format.caps().icc || (img.layout().is_gray() && !format.caps().layouts.iter().any(|l| l.is_gray())) {
         // Untagged files read back as sRGB/sGray. Even an ICC-capable format like WebP loses a
         // gray profile when the codec expands gray to RGB. Convert first (as Quick Export does)
@@ -2377,8 +2385,10 @@ fn matte_over_white(img: &Image) -> Result<Image, IoError> {
         let mut out = Vec::with_capacity(vals.len() / layout.channels() * layout.color_channels());
         for px in vals.chunks_exact(layout.channels()) {
             if let Some((&a, color)) = px.split_last() {
+                let emission = photocraft_color::is_emissive_alpha(a);
                 let a = a.clamp(0.0, 1.0);
-                out.extend(color.iter().map(|&c| c * a + white * (1.0 - a)));
+                let weight = if emission { 1.0 } else { a };
+                out.extend(color.iter().map(|&c| c * weight + white * (1.0 - a)));
             }
         }
         out

@@ -1190,3 +1190,27 @@ mod gpu_tests {
         assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
     }
 }
+
+#[test]
+fn display_image_preserves_zero_coverage_emission() {
+    let buf = photocraft_compose::Buffer {
+        rect: photocraft_geom::Rect::new(0, 0, 2, 1),
+        px: vec![[0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA], [0.5, 0.25, 0.125, 0.0]],
+    };
+    let mut doc = photocraft_doc::Document::new("emission", photocraft_geom::Size::new(2, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F32);
+    doc.icc_profile = Some(craft::cms::Builtin::LinearSrgb.profile().to_bytes());
+    let mut color = photocraft_engine::color_cmds::ColorState::default();
+    color.settings.monitor_profile = "srgb".into();
+    let display = color.canvas_display(&doc).unwrap();
+    for d in [None, Some(display.as_ref())] {
+        let expected = d.map_or_else(|| buf.to_rgba8(), |d| d.to_rgba8(&buf));
+        let [r, g, b, _] = expected.pixels[..4].try_into().unwrap();
+        let actual = super::display_image(d, &buf);
+        assert_eq!(actual.pixels[0], egui::Color32::from_rgba_premultiplied(r, g, b, 0));
+        assert_eq!(actual.pixels[1], egui::Color32::TRANSPARENT);
+    }
+    assert_eq!(crate::gpu_canvas::premultiply_rgba8(&buf.px), vec![128, 64, 32, 0, 0, 0, 0, 0]);
+    let half = crate::gpu_canvas::premultiply_rgba16f(&buf.px);
+    assert_eq!(half[..6], [0x00, 0x38, 0x00, 0x34, 0x00, 0x30]);
+    assert_eq!(u16::from_le_bytes([half[6], half[7]]) & 0x7fff, 0);
+}

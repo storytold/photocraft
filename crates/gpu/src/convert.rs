@@ -154,7 +154,7 @@ const MANAGED_BAND_ROWS: i32 = 16;
 /// Whether `fmt` pixels reach `kind` texels through a per-pixel colour transform (CMYK, Lab).
 pub(crate) fn colour_managed(fmt: &PixelFormat, kind: TexKind) -> bool {
     use photocraft_color::ColorMode;
-    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
+    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F | TexKind::Rgba32F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
 }
 
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
@@ -166,7 +166,12 @@ pub(crate) fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: Te
     }
     let fmt = surface.format();
     if let (Some(t), TexKind::Rgba16F) = (tile, kind)
-        && let Some(out) = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, &t.bytes()))
+        && let Some(out) = rgb_gray16_to_f16(&fmt, &t.bytes())
+    {
+        return out;
+    }
+    if let (Some(t), TexKind::Rgba32F) = (tile, kind)
+        && let Some(out) = rgb_gray32_to_f32(&fmt, &t.bytes())
     {
         return out;
     }
@@ -207,6 +212,11 @@ fn convert_rows(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, rect
                 let v = rgba();
                 for x in v {
                     out.extend(f32_to_f16(x).to_le_bytes());
+                }
+            }
+            TexKind::Rgba32F => {
+                for x in rgba() {
+                    out.extend(x.to_le_bytes());
                 }
             }
             TexKind::R8Direct => out.push((px[0].clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
@@ -251,11 +261,11 @@ pub(crate) fn rgb_gray16_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u
     Some(out)
 }
 
-/// RGBA16F texels of a 32-bit float RGB or grayscale tile, straight from its samples: the same
+/// RGBA32F texels of a 32-bit float RGB or grayscale tile, straight from its samples: the same
 /// bytes as the general path without decoding the tile into a float buffer and converting it
 /// pixel by pixel (a brush dab on a 32-bit layer re-uploads the tiles it touched). `None` for
 /// other formats.
-pub(crate) fn rgb_gray32_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn rgb_gray32_to_f32(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
     use photocraft_color::ColorMode;
     if fmt.sample != SampleType::F32 {
         return None;
@@ -265,21 +275,25 @@ pub(crate) fn rgb_gray32_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u
         ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => true,
         _ => return None,
     };
-    let one = f32_to_f16(1.0).to_le_bytes();
+    let one = 1.0f32.to_le_bytes();
     let ch = fmt.channels();
-    let mut out = scratch::take_cap((TILE_SIZE * TILE_SIZE) as usize * 8);
+    let mut out = scratch::take_cap((TILE_SIZE * TILE_SIZE) as usize * 16);
+    if cfg!(target_endian = "little") && *fmt == PixelFormat::RGBA32F {
+        out.extend_from_slice(bytes);
+        return Some(out);
+    }
     for px in bytes.chunks_exact(ch * 4) {
-        let h = |i: usize| -> [u8; 2] {
+        let sample = |i: usize| -> [u8; 4] {
             let v = px.get(i * 4..i * 4 + 4).map_or(0.0, |b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]));
-            f32_to_f16(v).to_le_bytes()
+            v.to_le_bytes()
         };
         let (r, g, b) = if gray {
-            let v = h(0);
+            let v = sample(0);
             (v, v, v)
         } else {
-            (h(0), h(1), h(2))
+            (sample(0), sample(1), sample(2))
         };
-        let a = if fmt.alpha { h(ch - 1) } else { one };
+        let a = if fmt.alpha { sample(ch - 1) } else { one };
         out.extend_from_slice(&r);
         out.extend_from_slice(&g);
         out.extend_from_slice(&b);

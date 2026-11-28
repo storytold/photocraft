@@ -7,13 +7,21 @@ use photocraft_engine::color_cmds::ColorExt;
 /// fill (`gradient_ui::live_overlay::show`'s answer).
 pub(crate) type LiveProposal<'a> = Option<&'a (photocraft_doc::LayerId, photocraft_doc::Fill)>;
 
+pub(crate) fn color_pixel([r, g, b, a]: [u8; 4], alpha: f32) -> egui::Color32 {
+    if photocraft_color::is_emissive_alpha(alpha) {
+        egui::Color32::from_rgba_premultiplied(r, g, b, 0)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+    }
+}
+
 fn buffer_to_image(buf: &photocraft_compose::Buffer) -> egui::ColorImage {
     // `buf.to_rgba8()` then `color_image`, fused: one parallel pass, no intermediate image.
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let mut pixels = vec![egui::Color32::TRANSPARENT; buf.px.len()];
     let convert = |out: &mut [egui::Color32], src: &[[f32; 4]]| {
         for (o, p) in out.iter_mut().zip(src) {
-            *o = egui::Color32::from_rgba_unmultiplied(q(p[0]), q(p[1]), q(p[2]), q(p[3]));
+            *o = color_pixel([q(p[0]), q(p[1]), q(p[2]), q(p[3])], p[3]);
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -29,22 +37,22 @@ fn buffer_to_image(buf: &photocraft_compose::Buffer) -> egui::ColorImage {
 /// `img` as an egui image: `ColorImage::from_rgba_unmultiplied`, in parallel off wasm. egui's own
 /// conversion runs on one thread and took 37 ms of a 24 MP canvas or preview update, three times
 /// the quantize before it.
-fn color_image(img: &photocraft_raster::Rgba8Image) -> egui::ColorImage {
+fn color_image(img: &photocraft_raster::Rgba8Image, original: &photocraft_compose::Buffer) -> egui::ColorImage {
     let size = [img.width as usize, img.height as usize];
     let src = img.pixels.as_chunks::<4>().0;
     let mut pixels = vec![egui::Color32::TRANSPARENT; src.len()];
-    let convert = |out: &mut [egui::Color32], src: &[[u8; 4]]| {
-        for (o, &[r, g, b, a]) in out.iter_mut().zip(src) {
-            *o = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+    let convert = |out: &mut [egui::Color32], src: &[[u8; 4]], original: &[[f32; 4]]| {
+        for ((o, &rgba), p) in out.iter_mut().zip(src).zip(original) {
+            *o = color_pixel(rgba, p[3]);
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        pixels.par_chunks_mut(16 * 1024).zip(src.par_chunks(16 * 1024)).for_each(|(o, s)| convert(o, s));
+        pixels.par_chunks_mut(16 * 1024).zip(src.par_chunks(16 * 1024)).zip(original.px.par_chunks(16 * 1024)).for_each(|((o, s), p)| convert(o, s, p));
     }
     #[cfg(target_arch = "wasm32")]
-    convert(&mut pixels, src);
+    convert(&mut pixels, src, &original.px);
     egui::ColorImage::new(size, pixels)
 }
 
@@ -52,7 +60,7 @@ fn color_image(img: &photocraft_raster::Rgba8Image) -> egui::ColorImage {
 /// common sRGB-on-sRGB case).
 pub(crate) fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
     match display {
-        Some(d) if !d.is_identity() => color_image(&d.to_rgba8(buf)),
+        Some(d) if !d.is_identity() => color_image(&d.to_rgba8(buf), buf),
         _ => buffer_to_image(buf),
     }
 }

@@ -295,7 +295,7 @@ impl Compositor {
                     _ => (p.kernel, p.dst),
                 };
                 let clear = p.kernel == Kernel::Clear;
-                let pipeline = if clear { None } else { Some(self.kit.pipelines.get(device, kernel, self.acc_format)?) };
+                let pipeline = if clear { None } else { Some(self.kit.pipelines.get(device, kernel, self.acc_format, fr.emission)?) };
                 let target = &self.pool[dst as usize].1;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("pc_compose_pass"),

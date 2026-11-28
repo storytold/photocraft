@@ -31,6 +31,7 @@ photocraft-algo = { workspace = true }
 craft-psd = { workspace = true }
 craft = { workspace = true, features = ["imaging"] }
 photocraft-codecs = { workspace = true }
+craft-exr = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53", features = ["decode"] }
 photocraft-formats = { workspace = true }
 photocraft-raw = { workspace = true }
 craft-affinity = { workspace = true }
@@ -67,6 +68,7 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
+tempfile = "3"
 lopdf = { version = "0.38", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"

@@ -135,18 +135,22 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
         let f = clamp((tt - i - 0.5) * (scale / per) + 0.5, vec2(0.0), vec2(1.0));
         col = textureSampleLevel(tex, samp, (i + 0.5 + f) / texels, 0.0);
     }
-    if (view.f.w > 0.0 && col.a > 0.0) {
+    // Zero-coverage texels can still carry associated light. Keep them additive while
+    // ordinary transparent texels (zero colour too) remain invisible.
+    if (col.a <= 0.0 && all(col.rgb <= vec3(0.0))) { discard; }
+    let weight = select(col.a, 1.0, col.a <= 0.0);
+    if (view.f.w > 0.0) {
         // View › 32-bit Preview Options: exposure and gamma in linear light on the sRGB-encoded
         // texture value, before the display LUT. A float canvas keeps values above 1.0, so they
         // are brought into range by the exposure instead of clipped.
-        let lin = srgb_to_linear(max(col.rgb / col.a, vec3(0.0))) * view.f.w;
+        let lin = srgb_to_linear(max(col.rgb / weight, vec3(0.0))) * view.f.w;
         let v = linear_to_srgb(min(pow(max(lin, vec3(1e-12)), vec3(view.g.w)), vec3(1.0)));
-        col = vec4(v * col.a, col.a);
+        col = vec4(v * weight, col.a);
     }
-    if (view.d.z > 0.5 && col.a > 0.0) {
+    if (view.d.z > 0.5) {
         // Colour management, Proof Colors, Gamut Warning: the document's display LUT (alpha flags
         // out-of-gamut colours).
-        let c = clamp(col.rgb / col.a, vec3(0.0), vec3(1.0));
+        let c = clamp(col.rgb / weight, vec3(0.0), vec3(1.0));
         var shown: vec3<f32>;
         if (view.d.z > 2.5) {
             shown = matrix_display(c);
@@ -155,13 +159,12 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
             let l = textureSampleLevel(lut, samp, (c * (n - 1.0) + 0.5) / n, 0.0);
             shown = select(l.rgb, mix(l.rgb, view.g.xyz, view.e.w), view.d.z > 1.5 && l.a > 0.5);
         }
-        col = vec4(shown * col.a, col.a);
+        col = vec4(shown * weight, col.a);
     }
     // Document pixels only, premultiplied: the canvas draws the checkerboard under them and the pixel grid over them.
-    if (col.a <= 0.0) { discard; }
     var rgb = col.rgb;
     if (view.d.w > 0.5) {
-        rgb = srgb_to_linear(rgb / col.a) * col.a;
+        rgb = srgb_to_linear(rgb / weight) * weight;
     }
     return vec4(rgb, col.a);
 }
@@ -185,6 +188,7 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
 fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let c = textureLoad(acc, vec2<i32>(floor(pos.xy)) - offset.xy, 0);
     let a = clamp(c.a, 0.0, 1.0);
+    let emission = bitcast<u32>(c.a) == 0xbf800000u;
     var rgb = max(c.rgb, vec3(0.0));
     if (offset.w == 0) {
         rgb = min(rgb, vec3(1.0));
@@ -193,6 +197,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         // Linear composite: store its sRGB encoding (8-bit precision where it matters).
         rgb = srgb_encode(rgb);
     }
+    if (emission) { return vec4(min(rgb, vec3(65504.0)), a); }
     return vec4(rgb * a, a);
 }
 "#;

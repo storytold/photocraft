@@ -177,9 +177,10 @@ impl Buffer {
     pub fn over_background(&self, bg: [f32; 3]) -> Buffer {
         let mut out = self.clone();
         for p in &mut out.px {
-            let a = p[3];
+            let a = p[3].max(0.0);
+            let colour_weight = if photocraft_color::is_emissive_alpha(p[3]) { 1.0 } else { a };
             for i in 0..3 {
-                p[i] = p[i] * a + bg[i] * (1.0 - a);
+                p[i] = p[i] * colour_weight + bg[i] * (1.0 - a);
             }
             p[3] = 1.0;
         }
@@ -237,3 +238,6 @@ mod tests;
 
 #[cfg(test)]
 mod advanced_tests;
+
+#[cfg(test)]
+mod emission_tests;

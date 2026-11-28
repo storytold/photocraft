@@ -32,8 +32,8 @@ impl ThumbSource<u64> for SnapshotThumbs<'_> {
 
     fn render(&self, key: &u64, request: &ThumbRequest) -> ThumbRender {
         let Some(snap) = self.snapshots.iter().find(|s| s.id == *key) else { return ThumbRender::Blank };
-        let comp = photocraft_compose::thumbnail(&snap.doc, request.side);
-        ThumbRender::Ready(egui::ColorImage::from_rgba_unmultiplied([comp.width as usize, comp.height as usize], &comp.pixels))
+        let comp = photocraft_compose::thumbnail_buffer(&snap.doc, request.side);
+        ThumbRender::Ready(crate::canvas::display_image(None, &comp))
     }
 }
 

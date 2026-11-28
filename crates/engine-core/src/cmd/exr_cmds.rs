@@ -231,12 +231,11 @@ mod tests {
         let doc = &s.active().unwrap().doc;
         assert_eq!(doc.layers.len(), 1);
         assert_eq!(doc.layers[0].name, "diffuse");
-        if let photocraft_doc::LayerContent::Raster(surface) = &doc.layers[0].content {
-            let px = surface.pixel(0, 0);
-            // The channels import as stored (straight here): values are untouched.
-            assert!((px[0] - 0.3).abs() < 1e-4, "{:?}", px);
-            assert!((px[3] - 0.5).abs() < 1e-4, "{:?}", px);
-        }
+        let surface = doc.layers[0].surface().expect("the selected group is a raster layer");
+        let px = surface.pixel(0, 0);
+        // The EXR stores associated diffuse colour 0.3 at half coverage.
+        assert!((px[0] - 0.6).abs() < 1e-4, "{px:?}");
+        assert!((px[3] - 0.5).abs() < 1e-4, "{px:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -68,7 +68,7 @@ pub(crate) fn render_content_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx:
     };
     if let Some(m) = mask_vals(layer, rect, cx) {
         for (p, k) in buf.px.iter_mut().zip(&m) {
-            p[3] *= k;
+            crate::psblend::mask_pixel(p, *k);
         }
         recycle_mask(Some(m));
     }
@@ -225,7 +225,9 @@ pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {
     }
     match &layer.content {
         LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => match layer.surface() {
-            Some(s) => !s.has_tiles_in(rect) && s.default_pixel().last().is_some_and(|a| *a <= 0.0) && s.format().alpha,
+            Some(s) => {
+                !s.has_tiles_in(rect) && s.default_pixel().last().is_some_and(|a| *a <= 0.0 && !photocraft_color::is_emissive_alpha(*a)) && s.format().alpha
+            }
             None => true,
         },
         _ => false,

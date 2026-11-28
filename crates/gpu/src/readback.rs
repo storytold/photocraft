@@ -159,10 +159,8 @@ where
         return Ok(());
     }
     ctl.check().map_err(|_| ReadbackError::Cancelled)?;
-    // Layer content is uploaded as half-precision textures on every adapter. Values above 65504
-    // become infinity, and the rest lose mantissa bits: 16-bit samples near 1.0 already merge
-    // before compositing, so only 8-bit output can be read back losslessly. Keep U16 and F32
-    // exports on the CPU compositor, which composites and writes in 32-bit float.
+    // Only 8-bit exports use GPU readback. U16 layers use half-float textures, which merge
+    // samples near 1.0. U16 and F32 exports use the CPU compositor's full precision.
     if matches!(doc.depth, SampleType::U16 | SampleType::F32) {
         return Err(ReadbackError::Unsupported("16-bit and 32-bit float documents need the CPU compositor".into()));
     }
