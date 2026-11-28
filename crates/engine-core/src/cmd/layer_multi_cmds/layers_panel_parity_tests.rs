@@ -151,6 +151,23 @@ fn preview_follows_clip_groups_like_the_committed_reorder() {
     assert_preview_is_commit(s, json!({"layer": u, "target": c1, "position": "above", "copy": true}), "Background B C1* U copy* C2* U");
 }
 
+/// Copies dropped together keep their clip group when the base is part of the drag.
+#[test]
+fn preview_preserves_copied_clip_groups_like_the_committed_reorder() {
+    let s = clip_stack("B C1* C2* U");
+    let (base, clipped, target) = (id_of(&s, "B"), id_of(&s, "C1"), id_of(&s, "U"));
+    assert_preview_is_commit(
+        s,
+        json!({"layers": [base, clipped], "target": target, "position": "above", "copy": true}),
+        "Background B C1* C2* U B copy C1 copy*",
+    );
+
+    // Without its base, a clipped layer copied to a standalone slot is no longer clipped.
+    let s = clip_stack("B C1* C2* U");
+    let (clipped, target) = (id_of(&s, "C1"), id_of(&s, "U"));
+    assert_preview_is_commit(s, json!({"layer": clipped, "target": target, "position": "above", "copy": true}), "Background B C1* C2* U C1 copy");
+}
+
 /// Copying the locked Background in a preview gives the same unlocked copy, joining the clip group it lands in, as the command.
 #[test]
 fn preview_copies_the_background_like_the_committed_copy() {
