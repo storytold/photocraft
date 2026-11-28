@@ -49,8 +49,9 @@ fn a_hidden_active_layer_is_quiet() {
 fn the_other_tools_keep_their_message() {
     refused(&mut hidden(Tool::Brush), "Could not use the brush tool because the target layer is hidden.");
     refused(&mut hidden(Tool::Smudge), "Could not use the smudge tool because the target layer is hidden.");
+    refused(&mut hidden(Tool::Healing), "Could not use the healing brush because the target layer is hidden.");
     // The Spot Healing Brush has its own alert since #12581.
-    for tool in [Tool::Pencil, Tool::Eraser, Tool::Healing, Tool::CloneStamp] {
+    for tool in [Tool::Pencil, Tool::Eraser, Tool::CloneStamp] {
         let mut app = hidden(tool);
         let before = steps(&app);
         stroke(&mut app);

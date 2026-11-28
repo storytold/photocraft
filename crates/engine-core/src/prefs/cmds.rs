@@ -53,7 +53,7 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
     // `edit.colorSettings` sets them. Process-wide: only a colour change moves them, so another
     // session's values survive this one's unrelated preferences.
     if color_changed {
-        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
@@ -94,7 +94,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.prefs.edit(|_| ());
     if path.is_none_or(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
-        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.text_gamma());
         photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();

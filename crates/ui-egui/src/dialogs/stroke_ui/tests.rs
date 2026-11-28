@@ -159,7 +159,7 @@ fn stroke_choices_apply_on_confirm_and_cancel_does_not_modify_document() {
 /// #15539: Width shows px and Opacity % after their numbers.
 #[test]
 fn width_and_opacity_declare_their_units() {
-    let rows = rows(&app(), [0.0, 0.0, 0.0]);
+    let rows = rows(&app(), [0.0, 0.0, 0.0], None);
     let unit = |key: &str| rows.iter().find(|p| p.key == key).and_then(|p| p.unit);
     assert_eq!(unit("width"), Some(UnitKind::Pixels));
     assert_eq!(unit("opacity"), Some(UnitKind::Percent));

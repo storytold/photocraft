@@ -31,7 +31,7 @@ fn harness(command: Option<&str>, rotation: f32) -> Harness<'static, Box<Photocr
                 return;
             }
             crate::shortcuts::handle(app, &ctx);
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
             crate::dialogs::run(app, ui);
         },
         app,

@@ -93,7 +93,7 @@ fn duplicate_drag(app: &PhotocraftApp) -> Option<(Rect, Rect)> {
 /// Shows the measurements over the canvas `rect`, in the Smart Guides colour. `pointer` is the
 /// screen hover position.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rect, pointer: Option<egui::Pos2>) {
-    let command = craft::ui::runtime::pointer::frame(ui.ctx()).mods.cmd;
+    let command = craft::ui::runtime::pointer::mods(ui.ctx()).cmd;
     let pressed = crate::canvas::tools::in_gesture(app);
     let at = pointer.and_then(|p| crate::canvas::document_display::doc_point_at(app, p)).map(|p| [p.x, p.y]);
     let Some((a, b)) = current(app, at, command, pressed) else { return };

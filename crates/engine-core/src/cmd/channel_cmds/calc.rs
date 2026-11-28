@@ -2,6 +2,7 @@ use super::manage::gray_document;
 use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
+use super::view::{keep_view_for_undo, view_before_step};
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
 use photocraft_color::blend::blend_rgb;
 
@@ -151,6 +152,7 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     match p.get("result").and_then(Value::as_str).unwrap_or("newChannel") {
         "newChannel" => {
+            let before = view_before_step(s);
             let i = s.edit("Calculations", |doc, _| {
                 let name = name.clone().unwrap_or_else(|| next_alpha_name(doc, "Alpha"));
                 let area = doc.bounds();
@@ -158,6 +160,8 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
                 doc.channels.push(AlphaChannel::new(name, plane_surface(&out, area, fmt)));
                 Ok(doc.channels.len() - 1)
             })?;
+            // Undo targets and shows what was before, as after New Channel (#14683).
+            keep_view_for_undo(s, before);
             Ok(json!({ "channel": i }))
         }
         "newDocument" => {

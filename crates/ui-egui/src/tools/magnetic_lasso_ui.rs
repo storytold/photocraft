@@ -68,7 +68,9 @@ pub(crate) fn prepare(app: &PhotocraftApp, tool: &mut MagneticLassoTool<PcEdges>
 
 /// Writes the tool's settings back after the run, so `[` and `]` reach the options store.
 pub(crate) fn store(app: &mut PhotocraftApp, tool: &MagneticLassoTool<PcEdges>) {
-    app.ui.tool_options.magnetic = *tool.settings();
+    if app.ui.tool_options.magnetic != *tool.settings() {
+        app.ui.tool_options.magnetic = *tool.settings();
+    }
 }
 
 /// Selects the closed border as drawn, in `mode` (the family's operation-to-mode name). Fewer than
