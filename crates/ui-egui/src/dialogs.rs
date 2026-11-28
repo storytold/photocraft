@@ -418,6 +418,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     live_shape_prompt::answer,
     assign_profile_layers_alert::answer,
     preset_group_prompt::answer,
+    crate::prefs_ui::shortcuts::answer,
     open_prompt::answer_prompt,
     alerts::answer,
     crate::jobs_ui::answer,
@@ -640,13 +641,14 @@ const ENGINE_READ_SHARED: &[&str] = &[photocraft_engine::atn_cmds::CAF_WORKSPACE
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 5] {
+fn dont_show_again_keys() -> [&'static str; 6] {
     [
         delete_layer_prompt::PREF,
         live_shape_prompt::PREF,
         assign_profile_layers_alert::PREF,
         crate::analysis::note_alerts::DELETE_NOTE_PREF,
         crate::retouch_ui::CAM_NO_PIXELS_PREF,
+        crate::prefs_ui::shortcuts::SWITCH_PREF,
     ]
 }
 

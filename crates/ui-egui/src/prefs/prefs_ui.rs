@@ -82,6 +82,8 @@ mod agents_tests;
 mod recovery_tests;
 
 #[cfg(test)]
+mod menu_set_tests;
+#[cfg(test)]
 mod shortcut_capture_tests;
 #[cfg(test)]
 mod shortcut_set_tests;

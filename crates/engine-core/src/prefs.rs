@@ -1608,6 +1608,14 @@ pub struct Preferences {
     /// The saved set in use ("" for the defaults).
     pub shortcut_set: String,
     pub menus: MenuCustomization,
+    /// Edit › Menus › Set: saved menu sets by name (`crate::menu_sets`), each a saved copy of the
+    /// customization above. A settings file from before menu sets loads with none saved, which is
+    /// the built-in set.
+    #[serde(default)]
+    pub menu_sets: BTreeMap<String, crate::menu_sets::MenuSet>,
+    /// The menu set in use ("" for the built-in set).
+    #[serde(default)]
+    pub menu_set: String,
     pub toolbar: ToolbarCustomization,
     /// Edit › Check Spelling: words added to the dictionary ("Add").
     pub user_dictionary: Vec<String>,
