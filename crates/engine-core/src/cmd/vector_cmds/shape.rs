@@ -189,6 +189,95 @@ fn arrow_axis_scales(a: &Affine, from: [f64; 2], to: [f64; 2]) -> Option<(f64, f
     (dot.abs() <= 1e-10 * axial * perpendicular).then_some((axial, perpendicular))
 }
 
+/// A live line's own frame.
+struct LineFrame {
+    /// The start.
+    from: [f64; 2],
+    /// The unit direction from the start to the end.
+    u: [f64; 2],
+    /// The normal, `(-u.y, u.x)`.
+    n: [f64; 2],
+    length: f64,
+    /// The weight, or the arrowhead width when it is wider and an arrowhead is on.
+    thickness: f64,
+}
+
+/// A live line's own frame; `None` for another live shape or a degenerate or non-finite line.
+fn line_frame(live: &LiveShape) -> Option<LineFrame> {
+    let (from, to, thickness) = match live {
+        LiveShape::Line { from, to, weight } => (*from, *to, *weight),
+        LiveShape::ArrowLine { from, to, weight, start, end, width, .. } => (*from, *to, if *start || *end { weight.max(*width) } else { *weight }),
+        _ => return None,
+    };
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    let length = dx.hypot(dy);
+    if !length.is_finite() || length <= 1e-12 || !thickness.is_finite() || !from.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let u = [dx / length, dy / length];
+    Some(LineFrame { from, u, n: [-u[1], u[0]], length, thickness })
+}
+
+/// The size of a live line in its own rotated frame, as the Line tool's W and H fields show it
+/// (#13250): `(length, thickness)`, the thickness being the weight, or the arrowhead width when an
+/// arrowhead is on and wider. `None` for another live shape or a degenerate line.
+pub fn line_frame_size(live: &LiveShape) -> Option<(f64, f64)> {
+    line_frame(live).map(|f| (f.length, f.thickness))
+}
+
+/// The transform that resizes a live line in its own rotated frame to `new_length` (W) by
+/// `new_thickness` (H), for `shape.edit {"transform": m}` (#13250; the Properties Transform of a
+/// line, #13265, builds on it). Along the line it scales about the start, so the start stays put
+/// and the angle is kept; across it, it scales about the edge of the rotated box on the start's
+/// side opposite the normal, `from - (thickness / 2) * n` with `n = (-u.y, u.x)`: the measured
+/// reference moves the start of a 15 px thick line from 400,300 to 398.88,302.24 for H 20.
+/// [`transform_shape`] keeps the line live under it and scales the weight and arrowhead width by
+/// the thickness factor and the arrowhead length by the length factor.
+///
+/// `None` (no edit) for another live shape, a degenerate line, or a size that is not finite and
+/// positive. Never panics.
+pub fn line_frame_scale(live: &LiveShape, new_length: f64, new_thickness: f64) -> Option<Affine> {
+    if !new_length.is_finite() || !new_thickness.is_finite() || new_length <= 0.0 || new_thickness <= 0.0 {
+        return None;
+    }
+    let LineFrame { from, u, n, length, thickness } = line_frame(live)?;
+    if thickness <= 1e-12 {
+        return None;
+    }
+    let (sa, sp) = (new_length / length, new_thickness / thickness);
+    if !sa.is_finite() || !sp.is_finite() {
+        return None;
+    }
+    // M = I + (sa - 1) u u^T + (sp - 1) n n^T, about the pivot P: x' = M x + (P - M P).
+    let (ka, kp) = (sa - 1.0, sp - 1.0);
+    let a = 1.0 + ka * u[0] * u[0] + kp * n[0] * n[0];
+    let b = ka * u[0] * u[1] + kp * n[0] * n[1];
+    let d = 1.0 + ka * u[1] * u[1] + kp * n[1] * n[1];
+    let pivot = [from[0] - thickness / 2.0 * n[0], from[1] - thickness / 2.0 * n[1]];
+    let e = pivot[0] - (a * pivot[0] + b * pivot[1]);
+    let f = pivot[1] - (b * pivot[0] + d * pivot[1]);
+    let m = [a, b, b, d, e, f];
+    m.iter().all(|v| v.is_finite()).then_some(Affine { m })
+}
+
+/// Whether `m` scales a live line only along and across itself (a non-trivial [`line_frame_scale`]):
+/// its direction and normal map onto themselves with positive factors, not both 1.
+fn is_line_frame_scale(live: &LiveShape, m: &[f64; 6]) -> bool {
+    let Some(LineFrame { u, n, .. }) = line_frame(live) else { return false };
+    let [a, b, c, d, _, _] = *m;
+    let map = |v: [f64; 2]| [a * v[0] + c * v[1], b * v[0] + d * v[1]];
+    let factor = |v: [f64; 2]| {
+        let w = map(v);
+        let along = w[0] * v[0] + w[1] * v[1];
+        let across = w[0] * -v[1] + w[1] * v[0];
+        (along.is_finite() && along > 1e-12 && across.abs() <= 1e-9 * along.max(1.0)).then_some(along)
+    };
+    match (factor(u), factor(n)) {
+        (Some(sa), Some(sp)) => (sa - 1.0).abs() > 1e-12 || (sp - 1.0).abs() > 1e-12,
+        _ => false,
+    }
+}
+
 /// Applies an affine transform to a shape's path, keeping the live shape when the transform
 /// is a translation plus axis-aligned scale (otherwise the shape stops being parametric).
 pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
@@ -317,6 +406,11 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                 }
             })
         }
+        // A plain line under the same transforms (the W and H of a diagonal line, #13250).
+        (Some(LiveShape::Line { from, to, weight }), false) => arrow_axis_scales(a, from, to).map(|(_, perpendicular_scale)| {
+            let pt = |p: [f64; 2]| [m0 * p[0] + m2 * p[1] + tx, m1 * p[0] + m3 * p[1] + ty];
+            LiveShape::Line { from: pt(from), to: pt(to), weight: weight * perpendicular_scale }
+        }),
         _ => None,
     };
     // Keep the exact transformed outline. Remove live arrow parameters
@@ -575,7 +669,9 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
 /// End and Width; Start, Length and Concavity follow the same pattern. Rounding a live triangle
 /// alone is "Change Rounded Triangle" (#13354); a three-sided Polygon is not a Triangle and keeps
 /// "Edit Shape" until the Polygon naming issue lands. Any other edit, several keys at once, or
-/// these keys sent to another shape stay "Edit Shape".
+/// these keys sent to another shape stay "Edit Shape". A lone `transform` of a line that only scales
+/// it along and across itself (the options bar's W and H, [`line_frame_scale`]) is "Scale Paths"
+/// (#13250).
 fn edit_history_name(s: &Session, id: LayerId, p: &Value) -> &'static str {
     const EDIT: &str = "Edit Shape";
     let live = s.active().and_then(|st| st.doc.layer(id)).and_then(|l| match &l.content {
@@ -592,6 +688,8 @@ fn edit_history_name(s: &Session, id: LayerId, p: &Value) -> &'static str {
         (Some("arrowLength"), None) if line => "Change Arrowhead Length",
         (Some("arrowConcavity"), None) if line => "Change Arrowhead Concavity",
         (Some("cornerRadius"), None) if matches!(live, Some(LiveShape::Triangle { .. })) => "Change Rounded Triangle",
+        // The options bar's W and H of a line (#13250): a resize in the line's own frame.
+        (Some("transform"), None) if live.zip(nums::<6>(p, "transform")).is_some_and(|(l, m)| is_line_frame_scale(l, &m)) => "Scale Paths",
         _ => EDIT,
     }
 }
