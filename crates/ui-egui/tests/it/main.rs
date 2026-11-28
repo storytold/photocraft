@@ -31,6 +31,7 @@ mod paint_bucket_all_layers;
 mod pending_remove_pointer;
 mod radial_blur_center;
 mod save_memory_gate;
+mod spot_healing_reset_tip;
 mod system_locale;
 mod tone_targets;
 mod variables_data_sets;

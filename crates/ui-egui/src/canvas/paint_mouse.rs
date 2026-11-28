@@ -82,7 +82,18 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             };
             // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
             let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
-            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current }
+            let mut b = BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current };
+            // The Spot Healing Brush starts with the measured tip (#12560); the rest of its brush
+            // wasn't measured, so it is the current brush as for the other tools.
+            if tool == Tool::SpotHealing {
+                let (size, hardness, spacing) = HEALING_BRUSH_TIP;
+                // A carried Dual Brush keeps its ratio to the tip, as any resize does.
+                b.resize_with_dual_brush(size);
+                (b.hardness, b.spacing, b.spacing_enabled) = (hardness, spacing, true);
+                (b.angle, b.roundness) = (0.0, 1.0);
+                b.tip = photocraft_engine::paint::TipShape::Round;
+            }
+            b
         }
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
@@ -116,7 +127,8 @@ const MIXER_BRUSH_TIP: (f32, f32, f32) = (35.0, 0.0, 0.25);
 const ERASER_TOOL_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Background Eraser's tip after Reset Tool (#11911): a 13 px hard round at 25 % spacing.
 const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
-/// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
+/// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing. The Spot
+/// Healing Brush has the same measured tip (#12560).
 const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
 /// The Pencil tool's starting and Reset Tool tip, as the reference measures it (#12200): size,
 /// hardness and spacing of a 1 px hard round at 25 % spacing.
@@ -140,8 +152,8 @@ const ADJUSTMENT_BRUSH_TIP: (f32, f32) = (100.0, 0.0);
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Mixer Brush's [`MIXER_BRUSH_TIP`] and measured mixer settings, the
-/// Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
+/// Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing and Spot Healing
+/// Brushes' [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] and the Art History Brush's [`ART_HISTORY_BRUSH_TIP`], both with no
 /// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
 /// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
@@ -165,7 +177,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             brush.smoothing.amount = 0.0;
         }
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
-        Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
+        Tool::Healing | Tool::SpotHealing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,

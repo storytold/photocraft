@@ -1,5 +1,5 @@
 //! Each painting tool's starting tip (#11810, #11911, #12099, #12548, #12601, #12671, #12684,
-//! #13029, #11936, #12200, #12964): Reset Tool and Reset All Tools (with the tool active, or picked later) give it
+//! #13029, #11936, #12200, #12964, #12560): Reset Tool and Reset All Tools (with the tool active, or picked later) give it
 //! `paint_mouse::fresh_brush`, and its first use follows the tool's own rule. Other tools keep
 //! their brushes.
 
@@ -19,6 +19,9 @@ enum FirstUse {
     Fresh,
     /// Its starting size; everything else from the previous brush.
     SizeOnly,
+    /// Its starting tip (size, hardness, spacing, angle and roundness); everything else from the
+    /// previous brush, at the first-use smoothing.
+    TipOnly,
     /// The previous brush, at the first-use smoothing.
     Current,
 }
@@ -41,7 +44,7 @@ const ROWS: [(Tool, Option<FirstUse>); 16] = [
     (Tool::Pencil, Some(FirstUse::Fresh)),
     (Tool::Eraser, Some(FirstUse::Fresh)),
     (Tool::Smudge, Some(FirstUse::Fresh)),
-    (Tool::SpotHealing, Some(FirstUse::Current)),
+    (Tool::SpotHealing, Some(FirstUse::TipOnly)),
 ];
 
 /// The fields of a brush that make up its tip and that the starting tips set.
@@ -158,6 +161,7 @@ fn each_tool_resets_and_first_uses_its_own_tip() {
         let want = match rule {
             FirstUse::Fresh => starting(&a, tool),
             FirstUse::SizeOnly => Tip { size: starting(&a, tool).size, smoothing: first_smoothing, ..previous },
+            FirstUse::TipOnly => Tip { smoothing: first_smoothing, pressure_size: previous.pressure_size, ..starting(&a, tool) },
             FirstUse::Current => Tip { smoothing: first_smoothing, ..previous },
         };
         assert_eq!(live(&a), want, "{tool:?}: first use ({rule:?})");
