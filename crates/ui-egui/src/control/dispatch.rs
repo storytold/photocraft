@@ -1215,6 +1215,9 @@ struct ParsedPointer {
 /// pickers, Color Range, the preview locator, context menus, Move transform controls). The host takes the
 /// whole queue on its next pass; a held Space is queued with the events (`hold`, then `let_go`), so it is down for
 /// exactly the events between them.
+///
+/// The exception: with a Color Picker as the top dialog its press and drag steps sample at the request, here, so the
+/// events never reach the window's input, where the dialog's own controls would take them (#16747).
 fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
     // Every field and event is validated before the first event is queued, so a rejected call
     // changes nothing (#2449).
@@ -1250,6 +1253,35 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
         !(at.x.is_finite() && at.y.is_finite())
     }) {
         return err(format!("events[{i}] is too far off the canvas: the point must be finite"));
+    }
+    // #16747: with a Color Picker as the top dialog, whose canvas eyedropper it arms as top, a primary
+    // `down` and the `move`s of its drag sample the composite at their document points into the picker's
+    // new colour - the same pick a press on the canvas runs through the dialog tool - and the tool
+    // underneath is not driven. Nothing is queued for the window either: the dialog's modal layer sits
+    // over the canvas, so the picker's own controls would take the synthetic events as clicks. A gesture
+    // the canvas is already running keeps its tool to its release (the picker's pick begins at the next press).
+    if button == PointerButton::Primary
+        && !ToolHost::in_gesture(ctx, canvas)
+        && crate::dialogs::canvas_input::armed(app) == Some(crate::dialogs::canvas_input::DialogPick::Color)
+    {
+        let mut held = false;
+        for step in &parsed.events {
+            match step.kind {
+                PointerKind::Down => {
+                    held = true;
+                    crate::dialogs::canvas_input::pick_color(app, [step.x, step.y]);
+                }
+                PointerKind::Move if held => {
+                    crate::dialogs::canvas_input::pick_color(app, [step.x, step.y]);
+                }
+                // A release ends the gesture without sampling (as the dialog tool's release does), and a
+                // move before any press is a hover: the picker's pipette samples neither.
+                PointerKind::Up => held = false,
+                PointerKind::Move => {}
+            }
+        }
+        ctx.request_repaint();
+        return ok(json!({"status": app.ui.status}));
     }
     let mods = tool_mods(modifiers_from(&parsed.modifiers));
     // Space held: the Crop tool moves the frame being drawn, a marquee, lasso or shape being drawn moves
