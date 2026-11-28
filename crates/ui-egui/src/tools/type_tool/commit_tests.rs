@@ -49,6 +49,10 @@ pub(super) fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
 /// Runs the whole app (logic and UI) on the app's own context: a warm-up so the fonts and the
 /// editor's focus are in place, then two frames after each of `events`.
 pub(super) fn frames(app: Box<PhotocraftApp>, events: Vec<egui::Event>) -> Box<PhotocraftApp> {
+    frames_observed(app, events, |_, _| {})
+}
+
+fn frames_observed(app: Box<PhotocraftApp>, events: Vec<egui::Event>, mut after: impl FnMut(usize, &PhotocraftApp)) -> Box<PhotocraftApp> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_context(ctx).build_app(
         |ui, app: &mut PhotocraftApp| {
@@ -68,9 +72,10 @@ pub(super) fn frames(app: Box<PhotocraftApp>, events: Vec<egui::Event>) -> Box<P
         }
     };
     step(&mut h, 8);
-    for event in events {
+    for (index, event) in events.into_iter().enumerate() {
         h.event(event);
         step(&mut h, 2);
+        after(index, h.state());
     }
     h.into_state()
 }
@@ -97,6 +102,58 @@ pub(super) fn type_keys(app: &mut PhotocraftApp, s: &str) {
 /// An input-method event, delivered to the focused editor.
 pub(super) fn ime(app: &mut PhotocraftApp, event: egui::ImeEvent) {
     deliver(app, |host| host.inject_ime(egui::ViewportId::ROOT, event));
+}
+
+/// Open an existing layer with its caret after the last character.
+fn sample_editor() -> (Box<PhotocraftApp>, LayerId) {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text":"Sample", "size":24})).unwrap()["layer"].as_u64().unwrap());
+    edit_active(&mut app);
+    let edit = app.ui.text_edit.as_mut().unwrap();
+    edit.anchor = 6;
+    edit.caret = 6;
+    (app, id)
+}
+
+fn enter(physical_key: Option<egui::Key>, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key: egui::Key::Enter, physical_key, pressed: true, repeat: false, modifiers }
+}
+
+#[test]
+fn type_enter_commits_only_for_a_distinct_keypad_position_or_command() {
+    let keypad = egui::Key::from_name("NumpadEnter").unwrap();
+    for (physical, modifiers, commits) in [
+        (Some(egui::Key::Enter), egui::Modifiers::NONE, false),
+        (None, egui::Modifiers::NONE, false),
+        (Some(egui::Key::A), egui::Modifiers::NONE, false),
+        (Some(keypad), egui::Modifiers::NONE, keypad != egui::Key::Enter),
+        (None, egui::Modifiers::COMMAND, true),
+    ] {
+        let (app, id) = sample_editor();
+        let app = frames(app, vec![enter(physical, modifiers)]);
+        assert_eq!(app.ui.text_edit.is_none(), commits, "{physical:?}, {modifiers:?}");
+        assert_eq!(text_of(&app, 0, id).as_deref(), Some(if commits { "Sample" } else { "Sample\n" }));
+    }
+}
+
+#[test]
+fn type_enter_leaves_confirmation_to_the_ime_until_it_commits() {
+    use egui::{Event, ImeEvent, Key, Modifiers};
+    let (app, id) = sample_editor();
+    let keypad = Key::from_name("NumpadEnter").unwrap();
+    let events = vec![
+        Event::Ime(ImeEvent::Preedit { text: "candidate".into(), active_range_chars: None }),
+        enter(Some(Key::Enter), Modifiers::NONE),
+        enter(Some(keypad), Modifiers::NONE),
+        enter(None, Modifiers::COMMAND),
+        Event::Ime(ImeEvent::Commit("chosen".into())),
+        enter(None, Modifiers::COMMAND),
+    ];
+    frames_observed(app, events, |index, app| {
+        assert_eq!(app.ui.text_edit.is_none(), index == 5, "session after event {index}");
+        let expected = if index < 4 { "Samplecandidate" } else { "Samplechosen" };
+        assert_eq!(text_of(app, 0, id).as_deref(), Some(expected), "text after event {index}");
+    });
 }
 
 /// Start a new type layer with a click and type `s` into it, as the canvas does.
