@@ -542,7 +542,8 @@ mod tests {
     /// at every motion model that contains the truth, with or without coarsening.
     #[test]
     fn registers_a_similarity_to_a_tenth_of_a_pixel() {
-        let (w, h) = (320, 240);
+        // Three pyramid levels: 192x144, 96x72, and 48x36.
+        let (w, h) = (192, 144);
         let reference = texture(w, h, 3);
         let truth = Pose { dx: 3.3 / w as f64, dy: -2.1 / h as f64, scale: 1.012, rot: 0.6f64.to_radians(), ..Pose::IDENTITY };
         // The pose maps the target's pixels onto the reference's: target(u) = reference(M u).
@@ -564,7 +565,7 @@ mod tests {
             });
             assert!(corner < 0.1 * (1 << coarsen) as f64 + 0.05, "{motion:?} coarsen {coarsen}: corners off by {corner} px, {:?}", r.pose);
             let searched = (w >> coarsen) * (h >> coarsen);
-            assert!(r.rms < 0.01 && r.overlap > searched / 2, "{motion:?}: rms {} overlap {} of {searched}", r.rms, r.overlap);
+            assert!(r.rms < 0.01 && r.overlap > searched / 2 && r.overlap <= searched, "{motion:?}: rms {} overlap {} of {searched}", r.rms, r.overlap);
         }
         // Translation only: the shift is found, the rest stays put.
         let t = Pose { dx: 4.0 / w as f64, dy: 3.0 / h as f64, ..Pose::IDENTITY };
