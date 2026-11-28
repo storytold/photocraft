@@ -285,6 +285,19 @@ fn a_running_job_locks_its_document_but_not_others() {
     assert_eq!(s.documents()[0].history.past_len(), 3);
 }
 
+/// The Frame tool asks for a job conflict separately from a mode refusal (#13886): a running job
+/// keeps its status message, while the Bitmap/Indexed refusal stays silent.
+#[test]
+fn the_frame_press_can_tell_a_job_conflict_from_a_mode_refusal() {
+    let mut s = session(64, 64);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let id = gated_job(&mut s, &gate);
+    let reason = s.job_conflict_reason("layer.new.frame").expect("a running job conflicts");
+    assert!(reason.contains("still running"), "{reason}");
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    wait_event(&mut s, id);
+}
+
 #[test]
 fn jobs_list_puts_running_jobs_before_ended_ones() {
     let mut s = session(64, 64);

@@ -1,7 +1,7 @@
 //! Photoshop-style image frames: independently editable vector containers with smart content.
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
-use photocraft_color::{BlendMode, Color};
+use photocraft_color::{BlendMode, Color, ColorMode};
 use photocraft_doc::{Document, Frame, Layer, LayerContent, LayerId, Path, VectorMask};
 use photocraft_geom::Affine;
 use serde_json::{Value, json};
@@ -11,6 +11,17 @@ fn bad(msg: impl Into<String>) -> EngineError {
 }
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or("no document open".into())
+}
+/// The Frame tool makes no frame in Bitmap or Indexed Color documents (#13886): the reference
+/// application's drag does nothing there. Only `layer.new.frame` is refused; Frame from Layers,
+/// Convert to Frame and the other `layer.frame.*` commands keep today's behaviour.
+fn frames_enabled(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    match st.doc.mode {
+        ColorMode::Bitmap => Err("the Frame tool does not work in Bitmap mode".into()),
+        ColorMode::Indexed => Err("the Frame tool does not work in Indexed Color mode".into()),
+        _ => Ok(()),
+    }
 }
 fn has_layer(s: &Session) -> std::result::Result<(), String> {
     s.active().and_then(|d| d.active_layer).map(|_| ()).ok_or("select a layer".into())
@@ -367,7 +378,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.frame",
             "New Frame",
             r#"{"x":i32,"y":i32,"width":u32,"height":u32,"shape":"rectangle|ellipse|triangle|polygon|custom"="rectangle","sides":3..100=5,"path":object?,"stroke":object|null?,"layer":id?,"name":str?} → {layer,frame:[x,y,w,h],shape}"#,
-            has_doc,
+            frames_enabled,
             new_frame,
         ),
         CommandSpec {
@@ -395,5 +406,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 #[cfg(test)]
 mod content_name_tests;
+#[cfg(test)]
+mod mode_tests;
 #[cfg(test)]
 mod tests;
