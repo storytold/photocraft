@@ -533,6 +533,12 @@ fn main() -> eframe::Result {
         mut launch_options,
     } = launch;
 
+    // Imported ICC profiles (Edit › Color Settings › Load…, `edit.importProfile`) live next to
+    // the other settings and stay available as working spaces, proofs and printer profiles.
+    if let Some(dir) = services::config_dir() {
+        photocraft_engine::installed_profiles::set_user_dir(Some(dir.join("Profiles")));
+    }
+
     attach_log_file(logger);
 
     // The saved preferences the launch needs before the window opens, read once without opening

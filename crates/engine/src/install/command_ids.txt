@@ -944,6 +944,7 @@ file.printOneCopy
 file.package
 file.export.pathsToIllustrator
 edit.installedProfiles
+edit.importProfile
 layer.selectInRect
 layer.pickAt
 layer.selectAbove

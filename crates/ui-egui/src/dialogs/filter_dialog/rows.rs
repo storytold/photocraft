@@ -243,13 +243,13 @@ const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile"
 
 /// Which installed profiles a menu of `cmd` lists after its built-ins, if it lists any: every
 /// destination profile for the `profile` menus of [`PROFILE_DIALOGS`], and for Color Settings'
-/// working spaces those of that space, as Photoshop lists them (#6323). An RGB working space is a
-/// display or colour-space profile, not a scanner's or a printer's.
+/// working spaces those of that space, as Photoshop lists them (#6323). An RGB working space or
+/// the monitor profile is a display or colour-space profile, not a scanner's or a printer's.
 fn installed_filter(cmd: &str, key: &str) -> Option<fn(&InstalledProfile) -> bool> {
     use craft::cms::ProfileClass;
     match (cmd, key) {
         (c, "profile") if PROFILE_DIALOGS.contains(&c) => Some(|_| true),
-        ("edit.colorSettings", "workingRgb") => {
+        ("edit.colorSettings", "workingRgb" | "monitorProfile") => {
             Some(|i| i.color_space == ColorSpace::Rgb && matches!(i.class, ProfileClass::Display | ProfileClass::ColorSpace))
         }
         ("edit.colorSettings", "workingCmyk") => Some(|i| i.color_space == ColorSpace::Cmyk),
@@ -267,6 +267,18 @@ pub(super) fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProf
 /// Like Photoshop, the profile menus also list the profiles installed in the system (printer and paper
 /// profiles, press conditions), by description. Assign Profile's restriction to what the document's colour
 /// mode can take (#4951) is dialogs-w24's `assign_profile_defaults`.
+/// A choice id that names an installed file rather than a built-in profile id.
+fn is_installed_id(id: &str) -> bool {
+    let lower = id.to_ascii_lowercase();
+    lower.ends_with(".icc") || lower.ends_with(".icm") || id.contains('/') || id.contains('\\')
+}
+
+/// Rebuilds the installed-profile entries of `params`. Safe to call again: the previous paths are
+/// dropped first, so a profile imported while the dialog is open appears on the next frame.
+pub(super) fn refresh_installed(command: &str, params: &mut [Param]) {
+    installed_profiles(command, params);
+}
+
 fn installed_profiles(command: &str, params: &mut [Param]) {
     if !params.iter().any(|p| installed_filter(command, &p.key).is_some()) {
         return;
@@ -275,6 +287,7 @@ fn installed_profiles(command: &str, params: &mut [Param]) {
     for p in params.iter_mut() {
         let choices = installed_choices(command, &p.key, &installed);
         if let ParamKind::Choice { options, .. } = &mut p.kind {
+            options.retain(|(id, _)| !is_installed_id(id));
             options.extend(choices.into_iter().map(|(path, description)| (path, Label::from(description))));
         }
     }

@@ -119,6 +119,12 @@ pub(crate) mod params {
         crate::actions::menu_item::FAMILY,
         crate::smart_svg_ui::family(),
         ParamFamily { check: Some(crate::workspace_ui::check_param), ..ParamFamily::new(crate::workspace_ui::owns_param, crate::workspace_ui::run_param) },
+        ParamFamily {
+            check: Some(filter_dialog::check),
+            footer: Some(filter_dialog::profile_load),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(filter_dialog::offers_profile_load, filter_dialog::run)
+        },
         ParamFamily { check: Some(filter_dialog::check), cancel: Some(filter_dialog::cancel), ..ParamFamily::new(filter_dialog::owns, filter_dialog::run) },
     ];
 

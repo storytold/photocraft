@@ -100,12 +100,27 @@ fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
     let paths = |key: &str| rows::installed_choices("edit.colorSettings", key, &installed).into_iter().map(|(path, _)| path).collect::<Vec<_>>();
     assert_eq!(paths("workingCmyk"), ["gracol.icc"]);
     assert_eq!(paths("workingRgb"), ["monitor.icc"]);
+    assert_eq!(paths("monitorProfile"), ["monitor.icc"]);
     assert_eq!(paths("workingGray"), ["gray.icc"]);
     assert!(paths("policyCmyk").is_empty() && paths("intent").is_empty());
     assert_eq!(rows::installed_choices("edit.colorSettings", "workingCmyk", &installed)[0].1, "GRACOL.ICC", "listed by description");
     // The profile dialogs keep listing every destination profile.
     assert_eq!(rows::installed_choices("edit.convertToProfile", "profile", &installed).len(), 5);
     assert!(rows::installed_choices("filter.blur.gaussianBlur", "profile", &installed).is_empty());
+}
+
+#[test]
+fn load_selects_a_working_space_only_when_photoshop_would() {
+    assert!(offers_profile_load("edit.colorSettings") && offers_profile_load("view.proofSetup"));
+    assert!(!offers_profile_load("edit.assignProfile") && !offers_profile_load("filter.blur.gaussianBlur"));
+    assert_eq!(imported_profile_field("edit.colorSettings", "rgb", "input"), None);
+    assert_eq!(imported_profile_field("edit.colorSettings", "rgb", "output"), None);
+    assert_eq!(imported_profile_field("edit.colorSettings", "rgb", "display"), Some("workingRgb"));
+    assert_eq!(imported_profile_field("edit.colorSettings", "rgb", "colorSpace"), Some("workingRgb"));
+    assert_eq!(imported_profile_field("edit.colorSettings", "cmyk", "output"), Some("workingCmyk"));
+    assert_eq!(imported_profile_field("edit.colorSettings", "gray", "output"), Some("workingGray"));
+    assert_eq!(imported_profile_field("view.proofSetup", "rgb", "input"), Some("profile"));
+    assert_eq!(imported_profile_field("edit.convertToProfile", "cmyk", "output"), None);
 }
 
 #[test]

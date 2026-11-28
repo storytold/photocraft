@@ -14,7 +14,7 @@ use std::sync::Arc;
 use craft::behavior::NumberCodec;
 use craft::host::{PickRequest, Picked};
 use craft::ui::contract::{Bind, Show as _};
-use craft::ui::dialog::{DialogId, dialog_id};
+use craft::ui::dialog::{DialogId, StackDialog, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::env::{Env, Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
@@ -582,7 +582,9 @@ fn builder(
     let key = command.to_owned();
     let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     move |fields: &mut DialogFields| {
-        let mut dialog = ParamDialog::command(key.clone(), title.clone(), params.clone())
+        let mut params = params.clone();
+        rows::refresh_installed(&key, &mut params);
+        let mut dialog = ParamDialog::command(key.clone(), title.clone(), params)
             .values(Bind::bound(fields))
             .reset_to(reset.clone())
             .layout(ParamLayout::Stacked)
@@ -599,7 +601,75 @@ fn builder(
                 ("save".to_owned(), FooterButton::new(tl!("Save…").to_string(), DialogRole::Other)),
             ]);
         }
+        if offers_profile_load(&key) {
+            dialog = dialog.extra_buttons(vec![("load".to_owned(), FooterButton::new(tl!("Load…").to_string(), DialogRole::Other))]);
+        }
         dialog
+    }
+}
+
+/// Color Settings and Proof Setup offer Load…, which copies a profile into the app's Profiles folder.
+pub(crate) fn offers_profile_load(cmd: &str) -> bool {
+    cmd == "edit.colorSettings" || cmd == "view.proofSetup"
+}
+
+/// The field Load… selects after importing a profile of `space` and `class`.
+///
+/// Proof Setup selects any imported destination, including a scanner. Color Settings selects a
+/// CMYK or Gray working space, and an RGB working space only for a display or colour-space
+/// profile: a scanner or printer stays in the folder for proof and print and is not the working RGB.
+pub(crate) fn imported_profile_field(cmd: &str, space: &str, class: &str) -> Option<&'static str> {
+    if cmd == "view.proofSetup" {
+        return Some("profile");
+    }
+    if cmd != "edit.colorSettings" {
+        return None;
+    }
+    match space {
+        "cmyk" => Some("workingCmyk"),
+        "gray" => Some("workingGray"),
+        _ if matches!(class, "display" | "colorSpace") => Some("workingRgb"),
+        _ => None,
+    }
+}
+
+/// Load… on Color Settings or Proof Setup: import the picked `.icc` / `.icm` and select it.
+pub(crate) fn profile_load(app: &mut PhotocraftApp, _ctx: &egui::Context, id: DialogId, action: &str) {
+    if action != "load" {
+        return;
+    }
+    let Some(cmd) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).and_then(|dialog| StackDialog::key(dialog).map(str::to_owned)) else {
+        return;
+    };
+    if !offers_profile_load(&cmd) {
+        return;
+    }
+    let load = app.pick_file_bytes_filtered(&["icc", "icm"], move |app, name, bytes| {
+        let stem = std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut params = Map::new();
+        params.insert("data".into(), json!(photocraft_engine::paint::tile::b64_encode(&bytes)));
+        if !stem.is_empty() {
+            params.insert("name".into(), json!(stem));
+        }
+        let imported = app.run("edit.importProfile", Value::Object(params))?;
+        let path = imported.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+        let space = imported.get("colorSpace").and_then(Value::as_str).unwrap_or("").to_owned();
+        let class = imported.get("class").and_then(Value::as_str).unwrap_or("").to_owned();
+        let description = imported.get("description").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(path.as_str()).to_owned();
+        if let Some(key) = imported_profile_field(&cmd, &space, &class)
+            && !path.is_empty()
+            && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+        {
+            dialog.set_field(key, FieldValue::Text(path));
+        }
+        app.ui.status_error = false;
+        app.ui.status = description;
+        Ok(Value::Null)
+    });
+    if let Err(e) = load
+        && e != crate::file_dialog::CANCELLED
+    {
+        crate::dialogs::alerts::report_error(app, e);
     }
 }
 
