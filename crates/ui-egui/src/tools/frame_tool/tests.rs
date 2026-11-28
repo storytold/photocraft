@@ -260,3 +260,22 @@ fn overhanging_content_handles_start_transform_and_cancel() {
     }
     assert_eq!(app.session.active().unwrap().history.entries(), entries);
 }
+
+/// #14291: of two custom shapes named "TriS", a custom frame takes the outline of the one the picker chose.
+#[test]
+fn a_custom_frame_takes_the_chosen_shape_of_a_shared_name() {
+    let mut app = app();
+    for knots in [json!([[10, 10], [90, 10], [50, 80]]), json!([[100, 100], [200, 100], [200, 200], [100, 200]])] {
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": knots}]}})).unwrap();
+        app.run("edit.defineCustomShape", json!({"name": "TriS"})).unwrap();
+    }
+    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let keys = crate::panels::preset_browser::shape_keys(&groups).pop().unwrap();
+    app.ui.frame_tool.shape = "custom".into();
+    for (key, knots) in keys.into_iter().zip([3, 4]) {
+        app.ui.presets_ui.custom_shape = key;
+        let p = shape_params(&app, [0, 0, 100, 100]);
+        let path = &p["path"]["subpaths"][0]["knots"];
+        assert_eq!(path.as_array().map(Vec::len), Some(knots), "{p}");
+    }
+}

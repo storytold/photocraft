@@ -420,8 +420,7 @@ fn as_one_component(outline: &photocraft_doc::vector::Path, rule: photocraft_doc
 /// The outline of an already snapped geometry, as a path (a custom shape fitted to its box).
 fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) -> Option<photocraft_doc::vector::Path> {
     if let ShapeGeometry::Custom { rect, keep_proportions } = geometry {
-        let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
-        let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
+        let shape = crate::panels::preset_browser::chosen_shape(app)?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, box_of(rect), *keep_proportions))
     } else {
         photocraft_engine::vector_cmds::shape_path(&with_tool_radius(app, kind, geometry_params(app, geometry, kind).ok()?)).ok()

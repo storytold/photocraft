@@ -24,6 +24,10 @@ mod csh;
 #[path = "custom_shape_layer_name_tests.rs"]
 mod custom_shape_layer_name_tests;
 
+#[cfg(test)]
+#[path = "custom_shape_duplicate_tests.rs"]
+mod custom_shape_duplicate_tests;
+
 /// Group listing Edit › Define Custom Shape results (`EditState::custom_shapes`).
 pub const CUSTOM_GROUP: &str = "Custom Shapes";
 
@@ -301,6 +305,37 @@ fn lookup(s: &Session, name: &str, group: Option<&str>, cmd: &str) -> Result<Sha
     Ok(groups[gi].items[ii].clone())
 }
 
+/// The `preset` param as given: Define Custom Shape keeps a name's leading and trailing spaces, so a name is not
+/// trimmed (#14291). `None` when it is missing or blank.
+fn preset_name(p: &Value) -> Option<&str> {
+    p.get("preset").and_then(Value::as_str).filter(|n| !n.trim().is_empty())
+}
+
+/// The shape `p` names, as (group index, index in the group) of [`all_groups`]: `position` in `group` when given (two
+/// custom shapes can share a name, #14291), else the first shape named `preset` (in `group` when given). With both,
+/// `preset` must be the name at `position`, so a position that went stale is refused rather than another shape used.
+/// `None` without `position` or `preset`.
+fn locate(s: &Session, p: &Value, cmd: &str) -> Result<Option<(usize, usize)>> {
+    let groups = all_groups(s);
+    let name = preset_name(p);
+    let Some(position) = p.get("position") else {
+        let Some(name) = name else { return Ok(None) };
+        let group = str_param(p, "group");
+        let found = find(&groups, name, group)
+            .or_else(|| find(&groups, name.trim(), group))
+            .ok_or_else(|| bad(cmd, format!("no shape \"{name}\" (see shape.presets.list)")))?;
+        return Ok(Some(found));
+    };
+    let position = position.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "`position` must be a whole number from 0"))?;
+    let group = str_param(p, "group").ok_or_else(|| bad(cmd, "`position` needs the shape's `group`"))?;
+    let gi = groups.iter().position(|g| g.name == group).ok_or_else(|| bad(cmd, format!("no shape group \"{group}\" (see shape.presets.list)")))?;
+    let shape = groups[gi].items.get(position).ok_or_else(|| bad(cmd, format!("group \"{group}\" has no shape {position}")))?;
+    if let Some(name) = name.filter(|n| *n != shape.name) {
+        return Err(bad(cmd, format!("shape {position} of \"{group}\" is \"{}\", not \"{name}\"", shape.name)));
+    }
+    Ok(Some((gi, position)))
+}
+
 /// IDs select the actual installed asset. A missing ID never falls through to a colliding name.
 pub(crate) fn filter_path(s: &Session, p: &Value) -> Result<Path> {
     const CMD: &str = "filter.blur.shapeBlur";
@@ -366,8 +401,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 
 fn place(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.presets.place";
-    let name = req_str(p, "preset", CMD)?;
-    let shape = lookup(s, name, str_param(p, "group"), CMD)?;
+    let (gi, ii) = locate(s, p, CMD)?.ok_or_else(|| bad(CMD, "missing `preset` (or `group` and `position`)"))?;
+    let shape = all_groups(s).swap_remove(gi).items.swap_remove(ii);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (w, h) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let keep = p.get("keepAspect").and_then(Value::as_bool).unwrap_or(true);
@@ -441,26 +476,35 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.presets.edit";
     let action = req_str(p, "action", CMD)?.to_string();
-    // Define Custom Shape results live in the edit state; rename/delete them there.
-    let custom = |s: &Session, n: &str| {
-        str_param(p, "group").is_none_or(|g| g == CUSTOM_GROUP)
-            && find(&s.presets().shapes, n, None).is_none()
-            && s.edit_state.custom_shapes.iter().any(|c| c.name == n)
+    // Define Custom Shape results live in the edit state; rename/delete them there. They are the last group of
+    // `all_groups`, and may share a name, so a `position` picks one of them (#14291); a name alone is the first.
+    let custom = |s: &Session| -> Result<Option<usize>> {
+        // Without a position, the first shape of the name in `group` (in every group without one; a preset of that name
+        // comes first), and only a custom one is renamed or deleted here; an unknown name gets the presets' error.
+        if p.get("position").is_none() {
+            let found = locate(s, p, CMD).ok().flatten();
+            return Ok(found.filter(|(gi, _)| *gi == s.presets().shapes.len()).map(|(_, ii)| ii));
+        }
+        let Some((gi, ii)) = locate(s, p, CMD)? else { return Ok(None) };
+        Ok((gi == s.presets().shapes.len()).then_some(ii))
     };
-    let r = match action.as_str() {
-        "rename" if custom(s, req_str(p, "preset", CMD)?) => {
-            let (n, to) = (req_str(p, "preset", CMD)?, req_str(p, "name", CMD)?);
-            if let Some(c) = s.edit_state.custom_shapes.iter_mut().find(|c| c.name == n) {
-                c.name = to.to_string();
-            }
+    let at = if matches!(action.as_str(), "rename" | "delete") { custom(s)? } else { None };
+    let r = match (action.as_str(), at) {
+        ("rename", Some(i)) => {
+            let to = req_str(p, "name", CMD)?;
+            let c = s.edit_state.custom_shapes.get_mut(i).ok_or_else(|| bad(CMD, format!("no custom shape {i}")))?;
+            c.name = to.to_string();
             json!({"name": to})
         }
-        "delete" if p.get("preset").and_then(Value::as_str).is_some_and(|n| custom(s, n)) => {
-            let n = req_str(p, "preset", CMD)?;
-            s.edit_state.custom_shapes.retain(|c| c.name != n);
+        ("delete", Some(i)) => {
+            if i >= s.edit_state.custom_shapes.len() {
+                return Err(bad(CMD, format!("no custom shape {i}")));
+            }
+            s.edit_state.custom_shapes.remove(i);
             json!({"deleted": 1})
         }
-        a => edit_groups(&mut s.presets_mut().shapes, a, p, CMD)?,
+        (_, _) if p.get("position").is_some() => return Err(bad(CMD, "`position` picks a custom shape to rename or delete")),
+        (a, _) => edit_groups(&mut s.presets_mut().shapes, a, p, CMD)?,
     };
     presets_changed(s);
     Ok(r)
@@ -480,6 +524,10 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"groups": s.presets().shapes.len()}))
 }
 
+/// `shape.presets.edit`'s params: the preset panels' group edits, plus `position` for custom shapes, which may share a
+/// name (#14291).
+const EDIT_PARAMS: &str = r##"{"action":"rename|delete|move|newGroup|renameGroup|deleteGroup","preset":name|[names] (rename/delete/move; a name is the first shape of that name),"group":name? (narrows the lookup; the group for renameGroup/deleteGroup),"position":n? (rename/delete: the custom shape at this index of `group` "Custom Shapes", as shape.presets.list lists it; `preset`, when given, must be its name),"name":str (rename: new name; newGroup/renameGroup: group name),"to":group (move),"index":n? (move)}"##;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         csh::spec(),
@@ -498,7 +546,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Place Custom Shape",
             menu: &[],
             shortcut: None,
-            params: r##"{"preset":name,"group":name?,"rect":[x,y,w,h]? (default: centred, half the canvas),"keepAspect":bool=true,"fill":…?=foreground,"stroke":…?,"useAlignedRendering":bool (new layer: false; addTo: preserve target when omitted),"name":str? (default: the shape's name numbered, "Heart 1", "Heart 2"),"addTo":layerId?,"op":"combine|subtract|intersect|exclude"?} → shape.info (Custom Shape tool / Shapes panel; fill and stroke as in shape.create)"##,
+            params: r##"{"preset":name (the first shape of that name),"group":name?,"position":n? (the shape at this index of `group`, as shape.presets.list lists it; picks one of two custom shapes of one name, and `preset`, when given, must be its name),"rect":[x,y,w,h]? (default: centred, half the canvas),"keepAspect":bool=true,"fill":…?=foreground,"stroke":…?,"useAlignedRendering":bool (new layer: false; addTo: preserve target when omitted),"name":str? (default: the shape's name numbered, "Heart 1", "Heart 2"),"addTo":layerId?,"op":"combine|subtract|intersect|exclude"?} → shape.info (Custom Shape tool / Shapes panel; fill and stroke as in shape.create)"##,
             enabled: has_doc,
             run: place,
             journal: true,
@@ -518,7 +566,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Shape Presets",
             menu: &[],
             shortcut: None,
-            params: super::GROUP_EDIT_PARAMS,
+            params: EDIT_PARAMS,
             enabled: always,
             run: edit,
             journal: true,

@@ -313,7 +313,7 @@ use fade::{can_fade, fade};
 pub use find_replace::find_matches;
 use find_replace::{can_find_replace, find_replace};
 pub(crate) use presets::current_path;
-pub use presets::{PRESET_FORMAT, PresetFile};
+pub use presets::{MAX_SHAPE_NAME, PRESET_FORMAT, PresetFile, SHAPE_NAME_REQUIRED, custom_shape_name};
 use presets::{can_define_shape, define_brush_preset, define_custom_shape, preset_manager};
 use purge::{can_purge_all, can_purge_clipboard, can_purge_histories, can_purge_undo, purge};
 

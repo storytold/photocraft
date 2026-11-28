@@ -214,11 +214,10 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
     let [x, y, x1, y1] = r;
     let shape = current_shape(&app.ui.frame_tool);
     let mut p = json!({"x":x,"y":y,"width":x1.saturating_sub(x),"height":y1.saturating_sub(y),"shape":shape,"sides":app.ui.frame_tool.sides.clamp(3,100)});
-    if shape == "custom" {
-        let name = app.ui.presets_ui.shape();
-        if let Some(sh) = photocraft_engine::presets::shapes::all_groups(&app.session).iter().flat_map(|g| &g.items).find(|s| s.name == name) {
-            p["path"] = photocraft_engine::vector_cmds::path_json(&sh.path);
-        }
+    if shape == "custom"
+        && let Some(sh) = crate::panels::preset_browser::chosen_shape(app)
+    {
+        p["path"] = photocraft_engine::vector_cmds::path_json(&sh.path);
     }
     if let Some(s) = &app.ui.frame_tool.stroke {
         p["stroke"] = stroke::json(s);

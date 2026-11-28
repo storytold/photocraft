@@ -82,32 +82,46 @@ pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
     current_path(&d.doc, d.active_layer, None).map(|_| ()).ok_or_else(|| "select a path or shape layer first".into())
 }
 
+/// The longest name Define Custom Shape stores, in characters; a longer name is cut (#14291).
+pub const MAX_SHAPE_NAME: usize = 240;
+
+/// The alert of Define Custom Shape for an empty or spaces-only name, titled "Shape Name" (#14291).
+pub const SHAPE_NAME_REQUIRED: &str = "You must specify a name for the shape.";
+
+/// The name Define Custom Shape stores for the `typed` one: as typed, spaces included, cut at [`MAX_SHAPE_NAME`]
+/// characters (never inside one). `None` for an empty or spaces-only name, which is refused.
+pub fn custom_shape_name(typed: &str) -> Option<String> {
+    if typed.trim().is_empty() {
+        return None;
+    }
+    Some(typed.chars().take(MAX_SHAPE_NAME).collect())
+}
+
+/// Stores the path as a new custom shape, after any of the same name (a taken name adds a second shape, #14291).
+/// Without a `name` the shape is "Shape N"; an empty or spaces-only one is refused with [`SHAPE_NAME_REQUIRED`].
 pub(super) fn define_custom_shape(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "edit.defineCustomShape";
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(typed)) => Some(custom_shape_name(typed).ok_or_else(|| bad(CMD, SHAPE_NAME_REQUIRED))?),
+        Some(_) => return Err(bad(CMD, "`name` must be text")),
+    };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let spec = p.get("path").and_then(Value::as_str);
-    let path = current_path(&st.doc, st.active_layer, spec).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
+    let path = current_path(&st.doc, st.active_layer, spec).ok_or_else(|| bad(CMD, "no such path"))?;
     // A targeted path is stored together with the active shape layer's path or vector mask.
     let path = match spec.and(layer_path(&st.doc, st.active_layer)) {
         Some(layer) => with_layer_path(layer, path).ok_or_else(|| {
             bad(
-                "edit.defineCustomShape",
+                CMD,
                 "the targeted path and the active layer's path can't be stored as one shape: both subtract, intersect or exclude, one is inverted, or their fill rules differ",
             )
         })?,
         None => path,
     };
-    let name = p
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("Shape {}", s.edit_state.custom_shapes.len() + 1));
+    let name = name.unwrap_or_else(|| format!("Shape {}", s.edit_state.custom_shapes.len() + 1));
     let shapes = &mut s.edit_state.custom_shapes;
-    match shapes.iter_mut().find(|c| c.name == name) {
-        Some(c) => c.path = path,
-        None => shapes.push(CustomShape { name: name.clone(), path }),
-    }
+    shapes.push(CustomShape { name: name.clone(), path });
     Ok(json!({"name": name, "count": shapes.len()}))
 }
 
@@ -198,6 +212,10 @@ pub struct PresetFile {
 }
 
 pub const PRESET_FORMAT: &str = "photocraft-presets";
+
+#[cfg(test)]
+#[path = "define_custom_shape_name_tests.rs"]
+mod define_custom_shape_name_tests;
 
 #[cfg(test)]
 #[path = "define_custom_shape_combine_tests.rs"]
