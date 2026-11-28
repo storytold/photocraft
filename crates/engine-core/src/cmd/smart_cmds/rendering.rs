@@ -344,10 +344,10 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// The box of a smart object's source in source pixels (what its warp's `us`/`vs` span), or `None`
 /// when the source can't be read.
 ///
-/// An SVG (or a native source's SVG preview) without Stack Mode is rendered by the bounded
+/// A plain SVG (or a native source's SVG preview) without Stack Mode is rendered by the bounded
 /// whole-drawing path, so its box only needs the canvas bounds: no editable layer caches are
-/// built, and a drawing whose layer caches exceed the budget still gets a warp frame. Stack Mode
-/// keeps the strict layered import it renders with.
+/// built, and a drawing whose layer caches exceed the budget still gets a warp frame. For other
+/// sources, including SVGZ, use the same import admission as the existing object's render.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
     let bytes = display_source(sm, &bytes);
@@ -355,7 +355,7 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
         Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => super::source::source_image(&name, &bytes, fmt).ok()?.bounds,
+        None => super::source::source_image_classified(&name, &bytes, fmt, false).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }

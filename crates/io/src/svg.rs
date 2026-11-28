@@ -527,15 +527,20 @@ fn image_error(budget: &Mutex<ImageBudget>, error: impl Into<String>) {
 }
 
 /// Parse one bounded SVG with the shared tree parser and its format-neutral image resolver.
-fn parse_image_bounded_with(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<usvg::Tree, IoError> {
+fn parse_image_bounded_with(
+    bytes: &[u8],
+    budget: Arc<Mutex<ImageBudget>>,
+    fonts: fn() -> Arc<usvg::fontdb::Database>,
+    source_limit: u64,
+) -> Result<usvg::Tree, IoError> {
     let overrun = |error: IoError| {
         image_error(&budget, error.to_string());
         error
     };
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_BOUNDED_SVG_BYTES {
-        return Err(overrun(IoError::Svg("embedded SVG source exceeds the 16 MiB byte limit".into())));
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > source_limit {
+        return Err(overrun(IoError::Svg(format!("SVG source exceeds the {} MiB byte limit", source_limit >> 20))));
     }
-    let xml = inflate_with_limit(bytes, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
+    let xml = inflate_with_limit(bytes, source_limit).map_err(overrun)?;
     let depth = nesting_depth(&xml, MAX_XML_DEPTH)?;
     if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
@@ -642,10 +647,14 @@ struct ParsedWork {
 /// scratch surfaces its embedded SVG images need at the drawing's own size count against the
 /// same limit.
 fn parse_bounded(bytes: &[u8], max_pixels: u64) -> Result<Parsed, IoError> {
-    let (parsed, chain) = parse_bounded_inner(bytes, max_pixels)?;
-    let area = canvas(&parsed.tree, &mut Vec::new()).size.area();
-    check_scratch_surfaces(area, chain, max_pixels)?;
-    Ok(parsed)
+    parse_bounded_with_source_limit(bytes, max_pixels, MAX_BOUNDED_SVG_BYTES)
+}
+
+fn parse_bounded_with_source_limit(bytes: &[u8], max_pixels: u64, source_limit: u64) -> Result<Parsed, IoError> {
+    let work = parse_bounded_work_with_source_limit(bytes, max_pixels, false, fonts, source_limit)?;
+    let area = canvas(&work.parsed.tree, &mut Vec::new()).size.area();
+    check_scratch_surfaces(area, work.svg_chain, max_pixels)?;
+    Ok(work.parsed)
 }
 
 /// [`parse_bounded`] without the scratch-surface check, also returning the deepest chain of
@@ -672,6 +681,16 @@ fn check_scratch_surfaces(area: u64, chain: u64, max_pixels: u64) -> Result<(), 
 
 /// The decoder's charged pixels, including raster images inside nested SVG images.
 fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<ParsedWork, IoError> {
+    parse_bounded_work_with_source_limit(bytes, max_pixels, strict, fonts, MAX_BOUNDED_SVG_BYTES)
+}
+
+fn parse_bounded_work_with_source_limit(
+    bytes: &[u8],
+    max_pixels: u64,
+    strict: bool,
+    fonts: fn() -> Arc<usvg::fontdb::Database>,
+    source_limit: u64,
+) -> Result<ParsedWork, IoError> {
     let budget = Arc::new(Mutex::new(ImageBudget {
         pixels: max_pixels.min(MAX_RASTER_PIXELS),
         xml_bytes: MAX_BOUNDED_SVG_BYTES,
@@ -685,7 +704,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         error: None,
         resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, max_pixels.min(MAX_RASTER_PIXELS)))),
     }));
-    let tree = parse_image_bounded_with(bytes, budget.clone(), fonts)?;
+    let tree = parse_image_bounded_with(bytes, budget.clone(), fonts, source_limit)?;
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
@@ -924,15 +943,25 @@ pub fn import_svg_bounded_images(name: &str, bytes: &[u8], max_decoded_pixels: u
 }
 
 /// The bounded layered import for callers without an omission-warning channel. Reject missing
-/// embedded images before rendering or caching any layers; keep the same decode and retained-
-/// pixel budgets as [`import_svg_bounded_images`].
+/// embedded images and artwork lost during conversion, with the same decode and retained-pixel
+/// budgets as [`import_svg_bounded_images`]. Skipping an optional shape cache preserves the artwork.
 pub fn import_svg_bounded_images_strict(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
+    import_svg_bounded_images_strict_with_source_limit(name, bytes, max_decoded_pixels, MAX_BOUNDED_SVG_BYTES)
+}
+
+/// For SVGZ recognized by Smart Object source admission. The already inflated
+/// outer XML uses Open's SVGZ allowance. Embedded resources keep their budgets.
+pub(super) fn import_inflated_svgz_bounded_images_strict(name: &str, xml: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
+    import_svg_bounded_images_strict_with_source_limit(name, xml, max_decoded_pixels, MAX_INFLATED_BYTES)
+}
+
+fn import_svg_bounded_images_strict_with_source_limit(name: &str, bytes: &[u8], max_decoded_pixels: u64, source_limit: u64) -> Result<ImportResult, IoError> {
     on_svg_stack(|| {
-        let parsed = parse_bounded(bytes, max_decoded_pixels)?;
+        let parsed = parse_bounded_with_source_limit(bytes, max_decoded_pixels, source_limit)?;
         if omitted_image_count(parsed.image_usage) != 0 {
             return Err(IoError::Svg("embedded images were unreadable or exceeded image limits; cannot import incomplete smart object contents".into()));
         }
-        import_parsed(name, parsed, MAX_GROUP_DEPTH, None, false)
+        import_parsed_with_limits(name, parsed, MAX_GROUP_DEPTH, None, false, MAX_PIXEL_BYTES, OmissionPolicy::Reject)
     })
 }
 
@@ -976,12 +1005,17 @@ fn import_parsed(
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
 ) -> Result<ImportResult, IoError> {
-    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES)
+    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES, OmissionPolicy::Warn)
 }
 
 #[cfg(test)]
 fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize, pixel_budget: u64) -> Result<ImportResult, IoError> {
-    import_parsed_with_limits(name, parsed, max_group_depth, None, false, pixel_budget)
+    import_parsed_with_limits(name, parsed, max_group_depth, None, false, pixel_budget, OmissionPolicy::Warn)
+}
+
+enum OmissionPolicy {
+    Warn,
+    Reject,
 }
 
 /// Convert a parsed tree into a document. With `max_cached_pixels`, a canvas over the budget is
@@ -995,6 +1029,7 @@ fn import_parsed_with_limits(
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
     pixel_budget: u64,
+    omission_policy: OmissionPolicy,
 ) -> Result<ImportResult, IoError> {
     let Parsed { tree, fontless_text, image_usage } = parsed;
     let mut warnings = Vec::new();
@@ -1029,8 +1064,18 @@ fn import_parsed_with_limits(
     let fmt = doc.pixel_format();
     let global = tiny_skia::Transform::from_scale(cv.scale, cv.scale);
     let max_group_depth = (max_group_depth != 0).then_some(max_group_depth.clamp(1, MAX_GROUP_DEPTH));
-    let mut conv =
-        Conv { fmt, canvas: doc.bounds(), global, max_group_depth, warnings, noted: Vec::new(), counts: [0; 4], pixel_budget, retained_pixel_bytes: 0 };
+    let mut conv = Conv {
+        fmt,
+        canvas: doc.bounds(),
+        global,
+        max_group_depth,
+        warnings,
+        noted: Vec::new(),
+        content_omitted: fontless_text,
+        counts: [0; 4],
+        pixel_budget,
+        retained_pixel_bytes: 0,
+    };
     if nodes > MAX_NODES || over_cache_budget {
         if over_cache_budget {
             conv.warnings.push("SVG: combined layer caches exceed the clipboard cache budget; opened as one pixel layer instead of editable shapes".into());
@@ -1043,11 +1088,16 @@ fn import_parsed_with_limits(
             if let Some(Ok(rendered)) = rendered {
                 doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&rendered, doc.bounds(), fmt))));
             } else {
-                conv.note("raster-panic", "SVG: the drawing could not be rendered".to_string());
+                conv.note_omission("raster-panic", "SVG: the drawing could not be rendered".to_string());
             }
+        } else {
+            conv.content_omitted = true;
         }
     } else {
         doc.layers = conv.convert_children(tree.root().children(), 0, 0, tree.root().abs_transform()).into();
+    }
+    if conv.content_omitted && matches!(omission_policy, OmissionPolicy::Reject) {
+        return Err(IoError::Svg("SVG conversion omitted drawing content; cannot import incomplete smart object contents".into()));
     }
     if doc.layers.is_empty() && !conv.noted.contains(&"raster-panic") {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
@@ -1315,6 +1365,8 @@ struct Conv {
     warnings: Vec<String>,
     /// Features already warned about (one warning each).
     noted: Vec<&'static str>,
+    /// Artwork was lost, independent of diagnostic text or optional shape caches.
+    content_omitted: bool,
     /// Unnamed shapes, groups, images and texts so far, for "Shape 3"-style names.
     counts: [usize; 4],
     /// Remaining budget for retained rasterised surfaces, in actual sample bytes.
@@ -1329,6 +1381,11 @@ impl Conv {
             self.noted.push(what);
             self.warnings.push(msg);
         }
+    }
+
+    fn note_omission(&mut self, what: &'static str, msg: String) {
+        self.content_omitted = true;
+        self.note(what, msg);
     }
 
     /// Check both retained and transient memory before rendering; charge only retained output.
@@ -1443,7 +1500,7 @@ impl Conv {
                 let abs = t.abs_transform().pre_concat(t.flattened().transform());
                 let children = self.convert_children(t.flattened().children(), depth + 1, rec + 1, abs);
                 if children.is_empty() {
-                    self.note("text", "SVG: text needs a font the drawing can use; none matched, so it was dropped".to_string());
+                    self.note_omission("text", "SVG: text needs a font the drawing can use; none matched, so it was dropped".to_string());
                     return;
                 }
                 let name = if t.id().is_empty() {
@@ -1621,24 +1678,25 @@ impl Conv {
         let pixels = u64::from(w) * u64::from(h);
         // Preflight the pixmap limit first, without charging the shared allowance.
         if pixels > MAX_RASTER_PIXELS {
-            self.note("raster-size", "SVG: an element too large to rasterise was dropped".to_string());
+            self.note_omission("raster-size", "SVG: an element too large to rasterise was dropped".to_string());
             return None;
         }
         // The layer keeps whole tiles over its box, however narrow the box.
         let logical = pixels;
         let pixels = Rect::new(x0, y0, x1, y1).tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
         if !self.can_retain_pixels(pixels, logical) {
+            self.content_omitted = true;
             return None;
         }
         let Some(mut pixmap) = pixmap(w, h) else {
-            self.note("raster-alloc", "SVG: a rasterised element could not be allocated".to_string());
+            self.note_omission("raster-alloc", "SVG: a rasterised element could not be allocated".to_string());
             return None;
         };
         let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
         let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
         // The shared renderer charges this element's scratch buffers on top of already retained layers.
         let Some(rendered) = guarded(|| draw::render_node(node, ts, &mut pixmap, self.retained_pixel_bytes, MAX_PEAK_PIXEL_BYTES)) else {
-            self.note("raster-panic", "SVG: an element that could not be rendered was dropped".to_string());
+            self.note_omission("raster-panic", "SVG: an element that could not be rendered was dropped".to_string());
             return None;
         };
         let rendered = match rendered {
@@ -1659,7 +1717,7 @@ impl Conv {
                 } else {
                     "raster-scratch-limit"
                 };
-                self.note(key, format!("SVG: an element was dropped because it {why}: {}", refusal.message));
+                self.note_omission(key, format!("SVG: an element was dropped because it {why}: {}", refusal.message));
                 return None;
             }
         };
