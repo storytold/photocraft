@@ -4,9 +4,10 @@
 //! `mode:"replace"` (#12101) - laid as it stands, byte for byte equal to the tile's source pixels
 //! read from our own document (the pattern's pixels through the same conversion chain the Pattern
 //! Stamp lays). A stroke needs no source point; the phase follows the Pattern Stamp's aligned
-//! rule (document origin with `aligned`). An unknown pattern or an unknown `sourceMode` is an
-//! `Err` that paints nothing and adds no History step; `sourceMode:"sampled"` (or no `sourceMode`)
-//! keeps the sampled path byte for byte, and one pattern stroke is one "Healing Brush" step.
+//! rule (document origin with `aligned`). An unknown pattern, an unknown `sourceMode` string or a
+//! supplied `sourceMode` that is not a string is an `Err` that paints nothing and adds no History
+//! step; `sourceMode:"sampled"` (or no `sourceMode`) keeps the sampled path byte for byte, and one
+//! pattern stroke is one "Healing Brush" step.
 
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_compose::pattern::{Placement, Tile, render};
@@ -104,6 +105,44 @@ fn want(s: &Session, x: i32, y: i32) -> Vec<i32> {
 fn levels(s: &Session, x: i32, y: i32) -> Vec<i32> {
     let q = |v: f32| (v * 255.0).round() as i32;
     pixel(s, x, y).iter().map(|&v| q(v)).collect()
+}
+
+/// The sampled fixture: the same document with a 20 x 20 checker at 6,6 (5 px cells alternating
+/// 60,60,60 / 200,200,200), so the source point 16,16 and the ground it heals into are different
+/// pixels. On the flat green fixture a sampled stroke heals green into green and a path that
+/// painted nothing would still pass.
+fn sampled_document() -> Session {
+    let mut s = document();
+    for cx in 0..4 {
+        for cy in 0..4 {
+            let color = if (cx + cy) % 2 == 0 { "#3c3c3c" } else { "#c8c8c8" };
+            s.execute("select.rect", json!({"x": 6 + 5 * cx, "y": 6 + 5 * cy, "width": 5, "height": 5})).unwrap();
+            s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        }
+    }
+    s.execute("select.deselect", json!({})).unwrap();
+    s
+}
+
+/// One sampled click at 30,24 with source 16,16 on a fresh `sampled_document`, plus the `extra`
+/// keys under test. The run checks its own stroke first - the frame moved, the click's own pixel
+/// moved off the ground, and it is one "Healing Brush" step - and returns the whole frame with the
+/// History length, which is what the comparisons of two runs then agree on.
+fn sampled_run(extra: Value) -> (Vec<Vec<f32>>, usize) {
+    let mut s = sampled_document();
+    let before = state(&s);
+    let mut p = json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100});
+    for (key, value) in extra.as_object().unwrap() {
+        p[key] = value.clone();
+    }
+    s.execute("paint.healingBrush", p).unwrap();
+    let after = state(&s);
+    let at = usize::try_from(24 * 48 + 30).unwrap();
+    assert_ne!(after.0, before.0, "the sampled stroke painted");
+    assert_ne!(after.0[at], before.0[at], "the click's own pixel moved off the ground: {:?} -> {:?}", before.0[at], after.0[at]);
+    assert_eq!(after.1, before.1 + 1, "one stroke, one step");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Healing Brush"), "the stroke's History name");
+    after
 }
 
 #[test]
@@ -227,24 +266,33 @@ fn an_unknown_source_mode_is_an_error_and_paints_nothing() {
 }
 
 #[test]
+fn a_non_string_source_mode_is_an_error_and_paints_nothing() {
+    // A supplied `sourceMode` has to be a string: with a sampled source set, `"sourceMode": true`
+    // may not quietly take the sampled branch, the way an unknown string already errors. A null one
+    // stays the absent key.
+    for mode in [json!(true), json!(3), json!(["pattern"]), json!({"mode": "pattern"})] {
+        let mut s = sampled_document();
+        let before = state(&s);
+        let p = json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100, "sourceMode": mode.clone()});
+        let err = s.execute("paint.healingBrush", p).unwrap_err().to_string();
+        assert!(err.contains("`sourceMode` must be a string"), "{mode}: {err}");
+        assert_eq!(state(&s), before, "{mode}: nothing painted, no step");
+    }
+    let plain = sampled_run(json!({}));
+    assert_eq!(sampled_run(json!({"sourceMode": Value::Null})), plain, "a null sourceMode is the absent key");
+}
+
+#[test]
 fn sampled_source_mode_keeps_the_sampled_stroke_byte_for_byte() {
     // The guard, at the command: with `sourceMode` absent or "sampled" the pattern key changes
-    // nothing - the explicit sampled source heals the same pixels as before.
-    let mut s = document();
-    s.execute("paint.healingBrush", json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100})).unwrap();
-    let plain = pixel(&s, 30, 24);
-    let mut r = document();
-    r.execute(
-        "paint.healingBrush",
-        json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100, "sourceMode": "sampled", "pattern": "Heal tile"}),
-    )
-    .unwrap();
-    assert_eq!(pixel(&r, 30, 24), plain, "sourceMode:\"sampled\" heals exactly like today's stroke");
-    assert_eq!(r.active().unwrap().history.undo_label(), Some("Healing Brush"));
+    // nothing - the sampled stroke heals the same whole frame as before the option existed. The
+    // fixture's source differs from the ground it heals, so each run also has to move pixels: a
+    // sampled path that painted nothing fails inside `sampled_run`, not only in the comparisons.
+    let plain = sampled_run(json!({}));
+    assert_eq!(sampled_run(json!({"sourceMode": "sampled"})), plain, "sourceMode:\"sampled\" heals exactly like today's stroke");
+    assert_eq!(sampled_run(json!({"sourceMode": "sampled", "pattern": "Heal tile"})), plain, "a pattern key on an explicit sampled stroke changes nothing");
     // A name that does not exist is not even resolved on the sampled path.
-    let mut g = document();
-    g.execute("paint.healingBrush", json!({"points": [[30, 24]], "source": [16, 16], "size": 20, "hardness": 100, "pattern": "Not There"})).unwrap();
-    assert_eq!(pixel(&g, 30, 24), plain, "a pattern key on a sampled stroke changes nothing");
+    assert_eq!(sampled_run(json!({"pattern": "Not There"})), plain, "the absent sourceMode is the sampled stroke, unknown pattern and all");
 }
 
 #[test]

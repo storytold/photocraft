@@ -80,9 +80,14 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let aligned = flag(p, "aligned", true);
     // The options bar's Source control (#12104): "pattern" takes the texture from the pattern
     // named by "pattern", resolved and tiled exactly like the Pattern Stamp's stroke, and needs
-    // no sampled source point. Anything else, above all the absent key, is today's sampled
-    // stroke - unchanged.
-    let healed_from = match string(p, "sourceMode", "sampled") {
+    // no sampled source point. The absent key, and a null one, is today's sampled stroke -
+    // unchanged; a supplied value that is not a string is an error, as an unknown string already
+    // is, so `"sourceMode": true` cannot quietly fall back to the sampled branch.
+    let source_mode = match p.get("sourceMode") {
+        None | Some(Value::Null) => "sampled",
+        Some(v) => v.as_str().ok_or_else(|| bad(CMD, "`sourceMode` must be a string (sampled|pattern)"))?,
+    };
+    let healed_from = match source_mode {
         "sampled" => HealedSource::Sampled(clone_mapping(s, p, &stroke, CMD)?),
         "pattern" => {
             // `parse_brush` refuses an empty `points`; the guard keeps the index out of the code.
