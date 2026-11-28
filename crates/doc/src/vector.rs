@@ -302,15 +302,20 @@ pub enum LiveShape {
     Ellipse {
         rect: [f64; 4],
     },
-    /// Regular polygon or star inscribed in `rect`; `star_ratio` = inner/outer radius (1 = polygon).
+    /// Regular polygon or star in `rect`; `star_ratio` = inner/outer radius (1 = polygon).
     /// `corner_radius` rounds every vertex of a polygon and the outer points of a star (0 = sharp),
-    /// each within what its edges allow.
+    /// each within what its edges allow. With `fills_box` (the Polygon tool and Create Polygon,
+    /// #13298) the polygon is stretched so its tight box is `rect`, with a vertex at the top centre
+    /// for an odd side count and a flat top edge for an even one; without it (files saved before it,
+    /// the Star tool, a ⇧-constrained drag) it is inscribed in `rect`'s ellipse, a vertex at the top.
     Polygon {
         rect: [f64; 4],
         sides: u32,
         star_ratio: f64,
         #[serde(default)]
         corner_radius: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fills_box: bool,
     },
     /// Isosceles triangle filling `rect`: the apex at the centre of the top edge, then the bottom
     /// right and the bottom left corner (the Triangle tool, Create Triangle). `corner_radius`
@@ -413,9 +418,18 @@ mod tests {
     fn a_polygon_saved_before_corner_radii_loads_sharp() {
         let old = r#"{"kind":"polygon","rect":[0.0,0.0,10.0,10.0],"sides":3,"star_ratio":1.0}"#;
         let back: LiveShape = serde_json::from_str(old).unwrap();
-        assert_eq!(back, LiveShape::Polygon { rect: [0.0, 0.0, 10.0, 10.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0 });
-        let round = LiveShape::Polygon { rect: [0.0; 4], sides: 6, star_ratio: 1.0, corner_radius: 4.5 };
+        assert_eq!(back, LiveShape::Polygon { rect: [0.0, 0.0, 10.0, 10.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0, fills_box: false });
+        let round = LiveShape::Polygon { rect: [0.0; 4], sides: 6, star_ratio: 1.0, corner_radius: 4.5, fills_box: false };
         assert_eq!(serde_json::from_str::<LiveShape>(&serde_json::to_string(&round).unwrap()).unwrap(), round);
+    }
+
+    /// #13298: the Polygon tool's geometry flag survives a save, and a polygon without it writes no key.
+    #[test]
+    fn a_polygon_filling_its_box_keeps_the_flag() {
+        let filled = LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 6, star_ratio: 1.0, corner_radius: 0.0, fills_box: true };
+        assert_eq!(serde_json::from_str::<LiveShape>(&serde_json::to_string(&filled).unwrap()).unwrap(), filled);
+        let inscribed = LiveShape::Polygon { rect: [0.0; 4], sides: 5, star_ratio: 1.0, corner_radius: 0.0, fills_box: false };
+        assert!(!serde_json::to_string(&inscribed).unwrap().contains("fills_box"));
     }
 
     #[test]

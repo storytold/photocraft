@@ -95,10 +95,9 @@ fn a_path_mode_outline_snaps_with_the_checkbox_off() {
     let doc = &app.session.active().unwrap().doc;
     assert_eq!(doc.layers.len(), 1, "no shape layer in Path mode");
     let (x0, y0, x1, y1) = doc.work_path.as_ref().unwrap().control_bounds().unwrap();
-    // The pentagon in the snapped box [10, 11, 30, 20] (centre 25,21, radii 15 and 10): its top
-    // vertex on the box's whole-pixel top edge, the others at 72° steps around the centre.
-    let (sin72, cos36) = (72f64.to_radians().sin(), 36f64.to_radians().cos());
-    assert_near([x0, y0, x1, y1], [25.0 - 15.0 * sin72, 11.0, 25.0 + 15.0 * sin72, 21.0 + 10.0 * cos36], "work path");
+    // The pentagon fills the snapped box [10, 11, 30, 20] (#13298): its top vertex on the box's
+    // whole-pixel top edge, its widest vertices and its base on the other edges.
+    assert_near([x0, y0, x1, y1], [10.0, 11.0, 40.0, 31.0], "work path");
 }
 
 #[test]

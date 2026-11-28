@@ -33,6 +33,8 @@ use crate::state::Tool;
 mod box_tests;
 #[cfg(test)]
 mod corner_tests;
+#[cfg(test)]
+mod polygon_one_widget_tests;
 
 /// The scale a drag can reach, as `path.transform`'s.
 const MIN_SCALE: f64 = 0.01;
@@ -205,13 +207,13 @@ fn show_box(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
     // the diagonal and an edge one way (`ScaleRule::Shape`). The outside is the tool's, so the rotate zone is
     // the band that a refused rotation leaves undeclared.
     let rules = BoxRules::in_mode(TransformMode::Free).with_allow(BoxAllow::new(false, false, false)).with_scale(ScaleRule::Shape);
-    // The Ellipse tool marks the box's centre; a live line shows its ends and midpoint instead of the frame.
+    // The Ellipse and the Polygon tool mark the box's centre; a live line shows its ends and midpoint instead of the frame.
     let mut transform_box = TransformBox::new(BOX_LABEL, Bind::given(given), start, 0.0)
         .rules(rules)
         .rotate_zone(RotateZone::Band)
         .reference_point(false)
         .inside_moves(false)
-        .centre_mark(app.ui.tool == Tool::EllipseShape)
+        .centre_mark(centre_mark(app.ui.tool))
         .id_salt((BOX_LABEL, salt));
     if let Some(line) = line {
         transform_box = transform_box.line(line);
@@ -230,6 +232,11 @@ fn show_box(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
         let paths = layers_paths(app, &layers, |path| path.transform(&map));
         SelectionOutline::solid(BOX_OUTLINE_LABEL, &paths).show_at(ui, rect);
     }
+}
+
+/// Does the box mark its centre with `tool`? The Ellipse and the Polygon tool's do (#13314).
+fn centre_mark(tool: Tool) -> bool {
+    matches!(tool, Tool::EllipseShape | Tool::Polygon)
 }
 
 /// `edit.transform` for the box dragged from `bounds` to `after`: one step for every selected layer. A drag
@@ -302,7 +309,7 @@ fn normal_rect([x, y, w, h]: [f64; 4]) -> Option<[f64; 4]> {
 }
 
 /// A shape layer's live shape as a widget target, if it has corners: a rectangle's four, each with its own
-/// radius; a polygon's or star's outer points, or a triangle's three, sharing one.
+/// radius; a polygon's top vertex, a star's outer points, or a triangle's three, sharing one.
 fn corner_target(layer: u64, live: &LiveShape) -> Option<CornerTarget> {
     let at = |p: [f64; 2]| Point::new(p[0], p[1]);
     match *live {
@@ -316,17 +323,21 @@ fn corner_target(layer: u64, live: &LiveShape) -> Option<CornerTarget> {
             let corners = (0..4).map(|i| CornerPoint::new(at(v[i]), at(v[(i + 3) % 4]), at(v[(i + 1) % 4]), radii[i], CornerKind::Round)).collect();
             Some(CornerTarget::new(layer, corners, true))
         }
-        LiveShape::Polygon { rect, sides, star_ratio, corner_radius } => {
+        LiveShape::Polygon { rect, sides, star_ratio, corner_radius, fills_box } => {
             let [x, y, w, h] = normal_rect(rect)?;
             if !(star_ratio.is_finite() && corner_radius.is_finite()) {
                 return None;
             }
-            let sharp = shapes::polygon(x, y, w, h, sides, star_ratio);
+            let sharp = shapes::regular_polygon(x, y, w, h, sides, star_ratio, fills_box);
             let vertices: Vec<[f64; 2]> = sharp.subpaths.first()?.knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
             let n = vertices.len();
-            // A star's inner points stay sharp, so they have no widget.
+            // A plain polygon (every vertex rounds, so vertex 1 does) has one widget, at its first vertex: the
+            // top one, or for an even side count the first one of the flat top edge (#13314). A star keeps one
+            // at each outer point; its inner points stay sharp, so they have no widget.
+            let star = !shapes::polygon_rounds_vertex(star_ratio, 1);
             let corners = (0..n)
                 .filter(|&i| shapes::polygon_rounds_vertex(star_ratio, i))
+                .take(if star { n } else { 1 })
                 .map(|i| CornerPoint::new(at(vertices[i]), at(vertices[(i + n - 1) % n]), at(vertices[(i + 1) % n]), corner_radius.max(0.0), CornerKind::Round))
                 .collect();
             Some(CornerTarget::new(layer, corners, false))
@@ -378,9 +389,9 @@ fn rounded_path(live: &LiveShape, radii: &[f64]) -> Option<Path> {
             let at = |i: usize| radii.get(i).copied().unwrap_or(0.0);
             Some(shapes::rounded_rect(x, y, w, h, [at(0), at(1), at(2), at(3)]))
         }
-        LiveShape::Polygon { rect, sides, star_ratio, .. } => {
+        LiveShape::Polygon { rect, sides, star_ratio, fills_box, .. } => {
             let corner_radius = radii.first().copied().unwrap_or(0.0);
-            Some(shapes::live_path(&LiveShape::Polygon { rect, sides, star_ratio, corner_radius }))
+            Some(shapes::live_path(&LiveShape::Polygon { rect, sides, star_ratio, corner_radius, fills_box }))
         }
         LiveShape::Triangle { rect, .. } => Some(shapes::live_path(&LiveShape::Triangle { rect, corner_radius: radii.first().copied().unwrap_or(0.0) })),
         LiveShape::Ellipse { .. } | LiveShape::Line { .. } | LiveShape::ArrowLine { .. } => None,

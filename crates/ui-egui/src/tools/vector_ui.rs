@@ -242,6 +242,9 @@ mod rectangle_align_edges_tests;
 mod triangle_align_edges_tests;
 
 #[cfg(test)]
+mod polygon_box_drag_tests;
+
+#[cfg(test)]
 mod triangle_shift_equilateral_tests;
 
 #[cfg(test)]

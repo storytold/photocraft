@@ -138,10 +138,9 @@ fn alt_pressed_after_the_drag_started_still_draws_from_the_centre() {
     let st = app.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     let LayerContent::Shape(shape) = &layer.content else { panic!("a shape layer") };
-    // The anchors' mean is the centre of a rectangle, an ellipse and a regular polygon.
-    let knots = &shape.path.subpaths[0].knots;
-    let n = knots.len() as f64;
-    let (cx, cy) = (knots.iter().map(|k| k.anchor.x).sum::<f64>() / n, knots.iter().map(|k| k.anchor.y).sum::<f64>() / n);
+    // The polygon fills its box (#13298), so the outline's bounds are centred on the press.
+    let (x0, y0, x1, y1) = shape.path.control_bounds().unwrap();
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     assert!((cx - 400.0).abs() < 1e-6 && (cy - 300.0).abs() < 1e-6, "centred on the press: ({cx}, {cy})");
 }
 

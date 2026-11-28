@@ -198,7 +198,7 @@ fn the_radius_field_leaves_the_active_polygon_and_the_history_alone() {
 fn radius_20_rounds_every_corner_of_the_next_polygon_with_two_tangent_anchors() {
     let (_, sharp) = drawn_with(0.0);
     let (live, knots) = drawn_with(20.0);
-    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 20.0 });
+    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 20.0, fills_box: true });
     assert_rounds(&knots, &sharp, 20.0);
     // 20 px fits every corner, so no arc is capped: a larger radius would move every anchor.
     let v: Vec<[f64; 2]> = sharp.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
@@ -209,14 +209,14 @@ fn radius_20_rounds_every_corner_of_the_next_polygon_with_two_tangent_anchors() 
 fn radius_1000_is_capped_by_the_shape_without_an_error() {
     let (_, sharp) = drawn_with(0.0);
     let (live, knots) = drawn_with(1000.0);
-    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 1000.0 });
+    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 1000.0, fills_box: true });
     assert_rounds(&knots, &sharp, 1000.0);
 }
 
 #[test]
 fn radius_0_draws_the_sharp_polygon() {
     let (live, knots) = drawn_with(0.0);
-    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 0.0 });
+    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 0.0, fills_box: true });
     assert_eq!(knots.len(), 5, "one anchor a corner");
     assert!(knots.iter().all(|k| k.in_ctrl == k.anchor && k.out_ctrl == k.anchor), "no curves");
 }
@@ -227,7 +227,7 @@ fn the_rectangle_radius_does_not_round_the_polygon() {
     app.ui.tool_options.corner_radius = 20.0;
     drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
     let (live, _) = active_shape(&app);
-    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 0.0 });
+    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 0.0, fills_box: true });
 }
 
 #[test]

@@ -64,7 +64,7 @@ fn a_huge_radius_is_capped_and_zero_or_nan_stays_sharp() {
 
 #[test]
 fn a_three_sided_polygon_keeps_its_inscribed_geometry() {
-    let p = live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0 });
+    let p = live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0, fills_box: false });
     close(&anchors(&p), &[(500.0, 300.0), (586.603, 375.0), (413.397, 375.0)], 1e-3);
 }
 
