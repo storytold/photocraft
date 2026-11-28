@@ -66,6 +66,8 @@ fn requested_languages_resolve_regional_preferences() {
         ("sr-RS", "sr-latn"),
         ("az-Latn-AZ", "az"),
         ("bs-BA", "bs"),
+        ("he-IL", "he"),
+        ("iw-IL", "he"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
@@ -212,7 +214,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
     if !needs_catalogs() {
         return;
     }
-    let cases: [(&[&str], &str); 14] = [
+    let cases: [(&[&str], &str); 16] = [
         (&["en-US"], "en"),
         (&["zh-CN"], "zh-hans"),
         (&["ja-JP"], "ja"),
@@ -225,6 +227,8 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
         (&["da-DK"], "da"),
         (&["nb-NO"], "nb"),
         (&["az-AZ"], "az"),
+        (&["he-IL"], "he"),
+        (&["iw-IL"], "he"),
         (&[], "en"),
         (&["sw-KE", "is-IS"], "en"),
     ];

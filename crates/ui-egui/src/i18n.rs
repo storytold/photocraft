@@ -342,6 +342,10 @@ fn candidates(tag: &str) -> Vec<String> {
         // than English.
         out.insert(out.len() - 1, "nb".to_string());
     }
+    if primary == "iw" && !out.iter().any(|c| c == "he") {
+        // Legacy ISO 639-1 code for Hebrew maps to `he`.
+        out.push("he".to_string());
+    }
     out
 }
 

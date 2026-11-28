@@ -274,6 +274,21 @@ fn ukrainian_and_arabic_resolve() {
     assert_eq!(ar.dir(), Dir::Rtl);
 }
 
+#[test]
+fn hebrew_and_legacy_iw_resolve_and_direct_rtl() {
+    if !needs_catalogs() {
+        return;
+    }
+    let he = lang("he");
+    assert_eq!(he.name(), "עברית");
+    assert!(he.complete_menus());
+    for tag in ["he", "HE", "he-IL", "he_IL.UTF-8", "he-Hebr-IL", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        assert_eq!(Lang::from_pref(tag), he, "{tag}");
+    }
+    assert_eq!(he.dir(), Dir::Rtl);
+}
+
 /// Every Serbian tag PhotoCraft matched to its `sr` catalog reaches `sr-latn`, as a system tag and
 /// as a preference (a saved `sr` included).
 #[test]
