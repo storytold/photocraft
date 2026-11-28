@@ -1116,6 +1116,11 @@ fn finish(
     if outcome.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }
+    // OK in New Artboard from Layers makes the Artboard tool current, its bar showing the new board (#14579). A
+    // step dialog of a playing action keeps the tool, as scripts and the control channel do.
+    if outcome.is_ok() && cmd == "layer.new.artboardFromLayers" && token.is_none() {
+        crate::tool_memory::select(app, crate::state::Tool::Artboard);
+    }
     if outcome.is_ok() {
         result.remember(ctx);
         // A step dialog of a playing action: the action continues after it.
