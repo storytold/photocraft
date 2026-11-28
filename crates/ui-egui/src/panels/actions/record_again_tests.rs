@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
 use craft::ui::contract::Bind;
-use craft::ui::dialog::DialogId;
+use craft::ui::dialog::{DialogId, HostedAlert, StackDialog};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::commands::CommandRef;
 use egui_kittest::Harness;
@@ -256,4 +256,61 @@ fn filter_and_adjustment_previews_retain_permissions_before_evaluation() {
         assert!(answer.is_err(), "OK with the changed settings is refused: {command}");
         assert_eq!(h.state().session.actions().list, original);
     }
+}
+
+/// #13678: Record Again of a Conditional Mode Change step whose OK opens the target mode's own dialog: that dialog
+/// answers for the step, so its OK replaces the step with its options and converts once, as the step.
+#[test]
+fn conditional_mode_change_target_dialog_answers_for_the_step() {
+    let mut h = harness("file.automate.conditionalModeChange", json!({"from": "any", "to": "grayscale"}));
+    let parent = open(&mut h);
+    assert_eq!(set_field(&mut h, parent, "to", json!("bitmap"))["ok"], true);
+    confirm(&mut h, parent).unwrap();
+    let child = h.state().framework.dialogs.stack().top().expect("the Bitmap dialog opened");
+    assert_ne!(child, parent);
+    assert_eq!(h.state().session.active().unwrap().doc.mode, photocraft_color::ColorMode::Rgb, "nothing converted yet");
+    assert_eq!(set_field(&mut h, child, "method", json!("threshold"))["ok"], true);
+    confirm(&mut h, child).unwrap();
+    assert!(!h.state().dialog_open());
+    let step = &h.state().session.actions().list.action(0).unwrap().steps[0];
+    assert_eq!(step.command, "file.automate.conditionalModeChange");
+    assert_eq!((&step.params["to"], &step.params["method"]), (&json!("bitmap"), &json!("threshold")), "{}", step.params);
+    assert_eq!(h.state().session.active().unwrap().doc.mode, photocraft_color::ColorMode::Bitmap);
+}
+
+/// #13678: Record Again of a Conditional Mode Change step to Bitmap opens the Bitmap dialog with the step's own options:
+/// the conditional dialog's rows take only `from` and `to`, and the step's `method` would otherwise give way to the
+/// Bitmap dialog's default.
+#[test]
+fn conditional_mode_change_target_dialog_opens_with_the_steps_options() {
+    let mut h = harness("file.automate.conditionalModeChange", json!({"from": "any", "to": "bitmap", "method": "threshold"}));
+    let parent = open(&mut h);
+    confirm(&mut h, parent).unwrap();
+    let child = h.state().framework.dialogs.stack().top().expect("the Bitmap dialog opened");
+    assert_ne!(child, parent);
+    let method = |h: &Harness<'static, Box<PhotocraftApp>>| {
+        h.state().framework.dialogs.open_dialogs().into_iter().find(|d| d.id == child).and_then(|d| d.fields?.get("method").cloned())
+    };
+    assert_eq!(method(&h), Some(json!("threshold")), "the step's method, not the dialog's default");
+    confirm(&mut h, child).unwrap();
+    let step = &h.state().session.actions().list.action(0).unwrap().steps[0];
+    assert_eq!(step.params["method"], json!("threshold"), "{}", step.params);
+}
+
+/// #13681: Record Again of a Conditional Mode Change step with nothing to convert shows Photoshop's alert on OK, as the
+/// dialog does from the menu, and the editor stays open with the step and the document unchanged. Only the same mode is
+/// set up here: the editor does not take the step's `from` (its checkboxes are a custom row `ui.dialog.set` refuses).
+#[test]
+fn conditional_mode_change_editor_shows_the_alert_and_stays_open() {
+    let mut h = harness("file.automate.conditionalModeChange", json!({"from": "any", "to": "rgb"}));
+    let dialog = open(&mut h);
+    let (original, revision) = (h.state().session.actions().list.clone(), h.state().session.active().unwrap().revision);
+    assert!(confirm(&mut h, dialog).is_err(), "OK is refused");
+    let dialogs = &h.state().framework.dialogs;
+    let alert = |id: DialogId| Some(dialogs.get_by_id::<HostedAlert>(id)?.json_fields()?.get("message")?.as_str()?.to_owned());
+    let alerts: Vec<String> = dialogs.open_dialogs().into_iter().filter_map(|d| alert(d.id)).collect();
+    assert_eq!(alerts, ["Mode of the document is the same as the Target Mode.  No conversion performed."]);
+    assert!(is_open(&h, dialog), "the editor is still open");
+    assert_eq!(h.state().session.actions().list, original, "the step is unchanged");
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "the document is unchanged");
 }

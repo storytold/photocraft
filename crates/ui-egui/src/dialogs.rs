@@ -28,9 +28,9 @@ pub(crate) mod params {
     use serde_json::Value;
 
     use super::{
-        PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
-        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, conditional_mode_change_dialog,
+        count_group_name_ui, duplicate_layer_ui, equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui,
+        new_group_ui, new_layer_ui, paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -109,6 +109,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == "file.automate.batch", filter_dialog::run)
         },
+        ParamFamily {
+            check: Some(conditional_mode_change_dialog::check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == conditional_mode_change_dialog::COMMAND, conditional_mode_change_dialog::run)
+        },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
         crate::swatches_ui::SWATCH_NAME_FAMILY,
@@ -119,6 +124,11 @@ pub(crate) mod params {
         crate::actions::menu_item::FAMILY,
         crate::smart_svg_ui::family(),
         ParamFamily { check: Some(crate::workspace_ui::check_param), ..ParamFamily::new(crate::workspace_ui::owns_param, crate::workspace_ui::run_param) },
+        ParamFamily {
+            check: Some(conditional_mode_change_dialog::check_target),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(conditional_mode_change_dialog::owns_target, conditional_mode_change_dialog::run_target)
+        },
         ParamFamily { check: Some(filter_dialog::check), cancel: Some(filter_dialog::cancel), ..ParamFamily::new(filter_dialog::owns, filter_dialog::run) },
     ];
 
@@ -240,9 +250,15 @@ pub(crate) mod params {
             let Some(result) = dialog_mut(app, id).and_then(HostedParamDialog::take_ok) else { continue };
             let answer = if crate::actions::is_editor(app, id) {
                 // An editor of Record Again or of a paused menu step: its answer is judged as the step requires, with the
-                // values OK runs.
-                let params = crate::filter_dialog::command_params(&result.key, &result.fields);
-                crate::actions::check_editor(app, id, &result.key, &params).map_err(Label::from)
+                // values OK runs. Conditional Mode Change shows its alerts there too (#13681).
+                let alert = if result.key == conditional_mode_change_dialog::COMMAND { conditional_mode_change_dialog::check(app, &result) } else { Ok(()) };
+                alert.and_then(|()| {
+                    match conditional_mode_change_dialog::editor_answer(app, &result.key, &result.fields) {
+                        Some(params) => crate::actions::check_editor(app, id, conditional_mode_change_dialog::COMMAND, &params),
+                        None => crate::actions::check_editor(app, id, &result.key, &crate::filter_dialog::command_params(&result.key, &result.fields)),
+                    }
+                    .map_err(Label::from)
+                })
             } else {
                 match family_for(&result.key).and_then(|family| family.check) {
                     Some(check) => check(app, &result),

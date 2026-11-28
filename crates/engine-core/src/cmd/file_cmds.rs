@@ -65,6 +65,7 @@ pub use paths::{
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, read_file, read_file_limited, write_file};
 pub(crate) use place_steps::PlaceSteps;
+pub use processing::nothing_to_convert;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 pub use save::SaveOpts;
 pub(crate) use save::encode;
@@ -388,7 +389,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Mode Change…",
             &["File", "Automate"],
             None,
-            r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",…]|"any"="any","to":"rgb|grayscale|cmyk|lab"}"##,
+            r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",…]|"any"="any","to":"rgb|grayscale|cmyk|lab|bitmap|duotone|indexed|multichannel",…the target's image.mode.* options} (bitmap, duotone, indexed, multichannel: those options go to the target, and the source must be RGB or Grayscale; Bitmap and Duotone from 8-bit RGB go through Grayscale and Grayscale converts directly; Indexed from 16-bit, or one-layer 32-bit, RGB or Grayscale goes through 8 Bits/Channel; Bitmap, Duotone and Multichannel need an 8-bit source; Bitmap to RGB goes through Grayscale; each step is its own history state)"##,
             has_doc,
             conditional_mode_change
         ),
