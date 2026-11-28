@@ -1434,4 +1434,14 @@ mod refusal_dialog_tests {
         assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
         assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
+
+    /// Finder and the Dock only offer a file to the app (double-click with Open With, a drop on the
+    /// Dock icon) when its type is one of the bundle's document types (#4504). SVG opens through
+    /// the same Apple-event path as PSD and PNG, so it has to be listed there too.
+    #[test]
+    fn the_mac_bundle_opens_svg_from_finder_and_the_dock() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let (_, document_types) = plist.split_once("<key>CFBundleDocumentTypes</key>").expect("the bundle declares document types");
+        assert!(document_types.contains("<string>public.svg-image</string>"), "Info.plist.in doesn't claim SVG");
+    }
 }
