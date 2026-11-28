@@ -425,6 +425,19 @@ fn size_keys_need_a_type_layer() {
 }
 
 #[test]
+fn a_type_size_down_to_001_pt_is_accepted_and_below_it_refused() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Tiny", "size": 0.01})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(text_layer(&s, id).char_runs()[0].style.size_pt, 0.01, "a new type layer takes the 0.01 pt minimum");
+    s.execute("type.setStyle", json!({"layer": id, "size": 0.05})).unwrap();
+    assert_eq!(text_layer(&s, id).char_runs()[0].style.size_pt, 0.05, "type.setStyle keeps a hundredth of a point");
+    s.execute("type.setStyle", json!({"layer": id, "size": f64::from(0.01f32)})).unwrap();
+    assert_eq!(text_layer(&s, id).char_runs()[0].style.size_pt, 0.01, "a 0.01 that arrives widened from f32 is the minimum, not below it");
+    let e = s.execute("type.setStyle", json!({"layer": id, "size": 0.009})).unwrap_err();
+    assert!(e.to_string().contains("size must be between 0.01 and 1296 pt"), "{e}: just below the minimum stays a parameter error");
+}
+
+#[test]
 fn auto_name_skips_leading_blank_lines() {
     let mut s = session();
     let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "\n  \nHello\nworld"})).unwrap()["layer"].as_u64().unwrap();
