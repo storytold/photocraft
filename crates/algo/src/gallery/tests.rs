@@ -27,9 +27,12 @@ fn image(rect: Rect, ch: usize) -> Image {
 
 fn check(src: &Image, out: Rect, ctx: &Ctx, pins: &[IrisPin]) {
     let want = reference::iris(src, out, ctx, pins);
-    let got = iris(src, out, ctx, pins);
+    check_pixels(&iris(src, out, ctx, pins), &want);
+}
+
+fn check_pixels(got: &[f32], want: &[f32]) {
     assert_eq!(got.len(), want.len());
-    for (i, (&got, &want)) in got.iter().zip(&want).enumerate() {
+    for (i, (&got, &want)) in got.iter().zip(want).enumerate() {
         assert!(got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan()), "sample {i}: {got} != {want}, delta {}", (got - want).abs());
     }
 }
@@ -37,6 +40,7 @@ fn check(src: &Image, out: Rect, ctx: &Ctx, pins: &[IrisPin]) {
 #[test]
 fn iris_matches_frozen_kernel_at_transitions_and_edges() {
     let bounds = Rect::new(-19, 7, 54, 66);
+    let interior = Rect::new(-7, 17, 15, 39);
     let mut cases = vec![vec![], vec![IrisPin::default()]];
     for blur in [0.0, 0.49, 0.5, 1.0, 15.0, 80.0, 500.0] {
         for roundness in [0.0, 0.01, 37.0, 100.0] {
@@ -54,8 +58,10 @@ fn iris_matches_frozen_kernel_at_transitions_and_edges() {
         for alpha in [false, true] {
             let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha };
             for pins in &cases {
-                check(&src, bounds, &ctx, pins);
-                check(&src, Rect::new(-7, 17, 15, 39), &ctx, pins);
+                // The frozen blur computes each level over the same source window for both outputs.
+                let want = Image { rect: bounds, ch, data: reference::iris(&src, bounds, &ctx, pins) };
+                check_pixels(&iris(&src, bounds, &ctx, pins), &want.data);
+                check_pixels(&iris(&src, interior, &ctx, pins), &want.crop(interior));
             }
         }
     }
