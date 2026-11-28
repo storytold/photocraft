@@ -2,14 +2,14 @@
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
 use craft::behavior::Value;
-use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, bind_tracked};
+use craft::ui::choice::{Checkbox, Radio, RadioGroup, Segmented};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, bind_tracked};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::text::RangeAlert;
 use photocraft_engine::presets::PresetsExt;
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 use crate::PhotocraftApp;
 use crate::option_cells::{hint, number};
@@ -132,10 +132,35 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
     None
 }
 
-/// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
-/// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
+/// The Healing Brush's options: its Source pair, then the Clone Stamp's cells. The "Alt-click to
+/// set the source" hint stays away while Source reads Pattern (#12104).
+pub(super) fn healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let source_unset = app.session.presets().clone.active().source.is_none();
+    healing_cells(ui, app);
+    clone_cells(ui, app);
+    if source_unset && app.ui.tool_options.healing_source != "pattern" {
+        Divider::vertical().show(ui);
+        hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+    }
+    None
+}
+
+/// Clone Stamp's options: its cells, and the hint a stroke without a source point needs.
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let source_unset = app.session.presets().clone.active().source.is_none();
+    clone_cells(ui, app);
+    if source_unset {
+        Divider::vertical().show(ui);
+        hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+    }
+    None
+}
+
+/// The Aligned and Sample cells Clone Stamp and Healing Brush share. In an Indexed Color document
+/// the Clone Stamp's Sample greys at Current Layer and keeps the stored choice for other documents
+/// (#12613). Their tooltips are the Clone Stamp's own (#12607); the Healing Brush's are on its
+/// Source cells (#12104).
+fn clone_cells(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let clone_stamp = app.ui.tool == Tool::CloneStamp;
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
     let (aligned, clone_sample) = bind_tracked!(app.ui.tool_options => clone_aligned, clone_sample);
@@ -144,11 +169,37 @@ pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeA
     let mut greyed = "current".to_owned();
     let sample = if indexed { Bind::bound(&mut greyed) } else { clone_sample };
     choose(ui, tl!("Sample"), sample, &samples, !indexed, clone_stamp.then(|| tl!("Choose which layers to sample")));
-    if source_unset {
-        Divider::vertical().show(ui);
-        hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+}
+
+/// The Healing Brush's Source pair: the Sampled · Pattern segmented control and the pattern
+/// picker after it (#12104), the reference's measured cells. The picker greys while Source reads
+/// Sampled; the pattern is the tool's own option, which Reset Tool keeps while it puts Source
+/// back to Sampled.
+fn healing_cells(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let sources = string_entries(&[("sampled", tl!("Sampled")), ("pattern", tl!("Pattern"))]);
+    Field::new(tl!("Source")).side(SideLabel::new().tooltip(tl!("Set a source to repair the area"))).sizing(Sizing::Content).show(ui, |ui, _| {
+        Segmented::new(tl!("Source"), bind_tracked!(app.ui.tool_options => healing_source), &sources).show(ui);
+    });
+    let on_pattern = app.ui.tool_options.healing_source == "pattern";
+    let patterns: Vec<Entry<String>> = app.session.patterns.items.iter().map(|p| Entry::new(p.id.clone(), p.display_name().to_string())).collect();
+    let held = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone()).unwrap_or_default();
+    // The option holds the pattern this tool last chose, which Reset Tool keeps (the measured row)
+    // and a stroke always names; the list's current pattern is what it starts from.
+    let mut shown = if app.ui.tool_options.healing_pattern.is_empty() { held.clone() } else { app.ui.tool_options.healing_pattern.clone() };
+    Field::new(tl!("Pattern")).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
+        let cell = Select::new(tl!("Pattern"), Bind::bound(&mut shown), &patterns).enabled(on_pattern && !patterns.is_empty());
+        let cell = if on_pattern { cell.tooltip(tl!("Use pattern as source for heal")) } else { cell };
+        cell.show(ui);
+    });
+    if !on_pattern || app.ui.tool_options.healing_pattern == shown {
+        return;
     }
-    None
+    // With Source on Pattern the choice also goes to the pattern list, as the Pattern Stamp's cell
+    // does, so the next tool that takes a pattern starts from it.
+    app.ui.tool_options.healing_pattern = shown.clone();
+    if shown != held {
+        let _ = app.run("pattern.presets.select", json!({"pattern": shown}));
+    }
 }
 
 #[allow(dead_code)]

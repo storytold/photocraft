@@ -20,6 +20,14 @@ pub(super) struct CloneFrom {
 }
 
 impl CloneFrom {
+    /// The source a stroke that samples nothing still needs: the working pixel format - a coverage
+    /// channel over a pixel layer, the target's own channels over a mask or channel. Deliberately
+    /// no document, no source layer and no colour transform, and none of the Clone Source slot's
+    /// refusals, which belong to a stroke that takes its texture from a sampled point (#12104).
+    pub(super) fn for_paint_target(p: &Value) -> Self {
+        Self { pixels: targets_pixels(p), ..Default::default() }
+    }
+
     /// Whether cached live pixels still refer to the same source snapshot and color transform.
     pub(super) fn unchanged(&self, other: &Self) -> bool {
         let document = match (&self.other, &other.other) {

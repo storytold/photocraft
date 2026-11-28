@@ -129,6 +129,9 @@ fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
         Tool::Zoom => &["zoom_in"],
         Tool::Patch => &["patch_structure", "patch_color"],
         Tool::ContentAwareMove => &["cam_mode"],
+        // Reset Tool puts the Healing Brush's Source back to Sampled but keeps the pattern the
+        // picker last chose (measured, #12104).
+        Tool::Healing => &["healing_pattern"],
         _ => &[],
     }
 }
@@ -234,7 +237,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Zoom => reset!(zoom_scrubby, zoom_in),
         Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
-        Tool::Healing => reset!(clone_aligned, clone_sample, healing_replace),
+        Tool::Healing => reset!(clone_aligned, clone_sample, healing_replace, healing_source, healing_pattern),
         Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color),
         Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color, cam_transform_on_drop),
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),

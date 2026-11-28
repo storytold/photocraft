@@ -1,10 +1,17 @@
 use super::clone::{apply_clone_coverage, blend_param, clamp_samples, clone_mapping, clone_result, clone_sample};
+use super::pattern_stamp::{heal_pattern_setup, paint_region};
 use super::periodic;
 use super::sampling::{SampleLayers, composite_region, sample_all_layers, sample_layers};
 use super::{
     BlendMode, CompleteParams, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, Session, Stroke, Surface, Value, apply_coverage, bad,
     coverage, damage_json, flag, inpaint, json, parse_brush, poisson, reject_huge_stroke, restore_coverage, run_stroke, string,
 };
+
+/// Where a Healing Brush pattern source sits: the Pattern Stamp's placement, at its unit scale
+/// and angle (#12104).
+fn pattern_placement(phase: (f32, f32)) -> photocraft_compose::pattern::Placement {
+    photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, 1.0, 0.0)
+}
 
 /// Grow a stroke's coverage map by `m` pixels of zero coverage (a Dirichlet boundary for the solve).
 fn pad_coverage(bounds: Rect, cov: &[f32], m: i32) -> (Rect, Vec<f32>) {
@@ -48,6 +55,14 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
 /// Duotone and Multichannel weren't measured and heal as before.
 const INDEXED_REFUSAL: &str = "Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
 
+/// What a Healing Brush stroke takes its texture from: the sampled clone source, or - with the
+/// options bar's Source control on Pattern (#12104) - the pattern's tile and placement phase,
+/// both from the Pattern Stamp's rules.
+enum HealedSource {
+    Sampled(crate::presets::clone_source::Mapping),
+    Pattern(std::sync::Arc<photocraft_compose::pattern::Tile>, (f32, f32)),
+}
+
 pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.healingBrush";
     if s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed) {
@@ -56,15 +71,44 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     let which = sample_layers(p, CMD)?;
-    let source = super::clone_sampling::resolve(s, p, CMD)?;
+    // The options bar's Source control (#12104): "pattern" takes the texture from the pattern
+    // named by "pattern", resolved and tiled exactly like the Pattern Stamp's stroke, and needs
+    // no sampled source point. The absent key, and a null one, is today's sampled stroke -
+    // unchanged; a supplied value that is not a string is an error, as an unknown string already
+    // is, so `"sourceMode": true` cannot quietly fall back to the sampled branch.
+    let source_mode = match p.get("sourceMode") {
+        None | Some(Value::Null) => "sampled",
+        Some(v) => v.as_str().ok_or_else(|| bad(CMD, "`sourceMode` must be a string (sampled|pattern)"))?,
+    };
+    // The Clone Source slot is the sampled stroke's business: a pattern stroke samples nothing, so
+    // a closed or incompatible source document in that slot must not refuse it. What the pattern
+    // stroke takes from here is the working pixel format its tile is laid in, and the paint target
+    // gives that on its own.
+    let source = match source_mode {
+        "pattern" => super::clone_sampling::CloneFrom::for_paint_target(p),
+        _ => super::clone_sampling::resolve(s, p, CMD)?,
+    };
     let mode = blend_param(p, CMD)?;
     // The options bar's Replace row (#12101): the stroke copies the source pixels without the
     // healing solve, composited through `mode` (Normal). It is the command's word, not a blend
     // mode; `blend_param` already accepted it for this command alone.
     let replace = p.get("mode").and_then(Value::as_str) == Some("replace");
     let aligned = flag(p, "aligned", true);
-    let map = clone_mapping(s, p, &stroke, CMD)?;
-    let off = map.offset();
+    let healed_from = match source_mode {
+        "sampled" => HealedSource::Sampled(clone_mapping(s, p, &stroke, CMD)?),
+        "pattern" => {
+            // `parse_brush` refuses an empty `points`; the guard keeps the index out of the code.
+            let first = stroke.points.first().ok_or_else(|| bad(CMD, "`points` is empty"))?;
+            let (_, tile, phase) = heal_pattern_setup(s, p, CMD, first)?;
+            HealedSource::Pattern(tile, phase)
+        }
+        o => return Err(bad(CMD, format!("unknown sourceMode `{o}` (sampled|pattern)"))),
+    };
+    let off = match &healed_from {
+        HealedSource::Sampled(map) => map.offset(),
+        // A pattern stroke maps nothing: the tile repeats across the whole canvas.
+        HealedSource::Pattern(..) => (0, 0),
+    };
     let dmg = run_stroke(s, "Healing Brush", id, p, |pre, surf, sel, lock| {
         // Pattern Preview: source and destination repeat across the canvas edges, so a stroke over
         // a seam heals as one patch and goes on wherever it repeats.
@@ -72,14 +116,20 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let (g, cov) = pad_coverage(bounds, &cov, 2);
         let fmt = source.sample_format(surf);
-        let src = clone_sample(pre, id, surf, which, &source, g, &map, wrap, CMD)?;
+        // The stroke's source texture: the pattern tile laid at its placement, or the sampled
+        // clone read. Both arrive in the sampling format, with a coverage channel for pixels.
+        let src = match &healed_from {
+            HealedSource::Pattern(tile, phase) => paint_region(tile, &pattern_placement(*phase), &fmt, g),
+            HealedSource::Sampled(map) => clone_sample(pre, id, surf, which, &source, g, map, wrap, CMD)?,
+        };
         // The solver can reconstruct positive alpha from the destination boundary even where
         // no source pixel exists. Keep source availability separate from the solved channels.
         let alpha = super::alpha_index(&fmt);
         let has_source = |pixel: &[f32]| alpha.is_none_or(|a| pixel.get(a).is_some_and(|value| *value > 0.0));
         let healed = if replace {
-            // Replace (#12101): the sampled source as it stands, no solve against the
-            // destination. Pixels with no source stay transparent, as they do through the solver.
+            // Replace (#12101): the stroke's source - sampled pixels or the pattern tile - as it
+            // stands, no solve against the destination. Pixels with no source stay transparent,
+            // as they do through the solver.
             src
         } else {
             // The destination the texture is fitted to: the layer itself, or what the user sees when
@@ -109,7 +159,11 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(apply_clone_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode))
     })?;
-    crate::presets::clone_source::remember_mapping(s, p, &map);
+    // Only a sampled stroke pairs a destination with a source; a pattern stroke leaves the
+    // Clone Source slot alone (#12104).
+    if let HealedSource::Sampled(map) = &healed_from {
+        crate::presets::clone_source::remember_mapping(s, p, map);
+    }
     Ok(clone_result(dmg, off, aligned, p, &stroke))
 }
 
@@ -329,6 +383,10 @@ mod heal_indexed_tests;
 #[cfg(test)]
 #[path = "history_brush_transparency_tests.rs"]
 mod history_brush_transparency_tests;
+
+#[cfg(test)]
+#[path = "heal_pattern_tests.rs"]
+mod heal_pattern_tests;
 
 #[cfg(test)]
 #[path = "heal_replace_tests.rs"]

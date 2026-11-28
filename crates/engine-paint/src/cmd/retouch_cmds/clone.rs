@@ -322,6 +322,12 @@ impl LiveRetouch {
     /// `paint.historyBrush` or an aligned, non-Impressionist `paint.patternStamp`) from its
     /// params; their `points` are rendered.
     pub fn begin(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
+        // A Healing Brush stroke with a pattern source (#12104): the live preview would show the
+        // clone source's texture, not the tile, so it refuses and the stroke commits through the
+        // command, like the Healing Brush's blend on release.
+        if cmd == "paint.healingBrush" && p.get("sourceMode").and_then(Value::as_str) == Some("pattern") {
+            return Err(bad(cmd, "pattern-source Healing Brush strokes are not drawn as live strokes"));
+        }
         has_pixel_layer(s).map_err(EngineError::Other)?;
         if cmd == "paint.patternStamp" {
             let st = pattern_stamp::Setup::parse(s, p)?;

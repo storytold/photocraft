@@ -315,7 +315,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","source":[sx,sy] | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","mode":"normal|…"="normal","wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges) → {"damage","offset","aligned","nextSource"}"#
+                r#","source":[sx,sy] | "offset":[dx,dy],"sourceMode":"sampled|pattern"="sampled" (pattern: the texture comes from "pattern", not from a sampled point; source/offset are then unused),"pattern":id|name? (with sourceMode "pattern": the document's, else the library's; an unknown one is an error),"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","mode":"normal|…"="normal","wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges) → {"damage","offset","aligned","nextSource"}"#
             ),
             enabled: has_pixel_layer,
             run: healing_brush,

@@ -179,6 +179,22 @@ pub(super) fn lay_coverage(
     rect
 }
 
+/// The pattern a Healing Brush stroke with `"sourceMode":"pattern"` paints from (#12104): the
+/// params' pattern resolved like the Pattern Stamp's, and the tile with the stamp's phase rule -
+/// the same `stamp_phase` at the unit scale and angle, since the ticket's *not measured* pattern
+/// phase and alignment follow the Pattern Stamp's rules. The Healing Brush has no Scale or Angle
+/// control, so the tile goes in at 100 % and 0°.
+pub(super) fn heal_pattern_setup(s: &Session, p: &Value, cmd: &str, first: &StrokePoint) -> Result<(Pattern, std::sync::Arc<Tile>, (f32, f32))> {
+    let pat = crate::pattern_cmds::resolve_param(s, cmd, p)?;
+    mode_refusal(s, &pat)?;
+    if pat.is_empty() {
+        return Err(bad(cmd, "the pattern is empty"));
+    }
+    let phase = stamp_phase(p, cmd, flag(p, "aligned", true), first, (pat.width, pat.height))?;
+    let tile = std::sync::Arc::new(Tile::new(&pat).ok_or_else(|| bad(cmd, "the pattern is empty or too large to paint"))?);
+    Ok((pat, tile, phase))
+}
+
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.patternStamp";
     let st = Setup::parse(s, p)?;

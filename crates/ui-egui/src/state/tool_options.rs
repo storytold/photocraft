@@ -99,6 +99,14 @@ pub struct ToolOptions {
     /// Healing Brush › Mode: Replace, which copies the source without healing (#12101). Like the
     /// painting tools' Clear flags it is tool-only: the stroke params carry it, not the brush.
     pub healing_replace: bool,
+    /// Healing Brush › Source: "sampled" (the Alt-clicked clone source) or "pattern" (the pattern
+    /// named by `healing_pattern`) (#12104). Tool-only like the Replace flag: the stroke params
+    /// carry it, and the Clone Stamp's bar never shows it.
+    pub healing_source: String,
+    /// Healing Brush › Source › Pattern: the picker's pattern, by id; empty is the library's
+    /// current one, as the Pattern Stamp's picker holds no own selection (#12104). Reset Tool
+    /// keeps it, the reference application's measured row.
+    pub healing_pattern: String,
     /// Spot Healing: contentAware | createTexture | proximityMatch
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -498,6 +506,8 @@ impl Default for ToolOptions {
             pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
             healing_replace: false,
+            healing_source: "sampled".into(),
+            healing_pattern: String::new(),
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
             patch_content_aware: false,
