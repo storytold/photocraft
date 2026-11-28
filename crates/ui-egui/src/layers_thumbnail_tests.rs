@@ -3,12 +3,13 @@
 
 use craft::layers::ui::tree::LayerPart;
 use egui::Modifiers;
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
+use photocraft_doc::LayerMask;
 use photocraft_engine::Session;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::layers_panel_nodes::{click, layer_id, thumb};
+use crate::layers_panel_nodes::{click, drag, layer_id, name_point, thumb};
 
 type H = Harness<'static, Box<PhotocraftApp>>;
 
@@ -178,4 +179,117 @@ fn a_masked_artboards_thumbnail_retargets_it_and_ends_the_mask_view() {
     click(&mut h, at, Modifiers::NONE);
     assert!(!h.state().ui.mask_target, "the board is targeted again");
     assert!(!viewing(&h), "and the mask view ends");
+}
+
+fn add_masked_adjustment(s: &mut Session) {
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 16})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s.execute("layer.newAdjustmentLayer.brightnessContrast", json!({"name": "Tone", "brightness": 12})).unwrap();
+}
+
+fn source_and_adjustment_masks(h: &H) -> [LayerMask; 2] {
+    let doc = &h.state().session.active().unwrap().doc;
+    ["Ink", "Tone"].map(|name| doc.layer(layer_id(h.state(), name)).unwrap().mask.as_ref().unwrap().clone())
+}
+
+fn drag_mask_to_adjustment(h: &mut H, mods: Modifiers) {
+    let from = thumb(h, "Ink", LayerPart::LayerMask).center();
+    let to = name_point(h, "Tone");
+    drag(h, from, to, mods);
+}
+
+#[test]
+fn alt_drag_asks_before_replacing_an_adjustment_mask() {
+    let mut s = Session::new();
+    add_masked_adjustment(&mut s);
+    let mut h = harness(s);
+    let original = source_and_adjustment_masks(&h);
+    assert_ne!(original[0], original[1]);
+    let history = |h: &H| h.state().session.active().unwrap().history.past_len();
+
+    let before = history(&h);
+    drag_mask_to_adjustment(&mut h, Modifiers::NONE);
+    assert!(h.query_by_label("Replace").is_none());
+    assert_eq!(source_and_adjustment_masks(&h), original);
+
+    drag_mask_to_adjustment(&mut h, Modifiers::ALT);
+    assert_eq!(source_and_adjustment_masks(&h), original);
+    assert!(h.query_by_label("Replace").is_some(), "Alt-drag to an existing adjustment mask asks first");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert_eq!(source_and_adjustment_masks(&h), original);
+    assert_eq!(history(&h), before, "dismissing the question does not edit the document");
+
+    drag_mask_to_adjustment(&mut h, Modifiers::ALT);
+    h.get_by_label("Replace").click();
+    h.run_steps(4);
+    assert_eq!(source_and_adjustment_masks(&h), [original[0].clone(), original[0].clone()]);
+    assert_eq!(history(&h), before + 1);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(source_and_adjustment_masks(&h), original);
+}
+
+#[test]
+fn alt_drag_replacement_does_not_run_after_a_document_switch_or_edit() {
+    for switch_document in [false, true] {
+        let mut s = Session::new();
+        add_masked_adjustment(&mut s);
+        // Opening a saved copy can keep the original's layer IDs. Give both copies the same revision,
+        // so a test that forgot to check document identity would replace the mask in the other copy.
+        let original = s.active().unwrap();
+        let revision = original.revision;
+        s.add_document((*original.doc).clone(), None);
+        s.active_mut().unwrap().revision = revision;
+        assert_ne!(s.documents()[0].doc.id, s.documents()[1].doc.id);
+        s.set_active(0);
+        let mut h = harness(s);
+        let original = source_and_adjustment_masks(&h);
+        drag_mask_to_adjustment(&mut h, Modifiers::ALT);
+        assert!(h.query_by_label("Replace").is_some());
+        if switch_document {
+            h.state_mut().session.set_active(1);
+        } else {
+            let target = layer_id(h.state(), "Tone").0;
+            h.state_mut().run("layer.layerMask.enabled", json!({"layer": target, "enabled": false})).unwrap();
+        }
+        h.run_steps(3);
+        let expected = source_and_adjustment_masks(&h);
+        h.get_by_label("Replace").click();
+        h.run_steps(4);
+        assert_eq!(source_and_adjustment_masks(&h), expected);
+        if switch_document {
+            h.state_mut().session.set_active(0);
+            h.run_steps(3);
+            assert_eq!(source_and_adjustment_masks(&h), original);
+        }
+    }
+}
+
+#[test]
+fn alt_drag_replacement_does_not_run_after_closing_and_reopening() {
+    let mut s = Session::new();
+    add_masked_adjustment(&mut s);
+    let saved = (*s.close(0).unwrap().doc).clone();
+    let path = Some("saved-masks.pcraft".to_owned());
+    s.add_document(saved.clone(), path.clone());
+    let mut h = harness(s);
+    let original = source_and_adjustment_masks(&h);
+    let identity = |h: &H| {
+        let active = h.state().session.active().unwrap();
+        (active.doc.id, active.revision)
+    };
+    let before = identity(&h);
+    drag_mask_to_adjustment(&mut h, Modifiers::ALT);
+    assert!(h.query_by_label("Replace").is_some());
+
+    let session = &mut h.state_mut().session;
+    session.close(0).unwrap();
+    session.add_document(saved, path);
+    h.run_steps(3);
+    assert_eq!(identity(&h), before, "reopening can reuse the same ID and revision");
+    h.get_by_label("Replace").click();
+    h.run_steps(4);
+    assert_eq!(source_and_adjustment_masks(&h), original, "the old approval does not apply to the newly opened document");
 }
