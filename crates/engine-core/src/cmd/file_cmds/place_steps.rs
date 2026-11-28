@@ -259,7 +259,7 @@ impl PlaceSteps {
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
-                let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
+                let (sharp, warnings) = crate::smart_cmds::render_with_warnings_in(doc, &so, ctx)?;
                 for warning in warnings {
                     if !self.warnings.contains(&warning) {
                         self.warnings.push(warning);

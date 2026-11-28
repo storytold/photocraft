@@ -103,11 +103,23 @@ fn empty_memo_with_stale_accounting_recovers_without_panicking() {
     let data = Arc::new(drawing("empty accounting", false));
     let mut memo = WarningRenderSources::new(&doc);
     memo.bytes = memo.budget;
-    let (image, warnings) = memo.image(&data, 1., *blake3::hash(b"empty.svg").as_bytes()).unwrap();
+    let (image, warnings) = memo.image(&data, 1., *blake3::hash(b"empty.svg").as_bytes(), &photocraft_raster::Interrupt::NONE).unwrap();
     assert!(warnings.is_empty());
     assert_eq!(image.surface.rgba(3, 3), [1., 0., 0., 1.]);
     assert_eq!(memo.entries.len(), 1);
     assert!(memo.bytes <= memo.budget);
+}
+
+#[test]
+fn a_cancelled_job_stops_after_the_svg_render_and_keeps_nothing() {
+    let doc = document();
+    let data = Arc::new(drawing("cancelled", false));
+    let mut memo = WarningRenderSources::new(&doc);
+    let cancel = || true;
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancel);
+    let result = memo.image(&data, 1., *blake3::hash(b"cancelled.svg").as_bytes(), &ctl);
+    assert!(matches!(result, Err(EngineError::Cancelled)), "{:?}", result.map(|(_, w)| w));
+    assert!(memo.entries.is_empty(), "a cancelled render is not kept in the memo");
 }
 
 #[test]

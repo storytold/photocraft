@@ -1,21 +1,36 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, cache_get, cache_key, cache_put, check, convert_svg_source, source_bytes, source_image_classified_with, source_surface_from_buffer,
+    svg_source_image_in_with, vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
     SmartSource, Stage, StageKey, Surface, Value, affine_homography, other, placement, stack_cache,
 };
+use photocraft_raster::Interrupt;
 use std::collections::VecDeque;
 use std::sync::{Mutex, Weak};
 
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`super::source_image`], keyed by mode.
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
-    stack_image_classified(file_name, bytes, fmt, mode, None)
+    stack_image_with(file_name, bytes, fmt, mode, &Interrupt::NONE)
 }
 
-fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, svg: Option<bool>) -> Result<SourceImage> {
+/// [`stack_image`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled: while the
+/// source is decoded, before each layer is rendered and before the layers are combined.
+fn stack_image_with(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, ctl: &Interrupt) -> Result<SourceImage> {
+    stack_image_classified(file_name, bytes, fmt, mode, None, ctl)
+}
+
+fn stack_image_classified(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    mode: photocraft_doc::StackMode,
+    svg: Option<bool>,
+    ctl: &Interrupt,
+) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
     let mut key = cache_key(bytes, fmt);
     // Keep the filename in the key because fallback import uses it to choose a format.
@@ -25,7 +40,7 @@ fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode:
         return Ok(img);
     }
     let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
-    let doc = super::decode_source_classified(file_name, bytes, svg)?;
+    let doc = super::decode_source_classified_with(file_name, bytes, svg, ctl)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -44,15 +59,17 @@ fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode:
         .iter()
         .filter(|l| l.visible)
         .map(|l| {
+            check(ctl)?;
             let mut one = l.clone();
             one.blend = BlendMode::Normal;
             one.clipped = false;
-            photocraft_compose::render_layer(&one, bounds).into_px()
+            Ok(photocraft_compose::render_layer(&one, bounds).into_px())
         })
-        .collect();
+        .collect::<Result<_>>()?;
     if frames.is_empty() {
         return Err(EngineError::Other("the smart object's contents have no visible layers".into()));
     }
+    check(ctl)?;
     let stat = match mode {
         photocraft_doc::StackMode::Entropy => Stat::Entropy,
         photocraft_doc::StackMode::Kurtosis => Stat::Kurtosis,
@@ -130,6 +147,12 @@ pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opa
 /// authority denies surfaces its error (the trusted compositor path has no gate installed, so
 /// this reads ambiently only when the caller established one and it refuses).
 pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> Result<Surface> {
+    apply_smart_filters_in(placed, sm, canvas, &JobCtx::new())
+}
+
+/// [`apply_smart_filters`] that runs each filter with `ctx` and stops with
+/// [`EngineError::Cancelled`] once it is cancelled, between filters and inside them.
+fn apply_smart_filters_in(placed: &Surface, sm: &SmartObject, canvas: Rect, ctx: &JobCtx) -> Result<Surface> {
     if !sm.filters_enabled || !sm.smart_filters.iter().any(|f| f.visible) {
         return Ok(placed.clone());
     }
@@ -137,7 +160,8 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
     // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
     let extent = canvas.union(&placed.content_bounds());
     for f in sm.smart_filters.iter().filter(|f| f.visible) {
-        cur = apply_smart_filter(f, sm, &cur, filter_bounds(f, placed, canvas), extent, &JobCtx::new())?;
+        ctx.check()?;
+        cur = apply_smart_filter(f, sm, &cur, filter_bounds(f, placed, canvas), extent, ctx)?;
     }
     Ok(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
         Some(m) => photocraft_compose::filter_mask::mix(placed, &cur, m),
@@ -184,7 +208,15 @@ fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: 
 /// The source placed in document pixels, before any smart filter (uncached test oracle).
 #[cfg(test)]
 pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
-    place_with_svg(name, bytes, doc, sm, photocraft_io::svg::is_svg(bytes), &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+    place_in(name, bytes, doc, sm, &Interrupt::NONE)
+}
+
+/// [`place`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled: while the source
+/// is decoded or drawn, and before and after it is placed.
+#[cfg(test)]
+pub(super) fn place_in(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, ctl: &Interrupt) -> Result<Surface> {
+    let is_svg = photocraft_io::svg::is_svg(bytes);
+    place_with_svg(name, bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in_with(bytes, doc, scale, ctl), ctl)
 }
 
 fn place_with_svg(
@@ -194,6 +226,22 @@ fn place_with_svg(
     sm: &SmartObject,
     is_svg: bool,
     svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>,
+    ctl: &Interrupt,
+) -> Result<Surface> {
+    check(ctl)?;
+    let placed = place_source_with_svg(name, bytes, doc, sm, is_svg, svg, ctl)?;
+    check(ctl)?;
+    Ok(placed)
+}
+
+fn place_source_with_svg(
+    name: &str,
+    bytes: &[u8],
+    doc: &Document,
+    sm: &SmartObject,
+    is_svg: bool,
+    svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>,
+    ctl: &Interrupt,
 ) -> Result<Surface> {
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
@@ -201,6 +249,7 @@ fn place_with_svg(
     if sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
         let k = vector_scale(sm);
         let img = svg(bytes, k)?;
+        check(ctl)?;
         return Ok(match &sm.perspective {
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
@@ -217,11 +266,12 @@ fn place_with_svg(
         });
     }
     let img = match sm.stack_mode {
-        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg))?, doc)?,
+        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg), ctl)?, doc)?,
         None if is_svg => svg(bytes, 1.0)?,
-        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg))?,
-        None => super::source::source_image_classified(name, bytes, fmt, is_svg)?,
+        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), ctl)?,
+        None => source_image_classified_with(name, bytes, fmt, is_svg, ctl)?,
     };
+    check(ctl)?;
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
     let h = placement(sm);
@@ -368,8 +418,16 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 
 /// Command-only rendering that retains usable SVG artwork and reports omitted embedded images.
 /// Its local source cache never enters the strict process-wide source/filter caches.
+#[cfg(test)]
 pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(Option<Surface>, Vec<String>)> {
-    render_with_warnings_using(sm, &mut WarningRenderSources::new(doc))
+    render_with_warnings_in(doc, sm, &JobCtx::new())
+}
+
+/// [`render_with_warnings`] for a job: stops with [`EngineError::Cancelled`] once `ctx` is
+/// cancelled: before the render, while the source is decoded or drawn, and in and between its
+/// smart filters.
+pub(crate) fn render_with_warnings_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<(Option<Surface>, Vec<String>)> {
+    render_with_warnings_using_in(sm, &mut WarningRenderSources::new(doc), ctx)
 }
 
 struct WarningSource {
@@ -408,7 +466,10 @@ impl<'a> WarningRenderSources<'a> {
         self.srgb.is_some()
     }
 
-    fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32]) -> Result<(SourceImage, Vec<String>)> {
+    /// The SVG source rendered at `scale` with its omission warnings; stops with
+    /// [`EngineError::Cancelled`] once `ctl` is cancelled, before the render is converted to the
+    /// document's profile.
+    pub(super) fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32], ctl: &Interrupt) -> Result<(SourceImage, Vec<String>)> {
         let doc = self.document;
         // Non-SVG and unavailable sources keep their old fast path without
         // materializing ICC bytes. This immutable document needs the context once.
@@ -430,6 +491,7 @@ impl<'a> WarningRenderSources<'a> {
         record(|statistics| statistics.svg_decodes = statistics.svg_decodes.saturating_add(1));
         let (buf, warnings) = photocraft_io::svg::rasterize_bounded_with_warnings(bytes, scale as f32, 24_000_000)
             .map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+        check(ctl)?;
         // Charge owned native tiles, entry and warning storage, not borrowed encoded bytes.
         // This is a soft memo budget: oversize entries retain the existing uncached path.
         let cost = usize::try_from(photocraft_raster::tile_storage_bytes(buf.rect, &doc.pixel_format()))
@@ -475,31 +537,52 @@ impl<'a> WarningRenderSources<'a> {
 
 /// Reuse only warning-aware source pixels during one shared-content update.
 pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
+    render_with_warnings_using_in(sm, sources, &JobCtx::new())
+}
+
+/// [`render_with_warnings_using`] for a job: stops with [`EngineError::Cancelled`] once `ctx` is
+/// cancelled.
+fn render_with_warnings_using_in(sm: &SmartObject, sources: &mut WarningRenderSources<'_>, ctx: &JobCtx) -> Result<(Option<Surface>, Vec<String>)> {
     let doc = sources.document;
+    ctx.check()?;
     if sm.vector_preview.is_some() || sm.stack_mode.is_some() {
-        return render(doc, sm).map(|surface| (surface, Vec::new()));
+        return render_in(doc, sm, ctx).map(|surface| (surface, Vec::new()));
     }
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
     if !photocraft_io::svg::is_svg(&bytes) {
         // Keep the same source snapshot for fallback, including authorized linked reads.
-        return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes))).map(|surface| (surface, Vec::new()));
+        return render_in_with_source(doc, sm, ctx, Some((name, bytes))).map(|surface| (surface, Vec::new()));
     }
     let name_key = *blake3::hash(name.as_bytes()).as_bytes();
     if !unapplied_filters(sm).is_empty() {
         return Err(other("the smart object has unsupported visible filters"));
     }
+    let cancel = || ctx.cancelled();
+    let ctl = Interrupt::cancel_only(&cancel);
     let mut warnings = Vec::new();
-    let placed = place_with_svg(&name, &bytes, doc, sm, true, &mut |_, scale| {
-        let (image, omitted) = sources.image(&bytes, scale, name_key)?;
-        warnings.extend(omitted);
-        Ok(image)
-    })?;
-    Ok((Some(apply_smart_filters(&placed, sm, doc.bounds())?), warnings))
+    let placed = place_with_svg(
+        &name,
+        &bytes,
+        doc,
+        sm,
+        true,
+        &mut |_, scale| {
+            let (image, omitted) = sources.image(&bytes, scale, name_key, &ctl)?;
+            check(&ctl)?;
+            warnings.extend(omitted);
+            Ok(image)
+        },
+        &ctl,
+    )?;
+    let filtered = apply_smart_filters_in(&placed, sm, doc.bounds(), ctx)?;
+    ctx.check()?;
+    Ok((Some(filtered), warnings))
 }
 
-/// [`render`], reporting progress per smart filter to `ctx` and stopping between filters once it
-/// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
-/// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
+/// [`render`], reporting progress per smart filter to `ctx` and stopping once it is cancelled:
+/// before the render, while the source is decoded or drawn, and between filters. Gives the same
+/// pixels as [`apply_smart_filters`] on the placed source, but starts from the deepest stage of
+/// the stack already rendered (see [`stack_cache`]).
 pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Surface>> {
     render_in_with_source(doc, sm, ctx, None)
 }
@@ -509,6 +592,9 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
+    ctx.check()?;
+    let cancel = || ctx.cancelled();
+    let ctl = Interrupt::cancel_only(&cancel);
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
     let bytes = display_source(sm, &original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
@@ -527,7 +613,8 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
+        let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in_with(bytes, doc, scale, &ctl), &ctl)?;
+        // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
         Ok(stage)
