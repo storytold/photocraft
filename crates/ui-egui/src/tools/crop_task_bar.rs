@@ -21,7 +21,7 @@ use craft::ui::runtime::env::Label;
 
 use crate::PhotocraftApp;
 use crate::crop_ui;
-use crate::state::Tool;
+use crate::state::{TaskBarContext, Tool};
 
 /// The bar shows: the Crop tool with a frame, the Window toggle on, no dialog over the canvas.
 fn wanted(app: &PhotocraftApp) -> bool {
@@ -43,6 +43,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     }
     let Some(frame) = app.canvas_tools.crop.tool.frame() else { return };
     let corners = frame.corners();
+    enter_context(app);
     // The body borrows `app`, so the place lives in a local while the bar is shown.
     let mut place = app.ui.panels.task_bar;
     let output = TaskBar::new(label(tl!("Contextual Task Bar")), &corners, Bind::bound(&mut place)).show(ui, area, |ui, cx| {
@@ -75,3 +76,20 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
 fn label(text: &str) -> Label {
     Label::from(text.to_string())
 }
+
+/// A new crop frame (the last one applied or discarded) or another document is a new context for the bar (#16758).
+fn enter_context(app: &mut PhotocraftApp) {
+    let Some(doc) = app.session.active().map(|d| d.doc.id.0) else { return };
+    let pending = crop_ui::pending(app);
+    let track = &mut app.ui.task_bar_track;
+    if track.crop_pending && !pending {
+        track.crop_frame = track.crop_frame.wrapping_add(1);
+    }
+    track.crop_pending = pending;
+    let frame = track.crop_frame;
+    app.ui.enter_task_bar_context(TaskBarContext::Crop { doc, frame });
+}
+
+#[cfg(test)]
+#[path = "../task_bar_drag_context_tests.rs"]
+mod task_bar_drag_context_tests;
