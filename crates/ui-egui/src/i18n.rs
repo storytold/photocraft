@@ -80,7 +80,7 @@ pub struct LangInfo {
 pub use craft::i18n::Direction as Dir;
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The registry. English first: it is the fallback and the source language. Plural forms follow
 /// each language's CLDR rules (the craft-i18n crate).
@@ -105,6 +105,7 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     LangInfo { code: "fr", complete_menus: true },
     LangInfo { code: "id", complete_menus: true },
     LangInfo { code: "ko", complete_menus: true },
+    LangInfo { code: "lo", complete_menus: false },
     LangInfo { code: "pl", complete_menus: true },
     LangInfo { code: "de", complete_menus: true },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).

@@ -58,6 +58,7 @@ fn requested_languages_resolve_regional_preferences() {
         ("zh-CN", "zh-hans"),
         ("ja-JP", "ja"),
         ("ko-KR", "ko"),
+        ("lo-LA", "lo"),
         ("ru-RU", "ru"),
         ("uk-UA", "uk"),
         ("fr-CA", "fr"),
@@ -212,11 +213,12 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
     if !needs_catalogs() {
         return;
     }
-    let cases: [(&[&str], &str); 14] = [
+    let cases: [(&[&str], &str); 15] = [
         (&["en-US"], "en"),
         (&["zh-CN"], "zh-hans"),
         (&["ja-JP"], "ja"),
         (&["ko-KR"], "ko"),
+        (&["lo-LA"], "lo"),
         (&["ru-RU"], "ru"),
         (&["uk-UA"], "uk"),
         (&["fr-CA"], "fr"),
@@ -279,7 +281,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let document = h.state().session.active().expect("document").doc.clone();
-        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fr", "id", "en"] {
+        for code in ["zh-hans", "ja", "ko", "lo", "ru", "uk", "fr", "id", "en"] {
             let (tx, rx) = std::sync::mpsc::channel();
             h.state_mut().control = Some(craft::automation::ControlChannel::new(rx));
             let (request, reply) =

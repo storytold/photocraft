@@ -76,6 +76,8 @@ Native-speaker review remains pending; validation results and limits are recorde
 
 Hebrew `he`, Romanian `ro` and Urdu `ur` are measured at 2,334 of 2,449 keys (95.3%), Thai `th` at 2,211 (90.3%) and Tamil `ta` at 2,133 (87.1%).
 
+Lao `lo` is registered with partial menu coverage. Full UI text rendering depends on font rollout ([craft-fonts#33](https://github.com/storytold/craft-fonts/pull/33)); systems without a bundled Lao font risk displaying tofu glyphs until font integration lands.
+
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
 counts now translate at their render/assignment sites. Navigator's zoom level uses a context

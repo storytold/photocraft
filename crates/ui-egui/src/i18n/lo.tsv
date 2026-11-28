@@ -1,0 +1,3369 @@
+# Lao (lo) catalog. UTF-8: context<TAB>English source<TAB>translation.
+# Empty context: plain UI text; @id: command ID; @plural: one|other source
+# with one Lao form. Other contexts disambiguate English meanings.
+# Preserve {name} placeholders, trailing ellipses and column escapes.
+# Original translations from the meaning of PhotoCraft's English labels.
+# No proprietary translation resources were consulted or extracted.
+# Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
+# Product names and technology names retain their spelling.
+
+# Channel Options and New Spot Channel (#3761)
+	Channel Color	ສີຊ່ອງສີ
+	Color Indicates:	ສີສະແດງເຖິງ:
+	Solidity:	ຄວາມທຶບ:
+	Masked Areas	ພື້ນທີ່ມາສກ໌
+	Selected Areas	ພື້ນທີ່ເລືອກ
+	Spot Color	ສີພິເສດ (Spot Color)
+	Ink Characteristics	ຄຸນລັກສະນະນ້ຳມຶກ
+
+# Guide layout dialog
+
+# Custom print paper (#3820)
+	Paper Width	ຄວາມກວ້າງເຈ້ຍ
+	Paper Height	ຄວາມສູງເຈ້ຍ
+	Columns	ຖັນ
+	Rows	ແຖວ
+	Number	ຈຳນວນ
+	Top:	ເທິງ:
+	Left:	ຊ້າຍ:
+	Bottom:	ລຸ່ມ:
+	Right:	ຂວາ:
+	Target:	ເປົ້າໝາຍ:
+	Selected Artboards	ອາດບອດທີ່ເລືອກ
+	Center Columns	ຈັດຖັນໄວ້ເຄິ່ງກາງ
+	Clear Existing Guides	ລຶບເສັ້ນນຳທາງທີ່ມີຢູ່
+	Invalid guide layout	ຮູບແບບເສັ້ນນຳທາງບໍ່ຖືກຕ້ອງ
+	Leave empty for automatic size	ປະຫວ່າງໄວ້ເພື່ອໃຊ້ຂະໜາດອັດຕະໂນມັດ
+	5 Columns, 3 Rows	5 ຖັນ, 3 ແຖວ
+	8 Columns	8 ຖັນ
+	12 Columns	12 ຖັນ
+
+	File	ໄຟລ໌
+	Edit	ແກ້ໄຂ
+	Image	ຮູບພາບ
+	Layer	ເລເຍີ
+	Type	ຂໍ້ຄວາມ
+	Select	ເລືອກ
+	Selected	ເລືອກແລ້ວ
+	Scope	ຂອບເຂດ
+	Filter	ຟິວເຕີ
+	View	ມຸມມອງ
+	Window	ປ່ອງຢ້ຽມ
+	Help	ຊ່ວຍເຫຼືອ
+	(coming soon)	(ໄວໆນີ້)
+	New…	ສ້າງໃໝ່…
+	New from Clipboard	ສ້າງໃໝ່ຈາກຄລິບບອດ
+	Open…	ເປີດ…
+	Open As…	ເປີດເປັນ…
+	Open EXR Parts…	ເປີດສ່ວນຕ່າງໆຂອງ EXR…
+	Add beauty precomp from the AOVs	ເພີ່ມ beauty precomp ຈາກ AOVs
+	Both	ທັງສອງ
+	Left	ຊ້າຍ
+	Right	ຂວາ
+	Open Recent	ເປີດໄຟລ໌ຫຼ້າສຸດ
+	Clear Recent Files	ລຶບລາຍການໄຟລ໌ຫຼ້າສຸດ
+	Remove from Recent	ລຶບອອກຈາກລາຍການຫຼ້າສຸດ
+	Remove {name} from Recent	ລຶບ {name} ອອກຈາກລາຍການຫຼ້າສຸດ
+	Close	ປິດ
+	Minimize	ຫຍໍ້ລົງ
+	Maximize	ຂະຫຍາຍເຕັມຈໍ
+	Restore	ຄືນຂະໜາດເດີມ
+	Close All	ປິດທັງໝົດ
+	Close Others	ປິດເອກະສານອື່ນໆ
+	Save	ບັນທຶກ
+	Save As…	ບັນທຶກເປັນ…
+	Save a Copy…	ບັນທຶກສຳເນົາ…
+	{name} can't keep everything in this document	{name} ບໍ່ສາມາດບັນທຶກທຸກຢ່າງໃນເອກະສານນີ້ໄດ້
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	ເລືອກຮູບແບບທີ່ຮອງຮັບເນື້ອຫາທັງໝົດເຊັ່ນ Photoshop (PSD) ຫຼື ບັນທຶກເປັນສຳເນົາ.
+	Revert	ຄືນຄ່າເດີມ
+	Export	ສົ່ງອອກ
+	Quick Export as PNG	ສົ່ງອອກດ່ວນເປັນ PNG
+	Export As…	ສົ່ງອອກເປັນ…
+	Export Preferences…	ຕັ້ງຄ່າການສົ່ງອອກ…
+	Save for Web (Legacy)…	ບັນທຶກສຳລັບເວັບ (ແບບເກົ່າ)…
+	Artboards to Files…	ສົ່ງ Artboard ເປັນໄຟລ໌…
+	Artboards to PDF…	ສົ່ງ Artboard ເປັນ PDF…
+	Layers to Files…	ສົ່ງເລເຢີເປັນໄຟລ໌…
+	Layer Comps to Files…	ສົ່ງ Layer Comps ເປັນໄຟລ໌…
+	Color Lookup Tables…	ຕາຕະລາງ Color Lookup…
+	Data Sets as Files…	ຊຸດຂໍ້ມູນເປັນໄຟລ໌…
+	Paths to Illustrator…	ສົ່ງ Path ໄປຍັງ Illustrator…
+	Render Video…	ເຣນເດີວິດີໂອ…
+	Generate	ສ້າງ
+	Image Assets	ແອັດເຊັດຮູບພາບ
+	Place Embedded…	ວາງແບບຝັງ…
+	Place Linked…	ວາງແບບເຊື່ອມໂຍງ…
+	Package…	ແພັກເກດ…
+	Automate	ອັດຕະໂນມັດ
+	Batch…	ປະມວນຜົນເປັນກຸ່ມ…
+	Create Droplet…	ສ້າງ Droplet…
+	Crop and Straighten Photos	ຕັດຮູບ ແລະ ປັບແນວຊື່
+	Contact Sheet II…	Contact Sheet II…
+	Conditional Mode Change…	ປ່ຽນໂໝດແບບມີເງື່ອນໄຂ…
+	Fit Image…	ປັບຂະໜາດຮູບໃຫ້ພໍດີ…
+	Lens Correction…	ແກ້ໄຂເລນ…
+	Merge to HDR Pro…	ຮວມເຂົ້າ HDR Pro…
+	Photomerge…	Photomerge…
+	Scripts	ສະຄຣິບ
+	Image Processor…	ຕົວປະມວນຜົນຮູບພາບ…
+	Delete All Empty Layers	ລຶບເລເຢີວ່າງທັງໝົດ
+	Flatten All Layer Effects	ຮວມເອັບເຟັກເລເຢີທັງໝົດ
+	Flatten All Masks	ຮວມມາດສ໌ທັງໝົດ
+	Script Events Manager…	ຕົວຈັດການເຫດການສະຄຣິບ…
+	Import	ນຳເຂົ້າ
+	Browse…	ເລືອກເບິ່ງ…
+	Source Files	ໄຟລ໌ຕົ້ນສະບັບ
+	Use:	ໃຊ້:
+	Files	ໄຟລ໌
+	Folder	ໂຟລເດີ
+	Add Open Files	ເພີ່ມໄຟລ໌ທີ່ເປີດຢູ່
+	Sort By Name	ຮຽງຕາມຊື່
+	Attempt to Automatically Align Source Images	ພະຍາຍາມຈັດລຽນຮູບຕົ້ນສະບັບອັດຕະໂນມັດ
+	Create Smart Object after Loading Layers	ສ້າງ Smart Object ຫຼັງຈາກໂຫຼດເລເຢີ
+	Reveal in Finder	ສະແດງໃນ Finder
+	Show in Explorer	ສະແດງໃນ Explorer
+	Show in Folder	ສະແດງໃນໂຟລເດີ
+	File Info…	ຂໍ້ມູນໄຟລ໌…
+	Print…	ພິມ…
+	Print One Copy	ພິມ 1 ຊຸດ
+	Exit	ອອກ
+	Undo	ຍົກເລີກການກະທຳ
+	Redo	ເຮັດຄືນ
+	Toggle Last State	ສະຫຼັບສະຖານະຫຼ້າສຸດ
+	Fade…	ຫຼຸດຄວາມເຂັ້ມ…
+	Cut	ຕັດ
+	Copy	ສຳເນົາ
+	Copy Merged	ສຳເນົາແບບຮວມເລເຢີ
+	Paste	ວາງ
+	Paste Special	ວາງແບບພິເສດ
+	Paste in Place	ວາງຕຳແໜ່ງເດີມ
+	Paste Into	ວາງໃສ່ໃນສ່ວນທີ່ເລືອກ
+	Paste Outside	ວາງໃສ່ນອກສ່ວນທີ່ເລືອກ
+	Paste Lorem Ipsum	ວາງຂໍ້ຄວາມ Lorem Ipsum
+	Clear	ລ້າງ
+	Search…	ຊອກຫາ…
+	Check Spelling…	ກວດການສະກົດຄຳ…
+	Find and Replace Text…	ຊອກຫາ ແລະ ປ່ຽນແທນຂໍ້ຄວາມ…
+	Add to Dictionary	ເພີ່ມໃສ່ວັດຈະນານຸກົມ
+	No Spelling Suggestions	ບໍ່ມີຄຳແນະນຳການສະກົດຄຳ
+	Fill…	ເຕີມ…
+	Stroke…	ເສັ້ນຂອບ…
+	Content-Aware Fill…	ເຕີມຕາມເນື້ອຫາ (Content-Aware)…
+	Delete and Fill Selection	ລຶບ ແລະ ເຕີມສ່ວນທີ່ເລືອກ
+	Content-Aware Scale	ປັບຂະໜາດຕາມເນື້ອຫາ (Content-Aware Scale)
+	Puppet Warp	ດັດຮູບຊົງ Puppet Warp
+	Perspective Warp	ດັດຮູບຊົງຕາມມຸມມອງ (Perspective Warp)
+	Free Transform	ແປງຮູບຮ່າງອິດສະຫຼະ
+	Free Transform a Copy	ແປງຮູບຮ່າງອິດສະຫຼະສຳເນົາ
+	Transform	ແປງຮູບຮ່າງ
+	Again	ຊ້ຳອີກ
+	Transform Again on a Copy	ແປງຮູບຮ່າງຊ້ຳອີກໃສ່ສຳເນົາ
+	Scale	ປັບຂະໜາດ
+	Rotate	ໝຸນ
+	Set horizontal skew	ຕັ້ງຄ່າຄວາມອຽງແນວນອນ
+	Set vertical skew	ຕັ້ງຄ່າຄວາມອຽງແນວຕັ້ງ
+	Skew	ອຽງ
+	Distort	ບິດບ້ຽວ
+	Perspective	ມຸມມອງເພີສເປັກຕິບ
+	Warp	ດັດຮູບຊົງ
+	Flip Horizontal	ປີ້ນແນວນອນ
+	Flip Vertical	ປີ້ນແນວຕັ້ງ
+	Rotate 180°	ໝຸນ 180°
+	Rotate 90° Clockwise	ໝຸນຕາມເຂັມໂມງ 90°
+	Rotate 90° Counter Clockwise	ໝຸນທວນເຂັມໂມງ 90°
+	180°	180°
+	90° Clockwise	ຕາມເຂັມໂມງ 90°
+	90° Counter Clockwise	ທວນເຂັມໂມງ 90°
+	Arbitrary…	ກຳນົດມຸມເອງ…
+	Auto-Align Layers…	ຈັດລຽນເລເຢີອັດຕະໂນມັດ…
+	Auto-Blend Layers…	ປະສົມເລເຢີອັດຕະໂນມັດ…
+	Define Brush Preset…	ກຳນົດຫົວແປງລ່ວງໜ້າ…
+	Define Pattern…	ກຳນົດລວດລາຍ…
+	Define Custom Shape…	ກຳນົດຮູບຊົງເອງ…
+	Purge	ລ້າງໜ່ວຍຄວາມຈຳ
+	Clipboard	ຄລິບບອດ
+	Histories	ປະຫວັດການເຮັດວຽກ
+	Video Cache	ແຄຊວິດີໂອ
+	All	ທັງໝົດ
+	Presets	ຄ່າທີ່ຕັ້ງໄວ້ລ່ວງໜ້າ
+	Preset Manager…	ຕົວຈັດການຄ່າຕັ້ງລ່ວງໜ້າ…
+	Migrate Presets	ຍ້າຍຄ່າຕັ້ງລ່ວງໜ້າ
+	Export/Import Presets…	ສົ່ງອອກ/ນຳເຂົ້າ ຄ່າຕັ້ງລ່ວງໜ້າ…
+	Color Settings…	ການຕັ້ງຄ່າສີ…
+	Assign Profile…	ກຳນົດໂປຣໄຟລ໌…
+	Convert to Profile…	ແປງເປັນໂປຣໄຟລ໌…
+	Keyboard Shortcuts…	ປຸ່ມລັດແປ້ນພິມ…
+	Menus…	ເມນູ…
+	Toolbar…	ແຖບເຄື່ອງມື…
+	Preferences	ການຕັ້ງຄ່າລະບົບ
+	General…	ທົ່ວໄປ…
+	Interface…	ໜ້າຕາລະບົບ…
+	Workspace…	ພື້ນທີ່ເຮັດວຽກ…
+	Tools…	ເຄື່ອງມື…
+	History Log…	ບັນທຶກປະຫວັດ…
+	File Handling…	ການຈັດການໄຟລ໌…
+	Export…	ສົ່ງອອກ…
+	Performance…	ປະສິດທິພາບ…
+	Scratch Disks…	ສະແຄຣັດດິດສ໌…
+	Cursors…	ເຄີເຊີ…
+	Transparency & Gamut…	ຄວາມໂປ່ງໃສ ແລະ ຂອບເຂດສີ…
+	Units & Rulers…	ຫົວໜ່ວຍ ແລະ ບັນທັດ…
+	Guides, Grid & Slices…	ເສັ້ນແນະນຳ, ຕາຕາລາງ ແລະ ພາກສ່ວນ…
+	Plug-ins…	ປລັກອິນ…
+	Type…	ຂໍ້ຄວາມ…
+	Enhanced Controls…	ການຄວບຄຸມຂັ້ນສູງ…
+	Camera Raw…	Camera Raw…
+	Raw Defaults…	ຄ່າເລີ່ມຕົ້ນ RAW…
+	Integrations…	ການເຊື່ອມໂຍງ…
+	AI Integrations…	ການເຊື່ອມໂຍງ AI…
+	Install Plug-in…	ຕິດຕັ້ງປລັກອິນ…
+	Language Options	ຕົວເລືອກພາສາ
+	Settings…	ການຕັ້ງຄ່າ…
+	Mode	ໂໝດ
+	Bitmap	ບິດແມັບ
+	Grayscale	ສີຂາວດຳ (Grayscale)
+	Duotone	ສອງໂທນສີ (Duotone)
+	Indexed Color	ສີແບບອິນເດັກສ໌
+	RGB Color	ສີ RGB
+	CMYK Color	ສີ CMYK
+	Lab Color	ສີ Lab
+	Multichannel	ຫຼາຍຊ່ອງສີ (Multichannel)
+	8 Bits/Channel	8 ບິດ/ຊ່ອງ
+	16 Bits/Channel	16 ບິດ/ຊ່ອງ
+	32 Bits/Channel	32 ບິດ/ຊ່ອງ
+	Color Table…	ຕາຕະລາງສີ…
+	Bitmap…	ບິດແມັບ…
+	Duotone…	ສອງໂທນສີ…
+	Indexed Color…	ສີແບບອິນເດັກສ໌…
+	Adjustments	ການປັບແຕ່ງ
+	Brightness/Contrast…	ຄວາມສະຫວ່າງ/ຄວາມຄົມຊັດ…
+	Levels…	ລະດັບສີ…
+	Curves…	ເສັ້ນໂຄ້ງ…
+	Exposure…	ການຮັບແສງ…
+	Vibrance…	ຄວາມອິ່ມຕົວສີທຳມະຊາດ…
+	Hue/Saturation…	ວັນນະສີ/ຄວາມອີ່ມຕົວສີ…
+	Color Balance…	ຄວາມສົມດຸນສີ…
+	Black & White…	ຂາວດຳ…
+	Photo Filter…	ຟິວເຕີຮູບ…
+	Channel Mixer…	ຕົວປະສົມຊ່ອງສີ…
+	Color Lookup…	Color Lookup…
+	Invert	ກັບຄ່າສີ
+	Posterize…	ໂພສເຕີ…
+	Threshold…	ຄ່າຂີດກຳນົດ…
+	Gradient Map…	ແຜນທີ່ສີໄລ່ລະດັບ…
+	Selective Color…	ເລືອກປັບສີ…
+	Shadows/Highlights…	ເງົາ/ໄຮໄລທ໌…
+	HDR Toning…	ປັບໂທນ HDR…
+	Desaturate	ຫຼຸດຄວາມອີ່ມຕົວສີ
+	Match Color…	ຈັບຄູ່ສີ…
+	Replace Color…	ປ່ຽນແທນສີ…
+	Equalize	ປັບສີໃຫ້ສະເໝີກັນ
+	Auto Tone	ປັບໂທນອັດຕະໂນມັດ
+	Auto Contrast	ປັບຄວາມຄົມຊັດອັດຕະໂນມັດ
+	Auto Color	ປັບສີອັດຕະໂນມັດ
+	Image Size…	ຂະໜາດຮູບພາບ…
+	Canvas Size…	ຂະໜາດຜ້າໃບ…
+	Image Rotation	ການໝຸນຮູບພາບ
+	Flip Canvas Horizontal	ປີ້ນຜ້າໃບແນວນອນ
+	Flip Canvas Vertical	ປີ້ນຜ້າໃບແນວຕັ້ງ
+	Crop	ຕັດຄອບ
+	Trim…	ຕັດຂອບ…
+	Reveal All	ສະແດງທັງໝົດ
+	Duplicate…	ເຮັດຊ້ຳ…
+	Apply Image…	ນຳໃຊ້ຮູບພາບ…
+	Calculations…	ການຄຳນວນ…
+	Variables	ຕົວປ່ຽນ
+	Define…	ກຳນົດ…
+	Data Sets…	ຊຸດຂໍ້ມູນ…
+	Apply Data Set…	ນຳໃຊ້ຊຸດຂໍ້ມູນ…
+	Variable Data Sets…	ຊຸດຂໍ້ມູນຕົວປ່ຽນ…
+	Trap…	ດັກແຄມສີ (Trap)…
+	Analysis	ການວິເຄາະ
+	Set Measurement Scale…	ຕັ້ງມາດຕາສ່ວນການວັດແທກ…
+	Select Data Points…	ເລືອກຈຸດຂໍ້ມູນ…
+	Record Measurements	ບັນທຶກຄ່າການວັດແທກ
+	Ruler Tool	ເຄື່ອງມືໄມ້ບັນທັດ
+	Count Tool	ເຄື່ອງມືນັບຈຳນວນ
+	Place Scale Marker…	ວາງເຄື່ອງໝາຍມາດຕາສ່ວນ…
+	Custom…	ກຳນົດເອງ…
+	New	ສ້າງໃໝ່
+	Layer…	ເລເຢີ…
+	Group…	ກຸ່ມ…
+	Group from Layers…	ສ້າງກຸ່ມຈາກເລເຢີ…
+	Artboard…	Artboard…
+	Artboard from Group…	ສ້າງ Artboard ຈາກກຸ່ມ…
+	Artboard from Layers…	ສ້າງ Artboard ຈາກເລເຢີ…
+	Layer via Copy	ສ້າງເລເຢີຈາກການສຳເນົາ
+	Layer via Cut	ສ້າງເລເຢີຈາກການຕັດ
+	Layer From Background…	ສ້າງເລເຢີຈາກພື້ນຫຼັງ…
+	Layer from Background…	ສ້າງເລເຢີຈາກພື້ນຫຼັງ…
+	Background from Layer	ສ້າງພື້ນຫຼັງຈາກເລເຢີ
+	Background From Layer	ສ້າງພື້ນຫຼັງຈາກເລເຢີ
+	New Shape Layer	ເລເຢີຮູບຊົງໃໝ່
+	New Type Layer	ເລເຢີຂໍ້ຄວາມໃໝ່
+	New Fill Layer	ເລເຢີເຕີມສີໃໝ່
+	New Adjustment Layer	ເລເຢີປັບແຕ່ງໃໝ່
+	New Layer Based Slice	ສ້າງ Slice ຕາມເລເຢີ
+	New Smart Object via Copy	ສ້າງ Smart Object ໃໝ່ຈາກການສຳເນົາ
+	New Blank Video Layer	ເລເຢີວິດີໂອວ່າງໃໝ່
+	New Video Layer from File…	ສ້າງເລເຢີວິດີໂອໃໝ່ຈາກໄຟລ໌…
+	Duplicate Layer…	ເຮັດຊ້ຳເລເຢີ…
+	Delete Layer	ລຶບເລເຢີ
+	Delete	ລຶບ
+	Rename Layer	ປ່ຽນຊື່ເລເຢີ
+	Create Layer	ສ້າງເລເຢີ
+	Layer Style	ຮູບແບບເລເຢີ
+	Blending Options…	ຕົວເລືອກການປະສົມ…
+	Bevel & Emboss…	ມຸມອຽງ ແລະ ນູນ (Bevel & Emboss)…
+	Inner Shadow…	ເງົາພາຍໃນ…
+	Inner Glow…	ແສງເຫຼືອງພາຍໃນ…
+	Satin…	ຜ້າໄໝຊາຕິນ (Satin)…
+	Color Overlay…	ວາງທັບສີ (Color Overlay)…
+	Gradient Overlay…	ວາງທັບສີໄລ່ລະດັບ…
+	Pattern Overlay…	ວາງທັບລວດລາຍ…
+	Outer Glow…	ແສງເຫຼືອງພາຍນອກ…
+	Drop Shadow…	ເງົາຕົກກະທົບ…
+	Copy Layer Style	ສຳເນົາຮູບແບບເລເຢີ
+	Paste Layer Style	ວາງຮູບແບບເລເຢີ
+	Clear Layer Style	ລ້າງຮູບແບບເລເຢີ
+	Global Light…	ແສງລວມທົ່ວໄປ…
+	Hide All Effects	ເຊື່ອງເອັບເຟັກທັງໝົດ
+	Scale Effects…	ປັບຂະໜາດເອັບເຟັກ…
+	Smart Filter	ຟິວເຕີອັດສະລິຍະ (Smart Filter)
+	Convert for Smart Filters	ແປງສຳລັບ Smart Filters
+	Clear Smart Filters	ລ້າງ Smart Filters
+	Disable Smart Filters	ປິດໃຊ້ງານ Smart Filters
+	Delete Filter Mask	ລຶບມາດສ໌ຟິວເຕີ
+	Disable Filter Mask	ປິດໃຊ້ງານມາດສ໌ຟິວເຕີ
+	Solid Color…	ສີດ່ຽວ…
+	Gradient…	ສີໄລ່ລະດັບ…
+	Pattern…	ລວດລາຍ…
+	Layer Mask	ມາດສ໌ເລເຢີ
+	Vector Mask	ມາດສ໌ເວັກເຕີ
+	Reveal Selection	ສະແດງສ່ວນທີ່ເລືອກ
+	Hide Selection	ເຊື່ອງສ່ວນທີ່ເລືອກ
+	Hide All	ເຊື່ອງທັງໝົດ
+	From Transparency	ຈາກຄວາມໂປ່ງໃສ
+	Delete Vector Mask	ລຶບມາດສ໌ເວັກເຕີ
+	Enable Layer Mask	ເປີດໃຊ້ງານມາດສ໌ເລເຢີ
+	Disable Layer Mask	ປິດໃຊ້ງານມາດສ໌ເລເຢີ
+	Enable Vector Mask	ເປີດໃຊ້ງານມາດສ໌ເວັກເຕີ
+	Link Layer Mask	ເຊື່ອມໂຍງມາດສ໌ເລເຢີ
+	Unlink Layer Mask	ຍົກເລີກການເຊື່ອມໂຍງມາດສ໌ເລເຢີ
+	Link Vector Mask	ເຊື່ອມໂຍງມາດສ໌ເວັກເຕີ
+	Add Vector Mask	ເພີ່ມມາດສ໌ເວັກເຕີ
+	Vector Mask from Current Path	ສ້າງມາດສ໌ເວັກເຕີຈາກ Path ປັດຈຸບັນ
+	Create Clipping Mask	ສ້າງ Clipping Mask
+	Release Clipping Mask	ປ່ອຍ Clipping Mask
+	Smart Objects	Smart Objects
+	Smart Object	Smart Object
+	Convert to Smart Object	ແປງເປັນ Smart Object
+	Convert to Embedded	ແປງເປັນແບບຝັງ
+	Convert to Layers	ແປງເປັນເລເຢີ
+	Convert to Linked…	ແປງເປັນແບບເຊື່ອມໂຍງ…
+	Edit Contents	ແກ້ໄຂເນື້ອຫາ
+	Replace Contents…	ປ່ຽນແທນເນື້ອຫາ…
+	Relink to File…	ເຊື່ອມໂຍງໃໝ່ກັບໄຟລ໌…
+	Export Contents…	ສົ່ງອອກເນື້ອຫາ…
+	Update Modified Content	ອັບເດດເນື້ອຫາທີ່ແກ້ໄຂ
+	Update All Modified Content	ອັບເດດເນື້ອຫາທີ່ແກ້ໄຂທັງໝົດ
+	Stack Mode	ໂໝດສະແຕັກ (Stack Mode)
+	Choose Stack Mode:	ເລືອກໂໝດສະແຕັກ:
+	Entropy	ເອັນໂທຣປີ (Entropy)
+	Kurtosis	ຄວາມໂດ່ງ (Kurtosis)
+	Maximum	ຄ່າສູງສຸດ
+	Mean	ຄ່າສະເລ່ຍ
+	Median	ມັດທະຍະຖານ
+	Minimum	ຄ່າຕ່ຳສຸດ
+	Range	ຊ່ວງຄ່າ
+	Skewness	ຄວາມເບ້ (Skewness)
+	Standard Deviation	ຄ່າບ່ຽງເບນມາດຕະຖານ
+	Summation	ຜົນຮວມ
+	Variance	ຄ່າຜັນປ່ຽນ (Variance)
+	Video Layers	ເລເຢີວິດີໂອ
+	Interpret Footage…	ຕີຄວາມໝາຍຟຸດເທດ…
+	Replace Footage…	ປ່ຽນແທນຟຸດເທດ…
+	Reload Frame	ໂຫຼດເຟຣມໃໝ່
+	Show Altered Video	ສະແດງວິດີໂອທີ່ຖືກແກ້ໄຂ
+	Restore Frame	ກູ້ຄືນເຟຣມ
+	Restore All Frames	ກູ້ຄືນທຸກເຟຣມ
+	Insert Blank Frame	ແຊກເຟຣມວ່າງ
+	Delete Frame	ລຶບເຟຣມ
+	Duplicate Frame	ເຮັດຊ້ຳເຟຣມ
+	Frame from Layers	ສ້າງເຟຣມຈາກເລເຢີ
+	Video Frames to Layers…	ເຟຣມວິດີໂອເປັນເລເຢີ…
+	Rasterize	ແປງເປັນຣັສເຕີ (Rasterize)
+	Rasterize Type	ແປງຂໍ້ຄວາມເປັນຣັສເຕີ
+	Rasterize Type Layer	ແປງເລເຢີຂໍ້ຄວາມເປັນຣັສເຕີ
+	Rasterize Shape	ແປງຮູບຊົງເປັນຣັສເຕີ
+	New Guide Layout…	ໂຄງຮ່າງເສັ້ນແນະນຳໃໝ່…
+	New Guides From Shape	ສ້າງເສັ້ນແນະນຳໃໝ່ຈາກຮູບຊົງ
+	Lock Layers…	ລັອກເລເຢີ…
+	Link Layers	ເຊື່ອມໂຍງເລເຢີ
+	Select Linked Layers	ເລືອກເລເຢີທີ່ເຊື່ອມໂຍງກັນ
+	Merge Layers	ຮວມເລເຢີ
+	Merge Down	ຮວມລົງເລເຢີລຸ່ມ
+	Merge Group	ຮວມກຸ່ມ
+	Merge Visible	ຮວມເລເຢີທີ່ສະແດງຢູ່
+	Stamp Visible	ສ້າງສຳເນົາຮວມເລເຢີທີ່ສະແດງ
+	Select Layer Above	ເລືອກເລເຢີຂ້າງເທິງ
+	Select Layer Below	ເລືອກເລເຢີຂ້າງລຸ່ມ
+	Select Top Layer	ເລືອກເລເຢີເທິງສຸດ
+	Select Bottom Layer	ເລືອກເລເຢີລຸ່ມສຸດ
+	Add Layer Above to Selection	ເພີ່ມເລເຢີຂ້າງເທິງໃສ່ສ່ວນທີ່ເລືອກ
+	Add Layer Below to Selection	ເພີ່ມເລເຢີຂ້າງລຸ່ມໃສ່ສ່ວນທີ່ເລືອກ
+	Stamp Down	ຮວມສຳເນົາລົງເລເຢີລຸ່ມ
+	Flatten Image	ຮວມເລເຢີທັງໝົດເປັນຮູບດຽວ (Flatten)
+	Matting	ຈັດການຂອບ Matting
+	Color Decontaminate…	ກຳຈັດສີປົນເປື້ອນ…
+	Remove Black Matte	ລຶບຂອບດຳ (Black Matte)
+	Remove White Matte	ລຶບຂອບຂາວ (White Matte)
+	Defringe…	ກຳຈັດຂອບມົວ Defringe…
+	Group Layers	ຈັດກຸ່ມເລເຢີ
+	Ungroup Layers	ຍົກເລີກການຈັດກຸ່ມເລເຢີ
+	Hide Layers	ເຊື່ອງເລເຢີ
+	Arrange	ຈັດລຳດັບ
+	Bring to Front	ຍ້າຍມາໜ້າສຸດ
+	Bring Forward	ຍ້າຍຂຶ້ນມາໜ້າ
+	Send Backward	ຍ້າຍລົງໄປຫຼັງ
+	Send to Back	ຍ້າຍໄປຫຼັງສຸດ
+	Reverse	ປີ້ນລຳດັບ
+	Combine Shapes	ຮວມຮູບຊົງ
+	Unite Shapes	ລວມຮູບຊົງ
+	Subtract Front Shape	ລົບຮູບຊົງດ້ານໜ້າອອກ
+	Intersect Shape Areas	ຕັດກັນສະເພາະຮູບຊົງທີ່ຊ້ອນກັນ
+	Exclude Overlapping Shapes	ຍົກເວັ້ນຮູບຊົງທີ່ຊ້ອນທັບກັນ
+	Merge Shape Components	ຮວມອົງປະກອບຮູບຊົງ
+	Align	ຈັດລຽນ
+	Top Edges	ຂອບເທິງ
+	Vertical Centers	ກາງແນວຕັ້ງ
+	Bottom Edges	ຂອບລຸ່ມ
+	Left Edges	ຂອບຊ້າຍ
+	Horizontal Centers	ກາງແນວນອນ
+	Right Edges	ຂອບຂວາ
+	Distribute	ກະຈາຍໄລຍະຫ່າງ
+	Vertically	ແນວຕັ້ງ
+	Horizontally	ແນວນອນ
+	Layer Edges	ຂອບເລເຢີ
+	Isolate Layers	ແຍກສະເພາະເລເຢີ
+	Layer Content Options…	ຕົວເລືອກເນື້ອຫາເລເຢີ…
+	Fill Content	ເນື້ອຫາການເຕີມ
+	Deselect Layers	ຍົກເລີກການເລືອກເລເຢີ
+	Find Layers	ຊອກຫາເລເຢີ
+	Layer Comps	Layer Comps
+	Layers	ເລເຢີ
+	All Layers	ທຸກເລເຢີ
+	Hidden Layers	ເລເຢີທີ່ຖືກເຊື່ອງ
+	Mask All Objects	ສ້າງມາດສ໌ທຸກວັດຖຸ
+	Subject	ວັດຖຸຫຼັກ (Subject)
+	Sky	ທ້ອງຟ້າ
+	Panels	ແຜງໜ້າຕ່າງ (Panels)
+	Character Panel	ແຜງຕົວອັກສອນ
+	Paragraph Panel	ແຜງຫຍໍ້ໜ້າ
+	Character Styles Panel	ແຜງຮູບແບບຕົວອັກສອນ
+	Paragraph Styles Panel	ແຜງຮູບແບບຫຍໍ້ໜ້າ
+	Glyphs Panel	ແຜງສັນຍະລັກ (Glyphs)
+	Anti-Alias	ລົດຮອຍຫຍັກ (Anti-Alias)
+	Sharp	ຄົມຊັດ
+	Crisp	ແຈ່ມແຈ້ງ
+	Strong	ເຂັ້ມ
+	Smooth	ນຽນນຸ່ມ
+	Windows LCD	Windows LCD
+	Windows	Windows
+	Orientation	ທິດທາງ
+	Horizontal	ແນວນອນ
+	Vertical	ແນວຕັ້ງ
+	OpenType	OpenType
+	Standard Ligatures	ຕົວເຊື່ອມອັກສອນມາດຕະຖານ
+	Contextual Alternates	ຕົວອັກສອນປ່ຽນຕາມບໍລິບົດ
+	Discretionary Ligatures	ຕົວເຊື່ອມອັກສອນພິເສດ
+	Swash	ຫາງອັກສອນຕະຫວັດ (Swash)
+	Oldstyle	ຮູບແບບບູຮານ (Oldstyle)
+	Stylistic Alternates	ຕົວອັກສອນສະໄຕລ໌ທາງເລືອກ
+	Titling Alternates	ຕົວອັກສອນທາງເລືອກສຳລັບຫົວຂໍ້
+	Ornaments	ລວດລາຍປະດັບ (Ornaments)
+	Ordinals	ຕົວເລກລຳດັບ (Ordinals)
+	Fractions	ເລກເສດສ່ວນ
+	Create Work Path	ສ້າງ Work Path
+	Convert to Shape	ແປງເປັນຮູບຊົງ
+	Warp Text…	ດັດຮູບຊົງຂໍ້ຄວາມ…
+	Convert to Point Text	ແປງເປັນຂໍ້ຄວາມແບບຈຸດ (Point Text)
+	Convert to Paragraph Text	ແປງເປັນຂໍ້ຄວາມແບບຫຍໍ້ໜ້າ (Paragraph Text)
+	Default Features	ຄຸນສົມບັດເລີ່ມຕົ້ນ
+	East Asian Features	ຄຸນສົມບັດອາຊີຕາເວັນອອກ
+	Middle Eastern Features	ຄຸນສົມບັດຕາເວັນອອກກາງ
+	Middle Eastern & South Asian Composer	ຕົວຈັດຮູບແບບຕາເວັນອອກກາງ ແລະ ອາຊີໃຕ້
+	Update All Text Layers	ອັບເດດເລເຢີຂໍ້ຄວາມທັງໝົດ
+	Replace All Missing Fonts	ປ່ຽນແທນຟອນທີ່ຂາດຫາຍທັງໝົດ
+	Resolve Missing Fonts…	ແກ້ໄຂບັນຫາຟອນທີ່ຂາດຫາຍ…
+	Font Preview Size	ຂະໜາດຕົວຢ່າງຟອນ
+	None	ບໍ່ມີ
+	Small	ນ້ອຍ
+	Medium	ກາງ
+	Large	ໃຫຍ່
+	Extra Large	ໃຫຍ່ຫຼາຍ
+	Huge	ໃຫຍ່ທີ່ສຸດ
+	Load Default Type Styles	ໂຫຼດຮູບແບບຕົວອັກສອນເລີ່ມຕົ້ນ
+	Save Default Type Styles	ບັນທຶກຮູບແບບຕົວອັກສອນເລີ່ມຕົ້ນ
+	Deselect	ຍົກເລີກການເລືອກ
+	Reselect	ເລືອກຄືນໃໝ່
+	Inverse	ກົງກັນຂ້າມ
+	Inverse Selection	ປີ້ນສ່ວນທີ່ເລືອກ
+	Similar	ສີຄ້າຍຄືກັນ
+	Color Range…	ຊ່ວງສີ…
+	Focus Area…	ພື້ນທີ່ໂຟກັສ…
+	Select and Mask…	ເລືອກ ແລະ ມາດສ໌…
+# Select and Mask dialog labels
+	Smart Radius	ລັດສະໝີອັດສະລິຍະ (Smart Radius)
+	Shift Edge	ເລື່ອນຂອບ
+	Decontaminate	ລ້າງສີປົນເປື້ອນ
+	Output	ຜົນອອກ
+	Refine Edge	ປັບແຕ່ງຂອບໃຫ້ລະອຽດ
+	Modify	ແກ້ໄຂ
+	Border…	ຂອບ…
+	Smooth…	ເຮັດໃຫ້ນຽນ…
+	Expand…	ຂະຫຍາຍ…
+	Contract…	ຫົດເຂົ້າ…
+	Feather…	ຂອບມົວ (Feather)…
+	Grow	ຂະຫຍາຍພື້ນທີ່ເລືອກ (Grow)
+	Transform Selection	ແປງຮູບຮ່າງສ່ວນທີ່ເລືອກ
+	Edit in Quick Mask Mode	ແກ້ໄຂໃນໂໝດ Quick Mask
+	Load Selection…	ໂຫຼດສ່ວນທີ່ເລືອກ…
+	Save Selection…	ບັນທຶກສ່ວນທີ່ເລືອກ…
+	Match All	ກົງກັນທັງໝົດ
+	Last Filter	ຟິວເຕີຫຼ້າສຸດ
+	Filter Gallery…	ຄັງຟິວເຕີ…
+	Adaptive Wide Angle…	ມຸມກວ້າງແບບປັບຕົວ…
+	Camera Raw Filter…	ຟິວເຕີ Camera Raw…
+	Liquify…	Liquify (ດັດຮູບຊົງພິກເຊລ)…
+	Vanishing Point…	ຈຸດລວມສາຍຕາ (Vanishing Point)…
+	Blur	ເຮັດໃຫ້ມົວ
+	Blur Gallery	ຄັງເອັບເຟັກຄວາມມົວ
+	Field Blur…	ມົວແບບຟິວ (Field Blur)…
+# Field Blur pins (#3373)
+	No pin selected	ບໍ່ມີເຂັມໝຸດທີ່ເລືອກ
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	ຄລິກທີ່ຮູບເພື່ອເພີ່ມເຂັມໝຸດ; ລາກເຂັມໝຸດເພື່ອຍ້າຍ ຫຼື ລາກວົງແຫວນເພື່ອປ່ຽນຄວາມມົວ. ກົດ Delete ເພື່ອລຶບເຂັມໝຸດທີ່ເລືອກ.
+	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	ລາກຈຸດຄວບຄຸມເທິງເສັ້ນເຄົ້າຮ່າງເພື່ອປັບຂະໜາດ ແລະ ໝຸນ, ລາກຮູບສີ່ຫຼ່ຽມເພື່ອປັບມຸມໃຫ້ມົນ, ແລະ ລາກຈຸດຂ້າງໃນເພື່ອກຳນົດບ່ອນເລີ່ມຕົ້ນຄວາມມົວ.
+	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	ລາກເຂັມໝຸດເພື່ອຍ້າຍແຖບ ຫຼື ລາກວົງແຫວນເພື່ອປ່ຽນຄວາມມົວ. ລາກເສັ້ນທຶບເພື່ອຂະຫຍາຍແຖບຄົມຊັດ, ລາກເສັ້ນປະເພື່ອກຳນົດໄລຍະປ່ຽນຜ່ານ, ແລະ ລາກຈຸດເພື່ອໝຸນ.
+	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	ລາກຈຸດຄວບຄຸມເທິງເສັ້ນເຄົ້າຮ່າງເພື່ອປັບຂະໜາດ ແລະ ໝຸນ; ວົງແຫວນຈະກຳນົດມຸມຄວາມມົວ.
+	Iris Blur…	ມົວແບບມ່ານຕາ (Iris Blur)…
+	Tilt-Shift…	Tilt-Shift…
+	Path Blur…	ມົວຕາມເສັ້ນທາງ (Path Blur)…
+	Spin Blur…	ມົວແບບໝຸນວົນ (Spin Blur)…
+	Blur More	ມົວຫຼາຍຂຶ້ນ
+	Box Blur…	ມົວແບບກ່ອງ (Box Blur)…
+	Gaussian Blur…	ມົວແບບກາວຊຽນ (Gaussian Blur)…
+	Lens Blur…	ມົວແບບເລນ (Lens Blur)…
+	Motion Blur…	ມົວແບບເຄື່ອນໄຫວ (Motion Blur)…
+	Radial Blur…	ມົວແບບລັດສະໝີ (Radial Blur)…
+	Shape Blur…	ມົວຕາມຮູບຊົງ (Shape Blur)…
+	Smart Blur…	ມົວອັດສະລິຍະ (Smart Blur)…
+	Surface Blur…	ມົວສະເພາະຜິວ (Surface Blur)…
+	Average	ຄ່າສະເລ່ຍ
+	Displace…	Displace (ແທນທີ່)…
+	Pinch…	ບີບເຂົ້າ…
+	Polar Coordinates…	ພິກັດຂົ້ວ (Polar Coordinates)…
+	Ripple…	ລະລອກຄື້ນນ້ອຍ…
+	Shear…	ດັດອຽງ (Shear)…
+	Spherize…	ປັບເປັນຊົງກົມ (Spherize)…
+	Twirl…	ບິດກ້ຽວ…
+	Wave…	ຄື້ນ…
+	ZigZag…	ຊິກແຊັກ…
+	Noise	ສິ່ງລົບກວນ (Noise)
+	Add Noise…	ເພີ່ມສິ່ງລົບກວນ…
+	Despeckle	ລຶບເມັດສີລົບກວນ (Despeckle)
+	Dust & Scratches…	ຝຸ່ນ ແລະ ຮອຍຂີດຂ່ວນ…
+	Median…	ມັດທະຍະຖານ…
+	Reduce Noise…	ຫຼຸດສິ່ງລົບກວນ…
+	Pixelate	ແຕກເປັນພິກເຊລ
+	Color Halftone…	ຮາຟໂທນສີ (Color Halftone)…
+	Crystallize…	ເກັດຜຶກ (Crystallize)…
+	Facet	ໜ້າຕັດຜລຶກ (Facet)
+	Fragment	ແຍກສ່ວນ (Fragment)
+	Mezzotint…	ເມຊໂຊຕິນທ໌…
+	Mosaic…	ໂມເສກ…
+	Pointillize…	ຈຸດສີ (Pointillize)…
+	Render	ເຣນເດີ
+	Clouds	ເມກ
+	Difference Clouds	ເມກແບບຜັນຕ່າງ
+	Fibers…	ເສັ້ນໄຍ…
+	Flame…	ແປວໄຟ…
+	Lens Flare…	ແສງສະທ້ອນເລນ (Lens Flare)…
+	Lighting Effects…	ເອັບເຟັກແສງ…
+	Relight…	ປັບແສງໃໝ່…
+	Picture Frame…	ກອບຮູບ…
+	Tree…	ຕົ້ນໄມ້…
+	Sharpen	ເຮັດໃຫ້ຄົມຊັດ
+	Sharpen Edges	ເຮັດໃຫ້ຂອບຄົມຊັດ
+	Sharpen More	ຄົມຊັດຍິ່ງຂຶ້ນ
+	Smart Sharpen…	ຄົມຊັດອັດສະລິຍະ…
+	Unsharp Mask…	Unsharp Mask…
+	High Pass…	High Pass…
+	Stylize	ຕົກແຕ່ງສະໄຕລ໌
+	Diffuse…	ກະຈາຍແສງ…
+	Emboss…	ປ້ຳນູນ…
+	Extrude…	ດຶງນູນ 3 ມິຕິ…
+	Find Edges	ຊອກຫາຂອບ
+	Oil Paint…	ພາບສີນ້ຳມັນ…
+	Solarize	Solarize (ກັບຄ່າແສງ)
+	Tiles…	ກະເບື້ອງ…
+	Trace Contour…	ຕາມຮອຍເສັ້ນເຄົ້າ…
+	Wind…	ລົມ…
+	Video	ວິດີໂອ
+	De-Interlace…	ລຶບເສັ້ນສະຫຼັບ De-Interlace…
+	NTSC Colors	ສີ NTSC
+	Other	ອື່ນໆ
+	Maximum…	ຄ່າສູງສຸດ…
+	Minimum…	ຄ່າຕ່ຳສຸດ…
+	Offset…	ອອບເຊັດ (Offset)…
+	Plug-ins	ປລັກອິນ
+	Proof Setup	ຕັ້ງຄ່າກວດສີພິມ (Proof Setup)
+	Proof Colors	ກວດສີພິມ (Proof Colors)
+	Gamut Warning	ເຕືອນສີນອກຂອບເຂດ (Gamut Warning)
+	Working CMYK	CMYK ທີ່ໃຊ້ວຽກ
+	Working Cyan Plate	ແຜ່ນສີຟ້າ Cyan ທີ່ໃຊ້ວຽກ
+	Working Magenta Plate	ແຜ່ນສີບົວບານເຢັນ Magenta ທີ່ໃຊ້ວຽກ
+	Working Yellow Plate	ແຜ່ນສີເຫຼືອງ Yellow ທີ່ໃຊ້ວຽກ
+	Working Black Plate	ແຜ່ນສີດຳ Black ທີ່ໃຊ້ວຽກ
+	Working CMY Plate	ແຜ່ນ CMY ທີ່ໃຊ້ວຽກ
+	Legacy Macintosh RGB	Macintosh RGB ແບບເກົ່າ
+	Internet Standard RGB	RGB ມາດຕະຖານອິນເຕີເນັດ
+	Monitor RGB	RGB ຈໍພາບ
+	Color Blindness — Protanopia-type	ຕາບອດສີ — ແບບບອດສີແດງ (Protanopia)
+	Color Blindness — Deuteranopia-type	ຕາບອດສີ — ແບບບອດສີຂຽວ (Deuteranopia)
+	Zoom In	ຊູມເຂົ້າ
+	Zoom Out	ຊູມອອກ
+	Fit on Screen	ພໍດີກັບໜ້າຈໍ
+	Fit Layer(s) on Screen	ປັບເລເຢີໃຫ້ພໍດີກັບໜ້າຈໍ
+	Fit Artboard on Screen	ປັບ Artboard ໃຫ້ພໍດີກັບໜ້າຈໍ
+	100%	100%
+	200%	200%
+	Print Size	ຂະໜາດພິມ
+	Pixel Aspect Ratio	ອັດຕາສ່ວນພິກເຊລ
+	Pixel Aspect Ratio Correction	ການແກ້ໄຂອັດຕາສ່ວນພິກເຊລ
+	Custom Pixel Aspect Ratio…	ອັດຕາສ່ວນພິກເຊລກຳນົດເອງ…
+	Square	ຈະຕຸລັດ
+	D1/DV NTSC (0.91)	D1/DV NTSC (0.91)
+	D1/DV NTSC Widescreen (1.21)	D1/DV NTSC ຈໍກວ້າງ (1.21)
+	D1/DV PAL (1.09)	D1/DV PAL (1.09)
+	D1/DV PAL Widescreen (1.46)	D1/DV PAL ຈໍກວ້າງ (1.46)
+	Anamorphic 2:1 (2)	ອານາມໍຟິກ 2:1 (2)
+	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1.33)
+	DVCPRO HD 1080/HDV 1080 (1.5)	DVCPRO HD 1080/HDV 1080 (1.5)
+	32-bit Preview Options…	ຕົວເລືອກສະແດງຕົວຢ່າງ 32 ບິດ…
+	Screen Mode	ໂໝດໜ້າຈໍ
+	Standard Screen Mode	ໂໝດໜ້າຈໍມາດຕະຖານ
+	Full Screen Mode With Menu Bar	ໂໝດເຕັມຈໍພ້ອມແຖບເມນູ
+	Full Screen Mode	ໂໝດເຕັມຈໍ
+	Cycle Screen Mode	ສະຫຼັບໂໝດໜ້າຈໍ
+	Show	ສະແດງ
+	Extras	ສ່ວນເພີ່ມເຕີມ
+	Selection Edges	ຂອບສ່ວນທີ່ເລືອກ
+	Target Path	Path ເປົ້າໝາຍ
+	Current Path	Path ປັດຈຸບັນ
+	Grid	ຕາຕະລາງເສັ້ນ
+	Guides	ເສັ້ນແນະນຳ
+	Canvas Guides	ເສັ້ນແນະນຳຜ້າໃບ
+	Artboard Guides	ເສັ້ນແນະນຳ Artboard
+	Count	ຈຳນວນ
+	Smart Guides	ເສັ້ນແນະນຳອັດສະລິຍະ
+	Slices	ພາກສ່ວນແບ່ງ (Slices)
+	Notes	ບັນທຶກຊ່ວຍຈຳ
+	Pixel Grid	ຕາຕະລາງພິກເຊລ
+	Pixel Art	ພິກເຊລອາດ
+	Pixel Art Preview	ສະແດງຕົວຢ່າງພິກເຊລອາດ
+	Pattern Preview	ສະແດງຕົວຢ່າງລວດລາຍ
+	Brush Preview	ສະແດງຕົວຢ່າງຫົວແປງ
+	Mesh	ຕາໜ່າງ (Mesh)
+	Edit Pins	ແກ້ໄຂເຂັມໝຸດ
+	Document Bounds	ຂອບເຂດເອກະສານ
+	Show Extras Options…	ຕົວເລືອກການສະແດງເພີ່ມເຕີມ…
+	Rulers	ໄມ້ບັນທັດ
+	Snap	ດູດຕິດ (Snap)
+	Snap To	ດູດຕິດກັບ
+	Lock Guides	ລັອກເສັ້ນແນະນຳ
+	Clear Guides	ລຶບເສັ້ນແນະນຳ
+	Clear Selected Artboard Guides	ລຶບເສັ້ນແນະນຳ Artboard ທີ່ເລືອກ
+	Clear Canvas Guides	ລຶບເສັ້ນແນະນຳຜ້າໃບ
+	New Guide…	ເສັ້ນແນະນຳໃໝ່…
+	Lock Slices	ລັອກ Slice
+	Clear Slices	ລຶບ Slice
+	Match Zoom	ຊູມໃຫ້ເທົ່າກັນ
+	Match Location	ຕຳແໜ່ງໃຫ້ຕົງກັນ
+	Match Rotation	ການໝຸນໃຫ້ຕົງກັນ
+	Cascade	ຮຽງຊ້ອນຫຼັ່ນກັນ
+	Tile	ຮຽງຕໍ່ກັນຄືກະເບື້ອງ
+	Tile All Horizontally	ຮຽງຕໍ່ກັນແນວນອນທັງໝົດ
+	Tile All Vertically	ຮຽງຕໍ່ກັນແນວຕັ້ງທັງໝົດ
+	2-up Horizontal	2 ສ່ວນແນວນອນ
+	2-up Vertical	2 ສ່ວນແນວຕັ້ງ
+	3-up Horizontal	3 ສ່ວນແນວນອນ
+	3-up Stacked	3 ສ່ວນແບບຊ້ອນ
+	3-up Vertical	3 ສ່ວນແນວຕັ້ງ
+	4-up	4 ສ່ວນ
+	6-up	6 ສ່ວນ
+	Consolidate All to Tabs	ຮວມທັງໝົດເປັນແທັບ
+	Float in Window	ແຍກລອຍເປັນໜ້າຕ່າງ
+	Float All in Windows	ແຍກລອຍເປັນໜ້າຕ່າງທັງໝົດ
+	New Window for Document	ໜ້າຕ່າງໃໝ່ສຳລັບເອກະສານ
+	Workspace	ພື້ນທີ່ເຮັດວຽກ
+	Essentials	ເລີ່ມຕົ້ນ (Essentials)
+	Graphic and Web	ກຣາບຟິກ ແລະ ເວັບ
+	Painting	ແຕ້ມຮູບ (Painting)
+	Photography	ການຖ່າຍຮູບ
+	New Workspace…	ພື້ນທີ່ເຮັດວຽກໃໝ່…
+	Delete Workspace…	ລຶບພື້ນທີ່ເຮັດວຽກ…
+	Reset Workspace	ຣີເຊັດພື້ນທີ່ເຮັດວຽກ
+	Reset Tool	ຣີເຊັດເຄື່ອງມື
+	Reset All Tools	ຣີເຊັດເຄື່ອງມືທັງໝົດ
+	Reset all tools to their default settings?	ທ່ານຕ້ອງການຣີເຊັດເຄື່ອງມືທັງໝົດເປັນຄ່າເລີ່ມຕົ້ນບໍ່?
+	Lock Workspace	ລັອກພື້ນທີ່ເຮັດວຽກ
+	Theme	ຮູບແບບສີ (Theme)
+	Pro Theme	ຮູບແບບສີ Pro
+	Pro Medium Gray Theme	ຮູບແບບສີ Pro ສີເທົາກາງ
+	Pro Light Gray Theme	ຮູບແບບສີ Pro ສີເທົາອ່ອນ
+	Pro Light Theme	ຮູບແບບສີ Pro ແບບສະຫວ່າງ
+	Studio Theme	ຮູບແບບສີ Studio
+	Studio Light Theme	ຮູບແບບສີ Studio ແບບສະຫວ່າງ
+	Adwaita Light Theme	ຮູບແບບສີ Adwaita ແບບສະຫວ່າງ
+	Adwaita Dark Theme	ຮູບແບບສີ Adwaita ແບບມືດ
+	Classic Theme	ຮູບແບບສີ ຄລາສສິກ
+	Solarized dark	Solarized ມືດ
+	Solarized Dark Theme	ຮູບແບບສີ Solarized ແບບມືດ
+	Breeze dark	Breeze ມືດ
+	Breeze Dark Theme	ຮູບແບບສີ Breeze ແບບມືດ
+	Breeze light	Breeze ສະຫວ່າງ
+	Breeze Light Theme	ຮູບແບບສີ Breeze ແບບສະຫວ່າງ
+	Soft dark	ມືດແບບນຸ່ມນວນ
+	Soft light	ແສງແບບນຸ່ມນວນ
+	Soft Dark Theme	ຮູບແບບສີ ມືດແບບນຸ່ມນວນ
+	Soft Light Theme	ຮູບແບບສີ ແສງແບບນຸ່ມນວນ
+	Next Theme	ຮູບແບບສີຖັດໄປ
+	Actions	ແອັກຊັນ (Actions)
+	Brush Settings	ການຕັ້ງຄ່າຫົວແປງ
+	Brushes	ຫົວແປງ
+	Channels	ຊ່ອງສີ (Channels)
+	Character	ຕົວອັກສອນ
+	Character Styles	ຮູບແບບຕົວອັກສອນ
+	Clone Source	ແຫຼ່ງສຳເນົາ (Clone Source)
+	Color	ສີ
+	Glyphs	ສັນຍະລັກ (Glyphs)
+	Gradients	ສີໄລ່ລະດັບ
+	Histogram	ຮິສໂຕແກຣມ
+	History	ປະຫວັດ
+	Info	ຂໍ້ມູນ
+	Measurement Log	ບັນທຶກການວັດແທກ
+	Modifier Keys	ປຸ່ມເສີມ (Modifier Keys)
+	Navigator	ແຜນຜັງນຳທາງ (Navigator)
+	Options	ຕົວເລືອກ
+	Paragraph	ຫຍໍ້ໜ້າ
+	Paragraph Styles	ຮູບແບບຫຍໍ້ໜ້າ
+	Paths	ເສັ້ນ Path
+	Patterns	ລວດລາຍ
+	Properties	ຄຸນສົມບັດ
+	Shapes	ຮູບຊົງ
+	Styles	ຮູບແບບ (Styles)
+	Swatches	ຈານສີຕົວຢ່າງ (Swatches)
+	Timeline	ທາມລາຍ (Timeline)
+	Tool Presets	ຄ່າຕັ້ງລ່ວງໜ້າຂອງເຄື່ອງມື
+	Tools	ເຄື່ອງມື
+	About PhotoCraft	ກ່ຽວກັບ PhotoCraft
+	PhotoCraft Website	ເວັບໄຊ PhotoCraft
+	PhotoCraft on GitHub	PhotoCraft ເທິງ GitHub
+	ArtCraft Website	ເວັບໄຊ ArtCraft
+	Join the ArtCraft Discord…	ເຂົ້າຮ່ວມ Discord ຂອງ ArtCraft…
+	Report an Issue…	ລາຍງານບັນຫາ…
+	WIA Support…	ການຮອງຮັບ WIA…
+	Apply	ນຳໃຊ້
+	HSB/HSL	HSB/HSL
+	Invert…	ກັບຄ່າສີ…
+	Load Files into Stack…	ໂຫຼດໄຟລ໌ເຂົ້າສະແຕັກ…
+	Motion	ການເຄື່ອນໄຫວ
+	Notes…	ບັນທຶກຊ່ວຍຈຳ…
+	Other…	ອື່ນໆ…
+	Remove Warp Split	ລຶບການແບ່ງເສັ້ນດັດຮູບຊົງ
+	Shape	ຮູບຊົງ
+	Split Warp Crosswise	ແບ່ງເສັ້ນດັດຮູບຊົງແບບກາກະບາດ
+	Split Warp Horizontally	ແບ່ງເສັ້ນດັດຮູບຊົງຕາມແນວນອນ
+	Split Warp Vertically	ແບ່ງເສັ້ນດັດຮູບຊົງຕາມແນວຕັ້ງ
+	Statistics…	ສະຖິຕິ…
+	Refine Strokes	ປັບແຕ່ງເສັ້ນຂອບ
+@plural	{n} item|{n} items	{n} ລາຍການ
+	Auto	ອັດຕະໂນມັດ
+	(print to the printer)	(ພິມອອກທາງເຄື່ອງພິມ)
+	+ Add variable	+ ເພີ່ມຕົວປ່ຽນ
+	30 frames @ 30 fps	30 ເຟຣມ @ 30 fps
+	3D LUT File	ໄຟລ໌ 3D LUT
+	Absolute	ສຳບູນ
+	Absolute Colorimetric	ວັດແທກສີແບບສຳບູນ (Absolute Colorimetric)
+	Action	ແອັກຊັນ
+	Adaptive	ແບບປັບຕົວ
+	Adaptive Wide Angle isn't open	ມຸມກວ້າງແບບປັບຕົວຍັງບໍ່ໄດ້ເປີດ
+	Add	ເພີ່ມ
+	Add Layer Mask	ເພີ່ມມາດສ໌ເລເຢີ
+	Add Stop	ເພີ່ມຈຸດຢຸດສີ
+	Add a layer style	ເພີ່ມຮູບແບບເລເຢີ
+	Add a mask  (from the selection; {key} inverts)	ເພີ່ມມາດສ໌  (ຈາກສ່ວນທີ່ເລືອກ; ກົດ {key} ເພື່ອກັບຄ່າ)
+	Add an adjustment	ເພີ່ມການປັບແຕ່ງ
+	Add disk	ເພີ່ມດິດສ໌
+	Add space after paragraph	ເພີ່ມຍະຫວ່າງຫຼັງຫຍໍ້ໜ້າ
+	Add space before paragraph	ເພີ່ມຍະຫວ່າງໜ້າຫຍໍ້ໜ້າ
+	Add to Sample	ເພີ່ມໃສ່ຕົວຢ່າງ
+	Add to selection  ({key})	ເພີ່ມໃສ່ສ່ວນທີ່ເລືອກ  ({key})
+	Adjust for Zoom	ປັບໃຫ້ພໍດີກັບການຊູມ
+	Adjustment visible	ສະແດງການປັບແຕ່ງ
+	Adobe RGB (1998) compatible	ເຂົ້າກັນໄດ້ກັບ Adobe RGB (1998)
+	Align and Distribute	ຈັດລຽນ ແລະ ກະຈາຍ
+	Align and distribute	ຈັດລຽນ ແລະ ກະຈາຍ
+	Align horizontal centers	ຈັດລຽນກາງແນວນອນ
+	Align left edges	ຈັດລຽນຂອບຊ້າຍ
+	Align right edges	ຈັດລຽນຂອບຂວາ
+	Aligned	ຈັດລຽນແລ້ວ
+	All Caps	ໂຕພິມໃຫຍ່ທັງໝົດ
+	All Slices	Slice ທັງໝົດ
+	All User Slices	Slice ຂອງຜູ້ໃຊ້ທັງໝົດ
+	All shortcuts reset to PhotoCraft defaults.	ຣີເຊັດປຸ່ມລັດທັງໝົດເປັນຄ່າເລີ່ມຕົ້ນຂອງ PhotoCraft ແລ້ວ.
+	Alt	Alt
+	Alt-click to define a source point to clone from	ກົດ Alt ຄ້າງໄວ້ແລ້ວຄລິກເພື່ອກຳນົດຈຸດຕົ້ນສະບັບທີ່ຈະສຳເນົາ
+	Always use pressure for opacity	ໃຊ້ນ້ຳໜັກກົດສຳລັບຄວາມທຶບແສງສະເໝີ
+	Always use pressure for size	ໃຊ້ນ້ຳໜັກກົດສຳລັບຂະໜາດສະເໝີ
+	Amount	ປະລິມານ
+	Anchor:	ຈຸດຍຶດ:
+	Angle	ມຸມ
+	Angle Gradient	ສີໄລ່ລະດັບຕາມມຸມ
+	Angle Jitter	ການກະຈາຍມຸມແບບສຸ່ມ
+	Answer the unsaved-changes prompt first	ກະລຸນາຕອບຂໍ້ຄວາມແຈ້ງເຕືອນການປ່ຽນແປງທີ່ຍັງບໍ່ທັນບັນທຶກກ່ອນ
+	Anti-alias	ລົດຮອຍຫຍັກ
+	Appearance	ຮູບຮ່າງລັກສະນະ
+	Appearance (Layer Style)	ຮູບຮ່າງລັກສະນະ (ຮູບແບບເລເຢີ)
+	Apply Layer Mask	ນຳໃຊ້ມາດສ໌ເລເຢີ
+	Add Mask to Selection	ເພີ່ມມາດສ໌ໃສ່ສ່ວນທີ່ເລືອກ
+	Subtract Mask from Selection	ລົບມາດສ໌ອອກຈາກສ່ວນທີ່ເລືອກ
+	Intersect Mask with Selection	ຕັດກັນລະຫວ່າງມາດສ໌ກັບສ່ວນທີ່ເລືອກ
+	Apply Per Tip	ນຳໃຊ້ຕໍ່ແຕ່ລະຫົວແປງ
+	Apply next selected layer comp	ນຳໃຊ້ Layer Comp ຖັດໄປທີ່ເລືອກ
+	Apply previous selected layer comp	ນຳໃຊ້ Layer Comp ກ່ອນໜ້າທີ່ເລືອກ
+	Artboard	Artboard
+	Artboard Background Color	ສີພື້ນຫຼັງ Artboard
+	Assign working space	ກຳນົດພື້ນທີ່ສີເຮັດວຽກ
+	Author:	ຜູ້ຂຽນ:
+	Auto Hide	ເຊື່ອງອັດຕະໂນມັດ
+	Auto-Select:	ເລືອກອັດຕະໂນມັດ:
+	Automatically level near-horizontal line segments	ປັບລະດັບເສັ້ນທີ່ເກືອບເປັນແນວນອນໂດຍອັດຕະໂນມັດ
+	Automatically straighten and level	ປັບໃຫ້ກົງ ແລະ ປັບລະດັບແນວນອນອັດຕະໂນມັດ
+	Automatically straighten near-vertical line segments	ປັບເສັ້ນທີ່ເກືອບເປັນແນວຕັ້ງໃຫ້ຊື່ອັດຕະໂນມັດ
+	Background	ພື້ນຫຼັງ
+	Background Color	ສີພື້ນຫຼັງ
+	Background Contents	ເນື້ອຫາພື້ນຫຼັງ
+	Custom background color	ສີພື້ນຫຼັງກຳນົດເອງ
+	Balance	ຄວາມສົມດຸນ
+	Baseline	ເສັ້ນຖານ
+	Baseline shift	ເລື່ອນເສັ້ນຖານ
+	Basic	ພື້ນຖານ
+	Before (Y)	ກ່ອນໜ້າ (Y)
+	Save Settings…	ບັນທຶກການຕັ້ງຄ່າ…
+	Load Settings…	ໂຫຼດການຕັ້ງຄ່າ…
+	Save these settings as a Camera Raw .xmp file	ບັນທຶກການຕັ້ງຄ່ານີ້ເປັນໄຟລ໌ Camera Raw .xmp
+	Load settings from a Camera Raw .xmp file	ໂຫຼດການຕັ້ງຄ່າຈາກໄຟລ໌ Camera Raw .xmp
+	Loaded Camera Raw settings from {file}	ໂຫຼດການຕັ້ງຄ່າ Camera Raw ຈາກ {file} ສຳເລັດແລ້ວ
+	Loaded Camera Raw settings from {file} ({n} not supported)	ໂຫຼດການຕັ້ງຄ່າ Camera Raw ຈາກ {file} ສຳເລັດແລ້ວ (ບໍ່ຮອງຮັບ {n} ລາຍການ)
+	Begin recording	ເລີ່ມຕົ້ນບັນທຶກ
+	Bend:	ຄວາມໂຄ້ງ:
+	Bicubic	Bicubic
+	Bicubic (smooth gradients)	Bicubic (ສີໄລ່ລະດັບນຽນ)
+	Automatic	ອັດຕະໂນມັດ
+	Bicubic Smoother (enlargement)	Bicubic Smoother (ສຳລັບຂະຫຍາຍພາບ)
+	Bicubic Sharper (reduction)	Bicubic Sharper (ສຳລັບຫຍໍ້ພາບ)
+	Bilinear	Bilinear
+	Black	ສີດຳ
+	Black & White	ຂາວດຳ
+	Black Point Compensation	ການຊົດເຊີຍຈຸດດຳ (Black Point Compensation)
+	Black, White	ດຳ, ຂາວ
+	Blacks	ໂທນສີດຳ
+	Blending	ການປະສົມສີ
+	Blending Options	ຕົວເລືອກການປະສົມ
+	Blue	ສີຟ້າ
+	Blue, Red, Yellow	ຟ້າ, ແດງ, ເຫຼືອງ
+	Both Axes	ທັງສອງແກນ
+	Bottom	ດ້ານລຸ່ມ
+	Brightness	ຄວາມສະຫວ່າງ
+	Brightness Jitter	ການກະຈາຍຄວາມສະຫວ່າງແບບສຸ່ມ
+	Brightness/Contrast	ຄວາມສະຫວ່າງ/ຄວາມຄົມຊັດ
+	Bring the selected pin forward	ຍ້າຍເຂັມໝຸດທີ່ເລືອກຂຶ້ນມາທາງໜ້າ
+	Brush Preset picker	ຕົວເລືອກຄ່າຫົວແປງທີ່ຕັ້ງໄວ້ລ່ວງໜ້າ
+	Brush Reconstruct Options	ຕົວເລືອກການຟື້ນຟູຫົວແປງ
+	Brush Tool Options	ຕົວເລືອກເຄື່ອງມືຫົວແປງ
+	Cache Level:	ລະດັບແຄຊ:
+	Camera Raw isn't open	Camera Raw ບໍ່ໄດ້ເປີດຢູ່
+	Cancel	ຍົກເລີກ
+	Reset	ຣີເຊັດ
+	Cancel (Esc)	ຍົກເລີກ (Esc)
+	Manage submitted jobs in the system print queue	ຈັດການວຽກທີ່ສົ່ງໄປແລ້ວໃນຄິວພິມຂອງລະບົບ
+	Cancel any current edits (Esc)	ຍົກເລີກການແກ້ໄຂປັດຈຸບັນ (Esc)
+	Cancel current crop operation  (Esc)	ຍົກເລີກການຕັດຄອບປັດຈຸບັນ  (Esc)
+	Cancel transform (Esc)	ຍົກເລີກການແປງຮູບຮ່າງ (Esc)
+	Cancel warp (Esc)	ຍົກເລີກການດັດຮູບຊົງ (Esc)
+	Canvas	ຜ້າໃບ (Canvas)
+	Canvas extension color:	ສີຂະຫຍາຍຜ້າໃບ:
+	Capture	ບັນທຶກພາບ
+	Capture the visibility, position and style of every layer with + below, then switch between versions.	ບັນທຶກການສະແດງຜົນ, ຕຳແໜ່ງ ແລະ ຮູບແບບຂອງທຸກເລເຢີດ້ວຍປຸ່ມ + ດ້ານລຸ່ມ, ແລ້ວສະຫຼັບລະຫວ່າງເວີຊັນຕ່າງໆ.
+	Catch-up on Stroke End	ໄລ່ທັນເມື່ອສິ້ນສຸດເສັ້ນແຕ້ມ
+	Center	ກາງ
+	Center Crop Marks	ເຄື່ອງໝາຍຕັດຄອບກາງ
+	Center text	ຈັດຂໍ້ຄວາມໄວ້ເຄິ່ງກາງ
+	Change	ປ່ຽນແປງ
+	Change All	ປ່ຽນແປງທັງໝົດ
+	Change Screen Mode  (F)	ປ່ຽນໂໝດໜ້າຈໍ  (F)
+	Change To:	ປ່ຽນເປັນ:
+	Channel Mixer	ຕົວປະສົມຊ່ອງສີ
+	Channel:	ຊ່ອງສີ:
+	Check All Layers	ກວດສອບທຸກເລເຢີ
+	Check Spelling	ກວດການສະກົດຄຳ
+	Clarity	ຄວາມແຈ່ມແຈ້ງ (Clarity)
+	Clear All	ລຶບທັງໝົດ
+	Clear Override	ລຶບຄ່າຂຽນທັບ
+	Clear Samples	ລຶບຕົວຢ່າງ
+	Click sets foreground · right-click sets background	ຄລິກເພື່ອກຳນົດສີໜ້າ · ຄລິກຂວາເພື່ອກຳນົດສີພື້ນຫຼັງ
+	Click the first point or press {key} to close · Esc cancels	ຄລິກຈຸດທຳອິດ ຫຼື ກົດ {key} ເພື່ອປິດ · Esc ເພື່ອຍົກເລີກ
+	Click to add a point · drag off or {key}-click or Delete to remove	ຄລິກເພື່ອເພີ່ມຈຸດ · ລາກອອກ ຫຼື ກົດ {key}+ຄລິກ ຫຼື Delete ເພື່ອລຶບອອກ
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	ຄລິກເພື່ອນຳໃຊ້, ກົດ {key}+ຄລິກ ເພື່ອລຶບຄ່າຂຽນທັບ, ດັບເບິນຄລິກສຳລັບຕົວເລືອກຮູບແບບ
+	Click to edit the gradient	ຄລິກເພື່ອແກ້ໄຂສີໄລ່ລະດັບ
+	Click to restore the current colour	ຄລິກເພື່ອຄືນຄ່າສີປັດຈຸບັນ
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	ຄລິກເພື່ອຊູມເຂົ້າ  ·  ກົດ {key}+ຄລິກ ເພື່ອຊູມອອກ  ·  ລາກຂວາ/ຊ້າຍ ເພື່ອຊູມເຂົ້າ/ອອກ
+	Click with the Note tool to add a note.	ຄລິກດ້ວຍເຄື່ອງມືບັນທຶກຊ່ວຍຈຳເພື່ອເພີ່ມບັນທຶກ.
+	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	ຄລິກ: ມຸມ · ລາກ: ໂຄ້ງມົນ · ຄລິກຈຸດທຳອິດ: ປິດຮອບ · {key} ສຳເລັດ · Esc ຍົກເລີກ
+	Click: corner · Drag: smooth · {alt}-drag: break handle · Click or drag first point: close · {key} finish · Esc cancel	ຄລິກ: ມຸມ · ລາກ: ໂຄ້ງມົນ · {alt}+ລາກ: ແຍກແຂນປັບ · ຄລິກ ຫຼື ລາກຈຸດທຳອິດ: ປິດຮອບ · {key} ສຳເລັດ · Esc ຍົກເລີກ
+	Clip to layer below	ຄລິບໃສ່ເລເຢີລຸ່ມ
+	Clipped	ຖືກຄລິບແລ້ວ
+	Close Style Options	ປິດຕົວເລືອກຮູບແບບ
+	Cmd	Cmd
+	Coated CMYK	ເຈ້ຍເຄືອບ CMYK
+	Color & Swatches	ສີ ແລະ ຈານສີຕົວຢ່າງ
+	Color Balance	ຄວາມສົມດຸນສີ
+	Color Detail	ລາຍລະອຽດສີ
+	Color Grading	ການເກຣດສີ (Color Grading)
+	Color Lookup	Color Lookup
+	Color Management	ການຈັດການສີ
+	Color Mixer	ຕົວປະສົມສີ
+	Color Mode	ໂໝດສີ
+	Color Priority	ໃຫ້ຄວາມສຳຄັນກັບສີ
+	Color Range preview	ສະແດງຕົວຢ່າງຊ່ວງສີ
+	Color:	ສີ:
+	Colorize	ຍ້ອມສີ
+	Colors	ສີສັນ
+	Commit Perspective Warp ({key})	ຢືນຢັນການດັດຮູບຊົງຕາມມຸມມອງ ({key})
+	Commit Puppet Warp ({key})	ຢືນຢັນການດັດຮູບຊົງ Puppet Warp ({key})
+	Commit any current edits ({key})	ຢືນຢັນການແກ້ໄຂປັດຈຸບັນທັງໝົດ ({key})
+	Commit current crop operation  ({key})	ຢືນຢັນການຕັດຄອບປັດຈຸບັນ  ({key})
+	Commit transform ({key})	ຢືນຢັນການແປງຮູບຮ່າງ ({key})
+	Commit warp ({key})	ຢືນຢັນການດັດຮູບຊົງ ({key})
+	Constant	ຄົງທີ່
+	Constrain proportions	ຮັກສາອັດຕາສ່ວນ
+	Contact Sheet II	Contact Sheet II
+	Content-Aware	ຕາມເນື້ອຫາ (Content-Aware)
+	Contiguous	ຕໍ່ເນື່ອງຕິດກັນ
+	Contrast	ຄວາມຄົມຊັດ
+	Control:	ການຄວບຄຸມ:
+	Convert to sRGB	ແປງເປັນ sRGB
+	Copies	ຈຳນວນຊຸດ
+	Copper	ທອງແດງ
+	Copyright	ລິຂະສິດ
+	Copyright and Contact Info	ລິຂະສິດ ແລະ ຂໍ້ມູນຕິດຕໍ່
+	Corner Crop Marks	ເຄື່ອງໝາຍຕັດຄອບຕາມມຸມ
+	Corner radius	ລັດສະໝີມຸມມົນ
+	Correction	ການແກ້ໄຂ
+	Count Jitter	ການກະຈາຍຈຳນວນແບບສຸ່ມ
+	Create	ສ້າງ
+	Create Droplet	ສ້າງ Droplet
+	Create Texture	ສ້າງພື້ນຜິວ
+	Create Video Timeline	ສ້າງທາມລາຍວິດີໂອ
+	Create a new count group	ສ້າງກຸ່ມນັບຈຳນວນໃໝ່
+	Create a new document or open an existing file.	ສ້າງເອກະສານໃໝ່ ຫຼື ເປີດໄຟລ໌ທີ່ມີຢູ່ແລ້ວ.
+	Create a new group	ສ້າງກຸ່ມໃໝ່
+	Create a new layer	ສ້າງເລເຢີໃໝ່
+	Create new action	ສ້າງແອັກຊັນໃໝ່
+	Create new channel	ສ້າງຊ່ອງສີໃໝ່
+	Create new document from current state	ສ້າງເອກະສານໃໝ່ຈາກສະຖານະປັດຈຸບັນ
+	Create new fill or adjustment layer	ສ້າງເລເຢີເຕີມສີ ຫຼື ປັບແຕ່ງໃໝ່
+	Create new gradient	ສ້າງສີໄລ່ລະດັບໃໝ່
+	Create new group	ສ້າງກຸ່ມໃໝ່
+	Create new layer comp	ສ້າງ Layer Comp ໃໝ່
+	Create new pattern from the selection	ສ້າງລວດລາຍໃໝ່ຈາກສ່ວນທີ່ເລືອກ
+	Create new shape from the current path	ສ້າງຮູບຊົງໃໝ່ຈາກ Path ປັດຈຸບັນ
+	Create new snapshot	ສ້າງສະແນັບຊັອດໃໝ່
+	Create new style (from the selected type)	ສ້າງຮູບແບບໃໝ່ (ຈາກຂໍ້ຄວາມທີ່ເລືອກ)
+	Create new style from the selected layer	ສ້າງຮູບແບບໃໝ່ຈາກເລເຢີທີ່ເລືອກ
+	Create new tool preset	ສ້າງຄ່າເຄື່ອງມືຕັ້ງລ່ວງໜ້າໃໝ່
+	Crop Factor	ຕົວຄູນຄອບຕັດ (Crop Factor)
+	Ctrl	Ctrl
+	Current & Below	ປັດຈຸບັນ ແລະ ດ້ານລຸ່ມ
+	Current Layer	ເລເຢີປັດຈຸບັນ
+	Current Size	ຂະໜາດປັດຈຸບັນ
+	Current Tool Only	ສະເພາະເຄື່ອງມືປັດຈຸບັນ
+	Curve	ເສັ້ນໂຄ້ງ
+	Curves	ເສັ້ນໂຄ້ງ
+	Custom	ກຳນົດເອງ
+	Custom Shapes	ຮູບຊົງກຳນົດເອງ
+	Cyan	ສີຟ້າ Cyan
+	Cyan  ·  Red	ຟ້າ Cyan  ·  ແດງ
+	Darken	ເຮັດໃຫ້ມືດລົງ
+	Darks	ໂທນມືດ
+	Data Sets	ຊຸດຂໍ້ມູນ
+	Default	ຄ່າເລີ່ມຕົ້ນ
+	Default colours (D)	ສີເລີ່ມຕົ້ນ (D)
+	Default printer	ເຄື່ອງພິມເລີ່ມຕົ້ນ
+	Default restored.	ຄືນຄ່າເລີ່ມຕົ້ນສຳເລັດແລ້ວ.
+	Define	ກຳນົດ
+	Define at least one variable first.	ກະລຸນາກຳນົດຕົວປ່ຽນຢ່າງໜ້ອຍໜຶ່ງຕົວເສຍກ່ອນ.
+	Dehaze	ລຶບໝອກຄວັນ (Dehaze)
+	Delete Cropped Pixels	ລຶບພິກເຊລທີ່ຖືກຕັດອອກ
+	Delete Group	ລຶບກຸ່ມ
+	Delete Layer Mask	ລຶບມາດສ໌ເລເຢີ
+	Delete Layers	ລຶບເລເຢີ
+	Add Shortcut	ເພີ່ມປຸ່ມລັດ
+	Delete Shortcut	ລຶບປຸ່ມລັດ
+	Delete Timeline	ລຶບທາມລາຍ
+	Delete Tool Preset	ລຶບຄ່າຕັ້ງລ່ວງໜ້າຂອງເຄື່ອງມື
+	Delete count group	ລຶບກຸ່ມນັບຈຳນວນ
+	Delete current channel	ລຶບຊ່ອງສີປັດຈຸບັນ
+	Delete current state	ລຶບສະຖານະປັດຈຸບັນ
+	Delete effect layer	ລຶບເລເຢີເອັບເຟັກ
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	ລຶບເລເຢີ ‘{name}’ ບໍ່?
+	Delete {count} layers? {names}	ລຶບ {count} ເລເຢີບໍ່? {names}
+	Delete layer?	ລຶບເລເຢີບໍ່?
+	The document is closed	ເອກະສານຖືກປິດແລ້ວ
+	The document or selected layers changed. Please request deletion again.	ເອກະສານ ຫຼື ເລເຢີທີ່ເລືອກມີການປ່ຽນແປງ. ກະລຸນາສັ່ງລຶບໃໝ່ອີກຄັ້ງ.
+	Missing delete command	ບໍ່ພົບຄຳສັ່ງລຶບ
+	Invalid delete command	ຄຳສັ່ງລຶບບໍ່ຖືກຕ້ອງ
+	Layer deleted, but confirmation preference could not be saved: {error}	ລຶບເລເຢີແລ້ວ, ແຕ່ບໍ່ສາມາດບັນທຶກການຕັ້ງຄ່າການຢືນຢັນໄດ້: {error}
+
+	Delete layer	ລຶບເລເຢີ
+	Delete layer comp	ລຶບອົງປະກອບເລເຢີ
+	Delete note	ລຶບໂນ້ດ
+	Delete selected measurements	ລຶບຄ່າການວັດແທກທີ່ເລືອກ
+	Delete style	ລຶບຮູບແບບ
+	Delete tool preset	ລຶບຄ່າຕິດຕັ້ງລ່ວງໜ້າຂອງເຄື່ອງມື
+	Density	ຄວາມໜາແໜ້ນ
+	Density:	ຄວາມໜາແໜ້ນ:
+	Depth	ຄວາມເລິກ
+	Depth Jitter	ການກະຈາຍຄວາມເລິກ
+	Description	ຄຳອະທິບາຍ
+	Deselect All	ຍົກເລີກການເລືອກທັງໝົດ
+	Detail	ລາຍລະອຽດ
+	Diamond Gradient	ສີໄລ່ລະດັບຮູບສີ່ແຈສາກເພັດ
+	Difference	ຜົນຕ່າງ
+	Diffusion	ການກະຈາຍ
+	Discard the embedded profile (don't color manage)	ຍົກເລີກໂປຣໄຟລ໌ທີ່ຝັງໄວ້ (ບໍ່ຈັດການສີ)
+	Discontiguous	ບໍ່ຕໍ່ເນື່ອງ
+	Discord	Discord
+	Dismiss	ປິດໄປ
+	Display P3	Display P3
+	Display Text	ຂໍ້ຄວາມສະແດງຜົນ
+	Dither	ການກະຈາຍເມັດສີ
+	Divide…	ຫານ…
+	Document	ເອກະສານ
+	Don't Save	ບໍ່ບັນທຶກ
+	No	ບໍ່
+	Yes	ແມ່ນ
+	Done	ສຳເລັດ
+	Dots	ຈຸດ
+	Drag a rectangle around the object	ລາກສີ່ແຈສາກອ້ອມວັດຖຸ
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	ລາກເທິງຮູບເພື່ອເພີ່ມເງື່ອນໄຂບັງຄັບ; ກົດ Shift ສຳລັບແນວນອນ/ແນວຕັ້ງ; ຄລິກຂວາເພື່ອລຶບ.
+	Drag to move the active shape's path or the Work Path	ລາກເພື່ອຍ້າຍເສັ້ນພາດຂອງຮູບຮ່າງທີ່ໃຊ້ງານ ຫຼື ເສັ້ນພາດເຮັດວຽກ
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	ຄລິກ: ເລືອກຈຸດສະມໍ · ລາກ: ຍ້າຍຈຸດສະມໍ, ແຂນຈັບ ຫຼື ສ່ວນເສັ້ນ · {shift}-ຄລິກ: ເພີ່ມ · {alt}-ຄລິກ: ທັງໝົດເສັ້ນພາດຍ່ອຍ
+	Draw with the Pen tool (P) or make a work path from a selection.	ແຕ້ມດ້ວຍເຄື່ອງມືປາກກາ (P) ຫຼື ສ້າງເສັ້ນພາດເຮັດວຽກຈາກພື້ນທີ່ເລືອກ.
+	Drop an image or PSD anywhere to open it.	ວາງຮູບພາບ ຫຼື ໄຟລ໌ PSD ໃສ່ບ່ອນໃດກໍໄດ້ເພື່ອເປີດ.
+	Duplicate Layers…	ເຮັດສຳເນົາເລເຢີ…
+	Duplicate style	ເຮັດສຳເນົາຮູບແບບ
+	Edit Toolbar…	ແກ້ໄຂແຖບເຄື່ອງມື…
+	Edit in Quick Mask Mode  (Q)	ແກ້ໄຂໃນໂໝດໜ້າກາກດ່ວນ  (Q)
+	Edit in Standard Mode  (Q)	ແກ້ໄຂໃນໂໝດມາດຕະຖານ  (Q)
+	Effects	ເອັບເຟັກ
+	Embed Color Profile	ຝັງໂປຣໄຟລ໌ສີ
+	Embedded Profile Mismatch	ໂປຣໄຟລ໌ທີ່ຝັງໄວ້ບໍ່ກົງກັນ
+	Enable airbrush-style build-up effects	ເປີດໃຊ້ງານເອັບເຟັກສີທັບຊ້ອນແບບແອຣ໌ບຣັຊ
+	Enhance Edge	ປັບແຕ່ງຂອບໃຫ້ດີຂຶ້ນ
+	Entire Font	ຟອນທັງໝົດ
+	Exact	ຊັດເຈນ
+	Expansion:	ການຂະຫຍາຍຕົວ:
+	Export Presets	ສົ່ງອອກຄ່າຕິດຕັ້ງລ່ວງໜ້າ
+	Export selected measurements (CSV)	ສົ່ງອອກຄ່າການວັດແທກທີ່ເລືອກ (CSV)
+	Exposure	ການຮັບແສງ
+	Exposure and Gamma	ການຮັບແສງ ແລະ ແກມມາ
+	Exposure:	ການຮັບແສງ:
+	Eyedropper	ເຄື່ອງມືດູດສີ
+	Factor:	ຕົວຄູນ:
+	Faux Bold	ຕົວໜາຈຳລອງ
+	Faux Italic	ຕົວອຽງຈຳລອງ
+	Feather	ຂອບຟຸ້ງ
+	Fewer Points	ຈຸດໜ້ອຍລົງ
+	File Settings	ການຕັ້ງຄ່າໄຟລ໌
+	Fill	ຕື່ມສີ
+	Fill:	ຕື່ມສີ:
+	Filter for adjustment layers	ກັ່ນຕອງສຳລັບເລເຢີປັບແຕ່ງ
+	Filter for pixel layers	ກັ່ນຕອງສຳລັບເລເຢີພິກເຊວ
+	Filter for shape layers	ກັ່ນຕອງສຳລັບເລເຢີຮູບຮ່າງ
+	Filter for smart objects	ກັ່ນຕອງສຳລັບສະມາດອອບເຈັກ
+	Filter for type layers	ກັ່ນຕອງສຳລັບເລເຢີຂໍ້ຄວາມ
+	Filter:	ຕົວກັ່ນຕອງ:
+	Finger Painting	ການທາສີດ້ວຍນິ້ວມື
+	Fisheye	ຕາປາ
+	Fit	ພໍດີ
+	Fit Screen	ພໍດີໜ້າຈໍ
+	Fill Screen	ເຕັມໜ້າຈໍ
+	Fit in View	ພໍດີກັບມຸມມອງ
+	Fixed	ຄົງທີ່
+	Fixed Ratio	ອັດຕາສ່ວນຄົງທີ່
+	Fixed Size	ຂະໜາດຄົງທີ່
+	Flip	ພິກ
+	Flip X	ພິກແກນ X
+	Flip X Jitter	ການກະຈາຍພິກແກນ X
+	Flip Y	ພິກແກນ Y
+	Flip Y Jitter	ການກະຈາຍພິກແກນ Y
+	Flow	ການໄຫຼ
+	Flow Jitter	ການກະຈາຍການໄຫຼ
+	Focal Length	ໄລຍະໂຟກັດ
+	Font	ຟອນ
+	Font Size:	ຂະໜາດຟອນ:
+	Font size	ຂະໜາດຟອນ
+	Foreground	ສີພື້ນໜ້າ
+	Foreground to Background	ສີພື້ນໜ້າຫາສີພື້ນຫຼັງ
+	Foreground/Background Jitter	ການກະຈາຍສີພື້ນໜ້າ/ພື້ນຫຼັງ
+	Format	ຮູບແບບ
+	Frame from Layers…	ສ້າງເຟຣມຈາກເລເຢີ…
+	Free	ອິດສະຫຼະ
+	Full Spherical	ຊົງກົມເຕັມຮູບ
+	Fuzziness:	ຄວາມມົວຍອມຮັບໄດ້:
+	GPU	GPU
+	Gamma Correction	ການແກ້ໄຂແກມມາ
+	Gamma:	ແກມມາ:
+	Global	ທົ່ວໄປ
+	Glow Color	ສີແສງເຮືອງ
+	Gradient Map	ແຜນທີ່ສີໄລ່ລະດັບ
+	Grain	ເມັດເກຣນ
+	Gray	ສີເທົາ
+	Gray Gamma 2.2	ສີເທົາ ແກມມາ 2.2
+	Green	ສີຂຽວ
+	Group	ກຸ່ມ
+	Hardness	ຄວາມແຂງ
+	Heart	ຮູບຫົວໃຈ
+	Height	ລວງສູງ
+	Height:	ລວງສູງ:
+	Hide Auto Slices	ເຊື່ອງສ່ວນແບ່ງອັດຕະໂນມັດ
+	Hide Properties	ເຊື່ອງຄຸນສົມບັດ
+	Highlight Compression	ການບີບອັດສ່ວນສະຫວ່າງ
+	Highlight Priority	ເນັ້ນສ່ວນສະຫວ່າງກ່ອນ
+	Highlights	ສ່ວນສະຫວ່າງ
+	Home	ໜ້າຫຼັກ
+	Horizontal scale	ອັດຕາສ່ວນແນວນອນ
+	Hue	ໂທນສີ
+	Hue Jitter	ການກະຈາຍໂທນສີ
+	Hue/Saturation	ໂທນສີ/ຄວາມອິ່ມຕົວຂອງສີ
+	Hyphenate	ໃສ່ຂີດຕໍ່
+	Ignore	ລະເລີຍ
+	Ignore All	ລະເລີຍທັງໝົດ
+	Image Size	ຂະໜາດຮູບພາບ
+	Import Brushes…	ນຳເຂົ້າແປງ…
+	Gradient Preset Options	ຕົວເລືອກຄ່າຕິດຕັ້ງລ່ວງໜ້າສີໄລ່ລະດັບ
+	Import .GRD	ນຳເຂົ້າ .GRD
+	Choose a gradient file (.grd).	ເລືອກໄຟລ໌ສີໄລ່ລະດັບ (.grd).
+	Import brushes (.abr)	ນຳເຂົ້າແປງ (.abr)
+	Import Presets	ນຳເຂົ້າຄ່າຕິດຕັ້ງລ່ວງໜ້າ
+	Imported	ນຳເຂົ້າແລ້ວ
+	Indent First	ຫຍໍ້ໜ້າແຖວທຳອິດ
+	Indent Left	ຫຍໍ້ໜ້າເບື້ອງຊ້າຍ
+	Indent Right	ຫຍໍ້ໜ້າເບື້ອງຂວາ
+	Indent first line	ຫຍໍ້ໜ້າແຖວທຳອິດ
+	Indent left margin	ຫຍໍ້ໜ້າຂອບຊ້າຍ
+	Indent right margin	ຫຍໍ້ໜ້າຂອບຂວາ
+	Input:	ຂາເຂົ້າ:
+	Inside	ທາງໃນ
+	Interlaced	ອິນເຕີເລຊ
+	Interpolation:	ການປະມານຄ່າ:
+	Intersect with selection  ({key})	ຕັດກັນກັບພື້ນທີ່ເລືອກ  ({key})
+	Invert All	ປີ້ນກັບທັງໝົດ
+	Invert has no settings.	ການປີ້ນກັບບໍ່ມີການຕັ້ງຄ່າ.
+	Italic	ຕົວອຽງ
+	Join us on Discord	ເຂົ້າຮ່ວມກັບພວກເຮົາໃນ Discord
+	Justify all	ຈັດພຽງສະເໝີໜ້າຫຼັງທັງໝົດ
+	Justify last centered	ຈັດພຽງສະເໝີ ແຖວສຸດທ້າຍໄວ້ເຄິ່ງກາງ
+	Justify last left	ຈັດພຽງສະເໝີ ແຖວສຸດທ້າຍໄວ້ທາງຊ້າຍ
+	Justify last right	ຈັດພຽງສະເໝີ ແຖວສຸດທ້າຍໄວ້ທາງຂວາ
+	Kerning	ໄລຍະຫ່າງລະຫວ່າງຕົວອັກສອນ
+	Keyboard Shortcuts	ປຸ່ມລັດແປ້ນພິມ
+	Keyboard Shortcuts and Menus	ປຸ່ມລັດແປ້ນພິມ ແລະ ເມນູ
+	Kind	ປະເພດ
+	Label Size	ຂະໜາດປ້າຍຊື່
+	Labels	ປ້າຍຊື່
+	Lanczos (sharp)	Lanczos (ຄົມຊັດ)
+	Landscape	ແນວນອນ
+	Last Document State	ສະຖານະເອກະສານຫຼ້າສຸດ
+	Layout	ໂຄງຮ່າງ
+	Leading	ໄລຍະຫ່າງແຖວ
+	Leading (set to the font size × auto-leading when Auto)	ໄລຍະຫ່າງແຖວ (ຕັ້ງຄ່າເປັນຂະໜາດຟອນ × ໄລຍະຫ່າງແຖວອັດຕະໂນມັດ ເມື່ອເລືອກອັດຕະໂນມັດ)
+	Leave as is (don't color manage)	ຮັກສາໄວ້ຕາມເດີມ (ບໍ່ຈັດການສີ)
+	Left align text	ຈັດຂໍ້ຄວາມໄປທາງຊ້າຍ
+	Length:	ລວງຍາວ:
+	Level	ລະດັບ
+	Levels	ລະດັບສີ
+	Lighten	ເຮັດໃຫ້ສະຫວ່າງຂຶ້ນ
+	Lightness	ຄວາມສະຫວ່າງ
+	Lights	ແສງສະຫວ່າງ
+	Limits:	ຂອບເຂດ:
+	Linear Gradient	ສີໄລ່ລະດັບແບບເສັ້ນຊື່
+	Link layers	ເຊື່ອມໂຍງເລເຢີ
+	Link width and height	ເຊື່ອມໂຍງລວງກວ້າງ ແລະ ລວງສູງ
+	Liquify is not open	ບໍ່ໄດ້ເປີດໃຊ້ງານການດັດຮູບຮ່າງ (Liquify)
+	Load	ໂຫຼດ
+	Load 3D LUT…	ໂຫຼດ 3D LUT…
+	Load channel as selection	ໂຫຼດຊ່ອງສີເປັນພື້ນທີ່ເລືອກ
+	Load…	ໂຫຼດ…
+	Localized Color Clusters	ກຸ່ມສີສະເພາະບ່ອນ
+	Lock	ລັອກ
+	Lock all	ລັອກທັງໝົດ
+	Lock image pixels	ລັອກພິກເຊວຮູບພາບ
+	Lock layer	ລັອກເລເຢີ
+	Lock position	ລັອກຕຳແໜ່ງ
+	Lock transparent pixels	ລັອກພິກເຊວໂປ່ງໃສ
+	Lock:	ລັອກ:
+	Logical Length:	ລວງຍາວທາງຕັກກະ:
+	Logical Units:	ຫົວໜ່ວຍທາງຕັກກະ:
+	Luminance	ຄວາມສະຫວ່າງສ່ອງ
+	Luminance Detail	ລາຍລະອຽດຄວາມສະຫວ່າງສ່ອງ
+	Magenta	ສີບົວບານເຢັນ
+	Magenta  ·  Green	ສີບົວບານເຢັນ · ສີຂຽວ
+	Maintain aspect ratio	ຮັກສາອັດຕາສ່ວນຂະໜາດ
+	Marker Size	ຂະໜາດເຄື່ອງໝາຍ
+	Mask All	ໃສ່ໜ້າກາກທັງໝົດ
+	Mask Options	ຕົວເລືອກໜ້າກາກ
+	Masking	ການໃສ່ໜ້າກາກ
+	Master	ແມ່ແບບຫຼັກ
+	Matte	ແມັດ
+	Median:	ຄ່າມັດທະຍະຖານ:
+	Menus	ເມນູ
+	Mesh Size	ຂະໜາດຕາໜ່າງ
+	Metadata	ເມຕາເດຕາ
+	Metrics	ການວັດແທກຕົວອັກສອນ
+	Midpoint	ຈຸດເຄິ່ງກາງ
+	Midtones	ໂທນສີປານກາງ
+	Midtones from:	ໂທນສີປານກາງເລີ່ມຈາກ:
+	Midtones to:	ໂທນສີປານກາງຮອດ:
+	Minimum Depth	ຄວາມເລິກຕ່ຳສຸດ
+	Minimum Diameter	ເສັ້ນຜ່າສູນກາງຕ່ຳສຸດ
+	Minimum Roundness	ຄວາມມົນຕ່ຳສຸດ
+	Mode:	ໂໝດ:
+	Monochrome	ຂາວດຳສີດຽວ
+	More Points	ຈຸດຫຼາຍຂຶ້ນ
+	Move effect layer down	ຍ້າຍເລເຢີເອັບເຟັກລົງ
+	Move effect layer up	ຍ້າຍເລເຢີເອັບເຟັກຂຶ້ນ
+	Move to	ຍ້າຍໄປທີ່
+	Name	ຊື່
+	Name:	ຊື່:
+	Nearest Neighbor	ຈຸດໃກ້ຄຽງທີ່ສຸດ
+	Nearest Neighbor (hard edges)	ຈຸດໃກ້ຄຽງທີ່ສຸດ (ຂອບແຂງ)
+	New Size	ຂະໜາດໃໝ່
+	New document…	ເອກະສານໃໝ່…
+	New effect layer	ເລເຢີເອັບເຟັກໃໝ່
+	New selection	ພື້ນທີ່ເລືອກໃໝ່
+	Next frame	ເຟຣມຖັດໄປ
+	Next note	ໂນ້ດຖັດໄປ
+	No Color	ບໍ່ມີສີ
+	No Color Management	ບໍ່ມີການຈັດການສີ
+	No Dither	ບໍ່ມີການກະຈາຍເມັດສີ
+	No author	ບໍ່ມີຜູ້ຂຽນ
+	No character style	ບໍ່ມີຮູບແບບຕົວອັກສອນ
+	No document	ບໍ່ມີເອກະສານ
+	No matching commands	ບໍ່ພົບຄຳສັ່ງທີ່ກົງກັນ
+	No presets for the current tool.	ບໍ່ມີຄ່າຕິດຕັ້ງລ່ວງໜ້າສຳລັບເຄື່ອງມືປະຈຸບັນ.
+	No presets of this type.	ບໍ່ມີຄ່າຕິດຕັ້ງລ່ວງໜ້າປະເພດນີ້.
+	No properties	ບໍ່ມີຄຸນສົມບັດ
+	No tool presets.	ບໍ່ມີຄ່າຕິດຕັ້ງລ່ວງໜ້າຂອງເຄື່ອງມື.
+	Noise Reduction	ການຫຼຸດສັນຍານລົບກວນ
+	Normal	ປົກກະຕິ
+	Not in Dictionary:	ບໍ່ມີໃນວັດຈະນານຸກົມ:
+	OK	ຕົກລົງ
+	Offset	ໄລຍະເລື່ອນ
+	Only Web Colors	ສະເພາະສີເວັບ
+	Opacity	ຄວາມທຶບແສງ
+	Opacity Jitter	ການກະຈາຍຄວາມທຶບແສງ
+	Opacity:	ຄວາມທຶບແສງ:
+	Open a document to define variables.	ເປີດເອກະສານເພື່ອກຳນົດຕົວປ່ຽນ.
+	Open a document to select a colour range.	ເປີດເອກະສານເພື່ອເລືອກຂອບເຂດສີ.
+	Open a document to use the timeline.	ເປີດເອກະສານເພື່ອໃຊ້ງານທາມລາຍ.
+	Optical	ທາງສາຍຕາ
+	Optimized	ປັບໃຫ້ເໝາະສົມແລ້ວ
+	Option-click to define a source point to clone from	ກົດ Option ຄ້າງໄວ້ແລ້ວຄລິກເພື່ອກຳນົດຈຸດຕົ້ນສະບັບສຳລັບການໂຄລນ
+	Original	ຕົ້ນສະບັບ
+	Output Channel:	ຊ່ອງສີຂາອອກ:
+	Output Levels:	ລະດັບຂາອອກ:
+	Output:	ຂາອອກ:
+	Outside	ທາງນອກ
+	Overlay Color	ສີວາງທັບ
+	Overlay Opacity	ຄວາມທຶບແສງການວາງທັບ
+	Overlay: Rule of Thirds	ການວາງທັບ: ກົດສາມສ່ວນ
+	Override Pressure	ແທນທີ່ແຮງກົດ
+	Override Rotation	ແທນທີ່ການໝູນ
+	Override Tilt	ແທນທີ່ການອຽງ
+	PRESET DETAILS	ລາຍລະອຽດຄ່າຕິດຕັ້ງລ່ວງໜ້າ
+	PSD	PSD
+	Paint Overlay	ທາສີວາງທັບ
+	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	ຕຳແໜ່ງແຜງຄວບຄຸມຖືກບັນທຶກໄວ້ໃນພື້ນທີ່ເຮັດວຽກ. ປຸ່ມລັດແປ້ນພິມ, ເມນູ ແລະ ແຖບເຄື່ອງມືສາມາດເລືອກໄດ້ຕາມໃຈ.
+	Paper	ເຈ້ຍ
+	Path	ເສັ້ນພາດ
+	Pattern	ລວດລາຍ
+	Pattern Size	ຂະໜາດລວດລາຍ
+	Pause	ຢຸດຊົ່ວຄາວ
+	Percent	ເປີເຊັນ
+	Perceptual	ຕາມການຮັບຮູ້
+	Perspective Warp is not active	ການດັດພາບຕາມທັດສະນີຍະພາບບໍ່ໄດ້ເຮັດວຽກຢູ່
+	Perspective Warp: draw planes along the image's perspective, then switch to Warp	ການດັດພາບຕາມທັດສະນີຍະພາບ: ແຕ້ມລະນhistoryາບຕາມທັດສະນີຍະພາບຂອງຮູບ ແລ້ວປ່ຽນໄປເປັນການດັດພາບ
+	Photo Filter	ຟິວເຕີຮູບພາບ
+	PhotoCraft	PhotoCraft
+	PhotoCraft Manages Colors	PhotoCraft ຈັດການສີເອງ
+	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — ໂປຣແກຣມແກ້ໄຂຮູບພາບແບບເນທີບ ໂອເພນຊອດ ຂຽນດ້ວຍພາສາ Rust.
+	Pin Depth:	ຄວາມເລິກໝຸດ:
+	Pixel Length:	ລວງຍາວພິກເຊວ:
+	Pixels/Centimeter	ພິກເຊວ/ຊັງຕີແມັດ
+	Pixels/Inch	ພິກເຊວ/ນິ້ວ
+	Pixels:	ພິກເຊວ:
+	Play	ຫຼິ້ນ
+	Play selection	ຫຼິ້ນສ່ວນທີ່ເລືອກ
+	Portrait	ແນວຕັ້ງ
+	Position	ຕຳແໜ່ງ
+	Position and Size	ຕຳແໜ່ງ ແລະ ຂະໜາດ
+	Posterize	ຫຼຸດຈຳນວນລະດັບສີ
+	Preserve Details	ຮັກສາລາຍລະອຽດ
+	Preserve Luminosity	ຮັກສາຄວາມສະຫວ່າງສ່ອງ
+	Preset	ຄ່າຕິດຕັ້ງລ່ວງໜ້າ
+	Preset Type	ປະເພດຄ່າຕິດຕັ້ງລ່ວງໜ້າ
+	Preset:	ຄ່າຕິດຕັ້ງລ່ວງໜ້າ:
+	Presets:	ຄ່າຕິດຕັ້ງລ່ວງໜ້າ:
+	Press keys…	ກົດປຸ່ມ…
+	Pressure	ແຮງກົດ
+	Pressure for Opacity	ໃຊ້ແຮງກົດສຳລັບຄວາມທຶບແສງ
+	Pressure for Size	ໃຊ້ແຮງກົດສຳລັບຂະໜາດ
+	Prevent auto-nesting in and out of Artboards and Frames	ປ້ອງກັນການຈັດຊ້ອນອັດຕະໂນມັດເຂົ້າ-ອອກ ພື້ນທີ່ເຮັດວຽກ ແລະ ເຟຣມ
+	Preview	ສະແດງຕົວຢ່າງ
+	Previous frame	ເຟຣມກ່ອນໜ້າ
+	Previous note	ໂນ້ດກ່ອນໜ້າ
+	Print	ພິມ
+	Printer	ເຄື່ອງພິມ
+	Printer Manages Colors	ເຄື່ອງພິມຈັດການສີເອງ
+	Printer Setup	ການຕິດຕັ້ງເຄື່ອງພິມ
+	Printing Marks	ເຄື່ອງໝາຍການພິມ
+	Progressive	ຄ່ອຍສະແດງຕາມລຳດັບ
+	Promote	ຍົກລະດັບຂຶ້ນເປັນສ່ວນແບ່ງຂອງຜູ້ໃຊ້
+	Protect Detail	ປົກປ້ອງລາຍລະອຽດ
+	Protect Foreground Color	ປົກປ້ອງສີພື້ນໜ້າ
+	Protect Tones	ປົກປ້ອງໂທນສີ
+	Proximity Match	ຈັບຄູ່ຕາມຄວາມໃກ້ຄຽງ
+	Pulled String Mode	ໂໝດດຶງເຊືອກ
+	Puppet Warp is not active	ການດັດພາບແບບຫຸ່ນເຊີດບໍ່ໄດ້ເຮັດວຽກຢູ່
+	Purity	ຄວາມບໍລິສຸດ
+	Quality	ຄຸນນະພາບ
+	Quick Actions	ການດຳເນີນການດ່ວນ
+	Quick Export As PNG	ສົ່ງອອກດ່ວນເປັນ PNG
+	Radial Gradient	ສີໄລ່ລະດັບແບບລັດສະໝີວົງມົນ
+	Radius	ລັດສະໝີ
+	Radius:	ລັດສະໝີ:
+	Range:	ຂອບເຂດ:
+	Rate	ອັດຕາ
+	Recently Used	ໃຊ້ຫຼ້າສຸດ
+	Reconstruct	ສ້າງຄືນໃໝ່
+	Record ● a sequence of edits, then play ▶ it on any document.	ບັນທຶກ ● ລຳດັບການແກ້ໄຂ, ຈາກນັ້ນກົດຫຼິ້ນ ▶ ໃນເອກະສານໃດກໍໄດ້.
+	Red	ສີແດງ
+	Redefine style by current selection	ກຳນົດຮູບແບບໃໝ່ຕາມສ່ວນທີ່ເລືອກປະຈຸບັນ
+	Refine	ປັບລະອຽດ
+	Reflected Gradient	ສີໄລ່ລະດັບແບບສະທ້ອນ
+	Registration Marks	ເຄື່ອງໝາຍທາບຕຳແໜ່ງພິມ
+	Regular	ປົກກະຕິ
+	Relative	ສຳພັດ
+	Relative Colorimetric	ການທຽບຄ່າສີແບບສຳພັດ
+	Remove	ລຶບອອກ
+	Remove All Pins	ລຶບໝຸດທັງໝົດ
+	Remove Background	ລຶບພື້ນຫຼັງອອກ
+	Remove Planes	ລຶບລະນhistoryາບອອກ
+	Remove stop	ລຶບຈຸດຢຸດສີ
+	Remove variable	ລຶບຕົວປ່ຽນ
+	Rename	ປ່ຽນຊື່
+	Rename Group…	ປ່ຽນຊື່ກຸ່ມ…
+	Rename Layer…	ປ່ຽນຊື່ເລເຢີ…
+	Rename Tool Preset…	ປ່ຽນຊື່ຄ່າຕິດຕັ້ງລ່ວງໜ້າຂອງເຄື່ອງມື…
+	Rename…	ປ່ຽນຊື່…
+	Resample	ປ່ຽນຂະໜາດສຸ່ມຕົວຢ່າງໃໝ່
+	Reset All to Defaults	ຕັ້ງຄ່າທັງໝົດກັບເປັນຄ່າເລີ່ມຕົ້ນ
+	Import Shortcuts…	ນຳເຂົ້າປຸ່ມລັດ…
+	Load a keyboard shortcut set saved as .kys	ໂຫຼດຊຸດປຸ່ມລັດແປ້ນພິມທີ່ບັນທຶກເປັນ .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	ນຳເຂົ້າ {n} ປຸ່ມລັດຈາກ {file} ແລ້ວ. ຄລິກ ຕົກລົງ ເພື່ອຮັກສາໄວ້.
+	{n} commands are not in PhotoCraft.	{n} ຄຳສັ່ງບໍ່ມີຢູ່ໃນ PhotoCraft.
+	Keyboard shortcuts imported	ນຳເຂົ້າປຸ່ມລັດແປ້ນພິມແລ້ວ
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	ຊຸດປຸ່ມລັດແປ້ນພິມຂອງທ່ານ {set} ກຳລັງຖືກນຳໃຊ້ຢູ່ບ່ອນນີ້: ມີ {n} ປຸ່ມລັດທີ່ຕ່າງຈາກຄ່າເລີ່ມຕົ້ນ. ສາມາດເບິ່ງໄດ້ທີ່ ແກ້ໄຂ › ປຸ່ມລັດແປ້ນພິມ; ຄລິກ ຕັ້ງຄ່າທັງໝົດກັບເປັນຄ່າເລີ່ມຕົ້ນ ເພື່ອຍົກເລີກການປ່ຽນແປງນີ້.
+	Import keyboard shortcuts?	ຕ້ອງການນຳເຂົ້າປຸ່ມລັດແປ້ນພິມບໍ່?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft ພົບເຫັນຊຸດປຸ່ມລັດແປ້ນພິມຂອງທ່ານ {set} ຈາກໂປຣແກຣມແກ້ໄຂຮູບພາບອື່ນໃນຄອມພິວເຕີນີ້: ມີ {n} ປຸ່ມລັດທີ່ຕ່າງຈາກຂອງ PhotoCraft. ຕ້ອງການນຳເຂົ້າມາບໍ່?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	ແກ້ໄຂ › ປຸ່ມລັດແປ້ນພິມ › ຕັ້ງຄ່າທັງໝົດກັບເປັນຄ່າເລີ່ມຕົ້ນ ສາມາດຍົກເລີກການນຳເຂົ້າໄດ້.
+	Don't Import	ບໍ່ນຳເຂົ້າ
+	The keyboard shortcut set was not imported: {error}	ບໍ່ສາມາດນຳເຂົ້າຊຸດປຸ່ມລັດແປ້ນພິມໄດ້: {error}
+	Reset Section	ຕັ້ງຄ່າພາກສ່ວນໃໝ່
+	Reset Transform	ຕັ້ງຄ່າການແປງຮູບໃໝ່
+	Reset to defaults	ຕັ້ງຄ່າກັບເປັນຄ່າເລີ່ມຕົ້ນ
+	Resolution	ຄວາມລະອຽດ
+	Resolution:	ຄວາມລະອຽດ:
+	Restore All	ກູ້ຄືນທັງໝົດ
+	Restore Defaults	ກູ້ຄືນຄ່າເລີ່ມຕົ້ນ
+	Restrictive (Web)	ຈຳກັດ (ເວັບ)
+	Right align text	ຈັດຂໍ້ຄວາມໄປທາງຂວາ
+	Rigid	ແຂງເກຣັງ
+	Rotate:	ໝູນ:
+	Rotation	ການໝູນ
+	Roughness	ຄວາມຫຍາບ
+	Roundness	ຄວາມມົນ
+	Roundness Jitter	ການກະຈາຍຄວາມມົນ
+	Rulers & Grids	ໄມ້ບັນທັດ ແລະ ເສັ້ນຕາໜ່າງ
+	Sample All Layers	ເກັບຕົວຢ່າງຈາກທຸກເລເຢີ
+	Sample:	ຕົວຢ່າງ:
+	Sampling: Background Swatch	ການເກັບຕົວຢ່າງ: ແຖບສີພື້ນຫຼັງ
+	Sampling: Continuous	ການເກັບຕົວຢ່າງ: ຕໍ່ເນື່ອງ
+	Sampling: Once	ການເກັບຕົວຢ່າງ: ຄັ້ງດຽວ
+	Saturate	ເພີ່ມຄວາມອິ່ມຕົວຂອງສີ
+	Saturation	ຄວາມອິ່ມຕົວຂອງສີ
+	Saturation Jitter	ການກະຈາຍຄວາມອິ່ມຕົວຂອງສີ
+	Save HTML and Images	ບັນທຶກ HTML ແລະ ຮູບພາບ
+	Save as PDF	ບັນທຶກເປັນ PDF
+	Save selection as channel	ບັນທຶກພື້ນທີ່ເລືອກເປັນຊ່ອງສີ
+	Save…	ບັນທຶກ…
+	Scale to Fit Media	ປັບຂະໜາດໃຫ້ພໍດີກັບສື່
+	Scatter	ການກະຈາຍ
+	Scratch disks	ດິສກ໌ພື້ນທີ່ເຮັດວຽກຊົ່ວຄາວ
+	Search	ຄົ້ນຫາ
+	Search commands	ຄົ້ນຫາຄຳສັ່ງ
+	Search commands, tools and panels…	ຄົ້ນຫາຄຳສັ່ງ, ເຄື່ອງມື ແລະ ແຜງຄວບຄຸມ…
+	Search fonts	ຄົ້ນຫາຟອນ
+	Select All	ເລືອກທັງໝົດ
+	Select Subject	ເລືອກວັດຖຸຫຼັກ
+	Select a type layer or click into text to insert glyphs	ເລືອກເລເຢີຂໍ້ຄວາມ ຫຼື ຄລິກໃສ່ຂໍ້ຄວາມເພື່ອແຊກຮູບອັກສອນ
+	Select text to apply a character style	ເລືອກຂໍ້ຄວາມເພື່ອນຳໃຊ້ຮູບແບບຕົວອັກສອນ
+	Select:	ເລືອກ:
+	Selections	ພື້ນທີ່ເລືອກ
+	Selective	ເລືອກສະເພາະ
+	Selective Color	ເລືອກປັບສະເພາະສີ
+	Send the selected pin backward	ສົ່ງໝຸດທີ່ເລືອກໄປທາງຫຼັງ
+	Set additional smoothing options	ຕັ້ງຄ່າຕົວເລືອກຄວາມລຽບນຽນເພີ່ມເຕີມ
+	Set background color	ຕັ້ງສີພື້ນຫຼັງ
+	Set foreground color	ຕັ້ງສີພື້ນໜ້າ
+	Set painting symmetry options	ຕັ້ງຄ່າຕົວເລືອກຄວາມສົມມາດໃນການແຕ້ມ
+	Symmetry Off	ປິດຄວາມສົມມາດ
+	Set shape fill type	ຕັ້ງປະເພດການຕື່ມສີຮູບຮ່າງ
+	Set shape stroke type	ຕັ້ງປະເພດເສັ້ນຂອບຮູບຮ່າງ
+	Set the text color	ຕັ້ງສີຂໍ້ຄວາມ
+	Shadows	ເງົາ
+	Shape:	ຮູບຮ່າງ:
+	Sharpening	ການປັບໃຫ້ຄົມຊັດ
+	Shift	Shift
+	Shortcut removed.	ລຶບປຸ່ມລັດອອກແລ້ວ.
+	Show All Menu Items	ສະແດງລາຍການເມນູທັງໝົດ
+	Show Backdrop	ສະແດງສາກຫຼັງ
+	Show Guides	ສະແດງເສັ້ນນຳສາຍຕາ
+	Show Mask	ສະແດງໜ້າກາກ
+	Show Mesh	ສະແດງຕາໜ່າງ
+	Show Overlay	ສະແດງການວາງທັບ
+	Show Transform Controls	ສະແດງຕົວຄວບຄຸມການແປງຮູບ
+	Show or hide the Notes panel	ສະແດງ ຫຼື ເຊື່ອງແຜງໂນ້ດ
+	Show:	ສະແດງ:
+	Sides	ຈຳນວນດ້ານ
+	Sides:	ຈຳນວນດ້ານ:
+	Size	ຂະໜາດ
+	Size Jitter	ການກະຈາຍຂະໜາດ
+	Size:	ຂະໜາດ:
+	Slice Options…	ຕົວເລືອກສ່ວນແບ່ງ…
+	Slices From Guides	ສ້າງສ່ວນແບ່ງຈາກເສັ້ນນຳສາຍຕາ
+	Slices are locked (View › Lock Slices)	ສ່ວນແບ່ງຖືກລັອກຢູ່ (ມຸມມອງ › ລັອກສ່ວນແບ່ງ)
+	Small Caps	ຕົວພິມໃຫຍ່ຂະໜາດນ້ອຍ
+	Smoothing	ຄວາມລຽບນຽນ
+	Space After	ຍະຫວ່າງຫຼັງວັກ
+	Space Before	ຍະຫວ່າງກ່ອນວັກ
+	Spacing	ຍະຫ່າງ
+	Spell check complete.	ກວດສອບຕົວສະກົດສຳເລັດແລ້ວ.
+	Split:	ແບ່ງ:
+	Star ratio	ອັດຕາສ່ວນຮູບດາວ
+	Stop playing/recording	ຢຸດຫຼິ້ນ/ບັນທຶກ
+	Straighten	ດັດໃຫ້ຊື່
+	Straighten Layer	ດັດເລເຢີໃຫ້ຊື່
+	Strength:	ຄວາມແຮງ:
+	Strikethrough	ຂີດຂ້າ
+	Stroke	ເສັ້ນຂອບ
+	Stroke Catch-up	ແຕ້ມເສັ້ນຂອບໄລ່ຕາມທັນ
+	Stroke:	ເສັ້ນຂອບ:
+	Location	ຕຳແໜ່ງ
+	Location:	ຕຳແໜ່ງ:
+	Preserve Transparency	ຮັກສາຄວາມໂປ່ງໃສ
+	Style	ຮູບແບບ
+	Style Options	ຕົວເລືອກຮູບແບບ
+	Style Options…	ຕົວເລືອກຮູບແບບ…
+	Style: Normal	ຮູບແບບ: ປົກກະຕິ
+	Subtract from Sample	ຫັກລົບອອກຈາກຕົວຢ່າງ
+	Subtract from selection  ({key})	ຫັກລົບອອກຈາກພື້ນທີ່ເລືອກ  ({key})
+	Suggestions:	ຄຳແນະນຳ:
+	Swap colours (X)	ສະຫຼັບສີ (X)
+	Swaps height and width	ສະຫຼັບລວງສູງ ແລະ ລວງກວ້າງ
+	Switch between free transform and warp modes	ສະຫຼັບລະຫວ່າງໂໝດແປງຮູບອິດສະຫຼະ ແລະ ດັດຮູບຮ່າງ
+	Switch theme	ປ່ຽນຮູບແບບສີສັນ
+	Temperature	ອຸນຫະພູມສີ
+	Tetrahedral	ສີ່ໜ້າ
+	Text Position:	ຕຳແໜ່ງຂໍ້ຄວາມ:
+	Texture	ພື້ນຜິວ
+	Texture Each Tip	ໃສ່ພື້ນຜິວທຸກໆປາຍແປງ
+	Threshold	ຄ່າຂີດແບ່ງ
+	Threshold Level	ລະດັບຄ່າຂີດແບ່ງ
+	Thumbnail size (smallest: list)	ຂະໜາດຮູບຫຍໍ້ (ນ້ອຍສຸດ: ລາຍການ)
+	Tilt X	ອຽງຕາມແກນ X
+	Tilt Y	ອຽງຕາມແກນ Y
+	Tint	ຍ້ອມສີ
+	Toggle count group visibility	ເປີດ-ປິດການສະແດງກຸ່ມນັບ
+	Toggle text orientation	ສະຫຼັບທິດທາງຂໍ້ຄວາມ
+	Tolerance	ຄ່າຍອມຮັບໄດ້
+	Tolerance:	ຄ່າຍອມຮັບໄດ້:
+	Tone:	ໂທນສີ:
+	Toolbar	ແຖບເຄື່ອງມື
+	Top	ດ້ານເທິງ
+	Total:	ລວມທັງໝົດ:
+	Tracking	ໄລຍະຫ່າງຕົວອັກສອນລວມ
+	Tracking (1/1000 em)	ໄລຍະຫ່າງຕົວອັກສອນລວມ (1/1000 em)
+	Transparency	ຄວາມໂປ່ງໃສ
+	Transparent	ໂປ່ງໃສ
+	Trilinear	ສາມເສັ້ນ
+	Type Styles	ຮູບແບບຕົວອັກສອນ
+	Type:	ປະເພດ:
+	Underline	ຂີດກ້ອງ
+	Untitled	ບໍ່ມີຫົວຂໍ້
+	Untitled-1	ບໍ່ມີຫົວຂໍ້-1
+	Update layer comp (visibility, position and appearance)	ອັບເດດອົງປະກອບເລເຢີ (ການສະແດງ, ຕຳແໜ່ງ ແລະ ຮູບລັກສະນະ)
+	Use Default	ໃຊ້ຄ່າເລີ່ມຕົ້ນ
+	Use Legacy	ໃຊ້ຮູບແບບເດີມ
+	Use Measurement Scale	ໃຊ້ມາດຕາສ່ວນວັດແທກ
+	Variables bind a layer's visibility, text or pixels to a named data slot.	ຕົວປ່ຽນຈະຜູກມັດການສະແດງຜົນ, ຂໍ້ຄວາມ ຫຼື ພິກເຊວຂອງເລເຢີໃສ່ຊ່ອງຂໍ້ມູນທີ່ມີຊື່.
+	Vertical scale	ອັດຕາສ່ວນແນວຕັ້ງ
+	Vibrance	ຄວາມສົດຂອງສີ
+	View Options	ຕົວເລືອກມຸມມອງ
+	Vignetting	ຂອບຮູບມືດ
+	Violet, Orange	ສີມ່ວງ, ສີສົ້ມ
+	Visibility	ການສະແດງຜົນ
+	Visible	ສະແດງ
+	Warp:	ດັດຮູບຮ່າງ:
+	Web Snap	ດູດຕິດສີເວັບ
+	Weight	ຄວາມໜາ
+	Weight:	ຄວາມໜາ:
+	White	ສີຂາວ
+	White Balance: As Shot	ຄວາມສົມດຸນສີຂາວ: ຕາມທີ່ຖ່າຍມາ
+	Whites	ໂທນສີຂາວ
+	Width	ລວງກວ້າງ
+	Slant	ຄວາມອຽງ
+	Width:	ລວງກວ້າງ:
+	Work Path	ເສັ້ນພາດເຮັດວຽກ
+	Yellow	ສີເຫຼືອງ
+	Yellow  ·  Blue	ສີເຫຼືອງ · ສີຟ້າ
+	Zoom	ຊູມ
+	Zoom in	ຊູມເຂົ້າ
+	Zoom out	ຊູມອອກ
+	command or shortcut	ຄຳສັ່ງ ຫຼື ປຸ່ມລັດ
+	current	ປະຈຸບັນ
+	image file path	ເສັ້ນທາງໄຟລ໌ຮູບພາບ
+	modified	ດັດແກ້ແລ້ວ
+	name	ຊື່
+	new	ໃໝ່
+	{name} options	ຕົວເລືອກ {name}
+	↑↓ navigate   {key} run   esc close	↑↓ ເລື່ອນ   {key} ສັ່ງການ   esc ປິດ
+	Version {version}	ເວີຊັນ {version}
+	New Document	ເອກະສານໃໝ່
+	New Document With Mask	ເອກະສານໃໝ່ພ້ອມໜ້າກາກ
+	New Layer With Mask	ເລເຢີໃໝ່ພ້ອມໜ້າກາກ
+	Saved	ບັນທຶກແລ້ວ
+	Save Preset…	ບັນທຶກຄ່າຕິດຕັ້ງລ່ວງໜ້າ…
+	Preset Name	ຊື່ຄ່າຕິດຕັ້ງລ່ວງໜ້າ
+	No saved presets yet.	ຍັງບໍ່ມີຄ່າຕິດຕັ້ງລ່ວງໜ້າທີ່ບັນທຶກໄວ້.
+	Error	ຂໍ້ຜິດພາດ
+	Command	ຄຳສັ່ງ
+	Adjustment layers have nothing to transform	ເລເຢີປັບແຕ່ງບໍ່ມີສິ່ງໃດໃຫ້ແປງຮູບ
+	Altitude	ລະດັບຄວາມສູງ
+	Android 1080p	Android 1080p
+	Apple Watch 45mm	Apple Watch 45mm
+	Aqua	ສີນ້ຳທະເລ
+	Art & Illustration	ສິລະປະ ແລະ ພາບປະກອບ
+	ArtCraft	ArtCraft
+	Background Eraser Tool	ເຄື່ອງມືຢາງລຶບພື້ນຫຼັງ
+	Bevel & Emboss	ມຸມອຽງ ແລະ ລາຍນູນ
+	Blend Mode	ໂໝດຜະສົມສີ
+	Blues	ໂທນສີຟ້າ
+	Blur Tool	ເຄື່ອງມືເຮັດມົວ
+	Bold	ຕົວໜາ
+	Brush	ແປງ
+	Pencil	ສໍ
+	Block	ບລັອກ
+	Brush Pose	ທ່າທາງແປງ
+	Brush Tip Shape	ຮູບຮ່າງປາຍແປງ
+	Brush Tool	ເຄື່ອງມືແປງ
+	Build-up	ສະສົມທັບຊ້ອນ
+	Burn Tool	ເຄື່ອງມືເຜົາສີໃຫ້ເຂັ້ມ
+	Centimeters	ຊັງຕີແມັດ
+	Choke	ບີບຂອບ
+	Classic	ຄລາສສິກ
+	Click to add text	ຄລິກເພື່ອເພີ່ມຂໍ້ຄວາມ
+	Click to fill similar colours	ຄລິກເພື່ອຕື່ມສີທີ່ຄ້າຍຄືກັນ
+	Clone Stamp Tool	ເຄື່ອງມືສະແຕມໂຄລນ
+	Color Burn	ເຜົາສີ
+	Color Dodge	ຫຼົບສີ
+	Color Dynamics	ການເຄື່ອນໄຫວປ່ຽນແປງຂອງສີ
+	Color Overlay	ວາງທັບສີ
+	Comic Book	ປຶ້ມກາຕູນ
+	Conform	ປັບຕາມຮູບຊົງ
+	Content-Aware Fill needs a selection on a pixel layer	ການຕື່ມສີຕາມເນື້ອຫາຮຽກຮ້ອງໃຫ້ມີພື້ນທີ່ເລືອກເທິງເລເຢີພິກເຊວ
+	Could not transform: the layer is empty	ບໍ່ສາມາດແປງຮູບໄດ້: ເລເຢີຫວ່າງເປົ່າ
+	Could not use Perspective Warp: the layer is empty	ບໍ່ສາມາດໃຊ້ການດັດພາບຕາມທັດສະນີຍະພາບໄດ້: ເລເຢີຫວ່າງເປົ່າ
+	Could not use Puppet Warp: no opaque pixels	ບໍ່ສາມາດໃຊ້ການດັດພາບແບບຫຸ່ນເຊີດໄດ້: ບໍ່ມີພິກເຊວທຶບແສງ
+	Could not use Puppet Warp: the layer is empty	ບໍ່ສາມາດໃຊ້ການດັດພາບແບບຫຸ່ນເຊີດໄດ້: ເລເຢີຫວ່າງເປົ່າ
+	Crop Tool	ເຄື່ອງມືຕັດຂອບ
+	Crosswise	ແນວຕັດຂວາງ
+	Current Tool	ເຄື່ອງມືປະຈຸບັນ
+	Custom Shape Tool	ເຄື່ອງມືຮູບຮ່າງກຳນົດເອງ
+	Cyans	ໂທນສີຟ້າຂຽວ
+	Default PhotoCraft Size	ຂະໜາດເລີ່ມຕົ້ນຂອງ PhotoCraft
+	Delete Workspace	ລຶບພື້ນທີ່ເຮັດວຽກ
+	Diamond	ຮູບສີ່ແຈສາກເພັດ
+	Dimensions:	ຂະໜາດມິຕິ:
+	Direction	ທິດທາງ
+	Distance	ໄລຍະຫ່າງ
+	Document Dimensions	ຂະໜາດມິຕິເອກະສານ
+	Document Profile	ໂປຣໄຟລ໌ເອກະສານ
+	Document Sizes	ຂະໜາດເອກະສານ
+	Dodge Tool	ເຄື່ອງມືຫຼົບແສງ
+	Down	ລົງ
+	Drag to draw a gradient	ລາກເພື່ອແຕ້ມສີໄລ່ລະດັບ
+	Drag to move the active layer	ລາກເພື່ອຍ້າຍເລເຢີທີ່ໃຊ້ງານຢູ່
+	Drag to pan  ·  hold Space with any tool	ລາກເພື່ອເລື່ອນມຸມມອງ · ກົດ Space ຄ້າງໄວ້ກັບເຄື່ອງມືໃດກໍໄດ້
+	Drop Shadow	ເງົາຕົກກະທົບ
+	Dual Brush	ແປງຄູ່
+	Edge	ຂອບ
+	Efficiency	ປະສິດທິພາບ
+	Efficiency: 100%	ປະສິດທິພາບ: 100%
+	Ellipse Tool	ເຄື່ອງມືຮູບວົງມົນຮີ
+	Elliptical Marquee Tool	ເຄື່ອງມືເລືອກຂອບເຂດແບບວົງຮີ
+	Single Row Marquee Tool	ເຄື່ອງມືເລືອກຂອບເຂດແຖວດຽວ
+	Single Column Marquee Tool	ເຄື່ອງມືເລືອກຂອບເຂດຖັນດຽວ
+	Emboss	ລາຍນູນ
+	Eraser	ຢາງລຶບ
+	Eraser Tool	ເຄື່ອງມືຢາງລຶບ
+	ExtraBold	ໜາພິເສດ
+	ExtraLight	ບາງພິເສດ
+	Eyedropper Tool	ເຄື່ອງມືດູດສີ
+	Fade	ຄ່ອຍຈາງຫາຍ
+	Fill Opacity	ຄວາມທຶບແສງຂອງການຕື່ມສີ
+	Film & Video	ຮູບເງົາ ແລະ ວິດີໂອ
+	From	ຈາກ
+	General	ທົ່ວໄປ
+	GitHub	GitHub
+	Gradient Overlay	ວາງທັບສີໄລ່ລະດັບ
+	Gradient Tool	ເຄື່ອງມືສີໄລ່ລະດັບ
+	Greens	ໂທນສີຂຽວ
+	Hand Tool	ເຄື່ອງມືຮູບມື
+	Hard	ແຂງ
+	Hard Mix	ປະສົມແຂງ
+	Healing Brush Tool	ເຄື່ອງມືແປງຮັກສາຮອຍ
+	Highlights from:	ສ່ວນສະຫວ່າງເລີ່ມຈາກ:
+	History Brush Tool	ເຄື່ອງມືແປງປະຫວັດການເຮັດວຽກ
+	Horizontal Type Tool	ເຄື່ອງມືຂໍ້ຄວາມແນວນອນ
+	Horizontal Type Mask Tool	ເຄື່ອງມືໜ້າກາກຂໍ້ຄວາມແນວນອນ
+	Vertical Type Mask Tool	ເຄື່ອງມືໜ້າກາກຂໍ້ຄວາມແນວຕັ້ງ
+	Image Size:	ຂະໜາດຮູບພາບ:
+	Inches	ນິ້ວ
+	Indexed	ອິນເດັກ
+	Initial Direction	ທິດທາງເລີ່ມຕົ້ນ
+	Inner Bevel	ມຸມອຽງທາງໃນ
+	Inner Glow	ແສງເຮືອງທາງໃນ
+	Inner Shadow	ເງົາທາງໃນ
+	Lab	Lab
+	Landscape, 10 x 8	ແນວນອນ, 10 x 8
+	Landscape, 6 x 4	ແນວນອນ, 6 x 4
+	Landscape, 7 x 5	ແນວນອນ, 7 x 5
+	Lasso	ເຊືອກບ້ວງ
+	Lasso Tool	ເຄື່ອງມືເຊືອກບ້ວງ
+	Layer Count	ຈຳນວນເລເຢີ
+	Layer Knocks Out Drop Shadow	ເລເຢີຕັດບັງເງົາຕົກກະທົບ
+	Legal	Legal
+	Letter	Letter
+	Light	ບາງ
+	Line Tool	ເຄື່ອງມືເສັ້ນ
+	Linear	ແບບເສັ້ນ
+	Linear Burn	ເຜົາສີແບບເສັ້ນ
+	Linear Height	ລວງສູງແບບເສັ້ນ
+	Link with Layer	ເຊື່ອມໂຍງກັບເລເຢີ
+	Lorem Ipsum	Lorem Ipsum
+	Magentas	ໂທນສີບົວບານເຢັນ
+	Magic Eraser Tool	ເຄື່ອງມືຢາງລຶບວິເສດ
+	Magic Wand Tool	ເຄື່ອງມືໄມ້ກາຍະສິດ
+	Marquee	ຂອບເຂດເສັ້ນເລືອກ
+	Mean:	ຄ່າສະເລ່ຍ:
+	Measurement Scale	ມາດຕາສ່ວນວັດແທກ
+	Measurement Scale Marker	ເຄື່ອງໝາຍມາດຕາສ່ວນວັດແທກ
+	Millimeters	ມິນລິແມັດ
+	Mobile	ມືຖື
+	Move Tool	ເຄື່ອງມືຍ້າຍ
+	Could not use the move tool because the layer is locked.	ບໍ່ສາມາດໃຊ້ເຄື່ອງມືຍ້າຍໄດ້ເນື່ອງຈາກເລເຢີຖືກລັອກ.
+	Could not complete the Free Transform command because the layer is locked.	ບໍ່ສາມາດດຳເນີນຄຳສັ່ງແປງຮູບອິດສະຫຼະໃຫ້ສຳເລັດໄດ້ເນື່ອງຈາກເລເຢີຖືກລັອກ.
+	Multiply	ຄູນສີ
+	My Brushes	ແປງຂອງຂ້ອຍ
+	Neutrals	ສີກາງ
+	New Workspace	ພື້ນທີ່ເຮັດວຽກໃໝ່
+	Note Tool	ເຄື່ອງມືໂນ້ດ
+	Object Selection Tool	ເຄື່ອງມືເລືອກວັດຖຸ
+	Off	ປິດ
+	Open	ເປີດ
+	Orange	ສີສົ້ມ
+	Original Ratio	ອັດຕາສ່ວນເດີມ
+	Out Of Gamut	ຢູ່ນອກຂອບເຂດສີ
+	Outer Bevel	ມຸມອຽງທາງນອກ
+	Outer Glow	ແສງເຮືອງທາງນອກ
+	Overlay	ວາງທັບ
+	Paint Bucket Tool	ເຄື່ອງມືຖັງສີ
+	Paints from the document's opening state	ແຕ້ມຈາກສະຖານະຕອນເປີດເອກະສານ
+	Path Selection Tool	ເຄື່ອງມືເລືອກເສັ້ນພາດ
+	Direct Selection Tool	ເຄື່ອງມືເລືອກໂດຍກົງ
+	Add Anchor Point Tool	ເຄື່ອງມືເພີ່ມຈຸດສະມໍ
+	Delete Anchor Point Tool	ເຄື່ອງມືລຶບຈຸດສະມໍ
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	ຄລິກໃສ່ສ່ວນເສັ້ນເພື່ອເພີ່ມຈຸດສະມໍ · {alt}-ຄລິກ ໃສ່ຈຸດສະມໍເພື່ອລຶບມັນອອກ
+	Click an anchor point to delete it · {alt}-click a segment to add one	ຄລິກໃສ່ຈຸດສະມໍເພື່ອລຶບມັນອອກ · {alt}-ຄລິກ ໃສ່ສ່ວນເສັ້ນເພື່ອເພີ່ມຈຸດສະມໍ
+	Pattern Overlay	ວາງທັບລວດລາຍ
+	Pen Pressure	ແຮງກົດປາກກາ
+	Pen Tilt	ການອຽງປາກກາ
+	Pen Tool	ເຄື່ອງມືປາກກາ
+	Convert Point Tool	ເຄື່ອງມືປ່ຽນຮູບແບບຈຸດ
+	Photo	ຮູບພາບ
+	PhotoCraft website	ເວັບໄຊ PhotoCraft
+	Picas	ໄພກາ
+	Pillow Emboss	ລາຍນູນແບບໝອນ
+	Pixel Replacement	ການປ່ຽນແທນພິກເຊວ
+	Pixels	ພິກເຊວ
+	Points	ພອຍຕ໌
+	Polygon Tool	ເຄື່ອງມືຮູບຫຼາຍແຈ
+	Polygonal Lasso Tool	ເຄື່ອງມືເຊືອກບ້ວງຫຼາຍແຈ
+	Portrait, 4 x 6	ແນວຕັ້ງ, 4 x 6
+	Portrait, 5 x 7	ແນວຕັ້ງ, 5 x 7
+	PostScript (72 points/inch)	PostScript (72 ພອຍຕ໌/ນິ້ວ)
+	Postcard	ໂປສກາດ
+	Poster	ໂປສເຕີ
+	Pro (Dark)	ໂປຣ (ມືດ)
+	Pro (Light)	ໂປຣ (ສະຫວ່າງ)
+	Pro (Light Gray)	ໂປຣ (ສີເທົາອ່ອນ)
+	Pro (Medium Gray)	ໂປຣ (ສີເທົາປານກາງ)
+	Protect Texture	ປົກປ້ອງພື້ນຜິວ
+	Purple	ສີມ່ວງ
+	Quick Mask	ໜ້າກາກດ່ວນ
+	Quick Selection Tool	ເຄື່ອງມືເລືອກດ່ວນ
+	Radial	ແບບລັດສະໝີວົງມົນ
+	Rasterize Layer	ແປງເລເຢີເປັນຣາສເຕີຣ໌
+	Rasterize Layers	ແປງບັນດາເລເຢີເປັນຣາສເຕີຣ໌
+	Ratio	ອັດຕາສ່ວນ
+	Recent	ຫຼ້າສຸດ
+	Rectangle Tool	ເຄື່ອງມືຮູບສີ່ແຈສາກ
+	Rectangular Marquee Tool	ເຄື່ອງມືເລືອກຂອບເຂດແບບສີ່ແຈສາກ
+	Reds	ໂທນສີແດງ
+	Reflected	ສະທ້ອນ
+	Sample: foreground colour	ຕົວຢ່າງ: ສີພື້ນໜ້າ
+	Sampled Colors	ສີທີ່ເກັບຕົວຢ່າງແລ້ວ
+	Satin	ຜ້າແພຊາຕິນ
+	Save Pixel Aspect Ratio	ບັນທຶກອັດຕາສ່ວນຂະໜາດພິກເຊວ
+	Scattering	ການກະຈາຍຕົວ
+	Scratch Sizes	ຂະໜາດພື້ນທີ່ເຮັດວຽກຊົ່ວຄາວ
+	Select Data Points	ເລືອກຈຸດຂໍ້ມູນ
+	Selection	ພື້ນທີ່ເລືອກ
+	SemiBold	ເກືອບໜາ
+	Shadows up to:	ເງົາຮອດ:
+	Shape Dynamics	ການປ່ຽນແປງຮູບຮ່າງ
+	Sharpen Tool	ເຄື່ອງມືປັບຄວາມຄົມຊັດ
+	Show Extras Options	ສະແດງຕົວເລືອກພິເສດເພີ່ມເຕີມ
+	Slice Select Tool	ເຄື່ອງມືເລືອກສ່ວນແບ່ງ
+	Slice Tool	ເຄື່ອງມືແບ່ງສ່ວນ
+	Smart Filters	ຟິວເຕີອັດສະລິຍະ
+	Smudge Tool	ເຄື່ອງມືຖູປ້າຍສີ
+	Soft	ນຸ່ມນວນ
+	Soften	ເຮັດໃຫ້ນຸ່ມນວນຂຶ້ນ
+	Source	ຕົ້ນສະບັບ
+	Source: set	ຕົ້ນສະບັບ: ຖືກຕັ້ງແລ້ວ
+	Sponge Tool	ເຄື່ອງມືຟອງນ້ຳ
+	Spot Healing Brush Tool	ເຄື່ອງມືແປງລຶບຮອຍສະເພາະຈຸດ
+	Spread	ການແຜ່ກະຈາຍ
+	Square, 12 x 12	ສີ່ແຈສາກຈັດຕຸລັດ, 12 x 12
+	Square, 5 x 5	ສີ່ແຈສາກຈັດຕຸລັດ, 5 x 5
+	Std Dev:	ຄ່າຜັນປ່ຽນມາດຕະຖານ:
+	Studio (Dark)	ສະຕູດິໂອ (ມືດ)
+	Studio (Light)	ສະຕູດິໂອ (ສະຫວ່າງ)
+	Stylus Wheel	ລໍ້ໝູນປາກກາສະໄຕລັສ
+	Subtract	ຫັກລົບ
+	Tabloid	ແທັບລອຍດ໌
+	Text Replacement	ການປ່ຽນແທນຂໍ້ຄວາມ
+	Thin	ບາງຫຼາຍ
+	Traditional (72.27 points/inch)	ແບບດັ້ງເດີມ (72.27 ພອຍຕ໌/ນິ້ວ)
+	Transfer	ການຖ່າຍໂອນ
+	Triangle Tool	ເຄື່ອງມືຮູບສາມແຈ
+	Unsaved changes	ການປ່ຽນແປງທີ່ຍັງບໍ່ໄດ້ບັນທຶກ
+	Uses the foreground and background colours.	ໃຊ້ສີພື້ນໜ້າ ແລະ ສີພື້ນຫຼັງ.
+	Web	ເວັບ
+	Web Large	ເວັບຂະໜາດໃຫຍ່
+	Web Minimum	ເວັບຂະໜາດຕ່ຳສຸດ
+	Web Most Common	ເວັບຂະໜາດທົ່ວໄປ
+	WebP (lossless)	WebP (ບໍ່ສູນເສຍຄຸນນະພາບ)
+	Wet Edges	ຂອບປຽກ
+	Yellows	ໂທນສີເຫຼືອງ
+	Zoom Tool	ເຄື່ອງມືຊູມ
+	{name} Properties	ຄຸນສົມບັດ {name}
+	Revert “{name}” to the last saved version? Your changes will be lost.	ຄືນຄ່າ “{name}” ໄປຫາເວີຊັນທີ່ບັນທຶກຫຼ້າສຸດບໍ່? ການປ່ຽນແປງຂອງທ່ານຈະສູນຫາຍໄປ.
+	Do you want to save the changes you made to “{name}” before quitting?	ທ່ານຕ້ອງການບັນທຶກການປ່ຽນແປງໃນ “{name}” ກ່ອນອອກຈາກໂປຣແກຣມບໍ່?
+	Do you want to save the changes you made to “{name}” before closing?	ທ່ານຕ້ອງການບັນທຶກການປ່ຽນແປງໃນ “{name}” ກ່ອນປິດບໍ່?
+	Doc: {flat}/{layered}	ເອກະສານ: {flat}/{layered}
+	Scratch: {size}	ດິສກ໌ຊົ່ວຄາວ: {size}
+	Untagged {mode}	ບໍ່ມີແທັກ {mode}
+	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
+	Resolution: {dpi} pixels/inch	ຄວາມລະອຽດ: {dpi} ພິກເຊວ/ນິ້ວ
+	Doc: {w} × {h} px	ເອກະສານ: {w} × {h} px
+	Frame {current} / {total}	ເຟຣມ {current} / {total}
+	Count: {n}	ຈຳນວນ: {n}
+	BLANK DOCUMENT PRESETS ({n})	ຄ່າຕິດຕັ້ງລ່ວງໜ້າເອກະສານເປົ່າ ({n})
+	Constraints ({n})	ເງື່ອນໄຂບັງຄັບ ({n})
+	Align {what}	ຈັດລຽງ {what}
+@plural	{n} Layer|{n} Layers	{n} ເລເຢີ
+@plural	{n} layer|{n} layers	{n} ເລເຢີ
+@plural	Group · {n} layer|Group · {n} layers	ກຸ່ມ · {n} ເລເຢີ
+	Additional plugins folder	ໂຟນເດີປລັກອິນເພີ່ມເຕີມ
+	Adobe	Adobe
+	Adobe rgb	Adobe RGB
+	Allow agent control	ອະນຸຍາດການຄວບຄຸມຈາກເອເຈນ
+	Allow scripts to connect	ອະນຸຍາດໃຫ້ສະຄຣິບເຊື່ອມຕໍ່ໄດ້
+	Always	ສະເໝີ
+	Always create smart objects when placing	ສ້າງສະມາດອອບເຈັກສະເໝີເມື່ອວາງໄຟລ໌
+	Animated zoom	ການຊູມແບບເຄື່ອນໄຫວ
+	Apply auto tone	ນຳໃຊ້ໂທນສີອັດຕະໂນມັດ
+	Ask	ຖາມກ່ອນ
+	Ask before saving layered tiff	ຖາມກ່ອນບັນທຶກໄຟລ໌ TIFF ທີ່ມີຫຼາຍເລເຢີ
+	Auto collapse icon panels	ພັບແຜງໄອຄອນເກັບອັດຕະໂນມັດ
+	Auto show hidden panels	ສະແດງແຜງທີ່ເຊື່ອງໄວ້ອັດຕະໂນມັດ
+	Auto show home screen	ສະແດງໜ້າຈໍຫຼັກອັດຕະໂນມັດ
+	Autosave	ບັນທຶກອັດຕະໂນມັດ
+	Autosave minutes	ໄລຍະເວລາບັນທຶກອັດຕະໂນມັດ (ນາທີ)
+	Beep when done	ດັງສຽງເຕືອນເມື່ອສຳເລັດ
+	Bicubic automatic	Bicubic ອັດຕະໂນມັດ
+	Bicubic sharper	Bicubic ຄົມຊັດກວ່າ
+	Bicubic smoother	Bicubic ລຽບນຽນກວ່າ
+	Bit depth	ຄວາມເລິກບິດ
+	Brush preview color	ສີສະແດງຕົວຢ່າງຂອງແປງ
+	Cache levels	ລະດັບແຄຊ
+	Cache tile size	ຂະໜາດໄທລ໌ແຄຊ
+	Camera Raw Defaults	ຄ່າເລີ່ມຕົ້ນ Camera Raw
+	Canvas border	ຂອບພື້ນຜ້າໃບ
+	Show canvas dots	ສະແດງຈຸດເທິງພື້ນຜ້າໃບ
+	Clip thumbnails to layer bounds	ຕັດຮູບຫຍໍ້ໃຫ້ພໍດີກັບຂອບເຂດເລເຢີ
+	Clip Thumbnails to Layer Bounds	ຕັດຮູບຫຍໍ້ໃຫ້ພໍດີກັບຂອບເຂດເລເຢີ
+	Canvas color	ສີພື້ນຜ້າໃບ
+	Canvas custom color	ສີພື້ນຜ້າໃບກຳນົດເອງ
+	Color picker	ຕົວເລືອກສີ
+	Color space	ພື້ນທີ່ສີ
+	Column width	ລວງກວ້າງຖັນ
+	Concise	ຫຍໍ້ກະທັດຮັດ
+	Control port	ພອດຄວບຄຸມ
+	Convert to srgb	ແປງເປັນ sRGB
+	Cursors	ເຄີເຊີ
+	Custom dark	ສີມືດກຳນົດເອງ
+	Custom light	ສີສະຫວ່າງກຳນົດເອງ
+	Dark	ມືດ
+	Dark gray	ສີເທົາເຂັ້ມ
+	Dashed lines	ເສັ້ນຂາດ
+	Destination	ປາຍທາງ
+	Detailed	ລະອຽດ
+	Disks	ດິສກ໌
+	Display p3	Display P3
+	Double click layer mask launches select and mask	ດັບເບິລຄລິກໃສ່ໜ້າກາກເລເຢີເພື່ອເປີດການເລືອກ ແລະ ໃສ່ໜ້າກາກ
+	Drop shadow	ເງົາຕົກກະທົບ
+	Dynamic color sliders	ແຖບເລື່ອນປັບສີແບບໄດນາມິກ
+	East asian	ອາຊີຕາເວັນອອກ
+	Effect cache mb	ແຄຊເອັບເຟັກ (MB)
+	Enable flick panning	ເປີດໃຊ້ການເລື່ອນມຸມມອງແບບສະບັດ
+	Enable floating document window docking	ເປີດໃຊ້ການຕິດໜ້າຕ່າງເອກະສານແບບລອຍຕົວ
+	Enable narrow options bar	ເປີດໃຊ້ແຖບຕົວເລືອກແບບແຄບ
+	Enabled	ເປີດໃຊ້ງານແລ້ວ
+	Enhanced Controls	ຕົວຄວບຄຸມຂັ້ນສູງ
+	Export clipboard	ສົ່ງອອກຄລິບບອດ
+	Extra large	ໃຫຍ່ພິເສດ
+	File Handling	ການຈັດການໄຟລ໌
+	File path	ເສັ້ນທາງໄຟລ໌
+	Fill new type layers with placeholder	ຕື່ມຂໍ້ຄວາມຕົວຢ່າງໃສ່ເລເຢີຂໍ້ຄວາມໃໝ່
+	Font preview	ສະແດງຕົວຢ່າງຟອນ
+	Full size tip	ປາຍແປງຂະໜາດເຕັມ
+	Gamut warning color	ສີເຕືອນຂອບເຂດສີເກີນ
+	Gamut warning opacity	ຄວາມທຶບແສງຂອງການເຕືອນຂອບເຂດສີເກີນ
+	Generator enabled	ເປີດໃຊ້ງານຕົວສ້າງ
+	Gif	GIF
+	Glossy	ເປັນເງົາ
+	Grid color	ສີເສັ້ນຕາໜ່າງ
+	Grid colors	ສີເສັ້ນຕາໜ່າງ
+	Grid size	ຂະໜາດເສັ້ນຕາໜ່າງ
+	Grid style	ຮູບແບບເສັ້ນຕາໜ່າງ
+	Grid unit	ຫົວໜ່ວຍເສັ້ນຕາໜ່າງ
+	Gridline every	ເສັ້ນຕາໜ່າງທຸກໆ
+	Guide color	ສີເສັ້ນນຳສາຍຕາ
+	Guide style	ຮູບແບບເສັ້ນນຳສາຍຕາ
+	Guides, Grid & Slices	ເສັ້ນນຳສາຍຕາ, ເສັ້ນຕາໜ່າງ ແລະ ສ່ວນແບ່ງ
+	Gutter	ໄລຍະຫ່າງລະຫວ່າງຖັນ
+	History Log	ບັນທຶກປະຫວັດການເຮັດວຽກ
+	History states	ຈຳນວນຂັ້ນຕອນປະຫວັດການເຮັດວຽກ
+	Ignore exif profile tag	ລະເລີຍແທັກໂປຣໄຟລ໌ EXIF
+	Image interpolation	ການປະມານຄ່າເມັດສີຮູບພາບ
+	Image previews	ສະແດງຕົວຢ່າງຮູບພາບ
+	Integrations	ການເຊື່ອມໂຍງລະບົບ
+	Interface	ສ່ວນຕິດຕໍ່ຜູ້ໃຊ້
+	Jpeg quality	ຄຸນນະພາບ JPEG
+	Jpg	JPG
+	Language	ພາສາ
+	Large tabs	ແທັບໃຫຍ່
+	Legacy compositing	ການປະສົມພາບແບບດັ້ງເດີມ
+	Light gray	ສີເທົາອ່ອນ
+	Line	ເສັ້ນ
+	Lines	ເສັ້ນ
+	Lossless	ບໍ່ສູນເສຍຄຸນນະພາບ
+	Lowercase extension	ນາມສະກຸນຕົວພິມນ້ອຍ
+	Maximize psd compatibility	ເພີ່ມຄວາມເຂົ້າກັນໄດ້ສູງສຸດຂອງໄຟລ໌ PSD
+	Medium gray	ສີເທົາປານກາງ
+	Memory usage mb	ການນຳໃຊ້ໜ່ວຍຄວາມຈຳ (MB)
+	Low resolution previews	ສະແດງຕົວຢ່າງຄວາມລະອຽດຕ່ຳ
+	Missing glyph protection	ປ້ອງກັນຮູບອັກສອນສູນຫາຍ
+	Modern	ທັນສະໄໝ
+	Nearest neighbor	ຈຸດໃກ້ຄຽງທີ່ສຸດ
+	Never	ບໍ່ເຄີຍ
+	Normal tip	ປາຍແປງປົກກະຕິ
+	Open as smart object	ເປີດເປັນສະມາດອອບເຈັກ
+	Open in camera raw	ເປີດໃນ Camera Raw
+	Open documents as tabs	ເປີດເອກະສານເປັນແທັບ
+	Overscroll	ເລື່ອນເກີນຂອບເຂດຜ້າໃບ
+	Performance	ປະສິດທິພາບການເຮັດວຽກ
+	Png	PNG
+	Point size	ຂະໜາດພອຍຕ໌
+	Precise	ຊັດເຈນແນ່ນອນ
+	Preserve details	ຮັກສາລາຍລະອຽດ
+	Print resolution	ຄວາມລະອຽດການພິມ
+	Pro	ໂປຣ
+	Pro light	ໂປຣ ແບບສະຫວ່າງ
+	Pro light gray	ໂປຣ ສີເທົາອ່ອນ
+	Pro medium	ໂປຣ ປານກາງ
+	Pro photo	ProPhoto
+	Quick export format	ຮູບແບບການສົ່ງອອກດ່ວນ
+	Quick export location	ບ່ອນເກັບການສົ່ງອອກດ່ວນ
+	Recent file count	ຈຳນວນໄຟລ໌ຫຼ້າສຸດ
+	Recent files	ໄຟລ໌ຫຼ້າສຸດ
+	Recent fonts	ຟອນຫຼ້າສຸດ
+	Recover on launch	ກູ້ຄືນເມື່ອເປີດໂປຣແກຣມ
+	Remember workspace changes	ຈື່ການປ່ຽນແປງຂອງພື້ນທີ່ເຮັດວຽກ
+	Resize image during place	ປັບຂະໜາດຮູບພາບຂະນະວາງໄຟລ໌
+	Rotate view with trackpad	ໝູນມຸມມອງດ້ວຍແທຣັກແພັດ
+	Same folder	ໂຟນເດີດຽວກັນ
+	Save in background	ບັນທຶກຢູ່ເບື້ອງຫຼັງ
+	Scratch Disks	ດິສກ໌ພື້ນທີ່ເຮັດວຽກຊົ່ວຄາວ
+	Screen	ສະກຣີນ
+	Screen resolution	ຄວາມລະອຽດໜ້າຈໍ
+	Scrubby slider acceleration	ການເລັ່ງຄວາມໄວແຖບເລື່ອນ
+	Sessions only	ສະເພາະເຊດຊັນນີ້
+	Sharpen for	ປັບຄວາມຄົມຊັດສຳລັບ
+	Show channels in color	ສະແດງຊ່ອງສີແບບມີສີສັນ
+	Show crosshair in brush tip	ສະແດງເຄື່ອງໝາຍບວກໃນປາຍແປງ
+	Show extension panels	ສະແດງແຜງສ່ວນຂະຫຍາຍ
+	Show font names in english	ສະແດງຊື່ຟອນເປັນພາສາອັງກິດ
+	Show menu colors	ສະແດງສີເມນູ
+	Show only crosshair while painting	ສະແດງສະເພາະເຄື່ອງໝາຍບວກຂະນະທາສີ
+	Show slice numbers	ສະແດງຕົວເລກສ່ວນແບ່ງ
+	Show tooltips	ສະແດງຄຳແນະນຳເຄື່ອງມື
+	Enable animations	ເປີດໃຊ້ງານພາບເຄື່ອນໄຫວ
+	Show highlight on rollover	ສະແດງຈຸດເດັ່ນເມື່ອເມົາສ໌ຊີ້ນຳ
+	Show transformation values	ສະແດງຄ່າການແປງຮູບ
+	Slice color	ສີສ່ວນແບ່ງ
+	Smart guide color	ສີເສັ້ນນຳສາຍຕາອັດສະລິຍະ
+	Smart quotes	ເຄື່ອງໝາຍວົງຢືມອັດສະລິຍະ
+	Snap vector tools and transforms to pixel grid	ດູດເຄື່ອງມືເວັກເຕີ ແລະ ການແປງຮູບໃຫ້ກົງຕາໜ່າງພິກເຊວ
+	Srgb	sRGB
+	Standard	ມາດຕະຖານ
+	Studio	ສະຕູດິໂອ
+	Studio light	ສະຕູດິໂອ ສະຫວ່າງ
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita ມືດ
+	Subdivisions	ການແບ່ງຍ່ອຍ
+	System	ລະບົບ
+	Text engine	ເຄື່ອງຈັກປະມວນຜົນຂໍ້ຄວາມ
+	Text file	ໄຟລ໌ຂໍ້ຄວາມ
+	Tiny	ນ້ອຍທີ່ສຸດ
+	Touch gestures	ທ່າທາງສຳຜັດ
+	Transparency & Gamut	ຄວາມໂປ່ງໃສ ແລະ ຂອບເຂດສີ
+	Type units	ຫົວໜ່ວຍຕົວໜັງສື
+	UI font size	ຂະໜາດຟອນ UI
+	UI scale	ມາດຕາສ່ວນ UI
+	Units & Rulers	ຫົວໜ່ວຍ ແລະ ໄມ້ບັນທັດ
+	Use additional plugins folder	ໃຊ້ໂຟນເດີປລັກອິນເພີ່ມເຕີມ
+	Use esc to commit	ໃຊ້ປຸ່ມ Esc ເພື່ອນຳໃຊ້
+	Use gpu	ໃຊ້ GPU
+	Use legacy free transform	ໃຊ້ການປ່ຽນຮູບແບບອິດສະຫຼະແບບດັ້ງເດີມ
+	Use shift key for tool switch	ໃຊ້ປຸ່ມ Shift ເພື່ອປ່ຽນເຄື່ອງມື
+	Vary round brush hardness on hud	ປັບຄວາມແຂງຂອງແປງມົນເທິງ HUD
+	Webp	WebP
+	World ready	ຮອງຮັບຫຼາຍພາສາ
+	Zoom clicked point to center	ຊູມຈຸດທີ່ຄລິກໄປໄວ້ເຄິ່ງກາງ
+	Zoom resizes windows	ຊູມພ້ອມປັບຂະໜາດປ່ອງຢ້ຽມ
+	Zoom with scroll wheel	ຊູມດ້ວຍລໍ້ເລື່ອນເມົາສ໌
+	Zoom with trackpad pinch	ຊູມດ້ວຍການຈີບນິ້ວເທິງແທຣັກແພັດ
+	Pass Through	ສົ່ງຜ່ານ
+	Dissolve	ກະຈາຍຕົວ
+	Darker Color	ສີເຂັ້ມກວ່າ
+	Linear Dodge (Add)	ລີນຽຣດອດຈ໌ (ເພີ່ມ)
+	Lighter Color	ສີສະຫວ່າງກວ່າ
+	Soft Light	ແສງອ່ອນ
+	Hard Light	ແສງແຂງ
+	Vivid Light	ແສງສົດໃສ
+	Linear Light	ແສງລີນຽຣ
+	Pin Light	ແສງພິນໄລທ໌
+	Exclusion	ຍົກເວັ້ນ
+	Divide	ຫານ
+	Luminosity	ຄວາມສະຫວ່າງ
+@plural	{n} sample|{n} samples	{n} ຕົວຢ່າງ
+	{added}, {removed} subtracted	ຍົກເວັ້ນ {added}, {removed}
+	Adjustment Preview	ຕົວຢ່າງການປັບແຕ່ງ
+	Airbrush: keeps depositing paint while the pointer rests.	ແອຣ໌ບຣັຊ: ພົ່ນສີຕໍ່ເນື່ອງເຖິງແມ່ນວ່າຕົວຊີ້ເມົາສ໌ຢຸດນິ້ງ.
+	Angle:	ມຸມ:
+	Blend If	ເງື່ອນໄຂປະສົມ
+	Close Tab Group	ປິດກຸ່ມແທັບ
+	Collapse	ພັບເກັບ
+	Collapse All Groups	ພັບເກັບທຸກກຸ່ມ
+	Collapse Panel Group	ພັບເກັບກຸ່ມພາແນລ
+	Collapse group  ({key}-click: all groups)	ພັບເກັບກຸ່ມ  ({key}-ຄລິກ: ທຸກກຸ່ມ)
+	Create new brush from the current settings	ສ້າງແປງໃໝ່ຈາກການຕັ້ງຄ່າປະຈຸບັນ
+	Create new brush from these settings	ສ້າງແປງໃໝ່ຈາກການຕັ້ງຄ່າເຫຼົ່ານີ້
+	Update the current brush with these settings	ອັບເດດແປງປະຈຸບັນດ້ວຍການຕັ້ງຄ່າເຫຼົ່ານີ້
+	Delete brush	ລຶບແປງ
+	Drag the arrow to set the angle, the dots to set the roundness	ລາກລູກສອນເພື່ອຕັ້ງຄ່າມຸມ, ລາກຈຸດເພື່ອຕັ້ງຄ່າຄວາມມົນ
+	Expand	ຂະຫຍາຍອອກ
+	Expand Panel Group	ຂະຫຍາຍກຸ່ມພາແນລ
+	Expand group  ({key}-click: all groups)	ຂະຫຍາຍກຸ່ມ  ({key}-ຄລິກ: ທຸກກຸ່ມ)
+	Fade steps	ຂັ້ນຕອນການຈາງລົງ
+	Hide the layer's effects  ({key}-click: all layers)	ເຊື່ອງເອັບເຟັກຂອງເລເຢຍ  ({key}-ຄລິກ: ທຸກເລເຢຍ)
+	Import Brushes… (.abr or image)	ນຳເຂົ້າແປງ… (.abr ຫຼື ຮູບພາບ)
+	Import Brush from Image…	ນຳເຂົ້າແປງຈາກຮູບພາບ…
+	Move Group Down	ຍ້າຍກຸ່ມລົງ
+	Move Group Up	ຍ້າຍກຸ່ມຂຶ້ນ
+	Reset the brush to the defaults	ຕັ້ງຄ່າແປງກັບເປັນຄ່າເລີ່ມຕົ້ນ
+	Restore original size	ຄືນຄ່າຂະໜາດເດີມ
+	Roundness:	ຄວາມມົນ:
+	Search Brushes	ຄົ້ນຫາແປງ
+	Show the layer's effects  ({key}-click: all layers)	ສະແດງເອັບເຟັກຂອງເລເຢຍ  ({key}-ຄລິກ: ທຸກເລເຢຍ)
+	Brush picker	ຕົວກວດເລືອກແປງ
+	Erase	ລຶບ
+	Right click with painting tools	ຄລິກຂວາດ້ວຍເຄື່ອງມືແຕ້ມ
+	System Info…	ຂໍ້ມູນລະບົບ…
+	System Info	ຂໍ້ມູນລະບົບ
+	More panels	ພາແນລເພີ່ມເຕີມ
+	More documents	ເອກະສານເພີ່ມເຕີມ
+	These settings aren't available in PhotoCraft yet.	ການຕັ້ງຄ່າເຫຼົ່ານີ້ຍັງບໍ່ມີໃຫ້ໃຊ້ໃນ PhotoCraft ເທື່ອ.
+	Graphics	ກຣາຟິກ
+	Reset GPU Backend	ຕັ້ງຄ່າ GPU Backend ໃໝ່
+	Applies at next launch.	ຈະມີຜົນໃນການເປີດໃຊ້ງານຄັ້ງຕໍ່ໄປ.
+	Click to sample the foreground colour  ·  {key}-click for background	ຄລິກເພື່ອເກັບຕົວຢ່າງສີໜ້າ  ·  {key}-ຄລິກ ສຳລັບສີພື້ນຫຼັງ
+	{key}-click to set the source	{key}-ຄລິກ ເພື່ອກຳນົດຕົ້ນສະບັບ
+	{key} to subtract	{key} ເພື່ອຫັກລົບ
+	Clone source {n} ({key}-click with Clone Stamp to set)	ຕົ້ນສະບັບໂຄລນ {n} ({key}-ຄລິກ ດ້ວຍ Clone Stamp ເພື່ອກຳນົດ)
+	Source: not set ({key}-click with Clone Stamp)	ຕົ້ນສະບັບ: ບໍ່ໄດ້ກຳນົດ ({key}-ຄລິກ ດ້ວຍ Clone Stamp)
+	Pixel Layer	ເລເຢຍພິກເຊລ
+	Type Layer	ເລເຢຍຕົວໜັງສື
+	Shape Layer	ເລເຢຍຮູບຮ່າງ
+	Group Layer	ເລເຢຍກຸ່ມ
+	Fill Layer	ເລເຢຍຖົມສີ
+	Smart Object Layer	ເລເຢຍ Smart Object
+	Create Warped Text	ສ້າງຂໍ້ຄວາມບິດຮູບ
+	Rasterize Smart Object	ແປງ Smart Object ເປັນຣາສເຕີຣ໌
+	Rasterize Fill Content	ແປງເນື້ອຫາຖົມສີເປັນຣາສເຕີຣ໌
+	Rasterize Layer Style	ແປງສະໄຕລ໌ເລເຢຍເປັນຣາສເຕີຣ໌
+	Unlock: picking a preset replaces these settings	ປົດລັອກ: ການເລືອກພຣີເຊັດຈະແທນທີ່ການຕັ້ງຄ່າເຫຼົ່ານີ້
+	Lock: keep these settings when picking another preset	ລັອກ: ຮັກສາການຕັ້ງຄ່າເຫຼົ່ານີ້ໄວ້ເມື່ອເລືອກພຣີເຊັດອື່ນ
+	Diameter:	ເສັ້ນຜ່າສູນກາງ:
+	Hardness:	ຄວາມແຂງ:
+	No brush presets	ບໍ່ມີພຣີເຊັດແປງ
+	Toggle the Brush Settings panel  (F5)	ສະຫຼັບພາແນລຕັ້ງຄ່າແປງ  (F5)
+	Create new brush preset from the current settings	ສ້າງພຣີເຊັດແປງໃໝ່ຈາກການຕັ້ງຄ່າປະຈຸບັນ
+	Brush Settings…  (F5): every option of this brush	ການຕັ້ງຄ່າແປງ…  (F5): ທຸກຕົວເລືອກຂອງແປງນີ້
+	Rename Brush…	ປ່ຽນຊື່ແປງ…
+	Delete Brush	ລຶບແປງ
+	New Brush Preset…	ພຣີເຊັດແປງໃໝ່…
+	Capture Brush Size in Preset	ບັນທຶກຂະໜາດແປງໄວ້ໃນພຣີເຊັດ
+	Include Tool Settings	ລວມການຕັ້ງຄ່າເຄື່ອງມື
+	Include Color	ລວມສີ
+	Enter a name for the brush preset	ປ້ອນຊື່ສຳລັບພຣີເຊັດແປງ
+	A brush preset with this name already exists	ມີພຣີເຊັດແປງຊື່ນີ້ຢູ່ແລ້ວ
+	Brush Preset Options	ຕົວເລືອກພຣີເຊັດແປງ
+	Group name	ຊື່ກຸ່ມ
+	Brush name	ຊື່ແປງ
+	Brush Name	ຊື່ແປງ
+	Brush Stroke	ເສັ້ນແຕ້ມແປງ
+	Brush Tip	ຫົວແປງ
+	Off: the speed of the pointer sets the spacing	ປິດ: ຄວາມໄວຂອງຕົວຊີ້ເມົາສ໌ຈະເປັນຕົວກຳນົດໄລຍະຫ່າງ
+	Tilt Scale	ອັດຕາການອຽງ
+	Brush Projection	ການສາຍພາບແປງ
+	Apply the pen's tilt and rotation to the tip shape	ນຳໃຊ້ການອຽງ ແລະ ການໝູນຂອງປາກກາໃສ່ຮູບຮ່າງຫົວແປງ
+	Mixer Brush	ແປງປະສົມສີ
+	Wet	ປຽກ
+	Mix	ປະສົມ
+	Wetness Jitter	ຄວາມປ່ຽນແປງຂອງຄວາມປຽກ
+	Mix Jitter	ຄວາມປ່ຽນແປງຂອງການປະສົມ
+	Show the layer mask as an overlay	ສະແດງໜ້າກາກເລເຢຍແບບວາງຊ້ອນ
+	Toggle visibility	ສະຫຼັບການສະແດງຜົນ
+	Unlink the mask from the layer	ຍົກເລີກການເຊື່ອມໂຍງໜ້າກາກຈາກເລເຢຍ
+	Link the mask to the layer	ເຊື່ອມໂຍງໜ້າກາກກັບເລເຢຍ
+	Gradient	ສີໄລ່ລະດັບ
+	Gradient Options	ຕົວເລືອກສີໄລ່ລະດັບ
+	Align with layer	ຈັດລຽງຕາມເລເຢຍ
+	Reset Alignment	ຕັ້ງຄ່າການຈັດລຽງໃໝ່
+	Centre the gradient (offset 0, 0)	ຈັດສີໄລ່ລະດັບໄວ້ເຄິ່ງກາງ (ໄລຍະຫ່າງ 0, 0)
+	The current gradient (pick one in Window › Gradients)	ສີໄລ່ລະດັບປະຈຸບັນ (ເລືອກໄດ້ທີ່ ປ່ອງຢ້ຽມ › ສີໄລ່ລະດັບ)
+	Select a type layer to edit its character and paragraph settings.	ເລືອກເລເຢຍຕົວໜັງສືເພື່ອແກ້ໄຂການຕັ້ງຄ່າຕົວອັກສອນ ແລະ ຫຍໍ້ໜ້າ.
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	ຕົວແກ້ໄຂສີໄລ່ລະດັບ
+	Gradient picker	ຕົວກວດເລືອກສີໄລ່ລະດັບ
+	Save As Preset	ບັນທຶກເປັນພຣີເຊັດ
+	The gradient the Gradient tool paints with	ສີໄລ່ລະດັບທີ່ເຄື່ອງມືໄລ່ລະດັບສີໃຊ້ແຕ້ມ
+	Adds the current gradient to the Gradients panel	ເພີ່ມສີໄລ່ລະດັບປະຈຸບັນໃສ່ພາແນລສີໄລ່ລະດັບ
+	Gradient stops	ຈຸດກຳນົດສີໄລ່ລະດັບ
+	Text color	ສີຕົວໜັງສື
+	Type Options	ຕົວເລືອກຕົວໜັງສື
+	Anti-aliasing method	ວິທີລົດຮອຍຢັກ
+	Horizontal type	ຕົວໜັງສືແນວນອນ
+	Vertical type	ຕົວໜັງສືແນວຕັ້ງ
+	Fill path with foreground color	ຖົມເສັ້ນພາດດ້ວຍສີໜ້າ
+	Stroke path with brush	ແຕ້ມເສັ້ນຂອບພາດດ້ວຍແປງ
+	Load path as a selection	ໂຫຼດເສັ້ນພາດເປັນພື້ນທີ່ເລືອກ
+	Make work path from selection	ສ້າງເສັ້ນພາດເຮັດວຽກຈາກພື້ນທີ່ເລືອກ
+	Add vector mask	ເພີ່ມໜ້າກາກເວັກເຕີຣ໌
+	Create new path	ສ້າງເສັ້ນພາດໃໝ່
+	Delete path	ລຶບເສັ້ນພາດ
+	Delete vector mask	ລຶບໜ້າກາກເວັກເຕີຣ໌
+	CPU (no GPU acceleration)	CPU (ບໍ່ມີການເລັ່ງຄວາມໄວດ້ວຍ GPU)
+	DirectX 12	DirectX 12
+	GPU backend	GPU Backend
+	Linux display server	ເຊີຣ໌ເວີຣ໌ຈໍສະແດງຜົນ Linux
+	X11	X11
+	Metal	Metal
+	OpenGL	OpenGL
+	Use tablet pressure	ໃຊ້ແຮງກົດແທັບເລັດ
+	Vulkan	Vulkan
+	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	ບໍ່ມີເສັ້ນພາດທີ່ຈະສ້າງເປັນພື້ນທີ່ເລືອກ: ແຕ້ມດ້ວຍເຄື່ອງມືປາກກາ ຫຼື ເລືອກໃນພາແນລເສັ້ນພາດ.
+	Cancel opening	ຍົກເລີກການເປີດ
+	Cancelled opening {name}	ຍົກເລີກການເປີດ {name} ແລ້ວ
+	The document “{name}” does not have an embedded {mode} profile.	ເອກະສານ “{name}” ບໍ່ມີໂປຣໄຟລ໌ {mode} ຝັງຢູ່.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	ເອກະສານ “{name}” ມີໂປຣໄຟລ໌ສີຝັງຢູ່ເຊິ່ງບໍ່ກົງກັບພື້ນທີ່ສີເຮັດວຽກ {mode} ປະຈຸບັນ.
+	Working: {working}	ພື້ນທີ່ເຮັດວຽກ: {working}
+	Developing {name}	ກຳລັງລ້າງຮູບ {name}
+	Cancelled {label}	ຍົກເລີກ {label} ແລ້ວ
+	Esc to cancel	ກົດ Esc ເພື່ອຍົກເລີກ
+	Opened {name}	ເປີດ {name} ແລ້ວ
+	Opening {name}	ກຳລັງເປີດ {name}
+	Saved {name}	ບັນທຶກ {name} ແລ້ວ
+	Saving {name}	ກຳລັງບັນທຶກ {name}
+	Saving {percent}	ກຳລັງບັນທຶກ {percent}
+	A save to {name} is still running; try again when it finishes	ການບັນທຶກໃສ່ {name} ຍັງດຳເນີນຢູ່; ລອງໃໝ່ອີກຄັ້ງເມື່ອສຳເລັດ
+	{label} is writing the file and can no longer be cancelled	{label} ກຳລັງຂຽນໄຟລ໌ ແລະ ບໍ່ສາມາດຍົກເລີກໄດ້ອີກ
+	Opening {name}…	ກຳລັງເປີດ {name}…
+	Opening…	ກຳລັງເປີດ…
+	Reading…	ກຳລັງອ່ານ…
+	Working…	ກຳລັງປະມວນຜົນ…
+
+# Labels added on main before the Korean/live-switching split.
+	8 bit	8 ບິດ
+	Integer	ຈຳນວນຖ້ວນ
+	16 bit	16 ບິດ
+	32 bit (float)	32 ບິດ (ທົດສະນິຍົມ)
+	Floating point	ຈຸດທົດສະນິຍົມ
+	Use Global Light	ໃຊ້ແສງລວມ
+	Native file drag-and-drop is unavailable	ບໍ່ສາມາດລາກແລ້ວວາງໄຟລ໌ໄດ້
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	ຍັງບໍ່ຮອງຮັບການລາກແລ້ວວາງໄຟລ໌ເທິງ Wayland ເທື່ອ. ໃຫ້ໃຊ້ ໄຟລ໌ › ເປີດ, ຫຼື ສຳເນົາຮູບພາບໃນໂປຣແກຣມຈັດການໄຟລ໌ ແລ້ວວາງດ້ວຍ {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	ເພື່ອລາກວາງໄຟລ໌, ໃຫ້ເປີດ PhotoCraft ພາຍໃຕ້ XWayland: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	ຫຼື ຕັ້ງຄ່າ ການຕັ້ງຄ່າ › ປະສິດທິພາບ › ເຊີຣ໌ເວີຣ໌ຈໍສະແດງຜົນ Linux ເປັນ X11: ແລ້ວ PhotoCraft ຈະເປີດຜ່ານ XWayland ສະເໝີ.
+	Edit › Paste	ແກ້ໄຂ › ວາງ
+	Use File › Open, or paste a copied image with {paste}.	ໃຊ້ ໄຟລ໌ › ເປີດ, ຫຼື ວາງຮູບພາບທີ່ສຳເນົາມາດ້ວຍ {paste}.
+	Invalid {mode} profile	ໂປຣໄຟລ໌ {mode} ບໍ່ຖືກຕ້ອງ
+	Unnamed {mode} profile	ໂປຣໄຟລ໌ {mode} ບໍ່ມີຊື່
+	Show bounding box when dragging layer	ສະແດງຂອບເຂດກ່ອງເມື່ອລາກເລເຢຍ
+	System title bar	ແຖບຫົວຂໍ້ລະບົບ
+	Mixer Brush Tool	ເຄື່ອງມືແປງປະສົມສີ
+	Color Replacement Tool	ເຄື່ອງມືແທນທີ່ສີ
+	Color Replacement	ການແທນທີ່ສີ
+	Rendering Mode	ໂໝດການສະແດງຜົນ
+	Automatic (recommended)	ອັດຕະໂນມັດ (ແນະນຳ)
+	CPU / Compatibility	CPU / ຄວາມເຂົ້າກັນໄດ້
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	ໂໝດອັດຕະໂນມັດຈະໃຊ້ການເລັ່ງ GPU ເມື່ອສາມາດໃຊ້ໄດ້ ແລະ ຈະສະຫຼັບໄປໃຊ້ CPU ຖ້າເກີດຂໍ້ຜິດພາດ.
+	Switched to CPU rendering	ສະຫຼັບໄປໃຊ້ການສະແດງຜົນດ້ວຍ CPU ແລ້ວ
+	GPU acceleration could not continue. Your documents are unchanged.	ບໍ່ສາມາດເລັ່ງຄວາມໄວ GPU ຕໍ່ໄປໄດ້. ເອກະສານຂອງທ່ານບໍ່ມີການປ່ຽນແປງ.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft ກຳລັງໃຊ້ຕົວປະກອບພາບດ້ວຍ CPU. ປ່ອງຢ້ຽມອາດຈະຍັງໃຊ້ກາດຈໍຂອງທ່ານຢູ່.
+	Retry GPU requires a restart. Save your work first.	ການລອງໃຊ້ GPU ໃໝ່ຕ້ອງເປີດໂປຣແກຣມໃໝ່. ກະລຸນາບັນທຶກວຽກຂອງທ່ານກ່ອນ.
+	Keep Using CPU	ສືບຕໍ່ໃຊ້ CPU
+	Retry GPU	ລອງໃຊ້ GPU ອີກຄັ້ງ
+	Advanced	ຂັ້ນສູງ
+	GPU Backend	GPU Backend
+	Details	ລາຍລະອຽດ
+	Rendering mode	ໂໝດການສະແດງຜົນ
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	ລາສໂຊແຊ່ແຂງ: ລາກເພື່ອແຊ່ແຂງພື້ນທີ່, Alt-ລາກ ເພື່ອລະລາຍ (L)
+	Shadow Clipping Warning (U)	ແຈ້ງເຕືອນເງົາຫຼຸດຂອບເຂດ (U)
+	Highlight Clipping Warning (O)	ແຈ້ງເຕືອນໄຮໄລທ໌ຫຼຸດຂອບເຂດ (O)
+	Show Lab Color Readouts	ສະແດງຄ່າສີ Lab
+	Show Vectorscope	ສະແດງເວັກເຕີຣ໌ສະໂຄບ
+	Show Red at 3 o'clock	ສະແດງສີແດງທີ່ຕຳແໜ່ງ 3 ໂມງ
+	Show Skin Tone Indicator	ສະແດງຕົວບົ່ງຊີ້ໂທນສີຜິວ
+	Tone Histogram	ຮິສໂຕແກຣມໂທນສີ
+	Show Selected Region	ສະແດງພື້ນທີ່ທີ່ເລືອກ
+cameraRaw	Light	ແຈ້ງ
+	Camera Raw Filter ({layer})	ຟິວເຕີຣ໌ Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
+cameraRaw	Lights	ແສງສະຫວ່າງ
+cameraRaw	Blending	ການປະສົມ
+cameraRaw	Blacks	ໂທນດຳ
+cameraRaw	Amount	ປະລິມານ
+cameraRaw	Color	ສີ
+	Patch Tool	ເຄື່ອງມືແຜ່ນແປະ
+	Patch:	ແຜ່ນແປະ:
+	Lasso around an area, then drag the selection	ໃຊ້ບ້ວງອ້ອມຮອບພື້ນທີ່, ແລ້ວລາກສ່ວນທີ່ເລືອກ
+	Transform On Drop	ປ່ຽນຮູບຮ່າງເມື່ອວາງ
+	Scale or rotate the moved area, then press {key}	ປັບຂະໜາດ ຫຼື ໝູນພື້ນທີ່ທີ່ຍ້າຍ, ແລ້ວກົດ {key}
+	Now drag the selection onto another area	ບາດນີ້ລາກສ່ວນທີ່ເລືອກໄປໃສ່ພື້ນທີ່ອື່ນ
+
+# Warp grid presets merged on main in #388.
+	3 x 3	3 × 3
+	4 x 4	4 × 4
+	5 x 5	5 × 5
+	Grid:	ຕາຕະລາງ:
+
+# Type layer thumbnails (#598)
+	Edit Type	ແກ້ໄຂຕົວໜັງສື
+	Eyedroppers:	ຫຼອດດູດສີ:
+	Set Black Point	ກຳນົດຈຸດສີດຳ
+	Set Neutral Gray Point	ກຳນົດຈຸດສີເທົາກາງ
+	Set White Point	ກຳນົດຈຸດສີຂາວ
+	Unavailable in this color mode	ບໍ່ສາມາດໃຊ້ໄດ້ໃນໂໝດສີນີ້
+
+# UI scale steps (#611)
+	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
+	125%	125%
+	150%	150%
+	175%	175%
+	250%	250%
+	300%	300%
+	Full-resolution preview unavailable	ບໍ່ສາມາດສະແດງຕົວຢ່າງຄວາມລະອຽດເຕັມໄດ້
+
+
+	New Style…	ສະໄຕລ໌ໃໝ່…
+	Style {name} saved	ບັນທຶກສະໄຕລ໌ {name} ແລ້ວ
+
+	Make Default	ຕັ້ງເປັນຄ່າເລີ່ມຕົ້ນ
+	Reset to Default	ຕັ້ງກັບເປັນຄ່າເລີ່ມຕົ້ນ
+
+# Additional generated filter labels and Photoshop-aligned UI terminology.
+@id	select.all	ເລືອກທັງໝົດ
+	No patterns	ບໍ່ມີລວດລາຍ
+	Enable {name}	ເປີດໃຊ້ {name}
+	Label	ປ້າຍຊື່
+	Date and Time	ວັນທີ ແລະ ເວລາ
+	Scale Units	ຫົວໜ່ວຍມາດຕາສ່ວນ
+	Scale Factor	ຄ່າຕົວຄູນມາດຕາສ່ວນ
+	Area	ພື້ນທີ່
+	Perimeter	ລວງຮອບ
+	Circularity	ຄວາມມົນກົມ
+	Gray Value (Minimum)	ຄ່າສີເທົາ (ຕໍ່າສຸດ)
+	Gray Value (Maximum)	ຄ່າສີເທົາ (ສູງສຸດ)
+	Gray Value (Mean)	ຄ່າສີເທົາ (ສະເລ່ຍ)
+	Gray Value (Median)	ຄ່າສີເທົາ (ມັດທະຍະຖານ)
+	Integrated Density	ຄວາມໜາແໜ້ນລວມ
+	Length	ຄວາມຍາວ
+	Legacy	ແບບດັ້ງເດີມ
+	In Black	ສີດຳຂາເຂົ້າ
+	Gamma	ແກມມາ
+	In White	ສີຂາວຂາເຂົ້າ
+	Out Black	ສີດຳຂາອອກ
+	Out White	ສີຂາວຂາອອກ
+	Tint Color	ສີຍ້ອມ
+	Stops	ຈຸດຢຸດສີ
+	Method	ວິທີການ
+	Lut	ຕາຕະລາງສີ (LUT)
+	Interpolation	ການປະມານຄ່າ
+	Data	ຂໍ້ມູນ
+	Center X	ຈຸດໃຈກາງ X
+	Center Y	ຈຸດໃຈກາງ Y
+	Reduce Noise	ຫຼຸດສິ່ງລົບກວນ
+	Distribution	ການກະຈາຍ
+	Monochromatic	ສີດຽວ
+	Seed	ຄ່າເລີ່ມຕົ້ນສຸ່ມ
+	Cell Size	ຂະໜາດຕາຕະລາງ
+	Generators	ຈຳນວນຕົວກຳເນີດ
+	Wavelength Min	ຄວາມຍາວຄື້ນຕໍ່າສຸດ
+	Wavelength Max	ຄວາມຍາວຄື້ນສູງສຸດ
+	Amplitude Min	ແອມພລິຈູດຕໍ່າສຸດ
+	Amplitude Max	ແອມພລິຈູດສູງສຸດ
+	Undefined Areas	ພື້ນທີ່ທີ່ບໍ່ໄດ້ກຳນົດ
+	Preserve	ຮັກສາໄວ້
+	Max Radius	ລັດສະໝີສູງສຸດ
+	Channel1	ຊ່ອງ 1
+	Channel2	ຊ່ອງ 2
+	Channel3	ຊ່ອງ 3
+	Channel4	ຊ່ອງ 4
+	Depth Mode	ໂໝດຄວາມເລິກ
+	Solid Front Faces	ໜ້າຕັດດ້ານໜ້າຕຶບ
+	Mask Incomplete Blocks	ໜ້າກາກບລັອກທີ່ບໍ່ສົມບູນ
+	Stylization	ການສ້າງສະໄຕລ໌
+	Cleanliness	ຄວາມກ້ຽງສະອາດ
+	Bristle Detail	ລາຍລະອຽດຂົນແປງ
+	Lighting	ແສງສະຫວ່າງ
+	Shine	ຄວາມເຫຼື້ອມ
+	Max Offset	ໄລຍະຫ່າງສູງສຸດ
+	Map Document	ເອກະສານແຜນທີ່
+	Map Path	ເສັ້ນທາງແຜນທີ່
+	Map Layer	ເລເຢຍແຜນທີ່
+	Ridges	ຮອຍສັນ
+	Strength	ຄວາມເຂັ້ມ
+	Lens	ເລນສ໌
+	Light Type	ປະເພດແສງ
+	Intensity	ຄວາມແຮງ
+	Light X	ແສງ X
+	Light Y	ແສງ Y
+	Light Z	ແສງ Z
+	Target X	ເປົ້າໝາຍ X
+	Target Y	ເປົ້າໝາຍ Y
+	Cone	ຮູບຈວຍ
+	Hotspot	ຈຸດໂຟກັສແສງ
+	Elevation	ມຸມເງີຍ
+	Ambient	ແສງແວດລ້ອມ
+	Warmth	ຄວາມອົບອຸ່ນ
+	Gloss	ຄວາມເງົາ
+	Metallic	ຄວາມເປັນໂລຫະ
+	Ambience	ບັນຍາກາດແສງ
+	White Is High	ສີຂາວຄືສູງ
+	Reduce Color Noise	ຫຼຸດສິ່ງລົບກວນສີ
+	Sharpen Details	ເພີ່ມຄວາມຄົມຊັດລາຍລະອຽດ
+	Remove Jpeg Artifact	ລົບຮອຍແຕກ JPEG
+	Remove Tool	ເຄື່ອງມືລຶບອອກ
+	Blade Curvature	ຄວາມໂຄ້ງຂອງໃບມີດ
+	Depth Map	ແຜນທີ່ຄວາມເລິກ
+	Focal Distance	ໄລຍະໂຟກັສ
+	Focus	ໂຟກັສ
+	Transition	ການປ່ຽນຜ່ານ
+	Radius X	ລັດສະໝີ X
+	Radius Y	ລັດສະໝີ Y
+	Pins	ໝຸດ
+	Blur Angle	ມຸມມົວ
+	Speed	ຄວາມໄວ
+	Taper	ປາຍຮຽວ
+	Start X	ເລີ່ມ X
+	Start Y	ເລີ່ມ Y
+	End X	ສິ້ນສຸດ X
+	End Y	ສິ້ນສຸດ Y
+	Kernel	ເຄີຣ໌ເນວ
+	Input Mode	ໂໝດຂາເຂົ້າ
+	Row Order	ລຳດັບແຖວ
+	Eliminate	ກຳຈັດ
+	Create By	ສ້າງໂດຍ
+	List	ລາຍການ
+	Pencil Width	ຄວາມກວ້າງສໍ
+	Stroke Pressure	ແຮງກົດເສັ້ນ
+	Paper Brightness	ຄວາມສະຫວ່າງເຈ້ຍ
+	Number Of Levels	ຈຳນວນລະດັບ
+	Edge Simplicity	ຄວາມລຽບງ່າຍຂອງຂອບ
+	Edge Fidelity	ຄວາມຊື່ກົງຂອງຂອບ
+	Brush Size	ຂະໜາດແປງ
+	Brush Detail	ລາຍລະອຽດແປງ
+	Highlight Area	ພື້ນທີ່ໄຮໄລທ໌
+	Glow Size	ຂະໜາດແສງເຮືອງ
+	Glow Brightness	ຄວາມສະຫວ່າງແສງເຮືອງ
+	Sharpness	ຄວາມຄົມຊັດ
+	Brush Type	ປະເພດແປງ
+	Stroke Size	ຂະໜາດເສັ້ນ
+	Stroke Detail	ລາຍລະອຽດເສັ້ນ
+	Softness	ຄວາມນຸ່ມ
+	Highlight Strength	ຄວາມເຂັ້ມໄຮໄລທ໌
+	Smoothness	ຄວາມລຽບນຽນ
+	Edge Thickness	ຄວາມໜາຂອບ
+	Edge Intensity	ຄວາມເຂັ້ມຂອບ
+	Posterization	ການເຮັດພາບໂປສເຕີຣ໌
+	Stroke Length	ຄວາມຍາວເສັ້ນ
+	Scaling	ການປັບມາດຕາສ່ວນ
+	Relief	ຮູບນູນ
+	Definition	ຄວາມຄົມຊັດຈະແຈ້ງ
+	Texture Coverage	ການຄອບຄຸມພື້ນຜິວ
+	Shadow Intensity	ຄວາມເຂັ້ມເງົາ
+	Edge Width	ຄວາມກວ້າງຂອບ
+	Edge Brightness	ຄວາມສະຫວ່າງຂອບ
+	Direction Balance	ຄວາມສົມດຸນທິດທາງ
+	Black Intensity	ຄວາມເຂັ້ມສີດຳ
+	White Intensity	ຄວາມເຂັ້ມສີຂາວ
+	Dark Intensity	ຄວາມເຂັ້ມສ່ວນມືດ
+	Light Intensity	ຄວາມເຂັ້ມສ່ວນແຈ້ງ
+	Spray Radius	ລັດສະໝີພົ່ນ
+	Stroke Direction	ທິດທາງເສັ້ນ
+	Stroke Width	ຄວາມກວ້າງເສັ້ນ
+	Graininess	ເມັດເກຣນ
+	Glow Amount	ປະລິມານແສງເຮືອງ
+	Clear Amount	ປະລິມານຄວາມໃສ
+	Distortion	ການບິດບ້ຽວ
+	Ripple Size	ຂະໜາດລະລອກຄື້ນ
+	Ripple Magnitude	ຄວາມແຮງລະລອກຄື້ນ
+	Charcoal Area	ພື້ນທີ່ຖ່ານ
+	Chalk Area	ພື້ນທີ່ດິນສໍຂາວ
+	Charcoal Thickness	ຄວາມໜາຖ່ານ
+	Light Dark Balance	ຄວາມສົມດຸນແຈ້ງມືດ
+	Foreground Level	ລະດັບສີໜ້າ
+	Background Level	ລະດັບສີພື້ນ
+	Pattern Type	ປະເພດລວດລາຍ
+	Image Balance	ຄວາມສົມດຸນຮູບພາບ
+	Darkness	ຄວາມມືດ
+	Fiber Length	ຄວາມຍາວເສັ້ນໃຍ
+	Crack Spacing	ໄລຍະຫ່າງຮອຍແຕກ
+	Crack Depth	ຄວາມເລິກຮອຍແຕກ
+	Crack Brightness	ຄວາມສະຫວ່າງຮອຍແຕກ
+	Grain Type	ປະເພດເກຣນ
+	Tile Size	ຂະໜາດກະເບື້ອງ
+	Grout Width	ຄວາມກວ້າງຮ່ອງຢາແນວ
+	Lighten Grout	ເຮັດໃຫ້ຮ່ອງຢາແນວແຈ້ງຂຶ້ນ
+	Square Size	ຂະໜາດຮູບຈະຕຸລັດ
+	Border Thickness	ຄວາມໜາຂອບ
+	Profile	ໂປຣໄຟລ໌
+	Correct Distortion	ແກ້ໄຂການບິດບ້ຽວ
+	Correct Vignette	ແກ້ໄຂຂອບມືດ
+	Correct C A	ແກ້ໄຂຄວາມຄາດສີ
+	Auto Scale	ປັບມາດຕາສ່ວນອັດຕະໂນມັດ
+	Red Cyan	ແດງ/ຟ້າຂຽວ
+	Blue Yellow	ຟ້າ/ເຫຼືອງ
+	Vignette Amount	ປະລິມານຂອບມືດ
+	Vignette Midpoint	ຈຸດເຄິ່ງກາງຂອບມືດ
+	Model	ຮູບແບບ
+	Constraints	ຂໍ້ຈຳກັດ
+	Curve Highlights	ເສັ້ນໂຄ້ງໄຮໄລທ໌
+	Curve Lights	ເສັ້ນໂຄ້ງໂທນແຈ້ງ
+	Curve Darks	ເສັ້ນໂຄ້ງໂທນມືດ
+	Curve Shadows	ເສັ້ນໂຄ້ງເງົາ
+	Curve Splits	ຈຸດແບ່ງເສັ້ນໂຄ້ງ
+	Point Curve	ເສັ້ນໂຄ້ງຈຸດ
+	Point Curve Red	ເສັ້ນໂຄ້ງຈຸດສີແດງ
+	Point Curve Green	ເສັ້ນໂຄ້ງຈຸດສີຂຽວ
+	Point Curve Blue	ເສັ້ນໂຄ້ງຈຸດສີຟ້າ
+	Hsl Hue	ໂທນສີ HSL
+	Hsl Sat	ຄວາມອີ່ມສີ HSL
+	Hsl Lum	ຄວາມສະຫວ່າງ HSL
+	Grade Shadows	ປັບເກຣດສີເງົາ
+	Sat	ຄວາມອີ່ມສີ
+	Lum	ຄວາມສະຫວ່າງ
+	Grade Midtones	ປັບເກຣດສີໂທນກາງ
+	Grade Highlights	ປັບເກຣດສີໄຮໄລທ໌
+	Grade Global	ປັບເກຣດສີລວມ
+	Grade Blending	ການປະສົມເກຣດສີ
+	Grade Balance	ຄວາມສົມດຸນເກຣດສີ
+	Sharpen Amount	ປະລິມານຄວາມຄົມຊັດ
+	Sharpen Radius	ລັດສະໝີຄວາມຄົມຊັດ
+	Sharpen Detail	ລາຍລະອຽດຄວາມຄົມຊັດ
+	Sharpen Masking	ໜ້າກາກຄວາມຄົມຊັດ
+	Noise Luminance	ສິ່ງລົບກວນຄວາມສະຫວ່າງ
+	Noise Luminance Detail	ລາຍລະອຽດສິ່ງລົບກວນຄວາມສະຫວ່າງ
+	Noise Color	ສິ່ງລົບກວນສີ
+	Noise Color Detail	ລາຍລະອຽດສິ່ງລົບກວນສີ
+	Grain Amount	ປະລິມານເມັດເກຣນ
+	Grain Size	ຂະໜາດເມັດເກຣນ
+	Grain Roughness	ຄວາມຫຍາບເມັດເກຣນ
+	Vignette Roundness	ຄວາມມົນຂອບມືດ
+	Vignette Feather	ຄວາມຟຸ້ງຂອບມືດ
+	Vignette Highlights	ໄຮໄລທ໌ຂອບມືດ
+	Vignette Style	ສະໄຕລ໌ຂອບມືດ
+	Planes	ລະນາບ
+	Corners	ມຸມ
+	Plane	ລະນາບ
+	At	ທີ່
+	Clone	ໂຄລນ
+	New Layer	ເລເຢຍໃໝ່
+	Shadow Amount	ປະລິມານເງົາ
+	Shadow Tone	ໂທນເງົາ
+	Shadow Radius	ລັດສະໝີເງົາ
+	Highlight Amount	ປະລິມານໄຮໄລທ໌
+	Highlight Tone	ໂທນໄຮໄລທ໌
+	Highlight Radius	ລັດສະໝີໄຮໄລທ໌
+	Midtone	ໂທນກາງ
+	Black Clip	ການຕັດຄລິບສີດຳ
+	White Clip	ການຕັດຄລິບສີຂາວ
+	Fuzziness	ຄວາມມົວກວມ
+	Source Layer	ເລເຢຍຕົ້ນສະບັບ
+	Neutralize	ປັບໃຫ້ເປັນກາງ
+	Use Selection In Source	ໃຊ້ພື້ນທີ່ເລືອກໃນຕົ້ນສະບັບ
+	Use Selection In Target	ໃຊ້ພື້ນທີ່ເລືອກໃນເປົ້າໝາຍ
+	Shadow	ເງົາ
+	Highlight	ໄຮໄລທ໌
+	Strokes	ເສັ້ນແຕ້ມ
+	Tool	ເຄື່ອງມື
+	Flame Type	ປະເພດແປວໄຟ
+	Randomize Length	ສຸ່ມຄວາມຍາວ
+	Interval	ໄລຍະຫ່າງ
+	Adjust Interval For Loops	ປັບໄລຍະຫ່າງສຳລັບການວົນຊ້ຳ
+	Use Custom Color	ໃຊ້ສີກຳນົດເອງ
+	Turbulent	ປັ່ນປ່ວນ
+	Jag	ຢັກແຫຼມ
+	Flame Lines	ເສັ້ນແປວໄຟ
+	Flame Bottom Alignment	ຈັດລຽງແປວໄຟຕິດດ້ານລຸ່ມ
+	Flame Style	ສະໄຕລ໌ແປວໄຟ
+	Flame Shape	ຮູບຮ່າງແປວໄຟ
+	Randomize Shapes	ສຸ່ມຮູບຮ່າງ
+	Frame	ເຟຣມ
+	Margin	ໄລຍະຂອບ
+	Arrangement	ການຈັດວາງ
+	Thickness	ຄວາມໜາ
+	Vine Color	ສີເຄືອໄມ້
+	Flower Color	ສີດອກໄມ້
+	Leaf Color	ສີໃບໄມ້
+	Base Tree Type	ປະເພດຕົ້ນໄມ້ພື້ນຖານ
+	Light Direction	ທິດທາງແສງ
+	Leaves Amount	ປະລິມານໃບໄມ້
+	Leaves Size	ຂະໜາດໃບໄມ້
+	Branches Height	ຄວາມສູງກິ່ງງ່າ
+	Branches Thickness	ຄວາມໜາກິ່ງງ່າ
+	Default Leaves	ໃບໄມ້ເລີ່ມຕົ້ນ
+	Leaves Color	ສີໃບໄມ້
+	Custom Branch Color	ສີກິ່ງງ່າກຳນົດເອງ
+	Branches Color	ສີກິ່ງງ່າ
+	Flat Shading	ການແຮເງົາແບບຮາບພຽງ
+	Open As	ເປີດເປັນ
+	Save As	ບັນທຶກເປັນ
+	Save a Copy	ບັນທຶກສຳເນົາ
+	Export As	ສົ່ງອອກເປັນ
+	Export Preferences	ການຕັ້ງຄ່າການສົ່ງອອກ
+	Save for Web (Legacy)	ບັນທຶກສຳລັບເວັບ (ແບບເກົ່າ)
+	Artboards to Files	ອາດບອດເປັນໄຟລ໌
+	Artboards to PDF	ອາດບອດເປັນ PDF
+	Layers to Files	ເລເຢຍເປັນໄຟລ໌
+	Layer Comps to Files	ອົງປະກອບເລເຢຍເປັນໄຟລ໌
+	Color Lookup Tables	ຕາຕະລາງຄົ້ນຫາສີ
+	Data Sets as Files	ຊຸດຂໍ້ມູນເປັນໄຟລ໌
+	Paths to Illustrator	ເສັ້ນພາດໄປຍັງ Illustrator
+	Render Video	ເຣນເດີຣ໌ວິດີໂອ
+	Place Embedded	ວາງແບບຝັງຕົວ
+	Place Linked	ວາງແບບເຊື່ອມໂຍງ
+	Package	ສ້າງແພັກເກດ
+	Batch	ປະມວນຜົນເປັນຊຸດ
+	Conditional Mode Change	ປ່ຽນໂໝດຕາມເງື່ອນໄຂ
+	Fit Image	ປັບຮູບພາບໃຫ້ພໍດີ
+	Lens Correction	ການແກ້ໄຂເລນສ໌
+	Merge to HDR Pro	ຮວມເປັນ HDR Pro
+	Photomerge	Photomerge
+	Image Processor	ຕົວປະມວນຜົນຮູບພາບ
+	Script Events Manager	ຕົວຈັດການເຫດການສະຄຣິບ
+	Browse	ເລືອກເບິ່ງ
+	File Info	ຂໍ້ມູນໄຟລ໌
+	Find and Replace Text	ຊອກຫາ ແລະ ແທນທີ່ຂໍ້ຄວາມ
+	Content-Aware Fill	ຖົມຕາມເນື້ອຫາ
+	Arbitrary	ມຸມກຳນົດເອງ
+	Auto-Align Layers	ຈັດລຽງເລເຢຍອັດຕະໂນມັດ
+	Auto-Blend Layers	ປະສົມເລເຢຍອັດຕະໂນມັດ
+	Define Brush Preset	ກຳນົດພຣີເຊັດແປງ
+	Define Pattern	ກຳນົດລວດລາຍ
+	Define Custom Shape	ກຳນົດຮູບຮ່າງເອງ
+	Preset Manager	ຕົວຈັດການພຣີເຊັດ
+	Export/Import Presets	ສົ່ງອອກ/ນຳເຂົ້າພຣີເຊັດ
+	Color Settings	ການຕັ້ງຄ່າສີ
+	Assign Profile	ກຳນົດໂປຣໄຟລ໌
+	Convert to Profile	ແປງເປັນໂປຣໄຟລ໌
+	Camera Raw	Camera Raw
+	Raw Defaults	ຄ່າເລີ່ມຕົ້ນ RAW
+	AI Integrations	ການເຊື່ອມໂຍງ AI
+	Install Plug-in	ຕິດຕັ້ງປລັກອິນ
+	Settings	ການຕັ້ງຄ່າ
+	Color Table	ຕາຕະລາງສີ
+	Shadows/Highlights	ເງົາ/ໄຮໄລທ໌
+	HDR Toning	ການປັບໂທນ HDR
+	Match Color	ປັບສີໃຫ້ກົງກັນ
+	Replace Color	ແທນທີ່ສີ
+	Canvas Size	ຂະໜາດແຄນວາສ
+	Trim	ຕັດແຕ່ງຂອບ
+	Duplicate	ສຳເນົາຊ້ຳ
+	Apply Image	ນຳໃຊ້ຮູບພາບ
+	Calculations	ການຄຳນວນ
+	Apply Data Set	ນຳໃຊ້ຊຸດຂໍ້ມູນ
+	Variable Data Sets	ຊຸດຂໍ້ມູນຕົວປ່ຽນ
+	Trap	ແທຣັບ
+	Set Measurement Scale	ກຳນົດມາດຕາສ່ວນວັດແທກ
+	Place Scale Marker	ວາງເຄື່ອງໝາຍມາດຕາສ່ວນ
+	Group from Layers	ສ້າງກຸ່ມຈາກເລເຢຍ
+	Artboard from Group	ສ້າງອາດບອດຈາກກຸ່ມ
+	Artboard from Layers	ສ້າງອາດບອດຈາກເລເຢຍ
+	Layer From Background	ເລເຢຍຈາກພື້ນຫຼັງ
+	Layer from Background	ເລເຢຍຈາກພື້ນຫຼັງ
+	New Video Layer from File	ເລເຢຍວິດີໂອໃໝ່ຈາກໄຟລ໌
+	Duplicate Layer	ສຳເນົາເລເຢຍຊ້ຳ
+	Global Light	ແສງລວມ
+	Scale Effects	ປັບຂະໜາດເອັບເຟັກ
+	Solid Color	ສີຕຶບ
+	Convert to Linked	ແປງເປັນແບບເຊື່ອມໂຍງ
+	Replace Contents	ແທນທີ່ເນື້ອຫາ
+	Relink to File	ເຊື່ອມໂຍງໃໝ່ໃສ່ໄຟລ໌
+	Export Contents	ສົ່ງອອກເນື້ອຫາ
+	Interpret Footage	ຕີຄວາມໝາຍຟຸດເທຈ
+	Replace Footage	ແທນທີ່ຟຸດເທຈ
+	Video Frames to Layers	ເຟຣມວິດີໂອເປັນເລເຢຍ
+	New Guide Layout	ເຄົ້າໂຄງເສັ້ນນຳທາງໃໝ່
+	Lock Layers	ລັອກເລເຢຍ
+	Color Decontaminate	ຂະຈັດສີປົນເປື້ອນ
+	Defringe	ລົບສີຂອບລາມ
+	Layer Content Options	ຕົວເລືອກເນື້ອຫາເລເຢຍ
+	Warp Text	ບິດຮູບຂໍ້ຄວາມ
+	Resolve Missing Fonts	ແກ້ໄຂຟອນທີ່ຂາດຫາຍ
+	Color Range	ຊ່ວງສີ
+	Focus Area	ພື້ນທີ່ໂຟກັສ
+	Select and Mask	ເລືອກ ແລະ ໃສ່ໜ້າກາກ
+	Border	ຂອບ
+	Contract	ຫົດຕົວ
+	Load Selection	ໂຫຼດສ່ວນທີ່ເລືອກ
+	Save Selection	ບັນທຶກສ່ວນທີ່ເລືອກ
+	Filter Gallery	ຄັງຟິວເຕີຣ໌
+	Adaptive Wide Angle	ມຸມກວ້າງແບບປັບຕົວ
+	Camera Raw Filter	ຟິວເຕີຣ໌ Camera Raw
+	Liquify	ດັດຮູບຮ່າງ
+	Vanishing Point	ຈຸດລວມສາຍຕາ
+	Field Blur	ເຮັດມົວສະເພາະຈຸດ
+	Iris Blur	ເຮັດມົວແບບມ່ານຕາ
+	Tilt-Shift	ພາບແບບຈຳລອງ
+	Path Blur	ເຮັດມົວຕາມເສັ້ນພາດ
+	Spin Blur	ເຮັດມົວແບບໝູນວົນ
+	Box Blur	ເຮັດມົວແບບກ່ອງ
+	Gaussian Blur	ເຮັດມົວແບບກາວຊຽນ
+	Lens Blur	ເຮັດມົວແບບເລນສ໌
+	Motion Blur	ເຮັດມົວແບບເຄື່ອນໄຫວ
+	Radial Blur	ເຮັດມົວແບບລັດສະໝີ
+	Shape Blur	ເຮັດມົວຕາມຮູບຮ່າງ
+	Smart Blur	ເຮັດມົວອັດສະລິຍະ
+	Surface Blur	ເຮັດມົວພື້ນຜິວ
+	Displace	ປ່ຽນຕຳແໜ່ງ
+	Pinch	ບີບເຂົ້າ
+	Polar Coordinates	ພິກັດຂົ້ວ
+	Ripple	ລະລອກຄື້ນ
+	Shear	ບິດອຽງ
+	Spherize	ຮູບຊົງກົມ
+	Twirl	ໝູນກ້ຽວ
+	Wave	ຄື້ນ
+	ZigZag	ຊິກແຊັກ
+	Add Noise	ເພີ່ມສິ່ງລົບກວນ
+	Dust & Scratches	ຂີ້ຝຸ່ນ ແລະ ຮອຍຂີດຂ່ວນ
+	Color Halftone	ຮາຟໂທນສີ
+	Crystallize	ຜລຶກ
+	Mezzotint	ເມຊໂຊທິນທ໌
+	Mosaic	ໂມເສກ
+	Pointillize	ຈຸດສີ
+	Fibers	ເສັ້ນໃຍ
+	Flame	ແປວໄຟ
+	Lens Flare	ແສງສະທ້ອນເລນສ໌
+	Lighting Effects	ເອັບເຟັກແສງ
+	Picture Frame	ກອບຮູບ
+	Tree	ຕົ້ນໄມ້
+	Smart Sharpen	ເພີ່ມຄວາມຄົມຊັດອັດສະລິຍະ
+	Unsharp Mask	ອັນຊາຣ໌ບມາດສ໌
+	High Pass	ໄຮພາດສ໌
+	Diffuse	ແຜ່ກະຈາຍ
+	Extrude	ດຶງຍືດສາມມິຕິ
+	Oil Paint	ຮູບແຕ້ມສີນ້ຳມັນ
+	Tiles	ກະເບື້ອງ
+	Trace Contour	ຕາມຮອຍເສັ້ນຂອບ
+	Wind	ລົມພັດ
+	De-Interlace	ຍົກເລີກການສັບຫວ່າງ
+	Custom Pixel Aspect Ratio	ອັດຕາສ່ວນພິກເຊລກຳນົດເອງ
+	32-bit Preview Options	ຕົວເລືອກສະແດງຕົວຢ່າງ 32 ບິດ
+	New Guide	ເສັ້ນນຳທາງໃໝ່
+	Join the ArtCraft Discord	ເຂົ້າຮ່ວມ Discord ຂອງ ArtCraft
+	Report an Issue	ລາຍງານບັນຫາ
+	WIA Support	ການຮອງຮັບ WIA
+	Load Files into Stack	ໂຫຼດໄຟລ໌ເຂົ້າກອງຊ້ອນ
+	Statistics	ສະຖິຕິ
+	Duplicate Layers	ສຳເນົາເລເຢຍຊ້ຳ
+	Edit Toolbar	ແກ້ໄຂແຖບເຄື່ອງມື
+	Import Brushes	ນຳເຂົ້າແປງ
+	Load 3D LUT	ໂຫຼດ 3D LUT
+	New document	ເອກະສານໃໝ່
+	Press keys	ກົດປຸ່ມ
+	Rename Group	ປ່ຽນຊື່ກຸ່ມ
+	Rename Tool Preset	ປ່ຽນຊື່ພຣີເຊັດເຄື່ອງມື
+	Search commands, tools and panels	ຄົ້ນຫາຄຳສັ່ງ, ເຄື່ອງມື ແລະ ພາແນລ
+	Slice Options	ຕົວເລືອກການຕັດແບ່ງ
+	Rename Brush	ປ່ຽນຊື່ແປງ
+	Opening	ກຳລັງເປີດ
+	Reading	ກຳລັງອ່ານ
+	Working	ກຳລັງເຮັດວຽກ
+	Accented Edges	ເນັ້ນຂອບ
+	Alpha	ອັນຟາ
+	Angled Strokes	ເສັ້ນແຕ້ມມຸມອຽງ
+	Anisotropic	ບໍ່ສົມມາດທິດທາງ
+	Around Center	ອ້ອມຮອບຈຸດໃຈກາງ
+	Artistic	ສິລະປະ
+	Bamboo	ໄມ້ໄຜ່
+	Bas Relief	ພາບນູນຕ່ຳ
+	Berries	ໝາກເບີຣ໌ຣີ່
+	Blast	ລົມລະເບີດ
+	Bleach Bypass	ຟອກສີຂ້າມຂັ້ນຕອນ
+	Blocks	ບລັອກ
+	Bottom Left	ລຸ່ມຊ້າຍ
+	Bottom Right	ລຸ່ມຂວາ
+	Brick	ດິນຈີ່
+	Brush Strokes	ເສັ້ນແປງ
+	Burlap	ຜ້າກະສອບ
+	Candle Light	ແສງທຽນ
+	Chalk & Charcoal	ດິນສໍຂາວ ແລະ ຖ່ານ
+	Charcoal	ຖ່ານ
+	Chrome	ໂຄຣມຽມ
+	Circle	ວົງມົນ
+	Clumped	ເປັນກຸ່ມກ້ອນ
+	Coarse Dots	ຈຸດຫຍາບ
+	Colored Pencil	ສໍສີ
+	Contrasty	ຄອນທຣາສສູງ
+	Conté Crayon	ສໍຄອງເຕ້
+	Cool	ໂທນເຢັນ
+	Cooling L B B	ຟິວເຕີຣ໌ໂທນເຢັນ (LBB)
+	Cooling80	ຟິວເຕີຣ໌ໂທນເຢັນ (80)
+	Cooling82	ຟິວເຕີຣ໌ໂທນເຢັນ (82)
+	Craquelure	ຮອຍແຕກລາຍງາ
+	Cross	ຮູບກາກະບາດ
+	Cross Process	ລ້າງຟິມຂ້າມຂະບວນການ
+	Crosshatch	ເສັ້ນຕັດກັນ
+	Cutout	ຕັດເຈ້ຍ
+	Daisies	ດອກເດຊີ
+	Dark Rough	ມືດ ແລະ ຫຍາບ
+	Dark Strokes	ເສັ້ນແຕ້ມສີມືດ
+	Darken Only	ສະເພາະສ່ວນມືດ
+	Day For Night	ປ່ຽນກາງເວັນເປັນກາງຄືນ
+	Deep Blue	ຟ້າເຂັ້ມ
+	Deep Emerald	ຂຽວມໍລະກົດເຂັ້ມ
+	Deep Red	ແດງເຂັ້ມ
+	Deep Yellow	ເຫຼືອງເຂັ້ມ
+	Diffuse Glow	ແສງເຮືອງກະຈາຍ
+	Dot	ຈຸດ
+	Double Line	ເສັ້ນຄູ່
+	Draft	ສະບັບຮ່າງ
+	Dry Brush	ແປງແຫ້ງ
+	Duplication	ການເຮັດຊ້ຳ
+	Edge Extension	ການຕໍ່ຂອບ
+	Edge Only	ສະເພາະຂອບ
+	Enlarged	ຂະຫຍາຍ
+	Even Fields	ເຟຣມຄູ່
+	Faded Film	ຟິມສີຈາງ
+	Film Grain	ເມັດເກຣນຟິມ
+	Fine	ລະອຽດ
+	Fine Dots	ຈຸດລະອຽດ
+	Flat	ຮາບພຽງ
+	Fresco	ເຟຣສໂກ
+	From Left	ຈາກຊ້າຍ
+	From Right	ຈາກຂວາ
+	Frosted	ແກ້ວຝ້າ
+	Gaussian	ກາວຊຽນ
+	Generic	ທົ່ວໄປ
+	Glass	ແກ້ວ
+	Glowing Edges	ຂອບເຮືອງແສງ
+	Grainy Dots	ຈຸດເມັດເກຣນ
+	Graphic Pen	ປາກກາກຣາຟິກ
+	Halftone Pattern	ລວດລາຍຮາຟໂທນ
+	Hearts	ຮູບຫົວໃຈ
+	Heptagon	ຮູບເຈັດແຈ
+	Hexagon	ຮູບຫົກແຈ
+	High	ສູງ
+	Horizontal Only	ສະເພາະແນວນອນ
+	Hsb	HSB
+	Hsl	HSL
+	Infinite	ບໍ່ມີທີ່ສິ້ນສຸດ
+	Ink Outlines	ເສັ້ນຂອບມຶກ
+	Ivy	ໄມ້ເລືອຍ
+	Left Diagonal	ເສັ້ນສະຫຼຽງຊ້າຍ
+	Level Based	ຕາມລະດັບ
+	Light Rough	ແຈ້ງ ແລະ ຫຍາບ
+	Lighten Only	ສະເພາະສ່ວນແຈ້ງ
+	Long Lines	ເສັ້ນຍາວ
+	Long Strokes	ເສັ້ນແຕ້ມຍາວ
+	Low	ຕ່ຳ
+	Lower	ດ້ານລຸ່ມ
+	Medium Dots	ຈຸດຂະໜາດກາງ
+	Medium Lines	ເສັ້ນຂະໜາດກາງ
+	Medium Strokes	ເສັ້ນແຕ້ມຂະໜາດກາງ
+	Mono Contrast	ຄອນທຣາສສີດຽວ
+	Mosaic Tiles	ກະເບື້ອງໂມເສກ
+	Movie Prime	ເລນສ໌ຟິກສ໌ຮູບເງົາ
+	Multiple Flames Along Path	ຫຼາຍແປວໄຟຕາມເສັ້ນພາດ
+	Multiple Flames One Direction	ຫຼາຍແປວໄຟທິດທາງດຽວ
+	Multiple Flames Path Directions	ຫຼາຍແປວໄຟຕາມທິດທາງເສັ້ນພາດ
+	Multiple Flames Various Length	ຫຼາຍແປວໄຟຫຼາຍຄວາມຍາວ
+	Neon Glow	ແສງນີອອນ
+	Note Paper	ເຈ້ຍບັນທຶກ
+	Ocean Ripple	ຄື້ນມະຫາສະໝຸດ
+	Octagon	ຮູບແປດແຈ
+	Odd Fields	ເຟຣມຄີ່
+	One Flame Along Path	ແປວໄຟດຽວຕາມເສັ້ນພາດ
+	Out From Center	ຈາກຈຸດໃຈກາງອອກໄປ
+	Oval	ຮູບໄຂ່
+	Overlay Edge	ຂອບວາງຊ້ອນ
+	Paint Daubs	ຮອຍປ້າຍສີ
+	Palette Knife	ຈວັກປະສົມສີ
+	Parallel	ຂະໜານ
+	Patchwork	ຕໍ່ຜ້າ
+	Pentagon	ຮູບຫ້າແຈ
+	Photocopy	ຖ່າຍເອກະສານ
+	Plaster	ປູນປລາສເຕີຣ໌
+	Plastic Wrap	ຟິມຫໍ່ຢາງ
+	Point	ຈຸດ
+	Pointed	ແຫຼມ
+	Polar To Rectangular	ພິກັດຂົ້ວເປັນສາກ
+	Pond Ripples	ລະລອກຄື້ນໜອງນ້ຳ
+	Poster Edges	ຂອບໂປສເຕີຣ໌
+	Prime105	ເລນສ໌ຟິກສ໌ 105mm
+	Prime35	ເລນສ໌ຟິກສ໌ 35mm
+	Pyramids	ປີຣາມິດ
+	Random	ສຸ່ມ
+	Rectangular To Polar	ພິກັດສາກເປັນຂົ້ວ
+	Repeat	ຊ້ຳ
+	Reticulation	ລາຍຕາໜ່າງ
+	Rgb	RGB
+	Right Diagonal	ເສັ້ນສະຫຼຽງຂວາ
+	Ring	ວົງແຫວນ
+	Rope	ເຊືອກ
+	Roses	ດອກກຸຫຼາບ
+	Rough Pastels	ພາສເທລຫຍາບ
+	Sandstone	ຫີນຊາຍ
+	Scallops	ຮອຍຫອຍ
+	Sepia	ຊີເປຍ
+	Short Lines	ເສັ້ນສັ້ນ
+	Short Strokes	ເສັ້ນແຕ້ມສັ້ນ
+	Simple	ລຽບງ່າຍ
+	Sine	ຊາຍ
+	Sketch	ສະເກັດສ໌
+	Smudge Stick	ແທ່ງຖູເກລ່ຍ
+	Snowflakes	ເກັດຫິມະ
+	Sparkle	ປະກາຍແສງ
+	Spatter	ສີກະຈາຍ
+	Speckle	ຈຸດດ່າງ
+	Spin	ໝູນ
+	Sponge	ຟອງນ້ຳ
+	Spot	ຈຸດ
+	Sprayed Strokes	ເສັ້ນແຕ້ມພົ່ນສີ
+	Sprinkles	ໂຮຍ
+	Squareness	ຄວາມເປັນສີ່ແຈສາກ
+	Stagger	ເຍື້ອງກັນ
+	Stained Glass	ແກ້ວສີປະດັບ
+	Stamp	ຕາປະທັບ
+	Star	ດາວ
+	Stars	ດາວ
+	Stippled	ຈຸດປະ
+	Stretch	ຍືດ
+	Sumi-e	ສູມິເອະ
+	Teal Orange	ຂຽວອົມຟ້າ ແລະ ສົ້ມ
+	Texturizer	ສ້າງພື້ນຜິວ
+	Tiny Lens	ເລນສ໌ຂະໜາດນ້ອຍ
+	To Center	ສູ່ຈຸດໃຈກາງ
+	Top Left	ເທິງຊ້າຍ
+	Top Right	ເທິງຂວາ
+	Torn Edges	ຂອບຈີກຂາດ
+	Triangle	ຮູບສາມແຈ
+	Unaltered	ບໍ່ປ່ຽນແປງ
+	Underpainting	ຮອງພື້ນສີ
+	Underwater	ໃຕ້ນ້ຳ
+	Uniform	ສະໝ່ຳສະເໝີ
+	Upper	ດ້ານເທິງ
+	Vertical Only	ສະເພາະແນວຕັ້ງ
+	Vine With Flowers	ເຄືອໄມ້ມີດອກ
+	Vine With Leaves	ເຄືອໄມ້ມີໃບ
+	Violent	ຮຸນແຮງ
+	Violet	ສີມ່ວງ
+	Warm	ໂທນອຸ່ນ
+	Warming L B A	ຟິວເຕີຣ໌ໂທນອຸ່ນ (LBA)
+	Warming81	ຟິວເຕີຣ໌ໂທນອຸ່ນ (81)
+	Warming85	ຟິວເຕີຣ໌ໂທນອຸ່ນ (85)
+	Water Paper	ເຈ້ຍປຽກນ້ຳ
+	Watercolor	ສີນ້ຳ
+	Waves	ຄື້ນ
+	Wide Blurry	ກວ້າງ ແລະ ມົວ
+	Wide Sharp	ກວ້າງ ແລະ ຄົມ
+	Wrap	ຫໍ່ຫຸ້ມ
+	Zigzag	ຊິກແຊັກ
+@id	filter.sharpen.sharpen	ຄົມຊັດ
+	Hold Alt while drawing for straight segments	ກົດ Alt ຄ້າງໄວ້ຂະນະແຕ້ມເພື່ອສ້າງສ່ວນເສັ້ນຊື່
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	ລາກ ຫຼື ຄລິກຈຸດຮູບຫຼາຍແຈ · ກົດ Alt ຄ້າງໄວ້ຂະນະໃຊ້ລາສໂຊເພື່ອສ້າງສ່ວນເສັ້ນຊື່ · {add} ເພີ່ມ · ກົດ {sub} ກ່ອນແຕ້ມເພື່ອຫັກລົບ
+	Move	ຍ້າຍ
+	Extend	ຂະຫຍາຍຕໍ່
+	Structure:	ໂຄງສ້າງ:
+	Content-Aware Move Tool	ເຄື່ອງມືຍ້າຍຕາມເນື້ອຫາ
+	TIFF Options	ຕົວເລືອກ TIFF
+	Targa Options	ຕົວເລືອກ Targa
+	24 bits/pixel	24 ບິດ/ພິກເຊລ
+	32 bits/pixel	32 ບິດ/ພິກເຊລ
+	Including layers will increase file size.	ການຮວມເລເຢຍຈະເຮັດໃຫ້ຂະໜາດໄຟລ໌ໃຫຍ່ຂຶ້ນ.
+	Discard Layers and Save a Copy	ຍົກເລີກເລເຢຍ ແລະ ບັນທຶກສຳເນົາ
+	Don't show again	ບໍ່ຕ້ອງສະແດງອີກ
+	Save failed: {error}	ການບັນທຶກລົ້ມເຫຼວ: {error}
+	Save cancelled	ການບັນທຶກຖືກຍົກເລີກແລ້ວ
+	Couldn't place {name}: {error}	ບໍ່ສາມາດວາງ {name}: {error}
+	Magnetic Lasso Tool	ເຄື່ອງມືບ້ວງແມ່ເຫຼັກ
+	Frequency	ຄວາມຖີ່
+	Use tablet pressure to change pen width	ໃຊ້ແຮງກົດແທັບເລັດເພື່ອປ່ຽນຄວາມກວ້າງປາກກາ
+
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	ກ່ຽວກັບ
+	Contributors	ຜູ້ປະກອບສ່ວນ
+	Models	ໂມເດວ
+	Sort	ຈັດຮຽງ
+	Username	ຊື່ຜູ້ໃຊ້
+	Display name	ຊື່ສະແດງ
+	Real name	ຊື່ແທ້
+	Reverse the order	ສະຫຼັບລຳດັບກັບຄືນ
+	Grab bag	ລວມກຸ່ມ
+	Table	ຕາຕະລາງ
+	Name (A–Z)	ຊື່ (A–Z)
+	Merged PRs	PR ທີ່ຮວມແລ້ວ
+	Commits	ຄອມມິດ
+	Lines added	ແຖວທີ່ເພີ່ມ
+	Lines deleted	ແຖວທີ່ລຶບ
+	Line delta	ສ່ວນຕ່າງແຖວ
+	Binary assets added	ໄຟລ໌ໄບນະລີທີ່ເພີ່ມ
+	Binary assets removed	ໄຟລ໌ໄບນະລີທີ່ລຶບ
+	First commit	ຄອມມິດທຳອິດ
+	First	ທຳອິດ
+	Last commit	ຄອມມິດຫຼ້າສຸດ
+	Last	ຫຼ້າສຸດ
+	Contributors: {contributors} · Commits: {commits}	ຜູ້ປະກອບສ່ວນ: {contributors} · ຄອມມິດ: {commits}
+	No contributor data was built into this copy.	ບໍ່ມີຂໍ້ມູນຜູ້ປະກອບສ່ວນໃນສະບັບນີ້.
+	No model credits were built into this copy.	ບໍ່ມີຂໍ້ມູນເຄຣດິດໂມເດວໃນສະບັບນີ້.
+	Company	ບໍລິສັດ
+	Version	ເວີຣ໌ຊັນ
+	% of all commits	% ຂອງຄອມມິດທັງໝົດ
+	Lines +/−	ແຖວ +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} ຄອມມິດ, +{added} / −{deleted} ແຖວ (Δ {delta}), +{binAdded} / −{binDeleted} ໄຟລ໌ໄບນະລີ, {first} – {last}
+
+# Swatches panel
+	Create new swatch	ສ້າງຕົວຢ່າງສີໃໝ່
+	New Swatch…	ຕົວຢ່າງສີໃໝ່…
+	New Swatch Group…	ກຸ່ມຕົວຢ່າງສີໃໝ່…
+	Import Swatches…	ນຳເຂົ້າຕົວຢ່າງສີ…
+	Replace Swatches…	ແທນທີ່ຕົວຢ່າງສີ…
+	Export Swatches…	ສົ່ງອອກຕົວຢ່າງສີ…
+	Export Swatches for Exchange…	ສົ່ງອອກຕົວຢ່າງສີສຳລັບແລກປ່ຽນ…
+	Reset Swatches	ຕັ້ງຄ່າຕົວຢ່າງສີໃໝ່
+	Add to Swatches	ເພີ່ມໃສ່ຕົວຢ່າງສີ
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	ເງື່ອນໄຂປະສົມ:
+	Channels:	ຊ່ອງສີ:
+	Knockout	ນັອກເອົາທ໌
+	Apply At Canvas Bounds	ນຳໃຊ້ທີ່ຂອບແຄນວາສ
+
+# Shared screen eyedropper and text Color Picker (#1128).
+	Color Picker (Text Color)	ຕົວກວດເລືອກສີ (ສີຕົວໜັງສື)
+	Color Picker ({name})	ຕົວກວດເລືອກສີ ({name})
+	Color Picker (Fill Color)	ຕົວກວດເລືອກສີ (ສີຖົມ)
+	Fill color	ສີຖົມ
+	Color Picker (Stroke Color)	ຕົວກວດເລືອກສີ (ສີເສັ້ນຂອບ)
+	Stroke color	ສີເສັ້ນຂອບ
+	Pick screen color	ເລືອກສີຈາກໜ້າຈໍ
+	Sample a pixel anywhere on the screen	ເກັບຕົວຢ່າງພິກເຊລຢູ່ບ່ອນໃດກໍໄດ້ເທິງໜ້າຈໍ
+	Click to pick · Esc to cancel	ຄລິກເພື່ອເລືອກ · Esc ເພື່ອຍົກເລີກ
+	Pick a screen pixel or press Esc to cancel	ເລືອກພິກເຊລເທິງໜ້າຈໍ ຫຼື ກົດ Esc ເພື່ອຍົກເລີກ
+	Scroll to zoom	ເລື່ອນເມົາສ໌ເພື່ອຊູມ
+	Drag to pan · Scroll to zoom · Double-click to fit	ລາກເພື່ອເລື່ອນພາບ · ເລື່ອນເມົາສ໌ເພື່ອຊູມ · ດັບເບິລຄລິກເພື່ອປັບໃຫ້ພໍດີ
+	Show/Hide All Panels	ສະແດງ/ເຊື່ອງທຸກພາແນລ
+	Show/Hide Panels	ສະແດງ/ເຊື່ອງພາແນລ
+	Could not open	ບໍ່ສາມາດເປີດໄດ້
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: ທີ່ຢູ່ໄຟລ໌ບໍ່ແມ່ນ Unicode ທີ່ຖືກຕ້ອງ; ກະລຸນາປ່ຽນຊື່ໄຟລ໌ແລ້ວເປີດອີກຄັ້ງ.
+	Good	ດີ
+	Best	ດີທີ່ສຸດ
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	ເນື້ອຫາ:
+	Custom Pattern:	ລວດລາຍກຳນົດເອງ:
+	Foreground Color	ສີໜ້າ
+	Color…	ສີ…
+	50% Gray	ສີເທົາ 50%
+	Color Adaptation	ການປັບຕົວຂອງສີ
+	{size} (was {old})	{size} (ເດີມແມ່ນ {old})
+	Cone (Inverted)	ຮູບຈວຍ (ປີ້ນກັບ)
+	Domed	ຮູບຫຼັງເຕົ່າ
+	Domed (Inverted)	ຮູບຫຼັງເຕົ່າ (ປີ້ນກັບ)
+	Diagonal (Descending)	ເສັ້ນສະຫຼຽງ (ລົງ)
+	Contour Editor	ຕົວແກ້ໄຂເສັ້ນຂອບຮູບ
+	Anti-aliased	ລົດຮອຍຢັກ
+	Corner	ມຸມ
+	Gloss Contour	ເສັ້ນຂອບຄວາມເຫຼື້ອມ
+	Contour	ເສັ້ນຂອບຮູບ
+	Cone - Inverted	ຮູບຈວຍ - ປີ້ນກັບ
+	Cove - Deep	ຮ່ອງໂຄ້ງ - ເລິກ
+	Cove - Shallow	ຮ່ອງໂຄ້ງ - ຕື້ນ
+	Half Round	ເຄິ່ງວົງມົນ
+	Ring - Double	ວົງແຫວນ - ຄູ່
+	Rolling Slope - Descending	ເປີ້ນຄ້ອຍລາດ - ລົງ
+	Rounded Steps	ຂັ້ນໄດມົນ
+	Sawtooth 1	ແຂ້ວເລື່ອຍ 1
+
+	Red Eye Tool	ເຄື່ອງມືແກ້ໄຂຕາແດງ
+	Red Eye	ຕາແດງ
+	Pupil Size	ຂະໜາດຕາດຳ
+	Darken Amount	ລະດັບຄວາມມືດ
+	Click a red pupil to neutralize it	ຄລິກທີ່ຕາດຳສີແດງເພື່ອປັບສີໃຫ້ປົກກະຕິ
+	open source	ໂອເພນຊອຣ໌ສ
+	…and {n} more	…ແລະ ອີກ {n} ລາຍການ
+	Selection Preview:	ສະແດງຕົວຢ່າງສ່ວນທີ່ເລືອກ:
+	Black Matte	ພື້ນຫຼັງດຳ
+	White Matte	ພື້ນຫຼັງຂາວ
+
+# Layer colour labels.
+	Seafoam	ສີຟອງທະເລ
+	Indigo	ສີຄາມ
+	Fuchsia	ສີບົວບານເຢັນ
+	Large document: redrawing on the CPU	ເອກະສານຂະໜາດໃຫຍ່: ກຳລັງແຕ້ມໃໝ່ເທິງ CPU
+	Redrawing	ກຳລັງແຕ້ມໃໝ່
+	This redraw took {seconds} s on the CPU.	ການແຕ້ມໃໝ່ນີ້ໃຊ້ເວລາ {seconds} ວິນາທີ ເທິງ CPU.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	ການແກ້ໄຂທີ່ມີຜົນຕໍ່ທັງເອກະສານ ເຊັ່ນ ໂໝດປະສົມ, ຄວາມໂປ່ງແສງ ຫຼື ການສະແດງຜົນຂອງເລເຢຍ ຈະແຕ້ມໃໝ່ທັງໝົດ.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	ເລເຢຍມີຂະໜາດເກີນໜ່ວຍຄວາມຈຳ GPU. ການເພີ່ມການໃຊ້ໜ່ວຍຄວາມຈຳໃນ ການຕັ້ງຄ່າ › ປະສິດທິພາບ ຈະເພີ່ມຂີດຈຳກັດໄດ້ສູງສຸດໜຶ່ງໃນສີ່ຂອງໜ່ວຍຄວາມຈຳຄອມພິວເຕີນີ້.
+	The GPU compositor wasn't used: {reason}	ບໍ່ໄດ້ໃຊ້ຕົວປະກອບພາບ GPU: {reason}
+fontWeight	Thin	ບາງຫຼາຍ
+fontWeight	ExtraLight	ບາງພິເສດ
+fontWeight	Light	ບາງ
+fontWeight	Regular	ປົກກະຕິ
+fontWeight	Medium	ປານກາງ
+fontWeight	SemiBold	ເຄິ່ງໜາ
+fontWeight	Bold	ໜາ
+fontWeight	ExtraBold	ໜາພິເສດ
+fontWeight	Black	ໜາທີ່ສຸດ
+fontWeight	Italic	ຕົວອຽງ
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	ເຄື່ອງມືສະແຕມລວດລາຍ
+	Pattern Stamp	ສະແຕມລວດລາຍ
+	Impressionist	ອິມເພຣສຊັນນິສຕ໌
+	Rotate View	ໝູນມຸມມອງ
+	Rotate View Tool	ເຄື່ອງມືໝູນມຸມມອງ
+	Reset View	ຕັ້ງຄ່າມຸມມອງໃໝ່
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	ລາກອ້ອມຮອບຈຸດໃຈກາງເພື່ອໝູນມຸມມອງ  ·  Shift ລັອກເທື່ອລະ 15°
+
+# Painting symmetry presets.
+	Dual Axis	ແກນຄູ່
+	Diagonal	ແນວສະຫຼຽງ
+	Transform Symmetry	ສົມມາດການປ່ຽນຮູບ
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	ຕົວຢ່າງຈຸດ
+	3 by 3 Average	ສະເລ່ຍ 3 × 3
+	5 by 5 Average	ສະເລ່ຍ 5 × 5
+	11 by 11 Average	ສະເລ່ຍ 11 × 11
+	31 by 31 Average	ສະເລ່ຍ 31 × 31
+	51 by 51 Average	ສະເລ່ຍ 51 × 51
+	101 by 101 Average	ສະເລ່ຍ 101 × 101
+	Sample Size:	ຂະໜາດຕົວຢ່າງ:
+	All Layers No Adjustments	ທຸກເລເຢຍ (ບໍ່ລວມການປັບແຕ່ງ)
+	Current & Below No Adjustments	ເລເຢຍປະຈຸບັນ ແລະ ດ້ານລຸ່ມ (ບໍ່ລວມການປັບແຕ່ງ)
+	Show Sampling Ring	ສະແດງວົງແຫວນເກັບຕົວຢ່າງ
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	ຢູ່ນອກຂອບເຂດສີສຳລັບການພິມ: ຄລິກເພື່ອເລືອກສີທີ່ພິມໄດ້ໃກ້ຄຽງທີ່ສຸດ
+	Not a web colour: click for the nearest web colour	ບໍ່ແມ່ນສີເວັບ: ຄລິກເພື່ອເລືອກສີເວັບທີ່ໃກ້ຄຽງທີ່ສຸດ
+	Color to Alpha…	ປ່ຽນສີເປັນອັນຟາ…
+	Transparency Threshold	ຂີດເລີ່ມຄວາມໂປ່ງໃສ
+	Opacity Threshold	ຂີດເລີ່ມຄວາມທຶບແສງ
+	PhotoCraft — Screen Color Picker	PhotoCraft — ຕົວກວດເລືອກສີໜ້າຈໍ
+
+	Rasterize svg groups deeper than	ແປງກຸ່ມ SVG ທີ່ເລິກກວ່າເປັນຣາສເຕີຣ໌
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	ຕັ້ງຄ່າ 0 ເພື່ອປິດຂີດເລີ່ມນີ້; ກຸ່ມ SVG ທີ່ຊ້ອນກັນເລິກກວ່າ 100 ຊັ້ນ ຈະຖືກແປງເປັນຣາສເຕີຣ໌ສະເໝີ.
+	Rule of Thirds	ກົດສາມສ່ວນ
+	Golden Ratio	ອັດຕາສ່ວນຄຳ
+	Golden Spiral	ກ້ຽວກົ້ນຫອຍທອງຄຳ
+	Auto Show Overlay	ສະແດງພາບວາງຊ້ອນອັດຕະໂນມັດ
+	Always Show Overlay	ສະແດງພາບວາງຊ້ອນສະເໝີ
+	Never Show Overlay	ບໍ່ສະແດງພາບວາງຊ້ອນ
+	Cycle Overlay	ວົນປ່ຽນຮູບແບບວາງຊ້ອນ
+	Cycle Orientation	ວົນປ່ຽນທິດທາງ
+	Set the overlay options for the Crop tool	ຕັ້ງຄ່າຕົວເລືອກພາບວາງຊ້ອນສຳລັບເຄື່ອງມືຕັດຂອບ
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	ການ Alt-ຄລິກ ສົ່ງໄປຍັງເດັສທັອບ ເຊິ່ງຍ້າຍປ່ອງຢ້ຽມດ້ວຍ Alt-ລາກ. ໃຫ້ຕັ້ງປຸ່ມຍ້າຍປ່ອງຢ້ຽມເປັນ Super, ຫຼື ລັອກ Alt ໃນ ປ່ອງຢ້ຽມ › ປຸ່ມຄວບຄຸມ.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	ຕົວກວດເລືອກສີ (ສີສະໄຕລ໌ເລເຢຍ)
+	Auto Hide Notifications	ເຊື່ອງການແຈ້ງເຕືອນອັດຕະໂນມັດ
+	Notification Duration (seconds)	ໄລຍະເວລາແຈ້ງເຕືອນ (ວິນາທີ)
+	Bundle Arrow-Key Nudges	ຮວມການກົດປຸ່ມລູກສອນຍ້າຍ
+	Nudge Bundle Pause (ms)	ເວລາລໍຖ້າຮວມການຍ້າຍ (ມິນລິວິນາທີ)
+	Appearance Mode	ໂໝດຮູບລັກສະນະ
+	Dark Theme	ຮູບແບບມືດ
+	Light Theme	ຮູບແບບແຈ້ງ
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	ໂໝດຮູບລັກສະນະຖັດໄປ
+	Sync with system	ຊິ້ງຄ໌ກັບລະບົບ
+	Active	ເປີດໃຊ້ງານ
+	Color Picker (Solid Color)	ຕົວກວດເລືອກສີ (ສີຕຶບ)
+	Straighten the image by drawing a line on it	ປັບຮູບໃຫ້ກົງໂດຍການແຕ້ມເສັ້ນລົງເທິງຮູບ
+	Set additional Crop options	ຕັ້ງຄ່າຕົວເລືອກຕັດຂອບເພີ່ມເຕີມ
+	Show Cropped Area	ສະແດງພື້ນທີ່ທີ່ຖືກຕັດອອກ
+	Enable Crop Shield	ເປີດໃຊ້ແຜ່ນບັງຕັດຂອບ
+	Match Canvas	ໃຫ້ພໍດີກັບແຄນວາສ
+	Auto Adjust Opacity	ປັບຄວາມທຶບແສງອັດຕະໂນມັດ
+	Crop Shield color	ສີແຜ່ນບັງຕັດຂອບ
+	Color Picker (Crop Shield Color)	ຕົວກວດເລືອກສີ (ສີແຜ່ນບັງຕັດຂອບ)
+	From Center	ຈາກຈຸດໃຈກາງ
+	Link radii	ເຊື່ອມໂຍງລັດສະໝີ
+	Star Ratio:	ອັດຕາສ່ວນດາວ:
+	Create Rectangle	ສ້າງຮູບສີ່ແຈສາກ
+	Create Ellipse	ສ້າງຮູບວົງລີ
+	Create Triangle	ສ້າງຮູບສາມແຈ
+	Create Polygon	ສ້າງຮູບຫຼາຍແຈ
+	Pressure curve	ເສັ້ນໂຄ້ງແຮງກົດ
+	Click to add a point, right-click to remove	ຄລິກເພື່ອເພີ່ມຈຸດ, ຄລິກຂວາເພື່ອລຶບອອກ
+	Some brush presets could not be loaded	ບໍ່ສາມາດໂຫຼດພຣີເຊັດແປງບາງອັນໄດ້
+	Retry saving presets	ລອງບັນທຶກພຣີເຊັດອີກຄັ້ງ
+	Brush preset changes are not saved: {error}	ການປ່ຽນແປງພຣີເຊັດແປງບໍ່ໄດ້ຖືກບັນທຶກ: {error}
+	Keep this tab open to retain your brushes.	ເປີດແທັບນີ້ໄວ້ເພື່ອຮັກສາແປງຂອງທ່ານ.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ບໍ່ສາມາດໃຊ້ບ່ອນເກັບຂໍ້ມູນບຣາວເຊີຣ໌ໄດ້; ແປງຈະຢູ່ສະເພາະເຊດຊັນນີ້ເທົ່ານັ້ນ. ເປີດແທັບນີ້ໄວ້ເພື່ອຮັກສາພວກມັນ.
+	Saving brush presets… Keep this tab open until saving finishes.	ກຳລັງບັນທຶກພຣີເຊັດແປງ… ເປີດແທັບນີ້ໄວ້ຈົນກວ່າການບັນທຶກຈະສຳເລັດ.
+	Reflect	ສະທ້ອນ
+	Glow	ແສງເຮືອງ
+	Negation	ປະຕິເສດ
+	XOR	XOR
+	Color Burn (Paint.NET)	ຄັລເລີຣ໌ເບີຣ໌ນ (Paint.NET)
+	Color Dodge (Paint.NET)	ຄັລເລີຣ໌ດອດຈ໌ (Paint.NET)
+	Stroke Options	ຕົວເລືອກເສັ້ນຂອບ
+	Solid	ເສັ້ນຕຶບ
+	Dashed	ເສັ້ນຂີດຂາດ
+	Dotted	ເສັ້ນຈຸດ
+	Alignment	ການຈັດລຽງ
+	Caps	ຫົວເສັ້ນ
+	Butt / Flat	ຕັດຮາບພຽງ
+	Miter	ມຸມແຫຼມ
+	Round	ມົນ
+	Bevel	ມຸມຕັດສຽງ
+	Miter limit	ຂີດຈຳກັດມຸມແຫຼມ
+	Dashed line	ເສັ້ນຂີດຂາດ
+	Dash	ເສັ້ນຂີດ
+	Gap	ຍະຫວ່າງ
+	Dash / gap lengths × stroke width	ຄວາມຍາວຂີດ / ຍະຫວ່າງ × ຄວາມກວ້າງເສັ້ນ
+	Add pair	ເພີ່ມຄູ່
+	Remove pair	ລຶບຄູ່
+	Dash offset	ໄລຍະເລື່ອນເສັ້ນຂີດ
+	Open paths use centered strokes	ເສັ້ນພາດປາຍເປີດຈະໃຊ້ເສັ້ນຂອບກຶ່ງກາງ
+	Use finite lengths and a positive pattern total	ໃຊ້ຄວາມຍາວທີ່ກຳນົດໄດ້ ແລະ ຜົນລວມລວດລາຍເປັນຄ່າບວກ
+	No subject found — try Object Selection or the Lasso	ບໍ່ພົບວັດຖຸ — ລອງໃຊ້ Object Selection ຫຼື Lasso
+	Quick Selection found nothing there	Quick Selection ບໍ່ພົບຫຍັງຢູ່ໃນຕຳແໜ່ງນັ້ນ
+	Object Selection found nothing there — try a tighter rectangle	Object Selection ບໍ່ພົບຫຍັງ — ລອງແຕ້ມສີ່ແຈໃຫ້ແຄບລົງ
+	No subject found — try a rectangle around the object	ບໍ່ພົບວັດຖຸ — ລອງແຕ້ມສີ່ແຈອ້ອມຮອບວັດຖຸ
+	Auto Erase	ລຶບອັດຕະໂນມັດ
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	ຄລິກຈຸດທຳອິດ ຫຼື ກົດ {key} ເພື່ອປິດ · {del} ລຶບຈຸດ · Esc ຍົກເລີກ
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	ຄລິກ ແລ້ວຍ້າຍໄປຕາມຂອບ · ຄລິກເພື່ອປັກຈຸດຍຶດ · {alt}-ຄລິກ ສຳລັບສ່ວນເສັ້ນຊື່ · ດັບເບິລຄລິກເພື່ອປິດ
+	Follows only edges this close to the pointer ([ and ] change it)	ຕິດຕາມສະເພາະຂອບທີ່ຢູ່ໃກ້ຕົວຊີ້ເມົາສ໌ເທົ່ານີ້ (ກົດ [ ແລະ ] ເພື່ອປ່ຽນ)
+	Higher values follow only edges that contrast sharply with their surroundings	ຄ່າຍິ່ງສູງຈະຍິ່ງຕິດຕາມສະເພາະຂອບທີ່ມີຄອນທຣາສຕ່າງຈາກບໍລິເວນອ້ອມຂ້າງຢ່າງຈະແຈ້ງ
+	How often fastening points are placed by themselves	ຄວາມຖີ່ໃນການວາງຈຸດຍຶດອັດຕະໂນມັດ
+	Scrubby Zoom	ຊູມແບບເລື່ອນລາກ
+	{mode} Color · {bits} bit	ສີ {mode} · {bits} ບິດ
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	ລາກກ່ອງຕັດຂອບ · ລາກຂ້າງໃນເພື່ອຍ້າຍ · ລາກຂອບເພື່ອປັບຂະໜາດ (ອັດຕາສ່ວນ {ratio}, ຈຸດກາງ {centre}) · Space ຍ້າຍຂະນະແຕ້ມ · ລູກສອນຍ້າຍລະອຽດ · X ສະຫຼັບທິດທາງ · {commit} ນຳໃຊ້ · Esc ຍົກເລີກ
+	Appearance Settings…	ການຕັ້ງຄ່າຮູບລັກສະນະ…
+	Add to favorites	ເພີ່ມໃສ່ລາຍການທີ່ມັກ
+	Remove from favorites	ລຶບອອກຈາກລາຍການທີ່ມັກ
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+	Camera Data	ຂໍ້ມູນກ້ອງ
+cameraData	Make	ຜູ້ຜະລິດ
+cameraData	Model	ລຸ້ນ
+cameraData	Date Taken	ວັນທີຖ່າຍ
+cameraData	Exposure	ເວລາເປີດຮັບແສງ
+cameraData	F-Stop	ຄ່າຮູຮັບແສງ (F-Stop)
+cameraData	ISO Speed	ຄວາມໄວ ISO
+cameraData	Focal Length	ໄລຍະໂຟກັສ
+cameraData	Focal Length (35 mm)	ໄລຍະໂຟກັສ (ທຽບເທົ່າ 35 ມມ)
+cameraData	Lens	ເລນສ໌
+# Shared panel docking
+	Activate Panel	ເປີດໃຊ້ພາແນລ
+	Change Panel Group	ປ່ຽນກຸ່ມພາແນລ
+	Change Panel Layout	ປ່ຽນເຄົ້າໂຄງພາແນລ
+	Close Panel	ປິດພາແນລ
+	Dock Panel	ສຽບຕິດພາແນລ
+	Float Panel	ປົດລອຍພາແນລ
+	Move Panel	ຍ້າຍພາແນລ
+	Group with	ຮວມກຸ່ມກັບ
+	Panel menu	ເມນູພາແນລ
+	Resize panel window	ປັບຂະໜາດປ່ອງຢ້ຽມພາແນລ
+	Resize panels	ປັບຂະໜາດພາແນລ
+	Use Classic Mode	ໃຊ້ໂໝດຄລາສສິກ
+	Auto Center Preview	ຈັດຮູບຕົວຢ່າງໄວ້ເຄິ່ງກາງອັດຕະໂນມັດ
+	Next Document	ເອກະສານຖັດໄປ
+	Previous Document	ເອກະສານກ່ອນໜ້າ
+	W x H x Resolution	ກວ້າງ x ສູງ x ຄວາມລະອຽດ
+	Front Image	ຮູບດ້ານໜ້າ
+	Frame Tool	ເຄື່ອງມືເຟຣມ
+	Create a new rectangular frame	ສ້າງເຟຣມສີ່ແຈສາກໃໝ່
+	Create a new elliptical frame	ສ້າງເຟຣມວົງລີໃໝ່
+	Include in playback	ລວມໃນການຫຼິ້ນຄືນ
+	Perspective Crop Tool	ເຄື່ອງມືຕັດຂອບແບບທັດສະນະມິຕິ
+	Show Grid	ສະແດງຕາຕະລາງ
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	ລາກກ່ອງ ຫຼື ຄລິກສີ່ແຈ · ລາກມຸມໄປໃສ່ຂອບຂອງຮູບຮ່າງທີ່ອຽງ · {commit} ນຳໃຊ້ · Esc ຍົກເລີກ
+	Artboard Tool	ເຄື່ອງມືອາດບອດ
+	Make Portrait	ຕັ້ງເປັນແນວຕັ້ງ
+	Make Landscape	ຕັ້ງເປັນແນວນອນ
+	Add New Artboard	ເພີ່ມອາດບອດໃໝ່
+	W	ກວ້າງ
+	H	ສູງ
+	Freeform Pen Tool	ເຄື່ອງມືປາກກາອິດສະຫຼະ
+	Curvature Pen Tool	ເຄື່ອງມືປາກກາເສັ້ນໂຄ້ງ
+	Curve Fit:	ຄວາມພໍດີຂອງເສັ້ນໂຄ້ງ:
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	ລາກ: ແຕ້ມອິດສະຫຼະ · {alt}-ຄລິກ: ສ່ວນເສັ້ນຊື່ · ປ່ອຍທີ່ຈຸດເລີ່ມຕົ້ນ: ປິດຮູບ
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	ຄລິກ: ຈຸດລຽບ · ດັບເບິລຄລິກ: ມຸມ · ລາກຈຸດ: ຍ້າຍ · ຄລິກຈຸດທຳອິດ: ປິດຮູບ · {key} ສຳເລັດ
+	New Crop Preset…	ພຣີເຊັດການຕັດຂອບໃໝ່…
+	Delete Crop Preset…	ລຶບພຣີເຊັດການຕັດຂອບ…
+	Select the crop presets to delete:	ເລືອກພຣີເຊັດການຕັດຂອບທີ່ຈະລຶບ:
+	Select the crop presets to delete	ເລືອກພຣີເຊັດການຕັດຂອບທີ່ຈະລຶບ
+	Enter a name for the crop preset	ປ້ອນຊື່ສຳລັບພຣີເຊັດການຕັດຂອບ
+	There is no crop size or ratio to save	ບໍ່ມີຂະໜາດ ຫຼື ອັດຕາສ່ວນການຕັດຂອບທີ່ຈະບັນທຶກ
+	Scale:	ມາດຕາສ່ວນ:
+	Snap to Origin	ດູດຕິດຈຸດກຳເນີດ
+	Search settings…	ຄົ້ນຫາການຕັ້ງຄ່າ…
+	No matching settings	ບໍ່ມີການຕັ້ງຄ່າທີ່ກົງກັນ
+	Loading fonts…	ກຳລັງໂຫຼດຟອນ…
+	Response curve	ເສັ້ນໂຄ້ງການຕອບສະໜອງ
+	Simulate Pressure	ຈຳລອງແຮງກົດ
+	Stroke Path…	ແຕ້ມເສັ້ນຂອບພາດ…
+	Background Eraser	ຢາງລຶບພື້ນຫຼັງ
+	Clone Stamp	ຕາປະທັບໂຄລນ
+	Healing Brush	ແປງຮັກສາຮູບ
+	Spot Healing Brush	ແປງຮັກສາສະເພາະຈຸດ
+	History Brush	ແປງປະຫວັດການເຮັດວຽກ
+	Smudge	ຖູເກລ່ຍ
+	Dodge	ດອດຈ໌
+	Burn	ເບີຣ໌ນ
+	Amount:	ປະລິມານ:
+	Protect:	ປ້ອງກັນ:
+	Protect skin tones	ປ້ອງກັນໂທນສີຜິວ
+	Edit points to modify the curve	ແກ້ໄຂຈຸດເພື່ອປັບປ່ຽນເສັ້ນໂຄ້ງ
+	Draw to modify the curve	ແຕ້ມເພື່ອປັບປ່ຽນເສັ້ນໂຄ້ງ
+curves	Smooth	ເຮັດໃຫ້ລຽບນຽນ
+	Smooth the curve values	ເຮັດໃຫ້ຄ່າເສັ້ນໂຄ້ງລຽບນຽນ
+	Drag to draw the curve · {key}-click draws a straight line	ລາກເພື່ອແຕ້ມເສັ້ນໂຄ້ງ · {key}-ຄລິກ ເພື່ອແຕ້ມເສັ້ນຊື່
+	Edit Plane	ແກ້ໄຂລະນາບ
+	Create Plane	ສ້າງລະນາບ
+	Grid Size:	ຂະໜາດຕາຕະລາງ:
+	Vanishing Point: click four corners to create a plane	ຈຸດລວມສາຍຕາ: ຄລິກສີ່ແຈເພື່ອສ້າງລະນາບ
+	Vanishing Point is not active	ຈຸດລວມສາຍຕາຍັງບໍ່ໄດ້ເປີດໃຊ້
+	Apply Vanishing Point ({key})	ນຳໃຊ້ຈຸດລວມສາຍຕາ ({key})
+	Fix the red plane first: its corners must form a convex quad	ແກ້ໄຂລະນາບສີແດງກ່ອນ: ມຸມຕ້ອງປະກອບເປັນຮູບສີ່ແຈໂນນ
+# Select and Mask view modes (#1754)
+	Onion Skin	ອອນນຽນສະກິນ
+	Marching Ants	ເສັ້ນປະມົດຍ່າງ
+	On Black	ເທິງພື້ນດຳ
+	On White	ເທິງພື້ນຂາວ
+	On Layers	ເທິງເລເຢຍ
+	Show Edge	ສະແດງຂອບ
+	Show Original	ສະແດງຕົ້ນສະບັບ
+	F cycles the views; hold X to see the image	ກົດ F ເພື່ອວົນປ່ຽນມຸມມອງ, ກົດ X ຄ້າງໄວ້ເພື່ອເບິ່ງຮູບ
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	ແປງປັບແຕ່ງຂອບ (R)
+	Expand Detection Area	ຂະຫຍາຍພື້ນທີ່ກວດຫາ
+	Restore Original Edge	ຄືນຄ່າຂອບເດີມ
+	Paint over hair or fur on the image; Alt paints the other mode	ທາໃສ່ເສັ້ນຜົມ ຫຼື ຂົນສັດເທິງຮູບພາບ; ກົດ Alt ເພື່ອທາໃນອີກໂໝດໜຶ່ງ
+	Clear Brush Strokes	ລຶບຮອຍແປງ
+	Show rulers	ສະແດງໄມ້ບັນທັດ
+	Presentation	ການນຳສະເໜີ
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	ຄລິກເພື່ອວາງ · Alt-ຄລິກ ຫຼື ລາກອອກນອກແຄນວາສເພື່ອລຶບອອກ
+	No document open	ບໍ່ມີເອກະສານເປີດຢູ່
+	{n} of {max} sample points	ຈຸດຕົວຢ່າງທີ {n} ຈາກ {max} ຈຸດ
+# Print dialog (#2697)
+	Emulsion Down	ດ້ານເຄືອບນ້ຳຢາລົງລຸ່ມ
+	Functions	ຟັງຊັນ
+	Print Resolution:	ຄວາມລະອຽດການພິມ:
+	Use Previous Layer to Create Clipping Mask	ໃຊ້ເລເຢຍກ່ອນໜ້າເພື່ອສ້າງຄລິບປິ້ງມາດສ໌
+	Fill with {mode}-neutral color (white)	ຖົມດ້ວຍສີກາງ {mode} (ສີຂາວ)
+	Fill with {mode}-neutral color (black)	ຖົມດ້ວຍສີກາງ {mode} (ສີດຳ)
+	Fill with {mode}-neutral color (50% gray)	ຖົມດ້ວຍສີກາງ {mode} (ສີເທົາ 50%)
+	(No neutral color exists for {mode} mode.)	(ບໍ່ມີສີກາງສຳລັບໂໝດ {mode}.)
+	Apply mask to layer before removing?	ຕ້ອງການນຳໃຊ້ໜ້າກາກໃສ່ເລເຢຍກ່ອນລຶບອອກບໍ່?
+	The layer or its mask changed. Drag the mask onto the Trash again.	ເລເຢຍ ຫຼື ໜ້າກາກມີການປ່ຽນແປງ. ກະລຸນາລາກໜ້າກາກໄປໃສ່ຖັງຂີ້ເຫຍື້ອອີກຄັ້ງ.
+	Delete the vector mask?	ຕ້ອງການລຶບໜ້າກາກເວັກເຕີຣ໌ບໍ່?
+# View › Guides › New Guide… › Color
+	Light Blue	ຟ້າອ່ອນ
+	Light Red	ແດງອ່ອນ
+	Medium Blue	ຟ້າກາງ
+	Light Gray	ເທົາອ່ອນ
+	Object Finder	ຕົວຄົ້ນຫາວັດຖຸ
+	No object found there — drag a rectangle around it	ບໍ່ພົບວັດຖຸຢູ່ບ່ອນນັ້ນ — ລາກສີ່ແຈອ້ອມຮອບມັນ
+	Remove after each stroke	ລຶບອອກຫຼັງຈາກແຕ່ລະເສັ້ນແຕ້ມ
+	Apply the removal ({key})	ນຳໃຊ້ການລຶບ ({key})
+	Strokes to remove: {n} (Enter applies, Esc cancels)	ເສັ້ນທີ່ຈະລຶບ: {n} (ກົດ Enter ເພື່ອນຳໃຊ້, Esc ເພື່ອຍົກເລີກ)
+	Show home recent files	ສະແດງໄຟລ໌ຫຼ້າສຸດໃນໜ້າຫຼັກ
+	Clear Brush Controls	ລຶບການຄວບຄຸມແປງ
+	Reset All Locked Settings	ຕັ້ງຄ່າການຕັ້ງຄ່າທີ່ຖືກລັອກທັງໝົດໃໝ່
+	Copy Texture to Other Tools	ສຳເນົາພື້ນຜິວໄປຍັງເຄື່ອງມືອື່ນ
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+	Load Actions…	ໂຫຼດແອັກຊັນ…
+	Save Actions…	ບັນທຶກແອັກຊັນ…
+	{name} (Photoshop)	{name} (Photoshop)
+	{message} ({note})	{message} ({note})
+@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	ໂຫຼດ {n} ແອັກຊັນຈາກ {file} ແລ້ວ
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} ຂັ້ນຕອນຍັງບໍ່ມີຟັງຊັນທີ່ທຽບເທົ່າໃນ PhotoCraft ເທື່ອ
+@plural	Saved {n} action to {file}|Saved {n} actions to {file}	ບັນທຶກ {n} ແອັກຊັນໃສ່ {file} ແລ້ວ
+@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	ຍົກເວັ້ນ {n} ຂັ້ນຕອນທີ່ບໍ່ມີຟັງຊັນທຽບເທົ່າໃນ Photoshop
+
+	File Naming	ການຕັ້ງຊື່ໄຟລ໌
+	Starting serial	ເລກລຳດັບເລີ່ມຕົ້ນ
+# Actions panel: set folders, dialog toggle, Insert Stop
+	Insert Stop…	ແຊກຈຸດຢຸດ…
+	Save Set…	ບັນທຶກຊຸດ…
+	Message:	ຂໍ້ຄວາມ:
+	Allow Continue	ອະນຸຍາດໃຫ້ດຳເນີນຕໍ່
+	Show dialog during playback	ສະແດງກ່ອງຂໍ້ຄວາມຂະນະຫຼິ້ນຄືນ
+	Select an action first	ກະລຸນາເລືອກແອັກຊັນກ່ອນ
+	Action playback stopped	ການຫຼິ້ນແອັກຊັນຖືກຢຸດແລ້ວ
+	Step {step} is waiting for its dialog	ຂັ້ນຕອນ {step} ກຳລັງລໍຖ້າກ່ອງຂໍ້ຄວາມ
+@plural	{n} action|{n} actions	{n} ແອັກຊັນ
+	Background (Default)	ພື້ນຫຼັງ (ຄ່າເລີ່ມຕົ້ນ)
+# Batch / Image Processor
+	Include All Subfolders	ລວມທຸກໂຟນເດີຍ່ອຍ
+	Auto Add/Delete	ເພີ່ມ/ລຶບ ອັດຕະໂນມັດ
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	ຢ່າເລືອກ ພິກຮູບພາບ ໃນການຕັ້ງຄ່າການພິມນຳອີກ: ເພາະການພິກສອງຄັ້ງຈະຫັກລ້າງກັນເອງ.
+	Print Settings…	ການຕັ້ງຄ່າການພິມ…
+	Remember to turn off the printer's own colour management in Print Settings…	ຢ່າລືມປິດການຈັດການສີຂອງເຄື່ອງພິມເອງໃນ ການຕັ້ງຄ່າການພິມ…
+	Sent to {printer}	ສົ່ງໄປຍັງ {printer} ແລ້ວ
+	set in Print Settings…	ກຳນົດໃນການຕັ້ງຄ່າການພິມ…
+	ICO is limited to 256 × 256 pixels	ICO ຖືກຈຳກັດໄວ້ທີ່ 256 × 256 ພິກເຊລ
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+	Use the embedded profile ({profile})	ໃຊ້ໂປຣໄຟລ໌ທີ່ຝັງມາ ({profile})
+	Convert to the working space ({profile})	ແປງເປັນພື້ນທີ່ສີເຮັດວຽກ ({profile})
+	Remember this choice for future images	ຈື່ການເລືອກນີ້ສຳລັບຮູບພາບໃນຕໍ່ໜ້າ
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	ເປີດການແຈ້ງເຕືອນຄືນໃໝ່ດ້ວຍ ຖາມເມື່ອບໍ່ກົງກັນ ໃນ ແກ້ໄຂ › ການຕັ້ງຄ່າສີ.
+	Button Mode	ໂໝດປຸ່ມ
+	Button Mode On	ເປີດໂໝດປຸ່ມ
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	ເຮັດໃຫ້ໜ້າຈໍມືດລົງ
+	Lighten Interface	ເຮັດໃຫ້ໜ້າຈໍແຈ້ງຂຶ້ນ
+# Bevel & Emboss Technique.
+	Technique	ເຕັກນິກ
+	Chisel Hard	ແກະສະຫຼັກແຂງ
+	Chisel Soft	ແກະສະຫຼັກນຸ່ມ
+	Open color-less EXR as ACEScg	ເປີດ EXR ທີ່ບໍ່ມີຂໍ້ມູນສີເປັນ ACEScg
+# Export As metadata and profile options
+	Color Profile	ໂປຣໄຟລ໌ສີ
+	EXIF	EXIF
+
+# View › Guides › right-click a guide
+	Edit Selected Guides	ແກ້ໄຂເສັ້ນນຳທາງທີ່ເລືອກ
+	Clear Selected Guides	ລຶບເສັ້ນນຳທາງທີ່ເລືອກ
+	Delete this set	ລຶບຊຸດນີ້
+	New Set…	ຊຸດໃໝ່…
+	PhotoCraft Defaults	ຄ່າເລີ່ມຕົ້ນຂອງ PhotoCraft
+	Save a list of these shortcuts as a web page	ບັນທຶກລາຍຊື່ປຸ່ມລັດເຫຼົ່ານີ້ເປັນໜ້າເວັບ
+	Save the changes to this set	ບັນທຶກການປ່ຽນແປງໃສ່ຊຸດນີ້
+	Save these shortcuts as a .kys file	ບັນທຶກປຸ່ມລັດເຫຼົ່ານີ້ເປັນໄຟລ໌ .kys
+	Save these shortcuts as a new set	ບັນທຶກປຸ່ມລັດເຫຼົ່ານີ້ເປັນຊຸດໃໝ່
+	Set deleted.	ລຶບຊຸດແລ້ວ.
+	Set saved.	ບັນທຶກຊຸດແລ້ວ.
+	Set:	ຊຸດ:
+	Summarize…	ສະຫຼຸບ…
+	There are too many sets: delete one first.	ມີຊຸດຫຼາຍເກີນໄປ: ກະລຸນາລຶບອອກກ່ອນໜຶ່ງຊຸດ.
+	set name	ຊື່ຊຸດ
+	{set} (modified)	{set} (ແກ້ໄຂແລ້ວ)
