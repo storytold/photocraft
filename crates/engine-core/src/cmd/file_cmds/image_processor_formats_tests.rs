@@ -166,7 +166,7 @@ fn legacy_format_and_resize_parameters_still_work() {
 #[test]
 fn a_bitmap_document_converts_to_srgb_through_rgb() {
     let dir = tempfile::tempdir().unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": "Plate", "width": 40, "height": 20, "mode": "gray", "background": "#ffffff"})).unwrap();
     s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
     assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
