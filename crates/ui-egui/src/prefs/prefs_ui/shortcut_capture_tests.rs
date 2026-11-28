@@ -194,3 +194,34 @@ fn a_user_shortcut_wins_over_a_default_it_was_not_moved_from() {
     let log = crate::shortcut_dispatch::take_log(&ctx);
     assert_eq!(log.last().map(|i| i.0.as_str()), Some("select.modify.feather"), "{log:?}");
 }
+
+/// #15534: Keyboard Shortcuts and Menus lays out both tabs with their full names and switches
+/// between them without clipping or overflowing.
+#[test]
+fn shortcuts_dialog_shows_full_keyboard_shortcuts_and_menus_tabs() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{Queryable as _, by};
+
+    let mut h = harness();
+    h.ctx.set_pixels_per_point(1.25);
+    crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
+    h.run_steps(5);
+
+    let shortcuts = h.get_by_role_and_label(Role::Tab, "Keyboard Shortcuts").rect();
+    let menus = h.get_by_role_and_label(Role::Tab, "Menus").rect();
+    assert!(shortcuts.width() > 0.0 && menus.width() > 0.0);
+    assert!(shortcuts.right() <= menus.left(), "tabs sit side by side: {shortcuts:?} vs {menus:?}");
+    assert!(h.query_by_label("More tabs").is_none(), "two tabs fit without an overflow menu");
+    assert!(h.query_by_label("Toolbar").is_none(), "Toolbar is customized in its own dialog (#14616)");
+
+    h.get_by_role_and_label(Role::Tab, "Menus").click();
+    h.run_steps(3);
+    let session = h.state().prefs_rt.shortcuts.as_ref().unwrap();
+    assert_eq!(session.state.snapshot(&session.keymap).unwrap().tab, "menus");
+    assert!(h.query_all(by().label("Show All Menu Items")).next().is_some());
+
+    h.get_by_role_and_label(Role::Tab, "Keyboard Shortcuts").click();
+    h.run_steps(3);
+    let session = h.state().prefs_rt.shortcuts.as_ref().unwrap();
+    assert_eq!(session.state.snapshot(&session.keymap).unwrap().tab, "shortcuts");
+}
