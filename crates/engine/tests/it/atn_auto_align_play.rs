@@ -80,8 +80,12 @@ fn a_played_auto_align_step_aligns_the_layers_in_one_history_state() {
     assert_eq!(loaded["unsupported"], json!([]));
     let result = s.execute("actions.play", json!({"action": loaded["actions"][0]})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
+    // Auto-Align moves the aligned layers' box to the canvas origin (#14195), so B lands on A
+    // and both sit at 0,0.
     let after = bounds(&s);
-    assert!((after.x0 - 20).abs() <= 1 && (after.y0 - 20).abs() <= 1, "B moved onto A: {after:?}");
+    let a_after = s.active().unwrap().doc.layer(a).unwrap().surface().unwrap().content_bounds();
+    assert!((after.x0 - a_after.x0).abs() <= 1 && (after.y0 - a_after.y0).abs() <= 1, "B moved onto A: {after:?} {a_after:?}");
+    assert!(after.x0.abs() <= 1 && after.y0.abs() <= 1, "the aligned box is at 0,0: {after:?}");
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history state");
 
     s.undo();
