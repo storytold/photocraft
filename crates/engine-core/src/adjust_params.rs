@@ -705,38 +705,49 @@ fn curve_round_trip_keeps_anchor(points: &[CurvePoint], input: f32, output: f32)
     parsed.iter().any(|point| (point.input - input).abs() < 1e-6 && (point.output - output).abs() < 1e-6)
 }
 
-fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
+fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool, keep_other_end: bool) {
     let sample = sample.clamp(0.0, 1.0);
-    let mut candidate = points.to_vec();
-    if black {
-        for p in &mut candidate {
-            p.input = sample + p.input * (1.0 - sample);
-        }
-        if let Some(first) = candidate.first_mut() {
-            first.input = sample;
-            first.output = 0.0;
-        }
-    } else {
-        for p in &mut candidate {
-            p.input *= sample;
-        }
-        if let Some(last) = candidate.last_mut() {
-            last.input = sample;
-            last.output = 1.0;
-        }
-    }
-
-    // `curve_arr` stores hundredths of a 0..255 level, while `parse_curve` drops points
-    // separated by less than half a level. Scaling an endpoint toward the sample can collapse
-    // several edited points together even when the target endpoint itself survives. Check that
-    // the full curve survives the actual serializer and parser.
     let target = if black { 0.0 } else { 1.0 };
-    if curve_round_trip_keeps_anchor(&candidate, sample, target) {
-        points.clone_from_slice(&candidate);
-        return;
+    let Some(last) = points.len().checked_sub(1) else { return };
+    let (own, other) = if black { (0, last) } else { (last, 0) };
+    // The scaling the eyedroppers have always used: a black pick maps every input into
+    // `sample..1`, a white pick into `0..sample`.
+    let scaled = |input: f32| if black { sample + input * (1.0 - sample) } else { input * sample };
+
+    // Both passes scale the inner points as before and put the picked end point on the sample.
+    // The first pass leaves the other end point where it is, so black then white (or white then
+    // black) sets both references (#14377). The second is the old behaviour and scales that end
+    // point too. It is used when the first would fold the curve (a pick at or past the other end
+    // point, or an inner point scaled past it) or lose points in the round trip below. With both
+    // end points at 0 and 255 (an unedited curve) the two passes give the same curve.
+    // `keep_other_end` false skips the first pass (the Properties panel pickers).
+    for keep_other in [true, false] {
+        if keep_other && (own == other || !keep_other_end) {
+            continue;
+        }
+        let mut candidate = points.to_vec();
+        for (i, p) in candidate.iter_mut().enumerate() {
+            if !(keep_other && i == other) {
+                p.input = scaled(p.input);
+            }
+        }
+        if let Some(picked) = candidate.get_mut(own) {
+            picked.input = sample;
+            picked.output = target;
+        }
+        // Scaling keeps the points in order, but a kept end point does not move with them.
+        let ordered = !keep_other || candidate.windows(2).all(|w| matches!(w, [a, b] if a.input < b.input));
+        // `curve_arr` stores hundredths of a 0..255 level, while `parse_curve` drops points
+        // separated by less than half a level. Moving an endpoint toward the sample can collapse
+        // several edited points together even when the target endpoint itself survives. Check
+        // that the full curve survives the actual serializer and parser.
+        if ordered && curve_round_trip_keeps_anchor(&candidate, sample, target) {
+            points.clone_from_slice(&candidate);
+            return;
+        }
     }
 
-    // If scaling collapses any points, keep the user's point positions and edits, and make the
+    // If neither pass is usable, keep the user's point positions and edits, and make the
     // two points nearest the selected endpoint a target plateau. Near an endpoint sample, those
     // two points bracket the sample; the plateau is representable and leaves the rest of the
     // curve intact.
@@ -932,6 +943,12 @@ pub fn adjustment_eyedropper(kind: &str, base: &Value, picker: CurvesEyedropper,
 /// RGB uses the three channel curves. Grayscale uses the composite curve and has no gray picker.
 /// Other colour models stay unsupported until their native channel semantics can be sampled.
 pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    curves_end_point_eyedropper(base, picker, sample, mode, true)
+}
+
+/// [`curves_eyedropper`]. `keep_other_end` false keeps the old scaling of the other end point:
+/// the Properties panel pickers (#14377 did not measure them, so they keep today's behaviour).
+fn curves_end_point_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode, keep_other_end: bool) -> Result<Adjustment> {
     check_eyedropper("curves eyedropper", picker, sample, mode)?;
     // The pickers place points: a pencil-drawn curve is first fitted with points, as when
     // Photoshop leaves the pencil for point editing.
@@ -949,14 +966,14 @@ pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
     let sample = sample.map(|v| v.clamp(0.0, 1.0));
     if mode == ColorMode::Grayscale {
         let tone = (sample[0] + sample[1] + sample[2]) / 3.0;
-        move_curve_endpoint(master, tone, picker == CurvesEyedropper::Black);
+        move_curve_endpoint(master, tone, picker == CurvesEyedropper::Black, keep_other_end);
         return Ok(adjustment);
     }
     match picker {
         CurvesEyedropper::Black | CurvesEyedropper::White => {
             let black = picker == CurvesEyedropper::Black;
             for (curve, value) in per_channel.iter_mut().zip(sample) {
-                move_curve_endpoint(curve, value, black);
+                move_curve_endpoint(curve, value, black, keep_other_end);
             }
             if let Some(endpoint) = if black { master.first_mut() } else { master.last_mut() } {
                 endpoint.output = if black { 0.0 } else { 1.0 };
@@ -1028,7 +1045,8 @@ pub fn destructive_eyedropper(s: &crate::Session, kind: &str, p: &Value) -> Resu
 /// the Properties panel's Set Black/Neutral Gray/White Point pickers. `at` samples the image the
 /// layer adjusts (the composite with the layer hidden, like its Properties histogram), so clicking
 /// the same pixel again maps it the same way. The picker edits the layer's adjustment with the
-/// other keys of `p` merged over it. `None` without the key.
+/// other keys of `p` merged over it. Curves picks here keep the old scaling of the other end point
+/// (#14377 did not measure the Properties panel). `None` without the key.
 pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &Value) -> Result<Option<Adjustment>> {
     let Some(e) = p.get("eyedropper") else { return Ok(None) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -1044,7 +1062,11 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
     }
     let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_params(kind, &rest, Some(adj), d.doc.mode)? };
     let (picker, sample) = eyedropper_sample(&d.doc, Some(layer), e, None)?;
-    adjustment_eyedropper(kind, &to_params(&current), picker, sample, d.doc.mode).map(Some)
+    match kind {
+        "curves" => curves_end_point_eyedropper(&to_params(&current), picker, sample, d.doc.mode, false),
+        _ => adjustment_eyedropper(kind, &to_params(&current), picker, sample, d.doc.mode),
+    }
+    .map(Some)
 }
 
 const EYEDROPPER: &str = "eyedropper";
@@ -1301,3 +1323,6 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod curves_eyedropper_endpoints_tests;
