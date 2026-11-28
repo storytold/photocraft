@@ -288,11 +288,12 @@ pub fn selective_color_weights(c: [f32; 3]) -> [f32; 9] {
 }
 
 /// Photoshop Selective Color: each range shifts the cyan, magenta and yellow ink (1 − R, G, B) by
-/// its percentage, plus its black percentage on every ink, weighted by how much the colour belongs
-/// to the range. Relative mode scales the shift by the ink already present (so it can't tint pure
-/// white). Absolute mode scales it by the room the ink has: adding ink by min(1, 2 × (1 − ink)),
-/// removing it by min(1, 2 × ink), so Neutrals Cyan +50 darkens red 64 by 32, not 64 (all 72
-/// absolute range × ink cases within 1 level of Photoshop 27.11).
+/// its percentage `a` combined with its black percentage `k` as a + k + a·k (Black compounds with
+/// the ink: Cyan +50 with Black +50 acts as +125 %), weighted by how much the colour belongs to the
+/// range. Relative mode scales the shift by the ink already present (so it can't tint pure white).
+/// Either way the shift is then clamped to what the ink can take, −ink … 1 − ink, so Neutrals Cyan
+/// +50 darkens red 64 by 32, not 64, and +100 by 64 rather than to black (measured on Photoshop
+/// 27.11 and 22.4.3, #13448).
 pub fn selective_color(c: [f32; 3], relative: bool, adj: &[[f32; 4]; 9]) -> [f32; 3] {
     let w = selective_color_weights(c);
     let mut delta = [0.0f32; 3];
@@ -303,14 +304,10 @@ pub fn selective_color(c: [f32; 3], relative: bool, adj: &[[f32; 4]; 9]) -> [f32
         let a = adj[r].map(|v| v / 100.0);
         for i in 0..3 {
             let ink = 1.0 - c[i];
-            let d = a[i] + a[3];
-            let d = if relative {
-                d * ink
-            } else if d > 0.0 {
-                d * (2.0 * (1.0 - ink)).min(1.0)
-            } else {
-                d * (2.0 * ink).min(1.0)
-            };
+            let d = a[i] + a[3] + a[i] * a[3];
+            let d = if relative { d * ink } else { d };
+            // `max` then `min` rather than `clamp`: never panics, even on an out-of-range pixel.
+            let d = d.max(-ink).min(1.0 - ink);
             delta[i] += d * wr;
         }
     }
