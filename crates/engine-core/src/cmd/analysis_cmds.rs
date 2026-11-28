@@ -1067,7 +1067,9 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             } else if d.measurement.count_total() > 0 {
                 "count"
             } else {
-                "selection"
+                // Automatic mode requires an active selection, ruler line or count marker (#16503);
+                // explicit `source: "selection"` keeps the full-canvas fallback (#933, #1184).
+                return Err(EngineError::Other("no selection, ruler line or count markers to measure".into()));
             }
         }
         x @ ("selection" | "ruler" | "count") => x,
