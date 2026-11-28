@@ -32,9 +32,12 @@ fn params(blur: f32, centre: (f32, f32), angle: f32, focus: f32, transition: f32
 fn check(src: &Image, out: Rect, ctx: &Ctx, p: &crate::FilterParams) {
     let crate::FilterParams::TiltShift { blur, center_x, center_y, angle, focus, transition } = *p else { panic!("Tilt-Shift fixture") };
     let want = reference::tilt_shift(src, out, ctx, blur, (center_x, center_y), angle, focus, transition);
-    let got = tilt_shift(src, out, ctx, blur, (center_x, center_y), angle, focus, transition);
+    check_pixels(&tilt_shift(src, out, ctx, blur, (center_x, center_y), angle, focus, transition), &want);
+}
+
+fn check_pixels(got: &[f32], want: &[f32]) {
     assert_eq!(got.len(), want.len());
-    for (i, (&got, &want)) in got.iter().zip(&want).enumerate() {
+    for (i, (&got, &want)) in got.iter().zip(want).enumerate() {
         assert!(got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan()), "sample {i}: {got} != {want}, delta {}", (got - want).abs());
     }
 }
@@ -42,6 +45,7 @@ fn check(src: &Image, out: Rect, ctx: &Ctx, p: &crate::FilterParams) {
 #[test]
 fn tilt_shift_matches_frozen_kernel_at_band_boundaries_and_edges() {
     let bounds = Rect::new(-19, 7, 54, 66);
+    let interior = Rect::new(-7, 17, 15, 39);
     let mut cases = Vec::new();
     for blur in [0.0, 0.49, 0.5, 1.0, 15.0, 80.0, 500.0] {
         for angle in [-90.0, -71.0, 0.0, 27.0, 90.0, 180.0] {
@@ -64,8 +68,12 @@ fn tilt_shift_matches_frozen_kernel_at_band_boundaries_and_edges() {
                 if !sweep.includes(case) {
                     continue;
                 }
-                check(&src, bounds, &ctx, p);
-                check(&src, Rect::new(-7, 17, 15, 39), &ctx, p);
+                let crate::FilterParams::TiltShift { blur, center_x, center_y, angle, focus, transition } = *p else { panic!("Tilt-Shift fixture") };
+                let center = (center_x, center_y);
+                // The frozen blur builds its levels over the same source window for both outputs.
+                let want = Image { rect: bounds, ch, data: reference::tilt_shift(&src, bounds, &ctx, blur, center, angle, focus, transition) };
+                check_pixels(&tilt_shift(&src, bounds, &ctx, blur, center, angle, focus, transition), &want.data);
+                check_pixels(&tilt_shift(&src, interior, &ctx, blur, center, angle, focus, transition), &want.crop(interior));
             }
         }
     }
