@@ -268,9 +268,9 @@ fn cmd_wasm() -> Result<(), String> {
     if failed == 0 { Ok(()) } else { Err(format!("{failed} wasm check(s) failed")) }
 }
 
-/// Test targets for the test build. Examples are left out so they aren't linked; clippy
-/// `--all-targets` still compiles them.
-const TEST_TARGETS: [&str; 4] = ["--workspace", "--lib", "--bins", "--tests"];
+/// Test targets for the test build. `--tests` respects each binary's `test` setting.
+/// Clippy checks ordinary examples with `--all-targets`.
+const TEST_TARGETS: [&str; 3] = ["--workspace", "--lib", "--tests"];
 
 fn nextest_available() -> bool {
     cargo().args(["nextest", "--version"]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
@@ -846,7 +846,7 @@ mod ci_tests {
             exclude: vec!["photocraft-web".into()],
             corpus: false,
         };
-        let build = "--workspace --locked --features heif --exclude photocraft-web --lib --bins --tests";
+        let build = "--workspace --locked --features heif --exclude photocraft-web --lib --tests";
         let args = nextest_args(&options, false, Some("package(g)"), None).join(" ");
         assert_eq!(args, format!("nextest run --profile ci {build} --partition hash:2/3 -E not (package(g))"));
         let gpu = CiOptions { selection: Selection::Gpu, partition: None, ..options.clone() };
