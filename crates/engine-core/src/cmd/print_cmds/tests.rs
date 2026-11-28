@@ -597,9 +597,10 @@ fn package_never_overwrites_one_link_copy_with_another() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A second package into the same folder copies its links beside the first one's, never over them.
+/// A second package into the same folder writes nothing without `overwrite`; with it the old
+/// package is replaced, so the link copy keeps its plain name (#14075).
 #[test]
-fn package_keeps_files_already_in_links() {
+fn package_again_needs_overwrite_and_replaces_the_old_links() {
     let dir = tmp("package-again");
     let link = format!("{dir}/art.png");
     let mut src = crate::session();
@@ -610,11 +611,12 @@ fn package_keeps_files_already_in_links() {
     let first = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
     let first = first["links"][0].as_str().unwrap().to_string();
     let kept = std::fs::read(&first).unwrap();
-    let second = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
-    let second = second["links"][0].as_str().unwrap();
-    assert_ne!(second, first);
-    assert!(second.ends_with("Links/art_1.png"), "{second}");
+    assert!(s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).is_err());
     assert_eq!(std::fs::read(&first).unwrap(), kept);
+    let second = s.execute("file.package", json!({"dir": format!("{dir}/pkg"), "overwrite": true})).unwrap();
+    let second = second["links"][0].as_str().unwrap();
+    assert_eq!(second, first, "the copy keeps its plain name");
+    assert!(second.ends_with("Links/art.png"), "{second}");
     assert_eq!(std::fs::read(second).unwrap(), kept);
     let _ = std::fs::remove_dir_all(&dir);
 }
