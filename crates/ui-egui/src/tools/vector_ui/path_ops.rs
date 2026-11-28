@@ -349,13 +349,93 @@ pub(crate) fn edit_path(path: &Path, key: u64) -> EditPath {
 
 /// Edit › Free Transform Path (⌘T with Path Selection or Direct Selection): the path the
 /// box transforms (the one Path Selection edits) and `path.transform`'s params that name it.
+///
+/// Free Transform Points (#13209): when Direct Selection has anchors selected on that same path, the
+/// params name those anchors as well, so the box transforms only them, and
+/// [`free_transform_point_bounds`] is the frame they span. The reference application was measured on
+/// a work or saved path with every selected anchor in one subpath, no segment selected and a frame
+/// that has an area; a shape layer's path, a vector mask, anchors across subpaths, a segment on its
+/// own, a selection spanning no area (one straight anchor, anchors on one line) and no selection keep
+/// today's whole-path transform.
 pub(crate) fn free_transform_path(app: &PhotocraftApp) -> Option<(Value, Path)> {
     if !matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection) {
         return None;
     }
     let (target, path) = target_path(app)?;
     path.control_bounds()?;
-    Some((target.params(app), path))
+    let mut params = target.params(app);
+    if let Some(anchors) = free_transform_anchor_selection(app, target, &path) {
+        params.as_object_mut()?.insert("anchors".into(), json!(anchors));
+    }
+    Some((params, path))
+}
+
+/// The anchors Free Transform Points acts on: the tool's own anchor selection of the path the box
+/// transforms, in the configuration the reference application was measured in. `None` keeps the
+/// whole-path transform. Every index addresses a knot of `path` and the selection is still the one
+/// this document and revision made, so a selection left over from elsewhere cannot name a point that
+/// is not there.
+fn free_transform_anchor_selection(app: &PhotocraftApp, target: PathRef, path: &Path) -> Option<Vec<[usize; 2]>> {
+    if app.ui.tool != Tool::DirectSelection || !matches!(target, PathRef::Work | PathRef::Saved(_)) {
+        return None;
+    }
+    let ds = &app.ui.direct_selection;
+    if ds.editing.is_some() || ds.segment.is_some() || ds.target != Some(target) || !crate::direct_select::still_valid(app, ds) {
+        return None;
+    }
+    let anchors = &ds.anchors;
+    let [sub, _] = *anchors.first()?;
+    let mut out = Vec::with_capacity(anchors.len());
+    for a in anchors {
+        let [s, k] = *a;
+        // Anchors on several subpaths were not measured: that selection keeps the whole path.
+        if s != sub {
+            return None;
+        }
+        path.subpaths.get(s)?.knots.get(k)?;
+        out.push([s, k]);
+    }
+    // A box needs an area to work in: one straight anchor, or anchors on one line, span none, and the
+    // session then has no map to move them by. That was not measured, so it keeps the whole path.
+    let (x0, y0, x1, y1) = point_frame(path, &out)?;
+    (x1 > x0 && y1 > y0).then_some(out)
+}
+
+/// The anchors Free Transform Points params name (`[subpath, knot]`, as `path.moveAnchors` names
+/// them); `None` when the params transform the whole path (#13209).
+pub(crate) fn free_transform_point_anchors(params: &Value) -> Option<Vec<[usize; 2]>> {
+    let list = params.get("anchors")?.as_array()?;
+    let mut out = Vec::with_capacity(list.len());
+    for a in list {
+        let pair = a.as_array().filter(|pair| pair.len() == 2)?;
+        let (Some(s), Some(k)) = (pair[0].as_u64(), pair[1].as_u64()) else { return None };
+        let (Ok(s), Ok(k)) = (usize::try_from(s), usize::try_from(k)) else { return None };
+        out.push([s, k]);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The frame the Free Transform box opens over: the bounds of the anchors and their own handles the
+/// params name (Free Transform Points, #13209), so the options bar reads the selection's X, Y, W and
+/// H. `None` when the params name no anchors: the whole path's control bounds then frame the box.
+pub(crate) fn free_transform_point_bounds(params: &Value, path: &Path) -> Option<(f64, f64, f64, f64)> {
+    point_frame(path, &free_transform_point_anchors(params)?)
+}
+
+/// The bounds the knots `anchors` span: their anchors and their own handles, the same measure
+/// [`Path::control_bounds`] is for the whole path. `None` when an index is not a knot of `path`.
+fn point_frame(path: &Path, anchors: &[[usize; 2]]) -> Option<(f64, f64, f64, f64)> {
+    let mut frame: Option<(f64, f64, f64, f64)> = None;
+    for &[s, k] in anchors {
+        let node = path.subpaths.get(s)?.knots.get(k)?;
+        for p in [node.anchor, node.in_ctrl, node.out_ctrl] {
+            frame = Some(match frame {
+                Some((x0, y0, x1, y1)) => (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
+                None => (p.x, p.y, p.x, p.y),
+            });
+        }
+    }
+    frame
 }
 
 fn point_in_subpath(sp: &photocraft_doc::vector::Subpath, pt: [f64; 2]) -> bool {

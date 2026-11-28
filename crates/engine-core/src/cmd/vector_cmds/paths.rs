@@ -1,8 +1,8 @@
 use super::params::{color, f64p, layer_id, op_from, parse_path, path_json};
 use super::shape::{map_path, map_shape, transform_shape, with_shape};
 use super::{
-    Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Rect, Result, SelectionMode, Session, Value, bad,
-    json, parse_blend, sel, vector,
+    Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Point, Rect, Result, SelectionMode, Session, Value,
+    bad, json, parse_blend, sel, vector,
 };
 
 // ---------------------------------------------------------------------------
@@ -227,6 +227,88 @@ enum PathMap {
     Warp(Box<photocraft_geom::warp::Warp>),
 }
 
+/// One point of the path through `map`; a point the map sends out of bounds is an error.
+fn point_through(map: &PathMap, p: Point) -> Result<Point> {
+    let q = match map {
+        PathMap::Affine(a) => a.apply(p),
+        PathMap::Projective(h) => {
+            let (x, y) = h.apply(p.x, p.y);
+            Point::new(x, y)
+        }
+        PathMap::Warp(w) => {
+            let (x, y) = w.map(p.x, p.y);
+            Point::new(x, y)
+        }
+    };
+    (q.x.is_finite() && q.y.is_finite()).then_some(q).ok_or_else(|| EngineError::Other("the distortion sends part of the path out of bounds".into()))
+}
+
+/// The anchors `path.transform` moves on their own (Free Transform Points, #13209), named as
+/// `path.moveAnchors` names them: `[subpath, knot]` pairs. `None` transforms the whole path; an empty
+/// or malformed list is an error, and a repeated pair moves that point once.
+fn anchor_list(cmd: &str, p: &Value) -> Result<Option<Vec<[usize; 2]>>> {
+    let Some(v) = p.get("anchors") else { return Ok(None) };
+    if v.is_null() {
+        return Ok(None);
+    }
+    let Some(list) = v.as_array().filter(|list| !list.is_empty()) else {
+        return Err(bad(cmd, "`anchors` must list [subpath, knot] pairs"));
+    };
+    let mut out: Vec<[usize; 2]> = Vec::with_capacity(list.len());
+    for a in list {
+        let [s, k] = a
+            .as_array()
+            .filter(|a| a.len() == 2)
+            .and_then(|a| Some([a[0].as_u64()?, a[1].as_u64()?]))
+            .and_then(|v| Some([usize::try_from(v[0]).ok()?, usize::try_from(v[1]).ok()?]))
+            .ok_or_else(|| bad(cmd, "each anchor is [subpath, knot] with whole numbers"))?;
+        if !out.contains(&[s, k]) {
+            out.push([s, k]);
+        }
+    }
+    Ok(Some(out))
+}
+
+/// The bounds the transform acts on, as `[x0, y0, x1, y1]`: the anchors and their own handles a point
+/// transform names — the same measure [`Path::control_bounds`] is for the whole path — or the whole
+/// path's control bounds. An index that is not a knot of `path` is an error.
+fn acted_on_bounds(cmd: &str, path: &Path, anchors: Option<&[[usize; 2]]>) -> Result<[f64; 4]> {
+    let mut b: Option<[f64; 4]> = None;
+    if let Some(anchors) = anchors {
+        for &[s, k] in anchors {
+            let Some(node) = path.subpaths.get(s).and_then(|sp| sp.knots.get(k)) else {
+                return Err(bad(cmd, format!("no anchor [{s}, {k}] on this path")));
+            };
+            for p in [node.anchor, node.in_ctrl, node.out_ctrl] {
+                b = Some(match b {
+                    Some([x0, y0, x1, y1]) => [x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)],
+                    None => [p.x, p.y, p.x, p.y],
+                });
+            }
+        }
+    } else {
+        b = path.control_bounds().map(|(x0, y0, x1, y1)| [x0, y0, x1, y1]);
+    }
+    b.ok_or_else(|| bad(cmd, "path has no points to transform"))
+}
+
+/// Free Transform Points (#13209): only the listed knots follow the map, each with its own handles;
+/// every other anchor and handle of the path stays exactly where it is.
+fn map_selected_points(path: &Path, anchors: &[[usize; 2]], map: &PathMap) -> Result<Path> {
+    let mut out = path.clone();
+    for &[s, k] in anchors {
+        // The indices were checked against the same path before anything was edited.
+        let Some(node) = out.subpaths.get_mut(s).and_then(|sp| sp.knots.get_mut(k)) else {
+            return Err(EngineError::Other(format!("no anchor [{s}, {k}] on this path")));
+        };
+        let (anchor, handle_in, handle_out) = (point_through(map, node.anchor)?, point_through(map, node.in_ctrl)?, point_through(map, node.out_ctrl)?);
+        node.anchor = anchor;
+        node.in_ctrl = handle_in;
+        node.out_ctrl = handle_out;
+    }
+    Ok(out)
+}
+
 pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.transform";
     let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
@@ -245,15 +327,17 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         // its groups. Pixel-only locks still allow mask edits; shape content checks them below.
         crate::commands::check_all_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     }
-    // The box Distort, Perspective and Warp frame: `rect`, else the path's control bounds.
+    // The anchors of a point-level transform (Free Transform Points, #13209), checked against the
+    // path before anything changes: a stale anchor list must refuse, not move another point.
+    let anchors = anchor_list(CMD, p)?;
+    if let Some(anchors) = &anchors {
+        acted_on_bounds(CMD, &transform_target(s, &name, layer_id, vector_mask)?, Some(anchors))?;
+    }
+    // The box Distort, Perspective and Warp frame: `rect`, else the bounds of what is transformed.
     let frame = |s: &Session| -> Result<[f64; 4]> {
         let r = match coords(p, "rect", 4)? {
             Some(r) => [r[0], r[1], r[2], r[3]],
-            None => {
-                let (x0, y0, x1, y1) =
-                    transform_target(s, &name, layer_id, vector_mask)?.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
-                [x0, y0, x1, y1]
-            }
+            None => acted_on_bounds(CMD, &transform_target(s, &name, layer_id, vector_mask)?, anchors.as_deref())?,
         };
         if r[2] - r[0] <= 0.0 || r[3] - r[1] <= 0.0 {
             return Err(bad(CMD, "`rect` must have a positive width and height (a straight path needs a `rect`)"));
@@ -305,9 +389,10 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         let (tx, ty) = (number("translateX", 0.0)?, number("translateY", 0.0)?);
         let (sx, sy) = (number("scaleX", 1.0)?, number("scaleY", 1.0)?);
         let angle = number("angle", 0.0)?;
-        // An explicit `layer` parameter determines both the transformed path and its pivot (#3062).
+        // An explicit `layer` parameter determines both the transformed path and its pivot (#3062);
+        // `anchors` pivots on the bounds of the anchors it names.
         let path = transform_target(s, &name, layer_id, vector_mask)?;
-        let (x0, y0, x1, y1) = path.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
+        let [x0, y0, x1, y1] = acted_on_bounds(CMD, &path, anchors.as_deref())?;
         let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
         PathMap::Affine(
             Affine::translate(-cx, -cy)
@@ -321,27 +406,38 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         PathMap::Projective(h) => json!({ "name": name, "homography": h.0 }),
         PathMap::Warp(_) => json!({ "name": name, "warp": true }),
     };
+    let label = if anchors.is_some() { "Transform Points" } else { "Transform Path" };
     if !vector_mask
         && let Some(id) = layer_id
         && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|layer| matches!(layer.content, LayerContent::Shape(_)))
     {
-        with_shape(s, id, "Transform Path", |shape, _| {
-            match &map {
-                PathMap::Affine(a) => transform_shape(shape, a),
-                PathMap::Projective(h) => map_shape(shape, Some(h), None)?,
-                PathMap::Warp(w) => map_shape(shape, None, Some(w))?,
+        with_shape(s, id, label, |shape, _| {
+            if let Some(anchors) = &anchors {
+                // Only part of the outline moved: the live shape's parameters cannot describe that,
+                // as with any other point-level path edit.
+                shape.path = map_selected_points(&shape.path, anchors, &map)?;
+                shape.live = None;
+            } else {
+                match &map {
+                    PathMap::Affine(a) => transform_shape(shape, a),
+                    PathMap::Projective(h) => map_shape(shape, Some(h), None)?,
+                    PathMap::Warp(w) => map_shape(shape, None, Some(w))?,
+                }
             }
             shape.psd_raw = None;
             Ok(())
         })?;
         return Ok(out);
     }
-    s.edit("Transform Path", |doc, _| {
+    s.edit(label, |doc, _| {
         let path = path_mut(doc, &name, layer_id)?;
-        *path = match &map {
-            PathMap::Affine(a) => path.transform(a),
-            PathMap::Projective(h) => map_path(path, Some(h), None)?,
-            PathMap::Warp(w) => map_path(path, None, Some(w))?,
+        *path = match &anchors {
+            Some(anchors) => map_selected_points(path, anchors, &map)?,
+            None => match &map {
+                PathMap::Affine(a) => path.transform(a),
+                PathMap::Projective(h) => map_path(path, Some(h), None)?,
+                PathMap::Warp(w) => map_path(path, None, Some(w))?,
+            },
         };
         Ok(())
     })?;

@@ -615,8 +615,12 @@ fn begin_lone(
 
 /// Edit › Free Transform Path: the box frames the path's anchors and handles and draws the
 /// path through it; OK commits one `path.transform` step.
+///
+/// Free Transform Points (#13209): the params can name anchors, in which case the box frames those
+/// anchors and OK transforms only them.
 fn begin_path(app: &mut PhotocraftApp, params: serde_json::Value, path: photocraft_doc::vector::Path) -> Result<(), String> {
-    let (x0, y0, x1, y1) = path.control_bounds().ok_or("the path has no points to transform")?;
+    let (x0, y0, x1, y1) =
+        crate::vector_ui::free_transform_point_bounds(&params, &path).or_else(|| path.control_bounds()).ok_or("the path has no points to transform")?;
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
     let layer = st.active_layer.or_else(|| doc.layers.first().map(|l| l.id)).ok_or("no layer")?;
@@ -629,7 +633,11 @@ fn begin_path(app: &mut PhotocraftApp, params: serde_json::Value, path: photocra
         format!("transform-{session}"),
         PreviewPixels::new(egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]),
     );
-    app.transform_preview = Some(OpenPreview { path: Some(path), ..OpenPreview::new(session, doc, textures, app.ui.tool) });
+    app.transform_preview = Some(OpenPreview {
+        path: Some(path),
+        path_points: crate::vector_ui::free_transform_point_anchors(&params),
+        ..OpenPreview::new(session, doc, textures, app.ui.tool)
+    });
     app.ui.transform = Some(FreeTransform {
         session: open_session(app, rect, BoxAllow::default(), true),
         id: session,

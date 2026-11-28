@@ -321,8 +321,34 @@ fn path_outline(t: &FreeTransform, pv: &OpenPreview) -> Option<EditPath> {
             (Box::new(move |p| h.apply_in_front(p, rect)), false)
         }
     };
+    // Free Transform Points (#13209): the box carries only the anchors it was opened on, so those
+    // points go through its map here and the outline of the whole path is drawn where it then stands.
+    let (source, map, bends) = match pv.path_points.as_deref() {
+        Some(anchors) => (points_through_box(source, anchors, &*map), Box::new(stays_where_it_is) as Box<dyn Fn(Point) -> Option<Point>>, false),
+        None => (source, map, bends),
+    };
     let subpaths = source.subpaths.iter().flat_map(|sub| mapped_runs(&flatten(sub, bends), sub.closed, &*map)).collect();
     Some(EditPath::new(source.key, subpaths).colored(source.color))
+}
+
+/// The map of a point transform's outline: the points it leaves alone keep their place.
+fn stays_where_it_is(p: Point) -> Option<Point> {
+    Some(p)
+}
+
+/// Free Transform Points (#13209): `source` with the knots `anchors` names put where the box puts
+/// them — each named knot's anchor and its own handles follow the map, every other point of the path
+/// stays exactly where it is. A point the map sends behind a Distort's horizon keeps its place.
+fn points_through_box(mut source: EditPath, anchors: &[[usize; 2]], map: &dyn Fn(Point) -> Option<Point>) -> EditPath {
+    for &[sub, knot] in anchors {
+        let Some(node) = source.subpaths.get_mut(sub).and_then(|sub| sub.knots.get_mut(knot)) else { continue };
+        for p in [&mut node.anchor, &mut node.in_ctrl, &mut node.out_ctrl] {
+            if let Some(q) = map(*p) {
+                *p = q;
+            }
+        }
+    }
+    source
 }
 
 /// `sub`'s outline as points: each segment's start, and for a curved segment (or any segment when
