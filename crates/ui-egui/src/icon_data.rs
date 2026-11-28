@@ -28,6 +28,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("pipette", include_bytes!("../../../assets/icons/pipette.svg")),
     ("rectangle-horizontal", include_bytes!("../../../assets/icons/rectangle-horizontal.svg")),
     ("rectangle-vertical", include_bytes!("../../../assets/icons/rectangle-vertical.svg")),
+    ("red-eye", include_bytes!("../../../assets/icons/red-eye.svg")),
     ("redo-2", include_bytes!("../../../assets/icons/redo-2.svg")),
     ("spirit-level", include_bytes!("../../../assets/icons/spirit-level.svg")),
     ("square-dashed", include_bytes!("../../../assets/icons/square-dashed.svg")),

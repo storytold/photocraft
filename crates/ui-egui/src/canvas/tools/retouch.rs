@@ -3,8 +3,9 @@
 
 use std::cell::RefCell;
 
+use craft::behavior::IconId;
 use craft::behavior::PointerButton;
-use craft::behavior::cursor::{Cursor, CursorIcon, PaintedCursor};
+use craft::behavior::cursor::{Cursor, CursorIcon, PaintedCursor, PointerGlyph};
 use craft::behavior::geometry::SelectionOperation;
 use craft::behavior::kurbo::Point;
 use craft::behavior::value::CancelReason;
@@ -279,6 +280,14 @@ impl CanvasTool for RetouchTool<'_> {
             if state.drag.active() || over {
                 return state.drag.cursor(&self.probe, cx);
             }
+        }
+        // Red Eye: a small crosshair with an eye to its lower right, hotspot on the cross, no
+        // pupil search circle (#12578). Precise Other Cursors and Caps Lock keep the crosshair.
+        if self.tool == Tool::RedEye {
+            if cx.precise() {
+                return Cursor::Painted(PaintedCursor::Crosshair);
+            }
+            return PaintedCursor::pointer_tool(PointerGlyph::Crosshair, IconId::new("eye")).into();
         }
         let state = self.state.borrow();
         let press = state.press.as_ref().map(|p| (p.start, p.modifiers));
