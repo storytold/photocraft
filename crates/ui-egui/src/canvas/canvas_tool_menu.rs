@@ -1551,6 +1551,14 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     {
         return false;
     }
+    // #16607: the Type tool's off-text selection menu greys Free Transform on a text layer.
+    if menu.tool == Tool::Type
+        && menu.has_selection
+        && command == "edit.freeTransform"
+        && app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(|layer| matches!(layer.content, LayerContent::Text(_)))
+    {
+        return false;
+    }
     if !(path_menu(menu.tool) || shape_tool_menu(menu.tool)) {
         return crate::menus::is_enabled(app, command);
     }

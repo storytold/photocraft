@@ -7,13 +7,14 @@
 //! not measured: they keep today's no menu. The Vertical Type Mask tool's idle right-click is
 //! #12091.
 
+use egui_kittest::kittest::{NodeT, Queryable as _};
 use serde_json::json;
 
 use photocraft_doc::LayerContent;
 
 use super::Tool;
 use super::count_tests::{call, listed, right_click};
-use super::tests::{labels, open_here, screen_of};
+use super::tests::{harness, labels, open_here, screen_of};
 use super::{COUNT_MENU, MEASURED_SELECTION_MENU, MenuKind, available, entry_enabled, rows};
 use crate::PhotocraftApp;
 
@@ -128,6 +129,7 @@ fn rasterize_layer_is_enabled_for_an_active_text_layer() {
     assert!(!entry_enabled(&app, &menu, "layer.rasterize.layerStyle"), "no layer style to rasterize");
     assert!(!entry_enabled(&app, &menu, "layer.smartObjects.convertToLayers"), "not a smart object");
     assert!(!entry_enabled(&app, &menu, "select.reselect"), "no earlier selection");
+    assert!(available(&app, &menu, "edit.freeTransform"), "a text layer without a selection can still be transformed");
 }
 
 #[test]
@@ -268,21 +270,20 @@ fn with_a_selection_an_active_text_layer_greys_the_selection_menu_as_measured() 
     app.run("type.create", json!({"text": "Hello", "size": 14, "x": 1, "y": 22})).unwrap();
     app.run("select.rect", json!({"x": 40, "y": 30, "width": 10, "height": 10})).unwrap();
     app.sync_views();
-    right_click(&mut app, 50.0, 40.0);
-    let menu = open_menu(&app);
+    let mut h = harness(app);
+    let pos = screen_of(h.state(), [42.0, 32.0]);
+    super::tests::right_click(&mut h, pos, egui::Modifiers::NONE);
+    let app = h.state();
+    let menu = open_menu(app);
     assert!(matches!(menu.kind, MenuKind::Tool), "the selection menu, got {:?}", menu.kind);
     assert_eq!(labels(rows(&menu)), labels(MEASURED_SELECTION_MENU), "the same menu as with a pixel layer active");
-    // Measured with a text layer active: those rows grey. Free Transform is the one row the
-    // reference greys here and this application does not: #2630 lets a text layer take Free
-    // Transform and a selection does not narrow it, pinned by
-    // `transform_type_tests::type_layers_offer_free_transform_but_not_distort_or_perspective`
-    // (also for the marquee's menu) and `free_transform_with_a_selection_frames_and_moves_the_whole_type_layer`.
     assert_eq!(
-        greyed(&app, &menu),
-        ["Layer Via Cut", "Fill…", "Stroke…", "Content-Aware Fill…", "Delete and Fill Selection", "Last Filter", "Fade…"],
-        "measured with a text layer active, except Free Transform (#2630)"
+        greyed(app, &menu),
+        ["Layer Via Cut", "Free Transform", "Fill…", "Stroke…", "Content-Aware Fill…", "Delete and Fill Selection", "Last Filter", "Fade…"],
+        "measured with a text layer active"
     );
-    assert!(available(&app, &menu, "edit.freeTransform"), "Free Transform stays live for editable type (#2630)");
+    assert!(h.get_by_label("Free Transform").accesskit_node().is_disabled(), "the menu exposes Free Transform as disabled");
+    assert!(crate::menus::is_enabled(app, "edit.freeTransform"), "the Edit menu still transforms the whole text layer (#2630)");
     for (label, id) in [
         ("Layer Via Copy", "layer.new.layerViaCopy"),
         ("New Layer…", "layer.new.layer"),
@@ -290,12 +291,15 @@ fn with_a_selection_an_active_text_layer_greys_the_selection_menu_as_measured() 
         ("Deselect", "select.deselect"),
         ("Select Inverse", "select.inverse"),
     ] {
-        assert!(available(&app, &menu, id), "{label} stays live with a text layer active");
+        assert!(available(app, &menu, id), "{label} stays live with a text layer active");
     }
-    // Every row greys exactly like its menu-bar twin: the Type tool adds no menu-local rule here.
-    for (_, id) in rows(&menu).iter().flatten() {
-        assert_eq!(entry_enabled(&app, &menu, id), crate::menus::is_enabled(&app, id), "{id}");
+    for (_, id) in rows(&menu).iter().flatten().filter(|(_, id)| *id != "edit.freeTransform") {
+        assert_eq!(entry_enabled(app, &menu, id), crate::menus::is_enabled(app, id), "{id}");
     }
+    let ctx = h.ctx.clone();
+    let reply = call(h.state_mut(), &ctx, "ui.context.choose", json!({"id": "edit.freeTransform"}));
+    assert_eq!(reply["ok"], false, "the disabled row cannot be invoked: {reply}");
+    assert!(h.state().ui.transform.is_none());
 }
 
 #[test]
