@@ -498,22 +498,84 @@ fn cmd_drag_with_the_brush_inside_the_selection_floats_the_selected_pixels() {
     assert_eq!(bounds(&h, id), Rect::new(100, 100, 160, 160), "the layer itself stayed");
 }
 
-/// ⌘-click with the Brush picks the layer under the pointer, as a ⌘-click with the Move tool does
-/// (Auto-Select off).
+/// ⌘-click with the Brush is the Move tool's click with its Auto-Select as set, as in Photoshop
+/// (#9619): on, it picks the layer under the pointer; off, the selected layer stays. Never paints.
 #[test]
 fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
-    let mut h = harness(Tool::Brush);
-    let red = with_layer(&mut h);
-    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
-    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
-    h.run_steps(1);
-    hold_mods(&mut h, Modifiers::COMMAND);
-    click(&mut h, 130.0, 130.0, Modifiers::COMMAND);
-    hold_mods(&mut h, Modifiers::NONE);
-    h.run_steps(2);
-    let st = h.state().session.active().unwrap();
-    assert_eq!(st.active_layer, Some(red));
-    assert_eq!(rgba(&h, 130, 130), [1.0, 0.0, 0.0, 1.0], "nothing painted");
+    for auto_select in [false, true] {
+        let mut h = harness(Tool::Brush);
+        let red = with_layer(&mut h);
+        h.state_mut().ui.tool_options.move_auto_select = auto_select;
+        let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+        h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+        h.run_steps(1);
+        hold_mods(&mut h, Modifiers::COMMAND);
+        click(&mut h, 130.0, 130.0, Modifiers::COMMAND);
+        hold_mods(&mut h, Modifiers::NONE);
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.active_layer, Some(if auto_select { red } else { bg }), "Auto-Select {auto_select}");
+        assert_eq!(rgba(&h, 130, 130), [1.0, 0.0, 0.0, 1.0], "nothing painted");
+    }
+}
+
+/// #9619: the Move tool that ⌘ summons over another tool (here the Brush) takes Auto-Select as
+/// it is set, as in Photoshop: on, a ⌘-drag picks the layer under the pointer and moves it; off,
+/// it moves the selected layer. Only in the Move tool itself does ⌘ turn the option round.
+#[test]
+fn command_over_another_tool_keeps_auto_select_as_set() {
+    for auto_select in [true, false] {
+        let mut h = harness(Tool::Brush);
+        let a = with_layer(&mut h);
+        // A second layer, B, painted away from A and selected.
+        let app = h.state_mut();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint", |doc, l| {
+                doc.layer_mut(l.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(200, 100, 260, 160), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.ui.tool_options.move_auto_select = auto_select;
+        h.run_steps(2);
+        drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 130.0, 150.0);
+        let (moved, stayed) = if auto_select { (a, b) } else { (b, a) };
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(moved), "Auto-Select {auto_select}");
+        let (m, s) = (bounds(&h, moved), bounds(&h, stayed));
+        assert_eq!((m.y0, m.y1), (120, 180), "Auto-Select {auto_select}: the {} layer moved", if auto_select { "picked" } else { "selected" });
+        assert_eq!((s.y0, s.y1), (100, 160), "Auto-Select {auto_select}: the other layer stayed");
+        assert_eq!(h.state().ui.tool, Tool::Brush, "the Brush is still the tool");
+    }
+}
+
+/// In the Move tool itself ⌘ still flips Auto-Select (#9619): with it on, a ⌘-drag moves the
+/// selected layer and leaves the one under the pointer; with it off, ⌘ picks the layer under the
+/// pointer. Same two layers as above, so a pick and a kept selection move different layers.
+#[test]
+fn command_in_the_move_tool_flips_auto_select() {
+    for auto_select in [true, false] {
+        let mut h = harness(Tool::Move);
+        let a = with_layer(&mut h);
+        // A second layer, B, painted away from A and selected.
+        let app = h.state_mut();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint", |doc, l| {
+                doc.layer_mut(l.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(200, 100, 260, 160), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.ui.tool_options.move_auto_select = auto_select;
+        h.run_steps(2);
+        drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 130.0, 150.0);
+        let (moved, stayed) = if auto_select { (b, a) } else { (a, b) };
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(moved), "Auto-Select {auto_select}");
+        let (m, s) = (bounds(&h, moved), bounds(&h, stayed));
+        assert_eq!((m.y0, m.y1), (120, 180), "Auto-Select {auto_select}: the {} layer moved", if auto_select { "selected" } else { "picked" });
+        assert_eq!((s.y0, s.y1), (100, 160), "Auto-Select {auto_select}: the other layer stayed");
+    }
 }
 
 /// Free Transform keeps ⌘ (its distort handles) while the Hand is selected: a ⌘-click is not the

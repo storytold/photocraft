@@ -474,7 +474,9 @@ impl Preflight<'_, '_> {
                 return crate::adjustment_brush::press_refused(app);
             }
             // Auto-Select's press picks the layer to move, so the hidden active layer is not its target.
-            let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.cmd;
+            // ⌘ flips Auto-Select only in the Move tool itself, not in the Move that ⌘ summons (#9619).
+            let flip = mods.cmd && app.ui.tool == Tool::Move;
+            let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != flip;
             (!picks && press_refused(app, tool))
                 || crate::rasterize_prompt::intercept(app, tool, at[0], at[1], pressure)
                 || refuse_group(app, tool)
