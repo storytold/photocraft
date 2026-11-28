@@ -101,6 +101,14 @@ pub(crate) struct ExportArgs {
     pub(crate) metadata: Option<XmpEmbed>,
 }
 
+/// Font files or folders loaded before anything opens (#3393).
+#[derive(Args, Clone, Debug, Default)]
+pub(crate) struct FontArgs {
+    /// Load a font file, or a folder of them, before anything opens; repeatable
+    #[arg(long = "font-dir", value_name = "DIR|FILE", action = ArgAction::Append)]
+    pub(crate) font_dirs: Vec<PathBuf>,
+}
+
 /// Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …)
 ///
 /// An <OUT> that is the <IN> file is refused, as the result would replace the original;
@@ -133,6 +141,8 @@ pub(crate) struct ConvertArgs {
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    #[command(flatten)]
+    pub(crate) fonts: FontArgs,
 }
 
 /// Print the document as JSON (size, mode, depth, layer tree)
@@ -148,6 +158,8 @@ pub(crate) struct InfoArgs {
     /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
     #[arg(long)]
     pub(crate) detail: bool,
+    #[command(flatten)]
+    pub(crate) fonts: FontArgs,
 }
 
 /// Open a file (or start a new document), run engine commands in order, save the result
@@ -183,6 +195,8 @@ pub(crate) struct RunArgs {
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    #[command(flatten)]
+    pub(crate) fonts: FontArgs,
     /// `--cmd` and `--params` values in command-line order, set by [`parse`].
     #[arg(skip)]
     pub(crate) steps: Vec<Step>,
@@ -243,6 +257,8 @@ pub(crate) struct BatchArgs {
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    #[command(flatten)]
+    pub(crate) fonts: FontArgs,
 }
 
 /// Run a droplet (File › Automate › Create Droplet) on images and folders
@@ -301,6 +317,8 @@ pub(crate) struct McpArgs {
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
+    #[command(flatten)]
+    pub(crate) fonts: FontArgs,
 }
 
 /// Keep one headless session open and answer JSON lines on stdio, or on 127.0.0.1:<PORT>
@@ -325,6 +343,8 @@ pub(crate) struct ServeArgs {
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
+    #[command(flatten)]
+    pub(crate) fonts: FontArgs,
 }
 
 /// Why a value was refused: clap prints it after the flag and its value (exit 2).

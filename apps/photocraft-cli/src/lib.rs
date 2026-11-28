@@ -14,6 +14,7 @@ mod automation;
 mod batch;
 mod document;
 mod error;
+mod fonts;
 mod gpu;
 mod output;
 
@@ -62,7 +63,7 @@ where
     };
     let result = match &cli.command {
         Command::Convert(a) => convert(a, out, err),
-        Command::Info(a) => info(a, out),
+        Command::Info(a) => info(a, out, err),
         Command::Run(a) => run_cmds(a, out, err),
         Command::Batch(a) => batch(a, out, err),
         Command::Droplet(a) => droplet(a, out, err),

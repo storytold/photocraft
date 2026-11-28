@@ -52,6 +52,8 @@ fn strip_shell_steps(action: &mut Action) {
 
 pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (in_dir, out_dir) = (a.in_dir.as_path(), a.out.as_path());
+    // Once for the process: every file's session sees the fonts.
+    crate::fonts::load(&a.fonts, err)?;
     let (actions, mut set, warnings) = load_actions_file(&a.actions, a.action.as_deref())?;
     set.iter_mut().for_each(strip_shell_steps);
     let mut seen_warnings = std::collections::HashSet::<String>::new();

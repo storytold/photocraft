@@ -6608,6 +6608,8 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "photocraft-testkit",
+ "photocraft-text",
  "pollster 1.0.1",
  "rmcp",
  "rustix 1.1.6",
@@ -6637,6 +6639,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "photocraft-testkit",
  "serde",
  "serde_json",
  "tempfile",
@@ -7047,7 +7050,9 @@ dependencies = [
  "photocraft-doc",
  "photocraft-geom",
  "photocraft-raster",
+ "photocraft-testkit",
  "rayon",
+ "rustix 1.1.5",
  "skrifa 0.47.0",
 ]
 

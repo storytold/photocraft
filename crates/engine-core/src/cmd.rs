@@ -57,6 +57,7 @@ pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
 pub mod float_cmds;
+pub mod font_cmds;
 pub mod font_library_cmds;
 pub mod frame_cmds;
 pub mod fx_view_cmds;

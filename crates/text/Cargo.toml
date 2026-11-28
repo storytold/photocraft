@@ -35,7 +35,13 @@ base64 = "0.23"
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
 craft = { workspace = true, default-features = false, features = ["font-catalog-system"] }
 rayon = { workspace = true }
+# `O_NONBLOCK` when opening a font file: a path swapped for a FIFO must not block the read.
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
 flate2 = { workspace = true }
+
+[dev-dependencies]
+# Renamed copies of the bundled Inter for the font-file tests (no font files committed).
+photocraft-testkit = { workspace = true }

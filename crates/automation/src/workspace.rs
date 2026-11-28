@@ -7,11 +7,15 @@ use std::sync::Arc;
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use photocraft_format::atomic::RenameRetry;
+use photocraft_text::fonts::{FONT_DIR_DEPTH, FontFileError, FontFileLimits, is_font_extension, read_font_data};
 use serde_json::Value;
 
 use crate::AutomationError;
 
 const DENIED: &str = "automation filesystem access is not granted";
+
+/// Font files read for `type.registerFonts`: `(name, bytes or why they couldn't be read)`.
+pub type FontFiles = Vec<(String, Result<Vec<u8>, String>)>;
 
 #[derive(Clone)]
 struct RootCapability {
@@ -161,6 +165,99 @@ impl AuthorizedWorkspace {
             Some(error) => Err(file_error("read", path, error)),
             None => Err(path_error(path, "absolute paths must be inside an automation read root")),
         }
+    }
+
+    /// The font files `type.registerFonts` names below the read roots: one file (whatever its
+    /// name), or every `.ttf`/`.otf`/`.ttc`/`.otc` file in a folder and its subfolders, named
+    /// relative to the folder and sorted. Sizes are checked before each read, so nothing past
+    /// the limits is read into memory. Errors name `path` as the client gave it, never the
+    /// root's host path.
+    pub fn read_font_files(&self, path: &str) -> Result<FontFiles, AutomationError> {
+        self.read_font_files_with(path, FontFileLimits::DEFAULT)
+    }
+
+    pub(crate) fn read_font_files_with(&self, path: &str, limits: FontFileLimits) -> Result<FontFiles, AutomationError> {
+        if self.read.is_empty() {
+            return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
+        }
+        // The first root that holds the path, as `read` picks it.
+        let mut not_found = None;
+        for root in &self.read {
+            let Some(relative) = scoped_path(path, root)? else { continue };
+            let metadata = match root.dir.metadata(&relative) {
+                Ok(metadata) => metadata,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    not_found = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(file_error("read", path, e)),
+            };
+            if metadata.is_file() {
+                let name = relative.file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+                return Ok(vec![(name, read_font(&root.dir, &relative, limits.max_file_bytes))]);
+            }
+            if !metadata.is_dir() {
+                return Err(AutomationError::BadRequest(format!("automation read path is not a file or folder: `{path}`")));
+            }
+            let folder = root.dir.open_dir(&relative).map_err(|e| file_error("read", path, e))?;
+            let mut found = Vec::new();
+            let mut unreadable = Vec::new();
+            collect_font_files(&folder, Path::new(""), 0, limits.max_files.saturating_add(1), &mut found, &mut unreadable);
+            if found.len() > limits.max_files {
+                return Err(font_error(FontFileError::TooManyFiles { path: path.into(), max: limits.max_files }));
+            }
+            found.sort();
+            let mut total = 0u64;
+            let mut files = Vec::with_capacity(found.len() + unreadable.len());
+            for name in found {
+                let remaining = limits.max_total_bytes.saturating_sub(total);
+                // A file over the per-file limit is skipped unread, as before.
+                if folder.metadata(&name).is_ok_and(|m| m.len() > limits.max_file_bytes) {
+                    let bytes = read_font(&folder, &name, limits.max_file_bytes);
+                    if let Ok(b) = &bytes {
+                        total = total.saturating_add(b.len() as u64);
+                    }
+                    files.push((slash_name(&name), bytes));
+                    continue;
+                }
+                // Read no further than what the total has left, so a file that grows between the
+                // size check and the read can't retain more than the budget.
+                let cap = limits.max_file_bytes.min(remaining);
+                let bytes = read_font(&folder, &name, cap);
+                if bytes.is_err() {
+                    // Classify a bounded read by what the file is now: over the per-file limit is
+                    // a skipped file; within it but over what the total has left is that limit's
+                    // failure.
+                    let now = folder.metadata(&name).map_or(0, |m| m.len());
+                    if now > limits.max_file_bytes {
+                        let bytes = read_font(&folder, &name, limits.max_file_bytes);
+                        if let Ok(b) = &bytes {
+                            total = total.saturating_add(b.len() as u64);
+                        }
+                        files.push((slash_name(&name), bytes));
+                        continue;
+                    }
+                    if cap < limits.max_file_bytes && now > remaining {
+                        return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
+                    }
+                }
+                if let Ok(b) = &bytes {
+                    total = total.saturating_add(b.len() as u64);
+                }
+                files.push((slash_name(&name), bytes));
+            }
+            if total > limits.max_total_bytes {
+                return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
+            }
+            for (dir, why) in unreadable {
+                files.push((slash_name(&dir), Err(format!("cannot read folder: {why}"))));
+            }
+            return Ok(files);
+        }
+        Err(match not_found {
+            Some(_) => font_error(FontFileError::NotFound(path.into())),
+            None => path_error(path, "absolute paths must be inside the automation root"),
+        })
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -614,6 +711,118 @@ fn is_windows_device_name(component: &str) -> bool {
         || stem.strip_prefix("LPT").is_some_and(port)
 }
 
+/// Font files below `dir` ([`FONT_DIR_DEPTH`] deep) as paths relative to it, stopping once `out`
+/// holds `limit`. Everything resolves through the capability, so links can't lead outside it.
+/// Folders that can't be listed are named in `unreadable`; a directory link is not followed, so
+/// a link back to a folder above can't count its files again.
+fn collect_font_files(dir: &Dir, prefix: &Path, depth: u32, limit: usize, out: &mut Vec<PathBuf>, unreadable: &mut Vec<(PathBuf, String)>) {
+    let entries = match dir.entries() {
+        Ok(entries) => entries,
+        Err(e) => {
+            unreadable.push((prefix.to_path_buf(), e.to_string()));
+            return;
+        }
+    };
+    for entry in entries {
+        if out.len() >= limit {
+            return;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                unreadable.push((prefix.to_path_buf(), e.to_string()));
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let path = prefix.join(&name);
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(e) => {
+                unreadable.push((path, e.to_string()));
+                continue;
+            }
+        };
+        // A link is never walked as a folder, so a cycle can't repeat the same files at every
+        // depth. A link to a file counts when the target is a regular file.
+        if file_type.is_dir() {
+            if depth < FONT_DIR_DEPTH {
+                match dir.open_dir(&name) {
+                    Ok(sub) => collect_font_files(&sub, &path, depth + 1, limit, out, unreadable),
+                    Err(e) => unreadable.push((path, e.to_string())),
+                }
+            }
+        } else if file_type.is_symlink() {
+            match dir.metadata(&name) {
+                Ok(meta) if meta.is_file() && Path::new(&name).extension().and_then(|x| x.to_str()).is_some_and(is_font_extension) => out.push(path),
+                Ok(_) => {}
+                Err(e) => unreadable.push((path, e.to_string())),
+            }
+        } else if file_type.is_file() && Path::new(&name).extension().and_then(|x| x.to_str()).is_some_and(is_font_extension) {
+            out.push(path);
+        }
+    }
+}
+
+/// One font file below `dir`, size-limited, or why it couldn't be read.
+fn read_font(dir: &Dir, name: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let file = open_font(dir, name).map_err(|e| e.to_string())?;
+    read_font_data(file, max_bytes)
+}
+
+/// How many links a font path may follow before it is refused.
+#[cfg(unix)]
+const FONT_LINK_DEPTH: u32 = 8;
+
+/// Opens a font file without blocking on a special file: the pathname can be replaced by a FIFO
+/// between the walk and this open, and a blocking open would never reach the limits. Parent
+/// folders resolve through cap-std, so a link swapped in among them cannot leave the read root;
+/// a link as the last name is followed here, refusing one that points outside.
+#[cfg(unix)]
+fn open_font(dir: &Dir, name: &Path) -> std::io::Result<std::fs::File> {
+    open_font_within(dir, name, 0)
+}
+
+#[cfg(unix)]
+fn open_font_within(dir: &Dir, name: &Path, depth: u32) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsFd as _;
+
+    use rustix::fs::{Mode, OFlags, openat};
+    if depth > FONT_LINK_DEPTH {
+        return Err(std::io::Error::other("too many font links"));
+    }
+    let (folder, last) = match name.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => (dir.open_dir(parent)?, name.file_name().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?),
+        None => (dir.try_clone()?, name.file_name().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?),
+    };
+    match openat(folder.as_fd(), last, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::NOFOLLOW, Mode::empty()) {
+        Ok(fd) => Ok(std::fs::File::from(fd)),
+        Err(rustix::io::Errno::LOOP) => {
+            let target = folder.read_link(last)?;
+            if target.is_absolute() {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "font link points outside the read root"));
+            }
+            open_font_within(&folder, &target, depth + 1)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn open_font(dir: &Dir, name: &Path) -> std::io::Result<std::fs::File> {
+    dir.open(name).map(cap_std::fs::File::into_std)
+}
+
+/// A relative path with `/` separators, as font files are reported.
+fn slash_name(path: &Path) -> String {
+    path.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+}
+
+/// Font file errors read as the engine command's own (`invalid parameters for …`).
+fn font_error(error: FontFileError) -> AutomationError {
+    photocraft_engine::EngineError::BadParams { cmd: photocraft_engine::font_cmds::REGISTER.into(), msg: error.to_string() }.into()
+}
+
 fn path_error(path: &str, reason: &str) -> AutomationError {
     AutomationError::BadRequest(format!("automation path rejected: {reason}: `{path}`"))
 }
@@ -680,6 +889,7 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
             id,
             "pattern.import"
                 | "pattern.export"
+                | "type.registerFonts"
                 | "edit.presets.migratePresets"
                 | "measurementLog.export"
                 | "layer.videoLayers.newVideoLayerFromFile"

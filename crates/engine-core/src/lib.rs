@@ -101,6 +101,7 @@ pub use cmd::exr_cmds;
 pub use cmd::extra_cmds;
 pub use cmd::file_cmds;
 pub use cmd::float_cmds;
+pub use cmd::font_cmds;
 pub use cmd::font_library_cmds;
 pub use cmd::frame_cmds;
 pub use cmd::fx_view_cmds;

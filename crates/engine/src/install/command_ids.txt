@@ -233,6 +233,7 @@ type.increaseSize
 type.decreaseSize
 type.increaseSizeMore
 type.decreaseSizeMore
+type.registerFonts
 type.createSelection
 edit.transform
 select.float

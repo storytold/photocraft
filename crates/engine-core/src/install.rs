@@ -40,6 +40,7 @@ const TABLES: &[Table] = &[
     ("solid_fill_cmds", crate::solid_fill_cmds::specs),
     ("pattern_fill_cmds", crate::pattern_fill_cmds::specs),
     ("type_cmds", crate::type_cmds::specs),
+    ("font_cmds", crate::font_cmds::specs),
     ("transform_cmds", crate::transform_cmds::specs),
     ("float_cmds", crate::float_cmds::specs),
     ("vector_cmds", crate::vector_cmds::specs),

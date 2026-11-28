@@ -42,6 +42,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
+    crate::fonts::load(&a.fonts, err)?;
     let import_opts = photocraft_io::ImportOptions {
         psd_high_memory_approved: a.approve_high_memory,
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
@@ -71,8 +72,9 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     Ok(())
 }
 
-pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
+pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let file = &a.file;
+    crate::fonts::load(&a.fonts, err)?;
     let mut h = Headless::trusted_local();
     let opened = h.open_with_approval(file, a.approve_high_memory)?;
     let mut doc = match (a.detail, h.session.active()) {
@@ -111,6 +113,7 @@ const QUICK_EXPORT_CPU_NOTE: &str = "file.export.quickExport runs on the CPU com
 
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
+    crate::fonts::load(&a.fonts, err)?;
     let mut h = Headless::trusted_local();
     let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     policy.apply_to_headless(&mut h);

@@ -6,7 +6,7 @@ use serde_json::Value;
 use photocraft_automation::{Headless, PhotocraftMcp, security};
 
 use crate::{
-    Result,
+    CliError, Result,
     args::{CommandsArgs, McpArgs, ServeArgs},
     output::{JsonStyle, print_json},
 };
@@ -34,6 +34,7 @@ pub(crate) fn commands(a: &CommandsArgs, out: &mut dyn Write) -> Result {
 
 pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     use std::sync::{Arc, Mutex};
+    crate::fonts::load(&a.fonts, err)?;
     let mut h = Headless::with_workspace(a.automation.workspace()?);
     let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     policy.apply_to_headless(&mut h);
@@ -72,8 +73,22 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
 /// headless (`mcp_live`); without the flag headless, as before it; `--headless` always headless;
 /// `--bridge` (or PHOTOCRAFT_CONTROL_PORT) a `photocraft --control` app.
 pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
+    if a.bridge.is_some() && !a.fonts.font_dirs.is_empty() {
+        return Err(CliError::Other("--font-dir is not available with mcp --bridge: the open app's engine loads its own fonts".into()));
+    }
+    // The live route serves the call in the open app too, which loads its own fonts: refuse the
+    // flag rather than load fonts here and have window-routed calls ignore them.
+    let live = a.bridge.is_none() && !a.headless && craft::automation::agents::mcp_flag();
+    if live && !a.fonts.font_dirs.is_empty() {
+        return Err(CliError::Other(
+            "--font-dir is not available when mcp runs in the open PhotoCraft window: pass --headless to run a headless engine that loads these fonts".into(),
+        ));
+    }
+    if !live {
+        crate::fonts::load(&a.fonts, err)?;
+    }
     let server = match &a.bridge {
-        None if !a.headless && craft::automation::agents::mcp_flag() => PhotocraftMcp::live(live_config(a)?),
+        None if live => PhotocraftMcp::live(live_config(a)?),
         Some(addr) => {
             if a.bridge_from_env {
                 // Name the mode switch, as `serve` does: the way back to headless is to unset it.
