@@ -48,6 +48,10 @@ mod count_group_name_tests;
 #[path = "../count_size_alert_tests.rs"]
 mod count_size_alert_tests;
 
+#[cfg(test)]
+#[path = "../count_pixel_centre_tests.rs"]
+mod count_pixel_centre_tests;
+
 /// The registry ids of the two panels the menu items toggle.
 pub(crate) const MEASUREMENT_LOG: &str = "measurementLog";
 pub(crate) const NOTES: &str = "notes";

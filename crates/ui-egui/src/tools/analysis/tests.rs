@@ -59,17 +59,17 @@ fn count_tool_add_move_remove() {
     let pts = |app: &PhotocraftApp| app.session.active().unwrap().doc.measurement.count_groups[0].points.clone();
     assert_eq!(pts(&app).len(), 2);
     let past = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
-    // A move under half a pixel sends no `count.move`: the marker and the history stay.
+    // A release in the pixel the marker sits on sends no `count.move`: the marker and the history stay.
     let before = past(&app);
     down(&mut app, 20.0, 20.0, egui::Modifiers::NONE);
     mv(&mut app, 20.3, 20.0, egui::Modifiers::NONE);
     up(&mut app, 20.3, 20.0);
-    assert_eq!(pts(&app)[0], [20.0, 20.0]);
-    assert_eq!(past(&app), before, "a sub-pixel move is no step");
+    assert_eq!(pts(&app)[0], [20.5, 20.5]);
+    assert_eq!(past(&app), before, "a move within the marker's pixel is no step");
     // A longer drag moves marker 1 in one step.
     down(&mut app, 20.5, 20.5, egui::Modifiers::NONE);
     up(&mut app, 30.0, 25.0);
-    assert_eq!(pts(&app)[0], [30.0, 25.0]);
+    assert_eq!(pts(&app)[0], [30.5, 25.5]);
     assert_eq!(past(&app), before + 1, "the move is one step");
     // ⌥-click removes.
     down(&mut app, 50.0, 50.0, egui::Modifiers::ALT);
@@ -94,9 +94,9 @@ fn over_a_marker_is_the_clicks_own_hit_test() {
         let pts = app.session.active().unwrap().doc.measurement.count_groups[0].points.clone();
         match hit {
             Some(_) => {
-                // The pointer position passes through f32 on its way to the marker.
+                // The marker lands on the centre of the release pixel (#11761).
                 assert!(
-                    pts.len() == 1 && (pts[0][0] - at[0]).abs() < 1e-4 && (pts[0][1] - (at[1] + 10.0)).abs() < 1e-4,
+                    pts.len() == 1 && pts[0] == [at[0].floor() + 0.5, (at[1] + 10.0).floor() + 0.5],
                     "{dx} px: the press moved the marker the cursor marked: {pts:?}"
                 );
             }
