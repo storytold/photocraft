@@ -693,8 +693,10 @@ pub(crate) fn row_menu(app: &PhotocraftApp, tree: &PhotoLayers, target: &MenuTar
         MenuKind::Layer(id) => {
             let Some(l) = tree.layer(&id) else { return Vec::new() };
             let mut out = commands(crate::layer_menu_ui::entries(l, target.on_selection, has_selection), target.on_selection);
-            out.push(Entry::separator());
-            out.push(Entry::new(RENAME.to_string(), tl!("Rename Layer…").to_string()));
+            // Rename Layer… joins the link block (Link Layers, Select Linked Layers); the panel runs it
+            // itself, so it is no engine command in `entries`.
+            let at = out.iter().position(|e| e.value().is_some_and(|v| v == "layer.selectLinkedLayers")).map_or(out.len(), |i| i + 1);
+            out.insert(at, Entry::new(RENAME.to_string(), tl!("Rename Layer…").to_string()));
             out
         }
         MenuKind::None => Vec::new(),

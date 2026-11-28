@@ -78,6 +78,17 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(Some((tl!("Quick Export as PNG"), "layer.quickExportAsPng")));
     v.push(Some((tl!("Export As…"), "layer.exportAs")));
     v.push(None);
+    if multi {
+        v.push(Some((tl!("Merge Layers"), "layer.mergeLayers")));
+    } else if matches!(l.content, LayerContent::Group(_)) {
+        // Photoshop's Merge Group: a group merges itself, not into the layer below (#3832).
+        v.push(Some((tl!("Merge Group"), "layer.mergeGroup")));
+    } else {
+        v.push(Some((tl!("Merge Down"), "layer.mergeDown")));
+    }
+    v.push(Some((tl!("Merge Visible"), "layer.mergeVisible")));
+    v.push(Some((tl!("Flatten Image"), "layer.flattenImage")));
+    v.push(None);
     // A group's row leads the artboard block with New Artboard and Artboard from Group (#14566); the
     // right-click selected the row, so both act on the clicked group. Artboards, frames and a
     // multi-selection keep the block as it was.
@@ -144,17 +155,6 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")));
     v.push(Some((tl!("Paste Layer Style"), "layer.layerStyle.pasteLayerStyle")));
     v.push(Some((tl!("Clear Layer Style"), "layer.layerStyle.clear")));
-    v.push(None);
-    if multi {
-        v.push(Some((tl!("Merge Layers"), "layer.mergeLayers")));
-    } else if matches!(l.content, LayerContent::Group(_)) {
-        // Photoshop's Merge Group: a group merges itself, not into the layer below (#3832).
-        v.push(Some((tl!("Merge Group"), "layer.mergeGroup")));
-    } else {
-        v.push(Some((tl!("Merge Down"), "layer.mergeDown")));
-    }
-    v.push(Some((tl!("Merge Visible"), "layer.mergeVisible")));
-    v.push(Some((tl!("Flatten Image"), "layer.flattenImage")));
     v
 }
 
@@ -185,3 +185,7 @@ mod tests;
 #[cfg(test)]
 #[path = "layer_menu_artboard_group_tests.rs"]
 mod layer_menu_artboard_group_tests;
+
+#[cfg(test)]
+#[path = "layer_menu_order_tests.rs"]
+mod layer_menu_order_tests;
