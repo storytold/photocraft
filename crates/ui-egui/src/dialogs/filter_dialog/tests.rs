@@ -1303,8 +1303,7 @@ struct PreviewError {
 }
 
 /// Mean absolute difference of neighbouring pixels at the document's own resolution.
-fn detail(d: &Document) -> f32 {
-    let b = photocraft_compose::flatten(d);
+fn detail(b: &photocraft_compose::Buffer) -> f32 {
     let w = b.rect.width() as usize;
     let mut sum = 0.0;
     for (i, p) in b.px.iter().enumerate() {
@@ -1318,7 +1317,10 @@ fn detail(d: &Document) -> f32 {
 /// Pixels of `d` at every `k`-th row and column: the document pixels a factor-`k` proxy
 /// samples, so a preview at `k` compares with them one to one.
 fn every_kth(d: &Document, k: u32) -> Vec<[f32; 4]> {
-    let b = photocraft_compose::flatten(d);
+    pixels_every_kth(&photocraft_compose::flatten(d), k)
+}
+
+fn pixels_every_kth(b: &photocraft_compose::Buffer, k: u32) -> Vec<[f32; 4]> {
     let w = b.rect.width() as usize;
     let k = k as usize;
     let h = b.px.len() / w.max(1);
@@ -1337,12 +1339,17 @@ fn preview_error(doc: &Document, command: &str, p: &Value, k: u32) -> Option<Pre
     let bg = doc.layers[0].id;
     let applied = preview_document(doc, Some(bg), command, p, 1)?;
     let shown = preview_document(doc, Some(bg), command, p, k).unwrap_or_else(|| panic!("{command} {p}: the k = {k} preview failed"));
-    let (a, s) = (every_kth(&applied, k), every_kth(&shown, 1));
+    let measure = |d: &Document, stride| {
+        let b = photocraft_compose::flatten(d);
+        (pixels_every_kth(&b, stride), detail(&b))
+    };
+    let (a, applied_detail) = measure(&applied, k);
+    let (s, shown_detail) = measure(&shown, 1);
     let (src, src_k) = (every_kth(doc, k), every_kth(&crate::proxy::proxy_document(doc, k), 1));
     let applied_change = mean_abs(&a, &src);
     Some(PreviewError {
         diff: mean_abs(&a, &s),
-        scale: detail(&shown) / k as f32 / detail(&applied).max(1e-5),
+        scale: shown_detail / k as f32 / applied_detail.max(1e-5),
         change: if applied_change > 0.01 { mean_abs(&s, &src_k) / applied_change } else { f32::NAN },
     })
 }
