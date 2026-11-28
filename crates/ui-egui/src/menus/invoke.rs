@@ -857,6 +857,8 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
                 app.run("document.activate", json!({"document": next}))?;
             }
             app.jobs.focus = None;
+            // Next and Previous Document show the document they choose, so they leave Home too (#16802).
+            app.ui.chrome.home = None;
             Ok(json!({"document": next}))
         })()),
         _ if id.starts_with(DOCUMENT_ITEM) => Some((|| {
@@ -865,6 +867,8 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
                 id.strip_prefix(DOCUMENT_ITEM).ok_or("no such document")?.parse::<usize>().ok().filter(|index| *index < count).ok_or("no such document")?;
             app.session.set_active(next);
             app.jobs.focus = None;
+            // Choosing a document shows it, so it leaves the Home screen opened over the documents (#16802).
+            app.ui.chrome.home = None;
             Ok(json!({"document": next}))
         })()),
         _ => None,

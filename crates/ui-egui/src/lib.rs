@@ -1104,6 +1104,8 @@ mod selection_move_step_tests;
 mod view_guides_submenu_tests;
 
 #[cfg(test)]
+mod home_screen_way_back_tests;
+#[cfg(test)]
 mod lasso_click_tests;
 #[cfg(test)]
 mod reset_tip_tests;
