@@ -114,7 +114,8 @@ pub fn polygon(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64) -> P
 /// Regular polygon (or star when `star_ratio < 1`) stretched so that its tight box is the rectangle
 /// (#13298): an odd side count puts a vertex at the top centre, an even one a flat edge at the top.
 /// The anchors run clockwise from the first vertex at or right of the top centre; a star's outer
-/// points land where the polygon's vertices do, its inner points at `star_ratio` of the way in. A
+/// points land where the polygon's vertices do, its inner points at `star_ratio` of the way in (as long as they stay
+/// inside the outer points' box; past that the box is fitted to every point). A
 /// negative size extends from the origin to the left or up, and the shape is the same.
 pub fn polygon_in_box(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64) -> Path {
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -128,19 +129,21 @@ pub fn polygon_in_box(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f6
         let a = start + TAU * i as f64 / n as f64;
         (a.cos(), a.sin())
     };
-    // The tight box of the outer points, on the unit circle.
-    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-    for (ux, uy) in (0..sides).map(|i| unit(i, sides)) {
-        (x0, x1, y0, y1) = (x0.min(ux), x1.max(ux), y0.min(uy), y1.max(uy));
-    }
-    let (sx, sy) = (w / (x1 - x0), h / (y1 - y0));
-    let pts: Vec<(f64, f64)> = (0..count)
+    // The tight box of every point the path emits, on the unit circle: a star's inner points can reach past the
+    // polygon's own box (a high ratio on few sides), and the shape must still fill the dragged box.
+    let unit_pts: Vec<(f64, f64)> = (0..count)
         .map(|i| {
             let (ux, uy) = unit(i, count);
             let k = if star && i % 2 == 1 { star_ratio } else { 1.0 };
-            (x + (k * ux - x0) * sx, y + (k * uy - y0) * sy)
+            (k * ux, k * uy)
         })
         .collect();
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for &(ux, uy) in &unit_pts {
+        (x0, x1, y0, y1) = (x0.min(ux), x1.max(ux), y0.min(uy), y1.max(uy));
+    }
+    let (sx, sy) = (w / (x1 - x0), h / (y1 - y0));
+    let pts: Vec<(f64, f64)> = unit_pts.iter().map(|&(ux, uy)| (x + (ux - x0) * sx, y + (uy - y0) * sy)).collect();
     Path::new(vec![Subpath::polygon(&pts)])
 }
 

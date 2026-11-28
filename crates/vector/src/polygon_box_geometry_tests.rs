@@ -84,3 +84,33 @@ fn without_the_flag_a_polygon_keeps_the_inscribed_geometry() {
     let new = LiveShape::Polygon { rect: BOX, sides: 5, star_ratio: 1.0, corner_radius: 0.0, fills_box: true };
     assert_near(&anchors(&live_path(&new)), &filled(5, 1.0), "flagged");
 }
+
+/// A star whose inner points reach past the polygon's own box (a high ratio on few sides) still has the drag box as its
+/// tight box: the box is fitted to every point the path emits, not to the outer points alone.
+#[test]
+fn a_star_with_a_high_ratio_still_fills_the_box() {
+    for sides in 3..=8 {
+        for ratio in [0.6, 0.75, 0.9, 0.99] {
+            let t = tight(&filled(sides, ratio));
+            assert!(t.iter().zip([400.0, 300.0, 600.0, 400.0]).all(|(g, w)| (g - w).abs() < 1e-9), "{sides} sides, ratio {ratio}: tight box {t:?}");
+        }
+    }
+}
+
+/// The reported case: a triangle at ratio 0.9 put an inner point at y = 426.67, below the box bottom at 400.
+#[test]
+fn a_triangle_star_at_ratio_point_nine_stays_inside_the_box() {
+    let p = polygon_in_box(400.0, 300.0, 200.0, 100.0, 3, 0.9);
+    let t = tight(&anchors(&p));
+    assert!(t[3] <= 400.0 + 1e-9, "bottom {t:?}");
+}
+
+/// Stars whose inner points stay inside the outer points' box keep the geometry they had.
+#[test]
+fn a_star_up_to_half_ratio_keeps_its_outer_points() {
+    for sides in 3..=8 {
+        let star = filled(sides, 0.5);
+        let outer: Vec<[f64; 2]> = star.iter().step_by(2).copied().collect();
+        assert_near(&outer, &filled(sides, 1.0), "outer points at ratio 0.5");
+    }
+}
