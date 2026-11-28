@@ -120,6 +120,72 @@ fn preset_drops_map_through_the_ruler_inset() {
     assert!((doc.x - 32.0).abs() < 1.0 && (doc.y - 24.0).abs() < 1.0, "the canvas centre is the document centre: {doc:?}");
 }
 
+// ------------------------------------------------------------------ Custom Shape picker (#13468)
+
+/// Every `ShapeView` maps to a view and a zoom in the browser's thumbnail range: Text Only is the
+/// framework's closest match, List at the smallest zoom (it has no "no thumbnail" row).
+#[test]
+fn shape_picker_view_state_maps_every_mode() {
+    let range = THUMB_RANGE.range();
+    let (small, large) = (*range.start(), *range.end());
+    let cases = [
+        (ShapeView::TextOnly, (PresetView::List, small)),
+        (ShapeView::SmallThumbnail, (PresetView::Grid, small)),
+        (ShapeView::LargeThumbnail, (PresetView::Grid, large)),
+        (ShapeView::SmallList, (PresetView::List, small)),
+        (ShapeView::LargeList, (PresetView::List, large)),
+    ];
+    for (view, expected) in cases {
+        assert_eq!(shape_picker_view_state(view), expected, "{view:?}");
+    }
+}
+
+fn add_shape(app: &mut PhotocraftApp, name: &str) {
+    app.run("shape.presets.new", json!({"name": name, "path": "M 0 0 L 10 0 L 10 10 L 0 10 Z"})).unwrap();
+}
+
+fn has_shape(app: &PhotocraftApp, name: &str) -> bool {
+    photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name))
+}
+
+/// The picker's own right-click events (native Rename/Move to/Delete) run the matching engine command, and the
+/// Custom Shape tool's current shape follows a rename of itself and clears on its own delete, leaving another
+/// shape's rename or delete alone.
+#[test]
+fn picker_events_run_their_command_and_the_current_shape_follows_or_clears() {
+    let mut app = app();
+    add_shape(&mut app, "A");
+    add_shape(&mut app, "B");
+    app.ui.presets_ui.custom_shape = "A".into();
+
+    apply_picker_events(&mut app, vec![PresetEvent::rename(item("B"), "C")]);
+    assert!(has_shape(&app, "C") && !has_shape(&app, "B"), "the rename ran");
+    assert_eq!(app.ui.presets_ui.custom_shape, "A", "renaming another shape leaves the current one alone");
+
+    apply_picker_events(&mut app, vec![PresetEvent::Delete(item("C"))]);
+    assert!(!has_shape(&app, "C"), "the delete ran");
+    assert_eq!(app.ui.presets_ui.custom_shape, "A", "deleting another shape leaves the current one alone");
+
+    apply_picker_events(&mut app, vec![PresetEvent::rename(item("A"), "Z")]);
+    assert!(has_shape(&app, "Z"));
+    assert_eq!(app.ui.presets_ui.custom_shape, "Z", "the current shape follows its own rename");
+
+    apply_picker_events(&mut app, vec![PresetEvent::Delete(item("Z"))]);
+    assert!(!has_shape(&app, "Z"));
+    assert!(app.ui.presets_ui.custom_shape.is_empty(), "the current shape clears on its own delete");
+}
+
+/// #13725 review: the gear menu's Rename/Delete enable for a built-in shape the same as a custom one, and disable
+/// when the name doesn't exist at all.
+#[test]
+fn shape_picker_rename_target_exists_covers_builtin_and_custom_shapes() {
+    let mut app = app();
+    assert!(shape_picker_rename_target_exists(&app.session, "Heart"), "a built-in shape enables Rename/Delete");
+    add_shape(&mut app, "A");
+    assert!(shape_picker_rename_target_exists(&app.session, "A"), "a custom shape enables Rename/Delete");
+    assert!(!shape_picker_rename_target_exists(&app.session, "Nope"), "a nonexistent shape disables them");
+}
+
 /// Runs one egui pass of `ctx` with `f`.
 fn pass(ctx: &egui::Context, f: impl FnMut(&mut egui::Ui)) {
     let mut out = ctx.run_ui(egui::RawInput::default(), f);
@@ -251,4 +317,17 @@ fn the_patterns_are_held_until_the_library_changes() {
     let grown = held_patterns(&mut app);
     assert!(!Arc::ptr_eq(&first, &grown));
     assert!(grown.iter().any(|pattern| pattern.id == "held-test-extra"));
+}
+
+/// #13725 review: Text Only and Small List give the shared browser the same (List, small) view state — the
+/// framework has no thumbnail-free list row — so it is `ShapePickerThumbs::text_only`, not the view state, that
+/// must tell them apart; otherwise the two options render identically.
+#[test]
+fn text_only_paints_no_thumbnail_unlike_small_list() {
+    assert_eq!(shape_picker_view_state(ShapeView::TextOnly), shape_picker_view_state(ShapeView::SmallList), "same framework view and zoom");
+    let swatch = shape_swatch(photocraft_engine::presets::shapes::ShapePreset { name: "Heart".into(), path: Default::default(), id: None });
+    let text_only = ShapePickerThumbs::new(vec![swatch.clone()], ShapeView::TextOnly);
+    let small_list = ShapePickerThumbs::new(vec![swatch], ShapeView::SmallList);
+    assert!(text_only.text_only, "Text Only paints no raster");
+    assert!(!small_list.text_only, "Small List keeps its thumbnail");
 }

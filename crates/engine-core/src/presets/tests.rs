@@ -424,6 +424,36 @@ fn custom_shapes_join_the_shapes_panel() {
     assert!(b.2.max(b.3) > 99.9);
 }
 
+/// #13725 review: renaming a custom shape onto a library preset's name must not collide, or a
+/// later Delete finds the library preset (which `custom()` now sees as taken) instead of the one
+/// just renamed.
+#[test]
+fn renaming_a_custom_shape_rejects_a_library_name_collision() {
+    let mut s = session(8);
+    s.execute("shape.create", json!({"kind": "star", "rect": [0, 0, 30, 30]})).unwrap();
+    s.execute("edit.defineCustomShape", json!({"name": "My Star"})).unwrap();
+    let before = s.edit_state.custom_shapes.clone();
+    assert!(s.execute("shape.presets.edit", json!({"action": "rename", "preset": "My Star", "name": "Heart"})).is_err());
+    assert_eq!(s.edit_state.custom_shapes, before, "nothing renamed");
+    s.execute("shape.presets.edit", json!({"action": "delete", "preset": "My Star"})).unwrap();
+    assert!(s.edit_state.custom_shapes.is_empty());
+    assert!(s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart")), "the library preset survives");
+}
+
+/// #13725 review: the picker's gear menu enables Rename/Delete whenever the shape exists in `all_groups`, a built-in
+/// included, not only a staged Define Custom Shape result. `edit`'s fallback to `edit_groups` is what makes that
+/// true: a built-in shape renames and deletes the same as any other library preset, as the Shapes panel already
+/// lets it (the picker's parity, per #13468).
+#[test]
+fn renaming_or_deleting_a_builtin_shape_succeeds_like_any_library_preset() {
+    let mut s = session(8);
+    assert!(s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart")));
+    s.execute("shape.presets.edit", json!({"action": "rename", "preset": "Heart", "name": "Heart 2"})).unwrap();
+    assert!(s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart 2")));
+    s.execute("shape.presets.edit", json!({"action": "delete", "preset": "Star"})).unwrap();
+    assert!(!s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Star")));
+}
+
 #[test]
 fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
     let mut invalid = vec![

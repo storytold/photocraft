@@ -2,20 +2,22 @@
 //! framework's `PresetBrowser` and `PresetPicker`. Rows come from a panel's groups in the panel's folder order; the
 //! browser's events run as the panel's engine commands, through one mapping for every preset panel (`events`).
 
-use craft::behavior::Selection;
+use craft::behavior::{IconId, Selection};
 use craft::color_ui::ui::gradient::GradientRamp;
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
+use craft::ui::buttons::IconButton;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, DropZone, MemoProps, PlainData, Props as _, Revision, Show as _, Tracked};
+use craft::ui::contract::{Bind, DropZone, Entry, MemoProps, PlainData, Props as _, Revision, Show as _, Tracked, Trigger};
 use craft::ui::list::ThumbAspect;
-use craft::ui::menu::PanelRow;
+use craft::ui::menu::{Menu, PanelRow};
 use craft::ui::patterns::presets::{
     CellShape, DefaultOpen, PresetBrowser, PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFns, PresetFooterEvent,
     PresetFooterOptions, PresetMenuAction, PresetPanelMenu, PresetPicker, PresetReorder, PresetRow, PresetSource, PresetState, PresetView, ThumbFn, ThumbInfo,
 };
 use craft::ui::primitives::textures::TextureCache;
 use craft::ui::primitives::{ContentPainterCx, FacePaint};
+use craft::ui::runtime::access::PopupKind;
 use craft::ui::runtime::commands::{CommandSet as _, CommandState};
 use craft::ui::runtime::env::Env;
 use craft::ui::tile_grid::TileZoom;
@@ -29,7 +31,7 @@ use serde_json::{Value, json};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::sync::Arc;
 
-use super::preset_panels::{PresetUi, run, tool_presets};
+use super::preset_panels::{PresetUi, ShapeView, run, tool_presets};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
@@ -673,6 +675,35 @@ fn shape_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: R
     }
 }
 
+/// The options-bar picker's thumbnails: its swatches, and whether the chosen view is Text Only, which paints no
+/// raster at all (the shared browser's List view otherwise shows the same small thumbnail as Small List, #13725
+/// review).
+#[derive(Clone, MemoProps)]
+struct ShapePickerThumbs {
+    swatches: Vec<Swatch>,
+    text_only: bool,
+}
+
+impl ShapePickerThumbs {
+    /// `swatches` at `view`: `text_only` is what actually tells Text Only apart from Small List, since
+    /// `shape_picker_view_state` gives both the same (List, small) (#13725 review).
+    fn new(swatches: Vec<Swatch>, view: ShapeView) -> Self {
+        ShapePickerThumbs { swatches, text_only: view == ShapeView::TextOnly }
+    }
+}
+
+/// The options-bar picker's thumbnail: `shape_thumb`'s raster, or nothing at Text Only.
+fn shape_picker_thumb(inputs: &PanelInputs<ShapePickerThumbs>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+    if inputs.thumbs.text_only {
+        return;
+    }
+    if let PresetKey::Item(key) = info.key
+        && let Some(swatch) = swatch_of(&inputs.thumbs.swatches, key)
+    {
+        swatch.paint(cx, rect.shrink(2.0));
+    }
+}
+
 /// Window › Shapes: a click picks the shape for the Custom Shape tool, a double click places it, and a drop on the
 /// canvas places it where it lands.
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -708,6 +739,12 @@ fn shape_place(app: &PhotocraftApp, key: &str, at: Option<Pos2>) -> Value {
     params
 }
 
+/// The id `shape_picker`'s own `PresetBrowser` shows under, so a gear-menu Rename can ask it to start renaming a row
+/// (`PresetBrowser::request_rename`), as a right-click's own Rename does.
+fn shape_picker_browser_id() -> egui::Id {
+    egui::Id::unique("shapePickerBrowser")
+}
+
 /// The pickers' view state, from the panel state's `browsers` (keyed by preset kind there, by `String` here).
 fn picker_state(presets: &PresetUi, id: &str) -> PresetState<String> {
     let mut state = PresetState::new();
@@ -728,37 +765,143 @@ fn keep_picker_state(presets: &mut PresetUi, id: &str, state: PresetState<String
     saved.filter = state.filter;
 }
 
-/// Options-bar shape picker for the Custom Shape tool.
-pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    const ID: &str = "shapePicker";
-    let groups: Vec<(String, Vec<Swatch>)> = photocraft_engine::presets::shapes::all_groups(&app.session)
-        .into_iter()
-        .map(|group| (group.name, group.items.into_iter().map(shape_swatch).collect()))
-        .collect();
-    let source = PresetSource::new(groups, PresetFns::new(shape_rows));
-    let mut value = Some(app.ui.presets_ui.shape().to_string());
-    let before = value.clone();
-    let mut state = picker_state(&app.ui.presets_ui, ID);
-    let _ = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &source, Bind::bound(&mut state)).columns(7).show(ui); // the picked value comes back through `value`
-    keep_picker_state(&mut app.ui.presets_ui, ID, state);
-    if let Some(picked) = value.filter(|picked| before.as_ref() != Some(picked) && !picked.starts_with(SHAPE_GROUP)) {
-        app.ui.presets_ui.custom_shape = picked;
+/// The picker's view at a view mode: a view mode and a thumbnail zoom, for the browser's `PresetState`. The framework
+/// has no "no thumbnail" list row, so Text Only is List at the smallest zoom, same as Small List; `shape_picker_thumb`
+/// is what actually paints no raster at Text Only, telling the two apart (#13725 review).
+fn shape_picker_view_state(view: ShapeView) -> (PresetView, f64) {
+    let range = THUMB_RANGE.range();
+    let (small, large) = (*range.start(), *range.end());
+    match view {
+        ShapeView::TextOnly => (PresetView::List, small),
+        ShapeView::SmallThumbnail => (PresetView::Grid, small),
+        ShapeView::LargeThumbnail => (PresetView::Grid, large),
+        ShapeView::SmallList => (PresetView::List, small),
+        ShapeView::LargeList => (PresetView::List, large),
     }
 }
 
-/// The key prefix of a shape group's row in the shape picker.
-const SHAPE_GROUP: &str = "group:";
+/// A row of the Custom Shape picker's gear menu (#13468).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ShapeGearAction {
+    Rename,
+    Delete,
+    View(ShapeView),
+    AppendDefaults,
+    Import,
+    /// Always disabled: there is no shape export command yet.
+    Export,
+}
 
-/// The shape picker's rows: each group, then its shapes with their rasters, named in their tooltips.
-fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<String>> {
-    let mut rows = Vec::new();
-    for (group, shapes) in groups {
-        rows.push(PresetRow::group(format!("{SHAPE_GROUP}{group}"), group.clone(), 0));
-        for shape in shapes {
-            rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview_face(ThumbAspect::SQUARE, shape.face(2.0)));
+/// Whether the gear menu's Rename/Delete can act on `name`: any shape `all_groups` shows, a built-in included, not
+/// only a saved custom one. The engine's `shape.presets.edit` falls back to `edit_groups` for any name that is not a
+/// staged Define Custom Shape result, so a built-in shape's rename or delete succeeds the same as a custom one's
+/// (`renaming_or_deleting_a_builtin_shape_succeeds_like_any_library_preset` in the engine), matching the Shapes
+/// panel's own existing parity (#13725 review).
+fn shape_picker_rename_target_exists(session: &photocraft_engine::Session, name: &str) -> bool {
+    photocraft_engine::presets::shapes::all_groups(session).iter().any(|g| g.items.iter().any(|s| s.name == name))
+}
+
+/// The picker's gear button (top right of the popover) and its menu: Rename/Delete the current shape, the five view
+/// modes (a single choice), Append Default Shapes…, Import Shapes… and the still-unimplemented Export.
+fn shape_gear_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let label = tl!("Custom Shape Options").to_string();
+    let button = IconButton::new(IconId::new("settings")).label(label.clone()).popup(PopupKind::Menu).show(ui);
+    let cur = app.ui.presets_ui.shape().to_string();
+    let cur_exists = shape_picker_rename_target_exists(&app.session, &cur);
+    let view = app.ui.presets_ui.shape_picker_view;
+    let entries = [
+        Entry::new(ShapeGearAction::Rename, tl!("Rename Shape…").to_string()).enabled(cur_exists),
+        Entry::new(ShapeGearAction::Delete, tl!("Delete Shape").to_string()).enabled(cur_exists),
+        Entry::separator(),
+        Entry::new(ShapeGearAction::View(ShapeView::TextOnly), tl!("Text Only").to_string()).checked(view == ShapeView::TextOnly),
+        Entry::new(ShapeGearAction::View(ShapeView::SmallThumbnail), tl!("Small Thumbnail").to_string()).checked(view == ShapeView::SmallThumbnail),
+        Entry::new(ShapeGearAction::View(ShapeView::LargeThumbnail), tl!("Large Thumbnail").to_string()).checked(view == ShapeView::LargeThumbnail),
+        Entry::new(ShapeGearAction::View(ShapeView::SmallList), tl!("Small List").to_string()).checked(view == ShapeView::SmallList),
+        Entry::new(ShapeGearAction::View(ShapeView::LargeList), tl!("Large List").to_string()).checked(view == ShapeView::LargeList),
+        Entry::separator(),
+        Entry::new(ShapeGearAction::AppendDefaults, tl!("Append Default Shapes…").to_string()),
+        Entry::new(ShapeGearAction::Import, tl!("Import Shapes…").to_string()),
+        Entry::new(ShapeGearAction::Export, tl!("Export Selected Shapes…").to_string()).enabled(false),
+    ];
+    let Some(picked) = Menu::new(label).opened_by(&button, Trigger::Press).pick(ui, &entries).picked else { return };
+    match picked {
+        ShapeGearAction::Rename => PresetBrowser::<PresetKey>::request_rename(ui.ctx(), shape_picker_browser_id(), &PresetKey::Item(cur)),
+        ShapeGearAction::Delete => {
+            if run(app, "shape.presets.edit", json!({"action": "delete", "preset": cur})).is_some() {
+                app.ui.presets_ui.custom_shape.clear();
+            }
+        }
+        ShapeGearAction::View(v) => app.ui.presets_ui.shape_picker_view = v,
+        ShapeGearAction::AppendDefaults => drop(run(app, "shape.presets.reset", json!({"append": true}))),
+        ShapeGearAction::Import => {
+            let r = app.pick_file_bytes_filtered(&["csh"], |app, name, bytes| {
+                let mut p = json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes)});
+                let stem = std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().trim().to_string()).filter(|s| !s.is_empty());
+                if let Some(stem) = stem {
+                    p["group"] = json!(stem);
+                }
+                app.run("shape.presets.importCsh", p)
+            });
+            if let Err(e) = r
+                && e != crate::file_dialog::CANCELLED
+            {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
+        ShapeGearAction::Export => {}
+    }
+}
+
+/// Applies the picker's own browser events (a right-click's Rename, Move to or Delete): the matching engine command,
+/// and the current shape follows a rename of itself or clears on its own delete.
+fn apply_picker_events(app: &mut PhotocraftApp, events: Vec<PresetEvent<PresetKey>>) {
+    for event in events {
+        let Some(Act::Run(command, params)) = act(SHAPES, &event, &[], None) else { continue };
+        if run(app, &command, params).is_none() {
+            continue;
+        }
+        match &event {
+            PresetEvent::Rename { key: PresetKey::Item(key), text, .. } if app.ui.presets_ui.custom_shape == *key => {
+                app.ui.presets_ui.custom_shape = text.clone();
+            }
+            PresetEvent::Delete(PresetKey::Item(key)) if app.ui.presets_ui.custom_shape == *key => {
+                app.ui.presets_ui.custom_shape.clear();
+            }
+            _ => {}
         }
     }
-    rows
+}
+
+/// Options-bar shape picker for the Custom Shape tool: a gear menu and a right-click menu on shapes and groups
+/// (#13468).
+pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    const ID: &str = "shapePicker";
+    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let folders: Vec<Folder> = groups
+        .iter()
+        .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|shape| (shape.name.clone(), shape.name.clone())).collect() })
+        .collect();
+    let swatches: Vec<Swatch> = groups.into_iter().flat_map(|group| group.items).map(shape_swatch).collect();
+    let view = app.ui.presets_ui.shape_picker_view;
+    let thumbs = ShapePickerThumbs::new(swatches, view);
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, thumbs), shape_picker_thumb);
+    let mut value = Some(PresetKey::Item(app.ui.presets_ui.shape().to_string()));
+    let before = value.clone();
+    let mut state = app.ui.presets_ui.browsers.get(ID).cloned().unwrap_or_default();
+    (state.view, state.zoom) = shape_picker_view_state(view);
+    let picked = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &source, Bind::bound(&mut state))
+        .columns(7)
+        .browser_id(shape_picker_browser_id())
+        .toolbar(true)
+        .search(false)
+        .tools(|ui| shape_gear_menu(app, ui))
+        .show(ui);
+    app.ui.presets_ui.browsers.insert(ID.to_string(), state);
+    apply_picker_events(app, picked.events);
+    if let Some(PresetKey::Item(picked)) = value.filter(|v| before.as_ref() != Some(v)) {
+        app.ui.presets_ui.custom_shape = picked;
+    }
 }
 
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
