@@ -411,7 +411,8 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 /// Whether a `file.import.wiaSupport` result reports no device: its `devices` list, empty on
 /// today's Windows builds and once real enumeration finds none. A list that names devices, or a
 /// result without one, opens nothing: the no-device alert must not fire once real enumeration
-/// reports a scanner or camera.
+/// reports a scanner or camera. Only the Windows arm uses it; off Windows that arm is not built.
+#[cfg(target_os = "windows")]
 pub(crate) fn lists_no_wia_device(result: &Value) -> bool {
     result.get("devices").and_then(Value::as_array).is_some_and(|devices| devices.is_empty())
 }

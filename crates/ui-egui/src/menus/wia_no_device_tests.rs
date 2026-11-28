@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::menus::invoke;
 
-/// The alert's message: our own words for the reference's no-device notice.
+/// The alert's message: our own words for the reference's no-device notice. Only the Windows
+/// tests read it; off Windows the item opens nothing.
+#[cfg(target_os = "windows")]
 const MESSAGE: &str = "No WIA-compatible device was found.";
 
 /// An app without a document, or with a 60 x 40 white one.
@@ -33,7 +35,8 @@ fn alert_messages(app: &PhotocraftApp) -> Vec<String> {
         .collect()
 }
 
-/// History states and layer count of the active document.
+/// History states and layer count of the active document. Only the Windows tests read it.
+#[cfg(target_os = "windows")]
 fn doc_state(app: &PhotocraftApp) -> (usize, usize) {
     let st = app.session.active().expect("a document");
     (st.history.past_len(), st.doc.layers.len())
@@ -92,6 +95,8 @@ fn off_windows_the_menu_item_keeps_todays_silent_path() {
 
 /// Only a result that reports an empty device list opens the alert: once real enumeration names
 /// a device, the menu item is silent as it is today, and a result without the list changes nothing.
+/// The helper it pins belongs to the Windows arm.
+#[cfg(target_os = "windows")]
 #[test]
 fn only_an_empty_device_list_reads_as_no_device() {
     assert!(invoke::lists_no_wia_device(&json!({"devices": []})), "an empty list reports no device");
