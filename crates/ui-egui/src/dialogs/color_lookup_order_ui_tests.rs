@@ -243,3 +243,34 @@ fn an_explicit_other_format_hides_the_orders_of_a_cube_name() {
         }
     }
 }
+
+/// `.cube` text given as `data` with no file name is read as `lut.cube` under Auto and under an explicit Cube format,
+/// so the orders show and OK applies them; an explicit `.3dl` or `.look` format still hides them (CodeRabbit on
+/// #16628).
+#[test]
+fn inline_cube_data_without_a_file_name_shows_and_applies_the_orders() {
+    for (format, data_order, want) in
+        [("auto", "rgb", [50, 50, 200]), ("auto", "bgr", [200, 50, 50]), ("cube", "rgb", [50, 50, 200]), ("cube", "bgr", [200, 50, 50])]
+    {
+        let mut app = app_with_doc();
+        let id = open(&mut app, COLOR_LOOKUP).unwrap();
+        passes(&mut app, 2);
+        try_set(&mut app, id, "data", json!(SWAP2)).unwrap();
+        try_set(&mut app, id, "lutFormat", json!(format)).unwrap();
+        passes(&mut app, 2);
+        assert!(shown(&app, id), "{format}: inline .cube text");
+        try_set(&mut app, id, "dataOrder", json!(data_order)).unwrap();
+        try_set(&mut app, id, "dither", json!(false)).unwrap();
+        ok(&mut app, id);
+        assert_eq!(pixel(&app), want, "{format}: data order {data_order}");
+    }
+    for format in ["3dl", "look"] {
+        let mut app = app_with_doc();
+        let id = open(&mut app, COLOR_LOOKUP).unwrap();
+        passes(&mut app, 2);
+        try_set(&mut app, id, "data", json!(SWAP2)).unwrap();
+        try_set(&mut app, id, "lutFormat", json!(format)).unwrap();
+        passes(&mut app, 2);
+        assert!(!shown(&app, id), "{format}: an explicit other format");
+    }
+}

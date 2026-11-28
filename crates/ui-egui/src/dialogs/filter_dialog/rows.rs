@@ -302,18 +302,27 @@ fn lut_choice(fields: &DialogFields) -> LutChoice {
 
 /// Whether the chosen LUT is a `.cube` file, which Data Order and Table Order apply to: a LUT folder file or given
 /// text that the command reads as Cube. An explicit LUT Format decides that, as it does for the command; under Auto
-/// the file name does. Built-in looks are no files and have no orders, and a LUT Load 3D LUT… read has no known
-/// format ([`LUT_PICKED`]).
+/// the file name does, and given text with no file name is read as `lut.cube`, as the command reads it. Built-in
+/// looks are no files and have no orders, and a LUT Load 3D LUT… read has no known format ([`LUT_PICKED`]).
 pub(crate) fn lut_is_cube(fields: &DialogFields) -> bool {
-    let named_cube = |name: &str| match fields.text("lutFormat") {
+    let named_cube = |name: &str, bytes: &[u8]| match fields.text("lutFormat") {
         Some("cube") => true,
         Some("3dl" | "look") => false,
-        _ => std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cube")),
+        _ => {
+            matches!(craft::cms::lutfile::Format::detect(name, bytes), craft::cms::lutfile::Format::Cube)
+                && std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cube"))
+        }
+    };
+    // Given text, which the command reads before a built-in look, under its file name or, with none, as `lut.cube`;
+    // under Auto the command still tells a `.look` by its text.
+    let given = || {
+        let data = fields.text("data").filter(|data| !data.is_empty())?;
+        let name = fields.text("fileName").filter(|name| !name.is_empty()).unwrap_or("lut.cube");
+        Some(named_cube(name, data.as_bytes()))
     };
     match lut_choice(fields) {
-        LutChoice::Loaded { .. } => fields.bool(LUT_PICKED) != Some(true) && fields.text("fileName").is_some_and(named_cube),
-        LutChoice::Folder(path) => named_cube(&path.to_string_lossy()),
-        _ => false,
+        LutChoice::Folder(path) => named_cube(&path.to_string_lossy(), b""),
+        _ => fields.bool(LUT_PICKED) != Some(true) && given().unwrap_or(false),
     }
 }
 
