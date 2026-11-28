@@ -432,3 +432,47 @@ fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
         assert_eq!(saved(&app), before, "{bad}");
     }
 }
+
+#[test]
+fn the_short_actions_panel_menu_opens_the_atn_picker() {
+    use std::sync::Arc;
+
+    use crate::app::framework::BuildApp;
+    use craft::behavior::dock::{Group, Workspace};
+    use craft::host::{PickKind, ScriptedFiles};
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let files = Arc::new(ScriptedFiles::held());
+    let services = crate::Services { files: Some(files.clone()), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let dock = Node::dock(DockEdge::End, vec![Column::new(vec![Group::new(vec!["actions".to_owned()], 0)])]);
+    app.ui.docking = Arc::new(Workspace::new(Layout::new(Some(dock), Vec::new())));
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 240.0)).build_app(|ui, app| show(app, ui, false), app);
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Panel Menu").click();
+    h.run_steps(4);
+    let top = h.get_by_label("New Action…").rect().center();
+    h.hover_at(top);
+    for _ in 0..12 {
+        if let Some(row) = h.query_by_label("Load Actions…").filter(|row| h.ctx.content_rect().contains(row.rect().center())) {
+            row.click();
+            h.run_steps(4);
+            let requests = files.requests();
+            assert!(
+                matches!(requests.as_slice(), [request] if request.kind == PickKind::OpenMany && request.filters.len() == 1 && request.filters[0].extensions == ["atn"]),
+                "{requests:?}"
+            );
+            return;
+        }
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(3);
+    }
+    panic!("Load Actions is outside the short window after scrolling");
+}
