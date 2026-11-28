@@ -86,12 +86,45 @@ pub(super) fn preview_text(app: &PhotocraftApp) -> Option<String> {
     let text = &crate::type_tool::text_layer(&app.session.active()?.doc, crate::type_tool::LayerId(layer))?.text;
     use crate::type_tool::defaults;
 
-    let chosen: String = match range {
-        Some([a, b]) => text.chars().skip(a).take(b.saturating_sub(a)).collect(),
-        None => text.clone(),
-    };
-    let line = chosen.split(['\n', '\r', '\u{2028}', '\u{2029}']).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
-    let line: String = line.chars().take(60).collect();
+    let (start, len) = range.map_or((0, usize::MAX), |[a, b]| (a, b.saturating_sub(a)));
+    preview_line(text.chars().skip(start).take(len))
+}
+
+/// Keep only the preview prefix. Whitespace is tentative until a following nonblank character
+/// proves it is inside a line; a line ending discards it, just as trimming before joining does.
+pub(super) fn preview_line(chars: impl Iterator<Item = char>) -> Option<String> {
+    const LIMIT: usize = 60;
+    let mut line = String::with_capacity(LIMIT);
+    let (mut count, mut end, mut end_count, mut in_line) = (0, 0, 0, false);
+    for c in chars {
+        if matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+            line.truncate(end);
+            count = end_count;
+            in_line = false;
+        } else if c.is_whitespace() {
+            if in_line && count < LIMIT {
+                line.push(c);
+                count += 1;
+            }
+        } else {
+            if !in_line && !line.is_empty() {
+                line.push(' ');
+                count += 1;
+            }
+            if count == LIMIT {
+                return Some(line);
+            }
+            line.push(c);
+            count += 1;
+            end = line.len();
+            end_count = count;
+            in_line = true;
+            if count == LIMIT {
+                return Some(line);
+            }
+        }
+    }
+    line.truncate(end);
     (!line.is_empty()).then_some(line)
 }
 

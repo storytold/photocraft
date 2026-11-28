@@ -233,3 +233,80 @@ fn hovering_a_font_adds_no_history_step_and_a_pick_adds_one() {
     assert_eq!(layer_font(h.state()), "JetBrains Mono");
     assert_eq!(history_len(h.state()), before + 1, "the pick is one history step");
 }
+
+/// The caller uses Unicode scalar selection offsets and normalizes the selected lines.
+#[test]
+fn the_preview_applies_unicode_selection_ranges() {
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    assert_eq!(super::preview_text(&app), None, "no document");
+    app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+    let id = app.run("type.create", serde_json::json!({"text": "🙂e\u{301}中\rworld  ", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.select", serde_json::json!({"layer": id})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit { layer: id, document: None, caret: 0, anchor: 0, session: "s".into(), created: false, mask: false });
+    assert_eq!(super::preview_text(&app).as_deref(), Some("🙂e\u{301}中 world"), "the whole text, on one line");
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        ed.anchor = 5;
+        ed.caret = 10;
+    }
+    assert_eq!(super::preview_text(&app).as_deref(), Some("world"), "only the selection while typing");
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        ed.anchor = 1;
+        ed.caret = 10;
+    }
+    assert_eq!(super::preview_text(&app).as_deref(), Some("e\u{301}中 world"), "the Unicode selection uses scalar offsets");
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        ed.anchor = 50;
+        ed.caret = 400;
+    }
+    assert_eq!(super::preview_text(&app), None, "an out-of-range selection is blank, not a panic");
+}
+
+/// The preview matches trimming and joining nonempty lines before taking 60 Unicode scalars.
+#[test]
+fn preview_prefix_preserves_whitespace_unicode_and_character_ranges() {
+    let cases = [
+        String::new(),
+        " \t\u{a0}\u{2003}".into(),
+        "\n \t alpha \t beta  \r\n\n\u{2028}\u{a0}gamma\u{2003}\u{2029} delta \t".into(),
+        "🙂e\u{301}中abc  ".repeat(20),
+        format!("{}  \nX", "a".repeat(59)),
+        format!("{}\tX", "a".repeat(59)),
+        format!("{}\t \r\n", "a".repeat(59)),
+        format!("{}\t \r\nB", "a".repeat(58)),
+        format!("{}a\nb", " ".repeat(4096)),
+        "a".repeat(4096),
+        format!("{}{}\u{2028}X", "a".repeat(59), " ".repeat(4096)),
+        format!("{}{}", "a".repeat(59), " ".repeat(4096)),
+        format!("{}{}\nX", "🙂".repeat(59), "\u{3000}".repeat(100)),
+        format!("{}\u{3000}X", "🙂".repeat(59)),
+        format!("{}\u{3000}", "🙂".repeat(59)),
+        "a\n".repeat(2000),
+    ];
+    for text in cases {
+        let chars = text.chars().count();
+        for range in [
+            None,
+            Some([0, 0]),
+            Some([0, 1]),
+            Some([1, 61]),
+            Some([2, 400]),
+            Some([60, 130]),
+            Some([chars.saturating_sub(4), chars + 2]),
+            Some([chars + 1, chars + 100]),
+            Some([9, 3]),
+        ] {
+            let (start, len) = range.map_or((0, usize::MAX), |[a, b]| (a, b.saturating_sub(a)));
+            // The original, complete normalization is an independent reference for the prefix.
+            let chosen: String = text.chars().skip(start).take(len).collect();
+            let joined = chosen.split(['\n', '\r', '\u{2028}', '\u{2029}']).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            let expected: String = joined.chars().take(60).collect();
+            let expected = (!expected.is_empty()).then_some(expected);
+            assert_eq!(super::fonts::preview_line(text.chars().skip(start).take(len)), expected, "{range:?}/{chars} characters");
+        }
+    }
+    let text = "🙂".repeat(4096);
+    let mut read = 0;
+    let prefix = super::fonts::preview_line(text.chars().inspect(|_| read += 1)).unwrap();
+    assert_eq!(prefix, "🙂".repeat(60));
+    assert_eq!(read, 60, "a complete prefix does not read the remaining text");
+}
