@@ -336,6 +336,23 @@ impl PhotocraftApp {
         })
     }
 
+    /// Same asynchronous picker, offering the named file `types` in order; the first is the
+    /// type the picker starts on.
+    pub(crate) fn pick_file_bytes_typed(
+        &mut self,
+        types: &[(&str, &[&str])],
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let mut request = types.iter().fold(PickRequest::open("file"), |req, (name, exts)| req.filter(*name, exts));
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, move |app, picked| {
+            let (name, bytes) = read_picked(picked)?;
+            then(app, name, bytes)
+        })
+    }
+
     fn open_file_request(&self, kind: PickKind, title: Option<String>, extensions: &[&str]) -> PickRequest {
         let mut request = open_filters(PickRequest::new(kind, "file"), extensions);
         if let Some(title) = title {
@@ -492,8 +509,11 @@ fn web_request(request: &PickRequest) -> FileDialogRequest {
     let initial_dir = request.directory.as_ref().map(|d| path_string(d));
     match request.kind {
         PickKind::Open | PickKind::OpenMany => {
-            // A request with several types is File › Open's; one type is a command's own list.
-            let extensions = (request.filters.len() == 1).then(|| request.filters[0].extensions.clone());
+            // File › Open's types (All Formats first) leave the dialog open to every file; a
+            // command's own types narrow it to all of their extensions (Color Table's ACT, ACO
+            // and PAL).
+            let file_open = request.filters.first().is_some_and(|f| f.extensions.iter().map(String::as_str).eq(filters::OPEN_EXTS.iter().copied()));
+            let extensions = (!file_open && !request.filters.is_empty()).then(|| request.filters.iter().flat_map(|f| f.extensions.iter().cloned()).collect());
             FileDialogRequest::Open { multiple: request.kind == PickKind::OpenMany, initial_dir, extensions }
         }
         PickKind::Folder => FileDialogRequest::Folder { initial_dir },

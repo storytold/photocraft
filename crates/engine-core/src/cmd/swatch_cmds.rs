@@ -415,6 +415,36 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 /// Colors in an `.act` color table (what the format holds).
 pub const ACT_COLORS: usize = craft_psd::act::COLOR_COUNT;
 
+/// A file chosen with the Color Table dialog's Load… as `#rrggbb` colors plus the transparent
+/// index, told apart by its extension (`name`'s, any case). Swatches (`.aco`) and RIFF palettes
+/// (`.pal`) give their first [`ACT_COLORS`] RGB colors in file order and no transparent index;
+/// swatches in other color models are left out, as how they load is not measured. Anything
+/// else is read as an `.act` ([`act_table`]). A file without RGB colors is refused.
+pub fn color_table_file(name: &str, bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>), String> {
+    let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let colors: Vec<String> = match ext.as_deref() {
+        Some("aco") => {
+            // Only swatches: an `.ase` or GIMP palette renamed to `.aco` isn't one.
+            let format = SwatchFormat::sniff(bytes, "table.aco");
+            if format != Some(SwatchFormat::Aco) {
+                return Err("not a swatches (.aco) file".into());
+            }
+            let (groups, _) = read_swatches(bytes, "table.aco").map_err(|e| e.to_string())?;
+            let rgb = |e: &SwatchEntry| match e.color() {
+                Some(SwatchColor::Rgb(v)) => Some(hex(*v)),
+                _ => None,
+            };
+            groups.iter().flat_map(|g| &g.entries).filter_map(rgb).take(ACT_COLORS).collect()
+        }
+        Some("pal") => craft::palette::parse_riff_pal(bytes)?.iter().take(ACT_COLORS).map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")).collect(),
+        _ => return act_table(bytes),
+    };
+    if colors.is_empty() {
+        return Err("the file holds no RGB colors".into());
+    }
+    Ok((colors, None))
+}
+
 /// `.act` bytes as `#rrggbb` colors plus the transparent index, for the Color Table dialog.
 /// A trailer count of 0 gives one white entry, as Photoshop loads it, never an empty table
 /// that `image.mode.colorTable` would refuse.
@@ -738,3 +768,6 @@ mod tests;
 
 #[cfg(test)]
 mod act_zero_count_tests;
+
+#[cfg(test)]
+mod color_table_load_formats_tests;

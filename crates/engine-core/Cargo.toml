@@ -19,7 +19,7 @@ photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
 # PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
-craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "3eb5b528b08211844bc5c95c5a4fd169894d52ff" }
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "e935ac91fb921b819e8dcd955cee397c88479e74" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }
@@ -49,7 +49,7 @@ craft-print = { workspace = true }
 # (`craft::keymap`), the palette (`craft::color_ui`), preferences storage and autosave
 # (`craft::settings`, `craft::platform`), and `craft::theme::ThemeId`, the theme ids the
 # appearance preferences hold.
-craft = { workspace = true, features = ["automation", "color-ui", "keymap", "platform", "settings"] }
+craft = { workspace = true, features = ["automation", "color-ui", "keymap", "palette", "platform", "settings"] }
 
 # Release tags use the same semantic versions as Cargo.
 semver = "1"

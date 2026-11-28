@@ -77,7 +77,7 @@ fn shape_layer_filled(tool: Tool, filled: bool) -> Box<PhotocraftApp> {
     app.ui.tool_options.shape_fill = filled;
     app.ui.tool_options.stroke_width = 2.0;
     let rect = craft::behavior::kurbo::Rect::new(40.0, 40.0, 120.0, 120.0);
-    let shape = if tool == Tool::Triangle { ShapeGeometry::Triangle { rect } } else { ShapeGeometry::Rect { rect, radii: [0.0; 4] } };
+    let shape = if tool == Tool::Triangle { ShapeGeometry::Triangle { rect, corner_radius: 0.0 } } else { ShapeGeometry::Rect { rect, radii: [0.0; 4] } };
     crate::vector_ui::create_geometry(&mut app, &shape, crate::vector_ui::kind_of(tool), None).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), "Shape", "{tool:?} made a shape layer");

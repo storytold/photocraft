@@ -174,6 +174,9 @@ pub struct ToolOptions {
     /// The Polygon tool's corner radius in px for the next polygon (#13302): its own, not the
     /// Rectangle's [`Self::corner_radius`]. 0 draws sharp corners.
     pub polygon_corner_radius: f32,
+    /// The Triangle tool's corner radius in px for the next triangle (#13355): its own, not the
+    /// Rectangle's [`Self::corner_radius`]. 0 draws sharp corners.
+    pub triangle_corner_radius: f32,
     pub line_weight: f32,
     /// Line arrowheads.
     pub arrow_start: bool,
@@ -532,6 +535,7 @@ impl Default for ToolOptions {
             polygon_sides: 5,
             star_points: 5,
             polygon_corner_radius: 0.0,
+            triangle_corner_radius: 0.0,
             line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,
