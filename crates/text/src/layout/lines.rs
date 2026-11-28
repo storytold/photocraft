@@ -28,6 +28,10 @@ struct KernSlot {
     coords: Vec<i16>,
     size: f32,
     rtl: bool,
+    /// Whitespace, a character with nothing drawn (no glyph, such as a joiner the font drops) or
+    /// the direction mark before the paragraph: trailing it is outside the line's extent. A
+    /// ligature's later characters have no glyph of their own either, but are part of the
+    /// ligature's advance, so they aren't blank.
     blank: bool,
     /// Advance along the line (px, horizontal scale included).
     advance: f32,
@@ -118,6 +122,11 @@ fn scale_of(st: &CharStyle) -> f32 {
     if st.horizontal_scale > 0.0 { st.horizontal_scale } else { 1.0 }
 }
 
+/// The horizontal scale of cluster `c`: its own style's.
+fn cluster_scale(styles: &[CharStyle], c: &parley::Cluster<'_, RunBrush>) -> f32 {
+    styles.get(c.first_style().brush.0 as usize).map_or(1.0, scale_of)
+}
+
 /// The clusters of `line` in visual order, per run.
 fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
     let env = para.env;
@@ -132,8 +141,22 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
             continue;
         }
         line_runs.push(run.index());
-        let hs = env.styles.get(gr.style().brush.0 as usize).map_or(1.0, scale_of);
+        // Each cluster's own scale: styles that differ only in horizontal scale (applied after
+        // shaping) share a shaping run, and their glyphs are drawn at their own scales. A
+        // ligature's later characters go with its glyph, drawn at its first character's scale.
+        let mut ligature_scale = 1.0;
+        let scales: Vec<(usize, f32)> = run
+            .clusters()
+            .map(|c| {
+                if !c.is_ligature_continuation() {
+                    ligature_scale = cluster_scale(env.styles, &c);
+                }
+                (c.text_range().start, ligature_scale)
+            })
+            .collect();
         for c in run.visual_clusters() {
+            let start = c.text_range().start;
+            let hs = scales.binary_search_by_key(&start, |s| s.0).ok().and_then(|i| scales.get(i)).map_or_else(|| cluster_scale(env.styles, &c), |s| s.1);
             let mut gl = c.glyphs();
             let first = gl.next().map(|g| g.id);
             let last = gl.last().map(|g| g.id).or(first);
@@ -147,7 +170,7 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
                 coords: run.normalized_coords().to_vec(),
                 size: run.font_size(),
                 rtl: c.is_rtl(),
-                blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= para.prefix.len(),
+                blank: c.is_space_or_nbsp() || (first.is_none() && !c.is_ligature_continuation()) || c.text_range().end <= para.prefix.len(),
                 upright: env.vertical && c.first_style().brush.1 != VClass::Rotate as u8,
                 advance: c.advance() * hs,
                 growth: c.advance() * (hs - 1.0),
@@ -336,6 +359,8 @@ impl Para<'_> {
     /// Where the line starts along its extent: box and area lines at their box or span edge,
     /// point and legacy unbounded path lines around the anchor. Explicit path ranges
     /// align center/right lines within their available span instead of around that anchor.
+    /// `line_kern` includes the horizontal-scale growth: lines are placed by the width they are
+    /// drawn at, not parley's unscaled one.
     fn line_start(&self, f: &LineFrame, offset: f32, adv: f32, line_kern: f32) -> f32 {
         if !self.env.wraps {
             let span = self.env.path_range.unwrap_or(0.0);
@@ -416,7 +441,9 @@ impl Para<'_> {
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
-        let growth = if self.env.path_range.is_some() { slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth } else { 0.0 };
+        // Horizontal scale is applied after shaping: point and path lines are placed by the
+        // width they are drawn at (box and area lines scale their break width instead).
+        let growth = if self.env.wraps { 0.0 } else { slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth };
         let dx = self.line_start(f, m.offset, adv, line_kern + growth);
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
@@ -469,7 +496,7 @@ impl Para<'_> {
         let run_x0 = lc.dx + gr.offset() + state.extra;
         if !state.seen_runs.contains(&run.index()) {
             state.seen_runs.push(run.index());
-            self.push_clusters(out, lc, run, hs, run_x0);
+            self.push_clusters(out, lc, run, run_x0);
         }
         self.push_glyphs(out, lc, state, gr, face, hs);
         let span = RunSpan { x0: run_x0, x1: lc.dx + gr.offset() + gr.advance() + state.extra, style: si };
@@ -477,11 +504,13 @@ impl Para<'_> {
     }
 
     /// The caret clusters of a shaping run, with kerning and horizontal scale in their advances.
-    fn push_clusters(&self, out: &mut TextLayout, lc: &LineCtx<'_>, run: &Run<'_, RunBrush>, hs: f32, run_x0: f32) {
+    fn push_clusters(&self, out: &mut TextLayout, lc: &LineCtx<'_>, run: &Run<'_, RunBrush>, run_x0: f32) {
         let mut cx = run_x0;
         let base = lc.slots.iter().position(|s| s.run == run.index()).unwrap_or(0);
         for (ci, c) in run.visual_clusters().enumerate() {
-            let a = c.advance() * hs + lc.kern_px.get(base + ci).copied().unwrap_or(0.0);
+            // The slot's advance has the cluster's own scale (see `collect_kern_slots`).
+            let scaled = lc.slots.get(base + ci).map_or_else(|| c.advance() * cluster_scale(self.env.styles, &c), |s| s.advance);
+            let a = scaled + lc.kern_px.get(base + ci).copied().unwrap_or(0.0);
             let r = c.text_range();
             if r.end > self.prefix.len() || self.prefix.is_empty() {
                 out.clusters.push(ClusterInfo {
