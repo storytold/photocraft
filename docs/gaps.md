@@ -421,7 +421,7 @@ what an agent can't finish alone.
 - **Missing:** JPEG Options' Matte and progressive Scans (FILE-215-19 partial), TIFF Options' JPEG compression, Pixel Order and Byte Order (the rest landed 2026-11-02, #8827), Photoshop PDF read and its vector/text/multi-page
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
   2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
-  DICOM, EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
+  DICOM, EPS/DCS, Pixar write (read landed), WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
   Raw; spot plates beyond PSD, TIFF and PDF: the spot ink preview's ink order at overlaps and its
   look at solidity 0.5 and 1 against reference files (FILE-215-17); .atn,
   .shc, .csh presets (.asl landed 2026-10-20) (FILE-215-15); C2PA (#1050).
