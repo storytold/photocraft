@@ -109,7 +109,7 @@ threads-required = 2
 [[profile.ci.overrides]]
 # over 200 s
 filter = '''
-  (package(photocraft-ui-egui) & test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is)) |
+  (package(photocraft-ui-egui) & (test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is_canvas) | test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is_layers_row) | test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is_focused_widget) | test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is_opacity_field))) |
   (package(photocraft-ui-egui) & test(=tone_targets::review_mask_action_context_matches_the_addressed_layer)) |
   (package(photocraft-ui-egui) & test(=tone_targets::grayscale_picker_controls_sample_the_plane_and_change_the_visible_curve)) |
   (package(photocraft-ui-egui) & test(=dialogs::adjust_editors::ui_tests::every_adjustment_layer_edits_through_properties)) |

@@ -201,6 +201,14 @@ pub fn combined_mask(layer: &Layer, canvas: Rect) -> Option<Surface> {
     Some(cached_mask(cache(), key(layer, canvas), || (build_mask(layer, canvas), layer.mask.as_ref().map(|m| m.surface.clone()))))
 }
 
+/// The renderer's mask working-set decision, exposed for sparse metadata controls.
+/// This does not allocate mask planes.
+pub fn can_build_mask(area: Rect) -> bool {
+    const MAX_MASK_WORKING_BYTES: u64 = 512 << 20;
+    let working = u64::from(area.width()).saturating_mul(u64::from(area.height())).saturating_mul(12);
+    !area.is_empty() && working <= MAX_MASK_WORKING_BYTES
+}
+
 fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
     let vm = layer.vector_mask.as_ref().filter(|v| v.enabled);
     let pixel = layer.mask.as_ref().filter(|m| m.enabled);
@@ -236,9 +244,7 @@ fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
     // f32 planes over it (coverage, pixel-mask values, blur scratch) could be gigabytes during
     // a one-pixel render. Above the budget, fall back to the constant default mask rather than
     // allocating; feather detail is lost only for pathological geometry.
-    const MAX_MASK_WORKING_BYTES: u64 = 512 << 20;
-    let working = (area.width() as u64).saturating_mul(area.height() as u64).saturating_mul(std::mem::size_of::<f32>() as u64).saturating_mul(3);
-    if !area.is_empty() && working <= MAX_MASK_WORKING_BYTES {
+    if can_build_mask(area) {
         let (w, h) = (area.width() as usize, area.height() as usize);
         // A slot initializer must not enter Rayon: another tile requesting the
         // same mask could be stolen onto its stack and wait for its own build.

@@ -395,6 +395,76 @@ fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
     assert!(failures.is_empty(), "{} shortcut failures:\n{}", failures.len(), failures.join("\n"));
 }
 
+// Keep the branch's exhaustive focus matrices alongside main's representative-route coverage.
+fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(place: Place) {
+    let mut failures = Vec::new();
+    let mut h = harness();
+    set_dry_run(&h.ctx, true);
+    put_focus(&mut h, place);
+    let typing = WindowHost::of(&h.ctx).typing();
+    let items = crate::menus::menu_rows(h.state());
+    for (id, sc, live) in displayed(h.state()) {
+        if !live {
+            continue;
+        }
+        let chord = Chord::parse(&sc).unwrap_or_else(|_| panic!("{id}: unparsable {sc}"));
+        // A press the focused component holds (the Layers rows' stacking and visibility keys)
+        // is the component's and reaches no app command.
+        let held = focus_holds(&h.ctx, chord);
+        press_in_one_frame(&mut h, &sc);
+        let log = take_log(&h.ctx);
+        if typing && !chord.has_command() && !chord.is_function_key() {
+            // A focused text field keeps its typing / editing keys: nothing may fire.
+            if !log.is_empty() {
+                failures.push(format!("{place:?}: {sc} ({id}) fired {log:?} into a focused field"));
+            }
+            continue;
+        }
+        let enabled = items.iter().find(|i| i.command.id == id).map_or_else(|| crate::menus::is_enabled(h.state(), &id), |i| i.enabled);
+        match log.as_slice() {
+            [] if held || typing => {}
+            [(bound, Outcome::Ran)] if same(&id, bound) && enabled => {}
+            [(bound, Outcome::Disabled(why))] if same(&id, bound) && !enabled && !why.is_empty() => {}
+            other => failures.push(format!("{place:?}: {sc} ({id}, menu enabled: {enabled}) -> {other:?}")),
+        }
+    }
+    // Tool letters from the tools panel tooltips ("Brush Tool  (B)").
+    if !typing {
+        for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
+            h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
+            press_in_one_frame(&mut h, &t.key().to_string());
+            if h.state().ui.tool.key() != t.key() {
+                failures.push(format!("{place:?}: tool key {} left {:?}", t.key(), h.state().ui.tool));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} shortcut failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// The complete displayed shortcut matrix from one ordinary focus location.
+#[test]
+fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_canvas() {
+    every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(Place::Canvas);
+}
+
+/// The complete displayed shortcut matrix from one ordinary focus location.
+#[test]
+fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_layers_row() {
+    every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(Place::LayersRow);
+}
+
+/// The complete displayed shortcut matrix from one ordinary focus location.
+#[test]
+fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_focused_widget() {
+    every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(Place::FocusedWidget);
+}
+
+/// The complete displayed shortcut matrix from one ordinary focus location.
+#[test]
+fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_opacity_field() {
+    every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(Place::OpacityField);
+}
+
 #[test]
 fn a_disabled_shortcut_says_why() {
     let mut h = harness();
