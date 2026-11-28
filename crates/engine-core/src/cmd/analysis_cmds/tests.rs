@@ -246,9 +246,9 @@ fn count_groups_markers_and_undo() {
     s.execute("count.setGroup", json!({"group": 0, "markerSize": 50, "labelSize": 20, "visible": false, "name": "Spots"})).unwrap();
     let g = &d(&s).measurement.count_groups[0];
     assert_eq!((g.marker_size, g.label_size, g.visible, g.name.as_str()), (10, 20, false, "Spots"));
-    // Record counts.
+    // Record counts (group 0 is hidden, so only group 1's visible marker is counted).
     let r = s.execute("image.analysis.recordMeasurements", json!({"source": "count"})).unwrap();
-    assert_eq!(r["rows"][0]["values"]["count"], 2);
+    assert_eq!(r["rows"][0]["values"]["count"], 1);
     s.execute("count.clear", json!({})).unwrap();
     assert_eq!(d(&s).measurement.count_total(), 1, "clears the active group only");
     s.execute("count.clear", json!({"group": "all"})).unwrap();
@@ -560,4 +560,32 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert_eq!(a.bounds, b.bounds);
         assert!(b.histogram.is_empty());
     }
+}
+
+#[test]
+fn measurement_log_counts_only_visible_count_groups() {
+    let mut s = session(160, 120, 8);
+    s.execute("image.analysis.selectDataPoints", json!({"reset": true})).unwrap();
+    s.execute("count.newGroup", json!({"name": "Group A"})).unwrap();
+    s.execute("count.add", json!({"x": 24, "y": 24})).unwrap();
+    s.execute("count.add", json!({"x": 48, "y": 24})).unwrap();
+    s.execute("count.newGroup", json!({"name": "Group B"})).unwrap();
+    s.execute("count.add", json!({"x": 24, "y": 64})).unwrap();
+    s.execute("count.setGroup", json!({"group": 0, "active": true})).unwrap();
+
+    // Both groups visible -> Count 3.
+    s.execute("image.analysis.recordMeasurements", json!({"source": "count"})).unwrap();
+    // Hide Group A (2 markers) while active -> Count 1.
+    s.execute("count.setGroup", json!({"group": 0, "visible": false})).unwrap();
+    s.execute("image.analysis.recordMeasurements", json!({"source": "count"})).unwrap();
+    // Hide Group B (1 marker) too -> Count 0 (row still appended).
+    s.execute("count.setGroup", json!({"group": 1, "active": true, "visible": false})).unwrap();
+    s.execute("image.analysis.recordMeasurements", json!({"source": "count"})).unwrap();
+
+    let list = s.execute("measurementLog.list", json!({})).unwrap();
+    let counts: Vec<Option<u64>> = list["rows"].as_array().unwrap().iter().map(|r| r["values"]["count"].as_u64()).collect();
+    assert_eq!(counts, vec![Some(3), Some(1), Some(0)]);
+    // Total stored markers still includes hidden groups.
+    let info = s.execute("image.analysis.info", json!({})).unwrap();
+    assert_eq!(info["count"]["total"].as_u64(), Some(3));
 }
