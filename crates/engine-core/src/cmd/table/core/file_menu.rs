@@ -21,7 +21,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some(v) if v != "discard" => return Err(bad("file.close", "`save` must be ask, discard or false")),
                 _ => {}
             }
-            s.close(i).ok_or(EngineError::NoDocument)?;
+            if !s.close_and_release(i) {
+                return Err(EngineError::NoDocument);
+            }
             Ok(Value::Null)
         }
     )]

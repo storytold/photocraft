@@ -1879,11 +1879,13 @@ impl Session {
             }
         };
         // A closed document's freed buffers went to the scratch pool (`before` and the action
-        // recording snapshot kept it alive until here). Drop both before handing the pool back
-        // to the OS (#10479). Compare ids since Split/Merge Channels open replacement documents.
+        // recording snapshot kept it alive until here). They go to the release thread with the
+        // document (`Session::close_and_release`), which may already have dropped its own
+        // reference: dropped here, the last of them would free the document on this thread.
+        // Then the pool goes back to the OS (#10479). Compare ids since Split/Merge Channels open
+        // replacement documents.
         if docs_before.iter().any(|id| !self.docs.iter().any(|st| st.doc.id == *id)) {
-            drop(before);
-            drop(record_before);
+            Self::release_off_thread((before, record_before));
             photocraft_raster::scratch::release();
         }
         out
