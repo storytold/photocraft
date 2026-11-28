@@ -430,8 +430,8 @@ pub fn color_table_file(name: &str, bytes: &[u8]) -> std::result::Result<(Vec<St
                 return Err("not a swatches (.aco) file".into());
             }
             let (groups, _) = read_swatches(bytes, "table.aco").map_err(|e| e.to_string())?;
-            let rgb = |e: &SwatchEntry| match e.color {
-                SwatchColor::Rgb(v) => Some(hex(v)),
+            let rgb = |e: &SwatchEntry| match e.color() {
+                Some(SwatchColor::Rgb(v)) => Some(hex(*v)),
                 _ => None,
             };
             groups.iter().flat_map(|g| &g.entries).filter_map(rgb).take(ACT_COLORS).collect()

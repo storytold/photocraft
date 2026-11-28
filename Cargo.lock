@@ -1384,6 +1384,7 @@ dependencies = [
  "craft-layers",
  "craft-menu",
  "craft-pages",
+ "craft-palette",
  "craft-platform",
  "craft-print",
  "craft-quit",
@@ -2022,6 +2023,11 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "craft-palette"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e935ac91fb921b819e8dcd955cee397c88479e74#e935ac91fb921b819e8dcd955cee397c88479e74"
 
 [[package]]
 name = "craft-pcraft-bundle"

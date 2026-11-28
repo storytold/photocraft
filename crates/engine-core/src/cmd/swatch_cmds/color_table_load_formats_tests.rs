@@ -90,7 +90,7 @@ fn only_rgb_swatches_load() {
     ];
     let mixed = write_swatches(&[SwatchGroup { name: "t".into(), entries: entries.clone() }], SwatchFormat::Aco).unwrap().0;
     assert_eq!(color_table_file("mixed.aco", &mixed), Ok((hexes(&rgb), None)));
-    let no_rgb: Vec<SwatchEntry> = entries.into_iter().filter(|e| !matches!(e.color, SwatchColor::Rgb(_))).collect();
+    let no_rgb: Vec<SwatchEntry> = entries.into_iter().filter(|e| !matches!(e.color(), Some(SwatchColor::Rgb(_)))).collect();
     let no_rgb = write_swatches(&[SwatchGroup { name: "t".into(), entries: no_rgb }], SwatchFormat::Aco).unwrap().0;
     assert!(color_table_file("cmyk.aco", &no_rgb).is_err(), "a file without RGB swatches is refused");
 }
