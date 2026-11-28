@@ -192,7 +192,8 @@ fn an_operation_without_a_selected_shape_starts_a_new_shape_layer() {
 #[test]
 fn path_mode_adds_subpaths_with_the_operation() {
     let mut app = app();
-    assert_eq!(pen_path_op(&app.ui.tool_options), Some("combine"));
+    assert_eq!(pen_path_op(&app.ui.tool_options), Some("exclude"), "the Path-mode default (#12905)");
+    app.ui.tool_options.pen_path_op = "combine".into();
     square(&mut app, 20.0, 20.0, 100.0);
     square(&mut app, 30.0, 30.0, 10.0);
     app.ui.tool_options.pen_path_op = "intersect".into();
@@ -235,7 +236,7 @@ fn the_options_bar_menu_sets_the_operation_and_merges() {
     assert!(h.get_by_label("New Layer").accesskit_node().is_disabled(), "Path mode has no New Layer");
     h.get_by_label("Exclude Overlapping Shapes").click();
     h.run_steps(3);
-    assert_eq!(h.state().ui.tool_options.pen_path_op, "exclude");
+    assert_eq!(h.state().ui.tool_options.pen_path_mode_op.as_deref(), Some("exclude"), "the Path-mode value (#12905)");
     assert!(h.query_by_label("Exclude Overlapping Shapes").is_none(), "choosing closes the menu");
     // Merge Shape Components: the Work Path's hole stays a hole, now as plain outlines.
     let before = work(h.state());
@@ -274,12 +275,13 @@ fn merge_is_disabled_with_fewer_than_two_components() {
     assert!(!merge_disabled(2));
 }
 
-/// An unknown stored operation (an edited settings file) falls back to New Layer, never panics.
+/// An unknown stored operation (an edited settings file) falls back to New Layer, never panics;
+/// Path mode has no New Layer, so there the fallback is its own default (#12905).
 #[test]
 fn an_unknown_operation_falls_back_to_new_layer() {
     let mut app = app();
     app.ui.tool_options.pen_path_op = "melt".into();
-    assert_eq!(pen_path_op(&app.ui.tool_options), Some("combine"));
+    assert_eq!(pen_path_op(&app.ui.tool_options), Some("exclude"));
     app.ui.tool_options.vector_mode = VectorMode::Shape;
     assert_eq!(pen_path_op(&app.ui.tool_options), None);
     let count = layers(&app);

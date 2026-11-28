@@ -577,7 +577,9 @@ fn rebuild_live_draft(app: &mut PhotocraftApp) -> Option<EditSubpath> {
 /// Is `pen` a fresh Pen draft that draws straight into the Work Path: one anchor, drawn with the Pen (not the Curvature
 /// Pen) in Path mode with a Path Operation that joins, nothing carried on, no vector mask targeted, and the Work Path
 /// as the destination its finish would pick? A selected saved path and the other operations were not measured and keep
-/// today's draft-until-the-finish route.
+/// today's draft-until-the-finish route. Which operations join this way follows #12890's measured configuration, the Pen
+/// in Path mode after Reset Tool: Combine while that was the default (#7648) and Exclude now that the default is
+/// Exclude Overlapping Shapes (#12905).
 fn starts_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
     pen.draft.knots.len() == 1
         && pen.resumes.is_none()
@@ -587,7 +589,7 @@ fn starts_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
         && !pen.commit_failed
         && app.ui.tool == Tool::Pen
         && app.ui.tool_options.vector_mode == VectorMode::Path
-        && pen_path_op(&app.ui.tool_options) == Some("combine")
+        && matches!(pen_path_op(&app.ui.tool_options), Some("combine" | "exclude"))
         && targeted_vector_mask(app).is_none()
         && draft_target(app, pen).as_deref().is_none_or(|n| n == "work")
 }
@@ -616,7 +618,7 @@ pub(super) fn start_live_path(app: &mut PhotocraftApp) {
     let index = if append { app.session.active().map_or(0, |st| st.doc.work_path.as_ref().map_or(0, |p| p.subpaths.len())) } else { 0 };
     let mut params = json!({"name": "work", "path": path_json(&pen_path(pen)), "historyName": if append { "New Path Component" } else { "New Work Path" }});
     if append {
-        params["op"] = json!("combine");
+        params["op"] = json!(pen_path_op(&app.ui.tool_options).unwrap_or("combine"));
     }
     if let Err(e) = run_beside_draft(app, "path.set", params) {
         app.ui.status = e;
@@ -638,7 +640,9 @@ pub(super) fn start_live_path(app: &mut PhotocraftApp) {
 
 /// Is `pen` a draft carried on from the end point of an open subpath of the Work Path, drawn live like a fresh one
 /// (#12890)? The press that picked it up is the step "Pick-up Path". The Curvature Pen and Freeform Pen, a saved path,
-/// a vector mask and the other Path Operations were not measured and keep today's route. A Work Path that a finish hid
+/// a vector mask and the remaining Path Operations were not measured and keep today's route (the Path-mode
+/// default Combine and now Exclude both join this way, as #12890 measured after Reset Tool, see
+/// [`starts_live_path`]). A Work Path that a finish hid
 /// (#12892) is not drawn, so nothing can be carried on from it: `resume_target` refuses it the same way, and minting
 /// from it here would put a live path back beside a hidden one.
 fn carries_on_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
@@ -648,7 +652,7 @@ fn carries_on_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
         && !pen.commit_failed
         && app.ui.tool == Tool::Pen
         && app.ui.tool_options.vector_mode == VectorMode::Path
-        && pen_path_op(&app.ui.tool_options) == Some("combine")
+        && matches!(pen_path_op(&app.ui.tool_options), Some("combine" | "exclude"))
         && targeted_vector_mask(app).is_none()
         && work_path_shown(app)
         && pen.resumes.as_ref().is_some_and(|r| r.layer.is_none() && r.path == "work")
@@ -763,13 +767,28 @@ pub(crate) const PATH_OPS: [(&str, &str, &str); 5] = [
 ];
 
 /// The operation (`path.set` / `shape.create` `op`) a new Pen path is added with; None for a new
-/// shape layer (New Layer, in Shape mode). Path mode has no New Layer: there it combines.
+/// shape layer (New Layer, in Shape mode). Path mode has no New Layer: it takes the Path-mode
+/// operation ([`pen_path_mode_op`]), which defaults to Exclude Overlapping Shapes (#12905) where
+/// this application combined.
 pub(crate) fn pen_path_op(o: &ToolOptions) -> Option<&'static str> {
+    if o.vector_mode != VectorMode::Shape {
+        return Some(pen_path_mode_op(o));
+    }
     let op = PATH_OPS.iter().map(|(v, ..)| *v).find(|v| *v == o.pen_path_op).unwrap_or("newLayer");
-    match op {
-        "newLayer" if o.vector_mode == VectorMode::Shape => None,
-        "newLayer" => Some("combine"),
-        op => Some(op),
+    (op != "newLayer").then_some(op)
+}
+
+/// The Path-mode operation the Pen, the Freeform Pen, the Curvature Pen, Path Selection and Direct
+/// Selection share (#12905): the pick made for Path mode, or `pen_path_op` while none has been made
+/// yet, which is how a settings file from an older build - it had one value for both modes - keeps
+/// the operation it saved. Path mode has no New Layer: an unset value, a saved "newLayer" and an
+/// unknown one all read as Exclude Overlapping Shapes, the reference application's default after
+/// Reset Tool.
+pub(crate) fn pen_path_mode_op(o: &ToolOptions) -> &'static str {
+    let saved = o.pen_path_mode_op.as_deref().unwrap_or(&o.pen_path_op);
+    match PATH_OPS.iter().map(|(v, ..)| *v).find(|v| *v == saved) {
+        Some(op) if op != "newLayer" => op,
+        _ => "exclude",
     }
 }
 
@@ -798,14 +817,37 @@ pub(super) fn tool_in_shape_mode(app: &PhotocraftApp) -> bool {
     }
 }
 
-/// The active tool's resolved operation (see `pen_path_op` and `shape_path_op`).
+/// The active tool's resolved operation (see `pen_path_op`, `pen_path_mode_op` and `shape_path_op`).
+/// Path Selection and Direct Selection make no shape layer, so they read the Path-mode value even
+/// while the Pens happen to be in Shape mode (#12905).
 pub(super) fn tool_path_op(app: &PhotocraftApp) -> Option<&'static str> {
-    if super::shapes::is_shape_tool(app.ui.tool) { shape_path_op(&app.ui.tool_options) } else { pen_path_op(&app.ui.tool_options) }
+    let o = &app.ui.tool_options;
+    if super::shapes::is_shape_tool(app.ui.tool) {
+        shape_path_op(o)
+    } else if tool_in_shape_mode(app) {
+        pen_path_op(o)
+    } else {
+        Some(pen_path_mode_op(o))
+    }
 }
 
-/// The Path Operations setting the active tool keeps: the Shape tools' own, else the Pens'.
-pub(crate) fn path_op_field(app: &mut PhotocraftApp) -> &mut String {
-    if super::shapes::is_shape_tool(app.ui.tool) { &mut app.ui.tool_options.shape_path_op } else { &mut app.ui.tool_options.pen_path_op }
+/// Store a Path Operations pick (the options-bar menu, the `+`/`-` keys or the control channel) for
+/// the active tool: the Shape tools' own value, the Pens' value for the mode they are in, and for
+/// Path Selection and Direct Selection the Path-mode value they share with the Pens (#12905). The
+/// first Shape-mode pick carries over what Path mode had, so the single value an older settings file
+/// wrote does not keep tying the two modes together after one of them is picked again.
+pub(crate) fn set_path_op(app: &mut PhotocraftApp, op: &str) {
+    if super::shapes::is_shape_tool(app.ui.tool) {
+        app.ui.tool_options.shape_path_op = op.into();
+        return;
+    }
+    if tool_in_shape_mode(app) {
+        let carried = pen_path_mode_op(&app.ui.tool_options);
+        app.ui.tool_options.pen_path_mode_op = Some(carried.to_string());
+        app.ui.tool_options.pen_path_op = op.into();
+    } else {
+        app.ui.tool_options.pen_path_mode_op = Some(op.into());
+    }
 }
 
 /// What the Path Operations menu's Merge Shape Components merges, as a command, its params and

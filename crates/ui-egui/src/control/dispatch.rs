@@ -518,7 +518,15 @@ impl ToolSet {
             app.ui.tool_options.vector_mode = m;
         }
         if let Some(o) = self.pen_path_op {
-            app.ui.tool_options.pen_path_op = o;
+            // The reference's `shapeOperation` is the option of the tool that is active: the Pen
+            // family and the two selection tools now take the pick for the mode they are in, the
+            // Path-mode value all five share (#12905). With a Shape tool active it keeps today's
+            // route of writing the Pens' setting, which is what the control channel did there.
+            if crate::vector_ui::is_shape_tool(app.ui.tool) {
+                app.ui.tool_options.pen_path_op = o;
+            } else {
+                crate::vector_ui::set_path_op(app, &o);
+            }
         }
         let o = &mut app.ui.tool_options;
         if let Some(style) = self.marquee_style {

@@ -53,14 +53,15 @@ fn open_path_operations(h: &mut Harness<'_, Box<PhotocraftApp>>) {
 }
 
 /// With a saved path targeted and nothing selected, as measured: the Path operations button with
-/// New Layer greyed and Combine Shapes checked; no hint text.
+/// New Layer greyed and Exclude Overlapping Shapes checked, the Path-mode default (#12905); no
+/// hint text.
 #[test]
 fn the_bar_shows_path_operations_instead_of_the_hint() {
     let mut h = bar(app(), Tool::DirectSelection);
     assert!(h.query_by_label_contains("Click: select anchor").is_none(), "no hint text");
     open_path_operations(&mut h);
     assert!(h.get_by_label("New Layer").accesskit_node().is_disabled(), "Direct Selection makes no shape layer");
-    assert_eq!(h.get_by_label("Combine Shapes").accesskit_node().toggled(), Some(Toggled::True));
+    assert_eq!(h.get_by_label("Exclude Overlapping Shapes").accesskit_node().toggled(), Some(Toggled::True));
     assert!(!h.get_by_label("Merge Shape Components").accesskit_node().is_disabled(), "two components to merge");
 }
 
@@ -72,7 +73,7 @@ fn new_layer_stays_greyed_with_the_pen_in_shape_mode() {
     let mut h = bar(app, Tool::DirectSelection);
     open_path_operations(&mut h);
     assert!(h.get_by_label("New Layer").accesskit_node().is_disabled());
-    assert_eq!(h.get_by_label("Combine Shapes").accesskit_node().toggled(), Some(Toggled::True), "not the greyed New Layer");
+    assert_eq!(h.get_by_label("Exclude Overlapping Shapes").accesskit_node().toggled(), Some(Toggled::True), "not the greyed New Layer");
 }
 
 /// With a saved path targeted both tools draw Path operations at the same place.
@@ -134,7 +135,7 @@ fn a_picked_operation_acts_on_the_component_with_a_selected_anchor() {
     assert_eq!(saved(app).subpaths.iter().map(|s| s.op).collect::<Vec<_>>(), [PathOp::Combine, PathOp::Subtract]);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
     assert_eq!(app.ui.direct_selection.anchors, [[1, 1]], "the anchor stays selected");
-    assert_eq!(app.ui.tool_options.pen_path_op, "subtract", "the tool keeps it for the next path, as Path Selection does");
+    assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("subtract"), "the tool keeps it for the next path, as Path Selection does");
 }
 
 /// The saved path is targeted, but the anchor is selected on the shape layer: Merge Shape
