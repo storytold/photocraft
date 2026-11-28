@@ -9,6 +9,10 @@ use photocraft_color::{ColorMode, SampleType};
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
+/// The named Open filters cover this list. All Formats itself is [`ALL_FORMATS`], not this list (#5126).
+/// Compiled for the open-filter coverage tests only: the native picker uses `*`, so a non-test build
+/// would otherwise warn that this list is unused.
+#[cfg(test)]
 pub(super) const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
@@ -20,7 +24,7 @@ const SVG_EXTS: &[&str] = &["svg", "svgz"];
 /// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
 /// of mixed files can be narrowed to one kind (#6337). The document formats, the rest by name as in
 /// [`SAVE_FILTERS`], then the app's own resources. Together they cover every extension of
-/// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
+/// the open-extension list. An explicit SVG filter also keeps vector artwork discoverable when a native
 /// picker defaults to another filter.
 pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Photoshop", &["psd", "psb", "psdt"]),
@@ -146,6 +150,10 @@ const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), (
 /// The extensions a Netpbm subtype's name carries; the save types offer only the neutral `.pnm`.
 const NETPBM_SUBTYPES: &[&str] = &["pbm", "pgm", "ppm", "pam", "pfm"];
 
+/// All Formats must not list every openable extension: the native dropdown concatenates
+/// `*.pcraft;*.pdn;…` into the combo label and hangs on Windows (#5126). `*` shows every file.
+const ALL_FORMATS: &[&str] = &["*"];
+
 /// `req` with the Open picker's types: All Formats then one type per format, or, for a command
 /// that reads one kind of file (`extensions` given), only those as "Supported Files", so it does
 /// not inherit the image formats.
@@ -153,7 +161,7 @@ pub(super) fn open_filters(req: PickRequest, extensions: &[&str]) -> PickRequest
     if !extensions.is_empty() {
         return req.filter("Supported Files", extensions);
     }
-    OPEN_FILTERS.iter().fold(req.filter("All Formats", OPEN_EXTS), |req, (name, exts)| req.filter(*name, exts))
+    OPEN_FILTERS.iter().fold(req.filter("All Formats", ALL_FORMATS), |req, (name, exts)| req.filter(*name, exts))
 }
 
 /// `suggested` with a Netpbm subtype's extension (an opened .pgm) as the neutral .pnm, the name
