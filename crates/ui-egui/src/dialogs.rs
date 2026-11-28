@@ -29,7 +29,7 @@ pub(crate) mod params {
 
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
-        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
+        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, lens_batch_ui, merge_channels_ui, new_group_ui, new_layer_ui,
         paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
@@ -108,6 +108,11 @@ pub(crate) mod params {
             check: Some(crate::view_cmds::dialogs::batch_check),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == "file.automate.batch", filter_dialog::run)
+        },
+        ParamFamily {
+            listing: Some(lens_batch_ui::listing),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == lens_batch_ui::COMMAND, filter_dialog::run)
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
