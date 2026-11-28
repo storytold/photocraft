@@ -1035,7 +1035,10 @@ fn base_row(s: &mut Session, d: &Document, source: &str, label: &str, now: &str)
     );
     m.insert("scale".into(), json!(sc.describe()));
     m.insert("scaleUnits".into(), json!(sc.units));
-    m.insert("scaleFactor".into(), json!(sc.factor()));
+    // The log uses pixels per logical unit. Imported scales may contain invalid lengths.
+    let valid_lengths = sc.pixel_length.is_finite() && sc.pixel_length > 0.0 && sc.logical_length.is_finite() && sc.logical_length > 0.0;
+    let scale_factor = if valid_lengths { sc.pixel_length / sc.logical_length } else { 1.0 };
+    m.insert("scaleFactor".into(), json!(scale_factor));
     let _ = s;
     m
 }

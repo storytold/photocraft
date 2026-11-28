@@ -205,10 +205,16 @@ fn ruler_protractor_and_record() {
     let r = s.execute("image.analysis.rulerTool", json!({"protractor": [10, 90]})).unwrap();
     assert!((r["info"]["angle"].as_f64().unwrap() - (180.0 - 36.8699)).abs() < 1e-3, "{r}");
     assert_eq!(r["info"]["l2"], 40.0);
-    s.execute("image.analysis.setMeasurementScale", json!({"pixelLength": 10, "logicalLength": 1, "units": "cm"})).unwrap();
+    let r = s.execute("image.analysis.recordMeasurements", json!({})).unwrap();
+    assert_eq!(r["rows"][0]["values"]["scaleFactor"], 1.0);
+    s.execute("image.analysis.setMeasurementScale", json!({"pixelLength": 20, "logicalLength": 5, "units": "mm"})).unwrap();
     let r = s.execute("image.analysis.recordMeasurements", json!({})).unwrap();
     assert_eq!(r["source"], "ruler");
-    assert_eq!(r["rows"][0]["values"]["length"], 5.0);
+    assert_eq!(r["rows"][0]["values"]["scaleFactor"], 4.0);
+    assert_eq!(r["rows"][0]["values"]["length"], 12.5);
+    s.execute("image.analysis.setMeasurementScale", json!({"pixelLength": 1e200, "logicalLength": 1e-110, "units": "mm"})).unwrap();
+    let r = s.execute("image.analysis.recordMeasurements", json!({})).unwrap();
+    assert_eq!(r["rows"][0]["values"].get("scaleFactor"), Some(&Value::Null));
     assert!(s.execute("image.analysis.rulerTool", json!({"start": [1, 1]})).is_err());
     s.execute("image.analysis.rulerTool", json!({"clear": true})).unwrap();
     assert!(d(&s).measurement.ruler.is_none());
