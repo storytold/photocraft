@@ -417,7 +417,7 @@ pub fn start_save(
     if app.jobs.saves.iter().any(|s| s.path == path) {
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
-    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let (snapshot, doc, revision, previous) = (Arc::clone(&st.doc), st.doc.id, st.revision, st.saved_revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();
@@ -442,7 +442,7 @@ pub fn start_save(
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
             } else {
-                app.saved(doc, revision, &path, &warnings, copy);
+                app.saved(doc, crate::services::saved_revision_after_write(!app.services.write_unconfirmed, revision, previous), &path, &warnings, copy);
             }
             Ok(Some((path, warnings)))
         }
@@ -470,9 +470,14 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
     match outcome {
         JobOutcome::Done(v) => {
             if save.automation {
+                // The control session's write root stores the bytes, as for an inline automation save.
                 app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
             } else {
-                app.saved(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+                // A writer that can't confirm the bytes were stored leaves the document unsaved,
+                // as an inline save does (#4962).
+                let previous = app.session.documents().iter().find(|st| st.doc.id == save.doc).map_or(save.revision, |st| st.saved_revision);
+                let revision = crate::services::saved_revision_after_write(!app.services.write_unconfirmed, save.revision, previous);
+                app.saved(save.doc, revision, &save.path, &warnings_of(&v), save.copy);
             }
             if !save.copy {
                 crate::discard_ui::saved_document(app, ctx, save.doc);
