@@ -1,0 +1,28 @@
+PhotoCraft document file icons: photocraft-document.svg and photocraft-document.ico for
+.psd/.psb, photocraft-pcraft-document.svg and photocraft-pcraft-document.ico for .pcraft.
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+The composition is adapted from design 01, "red outline page", one of the icon
+redesigns JustCallMeAD posted in
+https://github.com/storytold/pdfcraft/issues/308, redrawn and finished for PhotoCraft. The .pcraft icon is the same artwork with the native
+format's extension as its label.
+The folded corner is filled into a rounded flap, as on the shipped PdfCraft document
+icon, which is where that part of the treatment comes from.
+Copyright (c) 2026 JustCallMeAD and the PhotoCraft contributors.
+Licensed under either the MIT License or the Apache License, Version 2.0, at your
+option. Full texts are LICENSE-MIT and LICENSE-APACHE at the repository root and
+at the top level of the Windows portable and nightly archives.
+
+The ArtCraft mark on the document (the "A") is a brand mark of the ArtCraft
+project. It is used here as a mark, not as a licence: no trademark right is
+granted. A fork that distributes a modified version of PhotoCraft, or any work
+derived from it, must remove that mark from this artwork or replace it with its
+own, and must not present it as its own. A fork kept only to propose changes
+back to this repository may keep the mark unchanged.
+
+The lettering is outlined type (Archivo ExtraBold by Omnibus-Type, SIL Open Font
+License 1.1), converted to curves before export; the artwork embeds no font, no live text and no external
+image. The ICO is packed from 16-256 px renders of this master with
+`cargo run -p xtask -- ico photocraft-document.ico <render.png>...`; the exact
+commands are in README.md, and the artwork and its provenance are recorded in
+ATTRIBUTION.md.

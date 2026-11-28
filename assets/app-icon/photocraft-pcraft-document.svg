@@ -1,0 +1,36 @@
+<!-- PhotoCraft .pcraft document icon (master vector).
+     The native save format's file icon: the same page, fold and ArtCraft mark as
+     photocraft-document.svg (the .psd icon), in the same palette, with the label reading
+     "PCRAFT" because that is the extension PhotoCraft itself writes. Design 01, "red outline
+     page", is JustCallMeAD's (https://github.com/storytold/pdfcraft/issues/308); this is the
+     same treatment applied to the suite's own format.
+     Outline and mark are the app's blue (#2F7BF5), the field is the deep ink (#001424), the
+     label is white and the lettering is Archivo ExtraBold converted to curves — the display face of
+     getartcraft.com, so the label speaks in the brand's own voice on every desktop —
+     never live text. It runs to 61 % of the page width at a cap height of 66 % of the .psd
+     icon's, so six letters sit in the same band without touching the frame.
+     Geometry drawn in CorelDRAW 2026 and kept as exported. The ArtCraft mark is a brand mark
+     of the ArtCraft project, used as a mark and not licensed for reuse; a fork that
+     distributes a modified version must remove or replace it (LICENSE-document.txt).
+     No fonts or external images. Every PNG and the .ico are rendered from this file. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="512" height="512" viewBox="0 0 512 512" version="1.1"
+     style="shape-rendering:geometricPrecision; text-rendering:geometricPrecision; image-rendering:optimizeQuality; fill-rule:evenodd; clip-rule:evenodd">
+  <defs>
+    <style type="text/css">
+     <![CDATA[
+      .fil0 {fill:#001424;fill-rule:nonzero}
+      .fil1 {fill:#2F7BF5;fill-rule:nonzero}
+      .fil2 {fill:white;fill-rule:nonzero}
+     ]]>
+    </style>
+   </defs>
+  <g transform="translate(50.7322 0) scale(7.3101085)">
+
+      <path class="fil0" d="M1.3 5.93c0,-2.56 2.07,-4.63 4.63,-4.63l35.05 0 13.89 13.89 0 48.93c0,2.56 -2.07,4.63 -4.63,4.63l-44.31 0c-2.56,-0 -4.63,-2.07 -4.63,-4.63l-0 -58.19z"/>
+      <path class="fil1" d="M0.01 5.93c0,-1.64 0.66,-3.12 1.73,-4.19 1.07,-1.07 2.55,-1.74 4.19,-1.74l35.05 0c0.36,0 0.69,0.15 0.93,0.39l13.88 13.88c0.25,0.25 0.38,0.58 0.38,0.92l0 48.93c0,1.64 -0.66,3.12 -1.74,4.19 -1.07,1.07 -2.55,1.74 -4.19,1.74l0 -0.01 -44.31 0c-1.64,-0 -3.12,-0.66 -4.19,-1.73 -1.07,-1.07 -1.74,-2.55 -1.74,-4.19l0.01 0 -0 -58.19zm53.48 9.72l-8.66 0 -0 -0.01c-1.18,-0 -2.24,-0.47 -3.02,-1.22 -0.79,-0.76 -1.27,-1.82 -1.27,-2.98l0 -8.74 -0.1 -0.1 -34.51 0c-0.92,0 -1.75,0.37 -2.36,0.98 -0.61,0.61 -0.98,1.44 -0.98,2.36l0 58.19 0.01 0c0,0.92 0.37,1.75 0.98,2.36 0.61,0.61 1.44,0.98 2.36,0.98l44.31 -0 0 -0.01c0.92,0 1.75,-0.37 2.36,-0.98 0.6,-0.6 0.98,-1.44 0.98,-2.36l0 -48.4 -0.08 -0.08z"/>
+      <path class="fil1" d="M41.12 30.8l-6.43 -13.99 -8.83 0 -0.9 1.35 -9.16 13.82 -4.17 6.28 6.09 6.09 18.04 -10.45 4.8 10.47 3.96 -6.15 -3.41 -7.43 -0 -0zm-20.19 4.57l9.17 -13.82 3.09 6.72 -12.25 7.09 -0 0z"/>
+      <path class="fil2" d="M9.96 58.78l0 -5.97 3.29 0c0.41,0 0.75,0.08 1.04,0.25 0.29,0.17 0.51,0.39 0.66,0.69 0.15,0.29 0.23,0.64 0.23,1.03 0,0.41 -0.08,0.76 -0.24,1.05 -0.16,0.3 -0.39,0.53 -0.68,0.69 -0.29,0.17 -0.64,0.25 -1.05,0.25l-1.69 0 0 2.02 -1.56 0zm1.56 -3.22l1.33 0c0.24,0 0.43,-0.07 0.56,-0.2 0.13,-0.14 0.19,-0.33 0.19,-0.57 0,-0.17 -0.03,-0.32 -0.08,-0.43 -0.06,-0.11 -0.14,-0.2 -0.25,-0.26 -0.11,-0.06 -0.25,-0.09 -0.42,-0.09l-1.33 0 0 1.55zm7.26 3.32c-0.64,0 -1.19,-0.11 -1.64,-0.33 -0.45,-0.22 -0.79,-0.56 -1.02,-1.02 -0.23,-0.46 -0.35,-1.04 -0.35,-1.74 0,-1.03 0.26,-1.8 0.78,-2.32 0.52,-0.51 1.26,-0.77 2.23,-0.77 0.54,0 1.02,0.09 1.43,0.27 0.42,0.18 0.74,0.45 0.98,0.82 0.23,0.36 0.35,0.81 0.35,1.35l-1.52 0c0,-0.25 -0.05,-0.47 -0.15,-0.66 -0.1,-0.18 -0.24,-0.32 -0.43,-0.42 -0.18,-0.1 -0.4,-0.15 -0.66,-0.15 -0.32,0 -0.59,0.07 -0.8,0.2 -0.21,0.13 -0.36,0.32 -0.46,0.57 -0.1,0.25 -0.15,0.55 -0.15,0.9l0 0.39c0,0.35 0.05,0.66 0.15,0.91 0.1,0.25 0.25,0.44 0.46,0.57 0.21,0.13 0.47,0.2 0.8,0.2 0.28,0 0.51,-0.05 0.71,-0.14 0.19,-0.09 0.34,-0.23 0.44,-0.41 0.1,-0.18 0.15,-0.4 0.15,-0.66l1.47 0c0,0.54 -0.11,0.99 -0.34,1.35 -0.23,0.36 -0.55,0.63 -0.96,0.81 -0.41,0.18 -0.9,0.27 -1.46,0.27zm3.79 -0.1l0 -5.97 3.47 0c0.44,0 0.81,0.08 1.1,0.25 0.3,0.17 0.52,0.39 0.66,0.68 0.15,0.29 0.22,0.61 0.22,0.96 0,0.38 -0.09,0.72 -0.27,1.02 -0.18,0.3 -0.42,0.53 -0.74,0.7l1.2 2.36 -1.74 0 -0.99 -2.1 -1.36 0 0 2.1 -1.56 0zm1.56 -3.26l1.61 0c0.21,0 0.39,-0.07 0.52,-0.21 0.13,-0.14 0.2,-0.33 0.2,-0.57 0,-0.16 -0.03,-0.29 -0.09,-0.4 -0.06,-0.11 -0.14,-0.2 -0.24,-0.26 -0.1,-0.06 -0.23,-0.09 -0.38,-0.09l-1.61 0 0 1.53zm4.38 3.26l2.24 -5.97 1.87 0 2.24 5.97 -1.66 0 -0.36 -1.03 -2.38 0 -0.36 1.03 -1.6 0zm2.33 -2.2l1.63 0 -0.43 -1.26c-0.02,-0.06 -0.05,-0.14 -0.08,-0.24 -0.03,-0.1 -0.06,-0.2 -0.1,-0.3 -0.03,-0.11 -0.06,-0.22 -0.09,-0.33 -0.03,-0.11 -0.06,-0.21 -0.09,-0.29l-0.06 0c-0.02,0.11 -0.06,0.23 -0.1,0.37 -0.04,0.14 -0.09,0.28 -0.13,0.42 -0.04,0.14 -0.08,0.26 -0.12,0.37l-0.43 1.26zm4.74 2.2l0 -5.97 4.58 0 0 1.22 -3.02 0 0 1.29 2.66 0.01 0 1.18 -2.66 -0.01 0 2.29 -1.56 0zm7.06 0l0.01 -4.69 -1.94 -0.01 0 -1.27 5.42 0 0.01 1.28 -1.94 -0.01 0 4.7 -1.56 0z"/>
+ 
+  </g>
+</svg>
