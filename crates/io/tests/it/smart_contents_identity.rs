@@ -55,6 +55,229 @@ fn gaussian(radius: f64) -> SmartFilter {
     }
 }
 
+/// Imported layers may reference one FEid item while retaining separate filter-mask switches.
+/// Construct the shared placement in the file: the native exporter uniquifies placed IDs.
+#[test]
+fn shared_filter_mask_cache_keeps_each_layers_switches_in_both_orders() {
+    let switches = [(true, false), (false, false), (true, true), (false, true)];
+    for extension in ["psd", "psb"] {
+        for nonwhite in [false, true] {
+            let mut source = fixture();
+            let sm = smart_mut(&mut source.layers[0]);
+            sm.smart_filters.push(gaussian(1.0));
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            if nonwhite {
+                mask.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0.0]);
+            }
+            sm.filter_mask = Some(mask);
+            let (file, _) = round_trip(&source, extension);
+            let placed = sold(&file, "original");
+            let effects = file.global_blocks.iter().find(|block| &block.key == b"FEid").unwrap();
+            let effects = craft_psd::filter_effects::FilterEffects::parse(&effects.data).unwrap();
+            let original_item = &effects.items[0];
+            for missing_source in [false, true] {
+                for reversed in [false, true] {
+                    let mut shared = file.clone();
+                    if missing_source {
+                        shared.global_blocks.retain(|block| !matches!(&block.key, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE"));
+                    }
+                    let mut records = Vec::new();
+                    for (index, (enabled, linked)) in switches.into_iter().enumerate() {
+                        let mut record = file.layers()[0].clone();
+                        record.name = format!("switches{index}").into_bytes();
+                        record.blocks.retain(|b| !matches!(&b.key, b"luni" | b"lyid" | b"SoLd" | b"SoLE" | b"PlLd"));
+                        let mut stack = placed.stack.clone().unwrap();
+                        stack.mask_enabled = enabled;
+                        stack.mask_linked = linked;
+                        let fx = smart_map::filter_fx(&stack, "fixture", &mut Vec::new());
+                        let spec = smart_map::PlacedSpec {
+                            idnt: &placed.idnt,
+                            placed: &placed.placed,
+                            transform: placed.transform,
+                            perspective: None,
+                            size: (2.0, 2.0),
+                            dpi: 72.0,
+                            warp: None,
+                            filter_fx: Some(fx),
+                        };
+                        record.blocks.push(TaggedBlock::new(*b"SoLd", smart_map::sold_bytes(Some(&placed.descriptor), &spec, &mut Vec::new())));
+                        records.push(record);
+                    }
+                    if reversed {
+                        records.reverse();
+                    }
+                    *shared.layers_mut() = records;
+                    let bytes = shared.to_bytes().unwrap();
+                    let mut doc = import(extension, &bytes).unwrap().document;
+                    if nonwhite {
+                        let first = &smart(&doc, "switches0").filter_mask.as_ref().unwrap().surface;
+                        assert!(first.tile_count() > 0, "the sharing witness must contain stored mask pixels");
+                        for index in 1..switches.len() {
+                            let other = &smart(&doc, &format!("switches{index}")).filter_mask.as_ref().unwrap().surface;
+                            for (coord, tile) in first.tiles() {
+                                assert!(Arc::ptr_eq(tile, other.tile(*coord).unwrap()), "one placed ID must share mask pixel storage across switches");
+                            }
+                        }
+                    }
+                    for save in 0..2 {
+                        for (index, (enabled, linked)) in switches.into_iter().enumerate() {
+                            let name = format!("switches{index}");
+                            let got = smart(&doc, &name).filter_mask.as_ref();
+                            let context = format!("{extension} nonwhite={nonwhite} reversed={reversed} save={save} {name}");
+                            if !nonwhite && enabled && !linked {
+                                assert!(got.is_none(), "default white mask remains implicit: {context}");
+                            } else {
+                                let got = got.unwrap_or_else(|| panic!("mask lost: {context}"));
+                                assert_eq!((got.enabled, got.linked), (enabled, linked), "{context}");
+                                assert_eq!(got.surface.sample_channel(0, 0, 0), if nonwhite { 0.0 } else { 1.0 }, "{context}");
+                                assert_eq!(got.surface.sample_channel(1, 1, 0), 1.0, "{context}");
+                                if !nonwhite {
+                                    assert_eq!(got.surface.tile_count(), 0, "white masks remain tile-sparse: {context}");
+                                }
+                            }
+                        }
+                        if save == 0 {
+                            let output = export(&doc, extension, &ExportOptions::default()).unwrap();
+                            assert!(
+                                !output.warnings.iter().any(|w| w.contains("smart filter mask") || w.contains("smart object written as pixels")),
+                                "{:?}",
+                                output.warnings
+                            );
+                            let resaved = PsdFile::from_bytes(&output.bytes).unwrap();
+                            let back = import(extension, &output.bytes).unwrap().document;
+                            let effects = resaved.global_blocks.iter().find(|block| &block.key == b"FEid").unwrap();
+                            let effects = craft_psd::filter_effects::FilterEffects::parse(&effects.data).unwrap();
+                            assert_eq!(effects.items.len(), switches.len(), "each placement retains its filter cache");
+                            for (index, expected) in switches.into_iter().enumerate() {
+                                let placed = sold(&resaved, &format!("switches{index}"));
+                                let stack = placed.stack.unwrap();
+                                assert_eq!((stack.mask_enabled, stack.mask_linked), expected);
+                                let item = effects.items.iter().find(|item| item.id == placed.placed).unwrap();
+                                let mut expected_item = (*original_item).clone();
+                                expected_item.id = placed.placed;
+                                assert_eq!(*item, expected_item, "re-keying changes only the filter item's ID");
+                            }
+                            doc = back;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Depth changes rebuild both the original and re-keyed cache; same-depth missing sources keep their bytes.
+#[test]
+fn shared_filter_caches_follow_export_depth_without_rebuilding_same_depth_items() {
+    let mut source = fixture();
+    source.size = Size::new(2, 2);
+    let sm = smart_mut(&mut source.layers[0]);
+    sm.smart_filters.push(gaussian(1.0));
+    let mut mask = photocraft_doc::LayerMask::reveal_all();
+    // Implicit white must not let mask decoding reject the stale cache depth by itself.
+    mask.linked = false;
+    sm.filter_mask = Some(mask);
+    for extension in ["psd", "psb"] {
+        let (mut file, _) = round_trip(&source, extension);
+        let old_placed = sold(&file, "original").placed;
+        let block = file.global_blocks.iter_mut().find(|block| &block.key == b"FEid").unwrap();
+        let mut effects = craft_psd::filter_effects::FilterEffects::parse(&block.data).unwrap();
+        assert_eq!(effects.items.len(), 1);
+        assert_eq!(effects.items[0].depth, 8);
+        effects.items[0].mask = None;
+        let old_item = effects.items[0].clone();
+        let mut data = effects.to_bytes();
+        data.resize(data.len().next_multiple_of(4), 0);
+        block.data = data;
+        let mut records = Vec::new();
+        for name in ["original", "shared"] {
+            let mut record = file.layers()[0].clone();
+            record.name = name.as_bytes().to_vec();
+            record.blocks.retain(|block| !matches!(&block.key, b"luni" | b"lyid"));
+            records.push(record);
+        }
+        *file.layers_mut() = records;
+        for (sample, missing_source) in [(SampleType::U16, false), (SampleType::U8, true)] {
+            let mut input = file.clone();
+            if missing_source {
+                input.global_blocks.retain(|block| !matches!(&block.key, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE"));
+            }
+            let mut doc = import(extension, &input.to_bytes().unwrap()).unwrap().document;
+            for name in ["original", "shared"] {
+                assert!(smart(&doc, name).filter_mask.is_none(), "the missing payload is implicit white");
+            }
+            doc.depth = sample;
+            let (saved, back) = round_trip(&doc, extension);
+            assert_eq!(back.depth, sample);
+            let block = saved.global_blocks.iter().find(|block| &block.key == b"FEid").unwrap();
+            let effects = craft_psd::filter_effects::FilterEffects::parse(&block.data).unwrap();
+            assert_eq!(effects.items.len(), 2, "both placements retain a filter cache");
+            let placements: std::collections::HashSet<_> = ["original", "shared"].into_iter().map(|name| sold(&saved, name).placed).collect();
+            assert_eq!(placements.len(), 2);
+            assert!(placements.contains(&old_placed), "exercise both the original placement and a re-keyed one");
+            let fmt = photocraft_color::PixelFormat::new(ColorMode::Rgb, sample, true);
+            for name in ["original", "shared"] {
+                let placed = sold(&saved, name).placed;
+                let item = effects.items.iter().find(|item| item.id == placed).unwrap();
+                assert_eq!(item.depth, if sample == SampleType::U16 { 16 } else { 8 }, "{extension} {name}");
+                let pixels = smart_map::unfiltered_from_item(item, fmt).expect("cache planes must decode at the export depth");
+                assert_eq!(pixels.rgba(0, 0), [1.0, 0.0, 0.0, 1.0], "{extension} {sample:?} {name}");
+                if missing_source {
+                    let mut expected = old_item.clone();
+                    expected.id = placed;
+                    assert_eq!(*item, expected, "same-depth reuse changes only the placement ID");
+                }
+            }
+        }
+    }
+}
+
+/// Missing mask pixels are implicit white, but their layer-local switches still survive.
+#[test]
+fn smart_filter_mask_switches_survive_without_an_feid_mask_payload() {
+    for extension in ["psd", "psb"] {
+        for (enabled, linked) in [(true, false), (false, false), (true, true), (false, true)] {
+            let mut source = fixture();
+            let sm = smart_mut(&mut source.layers[0]);
+            sm.smart_filters.push(gaussian(1.0));
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            mask.enabled = enabled;
+            mask.linked = linked;
+            sm.filter_mask = Some(mask);
+            let (file, _) = round_trip(&source, extension);
+            for remove_item in [false, true] {
+                let mut file = file.clone();
+                if remove_item {
+                    file.global_blocks.retain(|block| &block.key != b"FEid");
+                } else {
+                    let block = file.global_blocks.iter_mut().find(|block| &block.key == b"FEid").unwrap();
+                    let mut effects = craft_psd::filter_effects::FilterEffects::parse(&block.data).unwrap();
+                    effects.items[0].mask = None;
+                    let mut data = effects.to_bytes();
+                    data.resize(data.len().next_multiple_of(4), 0);
+                    block.data = data;
+                }
+                let mut doc = import(extension, &file.to_bytes().unwrap()).unwrap().document;
+                for _ in 0..2 {
+                    let got = smart(&doc, "original").filter_mask.as_ref();
+                    if enabled && !linked {
+                        assert!(got.is_none());
+                    } else {
+                        let got = got.expect("switches without stored mask pixels were lost");
+                        assert_eq!((got.enabled, got.linked), (enabled, linked));
+                        assert_eq!(got.surface.tile_count(), 0);
+                        assert_eq!(got.surface.sample_channel(0, 0, 0), 1.0);
+                    }
+                    let (saved, back) = round_trip(&doc, extension);
+                    let stack = sold(&saved, "original").stack.unwrap();
+                    assert_eq!((stack.mask_enabled, stack.mask_linked), (enabled, linked));
+                    doc = back;
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn psd_and_psb_keep_shared_contents_and_identical_independent_copies_distinct() {
     let mut doc = fixture();

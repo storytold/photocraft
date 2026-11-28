@@ -199,6 +199,22 @@ pub fn filter_stack(fx: &Descriptor) -> FilterStack {
 /// (`filterMaskExtendWithWhite`), as a grayscale mask of `sample` depth. `Ok(None)` when the
 /// item has no mask or it is all white (no mask); `Err` when it can't be decoded.
 pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &FilterStack) -> Result<Option<LayerMask>, String> {
+    let surface = mask_surface_from_item(item, sample)?.filter(|surface| surface.tile_count() != 0);
+    Ok(surface.and_then(|surface| mask_from_surface(Some(surface), sample, stack)))
+}
+
+/// Decode the mask as import retains it, including switches without an explicit pixel payload.
+pub(crate) fn mask_from_item_preserving_switches(
+    item: Option<&FilterEffectsItem>,
+    sample: SampleType,
+    stack: &FilterStack,
+) -> Result<Option<LayerMask>, String> {
+    let surface = item.map(|item| mask_surface_from_item(item, sample)).transpose()?.flatten();
+    Ok(mask_from_surface(surface, sample, stack))
+}
+
+/// Decode the shared pixel payload without discarding white coverage needed by other layers.
+pub(crate) fn mask_surface_from_item(item: &FilterEffectsItem, sample: SampleType) -> Result<Option<Surface>, String> {
     if item.mask.is_none() {
         return Ok(None);
     }
@@ -214,10 +230,18 @@ pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &Filt
     surface.write_interleaved(GeomRect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
     photocraft_raster::scratch::give(bytes);
     surface.prune();
-    if surface.content_bounds().is_empty() {
-        return Ok(None);
+    Ok(Some(surface))
+}
+
+/// Apply a layer's switches after cloning the cached surface, whose tile payloads stay shared.
+/// A supplied surface must already be pruned against white: zero tiles mean all-white coverage.
+/// An absent pixel payload is also white, but must not discard disabled or linked switches.
+pub(crate) fn mask_from_surface(surface: Option<Surface>, sample: SampleType, stack: &FilterStack) -> Option<LayerMask> {
+    if stack.mask_enabled && !stack.mask_linked && surface.as_ref().is_none_or(|surface| surface.tile_count() == 0) {
+        return None;
     }
-    Ok(Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 }))
+    let surface = surface.unwrap_or_else(|| Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[1.0]));
+    Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 })
 }
 
 /// The unfiltered placed pixels of an `FEid` item (the inverse of [`feid_item`]), in `fmt`: colour

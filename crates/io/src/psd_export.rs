@@ -783,30 +783,43 @@ impl Ex<'_> {
         upsert(raw, &key, sold, None);
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
-            let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
-                (None, Some((img, img_bounds))) => {
-                    let unfiltered = match &sm.perspective {
-                        Some(p) => {
-                            photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
-                        }
-                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
-                    };
-                    match unfiltered {
-                        Ok(unfiltered) => {
-                            let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
-                            if item.is_some() && masked(sm) {
-                                let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
-                                self.smart.unfiltered.insert(l.id, u);
+            // Shared placements receive distinct IDs, but an unchanged cache needs no source
+            // pixels to be decoded or rendered again (the linked source may be missing).
+            let preserved = same_source.filter(|_| unchanged).and_then(|t| self.smart.old_fx.iter().find(|i| i.id == t.placed)).cloned();
+            let item = if let Some(mut item) = preserved {
+                item.id = placed.clone();
+                if masked(sm)
+                    && let Some(u) = crate::smart_map::unfiltered_from_item(&item, self.fmt)
+                {
+                    self.smart.unfiltered.insert(l.id, u);
+                }
+                Some(item)
+            } else {
+                match (sm.stack_mode, self.source_composite(&src.uuid)) {
+                    (None, Some((img, img_bounds))) => {
+                        let unfiltered = match &sm.perspective {
+                            Some(p) => {
+                                photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
                             }
-                            item
-                        }
-                        Err(e) => {
-                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
-                            None
+                            None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
+                        };
+                        match unfiltered {
+                            Ok(unfiltered) => {
+                                let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
+                                if item.is_some() && masked(sm) {
+                                    let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
+                                    self.smart.unfiltered.insert(l.id, u);
+                                }
+                                item
+                            }
+                            Err(e) => {
+                                warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                                None
+                            }
                         }
                     }
+                    _ => None,
                 }
-                _ => None,
             };
             match item {
                 Some(i) => self.smart.new_fx.push(i),
@@ -852,18 +865,24 @@ impl Ex<'_> {
     /// Whether an imported placed layer still says what the smart object is: transform, warp,
     /// filter stack and filter mask as stored.
     fn placed_unchanged(&self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> bool {
-        if t.transform != sm.transform || blocks::parse_placed_warp(b"SoLd", data) != sm.warp || t.stack.clone().unwrap_or_default() != *stack {
+        if t.transform != sm.transform
+            || blocks::parse_smart_perspective(b"SoLd", data) != sm.perspective
+            || blocks::parse_placed_warp(b"SoLd", data) != sm.warp
+            || t.stack.clone().unwrap_or_default() != *stack
+        {
             return false;
         }
         if stack.filters.is_empty() {
             return true;
         }
         let old = self.smart.old_fx.iter().find(|i| i.id == t.placed);
-        let mask = old.map(|i| crate::smart_map::mask_from_item(i, self.mask_fmt.sample, stack));
-        match mask {
-            Some(Ok(m)) => m == sm.filter_mask,
-            Some(Err(_)) => false,
-            None => sm.filter_mask.is_none(),
+        // A missing mask skips mask decoding, but the cached colour planes still have a depth.
+        if old.is_some_and(|item| item.depth != u32::from(crate::pixels::psd_depth(self.fmt.sample))) {
+            return false;
+        }
+        match crate::smart_map::mask_from_item_preserving_switches(old, self.mask_fmt.sample, stack) {
+            Ok(mask) => mask == sm.filter_mask,
+            Err(_) => false,
         }
     }
 
