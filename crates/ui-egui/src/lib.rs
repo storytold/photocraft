@@ -1101,6 +1101,8 @@ mod preferences_submenu_tests;
 #[cfg(test)]
 mod selection_move_step_tests;
 #[cfg(test)]
+mod vertical_type_icon_tests;
+#[cfg(test)]
 mod view_guides_submenu_tests;
 
 #[cfg(test)]

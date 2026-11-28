@@ -34,6 +34,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("square-dashed-mouse-pointer", include_bytes!("../../../assets/icons/square-dashed-mouse-pointer.svg")),
     ("triangle-alert", include_bytes!("../../../assets/icons/triangle-alert.svg")),
     ("type", include_bytes!("../../../assets/icons/type.svg")),
+    ("type-vertical", include_bytes!("../../../assets/icons/type-vertical.svg")),
     ("vector-shape", include_bytes!("../../../assets/icons/vector-shape.svg")),
     ("x", include_bytes!("../../../assets/icons/x.svg")),
 ];
