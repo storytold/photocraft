@@ -164,6 +164,13 @@ impl ViewOptions {
     }
 }
 
+/// Whether the user hid the editor's chrome with Tab while in Standard Screen Mode (#16841): the shell keeps that
+/// state, hides its own bars by it, and hides the panel dock and its toolbar through `ShellCx`. The contextual task
+/// bars, which the canvas body draws, gate on it here.
+pub(crate) fn chrome_hiding(app: &crate::PhotocraftApp) -> bool {
+    craft::ui::shell::chrome_state(app.ctx(), egui::ViewportId::ROOT).chrome_hidden
+}
+
 /// The saved and command names of the screen modes, in [`ScreenMode`]'s cycle order.
 const SCREEN_MODES: [&str; 3] = ["standard", "fullScreenWithMenuBar", "fullScreen"];
 
