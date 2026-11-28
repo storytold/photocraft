@@ -29,6 +29,8 @@ The core workflows a typical Photoshop professional runs every day, checked end 
 platform (macOS, 0.6.0), including saving and reopening the work. Any **no**, or a **partial**
 that blocks the workflow, would make PhotoCraft pre-alpha.
 
+The **Hours to pass** column uses the [2026-10-10 calibration](target-app-parity.md#remaining-effort-and-calibration).
+
 | Core workflow | Works end to end? | Evidence | Hours to pass |
 |---|---|---|---:|
 | Photo retouch: open JPEG/raw, heal/clone/remove, adjustment layers, export JPEG, save and reopen | yes | Spot Healing, Healing, Clone, Patch, Remove tools; 16 adjustment layers; raw for DNG/CR2/NEF/ARW/RAF; JPEG export; MCP workflow tests (`automation/tests/it/agent_tasks.rs`). Quality complaints (#1092, #2104) and no CR3 don't stop the workflow | 0 |
@@ -83,6 +85,8 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): 14 of Photoshop's 68. 60–100 h.
 
 ## What's next, with estimates
+
+Milestone estimates use the [2026-10-10 calibration](target-app-parity.md#remaining-effort-and-calibration).
 
 | Next milestone | Scope | Estimate |
 |---|---|---:|
