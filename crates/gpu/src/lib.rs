@@ -151,7 +151,7 @@ use batch::{BATCH, batch_kernel, batch_op_words, batch_runs, op_words, run_start
 use consts::OP_UNIFORM;
 pub use consts::{ACC_FORMAT, CHUNK, FX_BUDGET, PAGE, PATTERN_BUDGET, PATTERN_IDLE_FRAMES, RESIDENT_BUDGET};
 #[cfg(not(target_arch = "wasm32"))]
-pub use context::{GpuContextError, NativeContext, NativeContextOptions};
+pub use context::{AbandonedRequest, GpuContextError, NativeContext, NativeContextOptions};
 use convert::W;
 #[cfg(test)]
 use convert::{CONVERT_BATCH, colour_managed, convert_tile, convert_tiles, rgb_gray16_to_f16, rgb_gray32_to_f16};
