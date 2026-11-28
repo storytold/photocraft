@@ -83,6 +83,20 @@ pub fn dodge_burn(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect_ton
     }
 }
 
+/// The default Midtones Dodge (`burn = false`) or Burn of one grey value `v` (0..1) in a Grayscale
+/// document or on a layer mask, at Exposure 50 % with Protect Tones on: `v + 0.094·v^0.2·(1 − v)`
+/// for Dodge and `v − 0.236·v·(1 − v)^1.15` for Burn. Both are fitted to the reference's 8-bit
+/// single-channel results (#12689, #12675), which differ from what an RGB grey gets; each lands
+/// within 1 level of the six measured greys. Black and white stay put, tones stay in order, and
+/// values outside 0..1 are returned as they are.
+#[inline]
+pub fn single_channel_midtones(v: f32, burn: bool) -> f32 {
+    if !(v > 0.0 && v < 1.0) {
+        return v;
+    }
+    if burn { v - 0.236 * v * (1.0 - v).powf(1.15) } else { v + 0.094 * v.powf(0.2) * (1.0 - v) }
+}
+
 /// HSV-style saturation (chroma / max) of an RGB triple.
 #[inline]
 pub fn saturation(c: [f32; 3]) -> f32 {
