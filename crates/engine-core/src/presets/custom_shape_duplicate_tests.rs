@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 
 use super::CUSTOM_GROUP;
 use crate::Session;
-use crate::presets::PresetsExt;
 use crate::edit_menu_cmds::custom_shapes;
+use crate::presets::PresetsExt;
 
 /// Two custom shapes named "TriS": a triangle first, then a square.
 fn two_tris() -> Session {
