@@ -610,8 +610,14 @@ type ShapeParts = (Buffer, Buffer, Option<Vec<f32>>);
 /// A stroked shape layer with visible clipped layers: Photoshop draws the shape's vector stroke
 /// above the clipped layers, so the base content is the fill alone and the stroke is laid on top
 /// after clipping. See [`split_parts_with`].
+/// A shape with its fill turned off is its stroke alone: the clipped layers clip to the stroke
+/// and paint over it (in Photoshop 2026 a white ring stroke with a textured layer clipped to it
+/// shows the texture, not the white ring).
 fn shape_parts_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer], rect: Rect, cx: &Ctx, alloc: &A) -> Result<Option<ShapeParts>, A::Error> {
     if !clipped.iter().any(|c| c.visible) {
+        return Ok(None);
+    }
+    if matches!(&layer.content, LayerContent::Shape(sh) if sh.fill.is_none()) {
         return Ok(None);
     }
     split_parts_with(layer, rect, cx, alloc)
