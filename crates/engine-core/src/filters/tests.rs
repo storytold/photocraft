@@ -371,6 +371,33 @@ fn last_filter_applies_to_the_active_layer() {
 }
 
 #[test]
+fn last_filter_repeats_liquify_on_active_layer() {
+    let mut s = session();
+    paint_pattern(&mut s);
+    let first = s.active().unwrap().active_layer.unwrap();
+    assert!(!s.is_enabled("filter.lastFilter"));
+    s.execute("filter.liquify", json!({"strokes": [], "layer": first.0})).unwrap();
+    assert!(!s.is_enabled("filter.lastFilter"), "an empty Liquify commit does not enable Last Filter");
+
+    let stroke = json!({"tool": "forwardWarp", "size": 24, "points": [[12, 16], [28, 16]]});
+    s.execute("filter.liquify", json!({"strokes": [stroke], "layer": first.0})).unwrap();
+    assert!(s.is_enabled("filter.lastFilter"), "Last Filter is enabled after applying Liquify");
+    let once = active_pixels(&s);
+
+    s.execute("filter.lastFilter", json!({})).unwrap();
+    let twice = active_pixels(&s);
+    assert_ne!(twice, once, "Last Filter reapplies Liquify to the active layer");
+
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_pattern(&mut s);
+    s.execute("filter.lastFilter", json!({})).unwrap();
+    assert_eq!(active_pixels(&s), once, "Last Filter retargets Liquify to the new active layer");
+    let d = s.active().unwrap();
+    let l = d.doc.layer(first).unwrap();
+    assert_eq!(l.surface().unwrap().read_region(photocraft_geom::Rect::new(0, 0, 48, 32)), twice, "the first layer is left alone");
+}
+
+#[test]
 fn params_map_to_algorithm_units() {
     assert_eq!(params_for("filter.blur.gaussianBlur", &json!({"radius": 4.5})), Some(FilterParams::GaussianBlur { radius: 4.5 }));
     assert_eq!(

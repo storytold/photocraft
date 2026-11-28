@@ -563,19 +563,30 @@ pub fn specs() -> Vec<CommandSpec> {
                         object.insert("target".into(), target.clone());
                     }
                 }
-                crate::param_check::check(crate::commands::find(&id).ok_or_else(|| EngineError::Other("unknown saved filter".into()))?, &params)?;
-                run_filter(s, &id, &params)
+                let spec = crate::commands::find(&id).ok_or_else(|| EngineError::Other("unknown saved filter".into()))?;
+                crate::param_check::check(spec, &params)?;
+                if params_for(&id, &Value::Null).is_some() { run_filter(s, &id, &params) } else { (spec.run)(s, &params) }
             },
             journal: true,
         },
     ]
 }
 
+fn is_last_filter_entry(id: &str, params: &Value) -> bool {
+    if !id.starts_with("filter.") {
+        return false;
+    }
+    if params_for(id, &Value::Null).is_some() {
+        return true;
+    }
+    id == crate::distort_cmds::LIQUIFY && params.get("strokes").and_then(Value::as_array).is_some_and(|s| !s.is_empty())
+}
+
 /// The most recent filter command in the session journal, retargeted at the active layer: dialogs
 /// such as the Filter Gallery record the layer they ran on, and Last Filter applies to the
 /// current layer, as in Photoshop (#1270).
 pub fn last_filter(s: &Session) -> Option<(String, Value)> {
-    let (id, mut params) = s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()?;
+    let (id, mut params) = s.journal.iter().rev().find(|(id, params)| is_last_filter_entry(id, params)).cloned()?;
     if let Value::Object(m) = &mut params {
         m.remove("layer");
         m.remove("target");
