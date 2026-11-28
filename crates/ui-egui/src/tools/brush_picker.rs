@@ -5,6 +5,7 @@
 //! it at a point ([`show_at`], opened by [`open`]), and the options bar, where the closed field opens it
 //! ([`show_field`]). Every brush edit is a journaled `tools.setBrush` command, one per gesture.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use craft::behavior::EditEvents;
@@ -22,7 +23,7 @@ use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::brush_panel::brushes::{BrushKey, brush_source, current_key, run_picks, tip_paint};
+use crate::brush_panel::brushes::{BrushKey, brush_source, current_key, run_picks, tip_paint, updated_folders};
 use crate::brush_panel::commit_keyed;
 use crate::state::Tool;
 
@@ -132,6 +133,19 @@ pub(crate) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, keys: &[BrushK
     }
 }
 
+fn save_picker_folders(app: &mut PhotocraftApp, ui: &egui::Ui, folders_before: &HashSet<BrushKey>) {
+    if app.ui.brush_picker_state.browser.toggled == *folders_before {
+        return;
+    }
+    let keys: Vec<BrushKey> = {
+        let source = brush_source(&app.session.tools.presets, app.ui.brush_picker_state.parts);
+        source.rows(ui.ctx(), &Env::of(ui)).iter().map(|r| r.key.clone()).collect()
+    };
+    if let Some(folders) = updated_folders(folders_before, &app.ui.brush_picker_state.browser.toggled, &app.session.prefs().brush_picker_collapsed, &keys) {
+        app.session.prefs.edit(|p| p.brush_picker_collapsed = folders);
+    }
+}
+
 /// The picker at the point `app.ui.brush_picker` holds (a right-click on the canvas), while it is open. A tool without
 /// a picker closes it. The Background Eraser shows the compact form with its own rows under the head. A memoized view:
 /// it runs when the presets, the brush's tip or face, the current preset, the picker's state or the eraser's rows
@@ -142,6 +156,7 @@ pub(crate) fn show_at(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         close(app);
         return;
     }
+    let folders_before = app.ui.brush_picker_state.browser.toggled.clone();
     let mut sent = Vec::new();
     let tools = &app.session.tools;
     let eraser = app.ui.tool == Tool::BackgroundEraser;
@@ -156,6 +171,7 @@ pub(crate) fn show_at(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         out: Outbox::new(&mut sent),
     };
     let _ = MemoView::new("brush-preset-canvas", props, canvas_view).show(ui);
+    save_picker_folders(app, ui, &folders_before);
     for CanvasEvent { out, keys, eraser, closed } in sent {
         apply(app, ui.ctx(), &keys, out);
         if let Some(rows) = eraser {
@@ -235,6 +251,7 @@ struct FieldEvent(BrushPresetPickerOutput<BrushKey>, Vec<BrushKey>);
 /// mode, which paints with no brush. A memoized view: it runs when the presets, the brush's tip or face, the current
 /// preset or the picker's state change, while its popover is open, or when input reaches it.
 pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bool) {
+    let folders_before = app.ui.brush_picker_state.browser.toggled.clone();
     let mut sent = Vec::new();
     let tools = &app.session.tools;
     let props = FieldProps {
@@ -248,6 +265,7 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
         out: Outbox::new(&mut sent),
     };
     let _ = MemoView::new("brush-preset-field", props, field_view).show(ui);
+    save_picker_folders(app, ui, &folders_before);
     for FieldEvent(out, keys) in sent {
         apply(app, ui.ctx(), &keys, out);
     }
