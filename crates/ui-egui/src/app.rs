@@ -143,6 +143,8 @@ impl PhotocraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             input_queued_for: None,
             automation_input: false,
+            automation_dialogs: Vec::new(),
+            automation_pass_dialogs: None,
             programmatic_playback: false,
             run_depth: 0,
             paused_playbacks: Default::default(),

@@ -57,6 +57,11 @@ impl PhotocraftApp {
         // Shortcuts run in this phase: a pass whose input carries an injected step acts for the
         // automation client here too.
         self.automation_input = WindowHost::of(ctx).injected_pass();
+        // Those shortcuts can open or edit a dialog: compare against the dialogs open before
+        // them, as the UI pass that follows does (`ui_body`).
+        if self.automation_input && self.automation_pass_dialogs.is_none() {
+            self.automation_pass_dialogs = Some(crate::automation_preview::snapshot(self));
+        }
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock once per frame: the state injected input holds (`ui.capsLock`), else the OS's
         // (`Services::caps_lock`); the canvas cursor block needs it before the frame renders.
@@ -207,6 +212,13 @@ impl PhotocraftApp {
     /// The frame's UI, between `ui_start` and `finish_frame`.
     fn ui_body(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // The open dialogs before this pass's synthetic input reaches them, so only those it opens
+        // or edits are marked as automation-driven (a user's dialog it leaves alone keeps its
+        // preview). The logic phase took it already when its shortcuts ran the same input. Kept
+        // on the app for the pass, so previews drawn before its end are judged the same way.
+        if self.automation_input && self.automation_pass_dialogs.is_none() {
+            self.automation_pass_dialogs = Some(crate::automation_preview::snapshot(self));
+        }
         // Each painting tool keeps its own brush (#218), so switch the active tool's brush in
         // before anything this frame reads it (the cursor, the options bar, a stroke).
         paint_mouse::sync_tool_brush(self);
@@ -274,6 +286,13 @@ impl PhotocraftApp {
         tool_memory::persist(self, &ctx);
         // So are View › Extras, Show and Snap To (#3762).
         view_cmds::persist(self, &ctx);
+        // Synthetic input judges the previews of the dialogs it opened or edited this pass; input
+        // that began mid-pass (no snapshot to compare) could have reached any open dialog.
+        match self.automation_pass_dialogs.take() {
+            Some(before) => crate::automation_preview::note_changes(self, &before),
+            None if self.automation_input => crate::automation_preview::note_open(self),
+            None => {}
+        }
         self.automation_input = false;
         native_menu::sync(self, &ctx);
     }

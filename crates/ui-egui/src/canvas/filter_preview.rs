@@ -111,6 +111,9 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         (id, cmd, params)
     };
     crate::actions::authorize_panel_preview(app, id, &cmd, &params).ok()?;
+    // A dialog automation drove previews only what the policy lets it confirm: the preview reads
+    // the same files (a Displace map, a Color Lookup file) and the client can screenshot it.
+    let refused = crate::automation_preview::refusal(app, id, &cmd, &params);
     let st = app.session.documents().get(idx)?;
     let bounds = st.doc.bounds();
     // Fade previews at full size: it blends one area, like OK does, and has no proxy (#8230).
@@ -129,6 +132,14 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
         scratch: crate::scratch_reads::generation(),
     };
+    if let Some(error) = refused {
+        // Show the document without a preview, and say why once per set of values.
+        if !app.filter_preview.as_ref().is_some_and(|p| p.key == request && p.result.is_none()) {
+            app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result: None, committing: false });
+            crate::notices::error(app, error);
+        }
+        return None;
+    }
     app.filter_live.begin(session_of(&request), PixelRect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1));
     let key = request.doc.0 ^ (1u64 << 61);
     // Every filter's preview computes off the UI thread in the desktop app: Gaussian Blur at
