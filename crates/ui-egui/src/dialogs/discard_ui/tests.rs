@@ -270,6 +270,28 @@ fn listed_id(h: &mut Prompted) -> Value {
     listed.as_array().and_then(|dialogs| dialogs.last()).map(|d| d["id"].clone()).expect("ui.inspect lists the question")
 }
 
+#[test]
+fn unsaved_changes_buttons_name_the_actions() {
+    use craft::host::target::Os;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    for os in [Os::Linux, Os::Windows] {
+        for command in ["file.close", "file.closeAll", EXIT] {
+            let mut app = app_with_docs(2);
+            make_dirty(&mut app, 0);
+            make_dirty(&mut app, 1);
+            let h = prompt_for(app, command, os);
+            for label in ["Save", "Don't Save", "Cancel"] {
+                assert!(h.query_by_role_and_label(Role::Button, label).is_some(), "{os:?} {command}: missing {label}");
+            }
+            for label in ["Yes", "No"] {
+                assert!(h.query_by_role_and_label(Role::Button, label).is_none(), "{os:?} {command}: still shows {label}");
+            }
+        }
+    }
+}
+
 /// "Apply to All" (a checkbox, as in Photoshop) gives the answer to every document still to ask about.
 #[test]
 fn apply_to_all_discards_the_rest_without_asking_again() {
@@ -601,7 +623,7 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
     assert!(h.state().session.documents().is_empty(), "closed after one write");
 }
 
-/// Synthetic input pressing the prompt's Save key (Y) reaches the hosted question and is judged
+/// Synthetic input pressing the prompt's Save key (S) reaches the hosted question and is judged
 /// as `file.save`: a policy that refuses it writes nothing, keeps the prompt and the document,
 /// and reports the refusal in the status bar.
 #[test]
@@ -620,10 +642,10 @@ fn a_synthetic_save_press_on_the_hosted_prompt_is_refused_and_reported() {
     app.services.automation_command =
         Some(Box::new(|id: &str, _: &Value| if id == "file.save" { Err(format!("automation command `{id}` is disabled")) } else { Ok(()) }));
     let mut h = prompt_for(app, "file.close", craft::host::target::Os::Windows);
-    // Y as synthetic input: the window host injects it, and the passes carrying it act for the
+    // S as synthetic input: the window host injects it, and the passes carrying it act for the
     // automation client.
     let ctx = h.ctx.clone();
-    let (req, _rx) = crate::control::ControlRequest::new("ui.key", serde_json::json!({"key": "Y"}));
+    let (req, _rx) = crate::control::ControlRequest::new("ui.key", serde_json::json!({"key": "S"}));
     assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Reply::AfterInput));
     h.run_steps(4);
     assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());

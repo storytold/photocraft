@@ -53,7 +53,7 @@ fn closing_after_tiff_save_waits_for_options_and_writes_the_requested_document()
     for command in ["file.close", "file.closeAll", EXIT] {
         let (mut h, writes, saved, other) = tiff_prompt(command);
         capture(&mut h, "01-unsaved");
-        h.key_press(Key::Y);
+        h.key_press(Key::S);
         h.run_steps(3);
         capture(&mut h, "02-tiff-options");
         assert!(h.state().parked_save.is_some());
@@ -83,7 +83,7 @@ fn closing_after_tiff_save_waits_for_options_and_writes_the_requested_document()
 fn cancelling_failing_or_copying_a_tiff_keeps_the_original_unsaved() {
     for outcome in ["cancel", "export error", "write error", "copy"] {
         let (mut h, writes, saved, _) = tiff_prompt("file.close");
-        h.key_press(Key::Y);
+        h.key_press(Key::S);
         h.run_steps(3);
         match outcome {
             "export error" => h.state_mut().services.export = Some(Box::new(|_, _, _| Err("cannot encode".into()))),
@@ -118,7 +118,7 @@ fn cancelling_failing_or_copying_a_tiff_keeps_the_original_unsaved() {
 #[test]
 fn tiff_options_cannot_be_replaced_or_retarget_a_closed_document() {
     let (mut h, writes, _, other) = tiff_prompt("file.close");
-    h.key_press(Key::Y);
+    h.key_press(Key::S);
     h.run_steps(3);
     assert!(h.state_mut().save_as(Some("replacement.tif".into())).is_err());
     assert_eq!(parked(&h).map(|p| p.0).as_deref(), Some("kept.tif"));
@@ -140,7 +140,7 @@ fn close_all_waits_for_each_layered_tiff_write() {
     h.state_mut().discard = None;
     assert!(intercept(h.state_mut(), "file.closeAll", &Value::Null));
     for (i, doc) in [first, second].into_iter().enumerate() {
-        h.key_press(Key::Y);
+        h.key_press(Key::S);
         h.run_steps(3);
         assert_eq!(h.state().session.documents().len(), 2 - i, "each saved document closes once written");
         assert_eq!(writes.borrow().len(), i);

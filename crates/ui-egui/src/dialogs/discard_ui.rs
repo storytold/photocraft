@@ -332,7 +332,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let remaining = app.discard.as_ref().map_or(1, |p| p.docs.len());
         // Apply to All is offered only while several documents are left, and never for a revert:
         // the dialog decides from `remaining` and the scope.
-        app.framework.dialogs.open(UnsavedChangesDialog::new(scope, name).remaining(remaining));
+        app.framework.dialogs.open(UnsavedChangesDialog::new(scope, name).document_wording(true).remaining(remaining));
         if let Some(p) = app.discard.as_mut() {
             p.asked = Some(doc);
         }
