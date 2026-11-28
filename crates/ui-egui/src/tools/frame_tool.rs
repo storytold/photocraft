@@ -569,7 +569,9 @@ fn make_frame(app: &mut PhotocraftApp, b: KRect) {
     match app.run("layer.new.frame", p) {
         Ok(v) => {
             if let Some(id) = v.get("layer").and_then(Value::as_u64) {
-                select(app, LayerId(id), Target::Frame);
+                // A drag that took an image leaves that content active; empty frames select the container.
+                let target = if v.get("content").and_then(Value::as_u64).is_some() { Target::Content } else { Target::Frame };
+                select(app, LayerId(id), target);
             }
         }
         Err(e) => report(app, Err(e)),
@@ -889,3 +891,6 @@ pub(crate) fn transformed_frame(app: &PhotocraftApp, t: &FreeTransform) -> Resul
     }
     Ok(f.transform)
 }
+
+#[cfg(test)]
+mod content_active_tests;

@@ -106,6 +106,8 @@ fn frame_content_and_both_selection_follow_clicks_and_double_clicks() {
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
     let original = selected(&app).unwrap().frame.clone();
+    // This click cycle starts at the frame thumbnail, independently of creation.
+    select(&mut app, frame, Target::Frame);
     click(&mut app, [65., 65.]);
     assert_eq!(app.ui.frame_tool.target, Target::Both);
     assert_eq!(app.session.active().unwrap().active_layer, Some(frame));
@@ -136,6 +138,7 @@ fn free_transform_on_the_frame_thumbnail_previews_and_commits_only_the_clip() {
     let source = add_photo(&mut app, 200, 200);
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let original = app.session.active().unwrap().doc.layer(source).unwrap().clone();
     let ctx = app.ctx().clone();
     let set_box = |app: &mut PhotocraftApp, to: KRect| {
@@ -170,6 +173,7 @@ fn frame_keyboard_nudges_change_only_the_selected_thumbnail() {
     add_photo(&mut app, 200, 200);
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let child = selected(&app).unwrap().children().unwrap()[0].clone();
     // A unit test cannot build a `ToolContext`, so the test calls the function `FramePass::key` runs.
     let shift = Mods { shift: true, ..Mods::default() };
@@ -215,6 +219,8 @@ fn cancelling_a_frame_content_drag_clears_its_auto_commit() {
     let mut app = app();
     add_photo(&mut app, 200, 200);
     drag(&mut app, [20., 30.], [120., 110.]);
+    let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     tool_event(&mut app, ToolEvent::Down { x: 70., y: 75., pressure: 1.0 }, egui::Modifiers::NONE);
     assert!(app.ui.frame_tool.auto_transform, "a content drag transforms automatically");
@@ -228,6 +234,8 @@ fn filled_frame_closing_border_selects_frame() {
     let mut app = app();
     add_photo(&mut app, 200, 200);
     drag(&mut app, [20., 30.], [120., 110.]);
+    let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     tool_event(&mut app, ToolEvent::Down { x: 20., y: 50., pressure: 1. }, egui::Modifiers::NONE);
     assert_eq!(app.ui.frame_tool.target, Target::Frame);
@@ -240,6 +248,8 @@ fn overhanging_content_handles_start_transform_and_cancel() {
     let mut app = app();
     add_photo(&mut app, 200, 100);
     drag(&mut app, [20., 30.], [120., 110.]);
+    let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     let st = app.session.active().unwrap();
     let frame = selected(&app).unwrap();
