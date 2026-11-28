@@ -110,31 +110,34 @@ fn surfaces_exact_depth_models_alpha_selection_and_tile_boundaries() {
     let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
     let coverage: Vec<f32> = (0..area.width() as usize * area.height() as usize).map(|i| (i % 5) as f32 / 4.0).collect();
     selection.write_region(area, &coverage);
-    for shape in SHAPES {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
-                for alpha in [false, true] {
-                    let fmt = PixelFormat::new(mode, depth, alpha);
-                    let n = fmt.channels();
-                    let mut surface = Surface::new(fmt);
-                    surface.write_region(bounds, &image(bounds, n, alpha).data);
-                    let ctx = Ctx { bounds, mode, alpha };
-                    for radius in [2.5, 5.0, 25.0] {
-                        let p = FilterParams::ShapeBlur { radius, shape };
-                        let reach = radius.ceil() as i32 + 1;
-                        for extent in [None, Some(bounds)] {
-                            let src = match extent {
-                                None => Image::read(&surface, area.inflate(reach)),
-                                Some(e) => Image::read_clamped(&surface, area.inflate(reach), e),
-                            };
-                            let spans = Spans::new(radius, shape_inside(shape));
-                            let mut expected = conv_spans(&src, area, &ctx, &spans);
+    let shapes_by_radius = [2.5, 5.0, 25.0].map(|radius| (radius, SHAPES.map(|shape| (shape, Spans::new(radius, shape_inside(shape))))));
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            for alpha in [false, true] {
+                let fmt = PixelFormat::new(mode, depth, alpha);
+                let mut surface = Surface::new(fmt);
+                surface.write_region(bounds, &image(bounds, fmt.channels(), alpha).data);
+                let ctx = Ctx { bounds, mode, alpha };
+                let mut reference = surface.clone();
+                for (radius, shapes) in &shapes_by_radius {
+                    let reach = radius.ceil() as i32 + 1;
+                    for extent in [None, Some(bounds)] {
+                        let src = match extent {
+                            None => Image::read(&surface, area.inflate(reach)),
+                            Some(e) => Image::read_clamped(&surface, area.inflate(reach), e),
+                        };
+                        // Each shape reads the same halo and scalar sums for this input.
+                        let prefix = scalar_prefix(&src, alpha);
+                        for (shape, spans) in shapes {
+                            let p = FilterParams::ShapeBlur { radius: *radius, shape: *shape };
+                            let mut expected = conv_spans_from_prefix(&src, area, &ctx, spans, &prefix);
                             crate::mix_selection(&mut expected, area, &selection, &src, alpha);
-                            let mut reference = surface.clone();
+                            // Every shape replaces the entire output area of this reference surface.
                             reference.write_region(area, &expected);
+                            let reference_pixels = reference.read_region(bounds);
                             for tile in [17, 256] {
                                 let actual = apply_tiled(&surface, &p, area, bounds, Some(&selection), tile, extent);
-                                exact(&actual.read_region(bounds), &reference.read_region(bounds));
+                                exact(&actual.read_region(bounds), &reference_pixels);
                             }
                         }
                     }
