@@ -45,7 +45,20 @@ fn has_clip_and_selection(s: &Session) -> std::result::Result<(), String> {
 
 fn has_background(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    d.doc.background().map(|_| ()).ok_or_else(|| "the document has no Background layer".into())
+    d.doc.background().ok_or("the document has no Background layer")?;
+    background_convertible_in(d.doc.mode)
+}
+
+/// Layer from Background isn't available in Indexed, Bitmap and Multichannel documents, which
+/// keep their Background (#16762).
+fn background_convertible_in(mode: photocraft_color::ColorMode) -> std::result::Result<(), String> {
+    use photocraft_color::ColorMode::{Bitmap, Indexed, Multichannel};
+    match mode {
+        Indexed => Err("Layer from Background is not available in Indexed Color mode".into()),
+        Bitmap => Err("Layer from Background is not available in Bitmap mode".into()),
+        Multichannel => Err("Layer from Background is not available in Multichannel mode".into()),
+        _ => Ok(()),
+    }
 }
 
 /// The layers a layer-style command acts on: as [`crate::layer_multi_cmds::targets`], but with
@@ -492,6 +505,8 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     if d.doc.background().is_none() && p.get("ifPresent").and_then(Value::as_bool) == Some(true) {
         return Ok(json!({"layer": null}));
     }
+    // `ifPresent` skips the precondition, so the mode is checked here too.
+    background_convertible_in(d.doc.mode).map_err(EngineError::Other)?;
     // `select: false`: the targeted layer stays targeted, as when a Photoshop action's `set`
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
@@ -1229,6 +1244,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "layer_from_background_modes_tests.rs"]
+mod layer_from_background_modes_tests;
 #[cfg(test)]
 mod tests;
 
