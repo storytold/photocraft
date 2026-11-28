@@ -531,6 +531,122 @@ impl Sentinel {
     }
 }
 
+/// This start ended without new evidence of a driver crash (a returned error outside graphics, or
+/// a termination signal): release its marker. The marker a crashed previous start left (`previous`)
+/// is put back, so the next start still steps past that backend; otherwise the marker is cleared.
+pub fn release_without_crash(sentinel: &SharedSentinel, previous: Option<&Marker>) {
+    // Held until the marker is written, so a termination signal meanwhile waits for it.
+    let mut held = sentinel.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut s) = held.take() else {
+        return;
+    };
+    match previous {
+        // Dropping the sentinel releases the lock and leaves the marker.
+        Some(marker) => {
+            if let Err(error) = s.write(marker.clone()) {
+                log::warn!("couldn't restore previous GPU startup marker: {error}");
+            }
+        }
+        None => s.finish(),
+    }
+}
+
+/// Signals that end the process on purpose: `kill`, `systemctl stop`, logout and shutdown send
+/// SIGTERM, Ctrl+C SIGINT, a closed terminal SIGHUP.
+#[cfg(target_os = "linux")]
+const TERMINATION: [async_signal::Signal; 3] = [async_signal::Signal::Term, async_signal::Signal::Int, async_signal::Signal::Hup];
+
+/// A termination signal is not a driver crash (#12401): logout or `kill` in the seconds before
+/// the first frames rendered left the marker behind like a segfault in the driver, and the next
+/// start fell back to a safer backend (from GL straight to the CPU). From now on such a signal
+/// releases the marker ([`release_without_crash`]) and then ends the process with status
+/// 128 + the signal's number, as a shell reports a process the signal ended. SIGKILL can't be
+/// caught and still counts as a crash.
+///
+/// The signals are taken over on a thread of their own, for the whole run: once they are, they no
+/// longer end the process by themselves, so that thread has to. Returns whether any were taken
+/// over. A signal whose registration fails keeps its previous action. A signal the process
+/// inherited ignored (`nohup`) stays ignored.
+#[cfg(target_os = "linux")]
+pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>) -> bool {
+    release_on_termination_with(sentinel, previous, |signals, signal| signals.add_signals([signal]))
+}
+
+#[cfg(target_os = "linux")]
+fn release_on_termination_with(
+    sentinel: SharedSentinel,
+    previous: Option<Marker>,
+    register: fn(&mut async_signal::Signals, async_signal::Signal) -> std::io::Result<()>,
+) -> bool {
+    use futures_lite::StreamExt;
+    let (ready, registered) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("photocraft-termination".into()).spawn(move || {
+        // One inherited ignored (`nohup` ignores SIGHUP, a shell's background job SIGINT) stays
+        // ignored: taking it over would let it end the process.
+        let wanted: Vec<_> = TERMINATION.into_iter().filter(|&signal| !inherited_ignored(signal)).collect();
+        if wanted.is_empty() {
+            // All three inherited ignored: nothing was taken over, and the thread has no job.
+            let _ = ready.send(false);
+            return;
+        }
+        let mut signals = match async_signal::Signals::new(std::iter::empty::<async_signal::Signal>()) {
+            Ok(signals) => signals,
+            Err(error) => {
+                log::warn!("couldn't initialize termination handling: {error}");
+                let _ = ready.send(false);
+                return;
+            }
+        };
+        // Keep successful registrations even if a later one fails. Dropping the stream would
+        // remove their actions without restoring the old signal dispositions.
+        let mut taken = false;
+        for signal in wanted {
+            match register(&mut signals, signal) {
+                Ok(()) => taken = true,
+                Err(error) => log::warn!("couldn't register {signal:?} termination handling; keeping its previous action: {error}"),
+            }
+        }
+        if !taken {
+            let _ = ready.send(false);
+            return;
+        }
+        let _ = ready.send(true);
+        let signal = loop {
+            match async_io::block_on(signals.next()) {
+                Some(Ok(signal)) => break signal,
+                Some(Err(error)) => log::warn!("termination signal: {error}"),
+                // The stream never ends while `signals` lives; park rather than drop it.
+                None => std::thread::park(),
+            }
+        };
+        log::info!("{signal:?} received: ending without counting it as a graphics crash");
+        release_without_crash(&sentinel, previous.as_ref());
+        std::process::exit(128 + signal as i32);
+    });
+    match spawned {
+        Ok(_) => registered.recv().unwrap_or(false),
+        Err(error) => {
+            log::warn!("couldn't start termination handling: {error}");
+            false
+        }
+    }
+}
+
+/// Whether `signal` is ignored in this process, as a parent such as `nohup` can leave it: the
+/// `SigIgn` mask in `/proc/self/status` (bit `n - 1` for signal `n`). Unknown counts as not ignored.
+#[cfg(target_os = "linux")]
+fn inherited_ignored(signal: async_signal::Signal) -> bool {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    ignored_in_status(&status, signal as u32)
+}
+
+/// Whether `/proc/<pid>/status` text `status` lists signal number `signal` as ignored.
+#[cfg(any(target_os = "linux", test))]
+fn ignored_in_status(status: &str, signal: u32) -> bool {
+    let mask = status.lines().find_map(|line| line.strip_prefix("SigIgn:")).and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok());
+    signal.checked_sub(1).is_some_and(|bit| bit < 64 && mask.is_some_and(|m| (m >> bit) & 1 == 1))
+}
+
 /// The backend and rendering mode Preferences › Performance asks for, read before the window
 /// opens: an explicit Rendering Mode, else the one older settings imply (`useGpu`, `gpuBackend`).
 pub fn rendering_prefs(performance: &photocraft_engine::prefs::Performance) -> (GpuBackend, RenderingMode) {
