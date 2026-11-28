@@ -27,15 +27,20 @@ pub(crate) struct Gpu {
 /// Simulated texture limit (pages and chunks of 256 px).
 const PAGED_LIMIT: u32 = 256;
 
-/// A nearly transparent or nearly opaque 32-bit layer weighs the colours by its own alpha;
-/// values far above 1 show any change made to it.
+/// A nearly transparent 32-bit layer weighs the colours by its own alpha, and a nearly opaque one
+/// is never capped below 1; values far above 1 show either.
 #[test]
 fn near_transparent_and_near_opaque_32_bit_layers_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    let faint = 2f32.powi(-24);
+    // An exact half-float subnormal: losing the texel (off by 1/32) or raising it to the smallest
+    // normal half float (off by about 2) both exceed the tolerance.
+    let faint = 2f32.powi(-20);
+    // Plain half-float uploads round this to 1 by design (off by 1/512, within the tolerance);
+    // capping it below 1 would be off by 16.
+    let near_opaque = 1.0 - 2f32.powi(-24);
     for (what, bottom, top) in [
         ("near-transparent", [0.0, 0.0, 0.0, 1.0], [32768.0, 32768.0, 32768.0, faint]),
-        ("near-opaque", [32768.0, 32768.0, 32768.0, 1.0], [0.0, 0.0, 0.0, 1.0 - faint]),
+        ("near-opaque", [32768.0, 32768.0, 32768.0, 1.0], [0.0, 0.0, 0.0, near_opaque]),
     ] {
         let mut d = Document::new(what, Size::new(16, 16), ColorMode::Rgb, SampleType::F32);
         for (name, px) in [("bottom", bottom), ("top", top)] {
