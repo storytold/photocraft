@@ -252,9 +252,8 @@ fn answer_file(app: &mut PhotocraftApp, request: PresetFileRequest) {
                 let shown = crate::file_open::display_name(&path);
                 let env = craft::ui::runtime::env::Env::of_root(app.ctx());
                 let (swatch_words, preset_words) = words(app.ctx());
-                let status = request.saved(&shown).and_then(|event| {
-                    SwatchesPanel::apply_file(&mut pending, &event, &swatch_words, &preset_words, env.format()).status
-                });
+                let status =
+                    request.saved(&shown).and_then(|event| SwatchesPanel::apply_file(&mut pending, &event, &swatch_words, &preset_words, env.format()).status);
                 if let Some(status) = status {
                     show_status(app, &status);
                 } else {
