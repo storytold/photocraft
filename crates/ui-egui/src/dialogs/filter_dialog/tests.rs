@@ -1002,10 +1002,12 @@ fn waves(n: u32) -> Document {
     doc
 }
 
-/// Mean absolute RGB difference of two documents, compared at 1/4 scale.
-fn diff_at_quarter(a: &Document, b: &Document) -> f32 {
-    let quarter = |d: &Document| photocraft_compose::flatten(&crate::proxy::proxy_document(d, (d.size.width / 64).max(1)));
-    let (a, b) = (quarter(a), quarter(b));
+fn quarter_composite(doc: &Document) -> photocraft_compose::Buffer {
+    photocraft_compose::flatten(&crate::proxy::proxy_document(doc, (doc.size.width / 64).max(1)))
+}
+
+/// Mean absolute RGB difference between quarter-scale composites.
+fn diff_at_quarter(a: &photocraft_compose::Buffer, b: &photocraft_compose::Buffer) -> f32 {
     assert_eq!(a.px.len(), b.px.len());
     a.px.iter().zip(&b.px).map(|(p, q)| (0..3).map(|c| (p[c] - q[c]).abs()).sum::<f32>() / 3.0).sum::<f32>() / a.px.len() as f32
 }
@@ -1059,11 +1061,12 @@ fn fixed_size_filters_preview_at_the_scale_they_apply() {
         let bg = doc.layers[0].id;
         let applied = preview_document(doc, Some(bg), cmd, &p, 1).unwrap();
         let old = preview_document(doc, Some(bg), cmd, &p, 4).unwrap();
-        assert!(diff_at_quarter(&applied, &old) > 0.005, "{cmd}: a 1/4 proxy differs from the result");
+        let reference = quarter_composite(&applied);
+        assert!(diff_at_quarter(&reference, &quarter_composite(&old)) > 0.005, "{cmd}: a 1/4 proxy differs from the result");
         let k = preview_factor(cmd, &p, 4);
         assert_eq!(k, 1, "{cmd}");
         let shown = preview_document(doc, Some(bg), cmd, &p, k).unwrap();
-        assert!(diff_at_quarter(&applied, &shown) < 1e-4, "{cmd}: the preview is what OK applies");
+        assert!(diff_at_quarter(&reference, &quarter_composite(&shown)) < 1e-4, "{cmd}: the preview is what OK applies");
     }
     // Without dithering, the colour-mode conversions keep the proxy.
     assert_eq!(preview_factor("image.mode.indexedColor", &json!({"dither": "none"}), 4), 4);
