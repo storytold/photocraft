@@ -43,12 +43,25 @@ pub fn alert(app: &mut PhotocraftApp, message: impl Into<String>) -> DialogId {
 ///
 /// Escape answers OK (the prompt has no Cancel), so a ticked box is kept on OK and on Escape.
 pub fn alert_once(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'static str) -> Option<DialogId> {
+    alert_once_under(app, message, pref, None)
+}
+
+/// [`alert_once`] opened as a child of the dialog `parent`: the host waits for the child's answer
+/// before an OK aimed at the parent goes through, and closes the child when the parent is cancelled.
+/// The Batch Override message is a child of the form whose box was ticked (#13668).
+pub(crate) fn alert_once_in(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'static str, parent: DialogId) -> Option<DialogId> {
+    alert_once_under(app, message, pref, Some(parent))
+}
+
+/// The body of [`alert_once`] and [`alert_once_in`]: the same prompt and the same "Don't show again"
+/// preference, opened plain or under `parent`.
+fn alert_once_under(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'static str, parent: Option<DialogId>) -> Option<DialogId> {
     if dismissed(app, pref) {
         return None;
     }
     let prompt =
         StandardPrompt::custom(message.into()).title(TITLE).button(PromptChoice::Proceed, tl!("OK").to_owned()).dont_show_again().tag(AlertOnce { pref });
-    open_prompt(app, prompt).ok().or_else(|| prompt_tagged::<AlertOnce>(app))
+    open_prompt_under(app, prompt, parent).ok().or_else(|| prompt_tagged::<AlertOnce>(app))
 }
 
 /// Whether "Don't show again" was ticked on the question remembered as `pref`.
@@ -98,10 +111,19 @@ pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut
 
 /// Opens `prompt` unless a `StandardPrompt` is already open. `Err` carries the open prompt's id.
 pub(crate) fn open_prompt(app: &mut PhotocraftApp, prompt: StandardPrompt) -> Result<DialogId, DialogId> {
+    open_prompt_under(app, prompt, None)
+}
+
+/// [`open_prompt`] with the prompt opened as a child of `parent` ([`DialogHost::open_child`]), so the
+/// host answers it before its parent and closes it with that parent.
+fn open_prompt_under(app: &mut PhotocraftApp, prompt: StandardPrompt, parent: Option<DialogId>) -> Result<DialogId, DialogId> {
     let host = &mut app.framework.dialogs;
     match host.get::<StandardPrompt>().map(StackDialog::id) {
         Some(open) => Err(open),
-        None => Ok(host.open(prompt)),
+        None => Ok(match parent {
+            Some(parent) => host.open_child(prompt, parent),
+            None => host.open(prompt),
+        }),
     }
 }
 

@@ -482,6 +482,8 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::panels::apply_data_set_ui::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
+    // Not a finished dialog's result: what the open Batch form's Source check boxes changed this pass.
+    crate::view_cmds::dialogs::batch_source_take,
 ];
 
 /// Runs the answers of every dialog that finished: parameter dialogs, prompts, then each family's own results. It runs
@@ -640,13 +642,14 @@ const ENGINE_READ_SHARED: &[&str] = &[photocraft_engine::atn_cmds::CAF_WORKSPACE
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 5] {
+fn dont_show_again_keys() -> [&'static str; 6] {
     [
         delete_layer_prompt::PREF,
         live_shape_prompt::PREF,
         assign_profile_layers_alert::PREF,
         crate::analysis::note_alerts::DELETE_NOTE_PREF,
         crate::retouch_ui::CAM_NO_PIXELS_PREF,
+        crate::view_cmds::dialogs::BATCH_OVERRIDE_PREF,
     ]
 }
 

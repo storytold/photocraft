@@ -1,9 +1,15 @@
+use std::sync::Arc;
+
 use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
 use crate::dialogs::image_processor_ui;
+use craft::host::{Host, PickId, PickRequest};
+use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
+use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::DialogId;
+use craft::ui::display::Text;
+use craft::ui::layout_components::Stack;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
@@ -558,6 +564,254 @@ fn file_info_form(app: &mut PhotocraftApp) -> Option<(Vec<Param>, DialogFields)>
     Some((rows, fields))
 }
 
+/// The Batch Source check boxes in the reference application's order: the key the command gets, and
+/// the caption over it. Each key is one row's own key rather than a row of a kind the form fills in
+/// with a default, so a box nobody ticked is no value at all and Source Opened Files can leave all of
+/// them out: the engine refuses `overrideOpen`, `suppressOpenOptions` and `suppressWarnings` with an
+/// open source, and the reference application shows none of the options there.
+const BATCH_SOURCE_CHECKS: [(&str, &str); 4] = [
+    ("overrideOpen", "Override Action \"Open\" Commands"),
+    ("includeSubfolders", "Include All Subfolders"),
+    ("suppressOpenOptions", "Suppress File Open Options Dialogs"),
+    ("suppressWarnings", "Suppress Color Profile Warnings"),
+];
+
+/// The "Don't show again" entry of the Override Action "Open" Commands message, kept with the other
+/// dialog preferences.
+pub(crate) const BATCH_OVERRIDE_PREF: &str = "batch.overrideOpenMessage";
+
+/// The Source entries that take no pick: Import, because the app has no import plug-in to run, and
+/// Opened Files while no document is open.
+fn source_disabled(app: &PhotocraftApp) -> Vec<&'static str> {
+    let mut disabled = vec!["import"];
+    if app.session.active().is_none() {
+        disabled.push("open");
+    }
+    disabled
+}
+
+/// The folder the Source options row holds: its text, or the path `ui.set` wrote under the same key.
+fn batch_folder(fields: &DialogFields) -> Option<String> {
+    fields.text("input").filter(|text| !text.is_empty()).map(str::to_owned)
+}
+
+/// The folder as the label under Choose… shows it: with the separator the reference application puts
+/// at the end of the path it names.
+fn shown_folder(path: &str) -> String {
+    if path.ends_with('/') || path.ends_with('\\') {
+        return path.to_owned();
+    }
+    format!("{path}{}", std::path::MAIN_SEPARATOR)
+}
+
+/// The folder pick Choose… filed and has not answered yet.
+#[derive(Clone, Copy, Default)]
+struct BatchPick(Option<PickId>);
+
+/// Where the Batch Source row keeps its pending pick between passes.
+fn batch_pick_slot() -> egui::Id {
+    egui::Id::unique("pc-batch-source-pick")
+}
+
+/// Takes the answer of a pick the row filed: the chosen folder becomes the row's folder. A pick that
+/// has not been answered stays filed; a Cancelled one leaves the folder as it was.
+fn settle_folder_pick(ui: &egui::Ui, host: &Host, fields: &mut DialogFields) {
+    let slot = batch_pick_slot();
+    let waiting = ui.ctx().data_mut(|data| std::mem::take(data.get_temp_mut_or_default::<BatchPick>(slot)));
+    let Some(ticket) = waiting.0 else { return };
+    match host.files().take_answer(ticket) {
+        // Not answered yet: file it again for the next pass.
+        None => drop(ui.ctx().data_mut(|data| data.insert_temp(slot, waiting))),
+        Some(picked) => {
+            if let Some(path) = picked.first_path() {
+                fields.set("input", FieldValue::Text(path.to_string_lossy().into_owned()));
+            }
+        }
+    }
+}
+
+/// Files the folder pick Choose… asks for, starting in the folder the row holds. One at a time: a
+/// second press while the picker is open asks for nothing.
+fn ask_for_batch_folder(ui: &egui::Ui, host: &Host, fields: &DialogFields) {
+    let slot = batch_pick_slot();
+    let waiting = ui.ctx().data_mut(|data| data.get_temp::<BatchPick>(slot));
+    if waiting.is_some_and(|pick| pick.0.is_some()) {
+        return;
+    }
+    let mut request = PickRequest::folder("batch").title(tl!("Choose a batch folder…"));
+    if let Some(path) = batch_folder(fields) {
+        request = request.directory(path);
+    }
+    let ticket = host.files().pick(request);
+    ui.ctx().data_mut(|data| data.insert_temp(slot, BatchPick(Some(ticket))));
+}
+
+/// The Batch form's Source options, under its Source dropdown: a Choose… row (the button and, once a
+/// folder is chosen, that folder as a label under it) and then one row per check box of the reference
+/// application, in its order. Each row owns its key, so a box nobody ticked is no value at all; the
+/// check boxes are rows only while Source is Folder, and the Choose… row sweeps the keys out when it
+/// is not, which is what the reference application sends there: none of them.
+fn batch_source_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let mut rows = vec![batch_folder_row(app)];
+    rows.extend(BATCH_SOURCE_CHECKS.map(|(key, caption)| batch_check_row(key, caption)));
+    rows
+}
+
+/// The folder the run reads and the four check boxes, by key: what a source other than Folder leaves
+/// out of the form.
+const BATCH_SOURCE_KEYS: [&str; 5] = ["input", "overrideOpen", "includeSubfolders", "suppressOpenOptions", "suppressWarnings"];
+
+/// Draws one row's controls: `body` runs inside the framework's own container, so its widgets take
+/// clicks like a row of their own.
+fn source_row_body(ui: &mut egui::Ui, mut body: impl FnMut(&mut egui::Ui)) -> egui::Response {
+    Stack::new().show(ui, |ui, _| body(ui)).output
+}
+
+/// The Batch form's Source folder row: Choose… asks the host's file service for the folder the run
+/// reads, and the folder it answered shows as a label under the button. It is drawn whatever Source
+/// says, and with anything but Folder it draws nothing and takes the Source options' keys out of the
+/// form, since a hidden row keeps what it was given.
+fn batch_folder_row(app: &PhotocraftApp) -> Param {
+    let host = Arc::clone(app.framework.host());
+    Param::custom("input", Label::Empty, move |ui, fields, _cx| {
+        settle_folder_pick(ui, &host, fields);
+        let folder = fields.text("source") == Some("folder");
+        if !folder {
+            for key in BATCH_SOURCE_KEYS {
+                fields.remove(key);
+            }
+        }
+        source_row_body(ui, |ui| {
+            if !folder {
+                return;
+            }
+            if clicked(&Button::new(Label::from(tl!("Choose…"))).id_salt("chooseFolder").show(ui)) {
+                ask_for_batch_folder(ui, &host, fields);
+            }
+            if let Some(path) = batch_folder(fields) {
+                Text::new(shown_folder(&path)).show(ui);
+            }
+        })
+    })
+    // No label column: the reference application puts these controls under the Source dropdown with
+    // their own wording beside them.
+    .full_width()
+    // The row is drawn under every Source, only to take the Source options' keys out, so it cannot hide
+    // itself the way the check-box rows do. It takes input while Folder is chosen and nowhere else: a
+    // `ui.set` between the Source switch and OK would otherwise put `input` back with no draw to clear
+    // it, and the form sends a folder it does not show.
+    .enabled_when("source", "folder")
+}
+
+/// One Batch Source check box: its own row and its own key, so a box nobody ticked is no value at all,
+/// hidden with any Source but Folder. `key` names the row and its value; `caption` is the reference
+/// application's wording. The box draws on its own, as a form draws its own check row: in a stack its
+/// caption is measured as a label column and cut short.
+fn batch_check_row(key: &'static str, caption: &'static str) -> Param {
+    Param::custom(key, Label::Empty, move |ui, fields, _cx| {
+        let mut on = fields.bool(key).unwrap_or(false);
+        let check = Checkbox::new(Bind::bound(&mut on)).label(Label::from(tl!(caption))).id_salt(key).show(ui);
+        if on != fields.bool(key).unwrap_or(false) {
+            fields.set(key, FieldValue::Bool(on));
+        }
+        check.response
+    })
+    .full_width()
+    .visible_when("source", "folder")
+}
+
+/// A Choose… pick nobody will read is forgotten, the way the application's own Browse route forgets a
+/// pick of a dialog that closed: the host does not hold a ticket nobody will read, and an answer that
+/// arrives later cannot walk into a folder row. It goes with the form that filed it and with the Source
+/// that shows the row: under another Source the row draws only to clear the keys, so an answer kept
+/// waiting there would overwrite the folder the form was given on the way back.
+fn forget_pick_without_its_row(app: &PhotocraftApp, ctx: &egui::Context) {
+    let row_shown = app.framework.dialogs.open_dialogs().into_iter().any(|dialog| {
+        dialog.key.as_deref() == Some("file.automate.batch")
+            && dialog.fields.as_ref().and_then(|fields| fields.get("source")).and_then(Value::as_str) == Some("folder")
+    });
+    if row_shown {
+        return;
+    }
+    let slot = batch_pick_slot();
+    let waiting = ctx.data_mut(|data| std::mem::take(data.get_temp_mut_or_default::<BatchPick>(slot)));
+    if let Some(ticket) = waiting.0 {
+        app.framework.host().files().forget(ticket);
+    }
+}
+
+/// What each open Batch form had for `overrideOpen`, kept under the open it belongs to: the message
+/// answers a tick, not a value the form opened with. A command form keeps its dialog id across its
+/// opens, so the open's own number is part of the key.
+#[derive(Clone, Default)]
+struct OverrideSeen(Vec<(DialogId, u64, bool)>);
+
+/// Where the Batch Override observations wait between passes.
+fn override_seen_slot() -> egui::Id {
+    egui::Id::unique("pc-batch-override-seen")
+}
+
+/// The `overrideOpen` of a Batch form, as the host reports its fields.
+fn override_ticked(fields: Option<&Value>) -> bool {
+    fields.and_then(|fields| fields.get("overrideOpen")).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Notes what a Batch form opens with. The control channel can write the Override box in the turn that
+/// opened the form, before it has drawn once, and the message answers that tick: so the observation
+/// starts at the open, from the values the form was given, and not at the first pass that reads it.
+pub(crate) fn note_batch_open(app: &PhotocraftApp, id: DialogId) {
+    let opened = app.framework.dialogs.open_dialogs().into_iter().find(|dialog| dialog.id == id);
+    let (Some(fields), Some(open)) = (opened.and_then(|dialog| dialog.fields), app.framework.dialogs.open_serial(id)) else { return };
+    app.ctx().data_mut(|data| {
+        let seen = data.get_temp_mut_or_default::<OverrideSeen>(override_seen_slot());
+        seen.0.retain(|(seen_id, seen_open, _)| *seen_id != id || *seen_open != open);
+        seen.0.push((id, open, override_ticked(Some(&fields))));
+    });
+}
+
+/// The Batch form's pass (a `dialogs::TAKERS` row): ticking Override Action "Open" Commands shows the
+/// reference application's message with OK and Don't show again; unticking it shows nothing. The
+/// message is a child of the form whose box was ticked, so an OK aimed at that form waits for the
+/// message and a Cancel of the form takes the message with it.
+pub(crate) fn batch_source_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    forget_pick_without_its_row(app, ctx);
+    let open: Vec<(DialogId, u64, bool)> = app
+        .framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter(|dialog| dialog.key.as_deref() == Some("file.automate.batch"))
+        .filter_map(|dialog| Some((dialog.id, app.framework.dialogs.open_serial(dialog.id)?, override_ticked(dialog.fields.as_ref()))))
+        .collect();
+    let fired = ctx.data_mut(|data| {
+        let seen = data.get_temp_mut_or_default::<OverrideSeen>(override_seen_slot());
+        // An open that has gone takes its observation with it, also when no Batch form is left: the id
+        // comes back at the next open, and that open starts from its own opening value.
+        seen.0.retain(|(id, open_at, _)| open.iter().any(|(open_id, open_at_of, _)| *open_id == *id && *open_at_of == *open_at));
+        let mut fired: Option<DialogId> = None;
+        for (id, open_at, ticked) in open {
+            match seen.0.iter_mut().find(|(seen_id, seen_open, _)| *seen_id == id && *seen_open == open_at) {
+                Some((_, _, seen_on)) if *seen_on != ticked => {
+                    *seen_on = ticked;
+                    if ticked && fired.is_none() {
+                        fired = Some(id);
+                    }
+                }
+                Some(_) => {}
+                // A form whose open was not noted when it opened: what it holds now stands as its start.
+                None => seen.0.push((id, open_at, ticked)),
+            }
+        }
+        fired
+    });
+    if let Some(form) = fired {
+        let message = tl!(
+            "When this option is on, source files will be opened from the source folder only by open steps in the action. If there are no open steps, no files will be opened."
+        );
+        let _ = crate::dialogs::alerts::alert_once_in(app, message, BATCH_OVERRIDE_PREF, form);
+    }
+}
+
 /// File › Automate › Batch…: the selected action and its set, and where the files come from and go.
 fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogFields)> {
     let action = crate::actions::selected_action(app)?;
@@ -570,9 +824,18 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
     }
     rows.extend([
         choice("action", tl!("Action"), named(&names), &name),
-        choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("open", tl!("Opened Files"))]), "folder"),
-        folder("input", tl!("Input Folder"), dir),
-        Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
+        // The reference application's three sources, in its order: Import greyed while the app has no
+        // import plug-in, Opened Files only while a document is open (#13668). Changing the source
+        // takes the Source options with it where it is written, before OK can read them; the folder
+        // row's own sweep catches the same keys on the way to the screen.
+        choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("import", tl!("Import")), ("open", tl!("Opened Files"))]), "folder")
+            .disabled_options(source_disabled(app))
+            .resets(BATCH_SOURCE_KEYS),
+    ]);
+    // Choose… and the folder it answered, then the four Source check boxes: one row each, so the form
+    // gives every control its own room and a Source of Opened Files leaves the whole group out.
+    rows.extend(batch_source_rows(app));
+    rows.extend([
         folder("output", tl!("Output Folder"), format!("{dir}/batch")),
         choice(
             "format",
@@ -1120,7 +1383,13 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
         _ if is_form(id) => {
             let (rows, fields) = params_for(app, id)?;
-            Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))
+            let dialog = open_form(app, id, label, rows, fields, Value::Null);
+            // The Batch message answers a tick made after the form opened, and a control client writes
+            // that tick before the form has drawn: what the form opens with is noted at the open.
+            if id == "file.automate.batch" {
+                note_batch_open(app, dialog);
+            }
+            Some(Ok(opened(dialog)))
         }
         _ => None,
     }

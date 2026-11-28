@@ -76,6 +76,16 @@ fn edit_path(h: &mut Harness, name: &str, value: &Path) {
     h.run_steps(2);
 }
 
+/// The Batch form's source folder. Its row is a Choose… button and a label, not a text field (#13668),
+/// so the folder is given the way automation gives it: `ui.dialog.set` on the top dialog's `input`.
+fn set_source_folder(h: &mut Harness, value: &Path) {
+    let ctx = h.ctx.clone();
+    let (req, _rx) = ControlRequest::new("ui.dialog.set", json!({"dialog": "top", "field": "input", "value": value.to_string_lossy()}));
+    let Reply::Done(reply) = handle(h.state_mut(), &ctx, &req) else { panic!("ui.dialog.set: expected an immediate reply") };
+    assert_eq!(reply["ok"], true, "{value:?}: the form takes its source folder: {reply}");
+    h.run_steps(2);
+}
+
 #[test]
 fn batch_menu_offers_webp() {
     let mut h = harness();
@@ -199,7 +209,7 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     let fields = form_fields(&mut h);
     assert_eq!(fields["naming"], "");
     assert_eq!(fields["startingSerial"], 1);
-    edit_path(&mut h, "Input Folder", &input);
+    set_source_folder(&mut h, &input);
     edit_path(&mut h, "Output Folder", &output);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File Naming").click();
     h.run_steps(2);
@@ -244,7 +254,7 @@ fn batch_default_quality_keeps_lossless_webp_and_existing_jpeg_bytes() {
             h.get_by_label("JPEG").click();
             h.run_steps(3);
         }
-        edit_path(&mut h, "Input Folder", &input);
+        set_source_folder(&mut h, &input);
         edit_path(&mut h, "Output Folder", &output);
         assert!(form_fields(&mut h)["quality"].is_null());
         evidence(&mut h, &format!("batch-default-{format}"));

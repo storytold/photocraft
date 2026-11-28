@@ -490,6 +490,9 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     assert!(!cancelled.exists());
 
     let id = open_form(&mut app, &ctx, "file.automate.batch");
+    // The Source folder is a Choose… row now (#13668): a reopened form starts with no path, so this
+    // run names its folder again rather than leaning on the first form's remembered one.
+    set(&mut app, &ctx, id, "input", json!(source.to_string_lossy()));
     set(&mut app, &ctx, id, "action", json!("RotateRGB"));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
     let rotate = app.session.actions().list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
@@ -622,8 +625,11 @@ fn batch_dialogs_include_all_subfolders() {
     for (command, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
         let d = open_form(&mut app, &ctx, command);
         let shown = fields(&app, d);
-        assert_eq!(shown["includeSubfolders"], json!(false), "{command}");
-        assert_eq!(label_of(&mut app, command, "includeSubfolders"), "Include All Subfolders", "{command}");
+        // Batch keeps its check box inside the Source options row (#13668), so only Image Processor has a row of its own.
+        if command == "file.scripts.imageProcessor" {
+            assert_eq!(shown["includeSubfolders"], json!(false), "{command}");
+            assert_eq!(label_of(&mut app, command, "includeSubfolders"), "Include All Subfolders", "{command}");
+        }
         if command == "file.automate.batch" {
             assert_eq!(shown["source"], json!("folder"));
             assert_eq!(shown["stopOnError"], json!(false));
