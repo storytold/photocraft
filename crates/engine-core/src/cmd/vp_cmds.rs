@@ -2,9 +2,10 @@
 //! pasting an image onto a plane and the perspective clone stamp, as one replayable command
 //! ([`photocraft_algo::vanishing`]). The edit lands on the active pixel layer, or on a new layer
 //! with `"newLayer": true` (Photoshop's advice for non-destructive Vanishing Point work).
+//! The planes are kept with the document (`Document::vanishing_planes`) so the filter reopens with them.
 
-use photocraft_algo::vanishing::{Edge, PlaneCheck, Scene, VpPlane, clone_dabs, paste};
-use photocraft_doc::{Document, Layer, LayerContent, LayerId};
+use photocraft_algo::vanishing::{Edge, PastePlacement, PlaneCheck, Scene, VpPlane, clone_dabs, paste_placed};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, VanishingPlane, VanishingTorn};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -89,6 +90,25 @@ pub fn scene(p: &Value, canvas: Rect) -> Result<Scene> {
     Ok(sc)
 }
 
+/// The planes of `"planes"` as the document keeps them: every plane's corners as `sc` resolved
+/// them, and how the torn-off ones were torn.
+fn kept_planes(p: &Value, sc: &Scene) -> Vec<VanishingPlane> {
+    let params = p.get("planes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    sc.planes
+        .iter()
+        .zip(params)
+        .map(|(pl, v)| VanishingPlane {
+            corners: pl.corners,
+            torn: v.get("corners").is_none().then(|| VanishingTorn {
+                from: v.get("from").and_then(Value::as_u64).unwrap_or(0) as usize,
+                edge: v.get("edge").and_then(Value::as_str).unwrap_or("top").to_string(),
+                angle: v.get("angle").and_then(Value::as_f64).unwrap_or(90.0),
+                depth: v.get("depth").and_then(Value::as_f64).unwrap_or(1.0),
+            }),
+        })
+        .collect()
+}
+
 /// One stroke of `"clone"`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CloneSpec {
@@ -166,7 +186,13 @@ pub fn copy_changed(dst: &mut Surface, before: &Surface, after: &Surface, area: 
     dst.write_region(area, &cur);
 }
 
-/// The image a `"newLayer"` run's clone strokes sample: the visible document.
+/// Whether the clone strokes sample the visible image rather than the target layer: on a new layer, and on an empty
+/// one, which has nothing of its own to sample.
+pub fn samples_visible(new_layer: bool, target: &Surface) -> bool {
+    new_layer || target.content_bounds().is_empty()
+}
+
+/// The image a `"newLayer"` (or empty-layer) run's clone strokes sample: the visible document.
 pub fn visible_image(doc: &Document) -> Surface {
     crate::file_cmds::flattened(doc, doc.pixel_format())
 }
@@ -182,8 +208,8 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
 
 /// Pastes `src` (content in `rect`) onto plane `plane` of `sc` over `surf`, as the command's
 /// `"paste"` does. Returns the area the paste covers.
-pub fn paste_onto(sc: &Scene, surf: &mut Surface, plane: usize, src: &Surface, rect: Rect, at: [f64; 2], width: f64) -> Result<Rect> {
-    let Some(out) = paste(sc, plane, src, rect, at, width)? else { return Ok(Rect::EMPTY) };
+pub fn paste_onto(sc: &Scene, surf: &mut Surface, plane: usize, src: &Surface, rect: Rect, placement: &PastePlacement) -> Result<Rect> {
+    let Some(out) = paste_placed(sc, plane, src, rect, placement)? else { return Ok(Rect::EMPTY) };
     over(surf, &out);
     Ok(out.content_bounds())
 }
@@ -217,9 +243,11 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = st.doc.bounds();
     let sc = scene(p, canvas)?;
+    let kept = kept_planes(p, &sc);
     // Paste sources resolved up front (layer pixels or the clipboard).
-    let mut pastes: Vec<(usize, Surface, Rect, [f64; 2], f64)> = Vec::new();
-    for (k, item) in p.get("paste").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
+    let mut pastes = Vec::new();
+    let paste_params = p.get("paste").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    for (k, item) in paste_params.iter().enumerate() {
         let plane = item.get("plane").and_then(Value::as_u64).unwrap_or(0) as usize;
         if plane >= sc.planes.len() {
             return Err(bad(format!("paste {k}: no plane {plane}")));
@@ -234,16 +262,44 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
                 (clip.surface.clone(), clip.surface.content_bounds())
             }
         };
-        let at = item.get("at").and_then(pt).unwrap_or([0.25, 0.25]);
-        let width = item.get("width").and_then(Value::as_f64).unwrap_or(0.5).clamp(0.01, 10.0);
-        pastes.push((plane, surf, rect, at, width));
+        let placement = PastePlacement {
+            at: item.get("at").and_then(pt).unwrap_or([0.25, 0.25]),
+            width: item.get("width").and_then(Value::as_f64).unwrap_or(0.5).clamp(0.01, 10.0),
+            angle: item.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0).clamp(-180.0, 180.0),
+            flip_h: item.get("flipH").and_then(Value::as_bool).unwrap_or(false),
+            flip_v: item.get("flipV").and_then(Value::as_bool).unwrap_or(false),
+        };
+        // The clone strokes painted before it: it lands over those and under the later ones (none: first).
+        let after = item.get("after").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+        pastes.push((plane, surf, rect, placement, after));
     }
+    // Stable: pastes before the same stroke keep their order.
+    pastes.sort_by_key(|p| p.4);
     let clones = clone_specs(p)?;
     let new_layer = p.get("newLayer").and_then(Value::as_bool).unwrap_or(false);
     // The layer the mode was opened on (the UI passes it: other layers can be picked meanwhile).
     let layer = crate::commands::explicit_layer(s, p)?;
+    let planes_json = |sc: &Scene| -> Vec<Value> {
+        (0..sc.planes.len())
+            .map(|i| {
+                let (lu, lv) = sc.lifted(i).lengths();
+                json!({"corners": sc.planes[i].corners, "aspect": lu / lv})
+            })
+            .collect()
+    };
+    // Only planes (OK with nothing pasted or cloned): keep them with the document, no pixels.
+    if pastes.is_empty() && clones.is_empty() && !new_layer {
+        if st.doc.vanishing_planes != kept {
+            s.edit("Vanishing Point", |doc: &mut Document, _| {
+                doc.vanishing_planes = kept;
+                Ok(())
+            })?;
+        }
+        return Ok(json!({"focal": sc.focal, "planes": planes_json(&sc), "pasted": 0, "dabs": 0}));
+    }
     let mut dabs = 0usize;
     let target = s.edit("Vanishing Point", |doc: &mut Document, active| {
+        doc.vanishing_planes = kept;
         if let Some(l) = layer
             && doc.layer(l).is_none()
         {
@@ -261,39 +317,38 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             *active = Some(id);
             id
         };
-        // A new layer clones from the visible image; otherwise from the layer itself.
-        let base: Option<Surface> = new_layer.then(|| visible_image(doc));
+        // A new or an empty layer clones from the visible image; otherwise from the layer itself.
+        let empty = doc.layer(id).and_then(Layer::surface).is_some_and(|s| samples_visible(false, s));
+        let base: Option<Surface> = (new_layer || empty).then(|| visible_image(doc));
         let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if locks.all || locks.pixels {
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
-        for (plane, src, rect, at, width) in &pastes {
-            paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
-        }
-        // A new layer samples the visible image (merged with what's been pasted) and takes only
+        // A new or an empty layer samples the visible image (merged with what's been pasted) and takes only
         // the pixels the strokes change; otherwise the strokes paint the layer itself.
         let mut work = base.map(|mut w| {
             over(&mut w, surf);
             w
         });
-        for c in &clones {
-            dabs += clone_into(&sc, surf, work.as_mut(), c, canvas);
+        // Each paste lands before the first stroke made after it, so later strokes paint over and sample it.
+        let mut next = pastes.iter().peekable();
+        for k in 0..=clones.len() {
+            while let Some((plane, src, rect, placement, _)) = next.next_if(|p| p.4 <= k) {
+                if let Some(w) = work.as_mut() {
+                    paste_onto(&sc, w, *plane, src, *rect, placement)?;
+                }
+                paste_onto(&sc, surf, *plane, src, *rect, placement)?;
+            }
+            if let Some(c) = clones.get(k) {
+                dabs += clone_into(&sc, surf, work.as_mut(), c, canvas);
+            }
         }
         surf.prune();
         Ok(id)
     })?;
-    let planes: Vec<Value> = sc
-        .planes
-        .iter()
-        .enumerate()
-        .map(|(i, pl)| {
-            let (lu, lv) = sc.lifted(i).lengths();
-            json!({"corners": pl.corners, "aspect": lu / lv})
-        })
-        .collect();
-    Ok(json!({"layer": target.0, "focal": sc.focal, "planes": planes, "pasted": pastes.len(), "dabs": dabs}))
+    Ok(json!({"layer": target.0, "focal": sc.focal, "planes": planes_json(&sc), "pasted": pastes.len(), "dabs": dabs}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -302,7 +357,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Vanishing Point…",
         menu: &["Filter"],
         shortcut: Some("Cmd+Alt+V"),
-        params: r##"{"planes":[{"corners":[[x,y]×4]} | {"from":plane,"edge":"top|right|bottom|left","angle":deg=90,"depth":1}],"focalLength":px=0,"paste":[{"plane":0,"layer":id? (else the clipboard),"at":[u,v]=[0.25,0.25],"width":0..1=0.5}],"clone":[{"source":[x,y],"points":[[x,y]],"size":px=40,"hardness":0..100=50,"opacity":0..100=100}],"newLayer":bool=false,"layer":id|name? (else the active layer)}"##,
+        params: r##"{"planes":[{"corners":[[x,y]×4]} | {"from":plane,"edge":"top|right|bottom|left","angle":deg=90,"depth":1}],"focalLength":px=0,"paste":[{"plane":0,"layer":id? (else the clipboard),"at":[u,v]=[0.25,0.25],"width":0..1=0.5,"angle":deg=0,"flipH":bool,"flipV":bool}],"clone":[{"source":[x,y],"points":[[x,y]],"size":px=40,"hardness":0..100=50,"opacity":0..100=100}],"newLayer":bool=false,"layer":id|name? (else the active layer)}"##,
         enabled: has_layer,
         run: vanishing_point,
         journal: true,

@@ -241,6 +241,13 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     d.guides =
         Guides { horizontal: vec![10.0, 20.5], vertical: vec![100.25], colors: vec![GuideColor { vertical: true, position: 100.25, rgb: [0x33, 0x66, 0xff] }] };
     d.ruler_origin = [12.5, -4.25];
+    d.vanishing_planes = vec![
+        photocraft_doc::VanishingPlane { corners: [[10.0, 20.0], [90.0, 20.0], [120.0, 80.0], [0.0, 80.0]], torn: None },
+        photocraft_doc::VanishingPlane {
+            corners: [[10.0, 0.0], [90.0, 0.0], [90.0, 20.0], [10.0, 20.0]],
+            torn: Some(photocraft_doc::VanishingTorn { from: 0, edge: "top".into(), angle: 90.0, depth: 0.5 }),
+        },
+    ];
     let mut sel = Surface::new(PixelFormat::GRAY8);
     scribble(&mut sel, 14, false);
     d.selection = Some(sel);

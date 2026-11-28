@@ -4,7 +4,8 @@ use photocraft_algo::vanishing::VpPlane;
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use photocraft_geom::Rect;
-use serde_json::json;
+use photocraft_raster::Surface;
+use serde_json::{Value, json};
 
 use photocraft_engine::vp_cmds::*;
 
@@ -131,4 +132,75 @@ fn layer_param_paints_that_layer_not_the_active_one() {
     assert!(s.execute(VP, json!({"planes": planes, "clone": clone, "layer": 999_999})).is_err());
     assert!(s.execute(VP, json!({"planes": planes, "clone": clone, "layer": 999_999, "newLayer": true})).is_err());
     assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+}
+
+fn paste_sticker(transform: Value) -> Surface {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "sticker"})).unwrap();
+    let sticker = s.active().unwrap().active_layer.unwrap();
+    s.edit("sticker", |doc, _| {
+        let surf = doc.layer_mut(sticker).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(10, 5, 30, 25), &[1.0, 0.0, 0.0, 1.0]);
+        surf.fill_rect(Rect::new(30, 5, 50, 25), &[0.0, 0.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let mut paste = json!({"layer": sticker.0, "at": [0.25, 0.25], "width": 0.4});
+    paste.as_object_mut().unwrap().extend(transform.as_object().unwrap().clone());
+    let result = s.execute(VP, json!({"planes": [{"corners": [[0, 0], [200, 0], [200, 100], [0, 100]]}], "paste": [paste], "newLayer": true})).unwrap();
+    assert_eq!(result["pasted"], 1);
+    let id = LayerId(result["layer"].as_u64().unwrap());
+    s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone()
+}
+
+#[test]
+fn paste_flip_h_swaps_the_stickers_left_and_right() {
+    let out = paste_sticker(json!({"flipH": true}));
+    assert!(out.rgba(70, 45)[2] > 0.9);
+    assert!(out.rgba(110, 45)[0] > 0.9);
+}
+
+#[test]
+fn paste_angle_turns_the_sticker_in_the_plane_metric() {
+    let out = paste_sticker(json!({"angle": 90}));
+    assert!(out.rgba(90, 15)[0] > 0.9);
+    assert!(out.rgba(90, 75)[2] > 0.9);
+    assert_eq!(out.rgba(60, 45)[3], 0.0);
+}
+
+/// A green field with a red stripe at x 140..160: cloning from (150, 100) paints red.
+fn striped(s: &mut Session) -> LayerId {
+    s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#40c040"})).unwrap();
+    s.edit("stripe", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(140, 0, 160, 200), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.active().unwrap().active_layer.unwrap()
+}
+
+#[test]
+fn the_document_keeps_the_planes() {
+    let mut s = Session::new();
+    striped(&mut s);
+    let planes = json!([{"corners": [[20, 60], [180, 60], [190, 190], [10, 190]]}, {"from": 0, "edge": "top", "angle": 90, "depth": 0.5}]);
+    let steps = s.active().unwrap().history.past_len();
+    // OK with only planes is one step that keeps them; the same planes again change nothing.
+    s.execute(VP, json!({"planes": planes})).unwrap();
+    s.execute(VP, json!({"planes": planes})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    let kept = s.active().unwrap().doc.vanishing_planes.clone();
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0].corners, [[20.0, 60.0], [180.0, 60.0], [190.0, 190.0], [10.0, 190.0]]);
+    assert!(kept[0].torn.is_none());
+    let torn = kept[1].torn.as_ref().unwrap();
+    assert_eq!((torn.from, torn.edge.as_str(), torn.angle, torn.depth), (0, "top", 90.0, 0.5));
+    s.undo();
+    assert!(s.active().unwrap().doc.vanishing_planes.is_empty());
+    // A paint run keeps them too.
+    s.execute(VP, json!({"planes": planes, "clone": [{"source": [150, 150], "points": [[60, 150]], "size": 10}]})).unwrap();
+    assert_eq!(s.active().unwrap().doc.vanishing_planes, kept);
 }

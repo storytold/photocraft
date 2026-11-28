@@ -88,6 +88,9 @@ pub struct DocM {
     /// Note tool annotations.
     #[serde(default)]
     pub notes: Vec<photocraft_doc::Note>,
+    /// Filter › Vanishing Point's planes (older PhotoCraft versions ignore this optional field).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vanishing_planes: Vec<photocraft_doc::VanishingPlane>,
     /// Character and paragraph styles.
     #[serde(default)]
     pub text_styles: photocraft_doc::TextStyles,

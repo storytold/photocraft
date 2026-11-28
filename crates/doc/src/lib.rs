@@ -1010,6 +1010,32 @@ pub struct Document {
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
     /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
+    /// Filter › Vanishing Point's planes, kept so the filter reopens with them (as Photoshop keeps
+    /// them in the file).
+    pub vanishing_planes: Vec<VanishingPlane>,
+}
+
+/// A Vanishing Point plane kept with the document: its corners (document px, clockwise from the
+/// top-left) and, for a plane torn off another, how (it follows its parent when that is edited).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
+#[serde(rename_all = "camelCase")]
+pub struct VanishingPlane {
+    pub corners: [[f64; 2]; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torn: Option<VanishingTorn>,
+}
+
+/// How a [`VanishingPlane`] was torn off an earlier plane.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
+pub struct VanishingTorn {
+    /// The parent plane's index, below this plane's.
+    pub from: usize,
+    /// `top`, `right`, `bottom` or `left`.
+    pub edge: String,
+    /// Degrees between the planes (90: perpendicular).
+    pub angle: f64,
+    /// Extent as a multiple of the parent's adjacent side.
+    pub depth: f64,
 }
 
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
@@ -1086,6 +1112,7 @@ impl Document {
             variables: Variables::default(),
             timeline: None,
             file_encoding: FileEncoding::default(),
+            vanishing_planes: Vec::new(),
         }
     }
 

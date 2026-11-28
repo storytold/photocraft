@@ -249,6 +249,7 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         last_document_state: _,
         measurement: _,
         notes: _,
+        vanishing_planes: _,
         text_styles: _,
         slices: _,
         variables: _,
@@ -399,6 +400,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         last_document_state,
         measurement,
         notes,
+        vanishing_planes,
         text_styles,
         slices,
         variables,
@@ -422,6 +424,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         && *last_document_state == b.last_document_state
         && *measurement == b.measurement
         && *notes == b.notes
+        && *vanishing_planes == b.vanishing_planes
         && *text_styles == b.text_styles
         && *slices == b.slices
         && *variables == b.variables

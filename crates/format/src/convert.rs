@@ -302,6 +302,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
         last_document_state: d.last_document_state.as_ref().map(|c| comp_m(c, sink)),
         measurement: d.measurement.clone(),
         notes: d.notes.clone(),
+        vanishing_planes: d.vanishing_planes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
     })
@@ -747,6 +748,7 @@ impl Loader<'_> {
             last_document_state,
             measurement: m.measurement.clone(),
             notes: m.notes.clone(),
+            vanishing_planes: m.vanishing_planes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
         };

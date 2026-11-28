@@ -96,6 +96,7 @@ fn a_plane_and_ok_paste_in_one_step() {
     let layer = app.session.active().unwrap().active_layer.unwrap();
     let mut h = open(app);
     set(&mut h, json!({"planes": [floor()]}));
+    set(&mut h, json!({"pastes": [{"plane": 0}]}));
     assert!(source(&h).stamp_preview().is_none(), "no strokes, no stamp preview");
     let before = h.state().session.active().unwrap().history.past_len();
     ok(&mut h);
@@ -118,6 +119,7 @@ fn vanishing_point_cancel_leaves_pending_paste_unapplied() {
 
     let mut h = open(app);
     set(&mut h, json!({"planes": [floor()]}));
+    set(&mut h, json!({"pastes": [{"plane": 0}]}));
     let pending = describe(h.state()).expect("Vanishing Point is open");
     assert_eq!(pending["paste"].as_array().map(Vec::len), Some(1), "OK would paste onto the plane");
 
@@ -131,6 +133,27 @@ fn vanishing_point_cancel_leaves_pending_paste_unapplied() {
     let st = app.session.active().unwrap();
     assert_eq!(st.doc, original, "Cancel leaves the document unchanged");
     assert_eq!((st.history.past_len(), st.revision), (steps, revision), "Cancel does not edit the document or its history");
+}
+
+#[test]
+fn two_pastes_show_in_the_stamp_preview_and_land_on_ok() {
+    let mut app = app_with_layer();
+    copy_red_square(&mut app);
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"pastes": [{"at": [0.1, 0.2], "width": 0.2}, {"at": [0.65, 0.2], "width": 0.2, "angle": 30}]}));
+    set(&mut h, json!({"clone": [{"source": [100, 110], "points": [[100, 115]], "size": 8}]}));
+    let centres = [(54, 60), (175, 60)];
+    for (x, y) in centres {
+        assert!(shown(&h, x, y)[0] > 230);
+    }
+    ok(&mut h);
+    let out = committed(h.state(), layer, false);
+    for (x, y) in centres {
+        assert!(out.rgba(x, y)[0] > 0.9);
+    }
+    assert!(out.rgba(115, 60)[0] < 0.5, "the gap between the pastes");
 }
 
 #[test]
@@ -208,6 +231,7 @@ fn stamp_preview_paints_over_the_paste_like_ok() {
         let layer = app.session.active().unwrap().active_layer.unwrap();
         let mut h = open(app);
         set(&mut h, json!({"planes": [full_plane()], "newLayer": new_layer}));
+        set(&mut h, json!({"pastes": [{"plane": 0}]}));
         // The paste covers x 65..175 from y 45 down. One stroke clones it onto the base layer, the other paints across
         // its right edge.
         set(
@@ -234,13 +258,14 @@ fn moving_the_paste_repaints_the_stamp_preview() {
     copy_red_square(&mut app);
     let mut h = open(app);
     set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"pastes": [{"plane": 0}]}));
     set(&mut h, json!({"clone": [{"source": [200, 130], "points": [[30, 130]], "size": 8}]}));
     assert!(shown(&h, 100, 60)[0] > 230);
-    set(&mut h, json!({"pasteAt": [0.0, 0.5]}));
+    set(&mut h, json!({"pastes": [{"at": [0.0, 0.5]}]}));
     assert!(shown(&h, 100, 60)[0] < 128, "the paste left its old place");
     assert!(shown(&h, 30, 100)[0] > 230, "and shows at the new one");
-    set(&mut h, json!({"paste": false}));
-    assert!(shown(&h, 30, 100)[0] < 128, "paste off: gone from the preview");
+    set(&mut h, json!({"pastes": []}));
+    assert!(shown(&h, 30, 100)[0] < 128, "the removed paste is gone from the preview");
 }
 
 #[test]
@@ -305,5 +330,158 @@ fn ok_paints_the_layer_the_workspace_was_opened_on() {
         for (&(x, y), p) in at.iter().zip(&preview) {
             assert!(close(*p, done.rgba(x, y)), "({x}, {y}) newLayer={new_layer}");
         }
+    }
+}
+
+/// OK with only planes keeps them with the document, and the window reopens with every one of them.
+#[test]
+fn planes_come_back_when_the_window_reopens() {
+    let app = app_with_layer();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [floor(), {"corners": [[10, 10], [60, 10], [60, 50], [10, 50]]}]}));
+    ok(&mut h);
+    assert_eq!(h.state().session.active().unwrap().doc.vanishing_planes.len(), 2);
+    let ctx = h.ctx.clone();
+    begin(h.state_mut(), &ctx).unwrap();
+    h.run_steps(4);
+    let app = h.state();
+    let vp = app.vanishing.as_ref().expect("reopened");
+    let hosted = app.framework.dialogs.get_by_id::<Hosted>(vp.dialog).unwrap();
+    assert_eq!(hosted.workspace().session().planes.len(), 2);
+}
+
+/// The OK button (not only the automation's commit) runs the command: the planes stay with the document.
+#[test]
+fn the_ok_button_keeps_the_planes() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = open(app_with_layer());
+    set(&mut h, json!({"planes": [floor()]}));
+    h.get_by_label("OK").click();
+    h.run_steps(6);
+    assert!(h.state().vanishing.is_none(), "OK closed the window");
+    assert_eq!(h.state().session.active().unwrap().doc.vanishing_planes.len(), 1);
+}
+
+/// An empty layer over a photo: the window shows the photo, a stroke clones from it, and OK paints what the preview
+/// showed onto the empty layer.
+#[test]
+fn an_empty_layer_shows_the_image_and_stamps_from_it_like_ok() {
+    let mut app = app_with_layer();
+    app.session
+        .edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 70, 90), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.sync_views();
+    let empty = app.session.active().unwrap().active_layer.unwrap();
+    let mut h = open(app);
+    // The window shows the image below the empty layer, not a transparent layer.
+    let mut px = ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+    source(&h).image().read(PixelRect::new(200, 30, 201, 31), 1, &mut px);
+    assert!(px.pixels[0].a() == 255 && px.pixels[0].b() > px.pixels[0].r(), "the photo shows: {:?}", px.pixels[0]);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80], [126, 80]], "size": 12}]}));
+    let at = [(120, 80), (124, 80), (200, 30)];
+    let preview: Vec<[u8; 4]> = at.iter().map(|&(x, y)| shown(&h, x, y)).collect();
+    assert!(preview[0][0] > 230, "the stroke clones the red stripe from the image below");
+    ok(&mut h);
+    let st = h.state().session.active().unwrap();
+    assert!(st.doc.layer(empty).unwrap().surface().unwrap().rgba(120, 80)[0] > 0.9, "the stroke lands on the empty layer");
+    let done = visible_image(&st.doc);
+    for (&(x, y), p) in at.iter().zip(&preview) {
+        assert!(close(*p, done.rgba(x, y)), "({x}, {y}): {p:?} vs {:?}", done.rgba(x, y));
+    }
+}
+
+#[test]
+fn a_shadow_follows_the_dabs_of_a_later_batch() {
+    let mut app = app_with_layer();
+    app.session
+        .edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 110, 90), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("shadow", |doc, active| {
+            let mut shadow = photocraft_doc::effects::Effect::default_drop_shadow();
+            if let photocraft_doc::effects::Effect::DropShadow(s) = &mut shadow {
+                (s.distance, s.size) = (24.0, 0.0);
+            }
+            let layer = doc.layer_mut(active.unwrap()).unwrap();
+            layer.effects.items.push(shadow);
+            layer.effects.enabled = true;
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80]], "size": 12}]}));
+    // The second batch goes on with the same stroke, so only its dabs are painted again.
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80], [160, 80]], "size": 12}]}));
+    let at: Vec<(i32, i32)> = (90..200).step_by(3).flat_map(|x| (50..130).step_by(3).map(move |y| (x, y))).collect();
+    let preview: Vec<[u8; 4]> = at.iter().map(|&(x, y)| shown(&h, x, y)).collect();
+    ok(&mut h);
+    let done = visible_image(&h.state().session.active().unwrap().doc);
+    for (&(x, y), p) in at.iter().zip(&preview) {
+        assert!(close(*p, done.rgba(x, y)), "({x}, {y}): {p:?} vs {:?}", done.rgba(x, y));
+    }
+}
+
+#[test]
+fn a_half_opaque_empty_layer_previews_the_stamp_as_ok_paints_it() {
+    let mut app = app_with_layer();
+    app.session
+        .edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 70, 90), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("half", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().opacity = 0.5;
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80], [126, 80]], "size": 12}]}));
+    let preview = shown(&h, 120, 80);
+    ok(&mut h);
+    let done = visible_image(&h.state().session.active().unwrap().doc);
+    assert!(done.rgba(120, 80)[0] < 0.9, "the layer's opacity lets the image below show through");
+    assert!(close(preview, done.rgba(120, 80)), "{preview:?} vs {:?}", done.rgba(120, 80));
+}
+
+/// A paste lands where it was made among the strokes, in the preview and on OK alike: before the stroke, the stroke
+/// paints over it; after the stroke, it covers the stroke.
+#[test]
+fn a_paste_lands_between_the_strokes_in_the_order_they_were_made() {
+    for after in [0, 1] {
+        let mut app = app_with_layer();
+        app.session
+            .edit("stripe", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(150, 110, 190, 140), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        copy_red_square(&mut app);
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let mut h = open(app);
+        set(&mut h, json!({"planes": [full_plane()]}));
+        set(&mut h, json!({"clone": [{"source": [170, 125], "points": [[54, 60], [56, 60]], "size": 12}]}));
+        set(&mut h, json!({"pastes": [{"at": [0.1, 0.2], "width": 0.2, "after": after}]}));
+        let preview = shown(&h, 54, 60);
+        let (green, red) = (preview[1] > preview[0], preview[0] > preview[1]);
+        assert!(if after == 0 { green } else { red }, "after={after}: {preview:?}");
+        ok(&mut h);
+        let done = committed(h.state(), layer, false);
+        assert!(close(preview, done.rgba(54, 60)), "after={after}: OK paints what the preview showed: {preview:?} vs {:?}", done.rgba(54, 60));
     }
 }
