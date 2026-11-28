@@ -185,6 +185,27 @@ fn a_new_crop_frame_is_a_new_context() {
     assert_eq!(bar(&mut h)["rect"], automatic_crop_rect());
 }
 
+/// A crop discarded while the bar is hidden still ends that frame's context: the next frame's bar is automatic.
+#[test]
+fn a_crop_discarded_while_the_bar_is_hidden_is_a_new_context() {
+    let mut h = harness();
+    crop_frame(&mut h);
+    drag_grip(&mut h);
+    assert!(place(&h).offset.is_some());
+    control(&mut h, "ui.set", json!({"panels": {"context_task_bar": false}}));
+    h.run_steps(4);
+    crate::crop_ui::discard(h.state_mut());
+    h.run_steps(4);
+    h.state_mut().canvas_tools.crop.tool.crop_to(CropBox::new(DocRect::new(100.0, 100.0, 200.0, 160.0), 0.0));
+    h.run_steps(4);
+    assert!(crate::crop_ui::pending(h.state()), "a new pending frame while the bar is hidden");
+    control(&mut h, "ui.set", json!({"panels": {"context_task_bar": true}}));
+    h.run_steps(6);
+    let p = place(&h);
+    assert!(p.offset.is_none() && p.at.is_none(), "{p:?}");
+    assert_eq!(bar(&mut h)["rect"], automatic_crop_rect());
+}
+
 /// The Frame tool's bar: another frame layer is another context.
 #[test]
 fn another_frame_layer_is_a_new_context() {

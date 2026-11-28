@@ -38,6 +38,8 @@ pub fn eligible(app: &PhotocraftApp) -> bool {
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     // The canvas run that shows the bar reports where; a replay of that run shows it there still.
     app.ui.task_bar_shown = None;
+    // A crop applied or discarded while the bar is hidden still ends that frame's context.
+    track_crop_frame(app);
     if !wanted(app) {
         return;
     }
@@ -77,16 +79,20 @@ fn label(text: &str) -> Label {
     Label::from(text.to_string())
 }
 
-/// A new crop frame (the last one applied or discarded) or another document is a new context for the bar (#16758).
-fn enter_context(app: &mut PhotocraftApp) {
-    let Some(doc) = app.session.active().map(|d| d.doc.id.0) else { return };
-    let pending = crop_ui::pending(app);
+/// Counts the crop frames that end (applied or discarded) on every pass, whether the bar shows or not.
+fn track_crop_frame(app: &mut PhotocraftApp) {
+    let pending = app.canvas_tools.crop.tool.session().pending();
     let track = &mut app.ui.task_bar_track;
     if track.crop_pending && !pending {
         track.crop_frame = track.crop_frame.wrapping_add(1);
     }
     track.crop_pending = pending;
-    let frame = track.crop_frame;
+}
+
+/// A new crop frame (the last one applied or discarded) or another document is a new context for the bar (#16758).
+fn enter_context(app: &mut PhotocraftApp) {
+    let Some(doc) = app.session.active().map(|d| d.doc.id.0) else { return };
+    let frame = app.ui.task_bar_track.crop_frame;
     app.ui.enter_task_bar_context(TaskBarContext::Crop { doc, frame });
 }
 
