@@ -11,6 +11,10 @@ default = ["gpu"]
 # Open HEIC/HEIF photos (the optional craft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
+# Read and write AVIF (the optional `avif` encoder and `avif-decode` decoder of the same crate).
+# Built into the official native releases; the web build stays encode-only.
+avif = ["photocraft-codecs/avif"]
+avif-decode = ["photocraft-codecs/avif-decode"]
 # Optional native GPU rendering backend, enabled by default in native CLI builds.
 gpu = ["photocraft-automation/gpu"]
 

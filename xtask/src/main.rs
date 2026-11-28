@@ -41,7 +41,7 @@ commands:
   ci [lint | archive [--gpu-shard] | build | tests [--from <dir> [--shard <k>]] [--gpu | --no-gpu] | <step>]
                   the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
-                  --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
+                  --features heif,avif,avif-decode (stops at first failure). The gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `archive` builds the tests into the nextest archive at
                   $NEXTEST_ARCHIVE_FILE (the gate's build job, which then runs `doctest`), or with $NEXTEST_ARCHIVE_DIR one
                   archive per gate shard ($GATE_SHARDS of them, at $NEXTEST_ARCHIVE_DIR/<k>/$NEXTEST_ARCHIVE_NAME), each
@@ -290,9 +290,9 @@ fn cmd_test() -> Result<(), String> {
     run(c, &format!("cargo {tool} {}", TEST_TARGETS.join(" ")))
 }
 
-/// What the CI gate adds to every build: `--locked`, and the optional craft-heif decoder that
-/// official builds open HEIC photos with.
-const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
+/// What the CI gate adds to every build: `--locked`, and the optional craft-heif decoder and the
+/// AVIF codecs that official builds open HEIC and AVIF photos with.
+const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif,avif,avif-decode"];
 
 /// Where a `ci` step runs when the gate splits the work over its jobs. `cargo xtask ci` alone runs
 /// every step, in the order of [`CI_STEPS`].
@@ -376,7 +376,7 @@ fn step_fmt(_: &CiOptions) -> Result<(), String> {
 fn step_clippy(_: &CiOptions) -> Result<(), String> {
     let mut c = cargo();
     c.arg("clippy").args(GATE_ARGS).args(["--all-targets", "--keep-going", "--", "-D", "warnings"]);
-    run(c, "cargo clippy --workspace --locked --features heif --all-targets --keep-going -- -D warnings")
+    run(c, "cargo clippy --workspace --locked --features heif,avif,avif-decode --all-targets --keep-going -- -D warnings")
 }
 
 fn step_doctest(o: &CiOptions) -> Result<(), String> {
@@ -846,7 +846,7 @@ mod ci_tests {
             exclude: vec!["photocraft-web".into()],
             corpus: false,
         };
-        let build = "--workspace --locked --features heif --exclude photocraft-web --lib --bins --tests";
+        let build = "--workspace --locked --features heif,avif,avif-decode --exclude photocraft-web --lib --bins --tests";
         let args = nextest_args(&options, false, Some("package(g)"), None).join(" ");
         assert_eq!(args, format!("nextest run --profile ci {build} --partition hash:2/3 -E not (package(g))"));
         let gpu = CiOptions { selection: Selection::Gpu, partition: None, ..options.clone() };
@@ -859,11 +859,11 @@ mod ci_tests {
         assert_eq!(test_build_args(&here.exclude, false).join(" "), build);
         assert_eq!(
             test_build_args(&here.exclude, true).join(" "),
-            "--workspace --locked --features heif,photocraft-io/corpus,photocraft-engine/corpus --exclude photocraft-web --lib --bins --tests"
+            "--workspace --locked --features heif,avif,avif-decode,photocraft-io/corpus,photocraft-engine/corpus --exclude photocraft-web --lib --bins --tests"
         );
         // A package the build leaves out cannot get a feature.
         let args = test_build_args(&["photocraft-io".to_string()], true).join(" ");
-        assert!(args.contains("--features heif,photocraft-engine/corpus ") && !args.contains("photocraft-io/corpus"), "{args}");
+        assert!(args.contains("--features heif,avif,avif-decode,photocraft-engine/corpus ") && !args.contains("photocraft-io/corpus"), "{args}");
     }
 
     #[test]

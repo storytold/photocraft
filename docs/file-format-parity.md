@@ -16,8 +16,9 @@ dispatch), `crates/psd`, `crates/raw`, `crates/heif`, `crates/affinity`. More de
 **Summary.** By count, 13 of Photoshop's 31 formats are fully supported in the directions Photoshop supports them, 4 partially (48%,
 measured). Weighted by use (PSD/PSB 40%, JPEG 15%, PNG 15%, TIFF 10%, camera raw 8%, WebP/AVIF/
 HEIF/JXL 6%, PDF 3%, everything else 3%), presence is ~80% and ready-for-real-work ~60%: PSD
-is broad but not yet reliable against Photoshop (gap G1), and Photoshop PDF, AVIF read and JPEG
-XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
+is broad but not yet reliable against Photoshop (gap G1), and Photoshop PDF and JPEG
+XL are missing (gap G10; AVIF reads and writes in official builds, whose CI gate now passes
+`avif,avif-decode`). Remaining: 300–500 h including PSD fidelity.
 
 ## Photoshop's formats
 
@@ -32,7 +33,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | GIF | R/W | yes | yes | File › Open keeps the first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the delays (#572). Indexed Color documents save with the document's own colour table, unused entries and transparent index included, and pixel indices unchanged (#11824). Per-frame delays and keeping the frames in `.pcraft` are not done |
 | BMP | R/W | yes | yes | 8-bit; palette BMPs open in Indexed Color mode and Indexed Color documents save as palette BMPs (no transparency) |
 | WebP | R/W | yes | yes | Lossless and our own lossy VP8 encoder; ICC/EXIF/XMP (the CLI's `--metadata none` leaves the document XMP out, #9466); Save keeps an opened file lossy (at its quality) or lossless (#2399); Save for Web (Legacy) writes it too, lossy at its Quality or lossless, a format Photoshop's legacy dialog lacks (#6391). File › Open keeps an animation's first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the durations (#1198) |
-| AVIF | R/W | no (#463) | optional feature, off by default | |
+| AVIF | R/W | yes (clean-room AV1/HEIF reader, `avif-decode` feature, on in releases) | yes (ravif/rav1e, `avif` feature, on in releases) | 8/10/12-bit read; encode from 8- and 16-bit SDR as 10-bit 4:4:4; the web build stays encode-only |
 | JPEG XL | R/W | inside DNG only | no | |
 | HEIF/HEIC | R/W(HEIF) | yes (pure-Rust heic-rs, `heif` feature, on in releases) | no | 8/16-bit |
 | OpenEXR | R/W | yes | yes | f16/f32; deep EXR and Cryptomatte readers (`corpus/exr`) |

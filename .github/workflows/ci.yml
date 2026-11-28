@@ -218,7 +218,7 @@ jobs:
       after-archive-command: cargo xtask-gate doctest
       test-shards: 4
       shard-archives: true
-      # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
+      # The tests and panic_hunt with `--locked --features heif,avif,avif-decode` (TEST_TARGETS in xtask/src/main.rs).
       shard-command: bash scripts/ci-test-shard.sh --gpu-shard
 
   # The Windows tests and Clippy on the same gate, when `platforms` says the run needs them: a

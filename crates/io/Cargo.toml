@@ -14,6 +14,10 @@ workspace = true
 corpus = []
 # HEIC/HEIF decode (forwarded to photocraft-codecs; see its `heif` feature).
 heif = ["photocraft-codecs/heif", "photocraft-formats/heif"]
+# AVIF encode, behind photocraft-codecs' non-default `avif` feature (ravif and rav1e).
+avif = ["photocraft-codecs/avif", "photocraft-formats/avif"]
+# AVIF decode, behind `avif-decode` (native targets only: on wasm32 a decoder panic aborts).
+avif-decode = ["photocraft-codecs/avif-decode"]
 # Test support for synthetic memory injection, estimate charges and verification across crates.
 testgen = []
 # Editable PDF import (experimental): painted paths and embedded-font text become editable
