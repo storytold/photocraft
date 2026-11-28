@@ -1273,21 +1273,25 @@ fn replace_link(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether Quick Export needs a save dialog. Same Folder can write directly only if the
+/// document has a file and the export won't replace it (#6599). The web downloads directly.
+pub(crate) fn quick_export_asks_for_path(session: &photocraft_engine::Session) -> bool {
+    !cfg!(target_arch = "wasm32")
+        && (session.prefs().export.quick_export_location != photocraft_engine::prefs::ExportLocation::SameFolder
+            || session.active().is_none_or(|d| d.path.is_none())
+            || photocraft_engine::web_cmds::quick_export_target_is_own_file(session))
+}
+
 /// File › Export › Quick Export as PNG: the format, quality, metadata, colour space and location
 /// from File › Export › Export Preferences (engine `file.export.quickExport`). On the web (no
 /// file system) it falls back to a PNG download through the export service.
 pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     if !cfg!(target_arch = "wasm32") {
-        let prefs = app.session.prefs().export.clone();
-        let fmt = serde_json::to_value(prefs.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
-        let same = serde_json::to_value(prefs.quick_export_location).ok().is_some_and(|v| v == "sameFolder");
-        let saved = app.session.active().is_some_and(|d| d.path.is_some());
-        // Same Folder writes beside the document's file without asking, except when that would
-        // replace the file itself (a document opened from photo.png): then the save dialog asks,
-        // so replacing it is the user's choice (#6599).
-        if same && saved && !photocraft_engine::web_cmds::quick_export_target_is_own_file(&app.session) {
+        if !quick_export_asks_for_path(&app.session) {
             return quick_export(app, json!({}));
         }
+        let format = app.session.prefs().export.quick_export_format;
+        let fmt = serde_json::to_value(format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
         let st = app.session.active().ok_or("no document")?;
         let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
         let (suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);

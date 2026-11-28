@@ -252,7 +252,8 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
                 QuickExportFormat::Exr => "EXR",
             }
         };
-        item.label = format!("Quick Export as {format}");
+        let ellipsis = if crate::export_dialog::quick_export_asks_for_path(&app.session) { "…" } else { "" };
+        item.label = format!("Quick Export as {format}{ellipsis}");
     }
     // Smart Objects › Reveal in Finder names this platform's file manager (UI-217-19).
     if let Some(item) = find(&mut rows, "layer.smartObjects.revealInFinder") {

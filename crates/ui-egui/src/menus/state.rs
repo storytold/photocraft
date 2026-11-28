@@ -233,7 +233,11 @@ pub(super) fn translated_menu_label(lang: crate::i18n::Lang, id: &str, label: &s
     if id == "file.export.quickExportAsPng"
         && let Some(fmt) = label.strip_prefix("Quick Export as ")
     {
-        return crate::i18n::tr_id(lang, id, "Quick Export as PNG").replace("PNG", fmt);
+        let (format, ellipsis) = fmt.strip_suffix('…').map_or((fmt, ""), |format| (format, "…"));
+        // The catalog key is shared with the version that exports without a dialog.
+        let mut translated = crate::i18n::tr_id(lang, id, "Quick Export as PNG").replace("PNG", format);
+        translated.push_str(ellipsis);
+        return translated;
     }
     if id == "window.arrange.newWindowForDocument"
         && let Some(name) = label.strip_prefix("New Window for ")
