@@ -961,11 +961,15 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
     let cmyk = doc_cmyk_space(s);
+    // The same Anti-alias gate as the commit: only the Anti-alias-off branch of the effect reads a
+    // footprint's modulation map (#13160), so only that preview pays the second rasterising pass.
+    let keep_mods = !rs.anti_alias;
     // The same CMYK space as the commit, so the preview's dabs recolour the same device colours.
     photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-        crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| {
+        let live = crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| {
             Box::new(color_replacement_effect(pre.clone(), rs))
-        })
+        })?;
+        Ok::<_, EngineError>(if keep_mods { live.with_footprint_mods() } else { live })
     })?
     .with_tail_preview()
 }

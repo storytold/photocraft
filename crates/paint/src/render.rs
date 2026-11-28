@@ -450,12 +450,64 @@ impl BrushContext {
         }
     }
 
-    /// One dab's dense footprint (for the sequential retouch tools).
+    /// One dab's dense footprint (for the sequential retouch tools). It carries no modulation map
+    /// ([`Footprint::mods`] is `None`): only a tool that hardens the tip's edge asks for one.
     pub fn footprint(&self, d: &Dab, index: usize) -> Footprint {
         let rect = self.dab_rect(d, false);
         let mut cov = Vec::new();
         self.rasterize(d, false, rect, &mut cov);
-        Footprint { dab: *d, index, rect, cov }
+        Footprint { dab: *d, index, rect, cov, mods: None }
+    }
+
+    /// [`footprint`](Self::footprint), additionally building the dab's [`Footprint::mods`] map for
+    /// an effect that hardens the tip's edge and must keep the rest of the dab's strength
+    /// (Color Replacement with Anti-alias off, #13160). That is a second rasterising pass, so it is
+    /// asked for only where it is read; the map stays `None` for a brush without Wet Edges or
+    /// per-tip Texture, whose fully covered pixels take exactly the dab's alpha.
+    pub fn footprint_with_mods(&self, d: &Dab, index: usize) -> Footprint {
+        let rect = self.dab_rect(d, false);
+        let mut cov = Vec::new();
+        self.rasterize(d, false, rect, &mut cov);
+        let mods = self.dab_modulations(d, rect);
+        Footprint { dab: *d, index, rect, cov, mods }
+    }
+
+    /// The dab's strength at each pixel it covers once its own tip edge is forced to full coverage
+    /// (the `mods` map of [`Footprint`], #13160): the per-tip Texture combine and the Wet Edges
+    /// factor at the dab's depth, times the dab's alpha. `None` when the brush carries neither
+    /// modulation — then the value the dab leaves at a fully covered pixel is just its alpha.
+    fn dab_modulations(&self, d: &Dab, rect: Rect) -> Option<Vec<f32>> {
+        let b = &self.brush;
+        let wet = b.wet_edges;
+        let tex_tip = b.texture.enabled && b.texture.each_tip && self.texture.is_some();
+        if !wet && !tex_tip {
+            return None;
+        }
+        // With `depth` the rasteriser leaves Wet Edges out of the coverage and reports each painted
+        // pixel's depth (1 − rn) inside the dab, which is exactly the rn the wet factor takes. A
+        // brush carrying one of the modulations takes the general loop either way. Both maps are
+        // w × h dense: rasterize_into sizes every output it is given from `rect`.
+        let mut scratch = Vec::new();
+        let mut depth = Vec::new();
+        self.rasterize_into(d, false, rect, &mut scratch, Some(&mut depth));
+        let w = rect.width() as usize;
+        let mut mods = vec![0.0f32; scratch.len()];
+        for (i, (sc, dp)) in scratch.iter().zip(depth.iter()).enumerate() {
+            if *sc <= 0.0 {
+                continue;
+            }
+            let mut val = 1.0f32;
+            if tex_tip {
+                // The same combine the row applies, at full tip coverage; `d.depth` is the dab's
+                // own texture depth, what the combine takes there too.
+                val = texture_combine(b.texture.mode, 1.0, self.texture_at(rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32), d.depth);
+            }
+            if wet {
+                val *= wet_factor(1.0 - *dp);
+            }
+            mods[i] = val * d.alpha;
+        }
+        Some(mods)
     }
 
     /// Stroke-level masks applied to accumulated coverage `c` at a pixel.
