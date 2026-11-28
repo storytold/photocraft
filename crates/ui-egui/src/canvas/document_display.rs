@@ -577,6 +577,7 @@ fn canvas_controls(
             crate::transform_task_bar::show(app, ui, bar_area);
         }
         crate::frame_tool::task_bar::show(ui, app, bar_area);
+        crate::tools::place_action_bar::draw(app, ui, bar_area);
     }
     crate::vector_ui::shapes::show_preview(app, ui, rect, &space.view);
     crate::tools::brush_feedback::show(ui, app, rect, pointer);

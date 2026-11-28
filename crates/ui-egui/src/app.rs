@@ -189,6 +189,7 @@ impl PhotocraftApp {
             wide_angle: None,
             color_picker_live: Vec::new(),
             after_transform_commit: None,
+            place_action_bar: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,
