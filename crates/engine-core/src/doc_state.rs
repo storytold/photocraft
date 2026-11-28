@@ -31,6 +31,9 @@ pub struct DocState {
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
+    /// The channel views undo brings back, by the step they belong to: the ids of the history
+    /// states New Channel or Calculations started from and made (#14683). View state, not history.
+    pub(crate) undo_channel_views: Vec<(u64, u64, channel_cmds::ChannelView)>,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
     pub isolated_layers: Vec<LayerId>,
     /// Painting symmetry preset or sampled path (tool state, not document pixels).
@@ -144,6 +147,7 @@ impl DocState {
             damage_log: Default::default(),
             coalesce: None,
             channel_view,
+            undo_channel_views: Vec::new(),
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
@@ -379,8 +383,14 @@ pub struct ToolState {
     /// the inks the person picked (#4196). Matched by colour, so it follows a swap, a reset or a
     /// mask pair without bookkeeping.
     pub cmyk_picks: Vec<([f32; 3], [f32; 4])>,
+    /// CMYK ink associations for the current foreground/background pair
+    /// and the alternate pair used while targeting masks.
+    /// Each association also records its RGB stand-in.
+    pub cmyk_roles: CmykRoles,
 }
 
+/// Native CMYK inks associated with each color role.
+pub type CmykRoles = [[Option<([f32; 3], [f32; 4])>; 2]; 2];
 impl ToolState {
     /// How many CMYK picks are remembered.
     pub const CMYK_PICKS: usize = 8;
@@ -398,6 +408,42 @@ impl ToolState {
         self.cmyk_picks.iter().rev().find(|(c, _)| *c == rgb).map(|(_, k)| *k)
     }
 
+    /// Store the native inks for the current foreground (0) or background (1).
+    pub fn remember_role_cmyk(&mut self, role: usize, inks: [f32; 4]) {
+        let color = if role == 0 { self.foreground } else { self.background };
+        self.cmyk_roles[0][role] = Some(([color[0], color[1], color[2]], inks));
+    }
+
+    /// Return native inks only while their associated RGB still matches.
+    pub fn picked_role_cmyk(&self, role: usize) -> Option<[f32; 4]> {
+        let color = if role == 0 { self.foreground } else { self.background };
+        let rgb = [color[0], color[1], color[2]];
+        self.cmyk_roles[0][role].filter(|(stored_rgb, _)| *stored_rgb == rgb).map(|(_, inks)| inks)
+    }
+
+    /// Clear an association when its colour is explicitly replaced.
+    pub fn clear_role_cmyk(&mut self, role: usize) {
+        self.cmyk_roles[0][role] = None;
+    }
+
+    /// Resolve an explicitly supplied RGB colour only when its native inks
+    /// are unambiguous. Never choose arbitrarily between two different
+    /// foreground/background separations with the same displayed RGB.
+    pub fn matching_cmyk(&self, rgb: [f32; 3]) -> Option<[f32; 4]> {
+        let foreground = [self.foreground[0], self.foreground[1], self.foreground[2]] == rgb;
+        let background = [self.background[0], self.background[1], self.background[2]] == rgb;
+
+        match (foreground, background) {
+            (true, true) => {
+                let a = self.picked_role_cmyk(0);
+                let b = self.picked_role_cmyk(1);
+                if a == b { a } else { None }
+            }
+            (true, false) => self.picked_role_cmyk(0),
+            (false, true) => self.picked_role_cmyk(1),
+            (false, false) => self.picked_cmyk(rgb),
+        }
+    }
     /// Photoshop's colour pair for a layer mask that has none yet: white foreground, black
     /// background (reveal-paint first).
     pub const MASK_COLORS: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
@@ -432,6 +478,7 @@ impl ToolState {
             return false;
         }
         self.mask_targeted = mask;
+        self.cmyk_roles.swap(0, 1);
         let [fg, bg] = std::mem::replace(&mut self.other_colors, [self.foreground, self.background]);
         self.foreground = fg;
         self.background = bg;
@@ -459,6 +506,7 @@ impl Default for ToolState {
             mask_targeted: false,
             other_colors: Self::MASK_COLORS,
             cmyk_picks: Vec::new(),
+            cmyk_roles: [[None; 2]; 2],
         }
     }
 }
@@ -585,6 +633,82 @@ mod selected_tests {
         doc.remove(ids[3]);
         check(&doc);
         assert_eq!(selected_in(&doc, Some(ids[0]), &[ids[0], ids[3], ids[4]]), vec![ids[0]], "deleted layers are skipped");
+    }
+}
+
+#[cfg(test)]
+mod cmyk_same_rgb_diagnostic_tests {
+    use serde_json::json;
+
+    #[test]
+    fn foreground_and_background_keep_distinct_inks_with_same_rgb() {
+        let mut s = crate::session();
+
+        let foreground = [0.0, 0.0, 0.0, 1.0];
+        let background = [0.5, 0.5, 0.5, 1.0];
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": "#000000",
+                "background": "#000000",
+                "foregroundCmyk": foreground,
+                "backgroundCmyk": background
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(foreground));
+        assert_eq!(s.tools.picked_role_cmyk(1), Some(background));
+
+        // Swap exchanges both RGB and the native CMYK separations.
+        s.execute("tools.swapColors", json!({})).unwrap();
+
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(background));
+        assert_eq!(s.tools.picked_role_cmyk(1), Some(foreground));
+
+        // Default colors must clear both native associations.
+        s.execute("tools.defaultColors", json!({})).unwrap();
+
+        assert_eq!(s.tools.picked_role_cmyk(0), None);
+        assert_eq!(s.tools.picked_role_cmyk(1), None);
+    }
+
+    #[test]
+    fn mask_target_keeps_its_own_cmyk_associations() {
+        let mut s = crate::session();
+
+        let foreground = [0.0, 0.0, 0.0, 1.0];
+        let mask_inks = [0.5, 0.5, 0.5, 1.0];
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": "#000000",
+                "foregroundCmyk": foreground
+            }),
+        )
+        .unwrap();
+
+        assert!(s.tools.target_mask(true));
+        assert_eq!(s.tools.picked_role_cmyk(0), None);
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": "#000000",
+                "foregroundCmyk": mask_inks
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(mask_inks));
+
+        assert!(s.tools.target_mask(false));
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(foreground));
+
+        assert!(s.tools.target_mask(true));
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(mask_inks));
     }
 }
 

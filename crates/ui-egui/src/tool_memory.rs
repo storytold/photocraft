@@ -32,6 +32,7 @@ pub(crate) type ToolBrushes = (Tool, Vec<(Tool, BrushSettings)>);
 
 /// The sRGB stand-ins and exact inks of recently picked CMYK colours, oldest first.
 pub(crate) type CmykPicks = Vec<([f32; 3], [f32; 4])>;
+pub(crate) type CmykRoles = [[Option<([f32; 3], [f32; 4])>; 2]; 2];
 
 /// Explicit choices override temporary pen and held-key tools, even when selecting the same tool.
 pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
@@ -89,7 +90,7 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Ok(now) = serde_json::to_value(tool)
             && app.session.prefs().selected_tool != now
         {
-            app.session.prefs.edit(|p| p.selected_tool = now);
+            app.session.prefs.remember(|p| p.selected_tool = now);
             // prefs_ui::tick ran before the panels; ensure it can flush this new revision.
             ctx.request_repaint();
         }
@@ -97,13 +98,13 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     persist_colors(app, ctx);
     persist_group_tools(app, ctx, tool);
     persist_brushes(app);
-    if app.prefs_rt.tool_options.as_ref() == Some(&app.ui.tool_options) {
+    if app.prefs_rt.tool_options.as_ref() == Some(&*app.ui.tool_options) {
         return;
     }
-    app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
+    app.prefs_rt.tool_options = Some((*app.ui.tool_options).clone());
     let now = changed(&app.ui.tool_options);
     if app.session.prefs().tool_options != now {
-        app.session.prefs.edit(|p| p.tool_options = now);
+        app.session.prefs.remember(|p| p.tool_options = now);
     }
 }
 
@@ -114,21 +115,87 @@ fn colors(app: &PhotocraftApp) -> [[[f32; 4]; 2]; 2] {
     if t.mask_targeted { [t.other_colors, current] } else { [current, t.other_colors] }
 }
 
+/// Associations in persistent order: pixel foreground/background, then mask
+/// foreground/background, regardless of the currently selected target.
+fn cmyk_roles(app: &PhotocraftApp) -> CmykRoles {
+    let roles = app.session.tools.cmyk_roles;
+    if app.session.tools.mask_targeted { [roles[1], roles[0]] } else { roles }
+}
+
 fn persist_colors(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let now = colors(app);
-    if app.prefs_rt.tool_colors == Some(now) && app.prefs_rt.tool_cmyk_picks == app.session.tools.cmyk_picks {
+    let roles = cmyk_roles(app);
+    if app.prefs_rt.tool_colors == Some(now) && app.prefs_rt.tool_cmyk_picks == app.session.tools.cmyk_picks && app.prefs_rt.tool_cmyk_roles == Some(roles) {
         return;
     }
     app.prefs_rt.tool_colors = Some(now);
     app.prefs_rt.tool_cmyk_picks = app.session.tools.cmyk_picks.clone();
-    let saved = photocraft_engine::ToolState::saved_colors(now, &app.prefs_rt.tool_cmyk_picks);
-    app.session.prefs.edit(|p| p.tool_colors = photocraft_engine::prefs::ToolColors(saved));
+    app.prefs_rt.tool_cmyk_roles = Some(roles);
+    let saved = color_value(now, &app.prefs_rt.tool_cmyk_picks, roles);
+    #[cfg(not(target_arch = "wasm32"))]
+    let saved = {
+        let mut saved = saved;
+        photocraft_engine::prefs::stamp_tool_color_picks(&mut saved, &app.session.prefs().tool_colors);
+        saved
+    };
+    app.session.prefs.remember(|p| p.tool_colors = photocraft_engine::prefs::ToolColors(saved));
     // Panels and shortcuts can change colours after prefs_ui::tick already ran this frame.
     ctx.request_repaint();
 }
 
-fn restore_colors(app: &mut PhotocraftApp) {
-    let saved = &app.session.prefs().tool_colors;
+fn color_value(pairs: [[[f32; 4]; 2]; 2], cmyk_picks: &CmykPicks, cmyk_roles: CmykRoles) -> Value {
+    let [[foreground, background], [mask_foreground, mask_background]] = pairs;
+    json!({
+        "foreground": foreground, "background": background,
+        "maskForeground": mask_foreground, "maskBackground": mask_background,
+        "cmykPicks": cmyk_picks,
+        "cmykRoles": cmyk_roles,
+    })
+}
+
+/// Reconstruct legacy CMYK role associations from saved RGB colors and picks.
+/// Used by restoration and by the three-way preferences merge baseline.
+pub(crate) fn recover_legacy_cmyk_roles(saved: &Value) -> CmykRoles {
+    let mut tools = photocraft_engine::ToolState::default();
+    let mut pairs = [[tools.foreground, tools.background], tools.other_colors];
+
+    for (key, pair, role) in [("foreground", 0, 0), ("background", 0, 1), ("maskForeground", 1, 0), ("maskBackground", 1, 1)] {
+        if let Some(Ok(c)) = saved.get(key).map(|v| serde_json::from_value::<[f32; 4]>(v.clone()))
+            && c.iter().all(|v| v.is_finite())
+        {
+            pairs[pair][role] = c;
+        }
+    }
+
+    if let Some(entries) = saved.get("cmykPicks").and_then(Value::as_array) {
+        let picks: Vec<_> = entries
+            .iter()
+            .rev()
+            .filter_map(|v| {
+                serde_json::from_value::<([f32; 3], [f32; 4])>(v.clone())
+                    .ok()
+                    .filter(|(rgb, inks)| rgb.iter().all(|v| v.is_finite()) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+            })
+            .take(photocraft_engine::ToolState::CMYK_PICKS)
+            .collect();
+
+        for (rgb, inks) in picks.into_iter().rev() {
+            tools.remember_cmyk(rgb, inks);
+        }
+    }
+
+    let mut roles = [[None; 2]; 2];
+    for pair in 0..2 {
+        for role in 0..2 {
+            let color = pairs[pair][role];
+            let rgb = [color[0], color[1], color[2]];
+            roles[pair][role] = tools.picked_cmyk(rgb).map(|inks| (rgb, inks));
+        }
+    }
+    roles
+}
+pub(crate) fn restore_colors(app: &mut PhotocraftApp) {
+    let saved = app.session.prefs().tool_colors.clone();
     let mut pairs = colors(app);
     let [[foreground, background], [mask_foreground, mask_background]] = &mut pairs;
     // Each colour under its preference path (Preferences › Tool Colors).
@@ -173,7 +240,40 @@ fn restore_colors(app: &mut PhotocraftApp) {
             app.session.tools.remember_cmyk(rgb, inks);
         }
     }
+    // New preferences retain each role independently, including identical RGB
+    // stand-ins with different native CMYK separations.
+    let valid_role = |entry: Option<([f32; 3], [f32; 4])>, color: [f32; 4]| {
+        entry.filter(|(rgb, inks)| {
+            *rgb == [color[0], color[1], color[2]] && rgb.iter().all(|v| v.is_finite()) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        })
+    };
+
+    let stored_roles = saved.get("cmykRoles").and_then(|v| serde_json::from_value::<CmykRoles>(v.clone()).ok());
+
+    let mut roles = [[None; 2]; 2];
+    if let Some(stored) = stored_roles {
+        for pair in 0..2 {
+            for role in 0..2 {
+                roles[pair][role] = valid_role(stored[pair][role], pairs[pair][role]);
+            }
+        }
+    } else {
+        // Recover legacy associations using the same rules as the save baseline.
+        let recovered = saved.get("cmykPicks").and_then(Value::as_array).map(|_| recover_legacy_cmyk_roles(&saved));
+
+        for pair in 0..2 {
+            for role in 0..2 {
+                let c = pairs[pair][role];
+                let rgb = [c[0], c[1], c[2]];
+                let legacy = recovered.as_ref().map(|roles| roles[pair][role]).unwrap_or_else(|| app.session.tools.picked_cmyk(rgb).map(|inks| (rgb, inks)));
+                roles[pair][role] = valid_role(legacy, c);
+            }
+        }
+    }
+
+    app.session.tools.cmyk_roles = if app.session.tools.mask_targeted { [roles[1], roles[0]] } else { roles };
     app.prefs_rt.tool_cmyk_picks = app.session.tools.cmyk_picks.clone();
+    app.prefs_rt.tool_cmyk_roles = Some(roles);
     app.prefs_rt.tool_colors = Some(pairs);
 }
 
@@ -189,7 +289,7 @@ fn persist_group_tools(app: &mut PhotocraftApp, ctx: &egui::Context, tool: Tool)
     if let Ok(now) = serde_json::to_value(&app.ui.group_tools)
         && app.session.prefs().group_tools != now
     {
-        app.session.prefs.edit(|p| p.group_tools = now);
+        app.session.prefs.remember(|p| p.group_tools = now);
         // As for the selected tool: prefs_ui::tick ran before the panels.
         ctx.request_repaint();
     }
@@ -222,7 +322,7 @@ fn persist_brushes(app: &mut PhotocraftApp) {
     };
     app.prefs_rt.tool_brushes = Some((owner, brushes.clone()));
     if app.session.prefs().tool_brushes != now {
-        app.session.prefs.edit(|p| p.tool_brushes = now);
+        app.session.prefs.remember(|p| p.tool_brushes = now);
     }
 }
 
@@ -322,12 +422,12 @@ pub fn restore(app: &mut PhotocraftApp) {
         }
         if let Ok(mut o) = serde_json::from_value(Value::Object(cur)) {
             sanitize(&mut o);
-            app.ui.tool_options = o;
+            *app.ui.tool_options = o;
         }
     } else if !saved.is_null() {
         log::warn!("Preferences: the remembered tool options are not an object; using the defaults");
     }
-    app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
+    app.prefs_rt.tool_options = Some((*app.ui.tool_options).clone());
     restore_colors(app);
     restore_brushes(app);
 }

@@ -9,7 +9,7 @@ use craft::behavior::{CanvasView, PixelSize};
 use craft::imaging::ui::SelectionOverlay;
 use craft::ui::canvas::{
     Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, Extent, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor, PixelRect,
-    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, canvas_space, easing_view, ruler_guide, tool_pass,
+    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, WheelScheme, canvas_space, easing_view, ruler_guide, tool_pass,
 };
 use craft::ui::canvas_controls::{GuidesOutput, SelectionOutline};
 use craft::ui::contract::{Bind, Props, Show, ShowContainer};
@@ -33,6 +33,11 @@ impl View {
             .rotation(f64::from(self.rotation))
             .flip_x(flip)
             .aspect(f64::from(aspect))
+    }
+
+    /// Takes `zoom` points per document unit, shown at `ppp` device pixels per point, and leaves the centre and rotation.
+    pub(crate) fn set_zoom(&mut self, zoom: f64, ppp: f32) {
+        self.zoom = (zoom * f64::from(ppp)) as f32;
     }
 
     /// Takes the zoom, centre and rotation of `view`, shown at `ppp` device pixels per point.
@@ -137,7 +142,7 @@ pub(crate) fn view_follows_pointer(app: &PhotocraftApp) -> bool {
 pub(crate) fn navigation(app: &PhotocraftApp) -> NavigationOptions {
     let p = app.session.prefs();
     let mut options = NavigationOptions::default();
-    options.zoom_with_wheel = p.general.zoom_with_scroll_wheel;
+    options.wheel = if p.general.zoom_with_scroll_wheel { WheelScheme::Zoom } else { WheelScheme::Scroll };
     options.animated_zoom = p.general.animated_zoom;
     options.zoom_clicked_point_to_center = p.tools.zoom_clicked_point_to_center;
     options.flick_panning = p.tools.enable_flick_panning;
@@ -513,7 +518,7 @@ fn canvas_controls(
     crate::blur_pins::overlay(app, ui, rect);
     let doc = app.session.documents()[host.idx].doc.id;
     if let Some(shown) = crate::vector_ui::overlay::show_paths(app, ui, rect, doc) {
-        let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+        let mods = craft::ui::runtime::pointer::mods(ui.ctx());
         crate::direct_select::edits::apply(app, &shown.output, &shown.refs, app.ui.tool, mods);
     }
     crate::type_tool::canvas_controls(app, ui, rect);
@@ -546,7 +551,13 @@ fn canvas_controls(
     // above the earlier ones, and the Crop frame covers the whole canvas (its outside turns the frame; #16231). They
     // declare parts only over the bars and the compass, so a press elsewhere still reaches the controls below.
     let mut shown = space.view;
+    // The task bars float above everything, so they stay inside the canvas short of the scroll bars: a bar that slides
+    // over a crop frame larger than the view would otherwise sit on the horizontal bar and take its presses (#16231).
+    let mut bar_area = rect;
     if !app.ui.view.hides_chrome() {
+        // Document chrome draws the bars `size.icon.md` thick along the bottom and right edges, with no margin.
+        let thickness = craft::ui::runtime::env::Env::of(ui).tokens.tokens().size.icon.md;
+        bar_area.max -= egui::vec2(thickness, thickness);
         let size = app.session.documents()[host.idx].doc.size;
         let bounds = Rect64::from_origin_size(Point::ZERO, Size::new(f64::from(size.width), f64::from(size.height)));
         CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds)
@@ -561,13 +572,12 @@ fn canvas_controls(
     }
     // One contextual task bar per window: the active document's tile carries it, not the tile drawn last.
     if app.session.active_index() == Some(host.idx) {
-        crate::crop_task_bar::show(app, ui, rect);
+        crate::crop_task_bar::show(app, ui, bar_area);
         if primary {
-            crate::transform_task_bar::show(app, ui, rect);
+            crate::transform_task_bar::show(app, ui, bar_area);
         }
-        crate::frame_tool::task_bar::show(ui, app, rect);
+        crate::frame_tool::task_bar::show(ui, app, bar_area);
     }
-    crate::crop_ui::each_pass(app);
     crate::vector_ui::shapes::show_preview(app, ui, rect, &space.view);
     crate::tools::brush_feedback::show(ui, app, rect, pointer);
     if shown != space.view {

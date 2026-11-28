@@ -30,7 +30,7 @@ pub(crate) mod params {
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
         equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -82,6 +82,7 @@ pub(crate) mod params {
         ParamFamily::new(history_options_ui::owns, history_options_ui::run),
         ParamFamily::new(brush_preset_dialog::owns, brush_preset_dialog::run),
         ParamFamily { check: Some(equalize_ui::check), ..ParamFamily::new(equalize_ui::owns, equalize_ui::run) },
+        ParamFamily::new(paragraph_text_size::owns, paragraph_text_size::run),
         ParamFamily::new(channel_options_ui::owns, channel_options_ui::run),
         ParamFamily { check: Some(merge_channels_ui::check), ..ParamFamily::new(merge_channels_ui::owns, merge_channels_ui::run) },
         ParamFamily {
@@ -110,6 +111,7 @@ pub(crate) mod params {
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
+        crate::swatches_ui::SWATCH_NAME_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
         crate::actions::dialogs::NEW_SET_FAMILY,
         crate::actions::dialogs::INSERT_STOP_FAMILY,
@@ -270,11 +272,11 @@ pub(crate) mod params {
             let key = key_of(app, id);
             let Some(dialog) = dialog_mut(app, id) else { continue };
             let (colour, path, dropper, listing, footer, range) = (
-                dialog.pick_color(),
+                dialog.take_color_request(),
                 dialog.pick_path(),
                 dialog.take_eyedropper(),
                 dialog.take_listing(),
-                dialog.take_footer_action(),
+                dialog.take_action(),
                 dialog.take_range_alert(),
             );
             if let Some(alert) = range {
@@ -286,7 +288,7 @@ pub(crate) mod params {
             if let Some((row, colour)) = color_picker_ui::answer_for(app, id)
                 && let Some(dialog) = dialog_mut(app, id)
             {
-                dialog.answer_color(row, colour);
+                dialog.answer_color(&row, colour);
             }
             if let Some(request) = path {
                 start_pick(app, ctx, id, request);
@@ -414,6 +416,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     disk_change_prompt::answer,
     rasterize_prompt::answer,
     live_shape_prompt::answer,
+    assign_profile_layers_alert::answer,
     preset_group_prompt::answer,
     open_prompt::answer_prompt,
     alerts::answer,
@@ -443,6 +446,7 @@ pub(crate) fn prompts_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The families that take their own results (one `take(app, ctx)` each), in order.
 pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     alerts::take,
+    crate::file_open::take_open_alerts,
     discard_ui::take,
     open_prompt::take,
     credits::take,
@@ -630,10 +634,20 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 /// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move.
 const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy"];
 
+/// Preference entries the engine reads that a workspace also remembers in the framework's store: they stay, and are
+/// copied there only while it holds none. An empty recorded Content-Aware Fill step plays with the engine's copy (#14254).
+const ENGINE_READ_SHARED: &[&str] = &[photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS];
+
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 4] {
-    [delete_layer_prompt::PREF, live_shape_prompt::PREF, crate::analysis::note_alerts::DELETE_NOTE_PREF, crate::retouch_ui::CAM_NO_PIXELS_PREF]
+fn dont_show_again_keys() -> [&'static str; 5] {
+    [
+        delete_layer_prompt::PREF,
+        live_shape_prompt::PREF,
+        assign_profile_layers_alert::PREF,
+        crate::analysis::note_alerts::DELETE_NOTE_PREF,
+        crate::retouch_ui::CAM_NO_PIXELS_PREF,
+    ]
 }
 
 /// Where the remembered value of the preference entry `key` goes: `None` keeps it in `Preferences.dialogs`, else the
@@ -677,7 +691,9 @@ fn convert_blend_mode(key: &str, value: &mut Value) {
 
 /// Moves the dialogs' last-used values out of `Preferences.dialogs` into the remembered section of `host`, once, before
 /// the first frame. Entries the engine reads and the don't-show-again entries stay; a second run finds nothing to move
-/// because every moved entry left `Preferences.dialogs`. An entry that has no table form stays too.
+/// because every moved entry left `Preferences.dialogs`. An entry that has no table form stays too, and a shared entry
+/// ([`ENGINE_READ_SHARED`]) never replaces what the framework already remembers; a profile without one gets it from
+/// what the framework remembers ([`carry_forward_shared`]).
 pub(crate) fn move_memories(prefs: &mut Preferences, host: &Host) {
     let keys: Vec<String> = prefs.dialogs.keys().cloned().collect();
     for key in keys {
@@ -685,9 +701,37 @@ pub(crate) fn move_memories(prefs: &mut Preferences, host: &Host) {
         let Some(old) = prefs.dialogs.get(&key) else { continue };
         let mut value = without_nulls(old.clone());
         convert_blend_mode(&key, &mut value);
+        if key == photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS {
+            crate::caf_ui::recorded_to_workspace(&mut value);
+        }
         let Ok(table) = toml::Table::try_from(&value) else { continue };
-        Remembered::<toml::Table>::new(scope).store(host, &table);
+        let remembered = Remembered::<toml::Table>::new(scope);
+        if ENGINE_READ_SHARED.contains(&key.as_str()) {
+            // An empty entry holds no settings yet (see `carry_forward_shared`).
+            if !table.is_empty() && remembered.recall(host).is_none() {
+                remembered.store(host, &table);
+            }
+            continue;
+        }
+        remembered.store(host, &table);
         prefs.dialogs.remove(&key);
+    }
+    carry_forward_shared(prefs, host);
+}
+
+/// Gives a profile without the engine's copy of a shared entry one, once (#14254). An earlier version moved the
+/// Content-Aware Fill settings into the workspace's own memory and kept no copy, so that memory is carried forward:
+/// it is all such a profile has, although it also holds settings the workspace closed with and never filled. With no
+/// memory the copy starts empty. From then on only a fill that ran sets the copy, so settings closed without a fill
+/// are never carried forward.
+fn carry_forward_shared(prefs: &mut Preferences, host: &Host) {
+    for key in ENGINE_READ_SHARED {
+        if prefs.dialogs.contains_key(*key) {
+            continue;
+        }
+        let Some(scope) = memory_destination(key) else { continue };
+        let memory = Remembered::<toml::Table>::new(scope).recall(host).and_then(|table| serde_json::to_value(table).ok());
+        prefs.dialogs.insert((*key).into(), memory.map_or_else(|| serde_json::json!({}), crate::caf_ui::recorded_from_workspace));
     }
 }
 
@@ -697,11 +741,20 @@ pub mod adjust_preview;
 pub mod alerts;
 #[cfg(test)]
 mod arbitrary_ruler_prefill_tests;
+pub mod assign_profile_layers_alert;
+#[cfg(test)]
+mod assign_profile_layers_alert_tests;
+#[cfg(test)]
+mod auto_align_dialog_tests;
+pub(crate) mod auto_align_ui;
 pub(crate) mod bitmap_dialog;
 pub mod blend_options;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
 pub mod caf_ui;
+#[cfg(test)]
+mod calculations_preview_tests;
+pub(crate) mod calculations_ui;
 pub(super) mod camera_raw_detail_ui;
 pub(super) mod camera_raw_gpu;
 pub(super) mod camera_raw_scope_ui;
@@ -710,6 +763,8 @@ pub(crate) mod canvas_input;
 pub mod channel_options_ui;
 #[cfg(test)]
 mod color_lookup_no_remember_tests;
+#[cfg(test)]
+mod color_lookup_smart_edit_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
@@ -722,6 +777,8 @@ pub mod delete_layer_prompt;
 pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
+#[cfg(test)]
+mod duplicate_layer_other_document_name_tests;
 pub mod duplicate_layer_ui;
 pub mod equalize_ui;
 pub mod export_dialog;
@@ -753,6 +810,7 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod paragraph_text_size;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]

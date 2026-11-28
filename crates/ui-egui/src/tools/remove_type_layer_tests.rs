@@ -1,7 +1,7 @@
 //! #12553: a press and drag with the Remove tool on a type layer does nothing, as in the
 //! reference: no rasterize prompt, no stroke overlay, no message and no history state; the layer
-//! stays type. The other pixel tools, and the Remove tool on shape, Smart Object and fill
-//! layers, still ask to rasterize first.
+//! stays type. The other pixel tools, and the Remove tool on shape and fill layers, still ask to
+//! rasterize first; the Remove tool on a Smart Object layer has its own tests (#12555).
 
 use egui::Modifiers;
 
@@ -46,8 +46,8 @@ fn brush_and_eraser_still_ask_on_a_type_layer() {
 }
 
 #[test]
-fn remove_still_asks_on_shape_smart_object_and_fill_layers() {
-    for kind in [Kind::Shape, Kind::SmartObject, Kind::Fill] {
+fn remove_still_asks_on_shape_and_fill_layers() {
+    for kind in [Kind::Shape, Kind::Fill] {
         let mut app = app_with(kind);
         app.ui.tool = Tool::Remove;
         let before = past(&app);

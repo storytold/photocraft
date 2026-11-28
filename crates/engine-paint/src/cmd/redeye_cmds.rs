@@ -249,18 +249,22 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     let pupil = pupil_raw.clamp(1.0, 100.0);
     let darken = darken.clamp(0.0, 100.0);
     let id = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|d| d.active_layer) };
+    // The press point decides (#12576): a press outside the selection does nothing, not clipped, and
+    // like Photoshop it is silent (#13096): no pixels, no state, no message. Feathered (partly
+    // selected) and off-canvas presses were not measured and keep today's behaviour: any value above
+    // 0 counts as inside, and off-canvas presses are not checked.
+    if let (Some(&first), Some(d)) = (pts.first(), s.active())
+        && d.doc.bounds().contains(first.0, first.1)
+        && d.doc.selection.as_ref().is_some_and(|m| m.sample_channel(first.0, first.1, 0) <= 0.0)
+    {
+        return Ok(json!({ "damage": [0, 0, 0, 0], "pixels": 0, "outsideSelection": true }));
+    }
     let (damage, total) = s.edit("Red Eye Removal Tool", |doc, active| {
         let canvas = doc.bounds();
         let sel = doc.selection.clone();
         let layer = id.or(*active);
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
         let Some(&first) = pts.first() else { return Err(EngineError::Other(MISS.into())) };
-        // The press point decides (#12576): a press outside the selection is refused like a miss,
-        // not clipped. Feathered (partly selected) and off-canvas presses were not measured and keep
-        // today's behaviour: any value above 0 counts as inside, and off-canvas presses are not checked.
-        if canvas.contains(first.0, first.1) && sel.as_ref().is_some_and(|m| m.sample_channel(first.0, first.1, 0) <= 0.0) {
-            return Err(EngineError::Other(MISS.into()));
-        }
         // The Background always locks transparency, so only a click on a clear pixel counts.
         let on_locked_clear = lock && surf.rgba(first.0, first.1)[3] <= 1.0e-5;
         let mut total = 0u32;
@@ -286,7 +290,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Red Eye",
         menu: &[],
         shortcut: None,
-        params: r#"{"x":px, "y":px} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
+        params: r#"{"x":px, "y":px} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n, "outsideSelection":true?}"#,
         enabled,
         run: red_eye,
         journal: true,

@@ -15,7 +15,7 @@ pub fn persist(app: &mut PhotocraftApp) {
     }
     let Ok(now) = serde_json::to_value(app.ui.color_panel) else { return };
     if stored != now {
-        app.session.prefs.edit(|p| p.color_panel = now.clone());
+        app.session.prefs.remember(|p| p.color_panel = now.clone());
     }
     app.ui.color_panel_synced = Some(now);
 }

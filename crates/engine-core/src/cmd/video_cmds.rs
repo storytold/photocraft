@@ -665,6 +665,7 @@ pub fn render_video_with(
 ) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
+    let alpha = render_alpha(p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
@@ -721,6 +722,11 @@ pub fn render_video_with(
     // Image sequence.
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
+    // Only a PNG sequence can hold the alpha the option chooses; other formats ignore it. The
+    // format is resolved as the encoder resolves it, so ".png" and "PNG" are PNG too.
+    let ext = format.rsplit(['.', '/', '\\']).next().unwrap_or(format);
+    let png = photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec) == Some(photocraft_codecs::Format::Png);
+    let alpha = png.then_some(alpha);
     let mut files = Vec::new();
     for f in 0..frames {
         let mut doc = base.clone();
@@ -728,6 +734,14 @@ pub fn render_video_with(
             t.current = f;
         }
         sync(&mut doc);
+        if let Some(alpha) = alpha {
+            // The frame is flattened here, before the export pipeline's scratch check, which then
+            // sees only the matted copy: refuse placeholder pixels from a failed read ourselves.
+            let guard = crate::artboard_cmds::ScratchGuard::new(&doc)?;
+            let matted = matted_frame(&doc, alpha)?;
+            guard.check()?;
+            doc = matted;
+        }
         let path = format!("{stem}_{f:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;
@@ -737,6 +751,85 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// Render Video's Alpha Channel choice for a sequence frame (#14163).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RenderAlpha {
+    /// No alpha in the file: the colours are composited over black, so transparent areas are black.
+    None,
+    /// The alpha is kept and fully transparent pixels take this colour: white for Straight, the
+    /// matte for the premultiplied choices. Partly transparent pixels keep their colour and alpha
+    /// (the issue measured only fully transparent ones).
+    Kept([f32; 3]),
+}
+
+/// `alpha` and `matte` of `file.export.renderVideo`; a wrong type or name is an error.
+fn render_alpha(p: &Value) -> Result<RenderAlpha> {
+    let bad = |msg: &str| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg: msg.into() };
+    let matte = match p.get("matte") {
+        None | Some(Value::Null) => [0.0; 3],
+        // `parse_hex` also reads "rrggbb" and "#rrggbbaa"; the matte is "#rrggbb" only.
+        Some(Value::String(c)) => crate::commands::parse_hex(c)
+            .filter(|_| c.len() == 7 && c.starts_with('#'))
+            .map(|c| [c[0], c[1], c[2]])
+            .ok_or_else(|| bad("`matte` must be \"#rrggbb\" or [r, g, b] in 0..1"))?,
+        Some(Value::Array(a)) if a.len() == 3 => {
+            let mut c = [0.0; 3];
+            for (slot, v) in c.iter_mut().zip(a) {
+                *slot = v.as_f64().filter(|x| (0.0..=1.0).contains(x)).ok_or_else(|| bad("`matte` as an array must hold 3 numbers in 0..1"))? as f32;
+            }
+            c
+        }
+        Some(_) => return Err(bad("`matte` must be \"#rrggbb\" or [r, g, b] in 0..1")),
+    };
+    match p.get("alpha") {
+        None | Some(Value::Null) => Ok(RenderAlpha::None),
+        Some(Value::String(a)) => match a.as_str() {
+            "none" => Ok(RenderAlpha::None),
+            "straight" | "premultipliedWhite" => Ok(RenderAlpha::Kept([1.0; 3])),
+            "premultipliedBlack" => Ok(RenderAlpha::Kept([0.0; 3])),
+            "premultipliedColor" => Ok(RenderAlpha::Kept(matte)),
+            _ => Err(bad("`alpha` must be \"none\", \"straight\", \"premultipliedBlack\", \"premultipliedWhite\" or \"premultipliedColor\"")),
+        },
+        Some(_) => Err(bad("`alpha` must be a string")),
+    }
+}
+
+/// `doc` as one layer holding its composite with `alpha` applied, at the document's own depth.
+/// A frame left fully opaque is written without alpha, as any opaque export is.
+fn matted_frame(doc: &Document, alpha: RenderAlpha) -> Result<Document> {
+    let fmt = doc.pixel_format();
+    let bounds = doc.bounds();
+    let mut surf = crate::file_cmds::flattened_checked(doc, fmt, "file.export.renderVideo")?;
+    let n = fmt.channels();
+    let color = fmt.mode.color_channels();
+    let paint = |rgb: [f32; 3]| photocraft_raster::from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0]);
+    let black = paint([0.0; 3]);
+    let clear = paint(if let RenderAlpha::Kept(c) = alpha { c } else { [0.0; 3] });
+    let mut band = Vec::new();
+    // A band of tile rows at a time, so no frame-sized float buffer is held.
+    for y in (bounds.y0..bounds.y1).step_by(photocraft_geom::TILE_SIZE as usize) {
+        let rows = photocraft_geom::Rect::new(bounds.x0, y, bounds.x1, (y + photocraft_geom::TILE_SIZE).min(bounds.y1));
+        surf.read_region_into(rows, &mut band);
+        for px in band.chunks_exact_mut(n) {
+            let a = px[color].clamp(0.0, 1.0);
+            match alpha {
+                RenderAlpha::None => {
+                    for (c, k) in px[..color].iter_mut().zip(&black) {
+                        *c = *c * a + k * (1.0 - a);
+                    }
+                    px[color] = 1.0;
+                }
+                RenderAlpha::Kept(_) if a <= 0.0 => px[..color].copy_from_slice(&clear[..color]),
+                RenderAlpha::Kept(_) => {}
+            }
+        }
+        surf.write_region(rows, &band);
+    }
+    let mut out = doc.clone();
+    out.layers = vec![Layer::new("Layer 0", LayerContent::Raster(surf))].into();
+    Ok(out)
 }
 
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
@@ -781,9 +874,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.videoLayers.interpretFootage", "Interpret Footage…", vl, active_video, |s, p| interpret_footage(s, p)),
         spec!("layer.videoLayers.reloadFrame", "Reload Frame", vl, active_video, |s, p| reload_frame(s, p)),
         spec!("file.import.videoFramesToLayers", "Video Frames to Layers…", &["File", "Import"], has_doc, |s, p| frames_to_layers(s, p)),
-        spec!("file.export.renderVideo", "Render Video…", &["File", "Export"], has_doc, |s, p| render_video(s, p)),
+        CommandSpec {
+            params: r##"{"dir":folder,"format":"png|jpg|psd|tiff|…|gif"="png","alpha":"none|straight|premultipliedBlack|premultipliedWhite|premultipliedColor"="none" (png sequences only; none writes no alpha, transparent areas black),"matte":color=#000000 (premultipliedColor)} → {frames, dir}|{frames, file}"##,
+            ..spec!("file.export.renderVideo", "Render Video…", &["File", "Export"], has_doc, |s, p| render_video(s, p))
+        },
     ]
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "video_cmds/render_video_alpha_tests.rs"]
+mod render_video_alpha_tests;

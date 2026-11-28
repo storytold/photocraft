@@ -1569,6 +1569,11 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
         let SmartSource::Linked { path } = &so.source else { continue };
+        // PSD stores embedded placed files as Linked sources keyed by their UUID. Their payload
+        // remains in the document's global blocks, so they are not filesystem links to collect.
+        if photocraft_io::linked::embedded_payload(&doc.metadata, path).is_some() {
+            continue;
+        }
         if missing.contains(path) {
             continue;
         }
@@ -1849,3 +1854,7 @@ mod package_clash_name_tests;
 #[cfg(test)]
 #[path = "print_cmds/package_layer_rename_tests.rs"]
 mod package_layer_rename_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_psd_embedded_tests.rs"]
+mod package_psd_embedded_tests;

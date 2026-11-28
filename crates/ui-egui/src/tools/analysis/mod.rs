@@ -178,7 +178,8 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
                 app.refocus(doc)?;
                 let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
                 if let Ok(v) = &r {
-                    let _ = crate::panel_docking::show_panel(app, NOTES, Some(true));
+                    // The imported notes show on the canvas; the Notes panel keeps its state (#13918).
+                    app.ui.view.show.notes = true;
                     app.sync_views();
                     // Notes whose icon landed off the canvas stay there; the alert says so (#13914).
                     if v["outside"] == json!(true) {

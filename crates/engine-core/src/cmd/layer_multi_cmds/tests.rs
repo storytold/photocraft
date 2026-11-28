@@ -1014,7 +1014,8 @@ fn a_locked_group_keeps_a_grouped_background_locked() {
     let mut s = session(8);
     let bg = doc(&s).layers[0].id;
     s.execute("layer.select", json!({"layer": bg.0})).unwrap();
-    let g = s.execute("layer.new.groupFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    // Group from Layers refuses the Background (#14709); Group Layers still groups it.
+    let g = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
     s.execute("layer.setProps", json!({"layer": g, "locked": true})).unwrap();
     s.execute("layer.select", json!({"layer": bg.0})).unwrap();
     for (cmd, p) in [

@@ -420,12 +420,21 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, os_window::id_for(os_window::LaunchIdentity::NightlyV1))
 }
 
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hangs in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26). PhotoCraft's own Mac
+/// smoke passed, so this is preventive here.
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
 fn report_launch_profile_error(error: &str) {
     eprintln!("PhotoCraft launch profile: {error}");
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_process_identity() {
             eprintln!("PhotoCraft launch profile: {error}");
             return;
@@ -473,12 +482,21 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     Some(early.args)
 }
 
+/// The allocator on Windows: mimalloc instead of the system heap. The UI builds and frees many small values every
+/// frame, and the system heap's alloc and free took about 14 % of the UI thread (#15493). Linux keeps glibc, which
+/// `malloc_tuning` tunes to give closed documents' memory back (#8743); macOS keeps its system allocator.
+#[cfg(windows)]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> eframe::Result {
     let Some(arguments) = prepare_launch() else { return Ok(()) };
 
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
+    // The git commit of a dev build's checkout, for `--version` and About (build.rs, #5247).
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
@@ -703,7 +721,7 @@ fn main() -> eframe::Result {
             let session = Session::new();
             // Before the first pass: the one install of the craft runtime must see every pass from
             // the first (R71); the app then runs on that context.
-            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
+            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision, services::config_dir().as_deref());
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
             app.open_suite(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
@@ -1401,5 +1419,19 @@ mod tests {
             assert_eq!(commit.trim().trim_matches(['\'', '"']), rev, "{manifest}");
             assert!(text.contains("CRAFT_I18N_DIR: /run/build/photocraft/craft-i18n"), "{manifest}: the build names the catalogs");
         }
+    }
+}
+
+#[cfg(test)]
+mod refusal_dialog_tests {
+    use super::refusal_dialog;
+    use crate::build_flavor::BuildFlavor;
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }
