@@ -150,7 +150,7 @@ impl Session {
     /// Image Size, rotation), dropping the ones that land outside the new canvas. View state: the
     /// points stay pinned to their pixels, no history step. Cleared by the edit it is set for.
     /// The painting symmetry moves through `a` too.
-    pub(crate) fn set_sampler_map(&mut self, a: photocraft_geom::Affine) {
+    pub fn set_sampler_map(&mut self, a: photocraft_geom::Affine) {
         self.set_canvas_map(a, a);
     }
 

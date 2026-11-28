@@ -11,7 +11,7 @@ use crate::commands::CommandSpec;
 use crate::presets::{always, bad, req_str};
 use crate::{Result, Session};
 
-pub(crate) const MAX_DIMENSION: u32 = 300_000;
+pub const MAX_DIMENSION: u32 = 300_000;
 // What `file.new` creates must reopen: the `.pcraft` loader's default canvas budget covers it (#2935).
 const _: () =
     assert!(photocraft_format::MAX_CANVAS_SIDE >= MAX_DIMENSION && photocraft_format::MAX_CANVAS_PIXELS >= MAX_DIMENSION as u64 * MAX_DIMENSION as u64);

@@ -86,7 +86,7 @@ pub(crate) fn convert_layers_depth(layers: &mut [Layer], depth: SampleType) {
     });
 }
 
-pub(crate) fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)) {
+pub fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)) {
     for l in layers {
         f(l);
         if let Some(ch) = l.children_mut() {
@@ -509,7 +509,7 @@ fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer
 /// Fails, before moving anything, when some pixels would land outside the i32 coordinate
 /// range: the surface copy saturates its target rectangle there, which no longer matches
 /// the pixel data and panics (#959).
-pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> {
+pub fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> {
     if dx == 0 && dy == 0 {
         return Ok(());
     }
@@ -617,7 +617,7 @@ pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bo
 /// canvas, and any gap there) with `px`, under the pixels the Background already holds there:
 /// those a crop with Delete Cropped Pixels off hid show again instead of being painted over (#7086).
 /// Only the added strips are touched, so the cost follows the added area, not the canvas.
-fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[f32]) {
+pub fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[f32]) {
     let keep = surf.content_bounds().intersect(&old).intersect(&canvas);
     let strips = if keep.is_empty() {
         vec![canvas]

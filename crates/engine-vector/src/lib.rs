@@ -10,8 +10,8 @@
 // The core items this crate's code names as `crate::x`, so the code reads as it did inside core
 // (photocraft#15710).
 use photocraft_engine_core::{
-    EngineError, Result, Session, active_layer_of, allocation, analysis_cmds, channel_cmds, commands, error, extra_cmds, file_cmds, layer_multi_cmds,
-    layer_place, photo_cmds, smart_cmds, transform_cmds, type_cmds, type_extra_cmds, vector_cmds,
+    EngineError, Result, Session, active_layer_of, allocation, analysis_cmds, canvas_geom, channel_cmds, commands, document_preset_cmds, error, extra_cmds,
+    file_cmds, image_cmds, layer_multi_cmds, layer_place, photo_cmds, smart_cmds, transform_cmds, type_cmds, type_extra_cmds, vector_cmds,
 };
 #[cfg(test)]
 use photocraft_engine_core::{actions_cmds, command_specs, inspect};

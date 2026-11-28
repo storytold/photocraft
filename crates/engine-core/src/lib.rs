@@ -13,7 +13,7 @@ pub mod adjust_params;
 pub mod allocation;
 pub mod brush_defs;
 pub mod build_info;
-mod canvas_geom;
+pub mod canvas_geom;
 mod channel_clip;
 mod clip_group;
 pub mod color_channels;
