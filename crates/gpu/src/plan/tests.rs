@@ -393,6 +393,26 @@ fn blend_if_params_pack_every_range_exactly() {
     assert_eq!(&f[0..2], &[0.0, 255.0 * 256.0 + 255.0]);
 }
 
+/// `fill_divides` names exactly the special-eight modes whose result moves far when Fill × alpha
+/// is just below 1, where a half float rounds it to 1.
+#[test]
+fn fill_divides_names_the_special_eight_modes_ill_conditioned_near_full_fill() {
+    use super::lower::fill_divides;
+    use photocraft_compose::psblend::{blend_rgb_fill, fill_is_special};
+    let near = 1.0 - 2f32.powi(-12);
+    for mode in BlendMode::LAYER_MODES.into_iter().filter(|m| fill_is_special(*m)) {
+        let mut worst = 0.0_f32;
+        for cb in [2f32.powi(-13), 0.25, 0.5, 0.75, 1.0 - 2f32.powi(-13)] {
+            for cs in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let full = blend_rgb_fill(mode, [cb; 3], [cs; 3], 1.0);
+                let below = blend_rgb_fill(mode, [cb; 3], [cs; 3], near);
+                worst = full.iter().zip(below).fold(worst, |w, (a, b)| w.max((a - b).abs()));
+            }
+        }
+        assert_eq!(worst > 0.1, fill_divides(mode), "{mode:?}: {worst}");
+    }
+}
+
 #[test]
 fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     use photocraft_doc::Knockout;
@@ -431,23 +451,32 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     assert!(p.passes.iter().all(|p| p.flags & F_SHAPELESS == 0));
     t.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
     assert!(plan(&t).is_ok(), "effects without Transparency Shapes Layer");
-    // Hard Mix divides by 1 − Fill × alpha, which 16/32-bit half-float uploads can't hold near 1:
-    // it stays on the CPU there, while 8 bits and the other special-eight modes plan.
+    // Color Burn, Color Dodge, Vivid Light and Hard Mix divide by a quantity that reaches 0 at full
+    // Fill × alpha, which 16/32-bit half-float uploads can't hold near 1: they stay on the CPU
+    // there, while 8 bits and the other special-eight modes plan.
     t.layers[1].effects.items.clear();
-    t.layers[1].blend = BlendMode::HardMix;
-    assert!(plan(&t).is_ok(), "Hard Mix at 8 bits");
+    let dividing = [BlendMode::ColorBurn, BlendMode::ColorDodge, BlendMode::VividLight, BlendMode::HardMix];
+    for mode in dividing {
+        t.layers[1].blend = mode;
+        assert!(plan(&t).is_ok(), "{mode:?} at 8 bits");
+    }
     for depth in [SampleType::U16, SampleType::F32] {
         let mut w = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, depth, Color::WHITE);
-        let mut hm = Layer::raster("hm", w.pixel_format());
-        hm.advanced.transparency_shapes = false;
-        hm.blend = BlendMode::HardMix;
-        w.layers.push(hm);
-        assert!(plan(&w).unwrap_err().0.contains("Hard Mix"), "Hard Mix without Transparency Shapes Layer at {depth:?}");
-        w.layers[1].advanced.transparency_shapes = true;
-        assert!(plan(&w).is_ok(), "Hard Mix with Transparency Shapes Layer at {depth:?}");
+        let mut s = Layer::raster("shapeless", w.pixel_format());
+        s.advanced.transparency_shapes = false;
+        w.layers.push(s);
+        for mode in dividing {
+            w.layers[1].blend = mode;
+            w.layers[1].advanced.transparency_shapes = false;
+            assert!(plan(&w).unwrap_err().0.contains(mode.label()), "{mode:?} without Transparency Shapes Layer at {depth:?}");
+            w.layers[1].advanced.transparency_shapes = true;
+            assert!(plan(&w).is_ok(), "{mode:?} with Transparency Shapes Layer at {depth:?}");
+        }
         w.layers[1].advanced.transparency_shapes = false;
-        w.layers[1].blend = BlendMode::ColorDodge;
-        assert!(plan(&w).is_ok(), "Color Dodge without Transparency Shapes Layer at {depth:?}");
+        for mode in [BlendMode::LinearBurn, BlendMode::LinearDodge, BlendMode::LinearLight, BlendMode::Difference] {
+            w.layers[1].blend = mode;
+            assert!(plan(&w).is_ok(), "{mode:?} without Transparency Shapes Layer at {depth:?}");
+        }
     }
     // Clipped to a base, the same cases stay on the CPU.
     t.layers[1] = l.clone();

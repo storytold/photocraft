@@ -27,9 +27,11 @@ each use, so only the root stack's accumulated backdrop is live between units. T
 still return `Unsupported` from the GPU planner and use the CPU path: Blend Interior Effects as
 Group with effects, Layer / Vector Mask Hides Effects, Transparency Shapes Layer off with
 effects or a special-eight blend mode on a layer drawn atop its clipping base (Blend Clipped
-Layers as Group on; individually blended clipped layers run on the GPU), and Hard Mix with
-Transparency Shapes Layer off in a 16/32-bit document, or without effects on an adapter with
-half-float accumulation. So does Blend Clipped Layers as Group off in a 32-bit float document
+Layers as Group on; individually blended clipped layers run on the GPU), and Color Burn, Color
+Dodge, Vivid Light or Hard Mix with Transparency Shapes Layer off in a 16/32-bit document (their
+Fill formula divides by a quantity that reaches 0 at full Fill, so the alpha precision half floats
+lose shows), as does Hard Mix with it off, without effects, on an adapter with half-float
+accumulation. So does Blend Clipped Layers as Group off in a 32-bit float document
 when the base takes more than one pass (a group, or a pattern fill without cached pixels), since
 its coverage would go through an accumulator slot, which may be half float, or wears a 16-bit,
 vector or feathered mask, which uploads as half floats. A one-pass 32-bit base has its coverage

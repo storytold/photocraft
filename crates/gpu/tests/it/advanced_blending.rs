@@ -404,12 +404,13 @@ fn the_remaining_advanced_blending_options_are_refused() {
 #[test]
 fn shapeless_special_blends_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    let modes = [BlendMode::ColorDodge, BlendMode::LinearBurn, BlendMode::VividLight, BlendMode::HardMix];
-    // Hard Mix runs on the GPU at 8 bits only (see `hard_mix_shapeless_at_16_and_32_bits_stays_on_the_cpu`).
+    let modes = [BlendMode::ColorDodge, BlendMode::LinearBurn, BlendMode::VividLight, BlendMode::LinearLight, BlendMode::HardMix];
+    // Color Dodge, Vivid Light and Hard Mix run on the GPU at 8 bits only (see
+    // `dividing_shapeless_blends_at_16_and_32_bits_stay_on_the_cpu`).
     let combos = [(1.0, 1.0), (0.5, 1.0), (1.0, 0.5), (0.6, 0.4)];
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         for mode in modes {
-            if mode == BlendMode::HardMix && depth != SampleType::U8 {
+            if matches!(mode, BlendMode::ColorDodge | BlendMode::VividLight | BlendMode::HardMix) && depth != SampleType::U8 {
                 continue;
             }
             for (opacity, fill) in combos {
@@ -520,30 +521,36 @@ fn hard_mix_shapeless_near_opaque_matches_the_cpu() {
     }
 }
 
-/// Half floats can't keep a near-opaque alpha, and Hard Mix's Fill formula divides by
-/// 1 − alpha × Fill: a 16/32-bit document stays on the CPU.
+/// Half floats can't keep a near-opaque alpha, and the Fill formulas of Color Burn, Color Dodge,
+/// Vivid Light and Hard Mix divide by a quantity that reaches 0 at full Fill × alpha: a 16/32-bit
+/// document stays on the CPU.
 #[test]
-fn hard_mix_shapeless_at_16_and_32_bits_stays_on_the_cpu() {
+fn dividing_shapeless_blends_at_16_and_32_bits_stay_on_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    for (depth, near) in [(SampleType::U16, 65534.0 / 65535.0), (SampleType::F32, 0.9999)] {
-        let mut d = doc(depth, false);
-        let mut under = Layer::raster("under", d.pixel_format());
-        under.surface_mut().unwrap().fill_rect(d.bounds(), &[0.25, 0.25, 0.25, 1.0]);
-        // On the threshold: opaque on the left, near-opaque on the right.
-        let mut l = Layer::raster("shapeless", d.pixel_format());
-        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 24, 40), &[0.75, 0.75, 0.75, 1.0]);
-        l.surface_mut().unwrap().fill_rect(Rect::new(24, 0, 48, 40), &[0.75, 0.75, 0.75, near]);
-        l.blend = BlendMode::HardMix;
-        l.advanced.transparency_shapes = false;
-        d.layers.extend([under, l]);
-        let cpu = photocraft_compose::render(&d, d.bounds());
-        let (opaque, nearly) = (cpu.px[0][0], cpu.px[47][0]);
-        assert!(opaque - nearly > 0.5, "{depth:?}: opaque {opaque}, near-opaque {nearly}");
-        let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
-            .expect_err("the GPU must refuse Hard Mix without transparency shapes at 16/32 bits");
-        assert!(e.to_string().contains("Hard Mix"), "{depth:?}: {e}");
-        let e = g.comp.supports(&d).expect_err("supports() agrees");
-        assert!(e.to_string().contains("Hard Mix"), "{depth:?}: {e}");
+    // `edge` is a backdrop level near 0 or 1; `near` is an alpha a half float rounds to 1.
+    for (depth, edge, near) in [(SampleType::U16, 8.0 / 65535.0, 1.0 - 12.0 / 65535.0), (SampleType::F32, 2f32.powi(-13), 1.0 - 2f32.powi(-12))] {
+        for (mode, back, colour) in
+            [(BlendMode::ColorDodge, edge, 1.0), (BlendMode::VividLight, edge, 1.0), (BlendMode::ColorBurn, 1.0 - edge, 0.0), (BlendMode::HardMix, 0.25, 0.75)]
+        {
+            let mut d = doc(depth, false);
+            let mut under = Layer::raster("under", d.pixel_format());
+            under.surface_mut().unwrap().fill_rect(d.bounds(), &[back, back, back, 1.0]);
+            // Opaque on the left, near-opaque on the right.
+            let mut l = Layer::raster("shapeless", d.pixel_format());
+            l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 24, 40), &[colour, colour, colour, 1.0]);
+            l.surface_mut().unwrap().fill_rect(Rect::new(24, 0, 48, 40), &[colour, colour, colour, near]);
+            l.blend = mode;
+            l.advanced.transparency_shapes = false;
+            d.layers.extend([under, l]);
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            let (opaque, nearly) = (cpu.px[0][0], cpu.px[47][0]);
+            assert!((opaque - nearly).abs() > 0.25, "{mode:?} {depth:?}: opaque {opaque}, near-opaque {nearly}");
+            let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+                .expect_err("the GPU must refuse a dividing blend without transparency shapes at 16/32 bits");
+            assert!(e.to_string().contains(mode.label()), "{mode:?} {depth:?}: {e}");
+            let e = g.comp.supports(&d).expect_err("supports() agrees");
+            assert!(e.to_string().contains(mode.label()), "{mode:?} {depth:?}: {e}");
+        }
     }
 }
 

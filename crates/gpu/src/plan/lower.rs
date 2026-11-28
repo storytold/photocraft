@@ -36,14 +36,15 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
 /// off, which the GPU runs itself: the special-eight blends take the content's own alpha as Fill
 /// (`F_SHAPELESS`) and the effects take the whole layer as their shape (`Planner::effects`). A
 /// layer drawn atop its clipping base is still refused for the last one (`clipped_on_cpu`), and
-/// Hard Mix with it off in a 16/32-bit document is refused too (`hard_mix_shapeless_on_cpu`).
+/// Color Burn, Color Dodge, Vivid Light and Hard Mix with it off in a 16/32-bit document are
+/// refused too (`dividing_shapeless_on_cpu`).
 pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'static str> {
     let a = &layer.advanced;
     if a.is_default() {
         return None;
     }
-    if hard_mix_shapeless_on_cpu(layer, depth) {
-        return Some("Hard Mix with Transparency Shapes Layer off in a 16/32-bit document");
+    if dividing_shapeless_on_cpu(layer, depth) {
+        return Some("Transparency Shapes Layer off with Color Burn, Color Dodge, Vivid Light or Hard Mix in a 16/32-bit document");
     }
     let fx = photocraft_compose::effects::has_effects(layer);
     if a.blend_interior && fx {
@@ -61,12 +62,19 @@ pub(super) fn shapeless_blend(layer: &Layer) -> bool {
     !layer.advanced.transparency_shapes && photocraft_compose::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_))
 }
 
-/// Hard Mix with Transparency Shapes Layer off in a 16/32-bit document. The GPU holds such content
-/// as half floats, which can't keep a near-opaque alpha (0.9999, 65534/65535), and Hard Mix's Fill
-/// formula divides by `1 - fill`, so the lost precision shows. Half-float accumulation refuses it
-/// at any depth (`Compositor::check_accumulation`).
-pub(super) fn hard_mix_shapeless_on_cpu(layer: &Layer, depth: SampleType) -> bool {
-    depth != SampleType::U8 && layer.blend == BlendMode::HardMix && shapeless_blend(layer)
+/// Whether `mode`'s result below full Fill divides by a quantity that reaches 0 at full Fill ×
+/// alpha (Color Burn, Color Dodge, Vivid Light, Hard Mix), so a small error in a near-opaque alpha
+/// moves it far. The other special-eight modes are linear in Fill.
+pub(crate) fn fill_divides(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::ColorBurn | BlendMode::ColorDodge | BlendMode::VividLight | BlendMode::HardMix)
+}
+
+/// One of those modes (`fill_divides`) with Transparency Shapes Layer off in a 16/32-bit document.
+/// The GPU holds such content as half floats, which can't keep a near-opaque alpha (65534/65535,
+/// 1 − 2^-12), and the Fill formula amplifies the loss. Half-float accumulation refuses Hard Mix at
+/// any depth (`Compositor::check_accumulation`).
+pub(super) fn dividing_shapeless_on_cpu(layer: &Layer, depth: SampleType) -> bool {
+    depth != SampleType::U8 && fill_divides(layer.blend) && shapeless_blend(layer)
 }
 
 /// The Transparency Shapes Layer off case that keeps a layer drawn atop its clipping base (Blend
