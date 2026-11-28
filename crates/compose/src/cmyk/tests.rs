@@ -4,6 +4,7 @@ use photocraft_doc::{Adjustment, Document, Knockout, Layer, LayerContent, LayerM
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
 use proptest::prelude::*;
+use proptest::test_runner::TestCaseResult;
 
 use super::*;
 
@@ -674,13 +675,13 @@ fn unit() -> impl Strategy<Value = f32> {
     prop_oneof![Just(0.0f32), Just(1.0f32), 0.0f32..=1.0]
 }
 
-fn rect(w: i32, h: i32) -> impl Strategy<Value = Rect> {
-    (-1..w, -1..h, 1..w + 2, 1..h + 2).prop_map(|(x, y, rw, rh)| Rect::new(x, y, x + rw, y + rh))
+fn rect(w: i32, h: i32, offset: i32) -> impl Strategy<Value = Rect> {
+    (-1..w, -1..h, 1..w + 2, 1..h + 2).prop_map(move |(x, y, rw, rh)| Rect::new(x + offset, y + offset, x + offset + rw, y + offset + rh))
 }
 
-fn mask_spec(w: i32, h: i32) -> impl Strategy<Value = Option<MaskSpec>> {
+fn mask_spec(w: i32, h: i32, offset: i32) -> impl Strategy<Value = Option<MaskSpec>> {
     prop::option::of(
-        (prop::collection::vec((rect(w, h), unit()), 0..3), unit(), unit(), any::<bool>()).prop_map(|(rects, default, density, enabled)| MaskSpec {
+        (prop::collection::vec((rect(w, h, offset), unit()), 0..3), unit(), unit(), any::<bool>()).prop_map(|(rects, default, density, enabled)| MaskSpec {
             rects,
             default,
             density,
@@ -689,14 +690,14 @@ fn mask_spec(w: i32, h: i32) -> impl Strategy<Value = Option<MaskSpec>> {
     )
 }
 
-fn pixels(w: i32, h: i32) -> impl Strategy<Value = LayerSpec> {
+fn pixels(w: i32, h: i32, offset: i32) -> impl Strategy<Value = LayerSpec> {
     (
-        prop::collection::vec((rect(w, h), (unit(), unit(), unit(), unit(), unit())), 1..4),
+        prop::collection::vec((rect(w, h, offset), (unit(), unit(), unit(), unit(), unit())), 1..4),
         unit(),
         unit(),
         any::<bool>(),
         prop::bool::weighted(0.9),
-        mask_spec(w, h),
+        mask_spec(w, h, offset),
         prop_oneof![
             3 => prop_oneof![Just(Kind::Raster), Just(Kind::Text), Just(Kind::Shape), Just(Kind::Solid)],
             1 => adj_spec().prop_map(Kind::Adjust),
@@ -715,15 +716,25 @@ fn pixels(w: i32, h: i32) -> impl Strategy<Value = LayerSpec> {
         })
 }
 
-fn layer_spec(w: i32, h: i32) -> impl Strategy<Value = LayerSpec> {
-    pixels(w, h).prop_recursive(3, 12, 4, move |inner| {
-        (prop::collection::vec(inner, 1..4), any::<bool>(), unit(), prop_oneof![Just(1.0f32), unit()], mask_spec(w, h), blend_mode())
+fn layer_spec(w: i32, h: i32, offset: i32) -> impl Strategy<Value = LayerSpec> {
+    pixels(w, h, offset).prop_recursive(3, 12, 4, move |inner| {
+        (prop::collection::vec(inner, 1..4), any::<bool>(), unit(), prop_oneof![Just(1.0f32), unit()], mask_spec(w, h, offset), blend_mode())
             .prop_map(move |(children, pass_through, opacity, fill, mask, blend)| LayerSpec::Group { children, pass_through, blend, opacity, fill, mask })
     })
 }
 
 fn spec() -> impl Strategy<Value = Spec> {
-    (2i32..9, 2i32..7).prop_flat_map(|(w, h)| prop::collection::vec(layer_spec(w, h), 1..6).prop_map(move |layers| Spec { w, h, layers }))
+    spec_with_offset(0)
+}
+
+fn spec_with_offset(offset: i32) -> impl Strategy<Value = Spec> {
+    (2i32..9, 2i32..7).prop_flat_map(move |(w, h)| prop::collection::vec(layer_spec(w, h, offset), 1..6).prop_map(move |layers| Spec { w, h, layers }))
+}
+
+/// Most split-oracle inputs fit their paints and masks in one backing tile. The original layout
+/// still varies off-canvas paints and masks across the same stacks, inks and effects.
+fn split_oracle_spec() -> impl Strategy<Value = Spec> {
+    prop_oneof![3 => spec_with_offset(1), 1 => spec()]
 }
 
 fn build(s: &LayerSpec) -> Layer {
@@ -1523,26 +1534,71 @@ fn with_effects(s: &Spec, fx: &[(usize, FxSpec)], knockout: Option<usize>) -> Do
     d
 }
 
+fn check_split_exact_route(d: &Document) -> TestCaseResult {
+    let via = split_render(d);
+    let exact = render_cmyk(d, via.rect).unwrap_or_else(|| panic!("supported"));
+    prop_assert_eq!(via.px.len(), exact.px.len());
+    for (i, (g, w)) in via.px.iter().zip(&exact.px).enumerate() {
+        prop_assert!((g[4] - w[4]).abs() <= 1e-5, "alpha {i}: {g:?} vs {w:?}");
+        if w[4] > 1e-4 {
+            prop_assert!((0..4).all(|c| (g[c] - w[c]).abs() <= 1e-5), "ink {i}: {g:?} vs {w:?}");
+        }
+    }
+    Ok(())
+}
+
+fn check_split_effect_planes(d: &Document) -> TestCaseResult {
+    let rect = d.bounds().inflate(2);
+    let cmy = split::render_planes(d, rect, [0, 1, 2]);
+    let rot = split::render_planes(d, rect, [1, 2, 0]);
+    let k = split::render_planes(d, rect, [3, 3, 3]);
+    let mix = split::render_planes(d, rect, [3, 0, 3]);
+    let same = |a: f32, b: f32| (a - b).abs() <= 1e-6 || (a.is_nan() && b.is_nan());
+    for i in 0..cmy.px.len() {
+        let (p, r, q, m) = (cmy.px[i], rot.px[i], k.px[i], mix.px[i]);
+        prop_assert!(same(p[3], r[3]) && same(p[3], q[3]) && same(p[3], m[3]), "coverage {i}: {p:?} {r:?} {q:?} {m:?}");
+        prop_assert!(same(r[0], p[1]) && same(r[1], p[2]) && same(r[2], p[0]), "rotated {i}: {p:?} vs {r:?}");
+        prop_assert!(same(q[0], q[1]) && same(q[1], q[2]), "black {i}: {q:?}");
+        prop_assert!(same(m[0], q[0]) && same(m[1], p[0]) && same(m[2], q[0]), "mixed {i}: {m:?} vs {p:?} / {q:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn split_oracles_cover_four_backing_tiles_at_the_canvas_corner() {
+    let mut d = doc(5, 4);
+    let mut l = layer(&[(Rect::new(-1, -1, 3, 3), [0.17, 0.37, 0.59, 0.81, 1.0]), (Rect::new(0, 0, 4, 2), [0.72, 0.21, 0.43, 0.33, 0.6])]);
+    assert_eq!(l.surface().map(|s| s.tile_count()), Some(4));
+    l.mask = Some(mask(&[(Rect::new(-1, -1, 2, 3), 0.7), (Rect::new(1, 0, 4, 1), 0.35)], 1.0, 0.65, true));
+    d.layers.push(l);
+    assert!(supports(&d) && split::supports(&d));
+    check_split_exact_route(&d).unwrap();
+
+    let l = &mut d.layers[0];
+    l.effects.enabled = true;
+    l.effects.items.push(make_effect(&FxSpec::GradientOverlay {
+        from: [0.11, 0.23, 0.47, 0.61],
+        to: [0.76, 0.13, 0.35, 0.32],
+        blend: BlendMode::Normal,
+        opacity: 0.65,
+    }));
+    assert!(!supports(&d) && split::supports(&d));
+    check_split_effect_planes(&d).unwrap();
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 120, ..ProptestConfig::default() })]
 
     /// On every stack the exact path handles, the split route gives the same inks.
     #[test]
-    fn the_split_route_agrees_with_the_exact_path(s in spec()) {
+    fn the_split_route_agrees_with_the_exact_path(s in split_oracle_spec()) {
         prop_assume!(!clips_onto_pass_through(&s.layers));
         let mut d = doc(s.w as u32, s.h as u32);
         d.layers = s.layers.iter().map(build).collect();
         prop_assume!(supports(&d) && split::supports(&d));
         // Both are exact up to float rounding, which a mode that jumps can magnify (see [`jumps`]).
         prop_assume!(!any_layer(&d.layers, &|l| jumps(l.blend)));
-        let via = split_render(&d);
-        let exact = render_cmyk(&d, via.rect).unwrap_or_else(|| panic!("supported"));
-        for (i, (g, w)) in via.px.iter().zip(&exact.px).enumerate() {
-            prop_assert!((g[4] - w[4]).abs() <= 1e-5, "alpha {i}: {g:?} vs {w:?}");
-            if w[4] > 1e-4 {
-                prop_assert!((0..4).all(|c| (g[c] - w[c]).abs() <= 1e-5), "ink {i}: {g:?} vs {w:?}");
-            }
-        }
+        check_split_exact_route(&d)?;
     }
 
     /// The RGB compositor treats every channel on its own for everything the split route
@@ -1550,25 +1606,13 @@ proptest! {
     /// (nor coverage). That is what makes running it on inks' brightness exact.
     #[test]
     fn effects_work_channel_by_channel(
-        s in spec(),
+        s in split_oracle_spec(),
         fx in prop::collection::vec((0usize..8, fx_spec()), 1..4),
         knockout in prop::option::of(0usize..8),
     ) {
         let d = with_effects(&s, &fx, knockout);
         prop_assume!(split::supports(&d));
-        let rect = Rect::new(-2, -2, s.w + 2, s.h + 2);
-        let cmy = split::render_planes(&d, rect, [0, 1, 2]);
-        let rot = split::render_planes(&d, rect, [1, 2, 0]);
-        let k = split::render_planes(&d, rect, [3, 3, 3]);
-        let mix = split::render_planes(&d, rect, [3, 0, 3]);
-        let same = |a: f32, b: f32| (a - b).abs() <= 1e-6 || (a.is_nan() && b.is_nan());
-        for i in 0..cmy.px.len() {
-            let (p, r, q, m) = (cmy.px[i], rot.px[i], k.px[i], mix.px[i]);
-            prop_assert!(same(p[3], r[3]) && same(p[3], q[3]) && same(p[3], m[3]), "coverage {i}: {p:?} {r:?} {q:?} {m:?}");
-            prop_assert!(same(r[0], p[1]) && same(r[1], p[2]) && same(r[2], p[0]), "rotated {i}: {p:?} vs {r:?}");
-            prop_assert!(same(q[0], q[1]) && same(q[1], q[2]), "black {i}: {q:?}");
-            prop_assert!(same(m[0], q[0]) && same(m[1], p[0]) && same(m[2], q[0]), "mixed {i}: {m:?} vs {p:?} / {q:?}");
-        }
+        check_split_effect_planes(&d)?;
     }
 
     /// Effects don't depend on the tiling or banding (beyond the RGB compositor's own float
