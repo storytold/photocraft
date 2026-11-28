@@ -362,15 +362,4 @@ mod tests {
         assert!(!face_covers(inter, 1, 'A'), "a single-face file has no face 1");
         assert!(!face_covers(b"", 0, 'A'));
     }
-
-    /// With the real system fonts, each script that has a candidate installed has one that
-    /// covers it (skipped per script when the machine has none, e.g. CI Linux).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn system_candidates_cover_their_script() {
-        for (s, c) in [(Script::Thai, 'ส'), (Script::Arabic, 'ر'), (Script::Hebrew, 'ש'), (Script::Devanagari, 'न')] {
-            let found = system_candidates(s).iter().take(4).any(|p| std::fs::read(p).ok().and_then(|b| covering_face(&b, c)).is_some());
-            eprintln!("{s:?}: {}", if found { "covered" } else { "no installed font" });
-        }
-    }
 }
