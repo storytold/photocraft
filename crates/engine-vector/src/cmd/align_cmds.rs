@@ -301,6 +301,17 @@ fn place_aligned(doc: &mut Document, cmd: &str, ids: &[LayerId], placed: &[Layer
             if let Some(m) = &mut l.mask {
                 m.surface = translate_surface(&m.surface, extra.0, extra.1);
             }
+            // The rest of the layer moves with its pixels, as `translate_doc` moves it for the
+            // canvas origin: a vector mask, and a video layer's stored frames (the displayed
+            // raster is only the frame at the playhead).
+            if let Some(vm) = &mut l.vector_mask {
+                vm.path = vm.path.transform(&photocraft_geom::Affine::translate(f64::from(extra.0), f64::from(extra.1)));
+            }
+            if let Some(v) = &mut l.video {
+                for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+                    *frame = translate_surface(frame, extra.0, extra.1);
+                }
+            }
         }
     }
     // The Background's own move: the full shift when it was placed, else only the canvas origin.

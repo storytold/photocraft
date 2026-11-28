@@ -176,6 +176,37 @@ fn two_patches_move_to_the_origin_and_the_canvas_keeps_its_size() {
     assert_eq!(bounds(&s, bg), Rect::new(0, 0, 400, 300));
 }
 
+/// The placed reference's vector mask and a video layer's stored frames move with its pixels:
+/// before, only the displayed raster and the pixel mask moved. (The warp of the other layers
+/// doesn't carry these either, as on main; that's not the placement's job.)
+#[test]
+fn the_references_vector_mask_and_video_frames_move_with_its_pixels() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
+    let a = new_layer(&mut s, "A");
+    paint(&mut s, a, Rect::new(100, 75, 300, 225), |x, y| tex(x - 100, y - 75));
+    let b = new_layer(&mut s, "B");
+    paint(&mut s, b, Rect::new(130, 100, 330, 250), |x, y| tex(x - 130, y - 100));
+    s.edit("masks", |doc, _| {
+        for (id, x, y) in [(a, 100.0, 75.0), (b, 130.0, 100.0)] {
+            let l = doc.layer_mut(id).unwrap();
+            l.vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_vector::shapes::rect(x, y, 200.0, 150.0)));
+            let frame = l.surface().unwrap().clone();
+            l.video = Some(photocraft_doc::VideoData::new(vec![frame], 30.0));
+        }
+        Ok(())
+    })
+    .unwrap();
+    select(&mut s, &[a, b]);
+    let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).unwrap();
+    assert_eq!(r["reference"], json!(a.0), "{r}");
+    let l = s.active().unwrap().doc.layer(a).unwrap();
+    let (x0, y0, ..) = l.vector_mask.as_ref().unwrap().path.control_bounds().unwrap();
+    assert!(x0.abs() <= 1e-9 && y0.abs() <= 1e-9, "vector mask at {x0},{y0} {r}");
+    let frame = l.video.as_ref().unwrap().frames[0].content_bounds();
+    assert_eq!(frame, Rect::new(0, 0, 200, 150), "{r}");
+}
+
 /// A fully locked reference stays put; the canvas grows right and down only, and the unselected
 /// Background grows with white whatever its own colour.
 #[test]
