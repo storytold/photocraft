@@ -15,6 +15,9 @@ pub(crate) struct Runtime {
     /// The last update's outcome opened the result window; it opens once, so closing it with `ui.set` stays closed.
     #[cfg(not(target_arch = "wasm32"))]
     outcome_announced: bool,
+    /// The signed installer's last handoff error, shown on the startup prompt until the next try.
+    #[cfg(not(target_arch = "wasm32"))]
+    signed_error: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -33,6 +36,59 @@ impl Default for Runtime {
             result_dialog: None,
             #[cfg(not(target_arch = "wasm32"))]
             outcome_announced: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            signed_error: None,
+        }
+    }
+}
+
+/// The startup prompt's id, the same key craft-update uses for [`craft::update::stack_dialogs::UpdatePromptDialog`].
+#[cfg(not(target_arch = "wasm32"))]
+fn prompt_id() -> craft::ui::dialog::DialogId {
+    craft::ui::dialog::dialog_id("updateDialog.prompt")
+}
+
+/// Hands Update and Restart to the signed host installer when the bundle has one. Discovery and
+/// Download stay with the updater, so Sparkle does not open a second prompt or check at launch.
+/// A failed handoff leaves the prompt open and reports the error.
+#[cfg(not(target_arch = "wasm32"))]
+fn install_signed_request(app: &mut PhotocraftApp) {
+    if app.services.install_update.is_none() {
+        return;
+    }
+    let id = prompt_id();
+    let requested = app
+        .framework
+        .dialogs
+        .get_mut_by_id::<craft::update::stack_dialogs::UpdatePromptDialog>(id)
+        .is_some_and(craft::update::stack_dialogs::UpdatePromptDialog::take_update_request);
+    if !requested {
+        return;
+    }
+    match hand_signed_install(app) {
+        Ok(()) => {
+            app.updates_rt.signed_error = None;
+            if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<craft::update::stack_dialogs::UpdatePromptDialog>(id) {
+                dialog.withdraw();
+            }
+        }
+        Err(error) => app.updates_rt.signed_error = Some(error),
+    }
+}
+
+/// Runs the signed installer hook. Success closes the update window; failure leaves it open.
+#[cfg(not(target_arch = "wasm32"))]
+fn hand_signed_install(app: &mut PhotocraftApp) -> Result<(), String> {
+    let Some(install) = app.services.install_update.as_mut() else { return Ok(()) };
+    match install() {
+        Ok(()) => {
+            app.ui.updates_open = false;
+            Ok(())
+        }
+        Err(error) => {
+            app.ui.status = error.clone();
+            app.ui.status_error = true;
+            Err(error)
         }
     }
 }
@@ -86,6 +142,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
     // An update starts, and a ready one asks the app to close, only while no work is unsaved.
     let clean = !app.has_unsaved_work();
+    install_signed_request(app);
     let action = match app.updates_rt.updater.as_mut() {
         Some(updater) => {
             updater.tick(ctx);
@@ -102,6 +159,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // relaunches once the process exits.
         Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         _ => {}
+    }
+    // The updater writes the prompt's status line itself; put the signed installer's error back.
+    if let Some(error) = app.updates_rt.signed_error.clone()
+        && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<craft::update::stack_dialogs::UpdatePromptDialog>(prompt_id())
+    {
+        dialog.set_status(Some(error));
+    } else if !app.updates_rt.updater.as_ref().is_some_and(|updater| updater.prompt_open()) {
+        app.updates_rt.signed_error = None;
     }
 
     // A cancelled result (the dialog withdrawn below) answers nothing.
@@ -196,6 +261,38 @@ mod tests {
         assert!(app.ui.updates_open);
         assert_ne!(*app.updates_rt.updater.as_ref().unwrap().status(), craft::update::updater::Status::Idle);
         assert!(checks.recv_timeout(Duration::from_secs(5)).is_ok(), "the manual check ran");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn signed_install_uses_the_native_hook_and_does_not_open_a_browser() {
+        let installs = Arc::new(Mutex::new(0u32));
+        let counted = installs.clone();
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let urls = opened.clone();
+        let mut app = app();
+        app.services.install_update = Some(Box::new(move || {
+            *counted.lock().unwrap() += 1;
+            Ok(())
+        }));
+        app.services.open_url = Some(Box::new(move |url| {
+            urls.lock().unwrap().push(url.to_string());
+            Ok(())
+        }));
+        app.ui.updates_open = true;
+        assert!(hand_signed_install(&mut app).is_ok());
+        assert_eq!(*installs.lock().unwrap(), 1);
+        assert!(opened.lock().unwrap().is_empty());
+        assert!(!app.ui.updates_open);
+
+        app.ui.updates_open = true;
+        app.services.install_update = Some(Box::new(|| Err("Sparkle could not start".into())));
+        let error = hand_signed_install(&mut app).unwrap_err();
+        assert_eq!(error, "Sparkle could not start");
+        assert!(app.ui.updates_open, "a failed handoff leaves the window open");
+        assert!(app.ui.status_error);
+        assert_eq!(app.ui.status, "Sparkle could not start");
+        assert!(opened.lock().unwrap().is_empty());
     }
 
     #[test]
