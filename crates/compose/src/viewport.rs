@@ -247,10 +247,10 @@ mod tests {
             }
         }
     }
-    /// A white document with a noisy, partly transparent layer and a multiplied solid over one-colour
-    /// tiles, so the reduced path takes both its one-colour and per-pixel branches.
+    /// A white document with a noisy, partly transparent layer and a multiplied solid.
+    /// The upper-left tile stays one colour while the noise crosses tile boundaries on both axes.
     fn busy(depth: SampleType) -> Document {
-        let mut d = Document::with_background("busy", Size::new(1100, 700), ColorMode::Rgb, depth, Color::WHITE);
+        let mut d = Document::with_background("busy", Size::new(547, 291), ColorMode::Rgb, depth, Color::WHITE);
         let mut s = photocraft_raster::Surface::new(d.pixel_format());
         let mut seed = 0x2545_f491_u32;
         let mut next = || {
@@ -259,15 +259,15 @@ mod tests {
             seed ^= seed << 5;
             (seed % 1000) as f32 / 999.0
         };
-        for y in (100..530).step_by(3) {
-            for x in (190..905).step_by(3) {
+        for y in (100..271).step_by(3) {
+            for x in (462..531).step_by(3) {
                 let px = [next(), next(), next(), next()];
                 s.fill_rect(Rect::from_xywh(x, y, 3, 3), &px);
             }
         }
         d.layers.push(photocraft_doc::Layer::new("noise", photocraft_doc::LayerContent::Raster(s)));
         let mut s = photocraft_raster::Surface::new(d.pixel_format());
-        s.fill_rect(Rect::new(400, 0, 1100, 650), &[0.2, 0.5, 0.9, 1.0]);
+        s.fill_rect(Rect::new(288, 0, 547, 275), &[0.2, 0.5, 0.9, 1.0]);
         let mut top = photocraft_doc::Layer::new("tint", photocraft_doc::LayerContent::Raster(s));
         top.opacity = 0.6;
         top.blend = photocraft_color::blend::BlendMode::Multiply;
@@ -278,14 +278,17 @@ mod tests {
     fn reduced_pages_match_averaging_every_composited_pixel() {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let d = busy(depth);
+            let bounds = d.bounds();
             for k in [2u32, 4, 16] {
                 let ki = k as i32;
-                for source in [d.bounds(), Rect::new(512, 256, 1024, 700), Rect::new(ki * 13, ki * 5, 1100, ki * 37)] {
-                    let source = source.intersect(&d.bounds());
+                // Whole document, tile-aligned offset, then a factor-aligned offset within a tile.
+                for source in [bounds, Rect::new(256, 256, 512, bounds.y1), Rect::new(ki * 13, ki * 5, bounds.x1, ki * 37)] {
+                    let source = source.intersect(&bounds);
                     let out = Rect::new(source.x0 / ki, source.y0 / ki, (source.x1 + ki - 1) / ki, (source.y1 + ki - 1) / ki);
                     let reference = average_page(&d, source, ki, out, Interrupt::NONE).unwrap();
                     let got = render_page(&d, source, k, Interrupt::NONE).unwrap();
                     assert_eq!(got.rect, reference.rect, "{depth:?} k={k} {source:?}");
+                    assert_eq!(got.px.len(), reference.px.len(), "{depth:?} k={k} {source:?}");
                     let worst = got.px.iter().zip(&reference.px).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs())).fold(0.0f32, f32::max);
                     assert!(worst < 1e-4, "{depth:?} k={k} {source:?}: differs by {worst}");
                 }
