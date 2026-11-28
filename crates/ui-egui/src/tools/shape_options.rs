@@ -6,7 +6,7 @@ use craft::draw::stroke::StrokeStyle;
 use craft::draw::ui::RADIUS_RANGE;
 use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords};
 use craft::draw::ui::shape_drag::ShapeKind;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, bind_tracked};
 use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
@@ -167,7 +167,7 @@ fn tool_extras(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
         // The tool's own corner radius for the next polygon, after Sides (#13302); the active shape is not touched.
         // A value typed past the Rectangle Radius's range takes the closest one and says so.
         Divider::vertical().show(ui);
-        let out = crate::option_cells::number(tl!("Radius"), &mut app.ui.tool_options.polygon_corner_radius, RADIUS_RANGE).unit("px").show(ui);
+        let out = crate::option_cells::number(tl!("Radius"), bind_tracked!(app.ui.tool_options => polygon_corner_radius), RADIUS_RANGE).unit("px").show(ui);
         if let Some(alert) = out.out_of_range {
             crate::option_cells::range_alert(app, ui, &alert);
         }

@@ -121,7 +121,7 @@ fn run_frame(app: &mut PhotocraftApp) {
     frames.frame_without_input(os_input, |ui| {
         crate::shortcut_dispatch::record_view_commands(app);
         crate::shortcuts::handle(app, &ui.ctx().clone());
-        egui::CentralPanel::default().show(ui, |ui| super::document_area(app, ui));
+        egui::CentralPanel::default().show(ui, |ui| document_area(app, ui));
         crate::dialogs::run(app, ui);
         crate::shortcuts::escape_keys(app, &ui.ctx().clone());
     });
@@ -264,6 +264,14 @@ pub(crate) fn modifiers(app: &mut PhotocraftApp, mods: Modifiers) {
     let at = ctx.input(|i| i.pointer.latest_pos()).or_else(|| view(app).map(|v| v.rect.center())).unwrap_or(Pos2::ZERO);
     WindowHost::of(&ctx).inject_move(egui::ViewportId::ROOT, at, held(mods), 0.0);
     settle(app);
+}
+
+/// The document area as the app's window runs it: first the area's work of every pass, which the window's body runs
+/// before the dock (a pending crop left by a tool switch, the tablet settings, landed redraws), then the area. Every
+/// harness that shows the area without the window shows it through this.
+pub(crate) fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    super::document_area::each_pass(app, ui.ctx());
+    super::document_area(app, ui);
 }
 
 /// One pass with no input: what a tool change cancels, a document switch drops.

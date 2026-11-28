@@ -14,7 +14,7 @@ use craft::keymap::Mods;
 pub(crate) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

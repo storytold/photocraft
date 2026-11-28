@@ -34,7 +34,7 @@ fn home(path: &str) -> Harness<'static, (Box<PhotocraftApp>, bool)> {
     let mut h = Harness::builder().with_size(egui::vec2(900.0, 760.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::testing::document_area(app, ui));
             }
         },
         (app, false),

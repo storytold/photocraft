@@ -446,6 +446,7 @@ pub(crate) fn prompts_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The families that take their own results (one `take(app, ctx)` each), in order.
 pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     alerts::take,
+    crate::file_open::take_open_alerts,
     discard_ui::take,
     open_prompt::take,
     credits::take,
@@ -743,6 +744,9 @@ mod arbitrary_ruler_prefill_tests;
 pub mod assign_profile_layers_alert;
 #[cfg(test)]
 mod assign_profile_layers_alert_tests;
+#[cfg(test)]
+mod auto_align_dialog_tests;
+pub(crate) mod auto_align_ui;
 pub(crate) mod bitmap_dialog;
 pub mod blend_options;
 pub mod blur_pins;
@@ -773,6 +777,8 @@ pub mod delete_layer_prompt;
 pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
+#[cfg(test)]
+mod duplicate_layer_other_document_name_tests;
 pub mod duplicate_layer_ui;
 pub mod equalize_ui;
 pub mod export_dialog;

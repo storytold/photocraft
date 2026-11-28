@@ -23,7 +23,7 @@ fn move_controls_fixture() -> (Harness<'static, Box<PhotocraftApp>>, [LayerId; 2
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_context(ctx).with_size(vec2(1000.0, 800.0)).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );

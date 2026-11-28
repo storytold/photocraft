@@ -4,7 +4,7 @@
 use craft::behavior::IconId;
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, bind_tracked};
 use craft::ui::display::{Divider, Shade, Text};
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
@@ -68,14 +68,21 @@ pub(super) fn art_history(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<
     .into_iter()
     .map(|(k, l)| Entry::new(k.to_string(), l.to_string()))
     .collect();
-    let o = &mut app.ui.tool_options;
-    Field::new(tl!("Style")).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
-        Select::new(tl!("Style"), Bind::bound(&mut o.art_history_style), &styles).show(ui);
-    });
+    {
+        let mut style = bind_tracked!(app.ui.tool_options => art_history_style);
+        Field::new(tl!("Style")).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
+            Select::new(tl!("Style"), style.reborrowed(), &styles).show(ui);
+        });
+    }
     // Area: whole pixels 0..500, no slider; Tolerance: whole percents 0..100 with a slider. A value
     // typed past either range becomes the closest one with the reference's own alert (#12630).
-    let area = number(tl!("Area"), &mut o.art_history_area, 0.0..=500.0).whole().unit("px").tooltip(tl!("Painting area diameter")).show(ui).out_of_range;
-    let tolerance = number(tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0)
+    let area = number(tl!("Area"), bind_tracked!(app.ui.tool_options => art_history_area), 0.0..=500.0)
+        .whole()
+        .unit("px")
+        .tooltip(tl!("Painting area diameter"))
+        .show(ui)
+        .out_of_range;
+    let tolerance = number(tl!("Tolerance"), bind_tracked!(app.ui.tool_options => art_history_tolerance), 0.0..=100.0)
         .whole()
         .unit("%")
         .popup_slider()
@@ -99,7 +106,7 @@ fn art_history_angle_pressure(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Opt
     let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = brush.angle;
-    let angle_out = number(tl!("Angle"), &mut angle, -180.0..=180.0)
+    let angle_out = number(tl!("Angle"), Bind::bound(&mut angle), -180.0..=180.0)
         .whole()
         .unit("°")
         .icon(IconSpec::svg(IconId::new("rotate_cw")))
@@ -132,9 +139,9 @@ pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Optio
     let patterns: Vec<Entry<String>> = app.session.patterns.items.iter().map(|p| Entry::new(p.id.clone(), p.display_name().to_string())).collect();
     let held = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone());
     let mut picked = held.clone().unwrap_or_default();
-    let o = &mut app.ui.tool_options;
-    Checkbox::new(Bind::bound(&mut o.pattern_stamp_aligned)).label(tl!("Aligned")).show(ui);
-    Checkbox::new(Bind::bound(&mut o.pattern_stamp_impressionist)).label(tl!("Impressionist")).show(ui);
+    let (aligned, impressionist) = bind_tracked!(app.ui.tool_options => pattern_stamp_aligned, pattern_stamp_impressionist);
+    Checkbox::new(aligned).label(tl!("Aligned")).show(ui);
+    Checkbox::new(impressionist).label(tl!("Impressionist")).show(ui);
     Divider::vertical().show(ui);
     if patterns.is_empty() {
         Text::new(tl!("No patterns")).shade(Shade::Faint).show(ui);
@@ -143,8 +150,8 @@ pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Optio
             Select::new(tl!("Pattern"), Bind::bound(&mut picked), &patterns).show(ui);
         });
     }
-    let scale = number(tl!("Scale"), &mut o.pattern_stamp_scale, 1.0..=1000.0).unit("%").show(ui).out_of_range;
-    let angle = number(tl!("Angle"), &mut o.pattern_stamp_angle, -180.0..=180.0).unit("°").show(ui).out_of_range;
+    let scale = number(tl!("Scale"), bind_tracked!(app.ui.tool_options => pattern_stamp_scale), 1.0..=1000.0).unit("%").show(ui).out_of_range;
+    let angle = number(tl!("Angle"), bind_tracked!(app.ui.tool_options => pattern_stamp_angle), -180.0..=180.0).unit("°").show(ui).out_of_range;
     if !patterns.is_empty() && held.as_deref() != Some(picked.as_str()) {
         let _ = app.run("pattern.presets.select", json!({"pattern": picked}));
     }
@@ -153,9 +160,9 @@ pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Optio
 
 /// Red Eye: Pupil Size and Darken Amount.
 pub(super) fn red_eye(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let o = &mut app.ui.tool_options;
-    let pupil = number(tl!("Pupil Size"), &mut o.red_eye_pupil_size, 1.0..=100.0).show(ui).out_of_range;
-    let darken = number(tl!("Darken Amount"), &mut o.red_eye_darken, 0.0..=100.0).show(ui).out_of_range;
+    let (pupil_size, darken_amount) = bind_tracked!(app.ui.tool_options => red_eye_pupil_size, red_eye_darken);
+    let pupil = number(tl!("Pupil Size"), pupil_size, 1.0..=100.0).show(ui).out_of_range;
+    let darken = number(tl!("Darken Amount"), darken_amount, 0.0..=100.0).show(ui).out_of_range;
     Divider::vertical().show(ui);
     hint(ui, tl!("Click a red pupil to neutralize it"));
     pupil.or(darken)

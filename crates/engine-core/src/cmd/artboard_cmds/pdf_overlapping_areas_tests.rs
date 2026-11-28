@@ -27,7 +27,7 @@ fn session(depth: u32) -> (Session, [u64; 3]) {
 }
 
 /// A pixel layer `name` of `color` over `rect`, on top of board `board`'s layers.
-fn paint(s: &mut Session, board: u64, name: &str, rect: Rect, color: [u8; 3]) {
+pub(super) fn paint(s: &mut Session, board: u64, name: &str, rect: Rect, color: [u8; 3]) {
     s.edit(name, |doc, _| {
         let fmt = doc.pixel_format();
         let mut l = Layer::raster(name, fmt);
