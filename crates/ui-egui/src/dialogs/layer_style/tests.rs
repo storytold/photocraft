@@ -821,3 +821,26 @@ fn the_preview_swatch_follows_a_scratch_read_error_transition() {
     assert_eq!(draft(&app, id).render_hash(), key.1, "the draft is unchanged");
     assert_ne!(swatch_key(draft(&app, id)), key, "the swatch draws again");
 }
+
+#[test]
+fn layer_style_checkbox_drag_clears_then_checks_without_touching_the_next_effect() {
+    use crate::dialogs::tests::{checkbox_centers, fast_checkbox_drag};
+
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, None).unwrap();
+    let kinds = [EffectKind::BevelEmboss, EffectKind::Stroke, EffectKind::InnerShadow, EffectKind::InnerGlow];
+    edit(&mut app, id, |d| {
+        for kind in kinds {
+            d.add_instance(kind, &defaults(kind));
+        }
+    });
+    let mut h = harness(app);
+    let [bevel, stroke, shadow] = checkbox_centers(&h, ["Bevel & Emboss", "Stroke", "Inner Shadow"]);
+    let states = |app: &PhotocraftApp| kinds.map(|kind| draft(app, id).style.effect(first_of(app, id, kind)).unwrap().on);
+
+    assert_eq!(states(h.state()), [true; 4]);
+    fast_checkbox_drag(&mut h, [bevel, stroke, shadow]);
+    assert_eq!(states(h.state()), [false, false, false, true]);
+    fast_checkbox_drag(&mut h, [shadow, stroke, bevel]);
+    assert_eq!(states(h.state()), [true; 4]);
+}

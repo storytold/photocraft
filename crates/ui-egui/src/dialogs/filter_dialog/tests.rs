@@ -1919,3 +1919,25 @@ fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
     assert_eq!(app.session.documents()[0].history.past_len(), steps[0] + 1, "Lens Blur ran on the first document");
     assert_eq!(app.session.documents()[1].history.past_len(), steps[1], "the second document is untouched");
 }
+
+#[test]
+fn trim_checkbox_drag_clears_then_checks_without_touching_the_fourth_side() {
+    use crate::dialogs::tests::{checkbox_centers, fast_checkbox_drag};
+
+    let mut app = new_app();
+    app.run("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+    let id = open(&mut app, "image.trim").unwrap();
+    let mut h = harness(app, egui::vec2(1500.0, 1000.0));
+    h.run_steps(4);
+    let [top, bottom, left] = checkbox_centers(&h, ["Top", "Bottom", "Left"]);
+    let states = |app: &PhotocraftApp| {
+        let fields = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).unwrap().fields();
+        ["top", "bottom", "left", "right"].map(|key| fields.bool(key).unwrap())
+    };
+
+    assert_eq!(states(h.state()), [true; 4]);
+    fast_checkbox_drag(&mut h, [top, bottom, left]);
+    assert_eq!(states(h.state()), [false, false, false, true]);
+    fast_checkbox_drag(&mut h, [left, bottom, top]);
+    assert_eq!(states(h.state()), [true; 4]);
+}

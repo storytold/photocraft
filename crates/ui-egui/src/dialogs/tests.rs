@@ -239,3 +239,27 @@ fn a_prompt_answer_reaches_its_own_entry_once_and_a_host_cancel_reaches_none() {
     take_prompts_from(&mut app, &ctx, rows);
     assert_eq!(hits().last(), Some(&("b", PromptChoice::Cancel)));
 }
+
+/// Deliver motion and release together, as can happen between rendered frames.
+pub(super) fn fast_checkbox_drag(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, [start, middle, end]: [egui::Pos2; 3]) {
+    use egui::{Event, Modifiers, PointerButton};
+    h.event(Event::PointerMoved(start));
+    h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(middle));
+    h.event(Event::PointerMoved(end));
+    h.event(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+}
+
+pub(super) fn checkbox_centers(h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>, labels: [&str; 3]) -> [egui::Pos2; 3] {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    labels.map(|label| {
+        h.query_all_by_role(egui::accesskit::Role::CheckBox)
+            .find(|node| node.accesskit_node().label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("missing checkbox {label}"))
+            .rect()
+            .center()
+    })
+}
