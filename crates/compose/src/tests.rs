@@ -4516,6 +4516,10 @@ fn a_gigapixel_new_document_reduces_without_compositing_its_canvas() {
     // (25 s on 32 threads, all cores busy). Only the partial tiles at its right and bottom edges
     // hold two values; the rest is one shared white tile.
     let (w, h) = (78_740u32, 39_370u32);
+    let tile = RENDER_TILE as u32;
+    let edge_pixels = u64::from(w) * u64::from(h) - u64::from(w / tile * tile) * u64::from(h / tile * tile);
+    // At this zoom, cells still fit within and straddle source tiles. Check the whole reduction.
+    let out = Rect::from_xywh(0, 0, 509, 257);
     for fill in [Some(Color::WHITE), Some(Color::rgba(0.2, 0.4, 0.6, 1.0)), None] {
         let mut d = match fill {
             Some(c) => Document::with_background("big", Size::new(w, h), ColorMode::Rgb, SampleType::U8, c),
@@ -4523,11 +4527,14 @@ fn a_gigapixel_new_document_reduces_without_compositing_its_canvas() {
         };
         d.layers.push(Layer::raster("Layer 1", PixelFormat::RGBA8));
         let mut stats = ReducedStats::default();
-        let r = render_reduced_with(&d, d.bounds(), 3937, 1969, None, 0, true, &mut stats);
-        let edge_tiles = u64::from(w.div_ceil(256) + h.div_ceil(256) - 1);
-        assert!(stats.composited <= edge_tiles * 256 * 256, "{fill:?}: {stats:?}");
+        let r = render_reduced_with(&d, d.bounds(), out.width(), out.height(), None, 0, true, &mut stats);
+        let budget = if fill.is_some() { edge_pixels } else { 0 };
+        assert!(stats.uniform && stats.composited <= budget, "{fill:?}: {stats:?}, budget {budget}");
+        assert_eq!(r.rect, out, "{fill:?}");
+        assert_eq!(r.px.len(), out.width() as usize * out.height() as usize, "{fill:?}");
         let want = fill.map_or([0.0; 4], |c| [c.c[0], c.c[1], c.c[2], 1.0]);
-        assert!(r.px.iter().all(|p| close4(*p, want)), "{fill:?}");
+        // Exact alpha also catches a missing source row or column in a larger cell.
+        assert!(r.px.iter().all(|p| p[3] == want[3] && close4(*p, want)), "{fill:?}");
     }
 }
 
