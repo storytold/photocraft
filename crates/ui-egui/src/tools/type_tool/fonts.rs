@@ -11,7 +11,7 @@ pub fn families() -> Arc<Vec<String>> {
     type Cached = Option<((u64, u64), Arc<Vec<String>>)>;
     static FAMILIES: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
     let catalog = photocraft_text::fonts::catalog();
-    let key = (catalog.generation(), photocraft_text::served::generation());
+    let key = families_key();
     let mut cached = FAMILIES.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((k, v)) = cached.as_ref()
         && *k == key
@@ -28,6 +28,12 @@ pub fn families() -> Arc<Vec<String>> {
     let v = Arc::new(v);
     *cached = Some((key, v.clone()));
     v
+}
+
+/// Changes whenever [`families`] does: a family installed or served while the app runs reaches the font menus with no
+/// command or input, so the regions that show them hold this in their versions.
+pub(crate) fn families_key() -> (u64, u64) {
+    (photocraft_text::fonts::catalog().generation(), photocraft_text::served::generation())
 }
 
 /// Style names available for a family: the names of the catalog's faces of it (named instances included),

@@ -1,49 +1,20 @@
-//! The shell's title bar and options bar and every docked panel body as memoized views (#16118). The shell runs a slot
-//! every pass and the dock a panel body, and leave memoizing to the app; each reads the whole app, so it is a `MemoView`
-//! whose key is a version of what it shows: while the version is the same and no input reaches the slot, the frame adds
-//! its last run again instead of running every control in it. The status bar is a memoized view of its own
-//! (`status_bar::StatusProps`), over the values it shows. A version covers the app data its slot shows that can change while no
-//! input reaches the slot: what a command changes, the active document and layer and the tool in every version; what
-//! the slot shows of the canvas view, a job or the brush and colours; and what an edit elsewhere changes without a
-//! command, such as a box or pin dragged on the canvas. Input inside a slot runs it whatever its version, and so does a
-//! repaint it asks for itself.
+//! The versions of what the shell's slots, the docked panels and the document area show (#16118). The shell replays
+//! a slot, and PhotoCraft's views a panel body or the document area, while its version holds and no input reaches it:
+//! the frame adds its last run again instead of running every control in it. The title bar, the options bar and the
+//! status bar are the shell's versioned slots ([`title_bar`], [`options_bar`], [`status_bar`]); each panel body and
+//! the document area is a `MemoView` whose key is its version. A version covers the app data its region shows that
+//! can change while no input reaches the region: what a command changes, the active document and layer and the tool in
+//! every version; what the region shows of the canvas view, a job or the brush and colours; and what an edit elsewhere
+//! changes without a command, such as a box or pin dragged on the canvas. Input inside a region runs it whatever its
+//! version, and so does a repaint it asks for itself.
 
 use std::hash::{Hash, Hasher};
 
-use craft::ui::contract::{MemoProps, MemoView};
+use craft::ui::contract::{MemoKey, MemoProps, MemoView};
 
 use super::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
-
-/// The props of a shell slot's view: the app the slot reads, which its version stands for. One type per slot, so a
-/// trial and the frame's memo log tell the views apart.
-macro_rules! slot_props {
-    ($($name:ident: $what:literal),*) => {$(
-        #[doc = concat!("The ", $what, "'s view: the app it reads, which its version stands for.")]
-        #[derive(MemoProps)]
-        struct $name<'a> {
-            version: u64,
-            #[memo_props(covered_by = "version", reason = "the slot's version holds everything the slot shows of the app")]
-            app: &'a mut PhotocraftApp,
-        }
-    )*};
-}
-slot_props!(TitleSlot: "title bar", OptionsSlot: "options bar");
-
-/// The title bar in its slot, replaying while [`title_bar`]'s version holds.
-pub(crate) fn show_title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let version = title_bar(app);
-    let _ = MemoView::new("photocraft.title_bar", TitleSlot { version, app }, |slot: &mut TitleSlot<'_>, ui: &mut egui::Ui| super::title_bar(slot.app, ui))
-        .show(ui);
-}
-
-/// The options bar in its slot, replaying while [`options_bar`]'s version holds.
-pub(crate) fn show_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let version = options_bar(app);
-    let _ =
-        MemoView::new("photocraft.options_bar", OptionsSlot { version, app }, |slot: &mut OptionsSlot<'_>, ui: &mut egui::Ui| super::options_bar(slot.app, ui))
-            .show(ui);
-}
+use crate::state::Tool;
 
 /// A docked panel's body: the panel and the app it reads, which its version stands for.
 #[derive(MemoProps)]
@@ -65,22 +36,34 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 /// The version of the options bar: every tool option (`app.ui.tool_options`, all of which the bar shows; keys, the
 /// canvas menu, the canvas and its task bars, panels and presets write them without a command), the commit and cancel
 /// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
-/// Zoom tool's view, an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
+/// Zoom and Rotate View tools' zoom and rotation ([`bar_view`]), an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
 /// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
-/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets, the
-/// colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
+/// a command, #15547), the Crop tool's frame state, the type members' caret or selection and the font families they
+/// list ([`families_key`](crate::type_tool::families_key)), the brush and its presets, the colours, and the vector bar's "Make" row's own two ingredients: the Pen draft's anchor count and the Work Path the
 /// app hides (#12892), which a Pen drawing click by click changes with no History step (#12890). Which path is
 /// selected is already in [`version`]; the hidden path is held as its document's place, since its content can only
 /// change with the document's revision, which `version` holds too.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
-    let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
+    let shown = (app.ui.tool_options.revision(), super::options_bar::edit_key(app), text_target(app), crate::type_tool::families_key());
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
     let hidden = app.session.active().map(|st| (st.doc.id.0, app.ui.hidden_work_path.as_ref().map(|(id, _)| *id)));
     let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), hidden);
-    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, paths))
+    version(app, (bar_view(app), sessions, shown, brush(app), colours(app), gesture, paths))
+}
+
+/// The version of the status bar: the readout's item and the zoom of the active canvas, the status message, the
+/// render-path note, and the background redraw's and the job's progress. The readout's document values follow the
+/// active document and its revision and name the tool, which every version holds; the language its labels are in
+/// reaches the slot's view through its place.
+pub(crate) fn status_bar(app: &PhotocraftApp) -> u64 {
+    let item = MemoKey::of(&super::chrome_ui::status_item(&app.ui.chrome));
+    let zoom = crate::canvas::active_view(app).map(|view| view.zoom.to_bits());
+    let message = (&app.ui.status, app.ui.status_error);
+    let progress = MemoKey::of(&(crate::background_redraw::progress(app), crate::jobs_ui::status_job(app).map(|(_, progress)| progress)));
+    version(app, (item, zoom, message, super::chrome_ui::render_path_label(app), progress))
 }
 
 /// The version of the toolbar's footer: the colour chips' two colours, whether the active document is in Quick Mask and
@@ -89,6 +72,13 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
 pub(crate) fn toolbar_footer(app: &PhotocraftApp) -> u64 {
     let quick_mask = app.session.active().is_some_and(|st| st.doc.quick_mask.is_some());
     version(app, (colours(app), quick_mask, app.ui.view.screen_mode))
+}
+
+/// The version of the toolbar's group view, which the dock keys the toolbar's column by: the rail's slots (in the
+/// preferences, which [`version`] holds with the tool), the tools its groups remember, whether the Edit Toolbar drawer
+/// is open, and what the footer shows ([`toolbar_footer`]).
+pub(crate) fn toolbar(app: &PhotocraftApp) -> u64 {
+    version(app, (toolbar_footer(app), &app.ui.group_tools, app.ui.toolbar_drawer))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
@@ -115,7 +105,8 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
 /// colours, and so do Properties (a shape layer's fill and stroke swatches, a gradient fill's Foreground and
 /// Background stops, the adjustment editors' swatches) and Character (the colour of new type is the foreground).
 /// Character and Paragraph show the type defaults, and they and Properties the values at the caret or selection of the
-/// type being edited, which Glyphs inserts at. Every other panel shows only what every version holds.
+/// type being edited, which Glyphs inserts at; Character, Properties and Glyphs list the font families
+/// ([`families_key`](crate::type_tool::families_key)). Every other panel shows only what every version holds.
 pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     match id {
         "navigator" => version(app, (view(app), adjustment_preview(app))),
@@ -130,15 +121,23 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         }
         "cloneSource" => version(app, app.ui.presets_ui.clone_cursor.map(|(document, at)| (document, at.map(f64::to_bits)))),
         "modifierKeys" => version(app, app.ui.shell.latched),
-        "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app))),
+        "properties" => version(
+            app,
+            (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app), crate::type_tool::families_key()),
+        ),
         "brushSettings" | "brushes" => version(app, brush(app)),
         "histogram" => version(app, (adjustment_preview(app), histograms(app))),
-        "character" => version(app, (colours(app), type_defaults(app), text_target(app))),
+        "character" => version(app, (colours(app), type_defaults(app), text_target(app), crate::type_tool::families_key())),
         "paragraph" => version(app, (type_defaults(app), text_target(app))),
-        "glyphs" => version(app, text_target(app)),
+        "glyphs" => version(app, (text_target(app), crate::type_tool::families_key())),
         "color" | "swatches" | "gradients" | "gradientEditor" => version(app, colours(app)),
         _ => version(app, ()),
     }
+}
+
+/// The version of a panel in the dock whose body does not show: its title and icon, which every version holds.
+pub(crate) fn hidden_panel(app: &PhotocraftApp) -> u64 {
+    version(app, ())
 }
 
 /// What every slot may show, joined with `extra`: the commands run (any of them may change anything), the active
@@ -148,7 +147,7 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
 /// or `prefs.edit`, not as a counted command: units, the language, toolbar slots).
 /// Whether running command `id` leaves every settling region's version as it is: a view command (zoom, fit, print size,
 /// rotate) changes only the canvas view, which every region that shows it holds in its version (the Navigator, the Info
-/// panel and the options bar through [`view`], the status bar in its own props), so it need not count as a command run
+/// panel and the options bar through [`view`] and [`bar_view`], the status bar in its own props), so it need not count as a command run
 /// and run every panel body in the next frame (#15493). While an action is recorded it counts: the Actions panel lists
 /// the step it records.
 pub(crate) fn changes_only_the_view(app: &PhotocraftApp, id: &str) -> bool {
@@ -158,7 +157,7 @@ pub(crate) fn changes_only_the_view(app: &PhotocraftApp, id: &str) -> bool {
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     app.commands_run.hash(&mut hasher);
-    app.session.prefs.rev().hash(&mut hasher);
+    app.session.prefs.settings_rev().hash(&mut hasher);
     app.session.active_generation().hash(&mut hasher);
     app.session.active_layer_changes().hash(&mut hasher);
     app.session.active().map(|st| st.revision).hash(&mut hasher);
@@ -182,7 +181,7 @@ fn serialized(value: &impl serde::Serialize) -> u64 {
         }
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    // Writing to a hasher cannot fail, and every tool option serializes (they are saved).
+    // Writing to a hasher cannot fail, and the state it hashes serializes (it is saved).
     let _ = serde_json::to_writer(HashWriter(&mut hasher), value);
     hasher.finish()
 }
@@ -226,19 +225,127 @@ fn colours(app: &PhotocraftApp) -> [u32; 8] {
     bits
 }
 
+/// The part of the active document's view the options bar shows: the Zoom tool's bar the zoom, the Rotate View tool's
+/// the rotation, every other tool's none (the Hand tool's bar has no view field).
+fn bar_view(app: &PhotocraftApp) -> Option<u64> {
+    let view = crate::canvas::active_view(app)?;
+    match app.ui.tool {
+        Tool::Zoom => Some(view.zoom.to_bits()),
+        Tool::RotateView => Some(view.rotation.to_bits()),
+        _ => None,
+    }
+}
+
 /// The active document's view as the canvas showed it: its zoom, centre and turn.
 fn view(app: &PhotocraftApp) -> Option<[u64; 5]> {
     crate::canvas::active_view(app)
         .map(|view| [view.zoom.to_bits(), view.center.x.to_bits(), view.center.y.to_bits(), view.rotation.to_bits(), u64::from(view.flip_x)])
 }
 
+/// The document area's props: the app it reads, which [`canvas`] stands for.
+#[derive(MemoProps)]
+struct CanvasSlot<'a> {
+    version: u64,
+    #[memo_props(covered_by = "version", reason = "the canvas version holds everything the document area shows of the app")]
+    app: &'a mut PhotocraftApp,
+    #[memo_props(covered_by = "version", reason = "the document area's one drawing function, the same in every pass")]
+    show: fn(&mut PhotocraftApp, &mut egui::Ui),
+}
+
+/// The document area's tabs and documents in `ui`, replaying while [`canvas`] holds. `show` draws them; the per-pass
+/// work around them runs before, outside the view (`canvas::document_area`).
+pub(crate) fn show_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, show: fn(&mut PhotocraftApp, &mut egui::Ui)) {
+    let version = canvas(app);
+    let _ = MemoView::new("photocraft.canvas", CanvasSlot { version, app, show }, |slot: &mut CanvasSlot<'_>, ui: &mut egui::Ui| (slot.show)(slot.app, ui))
+        .show(ui);
+}
+
+/// The version of the document area, which keys its view and, through `DockPanels::content`, the docked tree it sits
+/// in. It holds what the tabs and every shown canvas draw that can change while no input reaches the area and its run
+/// asked for no pass: what every slot holds ([`version`]); each document's revision and unsaved mark (the tabs, the
+/// arranged panes); each view as stored, with the view commands queued for its next pass and a zoom ease asked; the
+/// document windows, the arrangement and its dividers; the View menu's options and the panels shown (the scroll bars
+/// go with the screen mode); the tool options and the on-canvas state of the tools (a transform box, a crop frame and whether its crop is pending, a pen draft, the
+/// type caret, a picked guide, the samplers, slices, frames and artboards), whose drags and keys change them without a
+/// command; the canvas menu and where the Brush Preset picker is open; whether a dialog is open (it holds back the tools and the task bars); the Layers panel's hovered layer, which the Move tool outlines; the previews a dialog or a panel drag shows
+/// on the canvas (an adjustment's live values, a filter's or Levels' preview, Color Range's mask); the opening files
+/// and their progress; the Batch input shown in place of the documents; the display the window is on; and the blocks a background redraw has landed
+/// (`background_redraw::poll`). A run that waits for work of its own (a preview worker, a tile stream) asks for its
+/// next pass through the framework, which runs the view then.
+pub(crate) fn canvas(app: &PhotocraftApp) -> u64 {
+    let ui = &app.ui;
+    let documents: Vec<(u64, u64, bool)> = app.session.documents().iter().map(|st| (st.doc.id.0, st.revision, st.is_dirty())).collect();
+    let views: Vec<_> = ui.views.iter().chain(ui.window_views.values()).map(view_key).collect();
+    let windows = serialized(&(&ui.view, &ui.panels, &ui.windows, &ui.document_windows, &ui.split_at));
+    let tools = serialized(&(
+        &ui.brush_tool,
+        &ui.cam_transform,
+        &ui.transform,
+        &ui.symmetry_transform,
+        &ui.layer_picker,
+        (&ui.clone_source, &ui.clone_offset, &ui.pattern_stamp_phase),
+        (&ui.canvas_tool_menu, &ui.brush_picker),
+        &ui.selected_guide,
+        &ui.direct_selection,
+        &ui.hidden_work_path,
+        (&ui.analysis, &ui.slices, &ui.frame_tool, &ui.artboard_tool),
+    ));
+    let sessions =
+        (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
+    let crop = app.canvas_tools.crop.tool.frame().map(|frame| [frame.rect.x0, frame.rect.y0, frame.rect.x1, frame.rect.y1, frame.angle].map(f64::to_bits));
+    let task_bars = (
+        crate::transform_task_bar::eligible(app),
+        crate::crop_task_bar::eligible(app),
+        crate::crop_ui::pending(app),
+        app.canvas_tools.crop.tool.straighten_armed(),
+    );
+    let editing = (text_target(app), ui.pen.as_ref().map(|p| p.draft.knots.len()), crate::canvas::tools::in_gesture(app), crop, task_bars);
+    let previews = (
+        adjustment_preview(app),
+        crate::canvas::filter_preview::canvas_key(app),
+        crate::levels_clipping::canvas_key(app),
+        crate::color_range_ui::canvas_key(app),
+    );
+    let opening: Vec<_> = crate::jobs_ui::open_tabs(app).into_iter().map(|(job, _, fraction)| (job, fraction.map(f32::to_bits))).collect();
+    let display = crate::monitor_status::view_display(app, app.ctx());
+    // The open Brush Preset picker lists the presets and shows the brush.
+    let picker = ui.brush_picker.map(|_| brush(app));
+    let gpu = app.gpu.as_ref().map(|gpu| gpu.canvas_budget());
+    version(
+        app,
+        (
+            documents,
+            views,
+            (windows, ui.tool_options.revision(), tools, picker),
+            sessions,
+            editing,
+            previews,
+            (app.hover_layer, app.dialog_open(), app.jobs.focus, opening, crate::jobs_ui::batch_preview_key(app), display, gpu, app.redraw_landed),
+        ),
+    )
+}
+
+/// A view as its canvas shows it next: the camera, the document size it last showed, how many view commands wait for
+/// its next pass (only that pass drains them) and a zoom ease asked.
+fn view_key(view: &crate::state::View) -> impl Hash + '_ {
+    let bits = |[x, y]: [f32; 2]| [x.to_bits(), y.to_bits()];
+    (
+        [view.zoom.to_bits(), view.rotation.to_bits()],
+        bits(view.center),
+        view.doc_size,
+        view.pending.len(),
+        view.zoom_animating,
+        view.zoom_anchor.map(|(doc, screen)| (doc.map(f64::to_bits), bits(screen))),
+        view.zoom_from.map(|(zoom, center)| (zoom.to_bits(), bits(center))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::Tool;
 
-    /// The brush, the colours, the type defaults, the tool options, the type caret, the Move tool's rollover and an
-    /// adjustment's live preview move the versions of the bars and panels that show them and of no other, so a drag that
+    /// The brush, the colours, the type defaults, the tool options, the type caret, the Move tool's rollover, an
+    /// adjustment's live preview and the status message move the versions of the bars and panels that show them and of no other, so a drag that
     /// edits one leaves the rest replaying; a version that missed one would replay a stale bar or panel.
     #[test]
     fn what_a_region_shows_moves_only_its_version() {
@@ -264,7 +371,7 @@ mod tests {
             .into_iter()
             .map(|id| (id, panel(app, id)))
             .collect();
-            all.extend([("optionsBar", options_bar(app)), ("titleBar", title_bar(app))]);
+            all.extend([("optionsBar", options_bar(app)), ("titleBar", title_bar(app)), ("statusBar", status_bar(app))]);
             all
         };
         let moved = |app: &mut PhotocraftApp, change: &dyn Fn(&mut PhotocraftApp)| -> Vec<&'static str> {
@@ -302,6 +409,7 @@ mod tests {
             app.doc_hist = Some(crate::histogram_panel::PanelHist { key, at: 30.0, hist: Default::default() });
         });
         assert_eq!(landed, ["histogram"], "a histogram the worker landed");
+        assert_eq!(moved(&mut app, &|app| app.ui.status = "Saved".into()), ["statusBar"], "a status message");
     }
 
     /// Opening or closing a layer's effects list or a group is view state off the document's revision, and a command

@@ -70,6 +70,8 @@ pub struct MemoryPrompt {
     pub id: u64,
     pub name: String,
     pub path: Option<String>,
+    /// Original read source when an untitled open has no save/recent path.
+    pub error_source: Option<String>,
     pub slot: Option<usize>,
     pub order: Option<crate::jobs_ui::OpenOrder>,
     pub estimated: u64,
@@ -406,6 +408,7 @@ pub fn arrive_memory(
     id: u64,
     name: String,
     path: Option<String>,
+    error_source: Option<String>,
     slot: Option<usize>,
     order: Option<crate::jobs_ui::OpenOrder>,
     estimated: u64,
@@ -413,7 +416,18 @@ pub fn arrive_memory(
     capacity_unknown: bool,
     uncertain_capacity_warning: bool,
 ) {
-    app.held_memory_prompts.push_back(MemoryPrompt { id, name, path, slot, order, estimated, available, capacity_unknown, uncertain_capacity_warning });
+    app.held_memory_prompts.push_back(MemoryPrompt {
+        id,
+        name,
+        path,
+        error_source,
+        slot,
+        order,
+        estimated,
+        available,
+        capacity_unknown,
+        uncertain_capacity_warning,
+    });
     app.prompt_order.push_back(PromptKind::Memory);
     advance_memory(app);
 }
@@ -480,6 +494,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
     let id = front.id;
     let name = front.name.clone();
     let path = front.path.clone();
+    let error_source = front.error_source.clone();
     let slot = front.slot;
     let order = front.order;
 
@@ -489,13 +504,27 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         Ok(r) => {
             if accept {
                 if let Some(job) = r.get("job").and_then(Value::as_u64) {
-                    app.jobs.opens.push(crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(job), name: name.clone(), path, slot, order });
+                    app.jobs.opens.push(crate::jobs_ui::OpenTab {
+                        job: photocraft_engine::jobs::JobId(job),
+                        name: name.clone(),
+                        path,
+                        error_source: error_source.clone(),
+                        slot,
+                        order,
+                    });
                     app.jobs.focus = Some(photocraft_engine::jobs::JobId(job));
                     app.ui.chrome.home = None;
                     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &name)]);
                     app.ui.status_error = false;
                 } else if let Some(result) = r.get("result") {
-                    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(0), name: name.clone(), path: path.clone(), slot, order };
+                    let tab = crate::jobs_ui::OpenTab {
+                        job: photocraft_engine::jobs::JobId(0),
+                        name: name.clone(),
+                        path: path.clone(),
+                        error_source: error_source.clone(),
+                        slot,
+                        order,
+                    };
                     if let Err(e) = crate::jobs_ui::finish_open_tab(app, &tab, result) {
                         app.ui.status = e;
                         app.ui.status_error = true;
@@ -511,8 +540,13 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
             Ok(r)
         }
         Err(err) => {
-            app.ui.status = err.clone();
-            app.ui.status_error = true;
+            let source = path.as_deref().or(error_source.as_deref()).unwrap_or(&name);
+            // A template may have reserved an Untitled name; presentation names its read source,
+            // while the returned error keeps the approval command's original wrapper.
+            let prefix = format!("{name}: ");
+            let error = err.strip_prefix(&prefix).unwrap_or(&err);
+            let reason = if name != crate::file_open::display_name(source) { error.strip_prefix(&prefix).unwrap_or(error) } else { error };
+            app.open_failed(source, reason);
             crate::jobs_ui::end_batch(app);
             advance(app);
             crate::jobs_ui::end_batch(app);

@@ -5,7 +5,7 @@ use egui::{PointerButton, Pos2, Rect, vec2};
 use serde_json::json;
 
 use super::document_display::{CanvasHost, shown_camera};
-use super::{canvas_display, canvas_view, document_area};
+use super::{canvas_display, canvas_view, testing};
 use crate::PhotocraftApp;
 use crate::state::{Tool, View};
 
@@ -23,7 +23,7 @@ fn live_brush_texture_includes_this_frames_press_and_moves() {
                 if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
-                egui::CentralPanel::default().show(ui, |ui| document_area(app, ui));
+                egui::CentralPanel::default().show(ui, |ui| testing::document_area(app, ui));
             },
             app,
         );

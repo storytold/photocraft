@@ -276,3 +276,6 @@ mod gradient_overlay_centre_tests;
 
 #[cfg(test)]
 mod gradient_overlay_alpha_box_tests;
+
+#[cfg(test)]
+mod stroke_partial_alpha_tests;
