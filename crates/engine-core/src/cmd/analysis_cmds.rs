@@ -594,13 +594,13 @@ fn gray_image(d: &Document, r: Rect) -> Vec<f32> {
     buf.px.par_iter().map(|p| 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2]).collect()
 }
 
-fn selection_rows(d: &Document, needs_gray: bool) -> Result<(Feature, Vec<Feature>)> {
+fn selection_rows(d: &Document, needs_gray: bool) -> Result<Option<(Feature, Vec<Feature>)>> {
     let r = match &d.selection {
         Some(sel) => sel.content_bounds().intersect(&d.bounds()),
         None => d.bounds(),
     };
     if r.is_empty() {
-        return Err(EngineError::Other("the selection is empty".into()));
+        return if d.selection.is_some() { Ok(None) } else { Err(EngineError::Other("the selection is empty".into())) };
     }
     // A legal 65536×65536 document is 2^32 pixels: size everything from a checked count,
     // and refuse what cannot be measured in one pass instead of overflowing (#933).
@@ -619,14 +619,14 @@ fn selection_rows(d: &Document, needs_gray: bool) -> Result<(Feature, Vec<Featur
     let range = gray_range(d.depth);
     let feats = measure_features_impl(&mask, gray.as_deref(), w, h, (r.x0, r.y0), range);
     if feats.is_empty() {
-        return Err(EngineError::Other("the selection is empty".into()));
+        return if d.selection.is_some() { Ok(None) } else { Err(EngineError::Other("the selection is empty".into())) };
     }
     let mut all: Vec<u16> = gray
         .as_deref()
         .map(|gray| mask.iter().zip(gray).filter(|(m, _)| **m).map(|(_, g)| (g.clamp(0.0, 1.0) * 65535.0).round() as u16).collect())
         .unwrap_or_default();
     let med = median(&mut all) * range;
-    Ok((summary(&feats, med), feats))
+    Ok(Some((summary(&feats, med), feats)))
 }
 
 // ------------------------------------------------------------------ ruler
@@ -1088,14 +1088,24 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
                 .selection
                 .iter()
                 .any(|key| matches!(key.as_str(), "grayMin" | "grayMax" | "grayMean" | "grayMedian" | "integratedDensity" | "histogram"));
-            let (sum, feats) = selection_rows(&d, needs_gray)?;
-            let mut m = base_row(s, &d, source, &label, &now);
-            feature_values(&mut m, &sum, feats.len(), factor);
-            rows.push(m);
-            if feats.len() > 1 {
-                for (i, f) in feats.iter().enumerate() {
-                    let mut m = base_row(s, &d, source, &format!("Feature {}", i + 1), &now);
-                    feature_values(&mut m, f, 1, factor);
+            match selection_rows(&d, needs_gray)? {
+                Some((sum, feats)) => {
+                    let mut m = base_row(s, &d, source, &label, &now);
+                    feature_values(&mut m, &sum, feats.len(), factor);
+                    rows.push(m);
+                    if feats.len() > 1 {
+                        for (i, f) in feats.iter().enumerate() {
+                            let mut m = base_row(s, &d, source, &format!("Feature {}", i + 1), &now);
+                            feature_values(&mut m, f, 1, factor);
+                            rows.push(m);
+                        }
+                    }
+                }
+                None => {
+                    // An active selection with no pixel above the feature cutoff still logs one
+                    // Selection row with Count 0 and blank geometry/gray cells (#16508).
+                    let mut m = base_row(s, &d, source, &label, &now);
+                    m.insert("count".into(), json!(0));
                     rows.push(m);
                 }
             }
