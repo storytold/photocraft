@@ -388,6 +388,32 @@ pub(crate) const SAVE_FOR_WEB: &str = "file.export.saveForWebLegacy";
 /// Layer › Copy CSS: refused under an open box too, as it would copy the bounds from before it.
 const COPY_CSS: &str = photocraft_engine::layer_css_cmds::ID;
 
+/// Does `id` write the committed document to a file? Under an open box it would write the
+/// document from before the box and the move would be lost (#16953), so these are off and
+/// refused until the box is committed or cancelled, as Save for Web is (#6737).
+pub(crate) fn writes_document(id: &str) -> bool {
+    matches!(
+        id,
+        SAVE_FOR_WEB
+            | "file.save"
+            | "file.saveAs"
+            | "file.saveACopy"
+            | "file.export.quickExportAsPng"
+            | "file.export.exportAs"
+            | "layer.quickExportAsPng"
+            | "layer.exportAs"
+            | "file.export.artboardsToFiles"
+            | "file.export.artboardsToPdf"
+            | "file.export.layersToFiles"
+            | "file.export.layerCompsToFiles"
+            | "file.export.colorLookupTables"
+            | "file.export.dataSetsAsFiles"
+            | "file.export.pathsToIllustrator"
+            | "file.export.renderVideo"
+            | "file.package"
+    )
+}
+
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
@@ -423,9 +449,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "edit.redo" => Some(t.session.can_redo()),
         // No Toggle Last State or history jump under the box, and one box at a time.
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
-        // Save for Web exports the committed document and would ignore the pending box (#6737).
-        // Copy CSS, likewise, would copy the layers' bounds from before the box.
-        SAVE_FOR_WEB | COPY_CSS => Some(false),
+        // Saves and exports write the committed document and would ignore the pending box
+        // (#6737, #16953). Copy CSS, likewise, would copy the layers' bounds from before the box.
+        COPY_CSS => Some(false),
+        i if writes_document(i) => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if preset_for_command(id).is_some() => Some(t.session.warp().is_none()),
         // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
@@ -446,7 +473,8 @@ pub(super) fn moves_type(app: &PhotocraftApp, t: &FreeTransform) -> bool {
 /// with ↩ and the options bar.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | COPY_CSS)
+    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | COPY_CSS)
+        || writes_document(id)
         || preset_for_command(id).is_some()
 }
 
@@ -459,9 +487,10 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
-        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | COPY_CSS => {
+        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | COPY_CSS => {
             Some(Err("Commit or cancel the transform first".into()))
         }
+        i if writes_document(i) => Some(Err("Commit or cancel the transform first".into())),
         _ => {
             let preset = preset_for_command(id)?;
             if warping {

@@ -209,12 +209,6 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if let Some(r) = crate::prefs_ui::invoke(app, ctx, id, params) {
         return Some(r);
     }
-    // Save for Web's dialog would export the committed document, not the open Free Transform (#6737).
-    if id == crate::transform_tool::SAVE_FOR_WEB
-        && let Some(r) = crate::transform_tool::intercept(app, id)
-    {
-        return Some(r);
-    }
     // Save for Web, Print and the other File-menu dialogs added with slices.
     if let Some(r) = crate::file_ui::invoke(app, ctx, id, params) {
         return Some(r);
@@ -399,6 +393,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     // File › Save and the unsaved-changes prompt's Save write from here without `run`: they must
     // not write Apply Data Set's Preview either. The dialog shows it again on the next frame.
     crate::panels::apply_data_set_ui::end_preview(app);
+    // Saves, exports and their dialogs would write the committed document, not the open Free
+    // Transform (#6737, #16953); the unsaved-changes prompt's Save comes here too.
+    if crate::transform_tool::writes_document(id)
+        && let Some(r) = crate::transform_tool::intercept(app, id)
+    {
+        return r;
+    }
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
     }
