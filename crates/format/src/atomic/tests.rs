@@ -582,7 +582,8 @@ fn symlink_loop_errors_without_replacing_the_links() {
 #[test]
 fn directory_target_or_bare_root_is_an_error_not_a_panic() {
     let d = TempDir::new("dir");
-    assert!(atomic_write(&d.0, b"x").is_err());
+    // Replacing this directory fails permanently, so skip the retry delays.
+    assert!(atomic_write_with(&RealFs, NO_RETRY, &d.0, b"x").is_err());
     assert!(atomic_write(Path::new("/"), b"x").is_err());
     assert!(atomic_write(Path::new(""), b"x").is_err());
 }
