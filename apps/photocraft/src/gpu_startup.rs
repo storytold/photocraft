@@ -14,8 +14,10 @@
 //! The choice that worked is remembered in `performance.gpuBackend` (Preferences › Performance,
 //! where it can be reset). With `auto`, Intel and Qualcomm (Windows on ARM) adapters on Windows
 //! use DX12, and when DXGI lists an Intel adapter the instance leaves Vulkan out, so the first
-//! start doesn't load the Intel Vulkan driver either. `WGPU_BACKEND` still overrides everything,
-//! and `--safe-gpu` forces the CPU path for one launch.
+//! start doesn't load the Intel Vulkan driver either. On Windows `auto` also leaves OpenGL out
+//! whenever DXGI lists an adapter: wgpu's OpenGL backend hides a window on a thread that pumps no
+//! messages, and a keyboard-layout hotkey then freezes the app (#9219, #15304).
+//! `WGPU_BACKEND` still overrides everything, and `--safe-gpu` forces the CPU path for one launch.
 //!
 //! "CPU" composites on the CPU and draws the window with a software adapter where the platform
 //! has one (WARP on Windows, llvmpipe over GL elsewhere). On Linux a GL adapter that can't present
@@ -210,14 +212,27 @@ pub fn backends(plan: &Plan, os: Os) -> Option<wgpu::Backends> {
     })
 }
 
-/// Instance backends for `auto` on Windows (no `WGPU_BACKEND`) when `dx12_vendors`, the PCI vendor
-/// ids of the DX12 adapters, includes Intel: DX12, with GL as the last resort (see [`rank`]). An
-/// instance with Vulkan loads the Intel Vulkan driver before the adapter selector runs, and #4's
-/// crash is in that driver. `dx12_vendors` is called only for that plan; `None` keeps [`backends`]'
-/// choice.
+/// Instance backends for `auto` on Windows (no `WGPU_BACKEND`) from `dx12_vendors`, the PCI vendor
+/// ids of the DX12 adapters: Direct3D 12 always, Vulkan unless an Intel adapter makes its driver
+/// unsafe (#4), and OpenGL only when DX12 lists no adapter at all, which on Windows means no
+/// Direct3D 12 runtime at all (#5191, #1788): Windows 10 and later list WARP even on old GPUs
+/// and in VMs, and WARP already ranks ahead of GL there (see [`rank`]). With any DX12 adapter
+/// listed, OpenGL stays out: wgpu's OpenGL backend keeps a hidden window on a thread that
+/// pumps no messages (gfx-rs/wgpu#10504), and a keyboard-layout switch through its system
+/// hotkey (Ctrl+Shift+<n>) activates the layout inside this process and blocks notifying that
+/// window forever, freezing the app (#9219, #15304; vectorcraft closed its same hang, #4150, by not
+/// starting OpenGL). `dx12_vendors` is called only for that plan; `None` keeps
+/// [`backends`]' choice.
 pub fn windows_auto_backends(plan: &Plan, os: Os, dx12_vendors: impl FnOnce() -> Vec<u32>) -> Option<wgpu::Backends> {
     let auto = plan.env.is_none() && plan.backend == GpuBackend::Auto && os == Os::Windows;
-    (auto && dx12_vendors().contains(&INTEL)).then_some(wgpu::Backends::DX12 | wgpu::Backends::GL)
+    if !auto {
+        return None;
+    }
+    let vendors = dx12_vendors();
+    if vendors.is_empty() {
+        return None;
+    }
+    if vendors.contains(&INTEL) { Some(wgpu::Backends::DX12) } else { Some(wgpu::Backends::DX12 | wgpu::Backends::VULKAN) }
 }
 
 /// The PCI vendor ids of the DX12 adapters, from a DX12-only instance (DXGI, no Vulkan driver)
@@ -384,11 +399,11 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
             let env = std::env::var("WGPU_DX12_COMPILER").ok();
             create.instance_descriptor.backend_options.dx12.shader_compiler = dx12_compiler(env.as_deref(), exe.as_deref().and_then(Path::parent));
         }
-        let without_vulkan = windows_auto_backends(plan, os, || dx12_vendors(&create.instance_descriptor));
-        if let Some(b) = without_vulkan {
+        let auto_backends = windows_auto_backends(plan, os, || dx12_vendors(&create.instance_descriptor));
+        if let Some(b) = auto_backends {
             create.instance_descriptor.backends = b;
         }
-        let vulkan_left_out = without_vulkan.is_some();
+        let vulkan_left_out = auto_backends.is_some_and(|b| !b.contains(wgpu::Backends::VULKAN));
         let wanted = applicable_adapter(wanted, plan.backend, ADAPTER_CHOICE);
         let select = wanted.is_some() || (plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows)));
         if select {

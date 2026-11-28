@@ -263,7 +263,8 @@ fn qualcomm_on_windows_defaults_to_dx12() {
 
 /// #4: an instance with Vulkan loads the Intel Vulkan driver, which crashed at startup, before
 /// the selector picks Intel's DX12 adapter. With an Intel adapter in the DX12 list, `auto` on
-/// Windows creates the instance without Vulkan.
+/// Windows creates the instance without Vulkan. #15304: it also leaves OpenGL out whenever DX12
+/// lists an adapter (see `auto_on_windows_starts_no_opengl_when_directx_12_has_an_adapter`).
 #[test]
 fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
     use wgpu::{Backend as B, DeviceType as T};
@@ -271,13 +272,15 @@ fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
     const AMD: u32 = 0x1002;
     const WARP: u32 = 0x1414;
     let auto = plan(Auto, None, None, false, Os::Windows);
-    let dx12_gl = Some(wgpu::Backends::DX12 | wgpu::Backends::GL);
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![INTEL, WARP]), dx12_gl);
+    let dx12_only = Some(wgpu::Backends::DX12);
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![INTEL, WARP]), dx12_only);
     // Intel iGPU + discrete GPU: the discrete GPU is then used on DX12.
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, INTEL, WARP]), dx12_gl);
-    // No Intel adapter: egui's default backends, Vulkan included.
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, WARP]), None);
-    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), None);
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, INTEL, WARP]), dx12_only);
+    // No Intel adapter: Vulkan stays (as in egui's default), OpenGL goes (#15304).
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, WARP]), Some(wgpu::Backends::DX12 | wgpu::Backends::VULKAN));
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), Some(wgpu::Backends::DX12 | wgpu::Backends::VULKAN));
+    // DX12 lists no adapter at all (no Direct3D 12 runtime: Windows 7, a DX12-less GPU;
+    // #5191, #1788): egui's default backends, OpenGL included.
     assert_eq!(windows_auto_backends(&auto, Os::Windows, Vec::new), None);
     // `WGPU_BACKEND`, `--safe-gpu`, a chosen backend, a crash fallback and other platforms
     // don't list the DX12 adapters at all.
@@ -298,6 +301,62 @@ fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
     assert_eq!(i, 0);
     assert_eq!(dx12_default_applied(&listed, i, Os::Windows, true), Some("Intel"));
     assert_eq!(dx12_default_applied(&listed, i, Os::Windows, false), None);
+}
+
+/// #15304, #9219 (as in vectorcraft#4150 and gfx-rs/wgpu#10504): wgpu's OpenGL backend keeps a
+/// hidden window on a thread that pumps no messages. A system keyboard-layout switch through its
+/// hotkey (Ctrl+Shift+<n>) runs its activation inside our process and blocks on notifying that
+/// window: while the native Save As dialog is up, the blocked thread is the dialog's own modal
+/// pump, and PhotoCraft stops answering entirely (a taskbar switch activates it in explorer.exe
+/// instead, which is why that path doesn't freeze the app). With any Direct3D 12 adapter listed,
+/// `auto` on Windows must not start OpenGL at all; OpenGL stays only where DX12 lists no adapter
+/// at all, which means no Direct3D 12 runtime: Windows 10 and later list WARP even on old
+/// GPUs and in VMs (#5191, #1788).
+#[test]
+fn auto_on_windows_starts_no_opengl_when_directx_12_has_an_adapter() {
+    const NVIDIA: u32 = 0x10de;
+    const WARP: u32 = 0x1414;
+    let auto = plan(Auto, None, None, false, Os::Windows);
+    for vendors in [vec![INTEL, WARP], vec![NVIDIA, INTEL, WARP], vec![NVIDIA, WARP], vec![QUALCOMM_DXGI, WARP]] {
+        let got = windows_auto_backends(&auto, Os::Windows, || vendors.clone()).expect("a DX12 adapter was listed, so a backend set is picked");
+        assert!(!got.contains(wgpu::Backends::GL), "{vendors:x?}: no OpenGL hidden window ({got:?})");
+    }
+    // No DX12 adapter at all (Windows 7, DX12-less GPU): the default with OpenGL stays.
+    // Guard: unchanged behaviour, this passes before and after the fix.
+    assert_eq!(windows_auto_backends(&auto, Os::Windows, Vec::new), None);
+}
+
+/// #15304 changes only the `auto` instance: everything that asked for OpenGL by name still gets
+/// it, and the other platforms keep egui's default.
+#[test]
+fn an_explicit_opengl_choice_still_gets_it() {
+    // The preference set to OpenGL still gets the GL backend.
+    assert_eq!(backends(&plan(Gl, None, None, false, Os::Windows), Os::Windows), Some(wgpu::Backends::GL));
+    // `WGPU_BACKEND` overrides the backends itself and skips the DX12 listing.
+    let env = plan(Auto, None, Some("gl"), false, Os::Windows);
+    assert_eq!(backends(&env, Os::Windows), None);
+    assert_eq!(windows_auto_backends(&env, Os::Windows, || panic!("DX12 adapters listed")), None);
+    // `--safe-gpu` on Windows already drew with WARP (DX12), and Linux keeps its GL|Vulkan pair.
+    assert_eq!(backends(&plan(Auto, None, None, true, Os::Windows), Os::Windows), Some(wgpu::Backends::DX12));
+    assert_eq!(backends(&plan(Auto, None, None, true, Os::Other), Os::Other), Some(wgpu::Backends::GL | wgpu::Backends::VULKAN));
+    // Other platforms' `auto`: untouched defaults.
+    assert_eq!(windows_auto_backends(&plan(Auto, None, None, false, Os::Other), Os::Other, Vec::new), None);
+    assert_eq!(windows_auto_backends(&plan(Auto, None, None, false, Os::Mac), Os::Mac, Vec::new), None);
+}
+
+/// The wiring of #15304: what `configure` actually puts into the window's instance descriptor.
+/// Only checked on Windows, where the DX12 adapter listing runs for real (it always lists at
+/// least WARP there).
+#[test]
+fn configure_gives_the_auto_window_no_opengl_on_windows() {
+    if !cfg!(windows) {
+        return;
+    }
+    let mut setup = egui_wgpu::WgpuSetup::without_display_handle();
+    let plan = plan(Auto, None, None, false, Os::Windows);
+    configure(&mut setup, &plan, Os::Windows, None, Arc::new(Mutex::new(None)), Arc::default());
+    let egui_wgpu::WgpuSetup::CreateNew(create) = &setup else { panic!("a new instance") };
+    assert!(!create.instance_descriptor.backends.contains(wgpu::Backends::GL), "{:?}", create.instance_descriptor.backends);
 }
 
 #[test]
