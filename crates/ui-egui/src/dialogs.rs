@@ -511,6 +511,9 @@ pub fn run(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::prefs_ui::feed(app);
     app.framework.dialogs.run(ui);
     take_results(app, &ui.ctx().clone());
+    // A row of the Batch form answers its own tick with a note (#13659), read after the host pass so
+    // the tick the user just made is in the form's values and an OK that already ran is not.
+    crate::view_cmds::dialogs::note_batch_override(app, &ui.ctx().clone());
 }
 
 /// Answers dialog `id` with OK, as its default button would, and runs what OK does. A held OK is answered at once by the
@@ -640,13 +643,14 @@ const ENGINE_READ_SHARED: &[&str] = &[photocraft_engine::atn_cmds::CAF_WORKSPACE
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 5] {
+fn dont_show_again_keys() -> [&'static str; 6] {
     [
         delete_layer_prompt::PREF,
         live_shape_prompt::PREF,
         assign_profile_layers_alert::PREF,
         crate::analysis::note_alerts::DELETE_NOTE_PREF,
         crate::retouch_ui::CAM_NO_PIXELS_PREF,
+        crate::view_cmds::dialogs::BATCH_OVERRIDE_PREF,
     ]
 }
 

@@ -1,5 +1,5 @@
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamKind};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_engine::color_cmds::ColorExt;
@@ -1858,6 +1858,46 @@ fn indexed_matte_other_shows_the_color_row_and_none_hides_it() {
     harness.run_steps(3);
     assert_eq!(fields_of(harness.state(), id).text("matte"), Some("none"));
     assert!(try_set(harness.state_mut(), id, "matteColor", json!([0.0, 0.0, 1.0])).is_err(), "None hides the colour row");
+}
+
+/// #13659 review: with Destination None or Save and Close the form keeps the greyed folder rows
+/// on screen, but the command params must not carry them: no output folder, no File Type (Save
+/// and Close writes every source in its own format, and the command refuses any other there),
+/// no retained Quality (the command re-encodes a JPEG or WebP source at it, so a greyed value
+/// left from an earlier Folder run would quietly lower the quality of an in-place Save and Close),
+/// and no retained Override tick (None writes nothing, and Save and Close does not represent
+/// the box - both are refused with it). A Folder run still sends its own rows.
+#[test]
+fn batch_command_params_drop_the_greyed_folder_rows_for_none_and_save_and_close() {
+    let fields = |destination: &str| {
+        DialogFields::from_pairs([
+            ("source", FieldValue::Text("folder".into())),
+            ("destination", FieldValue::Text(destination.into())),
+            ("output", FieldValue::Text("out".into())),
+            ("format", FieldValue::Text("jpg".into())),
+            ("quality", FieldValue::Number(3.0)),
+            ("overrideSaveAs", FieldValue::Bool(true)),
+        ])
+    };
+    let kept = command_params("file.automate.batch", &fields("folder"));
+    assert_eq!(
+        (&kept["output"], &kept["format"], &kept["overrideSaveAs"]),
+        (&json!("out"), &json!("jpg"), &json!(true)),
+        "a Folder run still sends its own rows: {kept}"
+    );
+    assert_eq!(kept["quality"].as_f64(), Some(3.0), "a Folder run still sends its own quality: {kept}");
+    for destination in ["none", "saveAndClose"] {
+        let params = command_params("file.automate.batch", &fields(destination));
+        assert!(params.get("output").is_none(), "{destination} sends no output folder: {params}");
+        assert!(params.get("format").is_none(), "{destination} sends no File Type: {params}");
+        assert!(params.get("quality").is_none(), "{destination} sends no quality: {params}");
+        assert!(params.get("overrideSaveAs").is_none(), "{destination} sends no Override tick: {params}");
+    }
+    let off = command_params(
+        "file.automate.batch",
+        &DialogFields::from_pairs([("destination", FieldValue::Text("folder".into())), ("overrideSaveAs", FieldValue::Bool(false))]),
+    );
+    assert!(off.get("overrideSaveAs").is_none(), "an unticked Override stays out even for Folder: {off}");
 }
 
 /// An alpha channel chosen as Lens Blur's depth map reaches the command as the `channel` source and its index: the

@@ -450,6 +450,8 @@ fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     let shown = fields(&app, id);
     assert_eq!((&shown["action"], &shown["set"]), (&json!("Turn"), &json!("B")));
     set(&mut app, &ctx, id, "input", json!(dir.path().to_string_lossy()));
+    // The form opens on Destination None (#13659); this run wants its copy written into `output`.
+    set(&mut app, &ctx, id, "destination", json!("folder"));
     set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
     confirm(&mut app, &ctx, id).unwrap();
     let saved = names_in(&output).into_iter().next().unwrap();
@@ -474,6 +476,7 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     assert!(!fields(&app, id).as_object().unwrap().contains_key("steps"));
     set(&mut app, &ctx, id, "input", json!(source.to_string_lossy()));
+    set(&mut app, &ctx, id, "destination", json!("folder"));
     set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
     set(&mut app, &ctx, id, "action", json!("RotateRGB"));
     assert_eq!(fields(&app, id)["action"], "RotateRGB");
@@ -485,12 +488,14 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
 
     let cancelled = dir.path().join("cancelled");
     let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "destination", json!("folder"));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
     cancel(&mut app, &ctx, id);
     assert!(!cancelled.exists());
 
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, id, "action", json!("RotateRGB"));
+    set(&mut app, &ctx, id, "destination", json!("folder"));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
     let rotate = app.session.actions().list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
     app.session.actions_mut().list.delete_action(rotate).unwrap();
@@ -626,11 +631,16 @@ fn batch_dialogs_include_all_subfolders() {
         assert_eq!(label_of(&mut app, command, "includeSubfolders"), "Include All Subfolders", "{command}");
         if command == "file.automate.batch" {
             assert_eq!(shown["source"], json!("folder"));
+            assert_eq!(shown["destination"], json!("none"), "the Batch form opens on Destination None (#13659)");
             assert_eq!(shown["stopOnError"], json!(false));
             assert_eq!(shown["errorLog"], json!(""));
         }
         // The folder rows show only for the Folder source.
         set(&mut app, &ctx, d, "source", json!("folder"));
+        if command == "file.automate.batch" {
+            // The subfolder walk here is the copy run's, so the form picks Folder (#13659).
+            set(&mut app, &ctx, d, "destination", json!("folder"));
+        }
         set(&mut app, &ctx, d, "input", json!(input));
         set(&mut app, &ctx, d, "output", json!(dir.join(out).to_string_lossy()));
         set(&mut app, &ctx, d, "includeSubfolders", json!(true));
@@ -668,6 +678,7 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|step| step.params["text"].clone()), Some(json!("Hi")));
     let d = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, d, "input", json!(dir.join("in").to_string_lossy()));
+    set(&mut app, &ctx, d, "destination", json!("folder"));
     set(&mut app, &ctx, d, "output", json!(dir.join("out").to_string_lossy()));
     confirm(&mut app, &ctx, d).unwrap();
     assert_eq!(names_in(&dir.join("out")), ["a.png", "b.png"]);
@@ -700,6 +711,7 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
     app.session.actions_mut().list.push(Action::new("Stale", vec![ActionStep::new("layer.setProps", json!({"layer": 424_242, "opacity": 50}))])).unwrap();
     let d = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, d, "input", json!(dir.join("in").to_string_lossy()));
+    set(&mut app, &ctx, d, "destination", json!("folder"));
     set(&mut app, &ctx, d, "output", json!(dir.join("out").to_string_lossy()));
     let notices = app.ui.notices.len();
     confirm(&mut app, &ctx, d).unwrap();
@@ -715,6 +727,265 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
         assert!(!line.strip_prefix(&path(name)).unwrap_or_default().trim().is_empty(), "{line}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `(id, caption)` pairs of choice row `key` of command `command`'s form, in the order the
+/// dropdown lists them.
+fn choice_captions(app: &mut PhotocraftApp, command: &str, key: &str) -> Vec<(String, String)> {
+    let (params, _) = params_for(app, command).expect("the command has a form");
+    match &params.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("no row {key}")).kind {
+        ParamKind::Choice { options, .. } => options.iter().map(|(id, label)| (id.clone(), label.as_str().to_owned())).collect(),
+        other => panic!("{key} is not a choice: {other:?}"),
+    }
+}
+
+/// The keys of command `command`'s form, in the order its rows are built.
+fn row_keys(app: &mut PhotocraftApp, command: &str) -> Vec<String> {
+    let (params, _) = params_for(app, command).expect("the command has a form");
+    params.iter().map(|param| param.key.clone()).collect()
+}
+
+/// #13659: Batch's Destination dropdown carries the reference application's three values, in its
+/// order, opening on None, with the Override Action "Save As" Commands box beside it.
+#[test]
+fn batch_dialog_offers_destination_none_save_and_close_and_folder() {
+    let (mut app, ctx) = app_with(0);
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    let shown = fields(&app, id);
+    assert_eq!(shown["destination"], json!("none"), "the default is None");
+    assert_eq!(choice_ids(&mut app, "file.automate.batch", "destination"), ["none", "saveAndClose", "folder"], "listed in the reference order");
+    assert_eq!(
+        choice_captions(&mut app, "file.automate.batch", "destination"),
+        [("none".to_owned(), "None".to_owned()), ("saveAndClose".to_owned(), "Save and Close".to_owned()), ("folder".to_owned(), "Folder".to_owned())],
+        "the captions are the reference application's, over the command's own values"
+    );
+    assert_eq!(label_of(&mut app, "file.automate.batch", "destination"), "Destination", "the row is labelled Destination");
+    assert_eq!(shown["overrideSaveAs"], json!(false), "Override Action \"Save As\" Commands starts off");
+    assert_eq!(label_of(&mut app, "file.automate.batch", "overrideSaveAs"), "Override Action \"Save As\" Commands", "with the reference caption");
+    let keys = row_keys(&mut app, "file.automate.batch");
+    let at = |key: &str| keys.iter().position(|k| k == key).unwrap_or_else(|| panic!("{key} is a Batch field: {keys:?}"));
+    assert!(at("source") < at("destination"), "Destination sits under the Source block: {keys:?}");
+    assert!(at("destination") < at("output"), "and the folder fields follow it: {keys:?}");
+}
+
+/// #13659: OK on Destination None runs the folder's files into open tabs. The form keeps the
+/// Output path typed for a folder run, so the run must send none: nothing is written and each file
+/// is left open and changed.
+#[test]
+fn batch_dialog_on_destination_none_opens_the_folder_files_and_writes_nothing() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    for name in ["a.png", "b.png"] {
+        app.run("file.saveACopy", json!({"path": input.join(name).to_string_lossy()})).unwrap();
+    }
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    let out = dir.path().join("batch").to_string_lossy().into_owned();
+    set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
+    // The Output row takes no input while Destination is None, so the path is typed as if for a
+    // folder run and the choice moved back to None: the form keeps it on screen (#13659).
+    set(&mut app, &ctx, id, "destination", json!("folder"));
+    set(&mut app, &ctx, id, "output", json!(out.clone()));
+    set(&mut app, &ctx, id, "destination", json!("none"));
+    assert_eq!(fields(&app, id)["output"], json!(out.clone()), "the typed path stays in the form");
+    let notices = app.ui.notices.len();
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(!app.ui.status_error, "the run asked for no output folder: {}", app.ui.status);
+    assert_eq!(app.ui.notices.len(), notices, "no file failed, so no failure notice: {:?}", app.ui.notices.get(notices..));
+    assert!(!std::path::Path::new(&out).exists(), "None writes nothing: the run took no output folder at all");
+    assert_eq!(app.session.documents().len(), 3, "both folder files opened as tabs");
+    assert!(app.session.documents().iter().skip(1).all(|st| st.is_dirty()), "each tab shows the changed mark");
+}
+
+/// #13659: Choose... and the File Naming controls are enabled only with Folder, and Override
+/// Action "Save As" Commands is greyed with None.
+#[test]
+fn batch_dialog_greys_the_folder_fields_until_folder_is_picked() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let (mut app, _) = app_with(0);
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000.0, 800.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+    h.run_steps(4);
+    let rows = [
+        (egui::accesskit::Role::TextInput, "File Naming"),
+        (egui::accesskit::Role::CheckBox, "Custom"),
+        (egui::accesskit::Role::CheckBox, "Override Action \"Save As\" Commands"),
+        (egui::accesskit::Role::ComboBox, "File Type"),
+    ];
+    let greyed =
+        |h: &Harness<'_, Box<PhotocraftApp>>, role: egui::accesskit::Role, label: &str| h.get_by_role_and_label(role, label).accesskit_node().is_disabled();
+    for (role, label) in rows {
+        assert!(greyed(&h, role, label), "{label} is greyed with Destination None");
+    }
+    assert_eq!(
+        h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>(),
+        vec![false, true],
+        "the Source folder keeps its Choose..., the destination's is greyed"
+    );
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Folder").click();
+    h.run_steps(2);
+    for (role, label) in rows {
+        assert!(!greyed(&h, role, label), "{label} is live again with Folder");
+    }
+    assert_eq!(
+        h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>(),
+        vec![false, false],
+        "with Folder both Choose... buttons are live"
+    );
+}
+
+/// #13659: ticking Override Action "Save As" Commands explains what it does, with OK; the note
+/// closes and the box stays ticked.
+#[test]
+fn ticking_override_save_as_shows_the_reference_note_with_ok() {
+    use craft::ui::dialog::{StackDialog, StandardPrompt};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    const NOTE: &str = "When this option is on, files will be saved to the destination folder only by \"save as\" steps in the action. \
+                        If there are no \"save\" or \"save as\" steps, no files will be saved.";
+    let (mut app, _) = app_with(0);
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000.0, 800.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    let reply = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+    let id = opened(h.state(), &reply);
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Folder").click();
+    h.run_steps(2);
+    assert_eq!(fields(h.state(), id)["destination"], json!("folder"), "Folder is chosen");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Override Action \"Save As\" Commands").click();
+    h.run_steps(4);
+    let open = crate::dialogs::alerts::alerts(h.state());
+    assert_eq!(open.len(), 1, "one note opened over the dialog: {open:?}");
+    let note = h.state().framework.dialogs.get::<StandardPrompt>().expect("the reference note opened over the dialog");
+    assert!(note.tag_as::<crate::dialogs::alerts::AlertOnce>().is_some(), "the note is the app's own alert, with a \"Don't show again\" box");
+    assert_eq!(crate::view_cmds::dialogs::BATCH_OVERRIDE_NOTE, NOTE, "it carries the reference application's sentence");
+    let shown = note.json_fields().expect("the note lists its fields");
+    assert_eq!(shown["skip"], json!(false), "the \"Don't show again\" box starts unticked");
+    let buttons: Vec<String> =
+        h.query_all_by_role(egui::accesskit::Role::Button).filter_map(|node| node.accesskit_node().label().map(|label| label.to_string())).collect();
+    assert_eq!(buttons.iter().filter(|label| *label == "OK").count(), 2, "the note has an OK of its own beside the dialog's: {buttons:?}");
+    h.query_all_by_label("OK").last().expect("the note's OK button").click();
+    h.run_steps(3);
+    assert!(h.state().framework.dialogs.get::<StandardPrompt>().is_none(), "OK closed the note (buttons {buttons:?})");
+    assert!(h.state().framework.dialogs.get_by_id::<HostedParamDialog>(id).is_some(), "the Batch dialog stayed open");
+    assert_eq!(fields(h.state(), id)["overrideSaveAs"], json!(true), "the box stayed ticked");
+}
+
+/// #13659 review: Save and Close writes each source in its own format and does not represent the
+/// Override box. A File Type and an Override tick left on screen by an earlier folder run must
+/// not reach the command, which refuses either beside Save and Close.
+#[test]
+fn batch_dialog_save_and_close_ignores_the_stale_file_type_and_override_tick() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let source = input.join("a.png");
+    app.run("file.saveACopy", json!({"path": source.to_string_lossy()})).unwrap();
+    let bytes_before = std::fs::read(&source).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
+    // Type the folder-run values while Folder is picked, then move back to Save and Close: the
+    // greyed rows keep them on screen, the run must not see them.
+    set(&mut app, &ctx, id, "destination", json!("folder"));
+    set(&mut app, &ctx, id, "format", json!("jpg"));
+    set(&mut app, &ctx, id, "overrideSaveAs", json!(true));
+    set(&mut app, &ctx, id, "destination", json!("saveAndClose"));
+    assert_eq!(fields(&app, id)["format"], json!("jpg"), "the File Type row keeps its value on screen");
+    let notices = app.ui.notices.len();
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(!app.ui.status_error, "the stale folder values do not reach the command: {}", app.ui.status);
+    assert_eq!(app.ui.notices.len(), notices, "no failure notice: {:?}", app.ui.notices.get(notices..));
+    assert_ne!(std::fs::read(&source).unwrap(), bytes_before, "the source was rewritten in place");
+    assert_eq!(names_in(&input), ["a.png"], "still in its own format, nothing else written");
+    assert_eq!(app.session.documents().len(), 1, "Save and Close leaves no tab open");
+}
+
+/// #13659 review: the Override box is greyed for Destination None, but a tick left by a folder
+/// run stays in the form. The command refuses an Override whose action has no Save step, so the
+/// retained tick must not reach a None run.
+#[test]
+fn batch_dialog_none_ignores_a_retained_override_tick() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let source = input.join("a.png");
+    app.run("file.saveACopy", json!({"path": source.to_string_lossy()})).unwrap();
+    let bytes_before = std::fs::read(&source).unwrap();
+    // An Invert-only action: the very action the command's rule refuses an Override with.
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
+    set(&mut app, &ctx, id, "destination", json!("folder"));
+    set(&mut app, &ctx, id, "overrideSaveAs", json!(true));
+    set(&mut app, &ctx, id, "destination", json!("none"));
+    assert_eq!(fields(&app, id)["overrideSaveAs"], json!(true), "the tick stays in the form while the row is greyed");
+    let notices = app.ui.notices.len();
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(!app.ui.status_error, "the greyed tick does not reach the command: {}", app.ui.status);
+    assert_eq!(app.ui.notices.len(), notices, "no failure notice: {:?}", app.ui.notices.get(notices..));
+    assert_eq!(app.session.documents().len(), 2, "the folder's file opened as a tab");
+    assert!(app.session.documents().iter().skip(1).all(|st| st.is_dirty()), "and reads as edited");
+    assert_eq!(std::fs::read(&source).unwrap(), bytes_before, "None still writes nothing");
+}
+
+/// #13659 review: Override Action "Save As" Commands is live for Folder only - Save and Close
+/// does not represent it, and the command refuses a tick beside that destination.
+#[test]
+fn batch_dialog_greys_override_save_as_for_save_and_close() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let (mut app, _) = app_with(0);
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000.0, 800.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+    h.run_steps(4);
+    let greyed = |h: &Harness<'_, Box<PhotocraftApp>>| {
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Override Action \"Save As\" Commands").accesskit_node().is_disabled()
+    };
+    assert!(greyed(&h), "greyed with the default None");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Save and Close").click();
+    h.run_steps(2);
+    assert!(greyed(&h), "greyed with Save and Close, which the command refuses an Override beside");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Folder").click();
+    h.run_steps(2);
+    assert!(!greyed(&h), "live again with Folder");
 }
 
 /// Float in Window takes the document and the screen position a dragged-off tab was dropped at

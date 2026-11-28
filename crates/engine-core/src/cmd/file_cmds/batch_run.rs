@@ -804,6 +804,33 @@ pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> R
     crate::actions_cmds::resolve(list, p, CMD)
 }
 
+/// The Batch Destination the command accepts: `none`, `folder` and `saveAndClose`. Naming no
+/// destination keeps `folder` (#13659 added `none` without moving that default, so every script,
+/// droplet and recorded action that names none still runs its copy into `output`).
+fn batch_destination<'a>(p: &'a Value, cmd: &str) -> Result<&'a str> {
+    match p.get("destination") {
+        None | Some(Value::Null) => Ok("folder"),
+        Some(Value::String(value)) if matches!(value.as_str(), "folder" | "saveAndClose" | "none") => Ok(value.as_str()),
+        _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: "destination must be none, folder or saveAndClose".into() }),
+    }
+}
+
+/// Destination None (#13659) writes nothing and opens each source itself, so it takes neither an
+/// output folder nor `recorded_open_options` (the flags that only steer how the scratch folder run
+/// opens a file: `overrideOpen`, `suppressOpenOptions`, `suppressWarnings`, `includeNonImages`).
+fn check_none_destination(p: &Value, cmd: &str, recorded_open_options: bool) -> Result<()> {
+    if p.get("output").is_some_and(|v| !v.is_null()) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "destination none opens each source; omit output".into() });
+    }
+    if recorded_open_options {
+        return Err(EngineError::BadParams {
+            cmd: cmd.into(),
+            msg: "destination none opens each source; the recorded folder-opening options need the folder run".into(),
+        });
+    }
+    Ok(())
+}
+
 /// Apply the selected file-error policy while retaining per-file results for direct callers.
 /// Resolve explicit or named steps, then run folder work on scratch documents or edit live tabs.
 /// Named actions carry their recursion context and both routes normalize recorded parameters.
@@ -826,12 +853,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "overrideOpen must be a boolean".into() }),
     };
     // Save and Close destination adapted from #10026 (@edaldridgePersonal, b96be5300cfa).
-    let save_and_close = match p.get("destination") {
-        None | Some(Value::Null) => false,
-        Some(Value::String(value)) if value == "folder" => false,
-        Some(Value::String(value)) if value == "saveAndClose" => true,
-        _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "destination must be folder or saveAndClose".into() }),
-    };
+    // None (#13659) opens each source and writes nothing.
+    let destination = batch_destination(p, cmd)?;
+    let save_and_close = destination == "saveAndClose";
+    let open_each_source = destination == "none";
     let save_close_tiff_layers = if save_and_close {
         match p.get("tiffLayers") {
             None | Some(Value::Null) => true,
@@ -854,6 +879,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(value)) => *value,
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "includeNonImages must be a boolean".into() }),
     };
+    if open_each_source {
+        check_none_destination(p, cmd, override_open || quiet_raw || quiet_profiles || include_non_images)?;
+    }
     let policy = BatchPolicy::parse(p, cmd)?;
     let source = match p.get("source") {
         None | Some(Value::Null) => "folder",
@@ -922,7 +950,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some((id, _)) = steps.iter().find(|(id, _)| !batch_save_point(id) && crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
-    let output = if save_and_close || source == "open" {
+    let output = if save_and_close || open_each_source || source == "open" {
         match p.get("output") {
             None | Some(Value::Null) => String::new(),
             Some(Value::String(path)) => path.clone(),
@@ -971,7 +999,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         batch_depth: s.recording.batch_depth.saturating_add(1),
         ..Default::default()
     };
-    if source == "open" {
+    if source == "open" || open_each_source {
         let save = SaveOpts::from_params(s, p, cmd)?;
         // A caller's recording index belongs to its original library, not an embedded namespace.
         // As in ordinary named playback, suspend it while executing and restore the Batch owner.
@@ -994,7 +1022,11 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
         }
-        let result = batch_open_documents(s, &steps, p, &output, &format, &policy, save);
+        // Destination None takes the folder's files as tabs first, so the action plays on a
+        // document the user keeps (#13659). `Some` names the folder's files as the inputs even
+        // when the folder holds none; `None` is the Source: Opened Files run.
+        let open_inputs: Option<&[BatchInput]> = if open_each_source && source == "folder" { Some(&inputs) } else { None };
+        let result = batch_live_run(s, &steps, p, &policy, save, LiveRun { output: &output, format: &format, errors: Vec::new() }, open_inputs);
         if owns_history {
             crate::actions_cmds::finish_document_history(s);
         }
@@ -1279,26 +1311,118 @@ fn recorded_output_guard(p: &Value) -> bool {
         || p.get("namingComponents").is_some_and(|value| !value.is_null())
 }
 
-/// Source: Opened Files runs on the live documents, so edits remain in their histories.
-/// Documents are identified before playback; a step that closes or reorders tabs cannot make
-/// the next input silently become a different document.
-fn batch_open_documents(
-    s: &mut Session,
-    steps: &[(String, Value)],
-    p: &Value,
-    output: &str,
-    format: &str,
-    policy: &BatchPolicy,
-    save: SaveOpts,
-) -> Result<Value> {
-    let originals: Vec<(u64, String, String)> = s
-        .documents()
+/// The open tabs a run over live documents plays: `(document id, name, path)`, in session order.
+fn live_document_targets(s: &Session) -> Vec<(u64, String, String)> {
+    s.documents()
         .iter()
         .map(|state| {
             let path = state.path.clone().unwrap_or_else(|| format!("{}.psd", state.doc.name));
             (state.doc.id.0, state.doc.name.clone(), path)
         })
-        .collect();
+        .collect()
+}
+
+/// Batch's Destination None with a folder source (#13659): open each input as a tab of this
+/// session, in input order, and return the tabs to play (`(id, name, path)`). A file that cannot
+/// be opened becomes that input's error and the rest still run, as the folder run reports them.
+fn open_batch_source_files(s: &mut Session, inputs: &[BatchInput], errors: &mut Vec<Value>) -> Vec<(u64, String, String)> {
+    let raw_ppi = super::open::raw_open_resolution(s);
+    let mut opened = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let path = input.path.as_str();
+        let imported = (|| -> Result<(Document, bool)> {
+            let bytes = read_file(path)?;
+            super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes)
+        })();
+        let (doc, read_only) = match imported {
+            Ok(imported) => imported,
+            Err(error) => {
+                errors.push(json!({"file": path, "error": error.to_string()}));
+                continue;
+            }
+        };
+        let index = s.add_document(doc, Some(path.to_string()));
+        let (id, name) = match s.documents().get(index) {
+            Some(state) => (state.doc.id.0, state.doc.name.clone()),
+            None => {
+                errors.push(json!({"file": path, "error": "the opened file was refused by this session"}));
+                continue;
+            }
+        };
+        // `add_document` left the new tab active. As File > Open records it, a source this build
+        // only reads (an XCF, an Affinity file) keeps that mark, so a later Save will not replace
+        // it with a flat encoding.
+        if let Some(state) = s.active_mut() {
+            state.source_read_only = read_only;
+        }
+        opened.push((id, name, path.to_string()));
+    }
+    opened
+}
+
+/// Where a live run would write its results. An empty `output` means it writes nothing: Source
+/// Opened Files with no destination folder, or Destination None (#13659). `errors` are per-file
+/// failures already known before playback (inputs that would not open): they ride into the error
+/// log and the answer beside the playback failures, as the scratch folder run reports its own.
+struct LiveRun<'a> {
+    output: &'a str,
+    format: &'a str,
+    errors: Vec<Value>,
+}
+
+/// The live run of Source: Opened Files, and of Destination None over a folder source (#13659).
+/// With `open_inputs` each file is opened as a tab of this session first, and a file that will not
+/// open is that input's error instead of a stop. A folder that holds no eligible image plays
+/// nothing - it is not a run over the tabs already open. If nothing opened at all, the answer
+/// carries those per-file errors, as a folder run whose every file failed does.
+fn batch_live_run(
+    s: &mut Session,
+    steps: &[(String, Value)],
+    p: &Value,
+    policy: &BatchPolicy,
+    save: SaveOpts,
+    run: LiveRun<'_>,
+    open_inputs: Option<&[BatchInput]>,
+) -> Result<Value> {
+    // The error log must not replace any input, so it is checked against the whole folder list
+    // here, before opening: an input that fails to open never reaches the guard that reads the
+    // opened files, and an all-failed run would otherwise write its log over that file (#13659).
+    if let Some(inputs) = open_inputs {
+        validate_error_log(policy, inputs.iter().map(|input| input.path.clone()), std::iter::empty())?;
+    }
+    let mut open_errors = Vec::new();
+    let originals = match open_inputs {
+        Some(inputs) => open_batch_source_files(s, inputs, &mut open_errors),
+        None => live_document_targets(s),
+    };
+    if originals.is_empty() && open_inputs.is_some() {
+        // Nothing to play: no tab is added, no already-open tab is touched, and the answer is the
+        // empty one - carrying the per-file errors when every input failed to open.
+        let log_failure = error_log_failure(policy.error_log.as_deref(), &open_errors);
+        let mut value = batch_outcome(Vec::new(), open_errors, None, policy.error_log.as_deref().filter(|_| log_failure.is_none()));
+        if let Some(error) = log_failure {
+            value["errorLogError"] = json!(error);
+        }
+        value["documents"] = json!(0);
+        return Ok(value);
+    }
+    batch_open_documents(s, steps, p, policy, save, originals, LiveRun { output: run.output, format: run.format, errors: open_errors })
+}
+
+/// Source: Opened Files runs on the live documents, so edits remain in their histories.
+/// Documents are identified before playback; a step that closes or reorders tabs cannot make
+/// the next input silently become a different document. Destination None of a folder source
+/// arrives here too, with the tabs [`open_batch_source_files`] added for it.
+fn batch_open_documents(
+    s: &mut Session,
+    steps: &[(String, Value)],
+    p: &Value,
+    policy: &BatchPolicy,
+    save: SaveOpts,
+    originals: Vec<(u64, String, String)>,
+    run: LiveRun<'_>,
+) -> Result<Value> {
+    let LiveRun { output, format, errors } = run;
     if originals.is_empty() {
         return Err(EngineError::NoDocument);
     }
@@ -1327,7 +1451,9 @@ fn batch_open_documents(
     }
     validate_error_log(policy, originals.iter().map(|(_, _, path)| path.clone()), planned.iter().flat_map(|paths| paths.iter().cloned()))?;
     let mut files = Vec::new();
-    let mut errors = Vec::new();
+    // Seeded with the inputs that failed before playback reached them (#13659: Destination None
+    // opens each file itself), so the error log and the answer carry them beside playback failures.
+    let mut errors = errors;
     let mut stopped = None;
     let mut done = 0;
     let mut written = OutputClaims::default();
