@@ -2204,6 +2204,32 @@ fn ending_the_transform_brings_back_the_tools_options_bar() {
     }
 }
 
+/// #15971: turning off "Maintain aspect ratio" in the options bar survives a restart: the click is
+/// saved with the tool options and a fresh app restores the link off.
+#[test]
+fn the_aspect_link_stays_off_after_a_restart() {
+    use egui_kittest::kittest::Queryable as _;
+    let app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    assert!(app.ui.tool_options.transform.aspect_linked, "the link starts on");
+    let mut h = harness(app, egui::vec2(1400.0, 900.0));
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+    h.run_steps(2);
+    // The Properties panel's Transform section has a link of its own; the options bar's is the top one.
+    let links = h.query_all_by_label("Maintain aspect ratio");
+    links.min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).unwrap().click();
+    h.run_steps(2);
+    assert!(!h.state().ui.tool_options.transform.aspect_linked, "the click turned the link off");
+    crate::tool_memory::persist(h.state_mut(), &ctx);
+    let saved = h.state().session.prefs().tool_options.clone();
+
+    let mut restarted = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    restarted.session.prefs.edit(|p| p.tool_options = saved);
+    crate::tool_memory::restore(&mut restarted);
+    assert!(!restarted.ui.tool_options.transform.aspect_linked, "the link is still off after a restart");
+}
+
 /// #15548: Free Transform on an unturned, unskewed box shows the horizontal skew as "0", not "-0". The field's value
 /// reads the unit it draws after the number.
 #[test]
