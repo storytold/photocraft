@@ -622,6 +622,8 @@ pub struct PhotocraftApp {
     pub(crate) finished_pens: Vec<vector_ui::FinishedPen>,
     /// Type tool layout cache: ((doc, revision, layer), layout).
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
+    /// The Type edit session that already recorded a history state.
+    pub(crate) recorded_type_edit: Option<String>,
     /// The path a Type tool click on a path would place its text on, shown before the click
     /// (`type_path_placement`).
     pub(crate) type_path_preview: Option<type_path_placement::Preview>,

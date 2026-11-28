@@ -170,6 +170,61 @@ fn a_kerned_session_ends_with_its_own_step_and_no_empty_one() {
     assert_eq!(history(&app), kerned, "ending the session adds no state of its own");
 }
 
+#[test]
+fn committing_after_typing_kerning_and_a_layer_rename_adds_no_undo_step() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    let before = history(&app);
+    super::host::type_text(&mut app, "Pair");
+    super::editing::kern_pair(&mut app, id, 2, 20.0);
+    let kerned = history(&app);
+    assert_eq!(&kerned[before.len()..], ["Edit Type", "Kerning"]);
+
+    let ctx = app.ctx().clone();
+    crate::panels::layers_events::run_actions(&mut app, &ctx, vec![("layer.renameLayer".into(), json!({"layer": id.0, "name": "Renamed"}))]);
+    let renamed = history(&app);
+    assert_eq!(&renamed[kerned.len()..], ["Rename Layer"]);
+    assert!(app.ui.text_edit.is_some());
+
+    crate::type_tool::commit(&mut app);
+    assert_eq!(history(&app), renamed, "commit must not add an empty Edit Type step");
+    app.run("edit.undo", json!({})).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.layer(id).unwrap().name, "Renamed");
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(text_of(&app, id), "Pair", "undoing Kerning keeps the typed text");
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(text_of(&app, id), "Hello");
+}
+
+#[test]
+fn a_layer_rename_does_not_count_as_a_type_edit() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    super::editing::kern_pair(&mut app, id, 0, 20.0);
+    app.run("layer.renameLayer", json!({"layer": id.0, "name": "Renamed"})).unwrap();
+    let renamed = history(&app);
+
+    crate::type_tool::commit(&mut app);
+    ended(&app, id, &renamed, "committing without a text change");
+    assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().name, "Renamed");
+}
+
+#[test]
+fn committing_after_undo_keeps_the_type_step_available_to_redo() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    super::host::type_text(&mut app, "Pair");
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(text_of(&app, id), "Hello");
+    assert!(app.ui.text_edit.is_some());
+    assert!(app.session.active().unwrap().history.can_redo());
+
+    crate::type_tool::commit(&mut app);
+    assert!(app.session.active().unwrap().history.can_redo(), "commit must not discard the undone Type step");
+    app.run("edit.redo", json!({})).unwrap();
+    assert_eq!(text_of(&app, id), "Pair");
+}
+
 /// The ⇧⌘ style keys are one step per press for the same reason; the commit must not add an empty
 /// state after them either.
 #[test]

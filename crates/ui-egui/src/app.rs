@@ -147,6 +147,7 @@ impl PhotocraftApp {
             run_depth: 0,
             paused_playbacks: Default::default(),
             type_layout: None,
+            recorded_type_edit: None,
             type_path_preview: None,
             type_transform_preview: None,
             type_path_damage: None,

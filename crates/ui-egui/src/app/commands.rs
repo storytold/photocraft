@@ -55,6 +55,9 @@ impl PhotocraftApp {
         self.run_depth += 1;
         let r = self.run_command_at_depth(id, params);
         self.run_depth -= 1;
+        if r.is_ok() {
+            crate::type_tool::remember_history_step(self);
+        }
         r
     }
 

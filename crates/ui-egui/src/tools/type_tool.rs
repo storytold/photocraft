@@ -37,7 +37,7 @@ use defaults::{default_style_params, default_styles, shown_scale};
 pub use defaults::{foreground_changed, open_color_picker};
 pub(crate) use defaults::{formatting_params, target, target_text};
 pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left};
-pub(crate) use editing::{commit_before_selecting, focus_editor};
+pub(crate) use editing::{commit_before_selecting, focus_editor, remember_history_step};
 #[cfg(test)]
 pub(crate) use editing::{step_char_metric, toggle_char_style, toggle_hyphenate};
 pub(crate) use fonts::families_key;
