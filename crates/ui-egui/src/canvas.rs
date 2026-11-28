@@ -247,7 +247,6 @@ mod doc_window_dialog_tests;
 mod document_window_title_tests;
 
 #[cfg(test)]
-#[path = "canvas/arrange_active_document_tests.rs"]
 mod arrange_active_document_tests;
 
 #[cfg(test)]

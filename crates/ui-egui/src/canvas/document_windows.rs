@@ -197,6 +197,11 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// brought it forward. The app has to have seen the window standing without the keyboard once for that: a window
 /// that arrives holding it, as every window of Float All in Windows does as it opens, was opened by the app, and
 /// its keyboard is not a choice of document (#16891).
+///
+/// Once the app has seen a window without the keyboard it reads every later focus gain of that window as the user's,
+/// because it cannot tell the user's click from a window system that hands the keyboard back to the window it opened
+/// last - which is also what a refused focus request leaves behind, on Windows among a run of windows that is still
+/// being created. That case belongs to the manual look at the window system; no test of ours can tell the two apart.
 fn the_user_brought_it_forward(ctx: &egui::Context, window: u64, container: egui::Id) -> bool {
     let host = WindowHost::of(ctx);
     // A window the system has told the app nothing about is not yet known to be standing without the keyboard.
