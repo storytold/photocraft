@@ -11,6 +11,7 @@ use craft::ui::patterns::form_dialogs::{
     CanvasExtension, CanvasSize, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize, HostedImageSize, ImageSize, ImageSizeResult, ImageSizeValues, Resample,
 };
 use craft::ui::runtime::env::{ColumnSize, Label, UnitKind};
+use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -106,6 +107,74 @@ fn extension_param(extension: &CanvasExtension) -> Value {
     }
 }
 
+/// What Canvas Size keeps from its last OK (#14581): Relative, the unit, and the ruler unit then, so a change of the
+/// ruler units since makes the next opening use the new ruler unit.
+const CANVAS_KEPT: &str = "photocraft.image.canvasSize.kept";
+/// The extension colour of the last Canvas Size run, with or without the dialog (#14581).
+const CANVAS_EXTENSION: &str = "photocraft.image.canvasSize.extensionColor";
+
+/// The `extensionColor` a Canvas Size run uses: the parameter, or the Background when it is absent or null, as the
+/// engine does (CodeRabbit on #16146).
+pub(crate) fn canvas_extension_of_params(params: &Value) -> Value {
+    params.get("extensionColor").filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!("background"))
+}
+
+/// The `extensionColor` of a successful Canvas Size run, for the next opening.
+pub(crate) fn note_canvas_extension(app: &PhotocraftApp, color: Value) {
+    if extension_of(&color).is_some() {
+        set_saved_value::<Option<Value>>(app.ctx(), &SaveKey::named(CANVAS_EXTENSION), Some(color));
+    }
+}
+
+/// The canvas extension an `extensionColor` value names: a name, or `#rrggbb` (mid grey is Gray).
+fn extension_of(color: &Value) -> Option<CanvasExtension> {
+    let name = color.as_str()?;
+    Some(match name {
+        "foreground" => CanvasExtension::Foreground,
+        "background" => CanvasExtension::Background,
+        "white" => CanvasExtension::White,
+        "black" => CanvasExtension::Black,
+        "transparent" => CanvasExtension::Transparent,
+        hex => {
+            let hex = hex.strip_prefix('#')?;
+            if hex.len() != 6 {
+                return None;
+            }
+            let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+            let rgb = [byte(0)?, byte(2)?, byte(4)?];
+            if rgb == [128, 128, 128] { CanvasExtension::Gray } else { CanvasExtension::Other(rgb.map(|b| f32::from(b) / 255.0)) }
+        }
+    })
+}
+
+/// Keeps a confirmed Canvas Size's Relative and unit, with the ruler unit they were picked under.
+fn keep_canvas(app: &PhotocraftApp, r: &CanvasSizeResult) {
+    let ruler = format!("{:?}", app.session.prefs().units_and_rulers.rulers);
+    let kept = json!({"relative": r.relative, "unit": r.unit, "ruler": ruler});
+    set_saved_value::<Option<Value>>(app.ctx(), &SaveKey::named(CANVAS_KEPT), Some(kept));
+}
+
+/// Canvas Size's opening values with what was kept applied: Relative, the unit unless the ruler units changed since,
+/// and the last run's extension colour. The anchor always opens at the centre.
+fn kept_canvas(app: &PhotocraftApp, mut values: CanvasSizeValues) -> CanvasSizeValues {
+    let ctx = app.ctx();
+    if let Some(kept) = saved_value::<Option<Value>>(ctx, &SaveKey::named(CANVAS_KEPT)) {
+        if let Some(on) = kept["relative"].as_bool() {
+            values = values.relative(on);
+        }
+        let ruler = format!("{:?}", app.session.prefs().units_and_rulers.rulers);
+        if kept["ruler"].as_str() == Some(ruler.as_str())
+            && let Ok(unit) = serde_json::from_value::<UnitKind>(kept["unit"].clone())
+        {
+            values = values.unit(unit);
+        }
+    }
+    if let Some(extension) = saved_value::<Option<Value>>(ctx, &SaveKey::named(CANVAS_EXTENSION)).as_ref().and_then(extension_of) {
+        values = values.extension(extension);
+    }
+    values
+}
+
 /// Whether `command` is Image Size or Canvas Size.
 pub fn is_sizing(command: &str) -> bool {
     matches!(command, IMAGE_COMMAND | CANVAS_COMMAND)
@@ -171,8 +240,12 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
             ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(bytes_per_pixel)
         }))
     } else {
-        let values =
+        let mut values =
             CanvasSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).has_background(d.background().is_some()).column_size(columns);
+        // A recorded step opens on its own values; the menu on what the last OK and run kept (#14581).
+        if !seeded {
+            values = kept_canvas(app, values);
+        }
         app.framework
             .dialogs
             .open(HostedCanvasSize::new(values, move |values: Bind<'_, CanvasSizeValues>| CanvasSize::new(values).bytes_per_pixel(bytes_per_pixel)))
@@ -229,7 +302,10 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     }
     if let Some(result) = app.framework.dialogs.take::<HostedCanvasSize>() {
         let params = match result {
-            DialogResult::Ok(r) => Some(canvas_params(&r)),
+            DialogResult::Ok(r) => {
+                keep_canvas(app, &r);
+                Some(canvas_params(&r))
+            }
             _ => None,
         };
         finish(app, dialog_id(HostedCanvasSize::KEY), CANVAS_COMMAND, params);
@@ -307,3 +383,6 @@ fn finish(app: &mut PhotocraftApp, id: DialogId, command: &str, params: Option<V
 mod canvas_size_readout_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod canvas_sticky_tests;

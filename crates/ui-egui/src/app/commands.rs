@@ -24,12 +24,17 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        // Canvas Size opens on the extension colour of the last run, with or without its dialog (#14581).
+        let extension = (id == "image.canvasSize").then(|| crate::sizing::canvas_extension_of_params(&params));
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
         }
         if library_change && result.is_ok() {
             actions::library_changed(self);
+        }
+        if let Some(color) = extension.filter(|_| result.is_ok()) {
+            crate::sizing::note_canvas_extension(self, color);
         }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.

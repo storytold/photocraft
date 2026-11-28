@@ -558,7 +558,15 @@ impl ActionRunner for ShellRunner<'_> {
             }
             // An explicit vector paste needs the original OS source, not just an old pixel copy.
             "edit.paste" if p.get("as").is_some() => app.run(id, p.clone()),
-            _ => app.session.execute(id, p.clone()).map_err(|e| e.to_string()),
+            _ => {
+                let r = app.session.execute(id, p.clone()).map_err(|e| e.to_string());
+                // A Canvas Size step that runs without its dialog sets the colour the dialog opens on, as the same
+                // run from `PhotocraftApp::run` does (CodeRabbit on #16146).
+                if id == "image.canvasSize" && r.is_ok() {
+                    crate::sizing::note_canvas_extension(app, crate::sizing::canvas_extension_of_params(&p));
+                }
+                r
+            }
         };
         // A called action that paused for a dialog continues here after it once confirmed.
         self.after_call(action, i, id, result, target)
