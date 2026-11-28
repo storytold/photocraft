@@ -814,12 +814,13 @@ fn history_source_caption_names_the_source() {
     app.run("history.deleteSnapshot", json!({"snapshot": 1})).unwrap();
     assert!(matches!(source_caption(&app), SourceCaption::Deleted), "deleted snapshot");
 
-    // So does discarding the redo state that was the source.
+    // A step that discards the redo state which is the source keeps it: last in the panel's list and
+    // still the source, so the bar still names it (#12844).
     app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
     app.run("history.setSource", json!({"state": 2})).unwrap();
     app.run("edit.undo", json!({})).unwrap();
     app.run("paint.pencil", json!({"points": [[10, 10]], "size": 1, "color": "#0000ff"})).unwrap();
-    assert!(matches!(source_caption(&app), SourceCaption::Deleted), "discarded redo state");
+    assert!(matches!(source_caption(&app), SourceCaption::Named(name) if name.contains("Fill")), "the kept source: {:?}", source_caption(&app));
 }
 
 /// An empty Clone Source slot refuses to paint, as with no source at all: the ⌥-click point left

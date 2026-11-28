@@ -89,6 +89,11 @@ pub struct History {
     /// A snapshot-backed alias of a folded row. Clear History moves this with its row source;
     /// a snapshot selected explicitly by the user remains separate in the document state.
     brush_source_snapshot: Option<u64>,
+    /// [`HistoryState::id`] of the source state a new step kept instead of discarding it with the
+    /// other later states (#12844). It is the farthest state in [`History::redo`], so the History
+    /// panel lists it last and dimmed; [`History::can_redo`] does not offer it as a state to step
+    /// forward to. `None` while no state is kept that way.
+    kept_source: Option<u64>,
     /// See [`History::generation`].
     generation: u64,
 }
@@ -119,6 +124,9 @@ struct Cleared {
     redo: Vec<HistoryState>,
     brush_source: Option<u64>,
     brush_source_snapshot: Option<u64>,
+    /// The state kept as the source (#12844) travels with the rows the Clear took off the list, so
+    /// its undo puts back exactly what was there: the row kept, and not a state to step forward to.
+    kept_source: Option<u64>,
 }
 
 /// The undo label of the step [`History::clear_states`] adds (Edit › Undo Clear History).
@@ -151,6 +159,7 @@ impl History {
             next_id: 1,
             brush_source: None,
             brush_source_snapshot: None,
+            kept_source: None,
             generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
@@ -205,7 +214,7 @@ impl History {
                 moved += 1;
             }
         } else {
-            self.clear_redo();
+            self.discard_later_states();
         }
         let mut evicted = Vec::new();
         while self.undo.len() > self.max_states {
@@ -221,11 +230,28 @@ impl History {
         self.last_record = Some(LastRecord { before, moved, evicted, visibility_capture_before: self.visibility_capture.clone() });
     }
 
+    /// Forget the later (redo) states a new step discards, except the one that is the History
+    /// Brush's source: that state stays and stays the source, so the next click paints from it
+    /// again (#12844). It stays the farthest later state, which the History panel lists last and
+    /// draws dimmed, and [`History::can_redo`] never offers it as a state to step forward to.
+    fn discard_later_states(&mut self) {
+        let kept = self.brush_source.filter(|id| self.redo.iter().any(|state| state.id == *id));
+        if let Some(tiles) = &mut self.tiles {
+            for state in self.redo.iter().filter(|state| Some(state.id) != kept) {
+                tiles.remove(&state.doc);
+            }
+        }
+        self.redo.retain(|state| Some(state.id) == kept);
+        self.kept_source = kept;
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty() || self.cleared.is_some()
     }
+    /// Whether the document can step forward to a later state. The source state a step kept
+    /// ([`History::discard_later_states`], #12844) is listed in that place but is not such a state.
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        self.redo.iter().any(|state| Some(state.id) != self.kept_source)
     }
     pub fn undo_label(&self) -> Option<&str> {
         if self.cleared.is_some() {
@@ -307,9 +333,14 @@ impl History {
         let map = |source: Option<u64>| source.map(|id| if id == prior_current { current } else { id });
         self.brush_source = map(later.brush_source);
         self.brush_source_snapshot = later.brush_source_snapshot;
+        // The fold replaces rows, so the state kept as the source is re-derived from the list that
+        // survives it: still kept while it is a held later state under its (possibly mapped) id,
+        // otherwise not (#12844).
+        self.kept_source = map(self.kept_source).filter(|id| self.redo.iter().any(|state| state.id == *id));
         if let (Some(dst), Some(src)) = (&mut self.cleared, &later.cleared) {
             dst.brush_source = map(src.brush_source);
             dst.brush_source_snapshot = src.brush_source_snapshot;
+            dst.kept_source = map(src.kept_source);
         }
         source
     }
@@ -324,6 +355,8 @@ impl History {
         self.changed();
         self.brush_source = None;
         self.brush_source_snapshot = Some(snapshot);
+        // No state source is left, so nothing is kept past its time (#12844).
+        self.drop_kept_source();
     }
 
     /// Keep a folded source inactive until Undo Clear History restores its source context.
@@ -332,6 +365,10 @@ impl History {
         if let Some(cleared) = &mut self.cleared {
             cleared.brush_source = None;
             cleared.brush_source_snapshot = Some(snapshot);
+            // Same rule while the Clear is pending: the state kept as a source goes with it (#12844).
+            if let Some(kept) = cleared.kept_source.take() {
+                cleared.redo.retain(|state| state.id != kept);
+            }
         }
     }
 
@@ -341,11 +378,12 @@ impl History {
         self.changed();
         // Undo Clear History: the cleared states come back; the document doesn't change.
         if let Some(cleared) = self.cleared.take() {
-            let Cleared { undo, redo, brush_source, brush_source_snapshot } = *cleared;
+            let Cleared { undo, redo, brush_source, brush_source_snapshot, kept_source } = *cleared;
             self.undo = undo;
             self.redo = redo;
             self.brush_source = brush_source;
             self.brush_source_snapshot = brush_source_snapshot;
+            self.kept_source = kept_source;
             self.tiles = None;
             return Some((current, self.current_layers.clone()));
         }
@@ -370,6 +408,11 @@ impl History {
     pub fn redo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
         self.changed();
         let next = self.redo.pop()?;
+        // Stepping forward onto the state a step kept as the source (#12844) ends the keeping: the
+        // state is the current one from here on, so the state a later Undo leaves behind is redoable.
+        if self.kept_source == Some(next.id) {
+            self.kept_source = None;
+        }
         self.last_record = None;
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&next.doc);
@@ -438,18 +481,24 @@ impl History {
 
     /// Make row `i` the History Brush's source (the History panel's source column). It stays on
     /// that state while older states fall off, and the state itself is kept when it would fall off
-    /// the history (by count or memory); `false` if there is no such row.
+    /// the history (by count or memory); `false` if there is no such row. The state a previous
+    /// source left behind in the list goes with that choice, as it would have gone with the step
+    /// that discarded it (#12844).
     pub fn set_brush_source(&mut self, i: usize) -> bool {
         self.changed();
         let Some(id) = self.row_id(i) else { return false };
+        if self.kept_source.is_some_and(|kept| kept != id) {
+            self.drop_kept_source();
+        }
         self.brush_source = Some(id);
         self.brush_source_snapshot = None;
         true
     }
 
     /// The History Brush's source row: the oldest state held by default, else the state set with
-    /// [`History::set_brush_source`]. `None` once that state is gone (deleted, or discarded by a
-    /// new step after stepping back): as in Photoshop, there is then no source until one is set.
+    /// [`History::set_brush_source`]. A new step keeps a source that was one of its discarded later
+    /// states, so it stays the source (#12844). `None` once that state is gone (deleted, or dropped
+    /// when another source is set): as in Photoshop, there is then no source until one is set.
     pub fn brush_source(&self) -> Option<usize> {
         match self.brush_source {
             None => Some(0),
@@ -510,6 +559,11 @@ impl History {
         }
         let Some(state) = self.undo.remove(i) else { return false };
         self.last_record = None;
+        // A state never stops being the kept source one by being deleted (#12844): the field only
+        // ever names the farthest later state, and this is the list's guard for that.
+        if self.kept_source == Some(state.id) {
+            self.kept_source = None;
+        }
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&state.doc);
         }
@@ -529,6 +583,11 @@ impl History {
         let Some(k) = self.redo.len().checked_sub(j.saturating_add(1)) else { return false };
         let state = self.redo.remove(k);
         self.last_record = None;
+        // Deleting the state that was kept as the source ends the keeping; the source then names no
+        // row, as for any deleted source (#12844).
+        if self.kept_source == Some(state.id) {
+            self.kept_source = None;
+        }
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&state.doc);
         }
@@ -612,7 +671,10 @@ impl History {
         self.next_id = self.next_id.max(later.next_id);
     }
 
-    /// Forget the redo states, e.g. after undoing half of a compound step that failed.
+    /// Forget the redo states, e.g. after undoing half of a compound step that failed, or after the
+    /// History panel deleted a state. The source state a step had kept goes with them: the
+    /// source is then gone until another is set (#12844). A recorded step takes the different path
+    /// of [`History::discard_later_states`], which keeps its source.
     pub fn clear_redo(&mut self) {
         self.changed();
         if !self.redo.is_empty() {
@@ -624,6 +686,19 @@ impl History {
             }
         }
         self.redo.clear();
+        self.kept_source = None;
+    }
+
+    /// Take the state kept as the History Brush's source (#12844) off the list again: another row
+    /// or a snapshot became the source, or Purge › Histories left no state source to keep it for.
+    fn drop_kept_source(&mut self) {
+        let Some(kept) = self.kept_source.take() else { return };
+        if let Some(tiles) = &mut self.tiles
+            && let Some(state) = self.redo.iter().find(|state| state.id == kept)
+        {
+            tiles.remove(&state.doc);
+        }
+        self.redo.retain(|state| state.id != kept);
     }
 
     /// Forget every past and redo state (Edit › Purge › Histories). The History Brush's source
@@ -641,11 +716,13 @@ impl History {
         self.reset_brush_source();
     }
 
-    /// Make the History Brush's source the default again (the oldest state held), pinning no state.
+    /// Make the History Brush's source the default again (the oldest state held), pinning no state
+    /// and letting go of any state a step kept only because it was the source (#12844).
     pub fn reset_brush_source(&mut self) {
         self.changed();
         self.brush_source = None;
         self.brush_source_snapshot = None;
+        self.drop_kept_source();
     }
 
     /// History panel › Clear History: take every state but the current one off the list without
@@ -677,7 +754,8 @@ impl History {
         let redo = std::mem::take(&mut self.redo);
         let brush_source = self.brush_source.take();
         let brush_source_snapshot = self.brush_source_snapshot.take();
-        self.cleared = Some(Box::new(Cleared { undo, redo, brush_source, brush_source_snapshot }));
+        let kept_source = self.kept_source.take();
+        self.cleared = Some(Box::new(Cleared { undo, redo, brush_source, brush_source_snapshot, kept_source }));
         self.last_record = None;
         self.tiles = None;
     }
