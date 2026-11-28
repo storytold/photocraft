@@ -255,3 +255,49 @@ fn command_drag_over_a_guide_moves_the_guide_with_any_tool() {
         }
     }
 }
+
+/// Numeric tick labels painted in the top ruler strip of `h`'s canvas.
+fn top_ruler_numbers(h: &AppHarness) -> Vec<f64> {
+    let rect = testing::view(h.state()).expect("the canvas showed").rect;
+    let mut out = Vec::new();
+    let mut stack: Vec<&egui::Shape> = h.output().shapes.iter().map(|c| &c.shape).collect();
+    while let Some(shape) = stack.pop() {
+        match shape {
+            egui::Shape::Vec(v) => stack.extend(v.iter()),
+            egui::Shape::Text(t) if t.pos.y < rect.top() && t.pos.x >= rect.left() => {
+                if let Ok(v) = t.galley.text().trim().parse::<f64>() {
+                    out.push(v);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// #17036: changing `unitsAndRulers.rulers` updates the canvas rulers' tick labels and spacing to
+/// the chosen unit (e.g. millimetres at the document's resolution) instead of staying in pixels.
+#[test]
+fn ruler_ticks_follow_units_and_rulers_preference() {
+    let mut h = canvas_harness([600, 400], Tool::Move);
+    h.state_mut()
+        .session
+        .edit("set dpi", |doc, _| {
+            doc.resolution_dpi = 300.0;
+            Ok(())
+        })
+        .unwrap();
+    h.run_steps(2);
+
+    let px_max = top_ruler_numbers(&h).into_iter().fold(0.0_f64, f64::max);
+    assert!(px_max >= 400.0, "default pixel ruler should reach hundreds of px, got max {px_max}");
+
+    h.state_mut().run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "mm"})).unwrap();
+    h.run_steps(3);
+
+    let mm_labels = top_ruler_numbers(&h);
+    let mm_max = mm_labels.iter().copied().fold(0.0_f64, f64::max);
+    assert!(!mm_labels.is_empty(), "millimetre ruler should paint tick labels");
+    // 600 px at 300 ppi is 50.8 mm; even across the 1000 pt viewport (~85 mm) labels stay well under 100.
+    assert!(mm_max < 100.0, "millimetre ruler at 300 ppi should not stay in pixel coordinates, got {mm_labels:?}");
+}
