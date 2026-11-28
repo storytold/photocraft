@@ -82,11 +82,11 @@ fn painting_a_hidden_layer_is_refused_at_the_press() {
         let n = steps(&app);
         tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         assert!(!crate::canvas::testing::in_gesture(&app) && app.live_stroke.is_none(), "{tool:?}: no stroke started");
-        // The Brush (#11898) and the Classic gradient (#12017) say so in an alert, the other tools
-        // in the status bar.
+        // The Brush (#11898), the Classic gradient (#12017) and the Paint Bucket (#12537) say so in
+        // an alert, the other tools in the status bar.
         let alerts = alerts(&app);
         let alert = alerts.iter().any(|m| m.contains("target layer is hidden"));
-        if matches!(tool, Tool::Brush | Tool::Gradient) {
+        if matches!(tool, Tool::Brush | Tool::Gradient | Tool::PaintBucket) {
             assert!(alert, "{tool:?}: {alerts:?}");
         } else {
             assert!(app.ui.status.contains("target layer is hidden") && alerts.is_empty(), "{tool:?}: {}", app.ui.status);

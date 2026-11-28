@@ -7,8 +7,9 @@ use craft::draw::ui::measure::{RulerBar, RulerLine};
 use craft::theme::Srgba;
 use craft::ui::buttons::{Button, IconButton, ToggleButton};
 use craft::ui::choice::Swatch;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, bind_tracked};
 use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
@@ -160,8 +161,8 @@ fn count(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Docum
     Divider::vertical().show(ui);
     let (marker, label) = (g.marker_size as f32, g.label_size as f32);
     let (mut new_marker, mut new_label) = (marker, label);
-    let marker_out = option_cells::number(tl!("Marker Size"), &mut new_marker, MARKER_SIZE).whole().show(ui);
-    let label_out = option_cells::number(tl!("Label Size"), &mut new_label, LABEL_SIZE).whole().show(ui);
+    let marker_out = option_cells::number(tl!("Marker Size"), Bind::bound(&mut new_marker), MARKER_SIZE).whole().show(ui);
+    let label_out = option_cells::number(tl!("Label Size"), Bind::bound(&mut new_label), LABEL_SIZE).whole().show(ui);
     // A typed size out of range takes the closest value and says so once (#13530).
     for alert in [&marker_out.out_of_range, &label_out.out_of_range].into_iter().flatten() {
         option_cells::range_alert(app, ui, alert);
@@ -180,9 +181,11 @@ fn count(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Docum
 }
 
 fn note(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Document) {
-    TextField::new(Label::from(tl!("Author")), Bind::bound(&mut app.ui.analysis.note_author)).show(ui);
+    // In `Field`s: a bare control's label only names it, it is not drawn (#16338).
+    Field::new(Label::from(tl!("Author"))).show(ui, |ui, _| TextField::new(Label::from(tl!("Author")), Bind::bound(&mut app.ui.analysis.note_author)).show(ui));
     let rgb = app.ui.analysis.note_color;
-    if Swatch::new(Label::from(tl!("Color")), Srgba::from_rgb_array(rgb)).show(ui).clicked
+    let swatch = Field::new(Label::from(tl!("Color"))).show(ui, |ui, _| Swatch::new(Label::from(tl!("Color")), Srgba::from_rgb_array(rgb)).show(ui).clicked);
+    if swatch.inner == Some(true)
         && let Err(message) = crate::color_picker_ui::open_for_target(app, "noteColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb)
     {
         crate::notices::error(app, message);
@@ -204,7 +207,7 @@ fn sampler(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let n = app.session.active().map_or(0, |d| d.color_samplers.len());
     // One Sample Size setting, shared with the Eyedropper (#11732).
     // PLAN: assumed `SamplerOptions::show(ui)` returns an output with `clear_all: bool`.
-    let out = SamplerOptions::new(n, Bind::bound(&mut app.ui.tool_options.eyedropper.size)).show(ui);
+    let out = SamplerOptions::new(n, bind_tracked!(app.ui.tool_options => eyedropper.size)).show(ui);
     if out.clear_all {
         run(app, "view.colorSamplers.clear", json!({}));
     }

@@ -7,6 +7,7 @@
 
 use craft::behavior::kurbo::Rect;
 use craft::behavior::{Cursor, CursorIcon, PointerSample};
+use craft::keymap::Mods;
 use craft::ui::canvas::ToolContext;
 use craft::ui::canvas_controls::brush::{BrushCursor, BrushCursorOptions, BrushTip, BrushTipOutline, PaintingCursor, TipPose, TipRings};
 use photocraft_engine::prefs::PaintingCursor as PaintingPref;
@@ -33,7 +34,7 @@ pub(crate) struct TipKey {
 impl TipKey {
     fn of(b: &BrushSettings) -> Self {
         Self {
-            tip: b.tip.clone(),
+            tip: (*b.tip).clone(),
             angle: b.angle,
             roundness: b.roundness,
             hardness: b.hardness,
@@ -46,7 +47,7 @@ impl TipKey {
 
 /// A round tip with no angle or flattening: the circle says it all.
 fn is_plain(b: &BrushSettings) -> bool {
-    matches!(b.tip, TipShape::Round) && b.angle == 0.0 && b.roundness >= 1.0
+    matches!(*b.tip, TipShape::Round) && b.angle == 0.0 && b.roundness >= 1.0
 }
 
 /// The size and kind of the aliased cursor tip the `tool` has: the Pencil's, the Eraser's in Pencil mode, and the
@@ -157,9 +158,16 @@ pub(crate) fn cursor(app: &PhotocraftApp, cx: &ToolContext<'_>) -> Cursor {
         return BrushCursor::new(&tip).centre(centre).painting(painting).icon(icon).cursor(cx, &options, &space.view);
     }
     let Some((_, tip)) = &app.brush_tip else { return arrow };
-    BrushCursor::new(tip).pose(pose(brush, cx.pointer.as_ref().map(|p| p.sample))).centre(centre).painting(painting).icon(icon).cursor(
+    let cursor = BrushCursor::new(tip).pose(pose(brush, cx.pointer.as_ref().map(|p| p.sample))).centre(centre).painting(painting).icon(icon).cursor(
         cx,
         &options,
         &space.view,
-    )
+    );
+    // Quick Selection's "−" goes on its ring only: the icon and crosshair the other Painting Cursors settings, Caps
+    // Lock or a small tip give were not measured and stay as they are.
+    let held = Mods { alt: option, shift: cx.mods.shift || app.ui.shell.latched.shift, ..cx.mods };
+    match (cursor, crate::canvas::cursor_policy::quick_selection_badge(app, held)) {
+        (Cursor::Painted(ring), Some(badge)) => Cursor::Painted(ring.marked(centre, Some(badge))),
+        (cursor, _) => cursor,
+    }
 }
