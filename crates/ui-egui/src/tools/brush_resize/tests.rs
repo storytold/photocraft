@@ -212,3 +212,39 @@ fn other_tools_and_strokes_in_progress_are_untouched() {
     assert!(a.session.journal.iter().any(|(id, _)| id == "paint.stroke"));
     assert_eq!(a.session.tools.brush.size, 40.0);
 }
+
+/// #14058: the resize preview is tinted in solid red, as in Photoshop, not a translucent pale red.
+#[test]
+fn the_resize_preview_tint_is_opaque_red() {
+    let a = app(Tool::Brush);
+    assert_eq!(options(&a).tint, Some(DataColor::new(egui::Color32::RED)));
+}
+
+/// #14058: an Alt+right-drag paints the falloff preview on the canvas, solid red at the press point. It was built but
+/// shown with no canvas rect, so nothing was painted.
+#[test]
+fn the_resize_preview_is_painted_in_solid_red_at_the_press() {
+    let mut app = app(Tool::Brush);
+    testing::shown(&mut app);
+    let host = WindowHost::of(&testing::ctx(&app));
+    let from = [100.0, 50.0];
+    let press = testing::to_screen(&app, from);
+    host.inject_click(egui::ViewportId::ROOT, press, PointerButton::Secondary, 1, mods_of(alt()), true);
+    settle(&mut app, &host);
+    for k in 1..=3 {
+        let pos = testing::to_screen(&app, [100.0 + 5.0 * f64::from(k), 50.0]);
+        host.inject_move(egui::ViewportId::ROOT, pos, mods_of(alt()), 0.0);
+        settle(&mut app, &host);
+    }
+    assert!(app.brush_resize.active(), "the drag is a resize");
+
+    let frames = app.canvas_tools.frames.as_mut().expect("the frames ran");
+    frames.record_paint();
+    testing::frame(&mut app);
+    let out = app.canvas_tools.frames.as_mut().and_then(|f| f.take_paint()).expect("the paint was recorded");
+    let red_at_press = out.shapes.iter().any(|s| match &s.shape {
+        egui::Shape::Mesh(m) => m.vertices.first().is_some_and(|v| v.pos.distance(press) < 1.0 && v.color == egui::Color32::RED),
+        _ => false,
+    });
+    assert!(red_at_press, "the preview is painted in solid red centred on the press");
+}
