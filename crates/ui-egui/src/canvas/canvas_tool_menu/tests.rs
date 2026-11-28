@@ -60,13 +60,13 @@ pub(super) fn close_dialogs(app: &mut PhotocraftApp) {
 }
 
 /// The open hosted parameter dialog.
-pub(super) fn hosted(app: &mut PhotocraftApp) -> &mut HostedParamDialog {
+pub(crate) fn hosted(app: &mut PhotocraftApp) -> &mut HostedParamDialog {
     app.framework.dialogs.get_mut::<HostedParamDialog>().expect("a hosted parameter dialog is open")
 }
 
 /// Presses OK on the open hosted parameter dialog through the app's dialog path: a family that judges a held OK
 /// answers it, then its run takes the result.
-pub(super) fn confirm_hosted(app: &mut PhotocraftApp, ctx: &Context) {
+pub(crate) fn confirm_hosted(app: &mut PhotocraftApp, ctx: &Context) {
     try_confirm_hosted(app, ctx).expect("OK was accepted");
 }
 
