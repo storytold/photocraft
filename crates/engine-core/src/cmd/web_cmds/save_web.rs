@@ -244,14 +244,19 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let dpi = wdoc.resolution_dpi;
     let mut warnings = web_warnings(&st, exif, dpi);
     warnings.extend(slices::overflow_warning(&doc));
-    let all = slices::resolve(&doc);
+    let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
+    // A `path` names the generated slice files too: `banner.png` gives `banner_01.png`,
+    // `banner_02.png`… whatever the document is called (#16662).
+    let all = match single.map(stem).filter(|base| !base.is_empty()) {
+        Some(base) => slices::resolve_named(&doc, &base),
+        None => slices::resolve(&doc),
+    };
     let picked = |r: &ResolvedSlice| match &pick {
         SlicePick::Numbers(n) => n.contains(&(r.number as u64)),
         SlicePick::User => r.origin != photocraft_doc::SliceOrigin::Auto,
         SlicePick::All => true,
     };
     let chosen: Vec<&ResolvedSlice> = all.iter().filter(|r| picked(r)).collect();
-    let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
     // `folder` (with no `path` or `dir`): the whole image into that folder under the document's
     // own name, so an action recorded with the suggested name saves each document it is played
@@ -313,12 +318,23 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         }
         name
     };
+    // Names the user gave are reserved first, in display order: a generated `<base>_NN` that
+    // matches one takes the `_2`, never the slice the user named (#16662).
+    let ext = st.format.ext();
+    let reserved: Vec<Option<String>> = all
+        .iter()
+        .map(|r| {
+            let named = r.id.and_then(|id| doc.slices.get(id)).is_some_and(|s| !s.name.is_empty());
+            let written = r.kind != SliceKind::NoImage && picked(r) && !scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds()).is_empty();
+            (named && written).then(|| unique(&slice_file(&r.name), ext))
+        })
+        .collect();
     // Slices never overlap here: one covered by later slices comes as its visible pieces (see
     // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
     // text goes into its first piece only. In the HTML, a slice that isn't exported stays as an
     // empty cell, so the exported ones keep their place in the table.
     let mut texted = std::collections::HashSet::new();
-    for r in &all {
+    for (r, reserved) in all.iter().zip(reserved) {
         let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
         if piece.is_empty() {
             continue;
@@ -340,7 +356,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
             continue;
         }
         let o = optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?;
-        let name = unique(&slice_file(&r.name), o.ext);
+        let name = reserved.unwrap_or_else(|| unique(&slice_file(&r.name), o.ext));
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);
         write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;

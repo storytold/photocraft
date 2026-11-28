@@ -324,7 +324,12 @@ fn merge_down(runs: Vec<Rect>) -> Vec<Rect> {
 /// it); with several, generated names are numbered `<base>_NN`. A slice covered by later ones
 /// appears once per visible piece: the first piece keeps its name, the others are `<name>-NN`.
 pub fn resolve(doc: &Document) -> Vec<ResolvedSlice> {
-    let base = base_name(doc);
+    resolve_named(doc, &base_name(doc))
+}
+
+/// [`resolve`] with the generated names built on `base` instead of the document name, as Save for
+/// Web names them after the file name chosen in its save dialog. Named slices keep their names.
+pub fn resolve_named(doc: &Document, base: &str) -> Vec<ResolvedSlice> {
     let rects: Vec<Rect> = doc.slices.list.iter().take(MAX_RESOLVED_SLICES).map(|s| s.rect).collect();
     let (owned, free) = partition(doc.bounds(), &rects, true);
     let mut all: Vec<(Option<usize>, Rect)> = owned.into_iter().enumerate().flat_map(|(i, pieces)| pieces.into_iter().map(move |p| (Some(i), p))).collect();
@@ -341,7 +346,7 @@ pub fn resolve(doc: &Document) -> Vec<ResolvedSlice> {
             let name = match s.map(|s| s.name.as_str()).filter(|n| !n.is_empty()) {
                 Some(n) if first => n.to_string(),
                 Some(n) => format!("{n}-{number:02}"),
-                None if single => base.clone(),
+                None if single => base.to_owned(),
                 None => format!("{base}_{number:02}"),
             };
             let (id, origin, kind) = s.map_or((None, SliceOrigin::Auto, SliceKind::Image), |s| (Some(s.id), s.origin, s.kind));
