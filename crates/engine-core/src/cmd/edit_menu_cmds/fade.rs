@@ -30,6 +30,15 @@ pub(super) fn before_state(st: &crate::DocState, f: &FadeSource) -> Option<std::
 /// with blend mode `mode` (premultiplied, so alpha changes fade too). Dissolve instead takes, per
 /// pixel, `after` or `before` whole, with `opacity` as the odds of `after`.
 pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: BlendMode, opacity: f32) -> Result<()> {
+    fade_surface_in(before, after, area, mode, opacity, None)
+}
+
+/// [`fade_surface`] for a step that ran inside `selection` (grey coverage, document pixels): a
+/// blend mode's effect is weighted by the coverage, `before + opacity × s × (B(before, after) −
+/// before)`, so pixels the selection kept out of the step stay as they are (#15603). Normal and
+/// Dissolve need no weight: outside the step `after` is `before`, and a pixel blended with itself
+/// is unchanged in those modes only.
+pub fn fade_surface_in(before: &Surface, after: &mut Surface, area: Rect, mode: BlendMode, opacity: f32, selection: Option<&Surface>) -> Result<()> {
     let fmt = after.format();
     let n = fmt.channels();
     let k = opacity.clamp(0.0, 1.0);
@@ -52,7 +61,7 @@ pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: Ble
         after.try_write_region(area, &a)?;
         return Ok(());
     }
-    let lerp_premul = |pb: &[f32], pa: &[f32], out: &mut [f32], alpha: bool| {
+    let lerp_premul = |pb: &[f32], pa: &[f32], out: &mut [f32], alpha: bool, k: f32| {
         let m = out.len();
         if !alpha {
             for c in 0..m {
@@ -69,16 +78,30 @@ pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: Ble
         out[m - 1] = ao;
     };
     let mut tmp = crate::allocation::filled(n, 0.0f32, "fading pixels")?;
-    for (pa, pb) in a.chunks_exact_mut(n).zip(b.chunks_exact(n)) {
-        if mode == BlendMode::Normal || n == 1 {
-            lerp_premul(pb, pa, &mut tmp, fmt.alpha);
+    let plain = mode == BlendMode::Normal || n == 1;
+    // The selection over `area` (its first channel is the coverage); only a blend mode reads it.
+    let coverage = match selection {
+        Some(sel) if !plain => Some((crate::allocation::read_region(sel, area, "fading pixels")?, sel.channels().max(1))),
+        _ => None,
+    };
+    for (i, (pa, pb)) in a.chunks_exact_mut(n).zip(b.chunks_exact(n)).enumerate() {
+        if plain {
+            lerp_premul(pb, pa, &mut tmp, fmt.alpha, k);
             pa.copy_from_slice(&tmp);
         } else {
+            let s = coverage.as_ref().map_or(1.0, |(c, m)| c.get(i * m).copied().unwrap_or(0.0).clamp(0.0, 1.0));
+            // A pixel the step changed outside the selection (Content-Aware Fill's adjusted fill
+            // area, Content-Aware Move's old place) fades in full, as before #15603.
+            let s = if s <= 0.0 && pa != pb { 1.0 } else { s };
+            if s <= 0.0 {
+                // Outside the selection the step left the pixel alone; so does Fade.
+                continue;
+            }
             let rb = to_rgba(&fmt, pb);
             let ra = to_rgba(&fmt, pa);
             let blended = photocraft_color::blend::composite(mode, rb, ra, 1.0);
             let mut o = [0.0f32; 4];
-            lerp_premul(&rb, &blended, &mut o, true);
+            lerp_premul(&rb, &blended, &mut o, true, k * s);
             let mut enc = [0.0f32; 8];
             from_rgba_into(&fmt, o, &mut enc);
             pa.copy_from_slice(&enc[..n]);
@@ -89,7 +112,7 @@ pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: Ble
 }
 
 /// What Edit › Fade with `p` blends: the layer, mask or channel of the last step, its pixels
-/// before it, the area to blend, the mode and the opacity.
+/// before it, the area to blend, the mode, the opacity and the selection the step ran in.
 struct FadeJob {
     target: FadeTarget,
     label: String,
@@ -97,6 +120,8 @@ struct FadeJob {
     area: Rect,
     mode: BlendMode,
     opacity: f32,
+    /// The document's selection, which is the step's: changing the selection disables Fade.
+    selection: Option<Surface>,
 }
 
 fn fade_job(s: &Session, p: &Value) -> Result<FadeJob> {
@@ -114,12 +139,12 @@ fn fade_job(s: &Session, p: &Value) -> Result<FadeJob> {
     // A uniform mask can change every pixel without storing a single tile. In that case
     // the content bounds are empty, but Fade must still blend across the canvas.
     let area = if before.default_pixel() != now.default_pixel() { st.doc.bounds() } else { before.content_bounds().union(&now.content_bounds()) };
-    Ok(FadeJob { target: src.target, label: src.label, before, area, mode, opacity })
+    Ok(FadeJob { target: src.target, label: src.label, before, area, mode, opacity, selection: st.doc.selection.clone() })
 }
 
 fn apply_fade(doc: &mut Document, j: &FadeJob) -> Result<()> {
     let surf = surface_of_mut(doc, j.target).ok_or_else(|| EngineError::Other("the faded layer or channel no longer exists".into()))?;
-    fade_surface(&j.before, surf, j.area, j.mode, j.opacity)?;
+    fade_surface_in(&j.before, surf, j.area, j.mode, j.opacity, j.selection.as_ref())?;
     surf.prune();
     Ok(())
 }
