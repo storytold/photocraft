@@ -1919,7 +1919,7 @@ impl Session {
 
     /// Counts the step that moved document `doc` past revision `from` in `DocState::pixel_revision` when its damage
     /// is not empty (`None` is everything). A selection-only or view-only step reports empty damage and keeps it.
-    fn note_pixel_change(&mut self, doc: DocId, from: u64) {
+    pub(crate) fn note_pixel_change(&mut self, doc: DocId, from: u64) {
         if let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc)
             && st.revision > from
             && st.last_damage != Some(photocraft_geom::Rect::EMPTY)

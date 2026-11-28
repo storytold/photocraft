@@ -263,6 +263,23 @@ impl Headless {
         })
     }
 
+    /// Place inline SVG markup into a document as a Smart Object / vector layer without touching
+    /// the filesystem.
+    pub fn place_svg(&mut self, index: Option<usize>, name: &str, svg: &str, params: &Value) -> Result<Value, AutomationError> {
+        const MAX_SVG_BYTES: usize = 8 * 1024 * 1024;
+        if svg.len() > MAX_SVG_BYTES {
+            return Err(AutomationError::BadRequest("svg exceeds the 8 MiB limit".into()));
+        }
+        if !svg.contains("<svg") {
+            return Err(AutomationError::BadRequest("svg must contain an `<svg` root element".into()));
+        }
+        let file_name = if name.to_ascii_lowercase().ends_with(".svg") { name.to_owned() } else { format!("{name}.svg") };
+        self.on_doc(index, |this| {
+            this.sync_jobs();
+            Ok(file_cmds::place_bytes(&mut this.session, &file_name, svg.as_bytes().to_vec(), None, params)?)
+        })
+    }
+
     /// Replace a smart object's contents with a file from the read root: the capability-scoped
     /// `layer.smartObjects.replaceContents`, which takes an ambient `path` and is refused in
     /// automation (#8061). `params` is the command's own (`layer`).

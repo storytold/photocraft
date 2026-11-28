@@ -2394,3 +2394,58 @@ fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
     crate::canvas::testing::frame(&mut app);
     assert!(app.session.documents().is_empty(), "Don't Save closed the document");
 }
+
+#[test]
+fn doc_place_svg_places_valid_svg_and_preserves_smart_object_option() {
+    let (mut app, ctx) = app_with_document();
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="blue"/></svg>"#;
+    let rev_before = app.session.active().unwrap().pixel_revision;
+
+    let placed = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": svg, "name": "icon"}));
+    assert_eq!(placed["ok"], true, "{placed}");
+    let st = app.session.active().unwrap();
+    assert!(st.pixel_revision > rev_before, "doc.placeSvg must advance pixel_revision");
+    let smart_layer = st.doc.layers.last().unwrap();
+    assert!(matches!(smart_layer.content, photocraft_doc::LayerContent::Smart(_)), "defaults to Smart Object layer");
+
+    let raster = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": svg, "name": "flat.svg", "smartObject": false}));
+    assert_eq!(raster["ok"], true, "{raster}");
+    let doc = &app.session.active().unwrap().doc;
+    let flat_layer = doc.layers.last().unwrap();
+    assert!(!matches!(flat_layer.content, photocraft_doc::LayerContent::Smart(_)), "preserves explicit smartObject: false");
+}
+
+#[test]
+fn doc_place_svg_rejects_bad_markup_oversized_and_explicit_index() {
+    let (mut app, ctx) = app_with_document();
+    let valid_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>"#;
+
+    let missing = call(&mut app, &ctx, "doc.placeSvg", json!({}));
+    assert_eq!(missing["ok"], false, "{missing}");
+
+    let bad = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": "<div>nope</div>"}));
+    assert_eq!(bad["ok"], false, "{bad}");
+
+    let oversized = format!("<svg>{}</svg>", " ".repeat(8 * 1024 * 1024));
+    let too_large = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": oversized}));
+    assert_eq!(too_large["ok"], false, "{too_large}");
+
+    let with_index = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": valid_svg, "index": 0}));
+    assert_eq!(with_index["ok"], false, "{with_index}");
+}
+
+#[test]
+fn doc_place_svg_respects_modal_dialog_and_automation_policy() {
+    let (mut app, ctx) = app_with_document();
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>"#;
+
+    let id = invoked_dialog(&mut app, &ctx, "select.colorRange");
+    let blocked = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": svg}));
+    assert_eq!(blocked["ok"], false, "modal dialog must block doc.placeSvg: {blocked}");
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}))["ok"], true);
+
+    app.services.automation_command = Some(Box::new(|cmd, _| if cmd == "doc.placeSvg" { Err("denied by policy".into()) } else { Ok(()) }));
+    let denied = call(&mut app, &ctx, "doc.placeSvg", json!({"svg": svg}));
+    assert_eq!(denied["ok"], false, "{denied}");
+    assert!(denied["error"].as_str().unwrap_or("").contains("denied by policy"), "{denied}");
+}
