@@ -227,11 +227,20 @@ pub fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
         return;
     }
     let Some(pass) = BoxPass::for_sigma(sigma) else { return };
-    // Each pass reads `r + 1` samples past a pixel, so three see `3(r + 1)` past the edge. Clamping
-    // every pass at the edge instead repeated the blurred values there, which brightened a 32 px
-    // feather by up to 12 levels where the canvas cut it off.
-    let m = pass.r.saturating_add(1).saturating_mul(3);
-    blur_plane(v, w, h, pass, m);
+    // Clamping every pass at the edge instead of padding by the reach repeated the blurred values
+    // there, which brightened a 32 px feather by up to 12 levels where the canvas cut it off.
+    blur_plane(v, w, h, pass, pass_reach(pass));
+}
+
+/// How many samples past a pixel [`gaussian`] reads along each axis: each pass reads `r + 1`
+/// past it, so three read `3(r + 1)`. A block of a plane blurred with this much of the plane
+/// around it gets the same values as the whole plane (0: nothing to blur).
+pub fn reach(sigma: f32) -> usize {
+    BoxPass::for_sigma(sigma).map_or(0, pass_reach)
+}
+
+fn pass_reach(pass: BoxPass) -> usize {
+    pass.r.saturating_add(1).saturating_mul(3)
 }
 
 /// Three box passes along each axis of the `w`×`h` plane, every line continued `halo` samples

@@ -381,3 +381,37 @@ fn hostile_path_coordinates_do_not_overflow() {
     l.vector_mask = Some(VectorMask::new(path));
     let _ = combined_mask(&l, Rect::new(0, 0, 8, 8));
 }
+
+/// A feathered mask whose area is over the working-set budget is built in blocks, not dropped
+/// for its default colour (#17060: a mostly black reveal-all mask on a 50 MP canvas showed the
+/// layer everywhere). A small budget stands in for the large canvas.
+#[test]
+fn feathered_mask_over_the_working_budget_keeps_its_shape() {
+    let canvas = Rect::new(0, 0, 300, 220);
+    let patch = Rect::new(40, 30, 90, 110);
+    let mut layer = Layer::raster("over budget", PixelFormat::RGBA8);
+    let mut mask = LayerMask::reveal_all();
+    mask.surface.fill_rect(canvas, &[0.0]);
+    mask.surface.fill_rect(patch, &[1.0]);
+    mask.feather = 5.0;
+    layer.mask = Some(mask);
+    // Room for a 100×100 block of the three f32 planes: the canvas takes several blocks.
+    let budget = 100 * 100 * 4 * 3;
+    for vector in [false, true] {
+        if vector {
+            let knots = [(20.0, 20.0), (280.0, 20.0), (280.0, 200.0), (20.0, 200.0)].iter().map(|&(x, y)| Knot::corner(x, y)).collect();
+            let mut path = Path::default();
+            path.subpaths.push(Subpath { knots, closed: true, ..Default::default() });
+            let mut vm = VectorMask::new(path);
+            vm.feather = 12.0;
+            layer.vector_mask = Some(vm);
+        }
+        let dense = build_mask_within(&layer, canvas, u64::MAX).read_region(canvas);
+        let blocks = build_mask_within(&layer, canvas, budget).read_region(canvas);
+        let at = |m: &[f32], x: usize, y: usize| m[y * canvas.width() as usize + x];
+        assert!(at(&blocks, 65, 70) > 0.9, "inside the patch the layer shows: {}", at(&blocks, 65, 70));
+        assert!(at(&blocks, 250, 180) < 0.01, "far outside it the layer is hidden: {}", at(&blocks, 250, 180));
+        let worst = dense.iter().zip(&blocks).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+        assert!(worst <= 2.0 / f32::from(u16::MAX), "blocks differ from one dense build by {worst} (vector mask: {vector})");
+    }
+}
