@@ -555,8 +555,14 @@ fn dtf_color(value: Option<&Value>) -> [f32; 3] {
         return rgb;
     }
     let Some(channels) = value.as_array() else { return [1.0, 0.0, 0.0] };
-    let channel = |index: usize| channels.get(index).and_then(Value::as_f64).map(|n| if n > 1.0 { (n as f32) / 255.0 } else { n as f32 }).unwrap_or(0.0);
-    [channel(0), channel(1), channel(2)]
+    let mut rgb = [0.0; 3];
+    for (index, channel) in rgb.iter_mut().enumerate() {
+        *channel = channels.get(index).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    }
+    if rgb.iter().any(|channel| *channel > 1.0) {
+        rgb = rgb.map(|channel| channel / 255.0);
+    }
+    rgb
 }
 
 /// File › File Info…: the document's metadata in Photoshop's order and labels, then its read-only Camera Data.

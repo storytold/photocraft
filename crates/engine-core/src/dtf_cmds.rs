@@ -14,7 +14,7 @@ use photocraft_color::Color;
 use photocraft_doc::AlphaChannel;
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{Action, ActionStep};
+use crate::actions_cmds::{Action, ActionStep, ActionsExt};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -235,15 +235,15 @@ fn remember(s: &mut Session, params: Value) {
         prefs.dialogs.insert(CMD.into(), params.clone());
     });
     let idx =
-        s.actions.list.actions().iter().position(|a| a.name == ACTION_NAME && a.steps.len() == 1 && a.steps.first().is_some_and(|step| step.command == CMD));
+        s.actions().list.actions().iter().position(|a| a.name == ACTION_NAME && a.steps.len() == 1 && a.steps.first().is_some_and(|step| step.command == CMD));
     if let Some(idx) = idx {
-        let _ = s.actions.list.replace_step(idx, 0, ActionStep::new(CMD, params));
+        let _ = s.actions_mut().list.replace_step(idx, 0, ActionStep::new(CMD, params));
     }
 }
 
 /// The Actions panel edited the DTF step: the next dialog should open on those values.
 pub fn note_edited_step(s: &mut Session, idx: usize) {
-    let Some(action) = s.actions.list.action(idx) else { return };
+    let Some(action) = s.actions().list.action(idx) else { return };
     if action.name != ACTION_NAME || action.steps.len() != 1 {
         return;
     }
@@ -271,14 +271,27 @@ pub fn builtin_action() -> Action {
 /// The previous preset was the three Photoshop commands. Fold those into one `image.dtf` step,
 /// keeping the contract, name, colour and solidity they recorded.
 fn legacy_params(action: &Action) -> Option<Value> {
-    if action.steps.len() != 3 {
+    if action.steps.len() != 3 || !action.disabled.is_empty() || !action.dialogs.is_empty() {
         return None;
     }
     let (load, contract, spot) = (&action.steps[0], &action.steps[1], &action.steps[2]);
     if load.command != "select.loadSelection" || contract.command != "select.modify.contract" || spot.command != "channel.newSpot" {
         return None;
     }
-    if load.params.get("channel").and_then(Value::as_str) != Some("transparency") {
+    let only_keys = |params: &Value, allowed: &[&str]| params.as_object().is_some_and(|obj| obj.keys().all(|key| allowed.contains(&key.as_str())));
+    if !only_keys(&load.params, &["channel", "invert", "operation"])
+        || load.params.get("channel").and_then(Value::as_str) != Some("transparency")
+        || !matches!(load.params.get("invert"), None | Some(Value::Bool(false)))
+        || !load.params.get("operation").is_none_or(|v| matches!(v.as_str(), Some("new" | "replace")))
+    {
+        return None;
+    }
+    if !only_keys(&contract.params, &["radius", "applyAtCanvasBounds"])
+        || !only_keys(&spot.params, &["name", "color", "solidity", "fromSelection"])
+        || !matches!(spot.params.get("fromSelection"), None | Some(Value::Bool(true)))
+        || !spot.params.get("color").is_some_and(Value::is_string)
+        || ["name", "color", "solidity"].iter().any(|key| spot.params.get(key).is_none())
+    {
         return None;
     }
     let mut params = default_params();
@@ -294,18 +307,27 @@ fn legacy_params(action: &Action) -> Option<Value> {
             obj.insert(key.into(), v.clone());
         }
     }
+    let radius = number(&params, "contract").ok().flatten()?;
+    if !(1.0..=f64::from(MAX_CONTRACT)).contains(&radius)
+        || flag(&params, "applyAtCanvasBounds", false).is_err()
+        || name_of(&params).is_err()
+        || color_of(&params).is_err()
+        || !number(&params, "solidity").ok().flatten().is_some_and(|n| (0.0..=100.0).contains(&n))
+    {
+        return None;
+    }
     Some(params)
 }
 
 /// Replaces the three-command recording at `idx` with one `image.dtf` step in the DTF set.
 fn fold_legacy(s: &mut Session, idx: usize, params: Value) {
-    let _ = s.actions.list.replace_step(idx, 0, ActionStep::new(CMD, params));
-    while s.actions.list.step_count(idx) > 1 {
-        let last = s.actions.list.step_count(idx).saturating_sub(1);
-        let _ = s.actions.list.delete_step(idx, last);
+    let _ = s.actions_mut().list.replace_step(idx, 0, ActionStep::new(CMD, params));
+    while s.actions().list.step_count(idx) > 1 {
+        let last = s.actions().list.step_count(idx).saturating_sub(1);
+        let _ = s.actions_mut().list.delete_step(idx, last);
     }
-    if s.actions.list.set_of(idx).is_none() {
-        let _ = s.actions.list.assign_set(idx, Some(SET_NAME.into()));
+    if s.actions().list.set_of(idx).is_none() {
+        let _ = s.actions_mut().list.assign_set(idx, Some(SET_NAME.into()));
     }
 }
 
@@ -313,8 +335,8 @@ fn fold_legacy(s: &mut Session, idx: usize, params: Value) {
 /// named DTF is left as the user kept it, except the old three-command recording, which
 /// becomes the one `image.dtf` step. Startup does not call this.
 pub fn ensure_preset(s: &mut Session) {
-    if let Some(idx) = s.actions.list.actions().iter().position(|a| a.name == ACTION_NAME) {
-        if let Some(params) = s.actions.list.action(idx).and_then(legacy_params) {
+    if let Some(idx) = s.actions().list.actions().iter().position(|a| a.name == ACTION_NAME) {
+        if let Some(params) = s.actions().list.action(idx).and_then(legacy_params) {
             fold_legacy(s, idx, params);
         }
         return;
@@ -322,12 +344,12 @@ pub fn ensure_preset(s: &mut Session) {
     let params = params_for_preset(s);
     let mut action = Action::new(ACTION_NAME, vec![ActionStep::new(CMD, params)]);
     action.set = Some(SET_NAME.into());
-    let _ = s.actions.list.push(action);
+    let _ = s.actions_mut().list.push(action);
 }
 
 fn install_action(s: &mut Session, _p: &Value) -> Result<Value> {
-    let had = s.actions.list.actions().iter().any(|a| a.name == ACTION_NAME);
-    let legacy = s.actions.list.actions().iter().any(|a| a.name == ACTION_NAME && legacy_params(a).is_some());
+    let had = s.actions().list.actions().iter().any(|a| a.name == ACTION_NAME);
+    let legacy = s.actions().list.actions().iter().any(|a| a.name == ACTION_NAME && legacy_params(a).is_some());
     ensure_preset(s);
     Ok(json!({"installed": !had || legacy, "name": ACTION_NAME, "set": SET_NAME}))
 }
@@ -374,7 +396,7 @@ mod tests {
     }
 
     fn first(s: &Session) -> &Action {
-        &s.actions.list.actions()[0]
+        &s.actions().list.actions()[0]
     }
 
     fn channel_at(s: &Session, x: i32, y: i32) -> f32 {
@@ -386,7 +408,7 @@ mod tests {
 
     #[test]
     fn contracts_an_inset_shape_by_one_pixel() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
         paint_rect(&mut s, Rect::new(2, 2, 6, 6));
         let r = s.execute(CMD, json!({})).unwrap();
@@ -411,7 +433,7 @@ mod tests {
 
     #[test]
     fn canvas_bounds_option_matches_select_modify() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 6, "height": 4, "background": "white"})).unwrap();
         // A locked white background is opaque to the canvas edge.
         s.execute(CMD, json!({"applyAtCanvasBounds": false, "name": "Edge"})).unwrap();
@@ -425,7 +447,7 @@ mod tests {
 
     #[test]
     fn custom_color_solidity_and_contract_are_honoured() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
         paint_rect(&mut s, Rect::new(1, 1, 7, 7));
         s.execute(CMD, json!({"contract": 2, "name": "White", "color": [255, 0, 128], "solidity": 80})).unwrap();
@@ -442,7 +464,7 @@ mod tests {
 
     #[test]
     fn zero_contract_keeps_the_transparency_edge() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 6, "height": 6, "background": "transparent"})).unwrap();
         paint_rect(&mut s, Rect::new(2, 2, 5, 5));
         s.execute(CMD, json!({"contract": 0})).unwrap();
@@ -452,7 +474,7 @@ mod tests {
 
     #[test]
     fn bad_params_do_not_panic() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         assert!(s.execute(CMD, json!({})).is_err());
         s.execute("file.new", json!({"width": 4, "height": 4, "background": "transparent"})).unwrap();
         for p in [
@@ -482,10 +504,10 @@ mod tests {
             s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
             paint_rect(s, Rect::new(2, 2, 6, 6));
         };
-        let mut via_cmd = Session::new();
+        let mut via_cmd = crate::session();
         prep(&mut via_cmd);
         via_cmd.execute(CMD, json!({})).unwrap();
-        let mut via_action = Session::new();
+        let mut via_action = crate::session();
         prep(&mut via_action);
         ensure_preset(&mut via_action);
         assert_eq!(first(&via_action).set.as_deref(), Some(SET_NAME));
@@ -502,7 +524,7 @@ mod tests {
 
     #[test]
     fn psd_and_tiff_keep_the_spot_channel() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
         paint_rect(&mut s, Rect::new(2, 2, 6, 6));
         s.execute(CMD, json!({})).unwrap();
@@ -537,7 +559,7 @@ mod tests {
     #[test]
     fn composite_includes_every_visible_layer_and_skips_hidden_ones() {
         let prep = || {
-            let mut s = Session::new();
+            let mut s = crate::session();
             s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
             paint_rect(&mut s, Rect::new(1, 1, 4, 4));
             let bottom = s.active().unwrap().doc.layers[0].id;
@@ -566,7 +588,7 @@ mod tests {
 
     #[test]
     fn last_settings_prefill_the_dialog_and_the_action() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 6, "height": 6, "background": "transparent"})).unwrap();
         paint_rect(&mut s, Rect::new(1, 1, 5, 5));
         ensure_preset(&mut s);
@@ -594,7 +616,7 @@ mod tests {
         assert_eq!(channel_at(&s, 0, 0), 1.0);
 
         // The Actions panel stores a new step, then tells the dialog to follow it.
-        s.actions
+        s.actions_mut()
             .list
             .replace_step(
                 0,
@@ -612,8 +634,8 @@ mod tests {
 
     #[test]
     fn a_saved_three_step_preset_becomes_one_dtf_step_in_the_set() {
-        let mut s = Session::new();
-        s.actions
+        let mut s = crate::session();
+        s.actions_mut()
             .list
             .push(Action::new(
                 ACTION_NAME,
@@ -625,7 +647,7 @@ mod tests {
             ))
             .unwrap();
         ensure_preset(&mut s);
-        assert_eq!(s.actions.list.actions().len(), 1);
+        assert_eq!(s.actions().list.actions().len(), 1);
         assert_eq!(first(&s).set.as_deref(), Some(SET_NAME));
         assert_eq!(first(&s).steps.len(), 1);
         assert_eq!(first(&s).steps[0].command, CMD);
@@ -633,27 +655,78 @@ mod tests {
         assert_eq!(first(&s).steps[0].params["contract"], json!(2));
         assert_eq!(first(&s).steps[0].params["applyAtCanvasBounds"], json!(true));
         // A customized action that is no longer those three commands is left in place.
-        s.actions.list.insert_step(0, 1, ActionStep::new("layer.new.layer", json!({}))).unwrap();
-        s.actions.list.assign_set(0, None).unwrap();
+        s.actions_mut().list.insert_step(0, 1, ActionStep::new("layer.new.layer", json!({}))).unwrap();
+        s.actions_mut().list.assign_set(0, None).unwrap();
         ensure_preset(&mut s);
         assert_eq!(first(&s).steps.len(), 2);
         assert!(first(&s).set.is_none());
     }
 
     #[test]
+    fn noncanonical_three_step_recordings_are_not_migrated() {
+        let load_params = [
+            json!({"channel": "transparency", "invert": true}),
+            json!({"channel": "transparency", "invert": "false"}),
+            json!({"channel": "transparency", "operation": "add"}),
+            json!({"channel": "transparency", "layer": "merged"}),
+            json!({"channel": "transparency", "document": 1}),
+        ];
+        for load in load_params {
+            let mut s = crate::session();
+            let action = Action::new(
+                ACTION_NAME,
+                vec![
+                    ActionStep::new("select.loadSelection", load),
+                    ActionStep::new("select.modify.contract", json!({"radius": 2})),
+                    ActionStep::new("channel.newSpot", json!({"name": "White", "color": "#ffffff", "solidity": 80})),
+                ],
+            );
+            s.actions_mut().list.push(action.clone()).unwrap();
+            let result = s.execute("image.installDtfAction", json!({})).unwrap();
+            assert_eq!(result["installed"], false);
+            assert_eq!(first(&s), &action);
+        }
+    }
+
+    #[test]
+    fn legacy_recordings_with_different_spot_or_playback_settings_are_not_migrated() {
+        let action = Action::new(
+            ACTION_NAME,
+            vec![
+                ActionStep::new("select.loadSelection", json!({"channel": "transparency"})),
+                ActionStep::new("select.modify.contract", json!({"radius": 2})),
+                ActionStep::new("channel.newSpot", json!({"name": "White", "color": "#ffffff", "solidity": 80})),
+            ],
+        );
+        assert!(legacy_params(&action).is_some());
+        let mut different = action.clone();
+        different.steps[2].params["fromSelection"] = json!(false);
+        assert!(legacy_params(&different).is_none());
+        let mut different = action.clone();
+        different.steps[2].params["color"] = json!([1, 128, 0]);
+        assert!(legacy_params(&different).is_none());
+        let mut different = action.clone();
+        different.disabled.insert(1);
+        assert!(legacy_params(&different).is_none());
+        let mut different = action;
+        different.dialogs.insert(0);
+        assert!(legacy_params(&different).is_none());
+    }
+
+    #[test]
     fn the_dtf_action_is_installed_only_when_asked() {
-        let mut s = Session::new();
-        assert!(s.actions.list.actions().iter().all(|a| a.name != ACTION_NAME), "startup does not install the action");
+        let mut s = crate::session();
+        assert!(s.actions().list.actions().iter().all(|a| a.name != ACTION_NAME), "startup does not install the action");
         let added = s.execute("image.installDtfAction", json!({})).unwrap();
         assert_eq!(added["installed"], json!(true));
-        assert_eq!(s.actions.list.actions().len(), 1);
+        assert_eq!(s.actions().list.actions().len(), 1);
         assert_eq!(first(&s).set.as_deref(), Some(SET_NAME));
         let again = s.execute("image.installDtfAction", json!({})).unwrap();
         assert_eq!(again["installed"], json!(false), "a second install leaves the existing action");
-        assert_eq!(s.actions.list.actions().len(), 1);
+        assert_eq!(s.actions().list.actions().len(), 1);
         let mut params = first(&s).steps[0].params.clone();
         params["contract"] = json!(4);
-        s.actions.list.replace_step(0, 0, ActionStep::new(CMD, params)).unwrap();
+        s.actions_mut().list.replace_step(0, 0, ActionStep::new(CMD, params)).unwrap();
         s.execute("image.installDtfAction", json!({})).unwrap();
         assert_eq!(first(&s).steps[0].params["contract"], json!(4), "a customized action is not replaced");
     }
