@@ -130,7 +130,7 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
 /// Photoshop action refers to it), `{"name":"merged"}` for a literal name, `{"background":true}`,
 /// or `"merged"` (default).
 /// An unknown name or a missing requested Background is an error.
-fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
+pub(super) fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
     let name = match p.get("layer") {
         Some(Value::Number(n)) => return Ok(n.as_u64().map(LayerId)),
         Some(v) if *v == serde_json::json!({"background": true}) => {
@@ -203,7 +203,9 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
                             .map(|p| p[3])
                             .collect(),
                     ],
-                    // Groups, adjustment and fill layers cover the whole canvas.
+                    // Groups, adjustment and fill layers cover the whole canvas as a channel source (Apply Image,
+                    // Calculations). Loading a group's transparency as a selection loads nothing instead
+                    // (`selection::group_transparency`, #17050).
                     _ => vec![vec![1.0; area.width() as usize * area.height() as usize]],
                 },
             }

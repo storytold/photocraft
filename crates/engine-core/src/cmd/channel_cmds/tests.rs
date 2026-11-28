@@ -693,3 +693,53 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     s.execute("channel.merge", json!({"mode": "lab"})).unwrap();
     assert_eq!(s.documents().len(), 2, "the three of one size merged; the other is left");
 }
+
+/// The selection's bounds as (x, y, width, height), `None` without one.
+fn selection_bounds(s: &Session) -> Option<(i32, i32, u32, u32)> {
+    doc(s).selection.as_ref().map(|m| m.content_bounds()).map(|b| (b.x0, b.y0, b.width(), b.height()))
+}
+
+/// #17050: a group has no pixels of its own. Loading its transparency changes neither the selection nor the history,
+/// and the result says nothing was loaded and why, however the group is named; it isn't an error, so an Action step
+/// plays on. A layer inside it and the group's layer mask load as before.
+#[test]
+fn a_groups_transparency_loads_no_selection() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 800, "height": 500})).unwrap();
+    let rect = s.execute("shape.create", json!({"kind": "rect", "rect": [300, 200, 200, 80], "fill": "#000000", "name": "Rect"})).unwrap()["layer"]
+        .as_u64()
+        .map(photocraft_doc::LayerId)
+        .unwrap();
+    s.execute("layer.select", json!({"layer": rect.0, "mode": "replace"})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": group.0, "name": "Group"})).unwrap();
+    // A selection to keep: subtract and intersect would change it.
+    s.execute("select.rect", json!({"x": 20, "y": 30, "width": 40, "height": 50})).unwrap();
+    let (kept, steps) = (selection_bounds(&s), s.active().unwrap().history.past_len());
+    for (how, layer) in [("by id", Some(json!(group.0))), ("by name", Some(json!("Group"))), ("as the active layer", None)] {
+        for operation in ["replace", "add", "subtract", "intersect"] {
+            let mut p = json!({"channel": "transparency", "operation": operation});
+            if let Some(layer) = &layer {
+                p["layer"] = layer.clone();
+            }
+            let result = s.execute("select.loadSelection", p).unwrap_or_else(|e| panic!("{how}, {operation}: no error: {e}"));
+            assert_eq!(result["loaded"], json!(false), "{how}, {operation}: nothing was loaded: {result}");
+            assert!(result["reason"].as_str().is_some_and(|r| !r.is_empty()), "{how}, {operation}: the result says why: {result}");
+            assert_eq!(result["selected"], json!(kept.is_some()), "{how}, {operation}: the result reports the selection as it is");
+            assert_eq!(selection_bounds(&s), kept, "{how}, {operation}: the selection is left as it was");
+            assert_eq!(s.active().unwrap().history.past_len(), steps, "{how}, {operation}: no history step");
+        }
+    }
+    // Neighbours: the layer inside the group loads its pixels, and the group's own layer mask loads.
+    s.execute("select.loadSelection", json!({"channel": "transparency", "layer": rect.0})).unwrap();
+    assert_eq!(selection_bounds(&s), Some((300, 200, 200, 80)));
+    s.execute("select.rect", json!({"x": 100, "y": 50, "width": 60, "height": 40})).unwrap();
+    s.execute("layer.select", json!({"layer": group.0, "mode": "replace"})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    if selection_bounds(&s).is_some() {
+        s.execute("select.deselect", json!({})).unwrap();
+    }
+    s.execute("select.loadSelection", json!({"channel": "mask", "layer": group.0})).unwrap();
+    assert_eq!(selection_bounds(&s), Some((100, 50, 60, 40)), "the group's layer mask loads");
+}

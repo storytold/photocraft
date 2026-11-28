@@ -635,6 +635,10 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
         ],
         "select.loadSelection" => {
             let first = d.channels.first().map_or_else(|| chans[0].clone(), |c| c.name.clone());
+            // A group's transparency loads nothing as a selection (#17050), so Load Selection doesn't offer it; Apply
+            // Image and Calculations keep it as a source.
+            let group = layer.is_some_and(|l| l.is_group() && l.artboard().is_none());
+            let load: Vec<String> = load.into_iter().filter(|c| !(group && c == "transparency")).collect();
             vec![
                 choice("channel", tl!("Channel"), channels(&load), &first),
                 Param::new("invert", tl!("Invert"), ParamKind::bool(false)),

@@ -265,3 +265,17 @@ fn load_selection_and_apply_image_keep_their_channel_lists() {
     assert_eq!(ids(&rows(&app, "select.loadSelection"), "channel"), want, "Load Selection");
     assert_eq!(ids(&rows(&app, "image.applyImage"), "sourceChannel"), want, "Apply Image");
 }
+
+/// #17050: with a group active, Load Selection leaves out Transparency (a group has no pixels of its own to load),
+/// while Apply Image and Calculations keep it as a source.
+#[test]
+fn load_selection_leaves_out_a_groups_transparency() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 12})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.groupLayers", json!({})).unwrap();
+    app.sync_views();
+    assert!(app.session.active().unwrap().active_layer.and_then(|id| app.session.active().unwrap().doc.layer(id)).is_some_and(|l| l.is_group()));
+    assert!(!ids(&rows(&app, "select.loadSelection"), "channel").contains(&"transparency".to_string()), "Load Selection doesn't offer it");
+    assert!(ids(&rows(&app, "image.applyImage"), "sourceChannel").contains(&"transparency".to_string()), "Apply Image keeps it");
+}
