@@ -159,7 +159,7 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"blend": "Screen", "opacity": 35, "color": "#ffffff", "technique": "softer", "spread": 0, "size": 7, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "innerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 35, "color": "#ffffff", "technique": "softer", "source": "edge", "choke": 0, "size": 7, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
@@ -576,15 +576,13 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         noise: 0.0,
         knocks_out: !inner,
     };
-    // The two glows share their shape, but not their factory values: the Outer Glow starts at
-    // the reference application's white 35 % Size 7 (#14944), the Inner Glow at today's values
-    // until #14917 measures its own.
-    let glow = |inner: bool| Glow {
-        common: FxCommon::new(BlendMode::Screen, if inner { 0.75 } else { 0.35 }),
-        paint: FxPaint::Color(if inner { Color::rgb(1.0, 1.0, 190.0 / 255.0) } else { Color::WHITE }),
+    // Both glows start at the reference application's white 35 % Size 7 (#14944, #14917).
+    let glow = || Glow {
+        common: FxCommon::new(BlendMode::Screen, 0.35),
+        paint: FxPaint::Color(Color::WHITE),
         technique: GlowTechnique::Softer,
         spread: 0.0,
-        size: if inner { 5.0 } else { 7.0 },
+        size: 7.0,
         contour: Contour::Linear,
         anti_alias: false,
         range: 0.5,
@@ -595,8 +593,8 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
     Some(match kind {
         "dropShadow" => Effect::DropShadow(shadow(false)),
         "innerShadow" => Effect::InnerShadow(shadow(true)),
-        "outerGlow" => Effect::OuterGlow(glow(false)),
-        "innerGlow" => Effect::InnerGlow(glow(true)),
+        "outerGlow" => Effect::OuterGlow(glow()),
+        "innerGlow" => Effect::InnerGlow(glow()),
         "stroke" => Effect::Stroke(StrokeFx {
             common: FxCommon::new(BlendMode::Normal, 1.0),
             size: 1.0,
@@ -1226,7 +1224,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "innerGlow",
             "Inner Glow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","source":"edge|center","choke":0..100,"size":px,"range":1..100=50,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=35,"blend":str="screen","technique":"softer|precise","source":"edge|center","choke":0..100,"size":px,"range":1..100=50,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "stroke",
@@ -1341,6 +1339,9 @@ mod satin_defaults_tests;
 
 #[cfg(test)]
 mod outer_glow_defaults_tests;
+
+#[cfg(test)]
+mod inner_glow_defaults_tests;
 
 #[cfg(test)]
 mod inner_shadow_ranges_tests;

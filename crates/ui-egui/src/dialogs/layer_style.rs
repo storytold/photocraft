@@ -626,8 +626,8 @@ fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) 
         .filter_map(|(key, _)| {
             let kind = EffectKind::from_key(key)?;
             let mut spec = EffectSpec::photoshop(kind).with_blend_keys(keys);
-            if kind == EffectKind::OuterGlow {
-                // #14944: Photoshop groups the Outer Glow rows Structure / Elements / Quality and
+            if matches!(kind, EffectKind::OuterGlow | EffectKind::InnerGlow) {
+                // #14944, #14917: Photoshop groups the glow rows Structure / Elements / Quality and
                 // puts Noise right under Opacity. The hosted page draws the spec's rows in order,
                 // so the host moves the row; the group titles belong to the framework's page.
                 if let Some(noise) = spec.fields.iter().position(|f| f.key == "noise") {

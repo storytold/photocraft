@@ -738,10 +738,10 @@ fn a_new_satin_in_the_dialog_starts_at_the_factory_values() {
 /// #14944: the Outer Glow page is grouped Photoshop-style - Noise right under Opacity, the rows of
 /// the Structure, Elements and Quality blocks. The hosted page draws `specs()` rows in order, so
 /// the page order is pinned here; the group TITLES belong to the framework's page (craft-libs has
-/// no header row on an effect page yet) and the other pages keep the framework's order (#14917 is
-/// the Inner Glow's own ticket).
+/// no header row on an effect page yet). #14917 groups the Inner Glow page the same way; the
+/// other pages keep the framework's order.
 #[test]
-fn the_outer_glow_page_rows_group_noise_under_opacity() {
+fn the_glow_page_rows_group_noise_under_opacity() {
     let row_keys = |want: &str| {
         specs(&blend_keys(), &Map::new(), 120.0)
             .into_iter()
@@ -753,11 +753,7 @@ fn the_outer_glow_page_rows_group_noise_under_opacity() {
             .collect::<Vec<_>>()
     };
     assert_eq!(row_keys("outerGlow"), ["blend", "opacity", "noise", "color", "technique", "spread", "size", "contour", "range"]);
-    assert_eq!(
-        row_keys("innerGlow"),
-        ["blend", "opacity", "color", "technique", "source", "choke", "size", "contour", "range", "noise"],
-        "the Inner Glow page stays as it is"
-    );
+    assert_eq!(row_keys("innerGlow"), ["blend", "opacity", "noise", "color", "technique", "source", "choke", "size", "contour", "range"]);
     assert_eq!(
         row_keys("dropShadow"),
         ["blend", "color", "opacity", "angle", "useGlobalLight", "distance", "spread", "size", "contour", "noise", "knocksOut"],
@@ -785,6 +781,33 @@ fn a_new_outer_glow_opens_at_the_factory_values_and_ok_keeps_them() {
     assert_eq!(color_picker_ui::hex(c.to_rgb_array()), "#ffffff", "the page's own colour");
     ok(&mut app, id);
     let Effect::OuterGlow(g) = &layer_effects(&app.session)[0] else { panic!("{:?}", layer_effects(&app.session)) };
+    assert!((g.common.opacity * 100.0 - 35.0).abs() < 1e-4 && (g.size - 7.0).abs() < 1e-4, "OK stored {g:?}");
+    let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
+    assert_eq!(hex(c), "#ffffff", "OK stored the colour");
+}
+
+/// #14917: a new Inner Glow opens at the reference application's factory values, and OK stores
+/// exactly those.
+#[test]
+fn a_new_inner_glow_opens_at_the_factory_values_and_ok_keeps_them() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::InnerGlow.key())).unwrap();
+    let glow = first_of(&app, id, EffectKind::InnerGlow);
+    let style = &draft(&app, id).style;
+    assert_eq!(
+        (text(style, glow, "blend").as_deref(), text(style, glow, "technique").as_deref(), text(style, glow, "source").as_deref()),
+        (Some("Screen"), Some("softer"), Some("edge"))
+    );
+    assert_eq!(
+        (num(style, glow, "opacity"), num(style, glow, "noise"), num(style, glow, "choke"), num(style, glow, "size"), num(style, glow, "range")),
+        (Some(35.0), Some(0.0), Some(0.0), Some(7.0), Some(50.0)),
+        "the page's own seed"
+    );
+    assert_eq!(style.effect(glow).and_then(|e| e.params.bool("antiAlias")), Some(false));
+    let Some(StyleValue::Color(c)) = param(style, glow, "color") else { panic!("the colour row loads as a colour") };
+    assert_eq!(color_picker_ui::hex(c.to_rgb_array()), "#ffffff", "the page's own colour");
+    ok(&mut app, id);
+    let Effect::InnerGlow(g) = &layer_effects(&app.session)[0] else { panic!("{:?}", layer_effects(&app.session)) };
     assert!((g.common.opacity * 100.0 - 35.0).abs() < 1e-4 && (g.size - 7.0).abs() < 1e-4, "OK stored {g:?}");
     let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
     assert_eq!(hex(c), "#ffffff", "OK stored the colour");

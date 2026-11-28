@@ -89,22 +89,3 @@ fn a_stored_outer_glow_keeps_its_own_values_through_replace() {
     assert_eq!(kept, stored, "an edited effect list left the glow's values alone");
     assert!((kept.common.opacity * 100.0 - 75.0).abs() < 1e-4 && (kept.size - 5.0).abs() < 1e-4, "kept {kept:?}");
 }
-
-/// #14944 is only about the Outer Glow page; the Inner Glow's factory values are #14917 and stay
-/// as they are today (the two glows share their fresh effect in the engine).
-#[test]
-fn an_inner_glow_still_starts_at_todays_values() {
-    let d = effect_defaults("innerGlow");
-    assert_eq!((d["opacity"].as_f64(), d["color"].as_str(), d["size"].as_f64()), (Some(75.0), Some("#ffffbe"), Some(5.0)));
-    let mut s = session();
-    s.execute("layer.layerStyle.innerGlow", json!({})).unwrap();
-    let g = match &s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().effects.items[0] {
-        Effect::InnerGlow(g) => g.clone(),
-        other => panic!("{other:?}"),
-    };
-    assert!((g.common.opacity * 100.0 - 75.0).abs() < 1e-4, "opacity {}", g.common.opacity);
-    assert_eq!(g.size, 5.0, "size");
-    let FxPaint::Color(c) = g.paint else { panic!("{:?}", g.paint) };
-    let rgb = c.to_rgb();
-    assert!((rgb[0] - 1.0).abs() < 1e-3 && (rgb[1] - 1.0).abs() < 1e-3 && (rgb[2] - 190.0 / 255.0).abs() < 1e-3, "colour {rgb:?}");
-}
