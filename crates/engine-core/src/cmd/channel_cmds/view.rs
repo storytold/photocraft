@@ -127,7 +127,7 @@ pub(crate) fn fix_view(st: &mut DocState) {
 
 /// Bump the revision for a view-only change without dirtying a clean document. The channels
 /// shown change the picture, so the whole canvas is drawn again.
-pub(super) fn touch(st: &mut DocState) {
+pub(crate) fn touch(st: &mut DocState) {
     st.bump_view_revision(!st.is_dirty());
     st.last_damage = None;
     st.record_damage();

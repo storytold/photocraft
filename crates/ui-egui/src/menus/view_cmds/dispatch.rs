@@ -239,6 +239,7 @@ fn wraps(id: &str) -> bool {
             | "type.pasteLoremIpsum"
             | "image.applyImage"
             | "image.calculations"
+            | "image.dtf"
             | "select.saveSelection"
             | "select.loadSelection"
             | "layer.videoLayers.newVideoLayerFromFile"

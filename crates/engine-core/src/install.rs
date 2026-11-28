@@ -55,6 +55,7 @@ const TABLES: &[Table] = &[
     ("actions_edit_cmds", crate::actions_edit_cmds::specs),
     ("swatch_cmds", crate::swatch_cmds::specs),
     ("image_cmds", crate::image_cmds::specs),
+    ("dtf_cmds", crate::dtf_cmds::specs),
     ("perspective_crop_cmds", crate::perspective_crop_cmds::specs),
     ("selection_cmds", crate::selection_cmds::specs),
     ("magnetic_cmds", crate::magnetic_cmds::specs),

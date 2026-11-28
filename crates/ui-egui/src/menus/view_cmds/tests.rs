@@ -164,7 +164,8 @@ fn command_dialogs_open_and_refuse() {
         app.run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
     };
     let sets_open = if cfg!(target_arch = "wasm32") { Err("unavailable on the web") } else { Ok(()) };
-    let cases: [(&str, Setup, Result<(), &str>); 9] = [
+    let cases: [(&str, Setup, Result<(), &str>); 10] = [
+        ("image.dtf", nothing, Ok(())),
         ("file.automate.fitImage", nothing, Ok(())),
         ("file.fileInfo", nothing, Ok(())),
         ("layer.videoLayers.interpretFootage", nothing, Ok(())),
@@ -210,6 +211,38 @@ fn command_dialogs_open_and_refuse() {
     assert_eq!(app.ui.views[0].zoom, 4.0);
     crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
     assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
+}
+
+/// The DTF dialog opens on the values the command remembered, including a colour, and does not
+/// install the action by itself.
+#[test]
+fn dtf_dialog_reopens_on_the_remembered_values() {
+    let (mut app, ctx) = app_with(1);
+    app.run("image.dtf", json!({"source": "composite", "contract": 4, "name": "White", "color": "#00ff00", "solidity": 80, "applyAtCanvasBounds": true}))
+        .unwrap();
+    assert!(app.session.actions().list.actions().iter().all(|action| action.name != "DTF"), "running the command does not install the action");
+    let id = open_form(&mut app, &ctx, "image.dtf");
+    let values = fields(&app, id);
+    assert_eq!(values["source"], "composite");
+    assert_eq!(values["name"], "White");
+    assert_eq!(values["contract"].as_f64(), Some(4.0));
+    assert_eq!(values["solidity"].as_f64(), Some(80.0));
+    assert_eq!(values["applyAtCanvasBounds"], true);
+    assert_eq!(values["color"], json!([0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn dtf_dialog_uses_one_scale_for_the_whole_color() {
+    let (mut app, ctx) = app_with(1);
+    app.session.edit_prefs(|prefs| {
+        prefs.dialogs.insert("image.dtf".into(), json!({"color": [1, 128, 0]}));
+    });
+    let id = open_form(&mut app, &ctx, "image.dtf");
+    let values = fields(&app, id);
+    let color = values["color"].as_array().unwrap();
+    assert!((color[0].as_f64().unwrap() - 1.0 / 255.0).abs() < 1e-6);
+    assert!((color[1].as_f64().unwrap() - 128.0 / 255.0).abs() < 1e-6);
+    assert_eq!(color[2].as_f64(), Some(0.0));
 }
 
 /// Fit Image's dialog bounds apply before the command, where a zero side would mean unconstrained.
@@ -349,7 +382,7 @@ fn arrange_layouts_floating_windows_and_matching() {
 }
 
 /// Match Zoom clamps the matched zoom to each document's own range: a 10 x 10 document can't go
-/// below the zoom at which its shorter side is 2 px, even when the source view is lower.
+/// below the zoom at which its shorter side is 2 px, even  the source view is lower.
 #[test]
 fn match_zoom_clamps_to_each_documents_zoom_range() {
     let lowest = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.min(craft::behavior::kurbo::Size::new(10.0, 10.0)) as f32;

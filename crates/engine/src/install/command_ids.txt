@@ -422,6 +422,8 @@ image.mode.bits8
 image.mode.bits16
 image.mode.bits32
 image.duplicate
+image.dtf
+image.installDtfAction
 image.perspectiveCrop
 select.magicWand
 select.colorRange

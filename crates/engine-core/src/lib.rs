@@ -22,6 +22,7 @@ mod crop_fill;
 mod damage;
 pub mod display_color;
 pub mod doc_path;
+pub mod dtf_cmds;
 pub mod filters;
 pub mod filters_ext;
 mod group_options;
