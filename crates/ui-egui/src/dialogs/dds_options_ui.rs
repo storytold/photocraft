@@ -77,7 +77,13 @@ mod tests {
         assert_eq!(options_param(&json!({}), "file.saveAs"), Ok(None));
         assert_eq!(options_param(&json!({"ddsCompression": "bc3"}), "file.saveAs"), Ok(Some(DdsOptions { compression: DdsCompression::Bc3, mipmaps: false })));
         assert_eq!(options_param(&json!({"ddsMipmaps": true}), "file.saveAs"), Ok(Some(DdsOptions { compression: DdsCompression::None, mipmaps: true })));
-        for bad in [json!({"ddsCompression": "bc7"}), json!({"ddsCompression": 3}), json!({"ddsMipmaps": "yes"})] {
+        for bad in [
+            json!({"ddsCompression": "bc7"}),
+            json!({"ddsCompression": "bc4"}),
+            json!({"ddsCompression": "ATI2"}),
+            json!({"ddsCompression": 3}),
+            json!({"ddsMipmaps": "yes"}),
+        ] {
             assert!(options_param(&bad, "file.saveAs").is_err(), "{bad}");
         }
         let mut step = json!({"path": "a.dds"});

@@ -874,7 +874,7 @@ fn dds_converts_both_ways_with_the_compression_asked_for() {
         ok(bin().arg("convert").arg(&out).arg(&back));
         assert!(back.exists(), "{args:?}");
     }
-    for bad in ["bc7", "dxt2", ""] {
+    for bad in ["bc7", "dxt2", "bc4", "ati2", ""] {
         let out = d.join("bad.dds");
         let o = bin().arg("convert").arg(&a).arg(&out).args(["--dds-compression", bad]).output().unwrap();
         assert_eq!(o.status.code(), Some(2), "--dds-compression {bad}");

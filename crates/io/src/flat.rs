@@ -2259,6 +2259,17 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, preserve_alpha: 
     }
 }
 
+/// The compressions DDS Options, `ddsCompression` and `--dds-compression` take: uncompressed and
+/// BC1 to BC3. The texture codec also writes BC4 and BC5, which saves don't offer.
+pub const DDS_COMPRESSIONS: [codecs::DdsCompression; 4] =
+    [codecs::DdsCompression::None, codecs::DdsCompression::Bc1, codecs::DdsCompression::Bc2, codecs::DdsCompression::Bc3];
+
+/// The compression `name` stands for (as [`codecs::DdsCompression::from_name`] reads it) when it
+/// is one of [`DDS_COMPRESSIONS`], else `None`.
+pub fn dds_compression(name: &str) -> Option<codecs::DdsCompression> {
+    codecs::DdsCompression::from_name(name).filter(|c| DDS_COMPRESSIONS.contains(c))
+}
+
 /// The image an RGB BMP of `bits` per pixel holds: 24 composites a transparent image over white,
 /// 32 gives an opaque image an opaque alpha; `None` keeps the image (32 with transparency, else
 /// 24). Grayscale images are written as they are. 16 bits is refused: the encoder has no 16-bit
