@@ -124,6 +124,8 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 }
 
 #[cfg(test)]
+mod pointer_color_picker_sample_tests;
+#[cfg(test)]
 mod tests;
 
 pub(super) const METHODS: &[&str] = &[
