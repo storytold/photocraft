@@ -1144,6 +1144,25 @@ fn the_automatic_clean_empties_the_reservoir() {
     assert_eq!((s.tools.mixer.reservoir, s.tools.mixer.amount, s.tools.mixer.pickup), (Some([0.0, 0.0, 1.0, 1.0]), 1.0, None));
 }
 
+/// #15327: with both automatic options on, a stroke after Clean Brush loaded the foreground again.
+#[test]
+fn clean_brush_stays_clean_after_a_stroke_with_the_automatic_load_and_clean_on() {
+    let mut s = mixer_over_red();
+    s.execute("tools.setBrush", json!({"brush": {"mixer": {"loadAfterStroke": true, "cleanAfterStroke": true}}})).unwrap();
+    s.execute("brush.mixer.load", json!({})).unwrap();
+    s.execute("brush.mixer.clean", json!({})).unwrap();
+    assert_eq!(s.tools.mixer.next_load(s.tools.foreground), None);
+    for y in [5, 15] {
+        let c = mixer_row(&mut s, y);
+        assert!(c[3] > 0.1 && c[2] < 0.01, "the clean brush lays down no blue: {c:?}");
+        assert_eq!(s.tools.mixer.next_load(s.tools.foreground), None, "the swatch stays empty after the stroke");
+    }
+    // Load Brush brings the automatic Load back.
+    s.execute("brush.mixer.load", json!({})).unwrap();
+    assert!(mixer_row(&mut s, 25)[2] > 0.2);
+    assert_eq!(s.tools.mixer.next_load(s.tools.foreground), Some([0.0, 0.0, 1.0, 1.0]));
+}
+
 #[test]
 fn load_brush_after_a_clean_paints_the_foreground_again() {
     let mut s = mixer_over_red();

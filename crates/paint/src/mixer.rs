@@ -102,6 +102,9 @@ pub struct MixerState {
     /// The color recorded by the last stroke (its color) or the last Load Brush or Clean Brush
     /// (the foreground). None = no stroke, load or clean yet.
     pub color: Option<[f32; 4]>,
+    /// Clean Brush emptied the brush and nothing has loaded it since. The automatic Load leaves
+    /// such a brush empty (#15327); a new color, Load Brush or a canvas sample loads it again.
+    pub cleaned: bool,
     /// Stroke length travelled so far in the current stroke, in px (the load's supply is measured
     /// in stroke length).
     #[serde(skip)]
@@ -114,6 +117,7 @@ pub struct MixerState {
 impl MixerState {
     /// Load Brush: fill the reservoir with a color (full).
     pub fn load(&mut self, color: [f32; 4]) {
+        self.cleaned = false;
         self.spatial = None;
         self.reservoir = Some(color);
         self.amount = 1.0;
@@ -148,9 +152,16 @@ impl MixerState {
             self.color = Some(color);
         }
     }
+    /// Clean Brush: [`MixerState::clean`], and the brush stays empty through the automatic Load
+    /// of the strokes that follow, until something loads it.
+    pub fn clean_brush(&mut self) {
+        self.clean();
+        self.cleaned = true;
+    }
     /// After a stroke in `color`: the automatic Clean empties the brush, then the automatic Load
-    /// fills the reservoir again.
+    /// fills the reservoir again, unless Clean Brush emptied it and nothing has loaded it since.
     pub fn end_stroke(&mut self, color: [f32; 4], clean: bool, load: bool) {
+        let load = load && !self.cleaned;
         // Automatic Load replenishes a sampled tip as well as a solid-color load.
         // Move its bounded buffer through Clean instead of allocating a copy.
         let sampled = self.holds_sample(color).then_some(color);
@@ -476,6 +487,32 @@ mod tests {
         // Both on: a fresh load with no pickup.
         st.end_stroke(green, true, true);
         assert_eq!((st.reservoir, st.amount, st.pickup), (Some(green), 1.0, None));
+    }
+
+    /// Clean Brush is not undone by the automatic Load after the next strokes (#15327).
+    #[test]
+    fn clean_brush_stays_empty_through_the_automatic_load() {
+        let (pink, green) = ([1.0, 0.4, 0.7, 1.0], [0.0, 1.0, 0.0, 1.0]);
+        let mut st = MixerState::default();
+        st.begin_stroke(pink);
+        st.end_stroke(pink, true, true);
+        assert_eq!(st.next_load(pink), Some(pink));
+        st.clean_brush();
+        for _ in 0..2 {
+            st.begin_stroke(pink);
+            st.pickup = Some(green);
+            st.end_stroke(pink, true, true);
+            assert_eq!((st.next_load(pink), st.reservoir, st.pickup), (None, None, None));
+        }
+        // Load Brush fills it, and the automatic Load keeps it filled again.
+        st.load(pink);
+        st.end_stroke(pink, true, true);
+        assert_eq!((st.reservoir, st.amount), (Some(pink), 1.0));
+        // So does a new color after a Clean Brush.
+        st.clean_brush();
+        st.begin_stroke(green);
+        st.end_stroke(green, true, true);
+        assert_eq!(st.next_load(green), Some(green));
     }
 
     /// Spatial paint reservoirs honor independent automatic clean and reload choices.
