@@ -23,6 +23,8 @@ fn mask_channel_key(index: usize) -> String {
 use crate::PhotocraftApp;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::ParamKind;
+use egui::accesskit::Role;
+use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::{Value, json};
 
 const APPLY: &str = "image.applyImage";
@@ -170,6 +172,63 @@ fn mask_channel_lists_gray_the_colours_and_the_alpha_channels() {
     assert_eq!(labels(options(&mut app, &mask_channel_key(target))), ["Gray", "Red", "Green", "Blue", "Alpha 1"]);
     // The composite keeps the engine's id; the engine reads a mask composite as luminosity.
     assert_eq!(ids(&mut app, &mask_channel_key(target))[0], "RGB");
+}
+
+type MaskHarness = Harness<'static, Box<PhotocraftApp>>;
+
+fn mask_menu_harness() -> (MaskHarness, DialogId) {
+    let (app, ctx) = five_documents();
+    let mut h = Harness::builder().with_context(ctx.clone()).with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(move |_| app);
+    h.run_steps(3);
+    let dialog = open(h.state_mut(), &ctx);
+    h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, MASK_ON, json!(true)).unwrap();
+    h.run_steps(4);
+    (h, dialog)
+}
+
+fn change_mask_source(h: &mut MaskHarness, dialog: DialogId, name: &str) {
+    let source = index_of(h.state(), name).to_string();
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, MASK_SOURCE, json!(source)).unwrap();
+    h.run_steps(3);
+}
+
+/// A separator occupies its own row in the popup. Read the positions of the selectable entries on either side.
+fn mask_option_positions<const N: usize>(h: &mut MaskHarness, label: &str, options: [&str; N]) -> [f32; N] {
+    // The mask's dropdown is below the source dropdown with the same label.
+    h.get_all_by_role_and_label(Role::ComboBox, label).max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect("the mask dropdown").click();
+    h.run_steps(3);
+    let positions = options.map(|option| h.get_by_role_and_label(Role::ListBoxOption, option).rect().center().y);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    positions
+}
+
+#[test]
+fn mask_layer_menu_separates_merged_from_the_layers() {
+    let (mut h, dialog) = mask_menu_harness();
+    mask_option_positions(&mut h, "Layer", ["Background"]);
+    change_mask_source(&mut h, dialog, "target");
+
+    let [merged, masked, top, background] = mask_option_positions(&mut h, "Layer", ["Merged", "Masked", "Top", "Background"]);
+    let step = background - top;
+    assert!((top - masked - step).abs() < 0.5, "the individual layers are consecutive");
+    assert!(masked - merged > step + 1.0, "the Mask Layer menu separates Merged from the individual layers");
+}
+
+#[test]
+fn mask_channel_menu_separates_the_alpha_channels_from_the_colour_channels() {
+    let (mut h, dialog) = mask_menu_harness();
+    mask_option_positions(&mut h, "Channel", ["Gray"]);
+    change_mask_source(&mut h, dialog, "source");
+    let [gray, red, green, blue] = mask_option_positions(&mut h, "Channel", ["Gray", "Red", "Green", "Blue"]);
+    assert!((red - gray - (green - red)).abs() < 0.5 && (blue - green - (green - red)).abs() < 0.5, "a list without alpha channels is consecutive");
+
+    change_mask_source(&mut h, dialog, "target");
+    let [gray, red, green, blue, alpha] = mask_option_positions(&mut h, "Channel", ["Gray", "Red", "Green", "Blue", "Alpha 1"]);
+    let step = blue - green;
+    assert!((red - gray - step).abs() < 0.5 && (green - red - step).abs() < 0.5, "the composite and colour channels are consecutive");
+    assert!(alpha - blue > step + 1.0, "the Mask Channel menu separates Blue from the alpha channels");
 }
 
 #[test]

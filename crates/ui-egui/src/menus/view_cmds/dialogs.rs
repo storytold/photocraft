@@ -805,25 +805,30 @@ fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, 
 
 /// The mask Channel list of a source document and its default (#14489): its composite, read as luminosity and so named
 /// Gray, the colour channels of a colour document, then its alpha channels (and Selection while it has one). A colour
-/// document starts at its first colour channel, a one-channel document at Gray. The reference draws a rule before the
-/// alpha channels; the hosted choice row takes no separators.
-fn apply_image_mask_channels(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, String) {
+/// document starts at its first colour channel and separates the alpha channels with a rule. A one-channel document
+/// starts at Gray.
+fn apply_image_mask_channel_row(key: &str, doc: &photocraft_doc::Document) -> Param {
     let mode = doc.pixel_format().mode;
+    let colour = mode.color_channels() > 1;
     let composite = photocraft_engine::channel_cmds::composite_name(mode).to_string();
     let mut list = vec![(composite.clone(), Label::from(tl!("Gray")))];
     let mut default = composite;
-    if mode.color_channels() > 1 {
+    if colour {
         let colors = photocraft_engine::channel_cmds::color_names(mode);
         if let Some(first) = colors.first() {
             default = (*first).to_string();
         }
         list.extend(colors.iter().map(|n| (n.to_string(), Label::from(n.to_string()))));
     }
-    list.extend(apply_image_alpha_options(doc));
+    let alpha_start = list.len();
+    let alphas = apply_image_alpha_options(doc);
+    let separate_alpha = colour && !alphas.is_empty();
+    list.extend(alphas);
     if doc.selection.is_some() {
         list.extend(channels(&["selection".to_string()]));
     }
-    (list, default)
+    let row = choice(key, tl!("Channel"), list, &default);
+    if separate_alpha { row.separated_at(alpha_start) } else { row }
 }
 
 /// Apply Image's Mask... checkbox and the group it opens (#14489): Source (the documents of [`apply_image_documents`],
@@ -836,9 +841,8 @@ fn apply_image_mask_rows(app: &PhotocraftApp) -> Vec<Param> {
     let mut rows = vec![Param::new(MASK_ON, tl!("Mask…"), ParamKind::bool(false)), shown(choice(MASK_SOURCE, tl!("Source"), names, &first))];
     for (i, doc) in documents {
         let (layers, layer) = apply_image_layers(doc);
-        let (list, channel) = apply_image_mask_channels(doc);
-        rows.push(choice(&mask_layer_key(i), tl!("Layer"), layers, &layer).visible_when(mask_shown_key(i), true));
-        rows.push(choice(&mask_channel_key(i), tl!("Channel"), list, &channel).visible_when(mask_shown_key(i), true));
+        rows.push(choice(&mask_layer_key(i), tl!("Layer"), layers, &layer).separated_at(1).visible_when(mask_shown_key(i), true));
+        rows.push(apply_image_mask_channel_row(&mask_channel_key(i), doc).visible_when(mask_shown_key(i), true));
     }
     rows.push(shown(Param::new(MASK_INVERT, tl!("Invert"), ParamKind::bool(false))));
     rows
