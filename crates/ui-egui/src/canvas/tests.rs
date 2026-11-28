@@ -2,10 +2,115 @@ use super::document_display::{CanvasHost, active_view};
 use super::*;
 use craft::behavior::canvas::ZoomScheme;
 use craft::behavior::kurbo::Size;
+use craft::keymap::Mods;
 use craft::ui::canvas::{PixelRect, RasterSource};
 use craft::ui::primitives::Revision;
 use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::presets::PresetsExt;
+
+fn edge_scroll_app(tool: Tool) -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 1600, "height": 900, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.ui.tool = tool;
+    app.ui.views[0].zoom = 2.0;
+    app.ui.views[0].center = [800.0, 450.0];
+    app.ui.views[0].clear_pending();
+    testing::window(&mut app, egui::vec2(900.0, 650.0));
+    testing::shown(&mut app);
+    app
+}
+
+fn edge_scroll(app: &mut PhotocraftApp, at: egui::Pos2, mods: Mods, frames: usize) -> f32 {
+    let before = app.ui.views[0].center[0];
+    let host = craft::ui::runtime::windows::WindowHost::of(&testing::ctx(app));
+    host.inject_move(egui::ViewportId::ROOT, at, mods, 0.0);
+    for _ in 0..frames {
+        testing::frame(app);
+    }
+    app.ui.views[0].center[0] - before
+}
+
+/// #13024: the modifier changes the edge scroll during the same selection gesture.
+#[test]
+fn selection_edge_scroll_follows_shift_and_stops_at_the_document_edge() {
+    for tool in [
+        Tool::RectMarquee,
+        Tool::EllipseMarquee,
+        Tool::SingleRowMarquee,
+        Tool::SingleColumnMarquee,
+        Tool::Lasso,
+        Tool::PolygonLasso,
+        Tool::MagneticLasso,
+        Tool::ObjectSelection,
+        Tool::QuickSelection,
+    ] {
+        let mut app = edge_scroll_app(tool);
+        let canvas = testing::view(&app).unwrap();
+        let alt = tool == Tool::PolygonLasso;
+        let mods = Mods { alt, ..Mods::NONE };
+        let shift = Mods { shift: true, ..mods };
+        // A 10pt overshoot gives whole-pixel steps at 60 Hz, including after doubling.
+        let at = egui::pos2(canvas.rect.right() + 10.0, canvas.rect.center().y + 20.0);
+        testing::press(&mut app, [800.0, 450.0], egui::Modifiers { alt, ..egui::Modifiers::NONE });
+
+        edge_scroll(&mut app, at, mods, 1);
+        let normal = edge_scroll(&mut app, at, mods, 6);
+        assert!(normal > 1.0, "{tool:?}: edge dragging scrolls the canvas");
+        let faster = edge_scroll(&mut app, at, shift, 6);
+        let restored = edge_scroll(&mut app, at, mods, 6);
+        assert!((faster - 2.0 * normal).abs() < 0.01, "{tool:?}: regular {normal}, Shift {faster}");
+        assert!((restored - normal).abs() < 0.01, "{tool:?}: speed after Shift release {restored}");
+        assert!(testing::in_gesture(&app));
+
+        let farther = at + egui::vec2(180.0, 0.0);
+        edge_scroll(&mut app, farther, shift, 60);
+        let limit = 1600.0 - f64::from(canvas.rect.width()) / (2.0 * canvas.zoom);
+        assert!((f64::from(app.ui.views[0].center[0]) - limit).abs() < 0.01, "{tool:?}: clamps to the image edge");
+        assert_eq!(edge_scroll(&mut app, farther, shift, 3), 0.0, "{tool:?}: staying beyond the edge keeps the view still");
+    }
+}
+
+#[test]
+fn selection_edge_scroll_keeps_the_pace_of_other_gestures() {
+    let shift = Mods { shift: true, ..Mods::NONE };
+    let mut polygon = edge_scroll_app(Tool::PolygonLasso);
+    let canvas = testing::view(&polygon).unwrap().rect;
+    testing::click(&mut polygon, [800.0, 450.0], egui::Modifiers::NONE);
+    let edge = egui::pos2(canvas.right() + 10.0, canvas.center().y);
+    edge_scroll(&mut polygon, edge, Mods::NONE, 1);
+    let normal = edge_scroll(&mut polygon, edge, Mods::NONE, 6);
+    assert!(normal > 1.0, "polygon hover still scrolls");
+    let modified = edge_scroll(&mut polygon, edge, shift, 6);
+    assert!((modified - normal).abs() < 0.01, "Shift preserves the polygon hover speed");
+
+    testing::press(&mut polygon, [800.0, 490.0], egui::Modifiers::NONE);
+    edge_scroll(&mut polygon, edge, Mods::NONE, 1);
+    let normal = edge_scroll(&mut polygon, edge, Mods::NONE, 6);
+    assert!(normal > 1.0, "plain polygon pointer movement still scrolls");
+    let modified = edge_scroll(&mut polygon, edge, shift, 6);
+    assert!((modified - normal).abs() < 0.01, "Shift preserves the plain polygon speed");
+
+    let mut marquee = edge_scroll_app(Tool::RectMarquee);
+    let canvas = testing::view(&marquee).unwrap().rect;
+    marquee.run("select.rect", json!({"x": 750, "y": 400, "width": 100, "height": 100})).unwrap();
+    testing::press(&mut marquee, [800.0, 450.0], egui::Modifiers::NONE);
+    let edge = egui::pos2(canvas.right() + 10.0, canvas.center().y + 20.0);
+    edge_scroll(&mut marquee, edge, Mods::NONE, 1);
+    let normal = edge_scroll(&mut marquee, edge, Mods::NONE, 6);
+    assert!(normal > 1.0, "moving an existing selection still scrolls");
+    let modified = edge_scroll(&mut marquee, edge, shift, 6);
+    assert!((modified - normal).abs() < 0.01, "Shift preserves the existing selection's drag speed");
+
+    let mut stand_in = edge_scroll_app(Tool::RectMarquee);
+    testing::press(&mut stand_in, [800.0, 450.0], egui::Modifiers::COMMAND);
+    let command = Mods { cmd: true, ..Mods::NONE };
+    edge_scroll(&mut stand_in, edge, command, 1);
+    let normal = edge_scroll(&mut stand_in, edge, command, 6);
+    assert!(normal > 1.0, "temporary Move still scrolls");
+    let modified = edge_scroll(&mut stand_in, edge, Mods { shift: true, ..command }, 6);
+    assert!((modified - normal).abs() < 0.01, "Shift preserves the temporary Move speed");
+}
 
 #[test]
 fn display_image_matches_egui_unmultiplied_conversion() {
