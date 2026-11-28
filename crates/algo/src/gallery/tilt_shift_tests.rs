@@ -146,8 +146,9 @@ fn tilt_shift_keeps_running_sum_order_for_extreme_hdr_and_signed_zero() {
 
 #[test]
 fn tilt_shift_depths_models_selection_and_tile_edges_match_reference() {
-    let bounds = Rect::new(-17, 11, 96, 84);
-    let area = Rect::new(-9, 17, 79, 77);
+    // Both small tile sizes still have complete tiles and clipped remainders.
+    let bounds = Rect::new(-17, 11, 73, 84);
+    let area = Rect::new(-9, 17, 56, 77);
     let p = params(17.0, (0.3, 0.7), 29.0, 0.07, 0.3);
     let mut selection = Surface::new(PixelFormat::GRAY8);
     selection.fill_rect(bounds, &[0.4]);
