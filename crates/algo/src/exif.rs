@@ -2,6 +2,8 @@
 //! craft-metadata; the raw-date and numeric selection semantics are preserved there.
 
 pub use craft_metadata::camera_fields::{CameraInfo, read, try_build};
+// The existing shared reader supplies additional camera tags without another TIFF parser.
+pub use craft_metadata::{TagRow, file_tag_rows};
 
 /// Build a TIFF-structured EXIF payload, preserving the existing infallible API.
 /// Returns an empty payload when the shared writer refuses an oversized value. New callers
