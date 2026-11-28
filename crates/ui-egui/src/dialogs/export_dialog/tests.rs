@@ -1099,3 +1099,29 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     assert!(kept.windows(b"secret".len()).any(|w| w == b"secret"));
     assert_eq!(doc, before);
 }
+
+/// A panorama's preview is the exported picture alone: the texture Export As shows has the export's
+/// proportions, and an opaque image previews opaque. A preview padded to a square would read as
+/// transparent bands above and below a wide image, as if the exported file had them.
+#[test]
+fn a_panorama_previews_at_its_own_proportions_with_no_transparent_bands() {
+    let mut h = harness(export_app(2172, 724));
+    super::open(h.state_mut()).unwrap();
+    settle_preview(&mut h);
+    let [w, h_px] = h.state().export_open.as_ref().expect("Export As is open").texture.as_ref().expect("the preview is shown").size();
+    assert!(w > h_px, "the preview is wider than tall: {w} × {h_px}");
+    let ratio = w as f64 / h_px as f64;
+    assert!((ratio - 3.0).abs() < 0.02, "the preview keeps 2172 × 724's proportions: {w} × {h_px}");
+
+    let doc = Document::with_background(
+        "panorama",
+        photocraft_doc::Size::new(2172, 724),
+        photocraft_doc::ColorMode::Rgb,
+        photocraft_doc::SampleType::U8,
+        photocraft_doc::Color::WHITE,
+    );
+    let f = Map::from_iter([("format".into(), json!("jpg")), ("scale".into(), json!(100))]);
+    let pixels = super::preview_pixels(&default_preview_proxy(&doc, &f).unwrap(), None);
+    assert_eq!(pixels.rgba.len(), pixels.width * pixels.height * 4);
+    assert!(pixels.rgba.chunks_exact(4).all(|px| px[3] == 255), "every preview pixel of an opaque image is opaque");
+}
