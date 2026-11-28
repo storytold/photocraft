@@ -139,12 +139,14 @@ pub(crate) struct PcGallerySource {
     background: [f32; 4],
     /// The middle of the layer, about 4× the thumbnail size, sampled down to the thumbnail size.
     thumb_src: Surface,
+    /// Keeps the shared thumbnail cache from reusing pictures from an earlier Gallery.
+    thumb_revision: Revision,
     catalog: PcCatalog,
     preview: SharedPicture,
 }
 
 impl PcGallerySource {
-    fn new(src: Surface, canvas: Rect, target: Value, colours: [[f32; 4]; 2]) -> Self {
+    fn new(src: Surface, canvas: Rect, target: Value, colours: [[f32; 4]; 2], thumb_revision: Revision) -> Self {
         let cb = src.content_bounds().intersect(&canvas);
         let cb = if cb.is_empty() { canvas } else { cb };
         let k = ((cb.width() as usize / (THUMB[0] * 4)).min(cb.height() as usize / (THUMB[1] * 4))).max(1) as u32;
@@ -152,7 +154,17 @@ impl PcGallerySource {
         let (cx, cy) = ((cb.x0 + cb.x1) / 2, (cb.y0 + cb.y1) / 2);
         let thumb_src = sample(&src, Rect::new(cx - tw / 2, cy - th / 2, cx - tw / 2 + tw, cy - th / 2 + th), k);
         let preview = SharedPicture::new(PixelSize::new(canvas.width().max(1), canvas.height().max(1)));
-        PcGallerySource { src: Arc::new(src), canvas, target, foreground: colours[0], background: colours[1], thumb_src, catalog: PcCatalog, preview }
+        PcGallerySource {
+            src: Arc::new(src),
+            canvas,
+            target,
+            foreground: colours[0],
+            background: colours[1],
+            thumb_src,
+            thumb_revision,
+            catalog: PcCatalog,
+            preview,
+        }
     }
 
     /// The command params for `effects`: what OK runs and what the preview renders.
@@ -213,9 +225,9 @@ impl FilterGallerySource for PcGallerySource {
 }
 
 impl ThumbSource<GalleryThumb> for PcGallerySource {
-    /// The crop and colours are fixed while the gallery is open, so a filter's thumbnail never changes.
-    fn revision(&self, key: &GalleryThumb, _request: &ThumbRequest) -> Revision {
-        Revision::of(&key.filter)
+    /// All filters use the same immutable source, and each filter has its own cache key.
+    fn revision(&self, _key: &GalleryThumb, _request: &ThumbRequest) -> Revision {
+        self.thumb_revision
     }
 
     fn render(&self, key: &GalleryThumb, _request: &ThumbRequest) -> ThumbRender {
@@ -501,7 +513,8 @@ fn open_on(
         session.effects = effects;
     }
     let size = PixelSize::new(canvas.width().max(1), canvas.height().max(1));
-    let source = Arc::new(PcGallerySource::new(src, canvas, target, colours));
+    let thumb_revision = Revision::new(app.texture_serials.mint());
+    let source = Arc::new(PcGallerySource::new(src, canvas, target, colours, thumb_revision));
     let workspace = FilterGalleryWorkspace::new(FilterGalleryOpen::new(size, layer_name, session));
 
     let shared: Arc<dyn FilterGallerySource> = source.clone();
