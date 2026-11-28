@@ -171,13 +171,19 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
 fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpen) {
     // Photoshop's Pen lists Shape, Path and a greyed Pixels; the other pens keep theirs.
     let offered: &[(VectorMode, bool)] = if tool == Tool::Pen { &PEN_MODES } else { &OTHER_PEN_MODES };
+    // Photoshop's Freeform Pen stays in Path mode in an Indexed Color document (#12840). The
+    // mode is shared with the other pens, so one set to Shape elsewhere is reset here too.
+    let path_only = tool == Tool::FreeformPen && indexed_document(app);
+    if path_only {
+        app.ui.tool_options.vector_mode = VectorMode::Path;
+    }
     let mode_before = app.ui.tool_options.vector_mode;
     VectorModeSelect::new(bind_tracked!(app.ui.tool_options => vector_mode), offered).show(ui);
     // #12910 measured: in an Indexed Color document the Pen lists Shape and keeps the entry enabled,
     // but picking it leaves the tool in Path mode. Only a pick through this dropdown counts: a Shape
     // mode that arrived another way (a tool preset, `penMode`) is not measured and keeps today's
-    // behaviour, and the other pens keep theirs.
-    if tool == Tool::Pen && mode_before == VectorMode::Path && app.ui.tool_options.vector_mode == VectorMode::Shape && indexed_document(app) {
+    // behaviour, and the Curvature Pen keeps its.
+    if path_only || (tool == Tool::Pen && mode_before == VectorMode::Path && app.ui.tool_options.vector_mode == VectorMode::Shape && indexed_document(app)) {
         app.ui.tool_options.vector_mode = VectorMode::Path;
     }
     Divider::vertical().show(ui);
