@@ -37,7 +37,7 @@ fn raw_pointer_brush_and_mixer_pixels_appear_in_the_input_frame() {
             app.sync_views();
             h.run_steps(4);
             let at = h.state().last_canvas_rect.center();
-            let before = h.render().unwrap().get_pixel(at.x as u32, at.y as u32).0;
+            let before = rendered(&mut h, Harness::render).get_pixel(at.x as u32, at.y as u32).0;
             h.input_mut().events.push(egui::Event::PointerMoved(at));
             h.input_mut().events.push(egui::Event::PointerButton {
                 pos: at,
@@ -46,12 +46,12 @@ fn raw_pointer_brush_and_mixer_pixels_appear_in_the_input_frame() {
                 modifiers: egui::Modifiers::NONE,
             });
             h.step();
-            let image = h.render().unwrap();
+            let image = rendered(&mut h, Harness::render);
             assert_ne!(image.get_pixel(at.x as u32, at.y as u32).0, before, "{tool:?} flip={flip}: press visible in its own frame");
             let next = at + egui::vec2(40.0, 0.0);
             h.input_mut().events.push(egui::Event::PointerMoved(next));
             h.step();
-            let image = h.render().unwrap();
+            let image = rendered(&mut h, Harness::render);
             assert_ne!(image.get_pixel(next.x as u32, next.y as u32).0, before, "{tool:?} flip={flip}: move visible in its own frame");
             if tool == Tool::MixerBrush
                 && !flip
@@ -80,6 +80,7 @@ fn harness() -> Option<Harness> {
             photocraft_raster::spill::use_test_volume_space();
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                DEVICE.set(Some(rs.device.clone()));
                 app.set_wgpu(rs.clone());
             }
             app
@@ -92,6 +93,61 @@ fn harness() -> Option<Harness> {
             None
         }
     }
+}
+
+thread_local! {
+    /// The wgpu device of the harness this thread built last.
+    static DEVICE: std::cell::RefCell<Option<eframe::wgpu::Device>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Calls `render` (`Harness::render`) and returns its image. egui_kittest submits the frame and waits
+/// 10 s for the GPU. Windows CI renders on WARP, a software rasterizer, where a frame can take longer
+/// while other GPU tests run, and the submitted frame keeps running after the timeout. After a timeout
+/// this waits up to 120 s for the device to finish all submitted work, then renders the frame once more
+/// with nothing else queued. A render that times out again fails the test. Any other render error fails
+/// the test at once, without a second render.
+fn rendered<H, T>(h: &mut H, render: fn(&mut H) -> Result<T, String>) -> T {
+    match render(h) {
+        Ok(image) => image,
+        Err(err) if is_gpu_wait_timeout(&err) => {
+            DEVICE.with_borrow(|device| {
+                if let Some(device) = device
+                    && let Err(wait) = device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(120)) })
+                {
+                    panic!("render: {err}; waiting for the device: {wait}");
+                }
+            });
+            render(h).unwrap_or_else(|again| panic!("render: {err}; again with the device idle: {again}"))
+        }
+        Err(err) => panic!("render: {err}"),
+    }
+}
+
+/// Whether `err` is the error egui_kittest's wgpu renderer returns when its GPU wait times out: it
+/// formats the `wgpu::PollError` as `PollError: {err}`.
+fn is_gpu_wait_timeout(err: &str) -> bool {
+    err == format!("PollError: {}", eframe::wgpu::PollError::Timeout)
+}
+
+/// `rendered` renders again only after a GPU wait timeout. No GPU is needed: the render is a counter,
+/// and with no harness built on this thread there is no device to wait for.
+#[test]
+fn rendered_retries_only_a_gpu_wait_timeout() {
+    fn timeout_then_ok(calls: &mut u32) -> Result<u32, String> {
+        *calls += 1;
+        if *calls == 1 { Err(format!("PollError: {}", eframe::wgpu::PollError::Timeout)) } else { Ok(*calls) }
+    }
+    fn other_error_then_ok(calls: &mut u32) -> Result<u32, String> {
+        *calls += 1;
+        if *calls == 1 { Err(format!("PollError: {}", eframe::wgpu::PollError::WrongSubmissionIndex(2, 1))) } else { Ok(*calls) }
+    }
+    let mut calls = 0;
+    assert_eq!(rendered(&mut calls, timeout_then_ok), 2, "a timeout renders once more");
+    let mut calls = 0;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rendered(&mut calls, other_error_then_ok)));
+    assert!(failed.is_err(), "another render error fails the test");
+    assert_eq!(calls, 1, "another render error is not rendered again");
+    assert!(!is_gpu_wait_timeout("PollError: wgpu device lost"));
 }
 
 /// Runs a control call and the frame that shows it; returns that (call + frame) time in ms.
@@ -143,7 +199,7 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
     let canvas = |h: &mut Harness| {
         h.run_steps(3);
         let r = h.state().last_canvas_rect.shrink(4.0);
-        let img = h.render().expect("render");
+        let img = rendered(h, Harness::render);
         let mut px = Vec::new();
         for y in r.top() as u32..(r.bottom() as u32).min(img.height()) {
             for x in r.left() as u32..(r.right() as u32).min(img.width()) {
@@ -299,10 +355,10 @@ fn live_tool_camera_navigation_is_visible_in_the_input_frame() {
             h.step();
             let moved = h.state().ui.views[0].clone();
             assert!(if zoom { moved.zoom != before.zoom } else { moved.center != before.center }, "navigation was applied");
-            let immediate = h.render().unwrap();
+            let immediate = rendered(&mut h, Harness::render);
             let rect = h.state().last_canvas_rect.shrink(8.0);
             h.step();
-            let settled = h.render().unwrap();
+            let settled = rendered(&mut h, Harness::render);
             if flip
                 && zoom
                 && let Ok(path) = std::env::var("PHOTOCRAFT_NAV_SNAPSHOT")
