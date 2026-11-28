@@ -674,20 +674,10 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             let alpha_names: Vec<String> = d.channels.iter().map(|c| c.name.clone()).collect();
             let (list, default) =
                 calculations_channels(mode, None, d.background().is_some(), &alpha_names).unwrap_or_else(|| (channels(&load), chans[0].clone()));
-            vec![
-                choice("source1Channel", tl!("Source 1 Channel"), list.clone(), &default),
-                Param::new("source1Invert", tl!("Invert Source 1"), ParamKind::bool(false)),
-                choice("source2Channel", tl!("Source 2 Channel"), list, &default),
-                Param::new("source2Invert", tl!("Invert Source 2"), ParamKind::bool(false)),
-                choice("blending", tl!("Blending"), blend_modes(), "multiply"),
-                Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
-                choice(
-                    "result",
-                    tl!("Result"),
-                    opts(&[("newChannel", tl!("New Channel")), ("newDocument", tl!("New Document")), ("selection", tl!("Selection"))]),
-                    "newChannel",
-                ),
-            ]
+            // The rows themselves, in the reference application's order, live with the dialog (#14526);
+            // this arm only hands them the Channel list of the source the form reads and the Blending
+            // modes the channel forms share.
+            crate::dialogs::calculations_ui::rows(list, &default, blend_modes())
         }
         // `params_for` routes only the four ids above here, so this asks for a new arm instead of
         // letting a fifth channel command quietly take the Calculations rows.

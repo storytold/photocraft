@@ -17,15 +17,67 @@
 //! The pinned framework draws the box but keys no shortcut to it, so the app binds the key here:
 //! [`preview_shortcut`] consumes it in the canvas pass that feeds the preview, before the pass
 //! reads the box, and writes the new value through the dialog host's own field channel.
+//!
+//! The same file holds the dialog's row table (#14526): [`rows`] builds it in the reference
+//! application's order, from the framework's own row kinds. The `image.calculations` arm of
+//! `menus::view_cmds::dialogs` hands it the Channel options it lists for the source and the
+//! Blending options it shares with the other channel forms; the arm keeps opening the hosted
+//! parameter form it opened before.
 
 use craft::ui::dialog::StackDialog as _;
-use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use craft::ui::patterns::form_dialogs::{HostedParamDialog, Param, ParamKind};
+use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::value_drag::SliderScale;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 
 /// The command whose dialog carries the Preview box and the grey channel preview.
 pub(crate) const COMMAND: &str = "image.calculations";
+
+/// The rows of the Calculations form, in the reference application's order (#14526): a Source 1 group
+/// (Channel, Invert), a Source 2 group, then Blending, Opacity, Scale and Offset, and Result last.
+/// The Source and Layer dropdowns of the two groups come with #14520 and the Mask group with its own
+/// item; the section heads hold their places meanwhile, and no row here gains a control those items
+/// own. `channels` and `channel_default` are the Channel options of the source the form reads
+/// (#14521); `blends` are the form's Blending options, whose list is #14523's.
+///
+/// Every row is one of the pinned framework's own row kinds, no drawn layout of the app's: Opacity is
+/// a `Range` row over 0..100 at whole numbers with a percent unit and a
+/// [`popup_slider`](Param::popup_slider), which is the reference's number field with the arrow that
+/// opens the slider; Scale and Offset are `Range` rows over the reference's bounds that show only
+/// while Blending names Add or Subtract. A change of Blending [`resets`](Param::resets) those two
+/// keys, so a value typed for Add never reaches OK under another mode; what every other Blending
+/// sends is the command's own defaults, Scale 1 and Offset 0.
+pub(crate) fn rows(channels: Vec<(String, Label)>, channel_default: &str, blends: Vec<(String, Label)>) -> Vec<Param> {
+    let channel = |key: &str| Param::new(key, tl!("Channel"), ParamKind::choice(channels.clone(), Some(channel_default.to_owned())));
+    let percent =
+        Param::new("opacity", tl!("Opacity"), ParamKind::range(0.0, 100.0, 100.0, SliderScale::Linear)).decimals(0).unit(UnitKind::Percent).popup_slider();
+    let for_add_and_subtract = |row: Param| row.visible_when_in("blending", ["add", "subtract"]);
+    vec![
+        Param::section(tl!("Source 1")),
+        channel("source1Channel"),
+        Param::new("source1Invert", tl!("Invert"), ParamKind::bool(false)),
+        Param::section(tl!("Source 2")),
+        channel("source2Channel"),
+        Param::new("source2Invert", tl!("Invert"), ParamKind::bool(false)),
+        Param::new("blending", tl!("Blending"), ParamKind::choice(blends, Some("multiply".to_owned()))).resets(["scale", "offset"]),
+        percent,
+        for_add_and_subtract(Param::new("scale", tl!("Scale"), ParamKind::range(1.0, 2.0, 1.0, SliderScale::Linear)).decimals(3)),
+        for_add_and_subtract(Param::new("offset", tl!("Offset"), ParamKind::range(-255.0, 255.0, 0.0, SliderScale::Linear)).decimals(0)),
+        Param::new(
+            "result",
+            tl!("Result"),
+            ParamKind::choice(
+                vec![("newDocument", tl!("New Document")), ("newChannel", tl!("New Channel")), ("selection", tl!("Selection"))]
+                    .into_iter()
+                    .map(|(id, name)| (id.to_owned(), Label::from(name)))
+                    .collect(),
+                Some("newChannel".to_owned()),
+            ),
+        ),
+    ]
+}
 
 /// The command and parameters the open Calculations form's canvas preview runs: the form's own
 /// values (the same map OK sends), with the Result routed to New Document. Every Result option
