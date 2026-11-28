@@ -206,7 +206,7 @@ pub(super) const ZIGZAG: &[Key] = &[
     },
 ];
 
-/// Wave's keys before its scale, undefined areas and seed (handled in `wave_from` / `wave_to`).
+/// Wave's keys before its undefined areas and seed (handled in `wave_from` / `wave_to`).
 const WAVE: &[Key] = &[
     Key::Enum { key: "Wvtp", param: "type", ty: "Wvtp", table: &[("WvSn", "sine"), ("WvSq", "square"), ("WvTr", "triangle")], default: "WvSn" },
     Key::Int { key: "NmbG", param: "generators", min: 1, max: 999, default: 5 },
@@ -214,6 +214,8 @@ const WAVE: &[Key] = &[
     Key::Int { key: "WLMx", param: "wavelengthMax", min: 1, max: 999, default: 120 },
     Key::Int { key: "AmMn", param: "amplitudeMin", min: 1, max: 999, default: 5 },
     Key::Int { key: "AmMx", param: "amplitudeMax", min: 1, max: 999, default: 35 },
+    Key::Int { key: "SclH", param: "scaleHorizontal", min: 1, max: 100, default: 100 },
+    Key::Int { key: "SclV", param: "scaleVertical", min: 1, max: 100, default: 100 },
 ];
 
 const WAVE_UNDEFINED: &[(&str, &str)] = &[("RptE", "repeat"), ("WrpA", "wrap")];
@@ -234,15 +236,12 @@ fn wave_command_takes(p: &Map<String, Value>) -> bool {
     WAVE_COMMAND_LIMITS.iter().all(|(param, min, max)| p.get(*param).and_then(Value::as_f64).is_none_or(|n| (*min..=*max).contains(&n)))
 }
 
-/// Wave (`Wave`). The command has no horizontal or vertical scale, so a step that scales the
-/// waves below 100 %, or by a fraction (saved back as 100), keeps the Photoshop step. Missing undefined areas are Photoshop's Repeat
-/// Edge Pixels (the command's own default is wrap); `RndS` keeps its 32 bits as the seed.
+/// Wave (`Wave`). Its scales are integers that Photoshop clamps to 1..100, as the other keys.
+/// Missing undefined areas are Photoshop's Repeat Edge Pixels (the command's own default is
+/// wrap); `RndS` keeps its 32 bits as the seed.
 pub(super) fn wave_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
-    let Some(mut m) = keys_map(d, WAVE, &["SclH", "SclV", "UndA", "RndS"]).filter(wave_command_takes) else { return unsupported };
-    if ["SclH", "SclV"].iter().any(|k| setting(d, k, num, 100.0).is_none_or(|n| n.fract() != 0.0 || n.clamp(1.0, 100.0) != 100.0)) {
-        return unsupported;
-    }
+    let Some(mut m) = keys_map(d, WAVE, &["UndA", "RndS"]).filter(wave_command_takes) else { return unsupported };
     let Some(undefined) = setting(d, "UndA", enum_of("UndA"), "RptE".into()).and_then(|e| lookup(WAVE_UNDEFINED, &e)) else { return unsupported };
     m.insert("undefinedAreas".into(), undefined.into());
     match setting(d, "RndS", |v| seed_bits(v).map(Some), None) {
@@ -270,6 +269,8 @@ pub(super) fn wave_to(_: &str, p: &Value) -> Option<Descriptor> {
         ("wavelengthMax", json!(120)),
         ("amplitudeMin", json!(5)),
         ("amplitudeMax", json!(35)),
+        ("scaleHorizontal", json!(100)),
+        ("scaleVertical", json!(100)),
     ];
     if !p.as_object().is_none_or(wave_command_takes) {
         return None;
@@ -283,7 +284,7 @@ pub(super) fn wave_to(_: &str, p: &Value) -> Option<Descriptor> {
         None | Some(Value::Null) => 0,
         Some(v) => u32::try_from(v.as_u64()?).ok()? as i32,
     };
-    Some(d.with("SclH", D::Integer(100)).with("SclV", D::Integer(100)).with("UndA", enm("UndA", undefined)).with("RndS", D::Integer(seed)))
+    Some(d.with("UndA", enm("UndA", undefined)).with("RndS", D::Integer(seed)))
 }
 
 // Adapter safety budget, not a Photoshop format maximum: at most 64 KiB per f64 point

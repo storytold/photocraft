@@ -1919,3 +1919,38 @@ fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
     assert_eq!(app.session.documents()[0].history.past_len(), steps[0] + 1, "Lens Blur ran on the first document");
     assert_eq!(app.session.documents()[1].history.past_len(), steps[1], "the second document is untouched");
 }
+
+/// Wave's dialog has Photoshop's Scale Horiz. and Vert. after the amplitudes: 1–100 %, 100 by
+/// default, percentages a reduced preview leaves as they are. OK applies the scales set there.
+#[test]
+fn wave_dialog_shows_and_applies_its_scales() {
+    let spec = photocraft_engine::commands::find("filter.distort.wave").expect("filter.distort.wave is registered");
+    let params = Param::parse_list(spec.params);
+    let at = |key: &str| params.iter().position(|p| p.key == key).unwrap_or_else(|| panic!("no {key}"));
+    assert!(at("amplitudeMax") < at("scaleHorizontal") && at("scaleHorizontal") < at("scaleVertical") && at("scaleVertical") < at("type"));
+    for key in ["scaleHorizontal", "scaleVertical"] {
+        let ParamKind::Range { min, max, default, .. } = params[at(key)].kind else { panic!("{key} is a range") };
+        assert_eq!((min, max, default), (1.0, 100.0, 100.0), "{key}");
+        assert!(!is_pixel_param_of("filter.distort.wave", key), "{key} is a percentage");
+    }
+
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+    s.execute("filter.render.clouds", json!({"seed": 4})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = harness(app, egui::vec2(900.0, 1000.0));
+    let id = open(h.state_mut(), "filter.distort.wave").unwrap();
+    h.run_steps(3);
+    for name in ["Scale Horizontal", "Scale Vertical"] {
+        assert!(h.query_all_by_label(name).count() > 0, "the dialog shows {name}");
+    }
+    for key in ["scaleHorizontal", "scaleVertical"] {
+        assert_eq!(field_json(h.state(), id, key).as_f64(), Some(100.0), "{key}");
+    }
+    set(h.state_mut(), id, "scaleHorizontal", json!(30.0));
+    set(h.state_mut(), id, "scaleVertical", json!(5.0));
+    assert!(ok(h.state_mut(), id), "OK applies the Wave");
+    let (command, applied) = h.state().session.journal.last().cloned().expect("the Wave was applied");
+    assert_eq!(command, "filter.distort.wave");
+    assert_eq!((applied["scaleHorizontal"].as_f64(), applied["scaleVertical"].as_f64()), (Some(30.0), Some(5.0)), "{applied}");
+}

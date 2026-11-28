@@ -490,12 +490,13 @@ fn distort_filter_params(class: &str, f: &Descriptor) -> Option<J> {
             json!({"amount": int(f, "Amnt")?, "ridges": int(f, "NmbR")?, "style": enum_name(f, "ZZTy", "ZZTy", &ZIGZAG_STYLE)?})
         }
         ("Wave", Some(f)) if exact_keys(f, &WAVE_KEYS) => {
-            // PhotoCraft's Wave has no Scale: a scaled wave stays verbatim rather than lose it. The
-            // same for more generators than the renderer models, which would draw fewer than
-            // Photoshop did (and than the file asks for, once its cached pixels are re-rendered).
+            // More generators than the renderer models would draw fewer than Photoshop did (and
+            // than the file asks for, once its cached pixels are re-rendered), and a scale outside
+            // the dialog's 1–100 % would render clamped: those stay verbatim.
             let generators = int(f, "NmbG")?;
             let modelled = u32::try_from(generators).is_ok_and(|g| (1..=photocraft_algo::MAX_WAVE_GENERATORS).contains(&g));
-            if int(f, "SclH")? != 100 || int(f, "SclV")? != 100 || !modelled {
+            let (horizontal, vertical) = (int(f, "SclH")?, int(f, "SclV")?);
+            if !modelled || ![horizontal, vertical].iter().all(|s| (1..=100).contains(s)) {
                 return None;
             }
             json!({
@@ -505,6 +506,8 @@ fn distort_filter_params(class: &str, f: &Descriptor) -> Option<J> {
                 "wavelengthMax": int(f, "WLMx")?,
                 "amplitudeMin": int(f, "AmMn")?,
                 "amplitudeMax": int(f, "AmMx")?,
+                "scaleHorizontal": horizontal,
+                "scaleVertical": vertical,
                 "undefinedAreas": enum_name(f, "UndA", "UndA", &UNDEFINED_AREAS)?,
                 // `RndS` is a signed long; the seed is its bit pattern.
                 "seed": (int(f, "RndS")? as u32),
