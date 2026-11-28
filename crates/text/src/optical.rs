@@ -288,35 +288,4 @@ mod tests {
             assert!(rms < 12.5, "rms {rms}");
         }
     }
-
-    /// Writes glyph profiles of macOS system fonts as JSON for fitting [`PARAMS`]
-    /// (`OPTICAL_DUMP=<file> cargo test -p photocraft-text optical_dump -- --ignored`).
-    #[test]
-    #[ignore]
-    fn optical_dump() {
-        let Some(out) = std::env::var_os("OPTICAL_DUMP") else { return };
-        let chars = "HOnovAVTyLWaYPFxrilIcdbpkwf1475eKsgzt";
-        let mut json = String::from("{");
-        for (name, path) in [
-            ("ArialMT", "/System/Library/Fonts/Supplemental/Arial.ttf"),
-            ("Georgia", "/System/Library/Fonts/Supplemental/Georgia.ttf"),
-            ("TimesNewRomanPSMT", "/System/Library/Fonts/Supplemental/Times New Roman.ttf"),
-            ("Verdana", "/System/Library/Fonts/Supplemental/Verdana.ttf"),
-        ] {
-            let data = std::fs::read(path).unwrap();
-            let font = skrifa::FontRef::from_index(&data, 0).unwrap();
-            json.push_str(&format!("\"{name}\":{{"));
-            for c in chars.chars() {
-                let g = font.charmap().map(c).unwrap().to_u32();
-                let p = profile(&font, &[], g).unwrap();
-                let f = |v: &[Option<f32>]| v.iter().map(|x| x.map_or("null".to_string(), |x| format!("{x:.5}"))).collect::<Vec<_>>().join(",");
-                json.push_str(&format!("\"{c}\":{{\"adv\":{},\"l\":[{}],\"r\":[{}]}},", p.advance, f(&p.left), f(&p.right)));
-            }
-            json.pop();
-            json.push_str("},");
-        }
-        json.pop();
-        json.push('}');
-        std::fs::write(out, json).unwrap();
-    }
 }
