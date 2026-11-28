@@ -71,13 +71,6 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     let which = sample_layers(p, CMD)?;
-    let source = super::clone_sampling::resolve(s, p, CMD)?;
-    let mode = blend_param(p, CMD)?;
-    // The options bar's Replace row (#12101): the stroke copies the source pixels without the
-    // healing solve, composited through `mode` (Normal). It is the command's word, not a blend
-    // mode; `blend_param` already accepted it for this command alone.
-    let replace = p.get("mode").and_then(Value::as_str) == Some("replace");
-    let aligned = flag(p, "aligned", true);
     // The options bar's Source control (#12104): "pattern" takes the texture from the pattern
     // named by "pattern", resolved and tiled exactly like the Pattern Stamp's stroke, and needs
     // no sampled source point. The absent key, and a null one, is today's sampled stroke -
@@ -87,6 +80,20 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => "sampled",
         Some(v) => v.as_str().ok_or_else(|| bad(CMD, "`sourceMode` must be a string (sampled|pattern)"))?,
     };
+    // The Clone Source slot is the sampled stroke's business: a pattern stroke samples nothing, so
+    // a closed or incompatible source document in that slot must not refuse it. What the pattern
+    // stroke takes from here is the working pixel format its tile is laid in, and the paint target
+    // gives that on its own.
+    let source = match source_mode {
+        "pattern" => super::clone_sampling::CloneFrom::for_paint_target(p),
+        _ => super::clone_sampling::resolve(s, p, CMD)?,
+    };
+    let mode = blend_param(p, CMD)?;
+    // The options bar's Replace row (#12101): the stroke copies the source pixels without the
+    // healing solve, composited through `mode` (Normal). It is the command's word, not a blend
+    // mode; `blend_param` already accepted it for this command alone.
+    let replace = p.get("mode").and_then(Value::as_str) == Some("replace");
+    let aligned = flag(p, "aligned", true);
     let healed_from = match source_mode {
         "sampled" => HealedSource::Sampled(clone_mapping(s, p, &stroke, CMD)?),
         "pattern" => {

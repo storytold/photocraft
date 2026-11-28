@@ -296,6 +296,28 @@ fn sampled_source_mode_keeps_the_sampled_stroke_byte_for_byte() {
 }
 
 #[test]
+fn a_pattern_stroke_ignores_the_clone_source_slot() {
+    // A pattern stroke has no source point, so the Clone Source slot must not speak for it: with
+    // the slot's document closed the tile still paints, while a sampled stroke still refuses.
+    let mut s = document();
+    let other = s.add_document(Document::with_background("other", Size::new(24, 24), ColorMode::Rgb, SampleType::U8, Color::rgb(0.0, 0.0, 0.0)), None);
+    s.execute("cloneSource.set", json!({"source": [4, 4]})).unwrap();
+    s.execute("file.close", json!({"document": other})).unwrap();
+    s.set_active(0);
+    use crate::presets::PresetsExt;
+    assert!(s.presets().clone.active().document_closed, "the fixture: the slot names the closed document");
+    let before = state(&s);
+    s.execute("paint.healingBrush", stroke("Heal tile", json!({}))).unwrap();
+    assert_ne!(state(&s).0, before.0, "the tile painted");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Healing Brush"), "one Healing Brush step");
+    // The sampled branch keeps its own guard: the same slot still refuses a stroke that needs it.
+    let err = s.execute("paint.healingBrush", json!({"points": [[10, 10]], "size": 8, "hardness": 100})).unwrap_err().to_string();
+    assert!(err.contains("closed"), "a sampled stroke still reads the slot: {err}");
+    assert_ne!(state(&s).0, before.0.clone(), "the refused sampled stroke painted nothing of its own");
+    assert_eq!(s.active().unwrap().history.past_len(), before.1 + 1, "and added no step");
+}
+
+#[test]
 fn a_pattern_stroke_is_not_drawn_as_a_live_clone_preview() {
     // The live retouching stroke paints its clone source; with a pattern source that texture is
     // not the tile, so the pattern stroke refuses the live preview and commits through the
