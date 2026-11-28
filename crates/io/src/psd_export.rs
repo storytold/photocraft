@@ -61,8 +61,8 @@ pub struct PsdExportOptions {
     /// (`false` keeps straight colour under the alpha: for containers that store the composite
     /// with its own alpha, such as a layered TIFF).
     pub merged_matte: bool,
-    /// Compression of the merged image (32-bit float documents are always written raw).
-    pub merged_compression: Compression,
+    /// Override the depth-specific merged compression (32-bit float documents always use raw).
+    pub merged_compression: Option<Compression>,
     /// Write the real merged image (Preferences › File Handling › Maximize PSD and PSB File
     /// Compatibility). `false` writes Photoshop's white placeholder instead and records
     /// `has_real_merged_data = false` in resource 1057: a smaller file and a faster save, but
@@ -91,7 +91,7 @@ impl Default for PsdExportOptions {
             force_psb: false,
             size_limit_psb: true,
             merged_matte: true,
-            merged_compression: Compression::Rle,
+            merged_compression: None,
             maximize_compatibility: true,
             document_path: None,
             read_linked_files: true,
@@ -196,7 +196,10 @@ fn q255(v: f32) -> u8 {
 
 impl Ex<'_> {
     fn compression(&self) -> Compression {
-        if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
+        match self.fmt.sample {
+            SampleType::U16 | SampleType::F32 => Compression::ZipPrediction,
+            SampleType::U8 => Compression::Rle,
+        }
     }
 
     fn encode(&self, id: i16, plane: &[u8], w: usize, h: usize) -> ChannelData {

@@ -18,6 +18,17 @@ fn document(depth: SampleType, size: Size) -> Document {
     doc
 }
 
+#[test]
+fn rgb16_default_save_uses_raw_composite_and_predicted_zip_layers() {
+    let doc = document(SampleType::U16, Size::new(17, 9));
+    let file = document_to_psd_with(&doc, &PsdExportOptions::default()).unwrap().0;
+    let parsed = craft_psd::PsdFile::from_bytes(&file.to_bytes().unwrap()).unwrap();
+    assert_eq!(parsed.image_data.compression, Compression::Raw);
+    let channels = &parsed.layer_info.as_ref().unwrap().layers[0].channels;
+    assert_eq!(channels.len(), 4);
+    assert!(channels.iter().all(|channel| channel.compression == Some(Compression::ZipPrediction)));
+}
+
 /// Compare both decoders and generate a legacy stream without flate2 compression.
 fn old_and_new_inflate(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let old = miniz_oxide::inflate::decompress_to_vec_zlib(bytes)
@@ -70,10 +81,10 @@ fn png_psd_and_pcraft_decode_identically() {
             let image = Image::from_normalized(257, 131, ChannelLayout::Rgba, sample, &pixels).unwrap();
             check_png(&photocraft_codecs::encode(&image, Format::Png, &Default::default()).unwrap(), &image);
         }
-        let raw_opts = PsdExportOptions { merged_compression: Compression::Raw, merged_matte: false, ..Default::default() };
+        let raw_opts = PsdExportOptions { merged_compression: Some(Compression::Raw), merged_matte: false, ..Default::default() };
         let merged = document_to_psd_with(&doc, &raw_opts).unwrap().0.image_data.data;
         for compression in [Compression::Zip, Compression::ZipPrediction] {
-            let opts = PsdExportOptions { merged_compression: compression, merged_matte: false, ..Default::default() };
+            let opts = PsdExportOptions { merged_compression: Some(compression), merged_matte: false, ..Default::default() };
             let mut file = document_to_psd_with(&doc, &opts).unwrap().0;
             // The IO exporter normally chooses Raw for float composites; also cover ZIP here.
             if depth == SampleType::F32 {
