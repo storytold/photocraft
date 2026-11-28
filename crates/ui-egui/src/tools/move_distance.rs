@@ -2,7 +2,8 @@
 //! › Smart Guides, Extras on) and the Move tool, holding ⌘ (Ctrl off the Mac) with no button down
 //! and hovering another layer shows the distances between the selected layers' bounds and that
 //! layer's, as lines labelled with the value in the ruler unit. Over empty canvas (or the
-//! Background, or the selection itself) the distances run to the canvas edges instead. While an
+//! Background) the distances run to the canvas edges instead; over the selection itself (or a
+//! layer in a selected group) nothing shows (#16861). While an
 //! ⌥-drag duplicates the layers, the distance between the original and the copy shows.
 //!
 //! It's an overlay only: nothing changes in the document and there is no command or History
@@ -34,6 +35,7 @@ pub(crate) struct Cache {
 
 /// The selected layers' box and the box to measure it to with the pointer at `at` (document px):
 /// the layer a click there would Auto-Select, or the canvas where that is no other layer.
+/// `None` when that layer is part of the selection.
 fn boxes(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<([f64; 4], [f64; 4])> {
     if !at[0].is_finite() || !at[1].is_finite() {
         return None;
@@ -49,11 +51,10 @@ fn boxes(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<([f64; 4], [f64; 4])> 
     let d = &st.doc;
     let a = union(selected.iter().filter(|id| !d.is_background(**id)).filter_map(|id| crate::snap_ui::tree_rect(d, *id)));
     let canvas = [0.0, 0.0, d.size.width as f64, d.size.height as f64];
-    let hovered = photocraft_engine::pick_cmds::move_auto_select_target(d, at[0], at[1], group).filter(|id| {
-        // The selection itself (or a layer in a selected group) isn't another layer.
-        !d.is_background(*id) && !selected.iter().any(|s| *s == *id || d.path_of(*id).zip(d.path_of(*s)).is_some_and(|(p, q)| p.starts_with(&q)))
-    });
-    let boxes = a.map(|a| (a, hovered.and_then(|id| crate::snap_ui::tree_rect(d, id)).unwrap_or(canvas)));
+    let hovered = photocraft_engine::pick_cmds::move_auto_select_target(d, at[0], at[1], group).filter(|id| !d.is_background(*id));
+    // The selection itself (or a layer in a selected group) isn't another layer: nothing to measure.
+    let on_selection = hovered.is_some_and(|id| selected.iter().any(|s| *s == id || d.path_of(id).zip(d.path_of(*s)).is_some_and(|(p, q)| p.starts_with(&q))));
+    let boxes = a.filter(|_| !on_selection).map(|a| (a, hovered.and_then(|id| crate::snap_ui::tree_rect(d, id)).unwrap_or(canvas)));
     app.move_distance = Some(Cache { doc, revision, at, group, selected: selected.to_vec(), boxes });
     boxes
 }
@@ -92,7 +93,7 @@ fn duplicate_drag(app: &PhotocraftApp) -> Option<(Rect, Rect)> {
 /// Shows the measurements over the canvas `rect`, in the Smart Guides colour. `pointer` is the
 /// screen hover position.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rect, pointer: Option<egui::Pos2>) {
-    let command = craft::ui::runtime::pointer::frame(ui.ctx()).mods.cmd;
+    let command = craft::ui::runtime::pointer::mods(ui.ctx()).cmd;
     let pressed = crate::canvas::tools::in_gesture(app);
     let at = pointer.and_then(|p| crate::canvas::document_display::doc_point_at(app, p)).map(|p| [p.x, p.y]);
     let Some((a, b)) = current(app, at, command, pressed) else { return };
@@ -148,8 +149,6 @@ mod tests {
         assert_eq!((a, b), (mover, Rect::new(300.0, 200.0, 350.0, 260.0)));
         // Over empty canvas (the Background): to the canvas.
         assert_eq!(current(&mut app, Some([200.0, 150.0]), true, false), Some((mover, canvas)));
-        // Over the selected layer itself: also the canvas.
-        assert_eq!(current(&mut app, Some([60.0, 60.0]), true, false), Some((mover, canvas)));
         // Only an overlay: the document didn't change.
         assert_eq!(app.session.active().unwrap().revision, revision);
         let target = app.session.active().unwrap().doc.layers.iter().find(|l| l.name == "target").unwrap().id;
@@ -199,3 +198,7 @@ mod tests {
         assert_eq!(current(&mut app, None, false, false), None);
     }
 }
+
+#[cfg(test)]
+#[path = "move_distance_self_tests.rs"]
+mod move_distance_self_tests;

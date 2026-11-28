@@ -18,6 +18,7 @@ use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::env::{Env, Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::sections::{DialogRole, FooterButton};
 use craft::ui::text::NumberField;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
@@ -317,6 +318,12 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
                 let kind = if command == "layer.layerStyle.globalLight" { ParamKind::angle_in(min, max, default, 0) } else { ParamKind::angle(default) };
                 p = Param::new(p.key, p.label, kind);
             }
+            // Artboard from Layers' Width and Height take 4 to 32000 px; a value typed outside is
+            // clamped when the field is left (#14577).
+            if command == "layer.new.artboardFromLayers" && matches!(p.key.as_str(), "width" | "height") {
+                use photocraft_engine::artboard_cmds::{FROM_LAYERS_MAX, FROM_LAYERS_MIN};
+                p = Param::new(p.key, p.label, ParamKind::int(Some(FROM_LAYERS_MIN), Some(FROM_LAYERS_MAX), 0));
+            }
             if command == SCALE_EFFECTS && p.key == "scale" {
                 return scale_effects_row(p);
             }
@@ -373,12 +380,17 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     if command == super::rotate_canvas_ui::COMMAND {
         list = super::rotate_canvas_ui::params();
     }
+    // Auto-Align Layers: the Projection and Lens Correction groups and the text block (#14196).
+    if command == super::auto_align_ui::COMMAND {
+        list = super::auto_align_ui::params(app);
+    }
     rows::custom_rows(app, command, &mut list);
     if command == color_settings_presets::COMMAND {
         // The Settings menu: Custom, a greyed group label and the named setups in groups (#14229).
         if let Some(p) = list.iter_mut().find(|p| p.key == "preset") {
             *p = color_settings_presets::row(Label::from(tl!("Settings")));
         }
+        color_settings_presets::text_gamma_rows(&mut list);
         // The monitor line under the rows: the cell holds the text each frame refreshes, which the build closure cannot read from the app.
         let note = crate::monitor_status::note_cell(app);
         list.push(craft::ui::patterns::form_dialogs::Param::custom("monitorNote", craft::ui::runtime::env::Label::Empty, move |ui, _, _| {
@@ -456,12 +468,13 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
         map.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
     }
     // The reference application's Artboard from Layers opens at the next Artboard N and the
-    // selected layers' size every time, never a remembered size; past the field's 30000 px
+    // selected layers' size every time, never a remembered size; past the field's 32000 px
     // range, 0 keeps the bounds.
     if command == "layer.new.artboardFromLayers"
         && let Some((name, [w, h])) = photocraft_engine::artboard_cmds::from_layers_defaults(&app.session)
     {
-        let fits = w <= 30_000 && h <= 30_000;
+        let max = photocraft_engine::artboard_cmds::FROM_LAYERS_MAX;
+        let fits = w <= max && h <= max;
         map.insert("name".into(), json!(name));
         map.insert("width".into(), json!(if fits { w } else { 0 }));
         map.insert("height".into(), json!(if fits { h } else { 0 }));
@@ -574,15 +587,17 @@ fn builder(
             .reset_to(reset.clone())
             .layout(ParamLayout::Stacked)
             .previews(preview)
-            // Alt keeps Rotate Canvas's Cancel a Cancel, as in the reference application (#14462).
-            .alt_resets(key != super::rotate_canvas_ui::COMMAND)
+            // Alt keeps Rotate Canvas's and Auto-Align's Cancel a Cancel, as in the reference application (#14462, #14196).
+            .alt_resets(key != super::rotate_canvas_ui::COMMAND && key != super::auto_align_ui::COMMAND)
             .alert_title(tl!("PhotoCraft"));
         if let Some(canvas) = canvas {
             dialog = dialog.canvas(canvas);
         }
         if key == "image.mode.colorTable" {
-            dialog = dialog
-                .extra_buttons(vec![("load".to_owned(), Label::from(tl!("Load…").to_string())), ("save".to_owned(), Label::from(tl!("Save…").to_string()))]);
+            dialog = dialog.extra_buttons(vec![
+                ("load".to_owned(), FooterButton::new(tl!("Load…").to_string(), DialogRole::Other)),
+                ("save".to_owned(), FooterButton::new(tl!("Save…").to_string(), DialogRole::Other)),
+            ]);
         }
         dialog
     }
@@ -650,6 +665,15 @@ pub fn open_smart_edit(app: &mut PhotocraftApp, command: &str, recorded: &Map<St
     let base = fields(app, command, &params);
     let reset = reset_values(&params, &base);
     let mut opening = base;
+    // A Color Lookup filter recorded without interpolation or dither renders with the engine's defaults, not the
+    // dialog's (#14419); OK replaces the params, so it opens on what it renders with.
+    let lookup;
+    let recorded = if command == "image.adjustments.colorLookup" {
+        lookup = photocraft_engine::adjust_cmds::lookup_filter_params(recorded);
+        &lookup
+    } else {
+        recorded
+    };
     overlay(&params, recorded, &mut opening);
     let build = builder(app, command, dialog_title(command, spec.label), params, reset, previews(command));
     // PLAN: assumed `open_param_unsaved`, as in `open_with_spec`.
@@ -720,6 +744,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
+    }
+    if command == super::auto_align_ui::COMMAND {
+        super::auto_align_ui::command_params(&mut map, fields);
     }
     // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
     // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
@@ -1140,6 +1167,7 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, result:
     app.ask_file(request, move |app, picked| {
         let path = match picked {
             Picked::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
+            Picked::Saved { .. } => return Err(crate::file_dialog::UNEXPECTED.into()),
             Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
             Picked::Unavailable(error) | Picked::Failed(error) => return Err(error),
             Picked::Contents(_) => return Err("open the displacement map as a document, then choose it as the Map Document".into()),
@@ -1405,6 +1433,8 @@ pub struct FilterPreviewKey {
     pub scratch: u64,
 }
 
+#[cfg(test)]
+mod artboard_from_layers_size_range_tests;
 #[cfg(test)]
 mod global_light_angle_range_tests;
 #[cfg(test)]

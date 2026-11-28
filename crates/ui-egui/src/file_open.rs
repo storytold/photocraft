@@ -3,9 +3,10 @@
 //! and the OS's "open these documents" requests (macOS Finder double-click, Open With, drops on the
 //! Dock icon) all go through [`PhotocraftApp::open_file`], so each one names the document after the
 //! file, remembers its path (File › Save writes back to it) and adds it to Open Recent. Failures
-//! are shown as errors (status bar + notice); import warnings as a notice.
+//! are shown as modal alerts and in the status bar; import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use craft::ui::dialog::{Alert, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog};
 use craft::ui::runtime::drag::OsFile;
 use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use photocraft_doc::DocId;
@@ -59,7 +60,7 @@ pub enum DropRoute {
 /// Where a web-build drop at `at` lands, from what the last frame drew: the canvas (a drop is
 /// placed only while a document is open) and whether `at` is free of windows and dialogs above
 /// the workspace (`uncovered`). No pointer, a covered one, or no canvas means [`DropTo::Window`].
-/// The web build's own drop path until FW-264; native drops arrive through framework drop targets.
+/// The web build's own drop path until FW-264, and native drops the tab strip does not take (`canvas::window_drop`).
 pub(crate) fn target_at(at: Option<egui::Pos2>, uncovered: bool, canvas: Option<egui::Rect>, has_document: bool) -> DropTo {
     let Some(p) = at.filter(|_| uncovered) else {
         return DropTo::Window;
@@ -206,6 +207,64 @@ pub fn display_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| path.to_string())
 }
 
+// Named PSD/PSB/templates deliberately keep the PSD parser's errors for direct callers. Only
+// its missing file-header signature means unrecognized content; damaged internal signatures
+// (8BIM, etc.) and a recognized 8BPS file's other parse errors must retain their reasons.
+fn unrecognized_open_reason(reason: &str) -> bool {
+    if reason == "codec: unrecognized image format" {
+        return true;
+    }
+    let Some(signature) = reason.strip_prefix("PSD: invalid signature [").and_then(|s| s.strip_suffix("], expected 8BPS")) else {
+        return false;
+    };
+    let mut values = signature.split(", ");
+    let mut found = [0u8; 4];
+    for byte in &mut found {
+        let Some(text) = values.next() else { return false };
+        let Ok(value) = text.parse::<u8>() else { return false };
+        if text != value.to_string() {
+            return false;
+        }
+        *byte = value;
+    }
+    values.next().is_none() && &found != b"8BPS"
+}
+
+/// One failed file, rendered by the shared alert. Distinct instances keep a multi-file open's
+/// errors separate; a plain HostedAlert has one fixed identity and would replace the earlier file.
+struct OpenFailureAlert {
+    id: DialogId,
+    alert: HostedAlert,
+}
+
+impl StackDialog for OpenFailureAlert {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+    fn instance(&self) -> Option<DialogId> {
+        Some(self.id)
+    }
+    fn key(&self) -> Option<&str> {
+        self.alert.key()
+    }
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        self.alert.json_fields()
+    }
+    fn confirm(&mut self, ctx: &egui::Context) -> Option<()> {
+        self.alert.confirm(ctx)
+    }
+    fn show(&mut self, ui: &mut egui::Ui, stack: &DialogStack) -> Option<DialogResult<()>> {
+        ui.push_id(self.id, |ui| self.alert.show(ui, stack)).inner
+    }
+}
+
+/// Acknowledgements contain no command; drain every completed occurrence without reopening it.
+pub(crate) fn take_open_alerts(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    while app.framework.dialogs.take_keyed::<OpenFailureAlert>().is_some() {}
+}
+
 impl PhotocraftApp {
     /// Open `bytes` read from the file at `path`: the document is named after the file, keeps
     /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
@@ -337,7 +396,7 @@ impl PhotocraftApp {
             // prompt that is answered later all place the file at its place in the set.
             match self.open_path_placed(abs, None, Some(order)) {
                 Ok(_) => opened += 1,
-                Err(e) => self.open_failed(&display_name(abs), &e),
+                Err(e) => self.open_failed(abs, &e),
             }
         }
         crate::jobs_ui::end_batch(self);
@@ -371,12 +430,31 @@ impl PhotocraftApp {
         true
     }
 
-    /// Show "Couldn't open <name>: <error>" as an error (status bar + notice).
-    pub fn open_failed(&mut self, name: &str, err: &str) {
-        self.failed({
+    /// Report one failed open in an OK alert, naming its source file once. Pass the source path
+    /// when available so its exact prefix can be removed from filesystem read errors too.
+    pub fn open_failed(&mut self, source: &str, err: &str) {
+        let name = display_name(source);
+        let source_prefix = format!("{source}: ");
+        let name_prefix = format!("{name}: ");
+        // The native background importer wraps its path-prefixed read error in the file name.
+        let wrapped_source_prefix = format!("{name}: {source}: ");
+        let reason = (source != name)
+            .then(|| err.strip_prefix(&wrapped_source_prefix))
+            .flatten()
+            .or_else(|| err.strip_prefix(&source_prefix))
+            .or_else(|| err.strip_prefix(&name_prefix))
+            .unwrap_or(err);
+        let msg = if unrecognized_open_reason(reason) {
+            crate::i18n::fmt(tl!("Could not open \"{name}\" because PhotoCraft does not recognize this type of file."), &[("name", &name)])
+        } else {
             let template = "Couldn't open {name}: {error}";
-            crate::i18n::fmt(tl!(template), &[("name", name), ("error", err)])
-        });
+            crate::i18n::fmt(tl!(template), &[("name", &name), ("error", reason)])
+        };
+        log::warn!("{msg}");
+        self.ui.status = msg.clone();
+        self.ui.status_error = true;
+        let id = crate::jobs_ui::open_failure_id(self);
+        self.framework.dialogs.open(OpenFailureAlert { id, alert: HostedAlert::new(Alert::new("PhotoCraft", msg)) });
     }
 
     /// Show "Couldn't place <name>: <error>" as an error (status bar + notice).
@@ -417,11 +495,13 @@ impl PhotocraftApp {
         }
         for f in files {
             let name = dropped_name(&f);
+            let source = f.path.as_deref().filter(|path| path.is_absolute()).map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| name.clone());
             let route = to.route(&name);
+
             if let Some(why) = f.path.as_deref().and_then(folder_error) {
                 match route {
                     DropRoute::Place => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &why)])),
-                    DropRoute::Open => self.open_failed(&name, &why),
+                    DropRoute::Open => self.open_failed(&source, &why),
                 }
                 continue;
             }
@@ -434,12 +514,12 @@ impl PhotocraftApp {
             match self.open_dropped_file(&f, &name, slot) {
                 Ok(true) => slot = slot.map(|s| s + 1),
                 Ok(false) => {}
-                Err(e) => self.open_failed(&name, &e),
+                Err(e) => self.open_failed(&source, &e),
             }
         }
     }
 
-    /// The pointer position (the web build's drop path until FW-264), from the OS cursor service when available, falling back to egui's
+    /// The pointer position (where a web or window-wide drop lands), from the OS cursor service when available, falling back to egui's
     /// last-known pointer position (e.g. on Wayland).
     pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
         self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
@@ -464,7 +544,7 @@ impl PhotocraftApp {
         places
     }
 
-    /// Where a web-build drop at `at` lands (the web build's own drop path until FW-264). Over a
+    /// Where a web-build or window-wide drop at `at` lands (`canvas::window_drop`). Over a
     /// window or dialog it's not the canvas. On the canvas it carries the document point under `at`.
     pub(crate) fn drop_to(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTo {
         let uncovered = at.is_some_and(|p| {
@@ -804,3 +884,6 @@ mod dialog_order_tests;
 mod place_multiple_files_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod unreadable_alert_tests;

@@ -2030,6 +2030,29 @@ fn semi_transparent_normal_stroke_knocks_out_the_layer_beneath_it() {
 }
 
 #[test]
+fn stroke_on_partial_raster_alpha_matches_on_gpu_across_page_boundaries() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::with_background("Partial alpha strokes", Size::new(540, 300), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut layer = Layer::raster("Orange blocks", doc.pixel_format());
+    let surface = layer.surface_mut().unwrap();
+    for (x, alpha) in [(20, 1.0), (236, 0.5), (460, 0.25)] {
+        surface.fill_rect(Rect::from_xywh(x, 40, 44, 220), &[1.0, 128.0 / 255.0, 0.0, alpha]);
+    }
+    doc.layers.push(layer);
+    for (position, size) in [(StrokePosition::Inside, 5.0), (StrokePosition::Center, 6.0), (StrokePosition::Outside, 5.0)] {
+        doc.layers[1].effects.items = vec![Effect::Stroke(stroke(size, position, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0))))];
+        let stats = fx_check(&mut g, &doc, &format!("{position:?} stroke across pages"));
+        assert!(stats.passes > 0, "the GPU rendered the effect");
+    }
+
+    // Retouching the same tile from translucent to opaque must invalidate its inside field.
+    doc.layers[1].effects.items = vec![Effect::Stroke(stroke(5.0, StrokePosition::Inside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0))))];
+    fx_check(&mut g, &doc, "cached inside stroke");
+    doc.layers[1].surface_mut().unwrap().fill_rect(Rect::from_xywh(248, 112, 24, 32), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+    fx_check(&mut g, &doc, "inside stroke after changing partial alpha");
+}
+
+#[test]
 fn exterior_effects_merge_from_the_shape_at_any_fill() {
     // Drop shadows and outer glows alone: the merge builds the layer from its shape (fill inside
     // it, times its alpha) instead of passes of its own. Fill from 0 to 1, opacity, modes
@@ -2924,7 +2947,7 @@ fn a_pattern_too_large_for_a_gpu_texture_falls_back_to_the_cpu() {
     let mut d = Document::new("big pattern", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
     // 100 MB as RGBA8, 400 MB as an RGBA32F texture.
     let surface = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
-    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, surface };
+    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, source_mode: None, surface };
     assert!(pat.is_paintable());
     d.layers.push(Layer::new(
         "pattern",

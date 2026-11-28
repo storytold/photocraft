@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// Colour and width stay in their existing controls. These options never replace a shape's paint.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft::ui::contract::PlainData)]
 #[serde(default)]
 pub struct StrokeOptions {
     pub align: StrokeAlign,

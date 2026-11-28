@@ -3,7 +3,7 @@
 //! the New Layer button still duplicate at once.
 use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use serde_json::{Value, json};
 
@@ -63,7 +63,27 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     };
     let mut options: Vec<(String, Label)> = destinations(app).into_iter().map(|(key, name)| (key, Label::from(name))).collect();
     options.push(("new".to_string(), Label::from(tl!("New"))));
+    // Another document or New proposes the layer's own name; the source document, "<name> copy" again (#14604).
+    // A group's naming is not measured and stays as it was (CodeRabbit on #16090).
+    let names = name.clone().filter(|_| !layer.is_group()).map(|copy| (copy, layer.name.clone()));
+    let shown_for = std::sync::Mutex::new(source.to_string());
+    // The proposal the As: field currently holds: only an untouched one is replaced when the destination changes.
+    let proposal = std::sync::Mutex::new(name.clone().unwrap_or_default());
     Ok(params::open_param(app, KEY, DialogFields::new(), captured, move |fields: &mut DialogFields| {
+        if let Some((copy, plain)) = &names {
+            let chosen = fields.text("document").map(str::to_owned);
+            let mut shown = shown_for.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(chosen) = chosen.filter(|chosen| *chosen != *shown) {
+                let proposed = if chosen == source.to_string() { copy } else { plain };
+                let mut last = proposal.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                // A name the user typed is theirs: keep it across destination changes (CodeRabbit on #16090).
+                if fields.text("name").is_none_or(|now| now.is_empty() || now == *last) {
+                    fields.set("name", FieldValue::Text(proposed.clone()));
+                    *last = proposed.clone();
+                }
+                *shown = chosen;
+            }
+        }
         let mut rows = Vec::new();
         if let Some(name) = &name {
             rows.push(Param::new("name", tl!("As:"), ParamKind::text(name.clone())));
@@ -110,10 +130,21 @@ pub(crate) fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamRe
 fn duplicate(app: &mut PhotocraftApp, fields: &DialogFields) -> Result<Value, String> {
     let index = app.session.active_index().ok_or("The document is closed")?;
     let mut params = serde_json::Map::new();
-    if let Some(name) = fields.text("name") {
-        params.insert("name".into(), json!(name));
+    let destination = destination(app, fields)?;
+    match fields.text("name") {
+        Some(name) if !name.is_empty() => {
+            params.insert("name".into(), json!(name));
+        }
+        // An empty As: another document or New takes the layer's own name, as the dialog proposes for them (#14604).
+        // A group keeps its previous behaviour (CodeRabbit on #16090).
+        Some(_) if !matches!(destination, Destination::Document(d) if d == index) => {
+            if let Some(layer) = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).filter(|l| !l.is_group()) {
+                params.insert("name".into(), json!(layer.name));
+            }
+        }
+        _ => {}
     }
-    match destination(app, fields)? {
+    match destination {
         Destination::New => {
             if let Some(doc_name) = fields.text("documentName").filter(|n| !n.is_empty()) {
                 params.insert("documentName".into(), json!(doc_name));
@@ -193,7 +224,7 @@ mod tests {
         set(&mut app, dialog, "document", pick).unwrap();
         confirm(&mut app, &ctx, dialog).unwrap();
         assert_eq!(app.session.documents()[0].doc.layer_count(), 2);
-        assert!(names(&app, 1).contains(&"Ink copy".to_string()));
+        assert!(names(&app, 1).contains(&"Ink".to_string()));
     }
 
     #[test]
@@ -208,7 +239,7 @@ mod tests {
         assert_eq!(app.session.active_index(), Some(1));
         assert_eq!(app.session.documents()[1].doc.name, "Card");
         assert_eq!(app.session.documents()[0].doc.layer_count(), 2, "the source is untouched");
-        assert!(names(&app, 1).contains(&"Ink copy".to_string()));
+        assert!(names(&app, 1).contains(&"Ink".to_string()));
     }
 
     #[test]
@@ -259,7 +290,7 @@ mod tests {
             let docs = app.session.documents();
             let spare = docs.iter().position(|d| d.doc.name == "Spare").unwrap();
             let spare_names: Vec<_> = docs[spare].doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect();
-            assert!(spare_names.contains(&"Ink copy".to_string()), "{change}: Spare receives the copy: {spare_names:?}");
+            assert!(spare_names.contains(&"Ink".to_string()), "{change}: Spare receives the copy: {spare_names:?}");
             if let Some(card) = docs.iter().position(|d| d.doc.name == "Card") {
                 assert_eq!(docs[card].doc.layer_count(), 1, "{change}: Card is untouched");
             }

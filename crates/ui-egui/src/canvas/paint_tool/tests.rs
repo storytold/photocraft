@@ -52,7 +52,7 @@ fn harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> 
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );
@@ -494,10 +494,12 @@ fn painting_a_group_is_refused_at_the_press_with_a_message() {
         let seen = errors(&app).len();
         app.ui.tool = tool;
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, M);
-        // Brush and Classic gradient use the measured alerts (#11898, #12017).
+        // Brush, Classic gradient, Magic Eraser and Paint Bucket use the measured alerts (#11898, #12017, #12020, #12537).
         let want = match tool {
             Tool::Brush => "Could not use the brush tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            Tool::MagicEraser => "Could not use the magic eraser because the pixels in a group cannot be edited without merging the group.".to_string(),
             Tool::Gradient => "Could not use the gradient tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            Tool::PaintBucket => "Could not use the paint bucket because the pixels in a group cannot be edited without merging the group.".to_string(),
             _ => format!("Could not use the {} because the target layer is a group.", tool.label()),
         };
         assert_eq!(errors(&app)[seen..], [want], "{tool:?}");

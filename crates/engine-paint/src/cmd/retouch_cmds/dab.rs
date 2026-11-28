@@ -4,7 +4,7 @@ use super::{
     Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
     from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
 };
-use photocraft_algo::retouch::sponge_rgb;
+use photocraft_algo::retouch::{luma, sponge_rgb, tone_curve};
 use photocraft_color::{ColorMode, SampleType};
 
 // ---------------------------------------------------------------------------------------------
@@ -185,6 +185,47 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + '
     })
 }
 
+/// Strength of [`linear_midtones`] per unit of Exposure.
+const LINEAR_MIDTONES_STRENGTH: f32 = 1.34;
+
+/// The Midtones Dodge (`burn = false`) or Burn curve for one linear value of a 32-bit document at
+/// exposure `e` (0..1): `v ± 1.34·e·v²·(1 − v)^1.5`, each channel on its own. It is fitted to the
+/// reference's 32-bit results (#12687, #12674), which tone the stored linear values: much gentler on the
+/// mid tones than the 8-bit curve on gamma-encoded values, and the shadows are left alone. Black
+/// and white stay put, values outside 0..1 (light above white) are kept as they are, and tones
+/// stay in order at every exposure.
+#[inline]
+fn linear_midtones(v: f32, e: f32, burn: bool) -> f32 {
+    if !(v > 0.0 && v < 1.0) {
+        return v;
+    }
+    let d = LINEAR_MIDTONES_STRENGTH * e.clamp(0.0, 1.0) * v * v * (1.0 - v).powf(1.5);
+    if burn { v - d } else { v + d }
+}
+
+/// The 32-bit reference was measured at Exposure 50 % only (#12687, #12674); other exposures keep the
+/// gamma curve.
+const MEASURED_LINEAR_EXPOSURE: f32 = 0.5;
+
+/// Dodge or Burn of a 32-bit colour with the curve the other bit depths use, except that light above
+/// white isn't clipped: Protect Tones scales such a colour to its new luma without gamut
+/// compression, which would pull it back to 1.0 (#12687, #12674). Such a colour whose luma isn't
+/// positive (a negative channel outweighs it) can't be scaled by luma, so it takes the per-channel
+/// curve, as with Protect Tones off, which keeps light above white too. Other colours get today's
+/// result.
+#[inline]
+fn dodge_burn_float(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect: bool) -> [f32; 3] {
+    if protect && c.iter().any(|&v| v > 1.0) {
+        let l = luma(c);
+        if l > 1e-6 {
+            let nl = tone_curve(l, e, range, burn);
+            return c.map(|v| v * nl / l);
+        }
+        return dodge_burn(c, e, range, burn, false);
+    }
+    dodge_burn(c, e, range, burn, protect)
+}
+
 fn tone_range(p: &Value, cmd: &str) -> Result<ToneRange> {
     match string(p, "range", "midtones") {
         "shadows" => Ok(ToneRange::Shadows),
@@ -305,6 +346,18 @@ impl DabTool {
     pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
         let sp = spacing;
         match self.clone() {
+            // A 32-bit RGB document holds linear values, which the reference's default Dodge and Burn
+            // tone with their own curve. Grayscale, the other ranges, Protect Tones off and the other
+            // exposures weren't measured there and keep the gamma curve, without clipping light
+            // above white.
+            Self::Tone { burn, range: ToneRange::Midtones, exposure, protect: true }
+                if fmt.sample == SampleType::F32 && fmt.mode == ColorMode::Rgb && (exposure - MEASURED_LINEAR_EXPOSURE).abs() < 1e-4 =>
+            {
+                tone_stroke(fmt, move |c| c.map(|v| linear_midtones(v, exposure, burn)))
+            }
+            Self::Tone { burn, range, exposure, protect } if fmt.sample == SampleType::F32 => {
+                tone_stroke(fmt, move |c| dodge_burn_float(c, exposure, range, burn, protect))
+            }
             Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
             // Flow is already in the dab's coverage. The reference RGB response applies to integer
             // RGB surfaces, including 16-bit. Float RGB and the other models use the legacy curve.
@@ -828,3 +881,11 @@ mod smudge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
 mod smudge_mode_tests;
+
+#[cfg(test)]
+#[path = "dodge_32bit_linear_tests.rs"]
+mod dodge_32bit_linear_tests;
+
+#[cfg(test)]
+#[path = "burn_32bit_linear_tests.rs"]
+mod burn_32bit_linear_tests;

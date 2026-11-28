@@ -6,7 +6,7 @@
 use craft::behavior::IconId;
 use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, bind_tracked};
 use craft::ui::display::Divider;
 use craft::ui::pickers::Select;
 use photocraft_engine::adjustment_brush_cmds::{self as ab, ENTRIES, INDEXED_ALERT};
@@ -151,13 +151,16 @@ pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bo
     // Present but inert: what it does was not measured.
     let choose = tl!("Choose an object and have the adjustment applied to it");
     IconButton::new(IconId::new("square-dashed-mouse-pointer")).label(choose).tooltip(choose).enabled(false).show(ui);
-    // Its tint over the painted mask is its own item (#12520).
-    Checkbox::new(Bind::bound(&mut app.ui.tool_options.adjustment_brush_overlay)).label(tl!("Overlay").to_owned()).show(ui);
+    // On, the canvas tints what the active adjustment layer's mask reveals (`raster_source::MaskTint`, #12520).
+    Checkbox::new(bind_tracked!(app.ui.tool_options => adjustment_brush_overlay))
+        .label(tl!("Overlay").to_owned())
+        .tooltip(tl!("Show or hide the painted mask areas").to_owned())
+        .show(ui);
     Divider::vertical().show(ui);
 
     let mut alerts = Vec::new();
     let mut opacity = (brush.opacity * 100.0).round();
-    let out = option_cells::number(tl!("Opacity:"), &mut opacity, 1.0..=100.0).whole().unit("%").show(ui);
+    let out = option_cells::number(tl!("Opacity:"), Bind::bound(&mut opacity), 1.0..=100.0).whole().unit("%").show(ui);
     key = out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
     brush.opacity = opacity / 100.0;
     alerts.extend(out.out_of_range);
@@ -170,7 +173,7 @@ pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bo
         key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
     }
     let mut flow = brush.flow * 100.0;
-    let out = option_cells::number(tl!("Flow:"), &mut flow, 1.0..=100.0).unit("%").show(ui);
+    let out = option_cells::number(tl!("Flow:"), Bind::bound(&mut flow), 1.0..=100.0).unit("%").show(ui);
     key = out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
     brush.flow = flow / 100.0;
     alerts.extend(out.out_of_range);

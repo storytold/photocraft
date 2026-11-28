@@ -5,13 +5,17 @@
 //! The menu is a custom row ([`row`]); [`reconcile`] does the rest after each pass of the dialog
 //! host and after each `ui.dialog.set`, so a confirm that follows a script's set sends the same
 //! name and values a draw would have shown.
+//!
+//! Blend Text Colors Using Gamma is a checkbox beside a 1.00 to 3.00 field ([`text_gamma_rows`],
+//! #14243).
 
 use craft::ui::contract::{Bind, Entry, Outcome as _, Show as _};
-use craft::ui::dialog::dialog_id;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param};
+use craft::ui::dialog::{Alert, dialog_id};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamKind};
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::Label;
-use photocraft_engine::color_cmds::{COLOR_SETTINGS_PRESETS, CUSTOM_SETTINGS, ColorExt, ColorSettings, is_settings_preset, preset_setup};
+use craft::ui::runtime::env::{Env, Label};
+use craft::ui::text::{NumberField, RangeAlert};
+use photocraft_engine::color_cmds::{COLOR_SETTINGS_PRESETS, CUSTOM_SETTINGS, ColorExt, ColorSettings, MIN_TEXT_GAMMA, is_settings_preset, preset_setup};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -29,7 +33,10 @@ const BASE: &str = "__presetBase";
 /// The setup whose working RGB is the monitor profile.
 const MONITOR_COLOR: &str = "Monitor Color";
 /// What a setup leaves as the controls show it.
-const KEPT: [&str; 2] = ["blendTextGamma", "monitorProfile"];
+const KEPT: [&str; 3] = [GAMMA, GAMMA_ON, "monitorProfile"];
+/// Blend Text Colors Using Gamma's field and checkbox.
+const GAMMA: &str = "blendTextGamma";
+const GAMMA_ON: &str = "blendTextGammaOn";
 
 /// The menu entry `value` names (Custom for anything the menu doesn't have).
 fn entry_of(value: Option<&str>) -> String {
@@ -57,10 +64,50 @@ pub(super) fn row(label: Label) -> Param {
     })
 }
 
+/// Blend Text Colors Using Gamma, in place of the spec's two rows: the checkbox, with the field
+/// beside it. The field shows two decimals, 1.00 to 3.00, and stays editable while the box is off;
+/// a value typed or stepped into it checks the box. A value typed out of range is held to the
+/// closest end with the range alert, written with the field's two decimals, which [`reconcile`]
+/// opens; an emptied field puts its value back.
+pub(super) fn text_gamma_rows(list: &mut Vec<Param>) {
+    list.retain(|p| p.key != GAMMA_ON);
+    let Some(at) = list.iter().position(|p| p.key == GAMMA) else { return };
+    let (min, max) = (f64::from(MIN_TEXT_GAMMA), f64::from(photocraft_compose::psblend::MAX_TEXT_GAMMA));
+    let default = f64::from(photocraft_compose::psblend::TEXT_GAMMA);
+    let label = Label::from(tl!("Blend Text Colors Using Gamma").to_string());
+    let on = Param::new(GAMMA_ON, label.clone(), ParamKind::bool(true)).beside_next();
+    let field = Param::custom(GAMMA, Label::Empty, move |ui, fields, _| {
+        let value = fields.number(GAMMA).filter(|v| v.is_finite()).unwrap_or(default);
+        let shown = NumberField::new(label.clone(), Bind::given(Some(value))).fixed_decimals(2).range(min..=max).step(0.01).show(ui);
+        if let Some(alert) = shown.out_of_range.clone() {
+            ui.ctx().data_mut(|d| d.insert_temp(gamma_alert_id(), Some((alert, Env::of(ui)))));
+        }
+        if let Some(v) = shown.edit.value().copied().flatten().filter(|v| v.is_finite()) {
+            fields.set(GAMMA, FieldValue::Number(((v * 100.0).round() / 100.0).clamp(min, max)));
+            fields.set(GAMMA_ON, FieldValue::Bool(true));
+        }
+        shown.edit.response.clone()
+    })
+    .opens_with(FieldValue::Number(default));
+    list.splice(at..=at, [on, field]);
+}
+
+/// Where the gamma field leaves its range alert for [`reconcile`], which can open it.
+fn gamma_alert_id() -> egui::Id {
+    egui::Id::unique("pc-color-settings-gamma-alert")
+}
+
+/// Opens the gamma field's range alert, titled as the dialog.
+fn show_gamma_alert(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some((alert, env)) = ctx.data_mut(|d| d.remove_temp::<Option<(RangeAlert, Env)>>(gamma_alert_id())).flatten() else { return };
+    let _ = crate::dialogs::alerts::show(app, Alert::range(tl!("Color Settings"), &alert, &env));
+}
+
 /// After a pass or a set: shows Custom for a name the menu doesn't have, loads a newly picked setup
 /// (from the menu or `ui.dialog.set`), or shows Custom once a control differs from the values the
 /// shown setup gave.
 pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    show_gamma_alert(app, ctx);
     let Some(dialog) = app.framework.dialogs.get_by_id::<HostedParamDialog>(dialog_id(COMMAND)) else { return };
     let f = fields_map(dialog.fields());
     let shown = entry_of(f.get(KEY).and_then(Value::as_str));
@@ -194,3 +241,7 @@ fn same(a: &Value, b: &Value) -> bool {
 #[cfg(test)]
 #[path = "../color_settings_presets_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../color_settings_text_gamma_tests.rs"]
+mod text_gamma_tests;

@@ -164,7 +164,9 @@ pub fn effect_defaults(kind: &str) -> Value {
         "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
-            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "custom"})
+            // The reference application's "Gray, White" with the Smooth method (#14900). The page
+            // edits the stop list; From/To name the same ends for callers that read them.
+            json!({"blend": "Normal", "opacity": 100, "from": "#d7d7d7", "to": "#ffffff", "stops": [[0, "#d7d7d7"], [1, "#ffffff"]], "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "smooth", "smoothness": 100})
         }
         "patternOverlay" => json!({"blend": "Normal", "opacity": 100, "pattern": "", "angle": 0, "scale": 100, "link": true}),
         "bevelEmboss" => {
@@ -553,6 +555,12 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
     craft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
+/// A Gradient Overlay with `Gradient::default()` (black to white, straight stops) and no recorded
+/// method: what a command that names its own colours or stops starts from.
+fn blank_gradient_overlay() -> Effect {
+    Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+}
+
 /// An effect of `kind` with its factory settings (before params are applied).
 fn fresh_effect(kind: &str) -> Option<Effect> {
     let shadow = |inner: bool| Shadow {
@@ -598,7 +606,10 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         }),
         "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
         "gradientOverlay" => {
-            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+            // The factory values carry the recorded Smooth method, so build them like the page does.
+            let mut fx = blank_gradient_overlay();
+            overlay_effect(&mut fx, &effect_defaults(kind));
+            fx
         }
         "patternOverlay" => Effect::PatternOverlay {
             common: FxCommon::new(BlendMode::Normal, 1.0),
@@ -974,7 +985,10 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
 /// spread, range in percent; sizes in px; angles in degrees).
 pub fn effect_from_params(kind: &str, p: &Value) -> Option<Effect> {
     crate::commands::check_f32_values("layer.layerStyle", p).ok()?;
-    let mut fx = fresh_effect(kind)?;
+    // A Gradient Overlay given its own colours or stops keeps today's straight stops unless the
+    // params pick a method; only the factory one (#14900) starts from the Smooth grey to white.
+    let mut fx =
+        if kind == "gradientOverlay" && ["from", "to", "stops"].iter().any(|k| p.get(k).is_some()) { blank_gradient_overlay() } else { fresh_effect(kind)? };
     overlay_effect(&mut fx, p);
     Some(fx)
 }
@@ -1002,8 +1016,11 @@ fn same_kind(a: &Effect, b: &Effect) -> bool {
 /// automation mistake can't ask for an unbounded document change.
 const MAX_EFFECTS: usize = 256;
 
-/// Replaces a layer's whole effect list in one history step: the Layer Style dialog's
-/// apply. Each entry builds an effect from `params`, or edits the snapshot it carried
+/// The most strokes `add` puts on one layer: the Layer Style dialog's limit (#15140).
+pub(crate) const MAX_STROKES: usize = 10;
+
+/// Applies blending options, effects, and shared light changes in one history step.
+/// Each entry builds an effect from `params`, or edits the snapshot it carried
 /// (`fx`: the effect JSON as the dialog loaded it, kept verbatim for everything the
 /// dialog doesn't model) with the params present. Unknown kinds, kind/snapshot
 /// mismatches and malformed snapshots are errors, never panics.
@@ -1058,9 +1075,33 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         }
         list.push(fx);
     }
+    let options = |key: &str| match p.get(key) {
+        None => Ok(None),
+        Some(value) if value.is_object() => Ok(Some(value)),
+        Some(_) => Err(bad(CMD, format!("`{key}` must be an object"))),
+    };
+    let blending = options("blendingOptions")?;
+    let light = options("globalLight")?
+        .map(|params| {
+            let current = s.active().ok_or(EngineError::NoDocument)?.doc.global_light;
+            crate::layer_menu_cmds::global_light_params(current, params)
+        })
+        .transpose()?;
     let count = list.len();
-    let label = if list.is_empty() { "Clear Layer Style" } else { "Edit Layer Style" };
+    let label = if blending.is_some() || light.is_some() {
+        "Layer Style"
+    } else if list.is_empty() {
+        "Clear Layer Style"
+    } else {
+        "Edit Layer Style"
+    };
     s.edit(label, |doc, _| {
+        if let Some(params) = blending {
+            crate::layer_menu_cmds::apply_blending_options(doc, id, params)?;
+        }
+        if let Some(light) = light {
+            doc.global_light = light;
+        }
         for pat in &pats {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
@@ -1098,7 +1139,14 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         // effects list already has the default `enabled: true`, so a first effect still shows.
         match l.effects.items.iter_mut().find(|e| same_kind(e, &fx)) {
             Some(slot) if !add => *slot = fx,
-            _ => l.effects.items.push(fx),
+            _ => {
+                // A new stroke stops at ten, as the dialog's "+" does (#15140). A layer that
+                // already holds more (from a file or a script) keeps them; editing one still works.
+                if matches!(fx, Effect::Stroke(_)) && l.effects.items.iter().filter(|e| matches!(e, Effect::Stroke(_))).count() >= MAX_STROKES {
+                    return Err(bad(&format!("layer.layerStyle.{kind}"), format!("a layer takes at most {MAX_STROKES} strokes")));
+                }
+                l.effects.items.push(fx);
+            }
         }
         Ok(())
     })?;
@@ -1211,7 +1259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Layer Style",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id,"effects":[{"kind":"dropShadow|innerShadow|outerGlow|innerGlow|stroke|colorOverlay|gradientOverlay|patternOverlay|satin|bevelEmboss","params":{…layer.layerStyle.<kind> params…},"fx":<effect snapshot carried through the Layer Style dialog, optional>}]} (replaces the layer's whole effect list; an entry with `fx` edits that effect with the params present, one without builds from params)"##,
+            params: r##"{"layer":id,"blendingOptions":{…layer.layerStyle.blendingOptions params…}?,"globalLight":{"angle":deg?,"altitude":deg?}?,"effects":[{"kind":"dropShadow|innerShadow|outerGlow|innerGlow|stroke|colorOverlay|gradientOverlay|patternOverlay|satin|bevelEmboss","params":{…layer.layerStyle.<kind> params…},"fx":<effect snapshot carried through the Layer Style dialog, optional>}]} (replaces the layer's whole effect list and applies optional blending and light settings in one history state; an entry with `fx` edits that effect with the params present, one without builds from params)"##,
             enabled: has_layer,
             run: replace_effects,
             journal: true,
@@ -1287,6 +1335,8 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
 }
 
 #[cfg(test)]
+mod gradient_overlay_defaults_tests;
+#[cfg(test)]
 mod satin_defaults_tests;
 
 #[cfg(test)]
@@ -1296,6 +1346,9 @@ mod outer_glow_defaults_tests;
 mod inner_shadow_ranges_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod stroke_max_ten_tests;
 
 fn exact_stops(p: &Value) -> Option<Vec<(f32, Color)>> {
     p.get("stops")?

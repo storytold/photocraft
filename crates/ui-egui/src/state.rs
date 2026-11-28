@@ -331,11 +331,14 @@ pub struct UiState {
     /// Slice and Slice Select tools (see `slice_ui`).
     #[serde(default)]
     pub slices: crate::slice_ui::SliceUi,
+    /// The open Save for Web dialog's colour table shifts (see `file_ui::web`).
+    #[serde(skip)]
+    pub web_table: crate::dialogs::file_ui::WebTable,
     /// Frame tool (see `frame_tool`).
     #[serde(default)]
     pub frame_tool: crate::frame_tool::FrameToolUi,
-    /// The contextual task bar as drawn in the last frame: its screen rect `[x0, y0, x1, y1]` in
-    /// points, `None` while no bar shows (`ui.inspect` › `taskBar`).
+    /// The contextual crop task bar as the last canvas run drew it: its screen rect `[x0, y0, x1, y1]`
+    /// in points, `None` while no bar shows (`ui.inspect` › `taskBar`).
     #[serde(skip)]
     pub task_bar_shown: Option<[f32; 4]>,
     /// Artboard tool (see `artboard_tool`).
@@ -419,7 +422,7 @@ pub struct UiState {
     #[serde(default)]
     pub selection_mode: u8,
     #[serde(default)]
-    pub tool_options: ToolOptions,
+    pub tool_options: Tracked<ToolOptions>,
     /// The shape Fill / Stroke swatches' recently used gradients, newest first (the Gradient
     /// tab's Recent row).
     #[serde(default)]
@@ -503,6 +506,7 @@ impl Default for UiState {
             analysis: Default::default(),
             timeline: Default::default(),
             slices: Default::default(),
+            web_table: Default::default(),
             frame_tool: Default::default(),
             task_bar_shown: None,
             artboard_tool: Default::default(),
@@ -542,7 +546,7 @@ impl Default for UiState {
             brush_curves_open: BTreeSet::new(),
             brushes_panel: brushes_list(),
             selection_mode: 0,
-            tool_options: ToolOptions::default(),
+            tool_options: Tracked::new(ToolOptions::default()),
             recent_gradients: Vec::new(),
             next_id: 1,
             status: String::new(),
@@ -595,7 +599,7 @@ mod tests {
         let mut s = SampleAllLayers::default();
         assert!(s.slot(Tool::Brush).is_none());
         for t in [Tool::MagicWand, Tool::PaintBucket, Tool::Blur, Tool::Sharpen, Tool::Smudge, Tool::Remove] {
-            *s.slot(t).unwrap() = true;
+            *s.slot_mut(t).unwrap() = true;
             assert!(s.get(t), "{t:?}");
         }
         assert!(!s.get(Tool::QuickSelection));
