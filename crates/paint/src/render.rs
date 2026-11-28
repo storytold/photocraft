@@ -246,10 +246,7 @@ pub(crate) fn rect_around(d: &Dab, reach: f32) -> Rect {
 impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
-        let mips = |t: &TipShape| match t.bitmap() {
-            Some(g) if g.is_valid() => Some(crate::mip_cache::tip_mips(g)),
-            _ => None,
-        };
+        let mips = |t: &TipShape| t.valid_bitmap().map(crate::mip_cache::tip_mips);
         Self {
             tip: mips(&brush.tip),
             dual_tip: if brush.dual_brush.enabled { mips(&brush.dual_brush.tip) } else { None },
@@ -277,12 +274,13 @@ impl BrushContext {
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
         let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
         let hardness = if dual { self.brush.dual_brush.hardness } else { self.brush.hardness };
-        // A computed soft tip paints past its nominal radius (see `tip_shape`).
         let aliased = self.brush.aliased && !dual;
         let reach = if sampled {
             d.radius * std::f32::consts::SQRT_2
         } else if aliased {
             d.radius
+        } else if let Some(fraction) = self.brush.tip_boundary.filter(|f| !dual && *f > 0.0 && *f <= crate::MAX_TIP_BOUNDARY) {
+            d.radius * fraction
         } else {
             crate::tip_reach(d.radius, hardness).max(d.radius)
         };
@@ -355,7 +353,8 @@ impl BrushContext {
         let r = d.radius;
         let ro = d.roundness.max(0.5 / r).min(1.0);
         let rm = (r * ro).max(0.5);
-        let profile = TipProfile::new(rm, hardness);
+        let boundary = b.tip_boundary.filter(|_| !dual && !aliased && mips.is_none());
+        let profile = TipProfile::with_boundary(rm, hardness, boundary);
         let reach = if aliased || mips.is_some() { rm } else { profile.reach().max(rm) };
         let reach2 = (reach + 0.5) * (reach + 0.5);
         // Sampled-tip mapping.
@@ -1634,7 +1633,8 @@ impl GeneralTip<'_> {
                 }
                 None if small => {
                     let d2 = (u * ro).powi(2) + v * v;
-                    if d2 >= small_reach2 {
+                    // Subpixel samples must not paint a pixel whose centre is outside the cursor.
+                    if d2 >= small_reach2 || !profile.contains_pixel(d2) {
                         continue;
                     }
                     let mut sum = 0.0;
@@ -1647,7 +1647,9 @@ impl GeneralTip<'_> {
                             sum += profile.falloff(sd);
                         }
                     }
-                    (sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32, d2.sqrt() / rm)
+                    let distance = d2.sqrt();
+                    let sample_count = (SUBPIXEL.len() * SUBPIXEL.len()) as f32;
+                    (profile.supersampled_coverage(distance, sum, sample_count), distance / rm)
                 }
                 None => {
                     let d2 = (u * ro).powi(2) + v * v;

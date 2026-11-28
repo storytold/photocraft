@@ -453,7 +453,7 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
 /// without any other sign (#8389). Returns that pitch and a warning naming it; `None` when the
 /// stroke keeps its coverage or Spacing is off (dabs then follow the stroke's speed, not a pitch).
 /// Whether the first dab covers the path is judged by that dab's own diameter, so a light first
-/// point that shrinks a pressure-sized dab still warns.
+/// point that shrinks a pressure-sized dab still warns. An active `tipBoundary` scales that reach.
 fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, String)> {
     use photocraft_paint::dynamics::{DabBuilder, StepInput, apply_pose, base_diameter};
     let brush = brush.bounded_for_render();
@@ -466,7 +466,9 @@ fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, S
     let step = StepInput { point: first, direction: 0.0, initial_direction: 0.0, step: 0 };
     let diameter = base_diameter(&brush, &step).max(1.0);
     let length: f64 = pts.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).filter(|d| d.is_finite()).sum();
-    (length > f64::from(diameter) / 2.0 && pitch > length).then(|| {
+    let radius = f64::from(diameter) / 2.0;
+    let reach = brush.tip_boundary.map_or(radius, |f| radius * f64::from(f));
+    (length > reach && pitch > length).then(|| {
         let dab = if (diameter - brush.size).abs() < 0.05 { format!("size {}", brush.size) } else { format!("the first dab's {diameter:.1} px (size {} at its pressure)", brush.size) };
         let warning = format!(
             "spacing {} × {dab} puts dabs {pitch:.1} px apart, more than the {length:.1} px path, so the stroke got only its first dab; lower `spacing` for a continuous stroke",
@@ -476,11 +478,22 @@ fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, S
     })
 }
 
+fn stroke_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
+    let cmd = "paint.stroke";
+    let mut brush = with_blend_mode(resolve_brush(s, p, cmd)?, p);
+    if let Some(boundary) = p.get("tipBoundary") {
+        let max = photocraft_paint::MAX_TIP_BOUNDARY;
+        let fraction = boundary.as_f64().filter(|v| *v <= f64::from(max)).map(|v| v as f32).filter(|v| *v > 0.0);
+        brush.tip_boundary = Some(fraction.ok_or_else(|| bad(cmd, format!("tipBoundary must be greater than 0 and at most {max}")))?);
+    }
+    Ok(brush)
+}
+
 /// `paint.stroke`: the Brush (and Eraser) tool. When the spacing left the stroke with its first
 /// dab only, the result also has the dab `pitch` in pixels and `warnings` saying so (#8389).
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
-    let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
+    let brush = stroke_brush(s, p)?;
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
     if flag(p, "fill", false) {
         return fill_region(s, p, label, brush, pts);
@@ -644,7 +657,7 @@ impl LiveStroke {
             "paint.pencil" => true,
             other => return Err(bad(other, "live strokes are `paint.stroke` or `paint.pencil`")),
         };
-        let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
+        let brush = if pencil { pencil_brush(s, p)? } else { stroke_brush(s, p)? };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
         let st = s.active().ok_or(EngineError::NoDocument)?;

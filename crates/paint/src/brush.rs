@@ -125,6 +125,10 @@ impl TipShape {
             TipShape::Stored(r) => Some(r.bitmap()),
         }
     }
+    pub(crate) fn valid_bitmap(&self) -> Option<&GrayTile> {
+        self.bitmap().filter(|bitmap| bitmap.is_valid())
+    }
+
     /// Whether the tip paints with its full bitmap: false only for a stored tip whose bitmap isn't loaded.
     pub fn is_loaded(&self) -> bool {
         match self {
@@ -565,6 +569,9 @@ pub struct BrushSettings {
     pub size: f32,
     /// 0 (soft) ..1 (hard). Computed tips only.
     pub hardness: f32,
+    /// Optional per-stroke boundary as a fraction of a computed tip's radius.
+    #[serde(skip)]
+    pub tip_boundary: Option<f32>,
     /// Spacing between dabs as a fraction of the diameter.
     pub spacing: f32,
     /// Photoshop's Spacing checkbox. Off: the pointer's speed sets the spacing (one dab every
@@ -645,6 +652,7 @@ impl Default for BrushSettings {
         Self {
             size: 20.0,
             hardness: 1.0,
+            tip_boundary: None,
             spacing: 0.1,
             spacing_enabled: true,
             opacity: 1.0,
@@ -706,8 +714,8 @@ impl BrushSettings {
         self.size = new_size;
     }
 
-    /// Copy the settings with the primary and dual diameters and Scatter amounts constrained for
-    /// rasterization.
+    /// Copy the settings with bounded diameters and Scatter amounts, keeping a tip boundary only
+    /// when the primary dab uses the anti-aliased computed tip.
     ///
     /// Engine commands reject out-of-range values; this is a final guard for direct users of the
     /// infallible paint API, which must not turn malformed brush dimensions into giant allocations,
@@ -723,6 +731,7 @@ impl BrushSettings {
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
         brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
         brush.dual_brush.scatter = safe_scatter(brush.dual_brush.scatter);
+        brush.tip_boundary = brush.tip_boundary.filter(|f| *f > 0.0 && *f <= crate::MAX_TIP_BOUNDARY && !brush.aliased && brush.tip.valid_bitmap().is_none());
         // A NaN here would paint fully opaque (`f32::min` returns the other operand) or not at all;
         // it falls back to the default (the values of `BrushSettings::default` and `DualBrush::default`). Every other value, infinities included, is left to the clamps downstream.
         let nan_or = |v: f32, d: f32| if v.is_nan() { d } else { v };

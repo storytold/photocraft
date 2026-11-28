@@ -342,6 +342,109 @@ fn mixer_drag_above_the_preview_size_paints_on_release() {
 }
 
 #[test]
+fn soft_brush_click_stays_inside_the_selected_cursor_outline() {
+    use photocraft_engine::prefs::PaintingCursor;
+
+    for (mode, setting) in [(PaintingCursor::NormalTip, "normalTip"), (PaintingCursor::FullSizeTip, "fullSizeTip")] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 128, "height": 128, "background": "transparent"})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 80, "hardness": 0.0}})).unwrap();
+        app.run("prefs.set", json!({"values": {"cursors.painting": setting}})).unwrap();
+        assert_eq!(app.session.prefs().cursors.painting, mode);
+        app.ui.tool = Tool::Brush;
+
+        let radius = if mode == PaintingCursor::NormalTip { photocraft_paint::half_coverage_radius(40.0, 0.0) } else { 40.0 };
+        let check = |doc: &Document| {
+            let s = doc.layers[0].surface().unwrap();
+            assert!(s.rgba(64, 64)[3] > 0.9);
+            assert!(s.rgba(64 + (radius * 0.75) as i32, 64)[3] > 0.05);
+            assert_eq!(s.rgba(64 + radius.ceil() as i32 + 1, 64)[3], 0.0, "paint outside {mode:?}");
+        };
+        tool_event(&mut app, ToolEvent::Down { x: 64.5, y: 64.5, pressure: 1.0 }, M);
+        let (shown, key) = display_doc(&mut app, 0);
+        assert_ne!(key, 0);
+        check(&shown);
+        tool_event(&mut app, ToolEvent::Up { x: 64.5, y: 64.5 }, M);
+        check(&app.session.active().unwrap().doc);
+    }
+}
+
+#[test]
+fn one_pixel_soft_normal_brush_marks_the_pixel_corner_inside_its_outline() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 32, "height": 32, "background": "transparent"})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 1, "hardness": 0.0}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    assert_eq!(app.session.prefs().cursors.painting, photocraft_engine::prefs::PaintingCursor::NormalTip);
+
+    let check = |doc: &Document| {
+        let surface = doc.layers[0].surface().unwrap();
+        for y in 14..18 {
+            for x in 14..18 {
+                // The click straddles four pixel centres inside the cursor's 1 px radius.
+                assert_eq!(surface.rgba(x, y)[3] > 0.0, (15..=16).contains(&x) && (15..=16).contains(&y), "pixel ({x}, {y})");
+            }
+        }
+    };
+    tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, M);
+    check(&display_doc(&mut app, 0).0);
+    tool_event(&mut app, ToolEvent::Up { x: 16.0, y: 16.0 }, M);
+    check(&app.session.active().unwrap().doc);
+}
+
+#[test]
+fn subpixel_soft_brush_uses_the_displayed_outline() {
+    // Full Size shows a 0.25 px radius for either outline. The traced Normal tip is smaller still.
+    for (mode, angle, inside, outside) in [("fullSizeTip", 0.0, 0.125, 0.375), ("fullSizeTip", 30.0, 0.125, 0.375), ("normalTip", 30.0, 0.125, 0.1875)] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 32, "height": 32, "background": "transparent", "depth": 32})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 0.5, "hardness": 0.0, "angle": angle}})).unwrap();
+        app.run("prefs.set", json!({"values": {"cursors.painting": mode}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        assert_eq!(app.session.tools.brush.size, 0.5);
+        for (y, distance, painted) in [(12, outside, false), (20, inside, true), (24, 0.0, true)] {
+            let x = 16.5 - distance;
+            let point_y = f64::from(y) + 0.5;
+            let check = |doc: &Document| {
+                let surface = doc.layers[0].surface().unwrap();
+                assert_eq!(surface.rgba(16, y)[3] > 0.0, painted, "{mode}, angle {angle}, distance {distance}");
+                assert_eq!(surface.rgba(15, y)[3], 0.0);
+            };
+            tool_event(&mut app, ToolEvent::Down { x, y: point_y, pressure: 1.0 }, M);
+            check(&display_doc(&mut app, 0).0);
+            tool_event(&mut app, ToolEvent::Up { x, y: point_y }, M);
+            check(&app.session.active().unwrap().doc);
+        }
+    }
+}
+
+#[test]
+fn soft_brush_in_standard_and_precise_cursors_keeps_coverage_past_the_nominal_radius() {
+    use photocraft_engine::prefs::PaintingCursor;
+
+    for (mode, setting) in [(PaintingCursor::Standard, "standard"), (PaintingCursor::Precise, "precise")] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 128, "height": 128, "background": "transparent"})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 80, "hardness": 0.0}})).unwrap();
+        app.run("prefs.set", json!({"values": {"cursors.painting": setting}})).unwrap();
+        assert_eq!(app.session.prefs().cursors.painting, mode);
+        app.ui.tool = Tool::Brush;
+        let check = |doc: &Document| {
+            let s = doc.layers[0].surface().unwrap();
+            assert!(s.rgba(64, 64)[3] > 0.9);
+            // 45 px is past the 40 px nominal radius; these cursors have no outline to clip to.
+            assert!(s.rgba(64 + 45, 64)[3] > 0.0, "{mode:?}");
+        };
+        tool_event(&mut app, ToolEvent::Down { x: 64.5, y: 64.5, pressure: 1.0 }, M);
+        check(&display_doc(&mut app, 0).0);
+        tool_event(&mut app, ToolEvent::Up { x: 64.5, y: 64.5 }, M);
+        check(&app.session.active().unwrap().doc);
+        let (_, params) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").unwrap();
+        assert!(params.get("tipBoundary").is_none(), "{mode:?} {params}");
+    }
+}
+
+#[test]
 fn brush_drag_shows_the_real_stroke_and_commits_it() {
     // The drag shows the real soft stroke, not a hard flat stand-in.
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -356,8 +459,9 @@ fn brush_drag_shows_the_real_stroke_and_commits_it() {
     }
     let (shown, key) = display_doc(&mut app, 0);
     assert_ne!(key, 0);
-    // A partial value two thirds of the way out: the soft tip, not a hard flat stand-in.
-    assert!(alpha(&shown, 40, 30) > 0.5 && (0.01..0.95).contains(&alpha(&shown, 40, 36)), "soft stroke while drawing");
+    // The preview shows the taper inside the Normal tip boundary.
+    assert!(alpha(&shown, 40, 30) > 0.5 && (0.01..0.95).contains(&alpha(&shown, 40, 33)), "soft stroke while drawing");
+    assert_eq!(alpha(&shown, 40, 36), 0.0, "outside the Normal tip boundary");
     assert_eq!(alpha(&app.session.documents()[0].doc, 40, 30), 0.0, "not committed yet");
     // The canvas redraws only what the stroke touched.
     let dk = canvas_display(&app, &app.session.documents()[0].doc, None).1;
@@ -366,7 +470,7 @@ fn brush_drag_shows_the_real_stroke_and_commits_it() {
     tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 30.0 }, M);
     let doc = app.session.documents()[0].doc.clone();
     assert!(app.live_stroke.is_none() && display_doc(&mut app, 0).1 == 0);
-    assert_eq!((alpha(&doc, 40, 30), alpha(&doc, 40, 38)), (alpha(&shown, 40, 30), alpha(&shown, 40, 38)), "commit matches the preview");
+    assert_eq!((alpha(&doc, 40, 33), alpha(&doc, 40, 36)), (alpha(&shown, 40, 33), alpha(&shown, 40, 36)), "commit matches the preview");
 }
 
 #[test]
@@ -451,7 +555,7 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
     // preview draws that tail live, so no frame after release is missing the end.
     let xs = [30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0];
-    let (live, done, partial, _) = drag_frames(0.5, &xs);
+    let (live, done, partial, app) = drag_frames(0.5, &xs);
     assert!(same_pixels(&live, &done), "preview at the last move = committed stroke, tail included");
     assert!(partial);
     let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
@@ -465,8 +569,10 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5, "catchUpOnEnd": true}}})).unwrap();
     let mut pts = vec![json!([10.0, 40.0, 1.0])];
     pts.extend(xs.iter().map(|&x| json!([x, 40.0 + (x / 7.0).sin() * 8.0, 1.0])));
-    // (Round tips without dynamics draw the same for any seed.)
-    s.execute("paint.stroke", json!({"points": pts, "seed": 0})).unwrap();
+    let (_, params) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").unwrap();
+    let boundary = params["tipBoundary"].as_f64().expect("the stroke records its Normal tip boundary");
+    // Round tips without dynamics draw the same for any seed.
+    s.execute("paint.stroke", json!({"points": pts, "seed": 0, "tipBoundary": boundary})).unwrap();
     // The drag reaches the tool through the pointer, as f32 screen points, so its points carry f32 rounding that
     // these f64 points don't: the two strokes may differ by one 8-bit level where a dab edge falls.
     assert!(within_a_level(&s.active().unwrap().doc, &done));

@@ -115,6 +115,65 @@ fn hard_edge_is_sharp() {
 }
 
 #[test]
+fn bounded_soft_tip_leaves_pixel_centres_outside_its_edge_untouched() {
+    for radius in [3.0, 30.0] {
+        for hardness in [0.0, 0.5, 0.95] {
+            let boundary = crate::half_coverage_radius(radius, hardness);
+            let brush = BrushSettings { hardness, tip_boundary: Some(boundary / radius), ..brush() };
+            let dab = Dab::round(Point::new(50.5, 50.5), radius, 1.0);
+            let r = raster(&brush, &dab);
+            assert!(at(&r, 50, 50) > 0.5);
+            for y in r.0.y0..r.0.y1 {
+                for x in r.0.x0..r.0.x1 {
+                    if ((x - 50) as f32).hypot((y - 50) as f32) >= boundary {
+                        assert_eq!(at(&r, x, y), 0.0, "radius {radius}, hardness {hardness}, pixel ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_one_pixel_soft_tip_tapers_as_the_pixel_centre_reaches_the_edge() {
+    let brush = BrushSettings { hardness: 0.0, tip_boundary: Some(2.0), ..brush() };
+    let coverage_at = |distance: f64| {
+        let dab = Dab::round(Point::new(50.5 - distance, 50.5), 0.5, 1.0);
+        at(&raster(&brush, &dab), 50, 50)
+    };
+
+    let [inside, near, edge, outside] = [0.75, 0.99, 1.0, 1.01].map(coverage_at);
+    assert!(inside > 0.05);
+    assert!(near > 0.0 && near < inside / 20.0, "coverage {near} close to the edge, {inside} further inside");
+    assert_eq!(edge, 0.0);
+    assert_eq!(outside, 0.0);
+}
+
+#[test]
+fn bounded_subpixel_soft_tip_paints_when_the_dab_sits_between_supersamples() {
+    // A traced Normal 0.5 px, 0% hardness outline is smaller than the 4x4 sample grid (nearest
+    // sample at about 0.177 px). A dab on the pixel centre must still leave a mark.
+    let outline = 0.25 * crate::half_coverage_radius(1.0, 0.0);
+    let brush = BrushSettings { hardness: 0.0, tip_boundary: Some(outline / 0.5), ..brush() };
+    let r = raster(&brush, &Dab::round(Point::new(50.5, 50.5), 0.5, 1.0));
+    assert!(at(&r, 50, 50) > 0.0, "coverage at the pixel centre, outline {outline}");
+    assert_eq!(at(&r, 51, 50), 0.0);
+}
+
+#[test]
+fn bounded_subpixel_soft_tip_changes_smoothly_as_a_sample_enters_its_reach() {
+    let outline = 0.25 * crate::half_coverage_radius(1.0, 0.0);
+    let brush = BrushSettings { hardness: 0.0, tip_boundary: Some(outline / 0.5), ..brush() };
+    // At this offset the nearest sample, at (0.125, ±0.125), lies exactly on the tip edge.
+    let crossing = 0.125 - f64::from(outline * outline - 0.125 * 0.125).sqrt();
+    let coverage = |offset| at(&raster(&brush, &Dab::round(Point::new(50.5 + offset, 50.5), 0.5, 1.0)), 50, 50);
+    let before = coverage(crossing - 0.0005);
+    let after = coverage(crossing + 0.0005);
+    assert!(before > 0.0 && after > 0.0);
+    assert!((before - after).abs() < 0.01, "coverage jumps from {before} to {after}");
+}
+
+#[test]
 fn sampled_tip_is_scaled_and_oriented() {
     // Tip: left half painted.
     let tip = GrayTile::from_fn(16, 16, |x, _| if x < 8 { 1.0 } else { 0.0 });

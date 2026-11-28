@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-08 · **Change:** minor (Eraser's Erase to History, #10692; no estimate changed; Both Axes on Scatter headers, #3825 partial; parity refresh retains the expanded painting-menu limitations; right-click Brush Preset picker is partial while a pen barrel right-click with Windows Ink on still often paints a dot (#5364); Brush Tip Shape Spacing checkbox and percentage share one header, #3825 partial; Angle/Roundness fields left of the Brush Tip Shape widget, labels right-aligned, #3825 partial; the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Clone Stamp and Healing Brush clone from a source set in another open document; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-27 · **Change:** minor (soft computed Brush and Eraser dabs fade to zero at the existing cursor boundary; Eraser's Erase to History, #10692; no estimate changed; Both Axes on Scatter headers, #3825 partial; parity refresh retains the expanded painting-menu limitations; right-click Brush Preset picker is partial while a pen barrel right-click with Windows Ink on still often paints a dot (#5364); Brush Tip Shape Spacing checkbox and percentage share one header, #3825 partial; Angle/Roundness fields left of the Brush Tip Shape widget, labels right-aligned, #3825 partial; the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Clone Stamp and Healing Brush clone from a source set in another open document; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -84,6 +84,10 @@ tablets against Photoshop side by side.
 | Precise / normal / full-size tip cursors, crosshair in the tip | partial | Caps Lock precise cursor not audited; round Pencil cursor done (#2662, #2694), parity request open (#1057) |
 | Brush choice kept per tool (Brush, Eraser, Blur each their own) | partial | #2542 |
 
+PhotoCraft tapers soft computed Brush and brush-mode Eraser dabs to zero at the displayed tip
+boundary. Normal Brush Tip retains the size of the original 50% contour. Full Size Brush Tip
+retains the nominal brush diameter. This makes the visible outline the limit of each dab.
+
 ## Symmetry
 
 | Mode | Status |
@@ -124,6 +128,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-27 | minor | Soft computed Brush and Eraser dabs fade to zero at the existing cursor boundary. |
 | 2026-11-06 | minor | Eraser end of the pen switches to the Eraser on Windows with Windows Ink on (#2285); row stays partial (X11, web); no estimate changed |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
