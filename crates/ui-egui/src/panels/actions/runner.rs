@@ -1143,19 +1143,27 @@ pub(crate) fn spelling_change(app: &mut PhotocraftApp, params: Value) -> Result<
 }
 
 /// Check Spelling's Done for the action paused at its step: the action continues when the document
-/// it was playing on is still the active one, and otherwise ends there with the reason in the
-/// status bar. Returns `Ok` when nothing failed.
+/// it was playing on is still the active one and no action of the paused call changed
+/// ([`played_changed`]), and otherwise ends there with the reason in the status bar. Returns `Ok`
+/// when nothing failed.
 pub(crate) fn resume_spelling(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
-    let Some((from, doc)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc)) else {
+    let Some((from, doc, changed)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc, played_changed(p, &app.session))) else {
         return resume(app, token);
     };
-    if doc.is_none() || doc == app.session.active().map(|d| d.doc.id) {
+    if !changed && (doc.is_none() || doc == app.session.active().map(|d| d.doc.id)) {
         return resume(app, token);
     }
     abandoned(app, token);
-    let error = "the active document changed while Check Spelling was open";
+    let error = if changed { "the paused action changed while Check Spelling was open" } else { "the active document changed while Check Spelling was open" };
     report_play(app, &json!({"failed": {"step": from.saturating_sub(1), "id": "edit.checkSpelling", "error": error}}));
     Err(error.into())
+}
+
+/// Whether an action of the paused call was edited, deleted or replaced by a new one of the same
+/// name since it paused, compared as [`resume`] compares them.
+fn played_changed(paused: &PausedPlayback, session: &photocraft_engine::Session) -> bool {
+    let list = session.actions().list.actions();
+    paused.played.iter().any(|played| list.iter().find(|action| action.name == played.name) != Some(played))
 }
 
 /// A step dialog confirmed (or a paced wait over): continue the playback `token` names after it.
