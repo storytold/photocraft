@@ -687,8 +687,13 @@ pub fn render_video_with(
         return Err(cancelled());
     }
 
+    // The format is resolved as the encoder resolves it, so ".gif" and "GIF" are GIF and ".png"
+    // and "PNG" are PNG too.
+    let ext = format.rsplit(['.', '/', '\\']).next().unwrap_or(format);
+    let codec = photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec);
+
     // Animated GIF: one file, every frame quantised to its own palette.
-    if format.eq_ignore_ascii_case("gif") {
+    if codec == Some(photocraft_codecs::Format::Gif) {
         // Each frame is staged as f32 RGBA and every encoded frame is kept until the file is written;
         // reject over-budget sizes before an infallible allocation can abort the process.
         check_gif_budget(w as u64, h as u64, frames as u64).map_err(EngineError::Other)?;
@@ -700,9 +705,13 @@ pub fn render_video_with(
                 t.current = f;
             }
             sync(&mut doc);
+            // The frames never reach the export pipeline's scratch check: refuse the placeholder
+            // pixels of a failed read before they are encoded as real ones.
+            let guard = crate::artboard_cmds::ScratchGuard::new(&doc)?;
             let surf = crate::file_cmds::flattened(&doc, fmt);
             let mut px = vec![[0.0f32; 4]; w * h];
             surf.read_rgba_into(bounds, &mut px);
+            guard.check()?;
             gframes.push(gif_frame(px, w, delay)?);
             // The final report follows encoding/writing, so total means the output exists.
             if !progress((f + 1).min(frames.saturating_sub(1)), frames) {
@@ -722,11 +731,8 @@ pub fn render_video_with(
     // Image sequence.
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
-    // Only a PNG sequence can hold the alpha the option chooses; other formats ignore it. The
-    // format is resolved as the encoder resolves it, so ".png" and "PNG" are PNG too.
-    let ext = format.rsplit(['.', '/', '\\']).next().unwrap_or(format);
-    let png = photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec) == Some(photocraft_codecs::Format::Png);
-    let alpha = png.then_some(alpha);
+    // Only a PNG sequence can hold the alpha the option chooses; other formats ignore it.
+    let alpha = (codec == Some(photocraft_codecs::Format::Png)).then_some(alpha);
     let mut files = Vec::new();
     for f in 0..frames {
         let mut doc = base.clone();

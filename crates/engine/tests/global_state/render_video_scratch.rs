@@ -47,12 +47,14 @@ fn render_video_refuses_unreadable_scratch_tiles() {
     doc.layers.push(pixels);
     session.add_document(doc, None);
     // The default (no alpha), an alpha choice and its ".png" spelling flatten the frame first; JPEG
-    // goes straight to the export pipeline.
+    // goes straight to the export pipeline. An animated GIF flattens every frame itself (#16692).
     let cases = [
         json!({"format": "png"}),
         json!({"format": "png", "alpha": "straight"}),
         json!({"format": ".png", "alpha": "premultipliedColor", "matte": "#00ff00"}),
         json!({"format": "jpg"}),
+        json!({"format": "gif"}),
+        json!({"format": ".gif"}),
     ];
     for params in &cases {
         assert_eq!(render(&session, params), (1, true), "{params} with readable tiles");
