@@ -522,3 +522,12 @@ fn color_balance_tones_round_to_whole_numbers() {
     assert_eq!(midtones, [13.0, 0.0, 100.0], "12.7 to 13, -0.4 to 0, 100.4 rounds into the clamp");
     assert_eq!(highlights, [-100.0, 0.0, 0.0], "-100.4 to -100");
 }
+
+#[test]
+fn color_of_rejects_plus_signs_in_hex() {
+    for s in ["#+f+f+f", "#+0+0+0", "#f+f+f+", "#zzzzzz"] {
+        assert!(color_of("photoFilter", "color", &json!(s)).is_err(), "{s} must be rejected");
+    }
+    let ok = color_of("photoFilter", "color", &json!("#ff8000")).unwrap();
+    assert_eq!(ok, [1.0, 128.0 / 255.0, 0.0]);
+}
