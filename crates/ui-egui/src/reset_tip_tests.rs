@@ -112,9 +112,13 @@ fn starting(app: &PhotocraftApp, tool: Tool) -> Tip {
 
 #[test]
 fn each_tool_resets_and_first_uses_its_own_tip() {
+    // One app for the two reset commands of all sixteen tools. Each case picks the tool and scrambles the brush
+    // before it invokes, and `tool.reset` / `tool.resetAll` work through `fresh_brush` for the tool in front of them,
+    // so a case never needs an app of its own: starting the app (document, panels, views) was the cost of a case
+    // here, 80 of them (#15941).
+    let mut a = app();
     for (tool, first_use) in ROWS {
         // Reset Tool.
-        let mut a = app();
         pick(&mut a, tool);
         scramble(&mut a);
         assert_ne!(live(&a), starting(&a, tool), "{tool:?}: the scrambled tip is not its starting tip");
@@ -122,12 +126,10 @@ fn each_tool_resets_and_first_uses_its_own_tip() {
         assert_eq!(live(&a), starting(&a, tool), "{tool:?}: Reset Tool");
 
         // Reset All Tools with the tool active, then with it picked later.
-        let mut a = app();
         pick(&mut a, tool);
         scramble(&mut a);
         invoke(&mut a, "tool.resetAll", json!({"confirmed": true}));
         assert_eq!(live(&a), starting(&a, tool), "{tool:?}: Reset All Tools, active");
-        let mut a = app();
         pick(&mut a, tool);
         scramble(&mut a);
         pick(&mut a, other(tool));
@@ -136,7 +138,6 @@ fn each_tool_resets_and_first_uses_its_own_tip() {
         assert_eq!(live(&a), starting(&a, tool), "{tool:?}: Reset All Tools, picked later");
 
         // Other tools keep their brushes through Reset Tool.
-        let mut a = app();
         pick(&mut a, other(tool));
         scramble(&mut a);
         let kept = live(&a);
@@ -145,7 +146,8 @@ fn each_tool_resets_and_first_uses_its_own_tip() {
         let theirs = a.ui.tool_brushes.iter().find(|(t, _)| *t == other(tool)).map(|(_, b)| tip(b));
         assert_eq!(theirs, Some(kept), "{tool:?}: {:?} keeps its tip", other(tool));
 
-        // First use, after another tool's tip; its own tip is then kept across tool switches.
+        // First use, after another tool's tip; its own tip is then kept across tool switches. The tool must not have
+        // been picked before, so this case keeps an app of its own.
         let Some(rule) = first_use else { continue };
         let mut a = app();
         pick(&mut a, other(tool));

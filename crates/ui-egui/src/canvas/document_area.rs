@@ -4,10 +4,15 @@
 use std::cell::RefCell;
 
 use craft::behavior::PressPhase;
+use craft::behavior::dock::Arrangement;
+use craft::ui::bars::{Bar, BarKind};
 use craft::ui::canvas::{SplitAt, SplitViews};
-use craft::ui::contract::{Bind, ShowContainer as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::{Elide, Text};
 use craft::ui::docking::Arranged;
 use craft::ui::shell::CanvasPanel;
+use craft::ui::style::StyleCx;
+use craft::ui::tabs::{Tab, TabPartEvent};
 use egui::Rect;
 
 use super::document_display::CanvasHost;
@@ -17,24 +22,69 @@ use super::textures::retain_gpu_documents;
 use super::{PhotocraftApp, canvas_view};
 
 /// The canvas panel with the tab strip and the document, or the Home screen; then drops layers dragged onto another
-/// document (`layer_transfer`).
+/// document (`layer_transfer`). The tabs and documents are a memoized view keyed by `region_versions::canvas`, and the
+/// dock's column around the area replays with that version too: the app work every pass needs ([`each_pass`]) runs
+/// outside both, before the window's body.
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Files the OS drops on the main window outside the tab strip: the Home screen has no other target (#16588).
+    let dropped = super::window_drop::take(ui, ui.max_rect());
     if crate::jobs_ui::batch_preview(app, ui) {
+        // The preview replaces the tabs: a floating window dropped meanwhile docks nowhere (#16415).
+        app.dock_drop_rect = None;
+        // It replaces the canvas too: a file dropped where the canvas was opens, not into the hidden document.
+        app.drop_canvas_rect = None;
+        app.ui.task_bar_shown = None;
+    } else {
+        crate::distort_ui::drop_foreign(app, ui.ctx());
+        crate::layer_transfer::prepare(app, ui.ctx());
+        if app.home_screen_up() {
+            // The Home screen hides the tabs: a floating window dropped on it docks nowhere (#16415).
+            app.dock_drop_rect = None;
+            app.drop_canvas_rect = None;
+            app.ui.task_bar_shown = None;
+            start_screen(app, ui);
+        } else {
+            crate::panels::region_versions::show_canvas(app, ui, documents);
+        }
+        crate::layer_transfer::finish(app, ui.ctx());
+        // The Shift+Alt+right-click HUD Color Picker (#6098), while its gesture is held.
+        crate::color_hud::show(app, ui);
+    }
+    if let Some(files) = dropped {
+        super::window_drop::open(app, ui.ctx(), files);
+    }
+}
+
+/// The document area's work of every pass, which the window's body runs before the dock: the GPU canvas's documents
+/// and their texture budget, a Content-Aware Scale step, the blocks background redraws landed, the tablet settings, and
+/// what a tool switch or a layer switch leaves behind (a pending crop, a Properties eyedropper). A replayed view or dock
+/// column runs none of its own code, so none of this lives in them. A Batch preview in place of the documents
+/// ([`crate::jobs_ui::batch_preview`]) holds all of it back.
+pub(crate) fn each_pass(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if crate::jobs_ui::batch_preview_key(app).is_some() {
         return;
     }
-    crate::distort_ui::drop_foreign(app, ui.ctx());
-    crate::layer_transfer::prepare(app, ui.ctx());
-    documents(app, ui);
-    crate::layer_transfer::finish(app, ui.ctx());
-    // The Shift+Alt+right-click HUD Color Picker (#6098), while its gesture is held.
-    crate::color_hud::show(app, ui);
+    retain_gpu_documents(app);
+    publish_shown(app);
+    crate::cas_transform::tick(app, ctx);
+    crate::background_redraw::poll_all(app);
+    // Pen pressure/tilt for the tools' events (mouse = 1.0), unless Preferences › Tools › Use Tablet Pressure is off;
+    // the pen's eraser end selects the Eraser.
+    app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
+    let curve = app.session.prefs().tools.pressure_curve.clone();
+    app.stylus.set_pressure_curve(&curve);
+    crate::stylus::Stylus::sync_eraser_tool(app);
+    // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
+    crate::layer_picker::prune(app);
+    // A crop left pending when another tool was picked is applied or dropped.
+    crate::crop_ui::each_pass(app);
 }
 
 /// Where each pane of Window › Arrange's n-up or Tile arrangement is in `rect`, with the document it shows: pane `i` is
 /// docked group `i` of `app.ui.document_windows`, showing that group's shown document, in the rect `SplitViews`
 /// places it in with the dividers at `app.ui.split_at`. `None` with no arrangement or fewer than two docked groups:
 /// the single canvas fills the area.
-pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
+pub(super) fn arranged_panes(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
     let windows = &app.ui.document_windows;
     let layout = windows.arrangement?;
     let count = windows.docked.len();
@@ -55,6 +105,46 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
     )
 }
 
+/// The arranged canvases' display and drop areas, inside any title and status bars.
+pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
+    let mut panes = arranged_panes(app, rect)?;
+    if app.ui.document_windows.arrangement == Some(Arrangement::Tile) {
+        let heights = tile_bar_heights(app);
+        for (_, pane) in &mut panes {
+            *pane = TilePane::new(*pane, heights).canvas;
+        }
+    }
+    Some(panes)
+}
+
+fn tile_bar_heights(app: &PhotocraftApp) -> (f32, f32) {
+    StyleCx::with_root(app.ctx(), |cx| {
+        let size = &cx.tokens.size.bar;
+        let title = if app.session.prefs().workspace.large_tabs { size.title } else { size.tab };
+        (title, size.status)
+    })
+}
+
+/// Tile chrome takes its own rows so it is outside the tools and drop targets of the canvas.
+struct TilePane {
+    title: Rect,
+    canvas: Rect,
+    status: Rect,
+}
+
+impl TilePane {
+    fn new(pane: Rect, (title, status): (f32, f32)) -> Self {
+        // With an exceptionally short pane, preserve a canvas before adding either full-height bar.
+        let top = pane.top() + if pane.height() > title { title } else { 0.0 };
+        let bottom = pane.bottom() - if pane.bottom() - top > status { status } else { 0.0 };
+        Self {
+            title: Rect::from_x_y_ranges(pane.x_range(), pane.top()..=top),
+            canvas: Rect::from_x_y_ranges(pane.x_range(), top..=bottom),
+            status: Rect::from_x_y_ranges(pane.x_range(), bottom..=pane.bottom()),
+        }
+    }
+}
+
 /// Tell the GPU canvas which documents are on screen (the arranged panes or the main canvas's, plus the shown
 /// document of every floating window): they split the display texture budget, and the textures of the others are
 /// freed first. Only a change of that set (or a document's size) re-splits it, so switching between shown documents
@@ -62,7 +152,7 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
 pub(crate) fn publish_shown(app: &PhotocraftApp) {
     let Some(gpu) = &app.gpu else { return };
     let docs = app.session.documents();
-    let mut shown: Vec<usize> = match arranged_cells(app, app.last_canvas_rect) {
+    let mut shown: Vec<usize> = match arranged_panes(app, app.last_canvas_rect) {
         Some(cells) => cells.into_iter().map(|(d, _)| d).collect(),
         None => main_canvas_document(app).into_iter().collect(),
     };
@@ -74,27 +164,29 @@ pub(crate) fn publish_shown(app: &PhotocraftApp) {
 }
 
 /// What the document area does after Window › Arrange changed the document windows (top-w15 calls it after
-/// `arrange`). A new n-up or Tile arrangement starts from even panes and every document fits its new pane, as
-/// production's layouts do; Tile is a pane per open document, floating windows docked first (the framework's
-/// `arrange` consolidates before it splits). The other window commands and the Match commands leave the panes and
-/// views alone.
+/// `arrange`). A new n-up or Tile arrangement starts from even panes; every document keeps its zoom and view centre,
+/// as the reference application's layouts do (#16885), so it shows centred in its new pane. Tile is a pane per open
+/// document, floating windows docked first (the framework's `arrange` consolidates before it splits). The other window
+/// commands and the Match commands leave the panes and views alone.
 pub(crate) fn apply_arranged(app: &mut PhotocraftApp, arranged: Arranged) {
     if arranged == Arranged::Windows && app.ui.document_windows.arrangement.is_some() {
         app.ui.split_at = SplitAt::default();
-        app.ui.views.iter_mut().for_each(|view| view.place(craft::ui::canvas::ViewCommands::FitOnScreen));
     }
 }
+
+/// The height of the band at the top of the document area that takes a floating window's drop where no tab strip
+/// shows: a tab's height.
+const DOCK_BAND: f32 = 32.0;
 
 fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The web build's drop path reads where the canvas is (`file_open::target_at`); set again when one shows.
     app.drop_canvas_rect = None;
-    retain_gpu_documents(app);
-    publish_shown(app);
-    crate::cas_transform::tick(app, ui.ctx());
-    if app.home_screen_up() {
-        start_screen(app, ui);
-        return;
-    }
+    // A run that shows no canvas of the active document shows no crop task bar (`crop_task_bar::show` reports one).
+    app.ui.task_bar_shown = None;
+    // A floating window's title bar docks on the tab strip (`tabs::strip` sets its rect); where no strip shows, on a
+    // band of a tab's height at the top of the area, where the strip would be.
+    let area = ui.max_rect();
+    app.dock_drop_rect = Some(Rect::from_min_size(area.min, egui::vec2(area.width(), DOCK_BAND.min(area.height()))));
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
     // The tabs region and the document run one after the other inside `show`, each with the app to itself.
@@ -151,24 +243,71 @@ fn arranged(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, active: usiz
             group.shown = Some(active_id);
         }
     }
-    let Some(cells) = arranged_cells(app, rect) else { return false };
+    let Some(panes) = arranged_panes(app, rect) else { return false };
+    let heights = (layout == Arrangement::Tile).then(|| tile_bar_heights(app));
     let count = app.ui.document_windows.docked.len();
     let active_pane = app.ui.document_windows.docked.iter().position(|group| group.shown == Some(active_id)).unwrap_or(0);
     let shown: Vec<Option<usize>> = app.ui.document_windows.docked.iter().map(|group| group.shown.and_then(|id| document_index(app, id))).collect();
     // The panes are laid out from the dividers as this pass starts; an edit of them lands after the pass.
     let mut at = app.ui.split_at.clone();
     let out = SplitViews::new(tl!("Documents"), layout, Bind::bound(&mut at)).count(count).active(active_pane).show(ui, |ui, _| {
-        for &(d, cell) in &cells {
+        for &(d, pane) in &panes {
             let view = app.ui.views[d].clone();
-            let (v, _) = canvas_view(app, ui, CanvasHost::main(d), cell, view, d == active);
+            let tile = heights.map(|heights| TilePane::new(pane, heights));
+            let canvas = tile.as_ref().map_or(pane, |tile| tile.canvas);
+            let (v, _) = canvas_view(app, ui, CanvasHost::main(d), canvas, view, d == active);
+            if let Some(tile) = &tile
+                && tile.status.height() > 0.0
+            {
+                let id = app.session.documents()[d].doc.id;
+                let zoom = format!("{}%", super::fmt_zoom(v.zoom * 100.0));
+                Bar::new("", BarKind::Status).id_salt(("tile-status", id)).show_at(ui, tile.status, |ui, _| {
+                    Text::new(zoom.clone()).elide(Elide::End).show(ui);
+                });
+            }
             if d != active {
                 app.ui.views[d] = v;
             }
         }
     });
     app.ui.split_at = at;
-    if let Some(d) = out.output.activated.and_then(|pane| shown.get(pane).copied().flatten()) {
+    let mut selected = out.output.activated.and_then(|pane| shown.get(pane).copied().flatten());
+    let mut closing = Vec::new();
+    if let Some(heights) = heights {
+        // SplitViews places a hit surface above each inactive canvas to handle its first press.
+        // Title controls are siblings above those surfaces so Close works even on an inactive tile.
+        for &(d, pane) in &panes {
+            let title = TilePane::new(pane, heights).title;
+            if title.height() <= 0.0 {
+                continue;
+            }
+            let doc = &app.session.documents()[d];
+            let label = tabs::tab_title_at(app, d, app.ui.views[d].zoom * 100.0);
+            let mut tab = Tab::new(label).id_salt(("tile-title", doc.doc.id)).selected(d == active);
+            if app.session.prefs().workspace.large_tabs {
+                tab = tab.large();
+            }
+            if doc.is_dirty() {
+                tab = tab.modified();
+            }
+            let out = tab.show_at(ui, title);
+            if matches!(out.event, Some(TabPartEvent::Close)) {
+                closing.push(doc.doc.id);
+            } else if out.response.clicked() {
+                selected = Some(d);
+            }
+        }
+    }
+    if let Some(d) = selected {
         app.session.set_active(d);
+    }
+    // A clean document can leave the session immediately, so close only after the pane indices were used.
+    for id in closing {
+        tabs::close_document(app, ui.ctx(), id);
     }
     true
 }
+
+#[cfg(test)]
+#[path = "arrange_keeps_zoom_tests.rs"]
+mod arrange_keeps_zoom_tests;

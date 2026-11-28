@@ -20,6 +20,9 @@ pub(crate) enum Item {
     Separator,
     /// The tool's blend mode.
     Blend(BlendMode),
+    /// The Healing Brush's Replace row (#12101): copy the source without healing. It is not a
+    /// blend mode: the stroke sends it as a mode word, and the keys and the ⇧+ / ⇧− cycle skip it.
+    HealingReplace,
     /// Painting-only: paint behind the layer's pixels (Brush, Pencil and Pattern Stamp).
     Behind,
     /// Painting-only: paint transparency (Brush, Pencil, Paint Bucket).
@@ -39,6 +42,7 @@ impl Item {
             Item::EditBrush => "Edit Brush…",
             Item::Separator => return None,
             Item::Blend(m) => m.label(),
+            Item::HealingReplace => "Replace",
             Item::Behind => "Behind",
             Item::Clear => "Clear",
             Item::Eraser(m) => match m {
@@ -98,8 +102,8 @@ fn blend_items(behind: bool, clear: bool) -> Vec<Item> {
 
 /// `tool`'s menu, top to bottom. Empty for a tool without one (its Shift+right-click keeps its
 /// other route). Only what the tool's options bar offers is listed: the reference application's
-/// Behind for the Clone Stamp, History Brush, Gradient and Paint Bucket, the Blur, Sharpen and Smudge
-/// modes, the Spot Healing modes and the Healing Brush's source and Replace have no setting here.
+/// Behind for the Clone Stamp, History Brush, Gradient and Paint Bucket, the Blur, Sharpen and
+/// Smudge modes, the Spot Healing modes and the Healing Brush's source have no setting here.
 pub(crate) fn items(tool: Tool) -> Vec<Item> {
     let with_brush = |rest: Vec<Item>| std::iter::once(Item::EditBrush).chain(std::iter::once(Item::Separator)).chain(rest).collect::<Vec<_>>();
     match tool {
@@ -110,7 +114,22 @@ pub(crate) fn items(tool: Tool) -> Vec<Item> {
         Tool::Eraser => ["brush", "pencil", "block"].into_iter().map(Item::Eraser).collect(),
         Tool::Dodge | Tool::Burn => with_brush(["shadows", "midtones", "highlights"].into_iter().map(Item::Range).collect()),
         Tool::Sponge => with_brush(["desaturate", "saturate"].into_iter().map(Item::Sponge).collect()),
-        Tool::Healing => crate::blend_keys::HEALING_MODES.into_iter().map(Item::Blend).collect(),
+        // The measured list (#12101): Replace after Normal, rules before Multiply and before Color.
+        Tool::Healing => {
+            use BlendMode::*;
+            vec![
+                Item::Blend(Normal),
+                Item::HealingReplace,
+                Item::Separator,
+                Item::Blend(Multiply),
+                Item::Blend(Screen),
+                Item::Blend(Darken),
+                Item::Blend(Lighten),
+                Item::Separator,
+                Item::Blend(Color),
+                Item::Blend(Luminosity),
+            ]
+        }
         Tool::Gradient => blend_items(false, false),
         Tool::PaintBucket => blend_items(false, true),
         _ => Vec::new(),
@@ -151,7 +170,15 @@ pub(crate) fn current(app: &PhotocraftApp, tool: Tool) -> Option<Item> {
         Tool::Brush => painting(o.brush_clear),
         Tool::Pencil => painting(o.pencil_clear),
         Tool::PatternStamp => painting(false),
-        Tool::CloneStamp | Tool::HistoryBrush | Tool::Healing => Item::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode)),
+        Tool::CloneStamp | Tool::HistoryBrush => Item::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode)),
+        // Replace wins over the brush's blend mode: it is the row the tool option selects (#12101).
+        Tool::Healing => {
+            if o.healing_replace {
+                Item::HealingReplace
+            } else {
+                Item::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode))
+            }
+        }
         Tool::Gradient => Item::Blend(o.gradient_blend_mode),
         Tool::PaintBucket if o.bucket_clear => Item::Clear,
         Tool::PaintBucket => Item::Blend(o.bucket_blend_mode),
@@ -231,6 +258,8 @@ pub(crate) fn choose(app: &mut PhotocraftApp, item: Item) {
             Ok(_) => match tool {
                 Tool::Brush => app.ui.tool_options.brush_clear = item == Item::Clear,
                 Tool::Pencil => app.ui.tool_options.pencil_clear = item == Item::Clear,
+                // Any of the seven blend modes leaves Replace (#12101).
+                Tool::Healing => app.ui.tool_options.healing_replace = false,
                 _ => {}
             },
             Err(e) => app.ui.status = e,
@@ -246,6 +275,8 @@ pub(crate) fn choose(app: &mut PhotocraftApp, item: Item) {
         Item::Eraser(m) => app.ui.tool_options.eraser_mode = m.into(),
         Item::Range(r) => app.ui.tool_options.tone_range = r.into(),
         Item::Sponge(m) => app.ui.tool_options.sponge_mode = m.into(),
+        // Replace is a tool option: it runs no command and adds no History step (#12101).
+        Item::HealingReplace if tool == Tool::Healing => app.ui.tool_options.healing_replace = true,
         Item::Blend(m) if tool == Tool::Gradient => crate::blend_keys::set_gradient_mode(app, m),
         Item::Blend(m) if tool == Tool::PaintBucket => {
             app.ui.tool_options.bucket_clear = false;

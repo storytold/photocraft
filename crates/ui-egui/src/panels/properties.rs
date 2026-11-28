@@ -58,10 +58,20 @@ fn kind_label(layer: &Layer) -> String {
 /// mask targets, the layer the panel was opened for) keys the inspector, so a field's typing or
 /// scrub state stays with its layer.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // A run that shows no adjustment layer's controls ends the Reset session kept (`PhotocraftApp::properties_hidden`).
+    // What the run shows decides, not whether the controls' code ran: a pass that reuses the inspector's measurement
+    // runs none of its content.
+    if !body(app, ui) {
+        app.properties_hidden = app.properties_hidden.saturating_add(2);
+    }
+}
+
+/// The panel's inspector; whether it shows an adjustment layer's controls.
+fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     let inspector = Inspector::new(tl!("Properties")).empty(tl!("No properties"));
     let Some(st) = app.session.active() else {
         inspector.show(ui, |_, _| {});
-        return;
+        return false;
     };
     let doc = st.doc.clone();
     let active = st.active_layer;
@@ -76,6 +86,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         _ if crate::doc_props_ui::shows_document(&doc, active) => Body::Document,
         _ => Body::Layer,
     };
+    let adjustment = shown == Body::Layer && layer.is_some_and(|l| matches!(l.content, LayerContent::Adjustment(_)));
     let mut inspector = inspector.target(target);
     // The Document properties are headed by the document, as production's panel is.
     inspector = match layer {
@@ -99,6 +110,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Body::Layer => layer_body(app, ui, layer),
         }
     });
+    adjustment
 }
 
 /// The document's properties, with Align and Distribute above them while several layers are selected.

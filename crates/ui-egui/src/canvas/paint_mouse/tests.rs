@@ -25,7 +25,7 @@ pub(super) fn harness(prefs: Option<&str>) -> Harness<'static, Box<PhotocraftApp
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
         },
         app,
     );
@@ -372,8 +372,8 @@ fn the_brush_is_a_per_tool_option_that_presets_keep() {
     tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 5.0 }, Modifiers::NONE);
 }
 
-/// #10263: the Art History Brush starts at full opacity the first time it is picked, though it
-/// keeps the rest of the brush the old tool left (other tools still take its opacity).
+/// #10263: the Art History Brush starts at full opacity the first time it is picked, with its own
+/// tip rather than the old tool's (#12631; other tools still take its opacity).
 #[test]
 fn art_history_brush_starts_at_full_opacity() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -384,7 +384,7 @@ fn art_history_brush_starts_at_full_opacity() {
     app.ui.tool = Tool::ArtHistoryBrush;
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "Art History starts at 100%");
-    assert_eq!(app.session.tools.brush.size, 40.0, "and inherits the size");
+    assert_eq!(app.session.tools.brush.size, 21.0, "with its own 21 px tip");
     app.ui.tool = Tool::HistoryBrush;
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "the History Brush takes the Art History brush's opacity");
@@ -401,7 +401,7 @@ fn art_history_brush_starts_at_full_opacity() {
 fn each_tool_keeps_its_own_brush() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    let brush = |app: &PhotocraftApp| app.session.tools.brush.clone();
+    let brush = |app: &PhotocraftApp| (*app.session.tools.brush).clone();
     let size = |b: &BrushSettings| b.size;
     let hardness = |b: &BrushSettings| b.hardness;
     let opacity = |b: &BrushSettings| b.opacity;
@@ -509,7 +509,7 @@ fn shift_right_menu_lists_each_tools_own_rows_in_order() {
         (Tool::Sponge, edit(vec!["Desaturate", "Saturate"])),
         (Tool::PaintBucket, with(&["Clear"])),
         (Tool::MixerBrush, vec!["Edit Brush…"]),
-        (Tool::Healing, vec!["Normal", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"]),
+        (Tool::Healing, vec!["Normal", "Replace", "Multiply", "Screen", "Darken", "Lighten", "Color", "Luminosity"]),
         (Tool::SpotHealing, vec![]),
         (Tool::MagicEraser, vec![]),
     ] {
@@ -545,7 +545,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
         let doc = &h.state().session.active().unwrap().doc;
         (doc.layers[0].id, doc.layers[1].id)
     };
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(bg);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(bg));
     for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket] {
         open_tool_menu(&mut h, tool);
         assert!(!enabled(h.state(), Item::Clear), "{tool:?}");
@@ -562,7 +562,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
     }
     assert!(!enabled(h.state(), Item::Behind));
     // On a normal layer they are available again.
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(top);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(top));
     assert!(enabled(h.state(), Item::Behind) && enabled(h.state(), Item::Clear));
 }
 

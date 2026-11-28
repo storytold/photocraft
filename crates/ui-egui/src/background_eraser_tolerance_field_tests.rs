@@ -52,7 +52,7 @@ fn type_into(h: &mut Harness<'static, Box<PhotocraftApp>>, name: &str, text: &st
 #[test]
 fn options_bar_fields_that_alert_past_their_range() {
     type Read = fn(&PhotocraftApp) -> f32;
-    let o = |a: &PhotocraftApp| -> ToolOptions { a.ui.tool_options.clone() };
+    let o = |a: &PhotocraftApp| -> ToolOptions { (*a.ui.tool_options).clone() };
     let _ = o;
     // (tool, field, typed, kept, alerts)
     let rows: [(Tool, &str, &str, f32, bool, Read); 11] = [
