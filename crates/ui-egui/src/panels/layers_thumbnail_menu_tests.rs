@@ -331,3 +331,27 @@ fn a_hidden_locked_or_clipped_row_keeps_todays_menu() {
         }
     }
 }
+
+/// The measured Background row carries the Background's own transparency and position locks, and
+/// those are the only locks its exemption covers. A lock it does not carry by itself - all or
+/// artboard - is the locked state the issue lists as not measured, so that row keeps the full layer
+/// menu it had before. Locking the pixels is no such case: that clears the transparency lock, and
+/// the layer stops being a Background.
+#[test]
+fn a_background_with_an_extra_lock_keeps_todays_layer_menu() {
+    let (mut app, k) = kinds();
+    let shown = |app: &PhotocraftApp| -> (bool, bool) {
+        let values: Vec<String> = thumb_menu(app, k.background).into_iter().filter_map(|e| e.value().cloned()).collect();
+        (values.iter().any(|v| v.starts_with(LOAD_PIXELS)), values.iter().any(|v| v == "layer.duplicate"))
+    };
+    let own_locks = photocraft_doc::Locks { transparency: true, position: true, ..Default::default() };
+    assert_eq!(shown(&app), (true, false), "the Background with its own locks opens the short menu");
+    for key in ["all", "artboard"] {
+        app.run("layer.setProps", json!({"layer": k.background.0, "locks": {key: true}})).unwrap();
+        assert!(app.session.active().unwrap().doc.is_background(k.background), "the {key} lock leaves the row a Background");
+        assert_eq!(shown(&app), (false, true), "a Background with the {key} lock keeps today's full layer menu");
+        app.run("layer.setProps", json!({"layer": k.background.0, "locks": {key: false}})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.first().unwrap().locks, own_locks, "only the Background's own locks are left after the {key} case");
+        assert_eq!(shown(&app), (true, false), "the Background is back on the short menu with the {key} lock off");
+    }
+}

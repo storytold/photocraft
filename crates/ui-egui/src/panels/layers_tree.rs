@@ -586,10 +586,12 @@ fn menu_kind(tree: &PhotoLayers, target: &MenuTarget<LayerId>) -> MenuKind {
         Some(LayerRowKey::Layer(id)) => {
             let Some(l) = tree.layer(id) else { return MenuKind::None };
             // #16777 measured visible, unlocked, unclipped rows and left every other state on today's
-            // menu: the short one only where a pixel layer already had it. A Background's own locks are
-            // measured - its row stands in the table - so they do not count as locked.
+            // menu: the short one only where a pixel layer already had it. A Background's own
+            // transparency and position locks are measured - its row stands in the table - so only a
+            // lock the Background does not carry by itself counts as locked there.
             let background = tree.doc().is_background(*id);
-            let measured_state = l.visible && !l.clipped && (background || !l.locks.any());
+            let unlocked = if background { !(l.locks.all || l.locks.pixels || l.locks.artboard) } else { !l.locks.any() };
+            let measured_state = l.visible && !l.clipped && unlocked;
             let short_menu_today = matches!(l.content, LayerContent::Raster(_)) && !background;
             match target.part {
                 Some(LayerPart::LayerMask) if l.mask.is_some() => MenuKind::Mask(*id),
