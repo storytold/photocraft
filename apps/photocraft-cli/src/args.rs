@@ -153,8 +153,9 @@ pub(crate) struct InfoArgs {
 /// Open a file (or start a new document), run engine commands in order, save the result
 ///
 /// Prints each command's JSON result. Give exactly one of <FILE> or --new, and at least one --cmd
-/// or --out. An --out that is the <FILE> is refused, as the result would replace the original;
-/// --in-place allows it.
+/// or --out. When <FILE> is edited with --cmd and --out is omitted, --in-place saves the result
+/// back to <FILE>; an --out that is the <FILE> is refused, as the result would replace the
+/// original, unless --in-place allows it.
 #[derive(Args)]
 #[command(group(ArgGroup::new("source").args(["file", "new"]).required(true)))]
 #[command(group(ArgGroup::new("work").args(["cmd", "out"]).required(true).multiple(true)))]
@@ -173,8 +174,8 @@ pub(crate) struct RunArgs {
     /// Save the result to this file
     #[arg(long, value_name = "FILE")]
     pub(crate) out: Option<PathBuf>,
-    /// Allow an --out that is the <FILE>, replacing the original
-    #[arg(long)]
+    /// Save back to <FILE> when --out is omitted, or allow an --out that is the <FILE>
+    #[arg(long, conflicts_with = "new")]
     pub(crate) in_place: bool,
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]

@@ -117,6 +117,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.
     let mut reported_fonts = std::collections::HashSet::<String>::new();
+    let mut opened_id = None;
     // clap's `source` group gives exactly one of the two, and its `work` group a --cmd or --out.
     if let Some(new) = &a.new {
         h.command_run("file.new", new.clone()).map_err(CliError::New)?;
@@ -126,6 +127,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
             refuse_overwriting_input(a.in_place, file, out)?;
         }
         let o = h.open_with_approval(file, a.approve_high_memory)?;
+        opened_id = h.session.active().map(|st| st.doc.id);
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);
@@ -138,6 +140,9 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
             continue;
         }
         let r = h.command_run(&id, params).map_err(|source| CliError::Command { id: id.clone(), source })?;
+        if opened_id.is_some_and(|open| !h.session.documents().iter().any(|st| st.doc.id == open)) {
+            opened_id = None;
+        }
         // A direct Batch reports per-file errors and continues, as in Scripts, unless it was
         // cancelled, ran out of script steps or couldn't write its error log; failed action or
         // script calls still stop the command list before export.
@@ -167,7 +172,14 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
     let remaining: Vec<String> =
         h.session.active().map(|st| missing_font_warnings(&st.doc)).unwrap_or_default().into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
     warn_all(err, &remaining);
-    if let Some(o) = a.out.as_deref() {
+    if let Some(o) = a.out.as_deref().or(a.file.as_deref().filter(|_| a.in_place)) {
+        if let Some(file) = a.file.as_deref() {
+            let targets_input = a.out.is_none() || photocraft_engine::file_cmds::same_file(file, o);
+            let active_is_opened = opened_id.is_some_and(|id| h.session.active().is_some_and(|st| st.doc.id == id));
+            if targets_input && !active_is_opened {
+                return Err(CliError::InPlaceDocumentChanged(file.to_path_buf()));
+            }
+        }
         let saved = h.save(None, Some(o), a.export.format.as_deref(), &opts);
         // Report GPU diagnostics even when the export fails: the fallback reason is queued
         // during the failed export and would otherwise be lost on the error path.
