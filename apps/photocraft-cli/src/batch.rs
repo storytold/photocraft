@@ -198,10 +198,15 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
 }
 
 pub(crate) fn droplet(a: &DropletArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
-    let (file, inputs) = (&a.file, &a.inputs);
-    let mut p = json!({"droplet": file, "input": inputs});
+    // The engine command takes its paths as JSON text, so a path that isn't valid UTF-8 stops here
+    // with the same exit 1 as `info`'s, not at parsing.
+    fn text<'a>(path: &'a Path, what: &'static str) -> Result<&'a str> {
+        path.to_str().ok_or_else(|| CliError::PathNotUtf8 { what, path: path.to_path_buf() })
+    }
+    let inputs = a.inputs.iter().map(|i| text(i, "droplet input")).collect::<Result<Vec<_>>>()?;
+    let mut p = json!({"droplet": text(&a.file, "droplet file")?, "input": inputs});
     if let Some(o) = &a.out {
-        p["output"] = json!(o);
+        p["output"] = json!(text(o, "--out")?);
     }
     let mut s = photocraft_engine::Session::new();
     let r = s.execute("file.automate.runDroplet", p)?;

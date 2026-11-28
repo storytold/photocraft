@@ -1422,6 +1422,31 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// RFC-0018 rule 1.5: `droplet` takes its file, inputs and `--out` as native paths, so a name that
+/// isn't valid Unicode is parsed rather than refused as a usage error (exit 2). The engine command
+/// that runs the droplet takes JSON text, so the run stops there, exit 1 and naming the path, like
+/// `info`'s.
+#[cfg(unix)]
+#[test]
+fn droplet_takes_a_non_unicode_path_and_stops_at_the_engine_boundary() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let d = tmp("droplet-non-unicode");
+    let name = OsStr::from_bytes(b"caf\xe9");
+    let utf8 = d.join("rot.pcdroplet");
+    for args in [
+        vec![OsStr::new("droplet").to_owned(), name.to_owned(), OsStr::new("in.png").to_owned()],
+        vec![OsStr::new("droplet").to_owned(), utf8.clone().into_os_string(), name.to_owned()],
+        vec![OsStr::new("droplet").to_owned(), utf8.clone().into_os_string(), OsStr::new("in.png").to_owned(), OsStr::new("--out").to_owned(), name.to_owned()],
+    ] {
+        let o = bin().current_dir(&d).args(&args).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!((o.status.code(), o.stdout.is_empty()), (Some(1), true), "{args:?}: {err}");
+        assert!(err.contains("must be valid UTF-8") && !err.contains("panicked"), "{err}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// `batch --actions set.atn`: a Photoshop Actions file plays like an Actions set, and its steps
 /// PhotoCraft can't play are warned about up front.
 #[test]
@@ -1516,6 +1541,23 @@ fn every_subcommand_help_returns_on_stdout() {
             assert_eq!((code, out.is_empty(), err.is_empty()), (0, false, true), "{sub} {help}: {err}");
             // `commands` would also exit 0 with output if it ran; its list names `file.new`, help doesn't.
             assert!(!out.contains("file.new"), "{sub} {help} ran instead of printing help: {out}");
+        }
+    }
+}
+
+/// RFC-0018 rule 1.1: `--version` and `-V` work on every subcommand, print one line on stdout and
+/// return without running it (`mcp` and `serve` would otherwise block on stdin).
+#[test]
+fn every_subcommand_prints_the_version() {
+    for sub in SUBCOMMANDS {
+        for version in ["--version", "-V"] {
+            let Invoke { code, stdout: out, stderr: err } = invoke(&[sub, version]);
+            assert_eq!((code, err.as_str()), (0, ""), "{sub} {version}");
+            assert!(out.starts_with("photocraft-cli") && out.ends_with('\n') && out.lines().count() == 1, "{sub} {version}: {out}");
+            // The same release as the top level's, so a script can read it from any command.
+            let top = invoke(&[version]).stdout;
+            let release = top.trim_end().strip_prefix("photocraft-cli ").unwrap();
+            assert!(out.contains(release), "{sub} {version}: {out} lacks {release}");
         }
     }
 }
