@@ -9,10 +9,14 @@
 use craft::automation::ui::actions::{
     ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, ActionsSettings, DIALOG_COLUMN, INCLUDE_COLUMN,
 };
-use craft::ui::contract::{SweepStep, ToggleEdit};
+use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, SweepStep, ToggleEdit};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
 use photocraft_engine::actions_cmds::ActionsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use photocraft_engine::actions_cmds::{self, Action};
 
@@ -37,6 +41,8 @@ pub(crate) use runner::{
     resume, resume_spelling, run_step_dialog, spelling_change, stopped, suspended_guard, token_of,
 };
 
+#[cfg(test)]
+mod batch_set_action_tests;
 #[cfg(test)]
 mod drag_drop_tests;
 #[cfg(test)]
@@ -129,20 +135,154 @@ pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
         .or_else(|| list.action(0))
 }
 
-/// The Set and Action dropdowns of the Batch and Create Droplet dialogs, as in the reference
-/// application: each action name once and each set once, in list order. A loaded library can hold
-/// one name in two sets, so the dialog sends the set too and the command picks that set's action.
-pub fn action_form_choices(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
-    let (mut names, mut sets) = (Vec::new(), Vec::new());
-    for action in app.session.actions().list.actions() {
-        if !names.contains(&action.name) {
-            names.push(action.name.clone());
-        }
-        if let Some(set) = action.set.as_ref().filter(|set| !sets.contains(*set)) {
-            sets.push(set.clone());
+/// One Action dropdown entry of the Batch and Create Droplet dialogs: what the form submits and
+/// what the dropdown shows. Owner decision (a) on #13672: the value is the action's INDEX in the
+/// action list - the `"action": <index>` form the command already takes - not its name.
+pub struct ActionChoice {
+    /// The index in the action list: the value the dropdown submits and the command runs.
+    pub index: usize,
+    /// The action's name: what the dropdown lists.
+    pub name: String,
+}
+
+/// One Set dropdown entry of those dialogs: the set it shows and the actions it offers. The
+/// actions outside any set form one entry with the empty id, which the dialogs show as the
+/// reference application words it.
+pub struct ActionSetChoices {
+    /// The set the entry shows; `""` stands for the actions outside any set. The row only filters
+    /// the Action list - the action index names the action on its own, so this is no command
+    /// parameter.
+    pub id: String,
+    /// The entry's actions in list order - actions without steps included - each by its index in
+    /// the action list and its name; empty for an empty set.
+    pub actions: Vec<ActionChoice>,
+}
+
+/// The Set dropdown of the Batch and Create Droplet dialogs, as in the reference application
+/// (#13672): the actions outside any set first when the list holds any, then every set in
+/// panel order, empty sets included - and each entry's actions in list order, actions without
+/// steps included. The list keeps action names unique across all its sets, so no entry repeats
+/// a name the reference application's would; the choice is still carried by the list index, which
+/// names the action without the set.
+pub fn action_form_choices(app: &PhotocraftApp) -> Vec<ActionSetChoices> {
+    let list = &app.session.actions().list;
+    let offered = |indices: Vec<usize>| -> Vec<ActionChoice> {
+        indices.into_iter().filter_map(|index| list.action(index).map(|action| ActionChoice { index, name: action.name.clone() })).collect()
+    };
+    let mut choices = Vec::new();
+    let loose: Vec<usize> = (0..list.actions().len()).filter(|index| list.set_of(*index).is_none()).collect();
+    if !loose.is_empty() {
+        choices.push(ActionSetChoices { id: String::new(), actions: offered(loose) });
+    }
+    for set in list.sets() {
+        choices.push(ActionSetChoices { id: set.to_owned(), actions: offered(set_actions(app, set)) });
+    }
+    choices
+}
+
+/// The action the two forms open on, as its index in the list: the same selection rule as
+/// [`selected_action`] (#10612), in the index form the rows submit.
+fn opened_action_index(app: &PhotocraftApp) -> Option<usize> {
+    let list = &app.session.actions().list;
+    selected_action_index(app)
+        .or_else(|| selected_set_actions(app).first().copied())
+        .or_else(|| if list.actions().is_empty() { None } else { Some(0) })
+        .filter(|index| list.action(*index).is_some())
+}
+
+/// The Set and Action rows of the Batch and Create Droplet forms (#13672). Set is always shown
+/// with every entry of [`action_form_choices`]; the rows open on the panel's selected action
+/// (#10612). The Action dropdown lists only the chosen set's actions, in list order, and submits
+/// that action's index in the action list; it follows the Set row like Match Color's layer follows
+/// its document: changing the set selects that set's first action, and an index the chosen set
+/// does not hold falls back to it. An empty set offers no action and sends none, which the command
+/// refuses as its own.
+pub(crate) fn set_and_action_rows(app: &PhotocraftApp) -> Option<Vec<Param>> {
+    let open = opened_action_index(app)?;
+    let choices = action_form_choices(app);
+    let open_set = app.session.actions().list.set_of(open).unwrap_or_default().to_owned();
+    let set_options: Vec<(String, Label)> = choices
+        .iter()
+        .map(|entry| {
+            let shown = if entry.id.is_empty() { Label::from(tl!("Ungrouped Actions")) } else { Label::from(entry.id.clone()) };
+            (entry.id.clone(), shown)
+        })
+        .collect();
+    let listing = Arc::new(choices);
+    let label = Label::from(tl!("Action"));
+    // A list index is kept as the field's whole number, which is what the command reads as its
+    // `action` index; a list can never hold more actions than an i64 counts.
+    Some(vec![
+        Param::new("set", tl!("Set"), ParamKind::choice(set_options, Some(open_set))).resets(["action"]),
+        Param::custom("action", label.clone(), move |ui, fields, _cx| {
+            let set = fields.text("set").unwrap_or_default().to_owned();
+            let actions: &[ActionChoice] = listing.iter().find(|entry| entry.id == set).map(|entry| entry.actions.as_slice()).unwrap_or_default();
+            let held = fields.int("action");
+            let shown =
+                held.filter(|index| actions.iter().any(|action| *index == action.index as i64)).or_else(|| actions.first().map(|action| action.index as i64));
+            if shown != held {
+                match shown {
+                    Some(index) => fields.set("action", index),
+                    // An empty set offers nothing: the key goes, and the command reports.
+                    None => drop(fields.remove("action")),
+                }
+            }
+            let entries: Vec<Entry<i64>> = actions.iter().map(|action| Entry::new(action.index as i64, Label::from(action.name.clone()))).collect();
+            let out = Select::new(label.clone(), Bind::given(shown.unwrap_or_default()), &entries).enabled(!actions.is_empty()).show(ui);
+            if let Some(index) = out.value() {
+                fields.set("action", *index);
+            }
+            out.response().clone()
+        })
+        .opens_with(FieldValue::Int(open as i64)),
+    ])
+}
+
+/// The Action the Batch and Create Droplet dropdowns mean at OK time (#13672, owner decision (a):
+/// the Action row submits the action's index in the action list). The Action row follows the Set
+/// row in its draw, but a value can lag the set between two writes no frame drew between them: a
+/// set picked and OK pressed at once. Such a lagging pair - no index, or one another entry of
+/// [`action_form_choices`] offers, or a value that is no index at all - becomes the chosen entry's
+/// first action, the pick its dropdown shows. An index no entry offers at all (the action was
+/// deleted while the dialog was open) stays as it is, so the command reports it as it does today,
+/// and a run whose form had no Set row is the command's own shape (a headless run or a recorded
+/// step). The `set` field is the row's filter, never a parameter: the dialog's field-to-parameter
+/// conversion (`filter_dialog::command_params`) drops it, so the index is the one parameter
+/// carrying the choice.
+pub(crate) fn playback_params(app: &PhotocraftApp, command: &str, fields: &DialogFields, params: Value) -> Value {
+    if !matches!(command, "file.automate.batch" | "file.automate.createDroplet") {
+        return params;
+    }
+    let mut params = params;
+    let Some(map) = params.as_object_mut() else { return params };
+    let Some(set) = fields.text("set").map(str::to_owned) else { return params };
+    let choices = action_form_choices(app);
+    let Some(entry) = choices.iter().find(|choice| choice.id == set) else {
+        // The set the form opened on is gone, so no index can be checked against it: the command
+        // reports the missing action rather than running some other set's.
+        drop(map.remove("action"));
+        return params;
+    };
+    let offered = |index: i64| entry.actions.iter().any(|action| action.index as i64 == index);
+    let elsewhere = |index: i64| choices.iter().any(|other| other.actions.iter().any(|action| action.index as i64 == index));
+    let lagging = match map.get("action") {
+        None => true,
+        Some(Value::Number(index)) => match index.as_i64() {
+            Some(index) => !offered(index) && elsewhere(index),
+            None => true,
+        },
+        // A name is no index: a value an earlier build or a script left in the field.
+        Some(_) => true,
+    };
+    if lagging {
+        if let Some(first) = entry.actions.first() {
+            drop(map.insert("action".into(), json!(first.index)));
+        } else {
+            // An empty set offers nothing: the key goes, and the command reports.
+            drop(map.remove("action"));
         }
     }
-    (names, sets)
+    params
 }
 
 /// The selected set folder, if it still exists.

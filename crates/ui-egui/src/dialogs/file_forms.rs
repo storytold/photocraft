@@ -102,17 +102,16 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
     let Some(action) = crate::actions::selected_action(app) else {
         return Err("record an action in the Actions panel first".into());
     };
-    let (name, set) = (action.name.clone(), action.set.clone());
-    let (action_names, set_names) = crate::actions::action_form_choices(app);
+    let name = action.name.clone();
     let mut rows = vec![
         Param::new("path", tl!("Path"), ParamKind::text(format!("{dir}/{name}.pcdroplet"))),
         Param::new("name", tl!("Name"), ParamKind::text(name.clone())),
     ];
-    // The Set choice picks between same-named actions; an action outside any set has none.
-    if let Some(set) = set {
-        rows.push(Param::new("set", tl!("Set"), ParamKind::choice(names(&set_names), Some(set))));
+    // The same Set and Action dropdowns as the Batch form (#13672). The selected action checked
+    // above is what those rows open on, so their rows are here whenever this dialog opens.
+    if let Some(playback) = crate::actions::set_and_action_rows(app) {
+        rows.extend(playback);
     }
-    rows.push(Param::new("action", tl!("Action"), ParamKind::choice(names(&action_names), Some(name))));
     // The Play group (#13709): four checkboxes under the Set and Action choices, all off. The droplet saves them and
     // hands them to each run.
     rows.extend([
