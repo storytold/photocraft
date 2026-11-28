@@ -609,6 +609,9 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
+    if !unapplied_filters(sm).is_empty() {
+        return Ok(false);
+    }
     match render_in(doc, sm, ctx)? {
         Some(px) => {
             sm.cache = Some(px);
@@ -625,8 +628,11 @@ pub fn refresh(doc: &mut Document, id: LayerId) -> Result<bool> {
 
 fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
     let mut l = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
-    if !matches!(l.content, LayerContent::Smart(_)) {
+    let LayerContent::Smart(sm) = &l.content else {
         return Err(other("the layer is not a smart object"));
+    };
+    if !unapplied_filters(sm).is_empty() {
+        return Ok(false);
     }
     let ok = refresh_layer_in(doc, &mut l, ctx)?;
     if ok && let Some(dst) = doc.layer_mut(id) {
@@ -643,7 +649,12 @@ pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) 
     if refresh_in(doc, id, ctx)? {
         return Ok(());
     }
-    if let SmartSource::Linked { path } = &smart(doc, id)?.source
+    let sm = smart(doc, id)?;
+    let stuck = unapplied_filters(sm);
+    if let Some(name) = stuck.first() {
+        return Err(other(format!("the {name} smart filter is not supported, so the smart object can't be re-rendered")));
+    }
+    if let SmartSource::Linked { path } = &sm.source
         && let Err(why @ crate::doc_path::NotFollowed::Refused(_)) = crate::doc_path::resolve(path)
     {
         return Err(crate::doc_path::refusal("the linked file", path, why));

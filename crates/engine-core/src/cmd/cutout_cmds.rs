@@ -19,13 +19,13 @@ const CMD: &str = "layer.removeBackground";
 /// edges and hair get partial coverage instead of a hard cut.
 const REFINE: RefineParams = RefineParams { radius: 2.0, smart_radius: true, smooth: 10.0, feather: 0.5, contrast: 10.0, shift_edge: 0.0 };
 
-/// Remove Background needs an unlocked pixel layer.
+/// Remove Background needs an unlocked pixel or smart object layer.
 fn check(doc: &Document, l: &Layer) -> std::result::Result<(), String> {
-    if !matches!(l.content, LayerContent::Raster(_)) {
-        return Err(format!("the layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()));
+    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) {
+        return Err(format!("the layer is {} {} layer, not a pixel or smart object layer", l.content.article(), l.content.kind_name()));
     }
     let locks = doc.effective_locks(l.id);
-    if locks.pixels || locks.all {
+    if locks.all || (matches!(l.content, LayerContent::Raster(_)) && locks.pixels) {
         return Err(format!("Could not complete your request because the layer \"{}\" is locked", l.name));
     }
     Ok(())
@@ -49,12 +49,25 @@ fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    check(doc, layer).map_err(EngineError::Other)?;
-    let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
-    let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
-    let area = subject_area(layer, doc.bounds(), sample_all);
+    let (sample_all, refine, area) = {
+        let d = s.active_mut().ok_or(EngineError::NoDocument)?;
+        let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        if matches!(&layer.content, LayerContent::Smart(sm) if sm.cache.is_none()) {
+            let doc = std::sync::Arc::make_mut(d.doc_mut());
+            if !crate::smart_cmds::refresh(doc, id)? {
+                return Err(EngineError::Other("the smart object's pixels are unavailable".into()));
+            }
+        }
+        let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        check(&d.doc, layer).map_err(EngineError::Other)?;
+        if layer.surface().is_none() {
+            return Err(EngineError::Other("the layer has no pixels to sample".into()));
+        }
+        let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
+        let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
+        let area = subject_area(layer, d.doc.bounds(), sample_all);
+        (sample_all, refine, area)
+    };
     crate::jobs::edit_job(
         s,
         "Remove Background",
@@ -336,5 +349,91 @@ mod tests {
                 assert!(a < 0.05, "depth {depth}: stroke along the layer's edge at x = {x} (alpha {a})");
             }
         }
+    }
+
+    #[test]
+    fn remove_background_works_on_smart_object() {
+        let (mut s, inside) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+        assert!(matches!(layer(&s, id).content, LayerContent::Smart(_)));
+        assert!(s.is_enabled(CMD));
+        let r = s.execute(CMD, json!({})).unwrap();
+        assert_eq!(r["layer"], id.0);
+        assert!(layer(&s, id).mask.is_some());
+        let v = mask_iou(&s, 200, 160, &inside);
+        assert!(v >= 0.75, "smart object: IoU {v}");
+    }
+
+    #[test]
+    fn remove_background_renders_smart_object_when_cache_absent() {
+        let (mut s, inside) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+
+        // Manually clear cache so sm.cache is None
+        s.edit("clear cache", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            let LayerContent::Smart(sm) = &mut l.content else { panic!("not smart") };
+            sm.cache = None;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(layer(&s, id).surface(), None);
+        assert!(s.is_enabled(CMD));
+
+        // Executing the command re-renders cache and succeeds
+        let r = s.execute(CMD, json!({})).unwrap();
+        assert_eq!(r["layer"], id.0);
+        assert!(layer(&s, id).surface().is_some());
+        assert!(layer(&s, id).mask.is_some());
+        let v = mask_iou(&s, 200, 160, &inside);
+        assert!(v >= 0.75, "smart object with re-rendered cache: IoU {v}");
+    }
+
+    #[test]
+    fn remove_background_fails_when_smart_object_has_no_cache_and_cannot_render() {
+        let (mut s, _) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+
+        // Clear cache and set invalid linked file path so rendering fails
+        s.edit("break source", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            let LayerContent::Smart(sm) = &mut l.content else { panic!("not smart") };
+            sm.cache = None;
+            sm.source = photocraft_doc::SmartSource::Linked { path: "non_existent_file.png".into() };
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(s.execute(CMD, json!({})).is_err());
+    }
+
+    #[test]
+    fn remove_background_fails_when_smart_object_has_no_cache_and_unsupported_filter() {
+        let (mut s, _) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+
+        s.edit("unsupported filter", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            let LayerContent::Smart(sm) = &mut l.content else { panic!("not smart") };
+            sm.cache = None;
+            sm.smart_filters.push(photocraft_doc::SmartFilter {
+                command: "unsupported.filter".into(),
+                params: json!({"name": "Unsupported Filter"}),
+                blend: photocraft_doc::BlendMode::Normal,
+                opacity: 1.0,
+                visible: true,
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(layer(&s, id).surface(), None);
+        assert!(s.execute(CMD, json!({})).is_err());
+        assert_eq!(layer(&s, id).surface(), None);
     }
 }
