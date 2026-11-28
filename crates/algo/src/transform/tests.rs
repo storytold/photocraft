@@ -1235,26 +1235,26 @@ fn the_valve_falls_back_to_todays_output() {
     }
 }
 
-/// #4864: the valve's probe, every 8th pixel each way, plans windows inside the full plan's, so
-/// it never reads or holds more: cells the valve turns down for the probe, it turns down for the
-/// full plan too. A near-uniform 55 % shrink is turned down from the probe alone.
+/// #4864: the valve evaluates in source space, independent of the clip, so clipped and full
+/// warps make the same path choice and agree byte for byte even when the valve trips.
 #[test]
-fn the_valve_probe_plans_inside_the_full_plan() {
+fn valve_decision_is_independent_of_clip() {
     let (w, hh) = (400, 300);
     let r = Rect::new(0, 0, w, hh);
     let src = paint(w, hh, SampleType::U8, |x, y| [((x * 7 + y * 3) % 23) as f32 / 22.0, 0.5, 0.5, 1.0]);
     let low = Tuning { valve_floor: 0.0, ..Tuning::DEFAULT };
-    let maps = [("wedge", wedge as fn(f64, f64) -> [[f64; 2]; 4]), ("q6", q6), ("trapezoid", trapezoid), ("shrink55", shrink55)];
-    for (name, q) in maps {
-        let (g, tiles) = setup(map(q, w, hh), r);
-        let plan = |step| build_jobs(&plan_tiles(&tiles, &g, &src, &Interrupt::NONE, step));
-        let (probe, full) = (plan(PROBE_STEP), plan(1));
-        assert!(!probe.is_empty(), "{name}: the probe reads no cell");
-        for (k, p) in &probe {
-            assert!(full.get(k).is_some_and(|f| f.union(p) == *f), "{name} {k:?}: the probe's {p:?} lies outside the full plan's {:?}", full.get(k));
-        }
+    for (name, q) in [("wedge", wedge as fn(f64, f64) -> [[f64; 2]; 4]), ("q6", q6), ("trapezoid", trapezoid), ("shrink55", shrink55)] {
+        let hm = map(q, w, hh);
         if name == "shrink55" {
-            assert!(refuses(&probe, &g, low) && refuses(&full, &g, low), "{name}: not turned down");
+            assert!(valve_refuses(&hm, r, low), "{name}: should trip valve with floor 0");
+            assert!(!valve_refuses(&hm, r, Tuning::DEFAULT), "{name}: should stay per-pixel under default floor");
+            let full = warp_with(&src, r, &hm, Interp::Bicubic, None, &Interrupt::NONE, low).unwrap();
+            for clip in [Rect::new(20, 20, 180, 140), Rect::new(40, 30, 180, 140), Rect::new(100, 90, 140, 120)] {
+                let part = warp_with(&src, r, &hm, Interp::Bicubic, Some(clip), &Interrupt::NONE, low).unwrap();
+                assert!(full.read_region(clip) == part.read_region(clip), "{name} clip {clip:?}: mismatch when valve trips");
+            }
+        } else {
+            assert!(!valve_refuses(&hm, r, low), "{name}: unexpectedly tripped valve");
         }
     }
 }
@@ -1550,6 +1550,12 @@ fn perspective_keeps_flat_colour_on_tiny_far_and_mirrored_layers() {
                         let q = wedge(fw * scale, fh * scale).map(|[x, y]| if mirror { [50.0 - x, y + 5.0] } else { [x + 5.0, y + 5.0] });
                         let hm = Homography::rect_to_quad(rect, q).unwrap();
                         let o = warp_surface(&s, r, &hm, Interp::Bicubic).unwrap();
+                        if scale >= 4.0 {
+                            assert!(
+                                o.read_region(o.content_bounds()).chunks_exact(opaque.len()).any(|p| p[opaque.len() - 1] > 0.0),
+                                "{fmt:?} {w}x{h} at ({ox}, {oy}), ×{scale}, mirrored {mirror}: magnified flat layer drew nothing"
+                            );
+                        }
                         assert_flat(&o, &opaque, &format!("{fmt:?} {w}x{h} at ({ox}, {oy}), ×{scale}, mirrored {mirror}"));
                     }
                 }
@@ -1633,15 +1639,18 @@ fn perspective_mirrored_and_transposed_quads_match() {
     for q in [wedge as fn(f64, f64) -> [[f64; 2]; 4], q6, trapezoid] {
         let quad = q(400.0, 300.0);
         let o = warp_surface(&src, r, &Homography::rect_to_quad([0.0, 0.0, 400.0, 300.0], quad).unwrap(), Interp::Bicubic).unwrap();
+        let ob = o.content_bounds();
         type Back = fn(i32, i32) -> (i32, i32);
-        let variants: [(&str, [[f64; 2]; 4], Back); 3] = [
-            ("mirror x", quad.map(|[x, y]| [1000.0 - x, y]), |x, y| (999 - x, y)),
-            ("mirror y", quad.map(|[x, y]| [x, 1000.0 - y]), |x, y| (x, 999 - y)),
-            ("transpose", quad.map(|[x, y]| [y, x]), |x, y| (y, x)),
+        type MapRect = fn(Rect) -> Rect;
+        let variants: [(&str, [[f64; 2]; 4], Back, MapRect); 3] = [
+            ("mirror x", quad.map(|[x, y]| [1000.0 - x, y]), |x, y| (999 - x, y), |b| Rect::new(1000 - b.x1, b.y0, 1000 - b.x0, b.y1)),
+            ("mirror y", quad.map(|[x, y]| [x, 1000.0 - y]), |x, y| (x, 999 - y), |b| Rect::new(b.x0, 1000 - b.y1, b.x1, 1000 - b.y0)),
+            ("transpose", quad.map(|[x, y]| [y, x]), |x, y| (y, x), |b| Rect::new(b.y0, b.x0, b.y1, b.x1)),
         ];
-        for (name, mq, back) in variants {
+        for (name, mq, back, map_bounds) in variants {
             let m = warp_surface(&src, r, &Homography::rect_to_quad([0.0, 0.0, 400.0, 300.0], mq).unwrap(), Interp::Bicubic).unwrap();
-            let b = m.content_bounds();
+            let mapped_o = if ob.is_empty() { Rect::EMPTY } else { map_bounds(ob) };
+            let b = m.content_bounds().union(&mapped_o);
             let px = m.read_region(b);
             let premul = |p: &[f32], k: usize| if k < 3 { p[k] * p[3] } else { p[3] };
             let mut worst = 0.0f32;
@@ -1711,4 +1720,34 @@ fn perspective_extreme_maps_stay_flat_and_clip_consistently() {
             }
         }
     }
+}
+
+/// #6376: a reduced thin strip whose center falls just past `src_rect` but whose pixel footprint
+/// still overlaps it must stay visible rather than being culled by a fixed 1 px margin.
+#[test]
+fn perspective_reduced_thin_strip_keeps_overlapping_pixels() {
+    let r = Rect::new(0, 0, 3, 64);
+    let col = [0.2f32, 0.6, 0.8, 1.0];
+    let mut src = Surface::new(PixelFormat::RGBA8);
+    src.fill_rect(r, &col);
+    let h = Homography([0.125, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.00001, 1.0]);
+    let out = warp_surface(&src, r, &h, Interp::Bicubic).unwrap();
+    let px = out.pixel(0, 20);
+    assert!(px[3] > 0.2, "column 0 strip pixel dropped: {px:?}");
+    assert_flat(&out, &col, "reduced 3x64 perspective strip");
+}
+
+/// #6376: a cancelled interrupt stops before starting the valve fallback's `resize_surface_per_axis`.
+#[test]
+fn perspective_cancelled_warp_skips_valve_fallback() {
+    let (w, hh) = (400, 300);
+    let r = Rect::new(0, 0, w, hh);
+    let mut src = Surface::new(PixelFormat::RGBA8);
+    src.fill_rect(r, &[0.3, 0.6, 0.9, 1.0]);
+    let hm = map(shrink55, w, hh);
+    let low = Tuning { valve_floor: 0.0, ..Tuning::DEFAULT };
+    assert!(valve_refuses(&hm, r, low));
+    let ctl = Interrupt::cancel_only(&|| true);
+    let out = warp_with(&src, r, &hm, Interp::Bicubic, None, &ctl, low).unwrap();
+    assert!(out.content_bounds().is_empty(), "cancelled warp should return an empty surface");
 }

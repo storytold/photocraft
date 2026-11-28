@@ -529,8 +529,6 @@ const CHUNK: i32 = 4 * TILE_SIZE;
 /// The source area (pixels) below which the valve never refuses the cells: a small layer's cells
 /// cost little, however many of them its map needs.
 const VALVE_FLOOR: f64 = (1u32 << 22) as f64;
-/// The valve's probe plans every 8th pixel each way, about 1/64 of a full plan's work.
-const PROBE_STEP: usize = 8;
 
 fn octave_scale(a: usize) -> f64 {
     OCTAVE.get(a).copied().unwrap_or(1.0)
@@ -633,6 +631,81 @@ fn samples_source_only(h: &Homography, src_rect: Rect) -> bool {
     w_min > 0.0 && column.is_finite() && weakest.is_finite() && column >= 0.6 && weakest >= 0.51
 }
 
+fn clip_half_plane(src: &[(f64, f64)], dst: &mut [(f64, f64); 10], signed: impl Fn(f64, f64) -> f64) -> usize {
+    let mut out = 0usize;
+    let n = src.len();
+    for i in 0..n {
+        let p = src[i];
+        let q = src[(i + 1) % n];
+        let dp = signed(p.0, p.1);
+        let dq = signed(q.0, q.1);
+        if dp >= 0.0
+            && let Some(slot) = dst.get_mut(out)
+        {
+            *slot = p;
+            out += 1;
+        }
+        if (dp >= 0.0) != (dq >= 0.0)
+            && let Some(slot) = dst.get_mut(out)
+        {
+            let k = dp / (dp - dq);
+            *slot = (p.0 + (q.0 - p.0) * k, p.1 + (q.1 - p.1) * k);
+            out += 1;
+        }
+    }
+    out
+}
+
+/// Whether pixel `(x, y)`'s destination square `[x, x + 1] × [y, y + 1]` (clipped to the same
+/// front half-plane [`footprint`] uses) overlaps `g.src_rect` in source space. Because a
+/// homography maps convex polygons on one side of the horizon to convex polygons, clipping the
+/// mapped vertices against `g.src_rect`'s four edges is exact and avoids AABB false positives at
+/// oblique corners, while staying well inside `footprint`'s ±3 px padding.
+fn pixel_overlaps_src(g: &Geometry, x: i32, y: i32) -> bool {
+    let (fx, fy) = (f64::from(x), f64::from(y));
+    let tc = [(fx, fy), (fx + 1.0, fy), (fx + 1.0, fy + 1.0), (fx, fy + 1.0)];
+    let mut a = [(0.0f64, 0.0f64); 10];
+    let mut b = [(0.0f64, 0.0f64); 10];
+    let len = match g.side {
+        Some(s) => clip_half_plane(&tc, &mut a, |px, py| s * (g.inv.0[6] * px + g.inv.0[7] * py + g.inv.0[8]) - g.w_lo),
+        None => {
+            let wc = tc.map(|(px, py)| g.inv.0[6] * px + g.inv.0[7] * py + g.inv.0[8]);
+            if wc.iter().any(|&w| w <= 0.0) && wc.iter().any(|&w| w >= 0.0) {
+                return true;
+            }
+            a[..4].copy_from_slice(&tc);
+            4
+        }
+    };
+    if len == 0 {
+        return false;
+    }
+    for p in &mut a[..len] {
+        let (u, v) = g.inv.apply(p.0, p.1);
+        if !u.is_finite() || !v.is_finite() {
+            return false;
+        }
+        *p = (u, v);
+    }
+    let r = g.src_rect;
+    // Tiny slack absorbs `rect_to_quad`/`inverse` ULP noise (~1e-15) at exact integer vertices.
+    const EPS: f64 = 1e-9;
+    let (x0, y0, x1, y1) = (f64::from(r.x0) - EPS, f64::from(r.y0) - EPS, f64::from(r.x1) + EPS, f64::from(r.y1) + EPS);
+    let len = clip_half_plane(&a[..len], &mut b, |u, _| u - x0);
+    if len == 0 {
+        return false;
+    }
+    let len = clip_half_plane(&b[..len], &mut a, |u, _| x1 - u);
+    if len == 0 {
+        return false;
+    }
+    let len = clip_half_plane(&a[..len], &mut b, |_, v| v - y0);
+    if len == 0 {
+        return false;
+    }
+    clip_half_plane(&b[..len], &mut a, |_, v| y1 - v) > 0
+}
+
 /// Destination pixel (x, y)'s filter, from the map's exact Jacobian at its source point: each axis
 /// reduced by its own factor, by the rule [`prefilter_scales`] gives affine maps but without the
 /// snap. `None` for a pixel today's path skips (behind the horizon, or off the source), and for a
@@ -642,23 +715,29 @@ fn pixel_lod(g: &Geometry, x: i32, y: i32) -> Option<Lod> {
     let m = &g.inv.0;
     // `inv.w`, `inv.apply` and `inv.jacobian` at (px, py), sharing their terms.
     let w = m[6] * px + m[7] * py + m[8];
-    if g.front.is_some_and(|s| s * w <= 0.0) {
+    if g.side.or(g.front).is_some_and(|s| s * w <= 0.0) {
         return None;
     }
     let (u, v) = ((m[0] * px + m[1] * py + m[2]) / w, (m[3] * px + m[4] * py + m[5]) / w);
-    let r = g.src_rect;
-    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
-    if !(u - 0.5 >= x0 - 1.0 && v - 0.5 >= y0 - 1.0 && u - 0.5 <= x1 && v - 0.5 <= y1) {
+    if !u.is_finite() || !v.is_finite() {
         return None;
     }
-    let j = g.h.jacobian(u, v);
-    let (fx, fy) = if j.iter().all(|e| e.is_finite()) { axis_factors(j, clamp_factor, column_length) } else { (1.0, 1.0) };
+    let r = g.src_rect;
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    if !(u >= x0 && u <= x1 && v >= y0 && v <= y1) && !pixel_overlaps_src(g, x, y) {
+        return None;
+    }
     // The pixel's extent in source pixels along u and v.
     let ji = [(m[0] - m[6] * u) / w, (m[1] - m[7] * u) / w, (m[3] - m[6] * v) / w, (m[4] - m[7] * v) / w];
     let extent = |e: f64| if e.is_finite() && e > 1e-12 { e } else { 1.0 };
     let (foot_u, foot_v) = (extent(ji[0].abs() + ji[1].abs()), extent(ji[2].abs() + ji[3].abs()));
     let cu = ((u - x0).min(x1 - u) / foot_u + 0.5).clamp(0.0, 1.0);
     let cv = ((v - y0).min(y1 - v) / foot_v + 0.5).clamp(0.0, 1.0);
+    if cu <= 0.0 || cv <= 0.0 {
+        return None;
+    }
+    let j = g.h.jacobian(u, v);
+    let (fx, fy) = if j.iter().all(|e| e.is_finite()) { axis_factors(j, clamp_factor, column_length) } else { (1.0, 1.0) };
     Some(Lod { u, v, ax: octave(fx), ay: octave(fy), cu, cv })
 }
 
@@ -773,11 +852,10 @@ struct TilePlan {
     cells: Vec<(u8, u8, Rect)>,
 }
 
-/// Plans tile `t` from every `step`th pixel each way (1 for the plan it renders with; a coarser
-/// step's windows lie inside that plan's). `None` when it draws nothing: today's footprint tests,
-/// with the source looked for as far as a pixel's filter reaches, so a tile whose own footprint is
-/// empty but whose filters reach the source still draws.
-fn plan_tile(t: Rect, g: &Geometry, src: &Surface, step: usize) -> Option<TilePlan> {
+/// Plans tile `t` from every pixel that overlaps the source ([`pixel_lod`]). `None` when it
+/// draws nothing: today's footprint tests, with the source looked for as far as a pixel's filter
+/// reaches, so a tile whose own footprint is empty but whose filters reach the source still draws.
+fn plan_tile(t: Rect, g: &Geometry, src: &Surface) -> Option<TilePlan> {
     let foot = footprint(&t, &g.inv, g.side, g.w_lo, g.src_rect);
     if foot.is_empty() || !src.has_tiles_in(foot.inflate(REACH)) {
         return None;
@@ -789,9 +867,8 @@ fn plan_tile(t: Rect, g: &Geometry, src: &Surface, step: usize) -> Option<TilePl
         return (!win.is_empty()).then(|| TilePlan { tile: t, cells: vec![(0, 0, win)] });
     }
     let mut boxes = [[Rect::EMPTY; 7]; 7];
-    let step = step.max(1);
-    for y in (t.y0..t.y1).step_by(step) {
-        for x in (t.x0..t.x1).step_by(step) {
+    for y in t.y0..t.y1 {
+        for x in t.x0..t.x1 {
             let Some(l) = pixel_lod(g, x, y) else { continue };
             for (a, rx, wx) in l.ax.entries() {
                 for (b, ry, wy) in l.ay.entries() {
@@ -892,9 +969,6 @@ fn build_cell_band(src: &Surface, src_rect: Rect, a: u8, b: u8, j: i32, r: Rect)
     Ok(out.tiles().filter(|(c, _)| c.ty == j && !c.rect().intersect(&keep).is_empty()).map(|(c, t)| (*c, Arc::clone(t))).collect())
 }
 
-/// A rendered destination tile: its rect and its pixels.
-type TileOut = (Rect, Vec<f32>);
-
 /// What rendering a tile reads: the geometry, the source (cell (0, 0)) and the built cells.
 struct Render<'a> {
     g: &'a Geometry,
@@ -918,7 +992,7 @@ impl Render<'_> {
                 if q.is_empty() {
                     continue;
                 }
-                if let Some(p) = plan_tile(q, self.g, self.src, 1) {
+                if let Some(p) = plan_tile(q, self.g, self.src) {
                     any |= self.tile(q, &p.cells, depth + 1, top, buf)?;
                 }
             }
@@ -986,9 +1060,9 @@ impl Render<'_> {
     }
 }
 
-/// Plans each of `tiles` from every `step`th pixel ([`plan_tile`]), in parallel on native.
-fn plan_tiles(tiles: &[Rect], g: &Geometry, src: &Surface, ctl: &Interrupt, step: usize) -> Vec<TilePlan> {
-    let plan = |t: &Rect| if ctl.cancelled() { None } else { plan_tile(*t, g, src, step) };
+/// Plans each of `tiles` ([`plan_tile`]), in parallel on native.
+fn plan_tiles(tiles: &[Rect], g: &Geometry, src: &Surface, ctl: &Interrupt) -> Vec<TilePlan> {
+    let plan = |t: &Rect| if ctl.cancelled() { None } else { plan_tile(*t, g, src) };
     #[cfg(not(target_arch = "wasm32"))]
     let plans = {
         use rayon::prelude::*;
@@ -1017,35 +1091,58 @@ fn build_jobs(plans: &[TilePlan]) -> BTreeMap<(u8, u8, i32, i32), Rect> {
     jobs
 }
 
-/// The valve: whether the cell builds `jobs` would read more than three times the source's area
-/// or hold more pixels than the source, the area taken as at least `tuning.valve_floor`.
-fn refuses(jobs: &BTreeMap<(u8, u8, i32, i32), Rect>, g: &Geometry, tuning: Tuning) -> bool {
-    let area = (f64::from(g.src_rect.width()) * f64::from(g.src_rect.height())).max(tuning.valve_floor);
+/// Whether `h`'s projective `w` keeps a single strict sign across `src_rect` (with the 1 px
+/// sampler margin), so the fallback's one-factor prefilter shouldn't shift with a clip.
+fn one_sided_w(h: &Homography, src_rect: Rect) -> bool {
+    let (x0, y0, x1, y1) = (f64::from(src_rect.x0) - 1.0, f64::from(src_rect.y0) - 1.0, f64::from(src_rect.x1) + 1.0, f64::from(src_rect.y1) + 1.0);
+    let fwd_w = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| h.0[6] * x + h.0[7] * y + h.0[8]);
+    [1.0, -1.0].into_iter().any(|s| fwd_w.iter().all(|&c| s * c > 0.0))
+}
+
+/// Clip-independent valve: estimates in source space whether the octave cells `h` needs over
+/// `src_rect` would read more than three times the source area or hold more pixels than the source
+/// (floored at `tuning.valve_floor`). Evaluating in source space guarantees clipped and full warps
+/// choose the same path.
+fn valve_refuses(h: &Homography, src_rect: Rect, tuning: Tuning) -> bool {
+    let src_area = f64::from(src_rect.width()) * f64::from(src_rect.height());
+    let area = src_area.max(tuning.valve_floor);
+    if src_area <= 0.0 || (4.0 * src_area <= 3.0 * area && 1.25 * src_area <= area) {
+        return false;
+    }
+    let (nx, ny) = (src_rect.width().clamp(1, 32), src_rect.height().clamp(1, 32));
+    let (dx, dy) = (f64::from(src_rect.width()) / f64::from(nx), f64::from(src_rect.height()) / f64::from(ny));
+    let d_area = dx * dy;
+    let (x0, y0) = (f64::from(src_rect.x0), f64::from(src_rect.y0));
     let (mut reads, mut held) = (0.0, 0.0);
-    for (&(a, b, _, _), r) in jobs {
-        let px = f64::from(r.width()) * f64::from(r.height());
-        held += px;
-        reads += px / (octave_scale(usize::from(a)) * octave_scale(usize::from(b)));
+    for iy in 0..ny {
+        let v = y0 + (f64::from(iy) + 0.5) * dy;
+        for ix in 0..nx {
+            let u = x0 + (f64::from(ix) + 0.5) * dx;
+            let j = h.jacobian(u, v);
+            if !j.iter().all(|e| e.is_finite()) {
+                continue;
+            }
+            let (fx, fy) = axis_factors(j, clamp_factor, column_length);
+            let (ax, ay) = (octave(fx), octave(fy));
+            for (a, _, wx) in ax.entries() {
+                for (b, _, wy) in ay.entries() {
+                    if (a, b) != (0, 0) && wx * wy > 0.0 {
+                        reads += d_area;
+                        held += d_area * octave_scale(a) * octave_scale(b);
+                    }
+                }
+            }
+        }
     }
     reads > 3.0 * area || held > area
 }
 
 /// Bicubic by a perspective map: each pixel of `tiles` filtered for its own reduction, from octave
-/// cells of the source built only where the tiles read them. `Ok(None)` when the valve
-/// ([`refuses`]) turns the cells down, as for a near-uniform shrink in the top quarter of an octave
-/// on both axes, which samples four cells everywhere; the caller then runs today's one-factor path.
-fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, tuning: Tuning) -> Result<Option<Vec<TileOut>>, AllocationError> {
-    // A probe first, every 8th pixel each way, at about 1/64 the cost: its windows lie inside the
-    // full plan's, so cells the valve turns down for it, it would turn down for the full plan too.
-    if refuses(&build_jobs(&plan_tiles(tiles, g, src, ctl, PROBE_STEP)), g, tuning) {
-        return Ok(None);
-    }
-    let plans = plan_tiles(tiles, g, src, ctl, 1);
-    let jobs = build_jobs(&plans);
-    if refuses(&jobs, g, tuning) {
-        return Ok(None);
-    }
-    let jobs: Vec<((u8, u8, i32, i32), Rect)> = jobs.into_iter().collect();
+/// cells of the source built only where the tiles read them. Tiles are written to a local destination
+/// surface as they finish so peak scratch memory stays bounded by in-flight tiles.
+fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, tuning: Tuning) -> Result<Surface, AllocationError> {
+    let plans = plan_tiles(tiles, g, src, ctl);
+    let jobs: Vec<((u8, u8, i32, i32), Rect)> = build_jobs(&plans).into_iter().collect();
     let started = AtomicUsize::new(0);
     let count = jobs.len().max(1);
     type Band = (u8, u8, Vec<(TileCoord, Arc<Tile>)>);
@@ -1065,7 +1162,7 @@ fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, 
     #[cfg(target_arch = "wasm32")]
     let bands: Vec<Option<Band>> = jobs.iter().map(build).collect::<Result<_, _>>()?;
     if ctl.cancelled() {
-        return Ok(Some(Vec::new()));
+        return Ok(Surface::new(src.format()));
     }
     let mut built: Vec<Option<Surface>> = (0..49).map(|_| None).collect();
     for (a, b, tiles) in bands.into_iter().flatten() {
@@ -1090,27 +1187,29 @@ fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, 
         buf.resize(len, 0.0f32);
         Ok(render.tile(t, &p.cells, 0, t, &mut buf)?.then_some((t, buf)))
     };
-    let result_bytes = plans.len().checked_mul(std::mem::size_of::<(Rect, Vec<f32>)>()).ok_or(AllocationError::SizeOverflow)?;
-    let mut done = Vec::new();
-    done.try_reserve_exact(plans.len()).map_err(|_| AllocationError::NotEnoughMemory { bytes: result_bytes })?;
-    let done = std::sync::Mutex::new(done);
+    let out = std::sync::Mutex::new(Surface::new(src.format()));
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         plans.par_iter().try_for_each(|p| -> Result<(), AllocationError> {
-            if let Some(result) = work(p)? {
-                done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(result);
+            if let Some((r, v)) = work(p)? {
+                out.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_write_region(r, &v)?;
             }
             Ok(())
         })?;
     }
     #[cfg(target_arch = "wasm32")]
     for p in &plans {
-        if let Some(result) = work(p)? {
-            done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(result);
+        if let Some((r, v)) = work(p)? {
+            out.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_write_region(r, &v)?;
         }
     }
-    Ok(Some(done.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner)))
+    if ctl.cancelled() {
+        return Ok(Surface::new(src.format()));
+    }
+    let mut out = out.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+    out.prune();
+    Ok(out)
 }
 
 /// The source footprint of destination tile `t`: its corners mapped back (the part of it in front
@@ -1199,7 +1298,7 @@ fn warp_with(
         converted = src.try_convert(fmt)?;
         &converted
     };
-    let mut out = Surface::new(fmt);
+    let out = Surface::new(fmt);
     if src_rect.is_empty() || clip.is_some_and(|c| c.is_empty()) {
         return Ok(out);
     }
@@ -1217,7 +1316,18 @@ fn warp_with(
         let (fx, fy) = match prefilter_scales(&h, src_rect, clip) {
             Prefilter::Axes(fx, fy) => (fx, fy),
             Prefilter::PerPixel if tuning.force_valve => {
+                if ctl.cancelled() {
+                    return Ok(out);
+                }
                 let one = centre_factor(&h, src_rect, clip);
+                (one, one)
+            }
+            Prefilter::PerPixel if valve_refuses(&h, src_rect, tuning) => {
+                if ctl.cancelled() {
+                    return Ok(out);
+                }
+                let fallback_clip = if one_sided_w(&h, src_rect) { None } else { clip };
+                let one = centre_factor(&h, src_rect, fallback_clip);
                 (one, one)
             }
             Prefilter::PerPixel => {
@@ -1226,6 +1336,9 @@ fn warp_with(
             }
         };
         if fx < 1.0 || fy < 1.0 {
+            if ctl.cancelled() {
+                return Ok(out);
+            }
             reduced = resize_surface_per_axis(src, fx, fy);
             src = &reduced;
             h = h.mul(&Homography([1.0 / fx, 0.0, 0.0, 0.0, 1.0 / fy, 0.0, 0.0, 0.0, 1.0]));
@@ -1275,19 +1388,7 @@ fn warp_with(
         let cells = std::array::from_fn(|a| std::array::from_fn(|b| scaled_rect(src_rect, octave_scale(a), octave_scale(b))));
         let source_only = !tuning.plan_pixels && side.is_some() && samples_source_only(&h, src_rect);
         let g = Geometry { h, inv, src_rect, side, w_lo, front, cells, source_only };
-        // The valve's fallback, today's one-factor path, from the source as converted above: the
-        // per-pixel path reduces nothing first, so `h` and `src_rect` are still the caller's.
-        let Some(done) = warp_per_pixel(src_ref, &g, &tiles, ctl, tuning)? else {
-            return warp_with(src_ref, src_rect, &h, interp, clip, ctl, Tuning { force_valve: true, ..tuning });
-        };
-        if ctl.cancelled() {
-            return Ok(out);
-        }
-        for (r, v) in done {
-            out.try_write_region(r, &v)?;
-        }
-        out.prune();
-        return Ok(out);
+        return warp_per_pixel(src_ref, &g, &tiles, ctl, tuning);
     }
     // Tiles finished so far, for progress reported per tile (from any worker thread).
     let finished = std::sync::atomic::AtomicUsize::new(0);
