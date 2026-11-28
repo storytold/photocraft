@@ -311,3 +311,23 @@ fn the_thumbnail_menu_offers_the_rows_colour_submenu() {
     let empty = MenuTarget::new(None);
     assert!(!tree.label_colors_in_menu(&empty), "the empty-space menu does not");
 }
+
+/// The issue lists a hidden, locked or clipped row as not measured and keeps it on today's menu
+/// (#16777): the pixel layer, which had the short menu in every state, keeps it, and a layer of any
+/// other kind keeps the full layer menu its measured twin no longer gets.
+#[test]
+fn a_hidden_locked_or_clipped_row_keeps_todays_menu() {
+    let (mut app, k) = kinds();
+    let set = |app: &mut PhotocraftApp, id: LayerId, key: &str, on: bool| app.run("layer.setProps", json!({"layer": id.0, key: on})).unwrap();
+    // `state` is the value that puts the row into the unmeasured state, `plain` the value it had before.
+    for (key, state, plain, case) in [("visible", false, true, "hidden"), ("locked", true, false, "locked"), ("clipped", true, false, "clipped")] {
+        for (kind, id) in [("pixel", k.pixel), ("shape", k.shape)] {
+            set(&mut app, id, key, state);
+            let values: Vec<String> = thumb_menu(&app, id).into_iter().filter_map(|e| e.value().cloned()).collect();
+            let short = values.iter().any(|v| v.starts_with(LOAD_PIXELS));
+            let full = values.iter().any(|v| v == "layer.duplicate");
+            assert_eq!((short, full), (kind == "pixel", kind != "pixel"), "a {case} {kind} thumbnail keeps today's menu");
+            set(&mut app, id, key, plain);
+        }
+    }
+}

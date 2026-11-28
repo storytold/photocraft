@@ -585,11 +585,17 @@ fn menu_kind(tree: &PhotoLayers, target: &MenuTarget<LayerId>) -> MenuKind {
         Some(LayerRowKey::Effects(..)) => MenuKind::Effects,
         Some(LayerRowKey::Layer(id)) => {
             let Some(l) = tree.layer(id) else { return MenuKind::None };
+            // #16777 measured visible, unlocked, unclipped rows and left every other state on today's
+            // menu: the short one only where a pixel layer already had it. A Background's own locks are
+            // measured - its row stands in the table - so they do not count as locked.
+            let background = tree.doc().is_background(*id);
+            let measured_state = l.visible && !l.clipped && (background || !l.locks.any());
+            let short_menu_today = matches!(l.content, LayerContent::Raster(_)) && !background;
             match target.part {
                 Some(LayerPart::LayerMask) if l.mask.is_some() => MenuKind::Mask(*id),
-                // A thumbnail opens the short menu for every kind (#16777). Frames and artboards were
-                // not measured and keep the layer menu.
-                Some(LayerPart::Pixels) if l.frame.is_none() && l.artboard().is_none() => MenuKind::Thumbnail(*id),
+                // A thumbnail opens the short menu for every kind (#16777). Frames, artboards and the
+                // hidden, locked or clipped rows the issue did not measure keep today's menu.
+                Some(LayerPart::Pixels) if l.frame.is_none() && l.artboard().is_none() && (measured_state || short_menu_today) => MenuKind::Thumbnail(*id),
                 Some(LayerPart::LayerMask | LayerPart::VectorMask | LayerPart::FilterMask) => MenuKind::None,
                 _ => MenuKind::Layer(*id),
             }
