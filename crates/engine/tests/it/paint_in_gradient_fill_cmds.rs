@@ -77,3 +77,18 @@ fn classic_gradient_still_paints_pixels() {
     let px = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(1, 5);
     assert!(px[0] < 0.1);
 }
+
+/// #12015: only an empty pixel layer is converted in place; one with pixels keeps its content and
+/// gets a new Gradient fill layer above it.
+#[test]
+fn a_layer_with_pixels_gets_a_new_layer_above() {
+    let mut s = session(8, "white");
+    let top = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute(CREATE, json!({"from": [0, 0], "to": [48, 0]})).unwrap();
+    let d = s.active().unwrap();
+    let names: Vec<&str> = d.doc.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Background", "Top", "Gradient Fill 1"]);
+    let kept = d.doc.layer(photocraft_doc::LayerId(top)).unwrap();
+    assert!(matches!(kept.content, photocraft_doc::LayerContent::Raster(_)));
+}
