@@ -12,6 +12,11 @@ pub(crate) fn mask_toggle_label(enabled: bool) -> &'static str {
     if enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }
 }
 
+/// English action key shared by the layer row and Layer > Vector Mask.
+pub(crate) fn vector_mask_toggle_label(enabled: bool) -> &'static str {
+    if enabled { "Disable Vector Mask" } else { "Enable Vector Mask" }
+}
+
 /// The command behind "Add Layer Mask" (the panel button and this menu). Like Photoshop, an active
 /// selection becomes the mask; ⌥ inverts it (Hide Selection, or Hide All without a selection).
 pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
@@ -132,6 +137,9 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         v.push(Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")));
     } else {
         v.push(Some((tl!("Add Layer Mask"), add_mask_command(has_selection, false))));
+    }
+    if let Some(mask) = l.vector_mask.as_ref().filter(|_| !multi) {
+        v.push(Some((vector_mask_toggle_label(mask.enabled), "layer.vectorMask.enabled")));
     }
     v.push(Some((
         if l.clipped { tl!("Release Clipping Mask") } else { tl!("Create Clipping Mask") },
