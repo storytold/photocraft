@@ -80,6 +80,7 @@ mod gradient_overlay_strokes;
 mod guide_layout_limit;
 mod guide_layout_preview;
 mod hdr_gamma_direction;
+mod history_source_region;
 mod huge_doc_flatten;
 mod image_size_scale_styles;
 mod image_size_scale_styles_atn;
