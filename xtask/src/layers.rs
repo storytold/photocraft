@@ -106,11 +106,11 @@ fn standalone_exception(from: &str, to: &str) -> bool {
 /// Entries ending in `*` are prefixes.
 pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "craft-ui", "rfd", "bevy*"];
 
-/// Facade crates that are a UI toolkit dependency only with some of their features (#15467): `craft` carries the
-/// whole craft UI framework behind `ui` (and the features that turn it on), while lower layers use its non-UI parts
-/// (imaging, fonts, keymap, settings). `keymap-egui` adds the keymap's egui key conversions, which bring egui itself.
+/// Facade features that bring a UI dependency (#15467). Alongside `ui` and its extensions, some modules bring
+/// `egui` or `craft-ui` directly, and `dialogs` brings the native `rfd` picker.
 /// Feature names ending in `*` are prefixes.
-pub const UI_FEATURES: &[(&str, &[&str])] = &[("craft", &["ui", "ui-*", "screen-testing", "keymap-egui"])];
+pub const UI_FEATURES: &[(&str, &[&str])] =
+    &[("craft", &["ui", "ui-*", "screen-testing", "keymap-egui", "cloud-ui", "cloud-ui-*", "theme-editor", "layers", "menu", "dialogs"])];
 
 /// First layer allowed to use UI crates.
 pub const UI_MIN_LAYER: u8 = 6;
@@ -208,6 +208,9 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             if d.name == c.name {
                 continue;
             }
+            if layer < UI_MIN_LAYER && is_ui_dep(d) {
+                out.push(Violation::UiBelowL6 { krate: c.name.clone(), dep: d.name.clone(), layer });
+            }
             if d.workspace {
                 if class == Class::Standalone {
                     if standalone_exception(&c.name, &d.name) {
@@ -234,8 +237,6 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                         }
                     }
                 }
-            } else if layer < UI_MIN_LAYER && is_ui_dep(d) {
-                out.push(Violation::UiBelowL6 { krate: c.name.clone(), dep: d.name.clone(), layer });
             }
         }
     }
@@ -390,32 +391,54 @@ mod tests {
 
     #[test]
     fn craft_facade_with_ui_features_flagged_below_l6() {
-        // #15467: the facade's UI features bring the whole craft UI framework.
-        for features in [&["ui"][..], &["imaging", "ui-app"], &["screen-testing"]] {
+        for features in [
+            &["ui"][..],
+            &["imaging", "ui-app"],
+            &["screen-testing"],
+            &["cloud-ui"],
+            &["cloud-ui-cloud"],
+            &["cloud-ui-esign"],
+            &["cloud-ui-share"],
+            &["theme-editor"],
+            &["layers"],
+            &["menu"],
+            &["dialogs"],
+        ] {
             let v = check(&[with_features("photocraft-engine", "craft", Normal, features)]);
             assert!(matches!(&v[..], [Violation::UiBelowL6 { layer: 5, dep, .. }] if dep == "craft"), "{features:?}");
             let v = check(&[with_features("photocraft-text", "craft", Dev, features)]);
             assert!(matches!(v[..], [Violation::UiBelowL6 { layer: 2, .. }]), "dev {features:?}");
+            assert!(check(&[with_features("photocraft-ui-egui", "craft", Normal, features)]).is_empty(), "L6 {features:?}");
         }
         // Its non-UI parts stay usable below L6 (what text, io and engine use today), and L6 may use it all.
         for features in [&[][..], &["imaging"], &["font-catalog", "font-manager"], &["automation", "color-ui", "keymap", "platform", "settings"]] {
             assert!(check(&[with_features("photocraft-engine", "craft", Normal, features)]).is_empty(), "{features:?}");
         }
-        assert!(check(&[with_features("photocraft-ui-egui", "craft", Normal, &["ui", "screen-testing"])]).is_empty());
         // Only the facade is judged by its features.
         assert!(check(&[with_features("photocraft-engine", "craft-imaging", Normal, &["ui"])]).is_empty());
     }
 
     #[test]
     fn metadata_reads_dependency_features() {
-        let meta: Value = serde_json::from_str(
-            r#"{"packages":[{"name":"photocraft-engine","dependencies":[
-                {"name":"craft","kind":null,"features":["keymap","ui"]}]}]}"#,
-        )
-        .unwrap();
-        let g = from_metadata(&meta).unwrap();
-        assert_eq!(g[0].deps[0].features, ["keymap", "ui"]);
-        assert!(matches!(check(&g)[..], [Violation::UiBelowL6 { .. }]));
+        for path in [None, Some("/x/craft-libs/crates/craft")] {
+            for (feature, ui) in [("cloud-ui", true), ("imaging", false)] {
+                let meta = serde_json::json!({
+                    "packages": [{"name": "photocraft-engine", "dependencies": [{
+                        "name": "craft", "kind": null, "path": path, "features": ["keymap", feature],
+                        "source": path.is_none().then_some("git+https://github.com/storytold/craft-libs")
+                    }]}]
+                });
+                let g = from_metadata(&meta).unwrap();
+                assert_eq!(g[0].deps[0].workspace, path.is_some());
+                assert_eq!(g[0].deps[0].features, ["keymap", feature]);
+                let violations = check(&g);
+                if ui {
+                    assert!(matches!(&violations[..], [Violation::UiBelowL6 { layer: 5, dep, .. }] if dep == "craft"), "{path:?}");
+                } else {
+                    assert!(violations.is_empty(), "{path:?}: {violations:?}");
+                }
+            }
+        }
     }
 
     /// The keymap's egui conversions bring egui; the plain keymap does not.
@@ -436,7 +459,12 @@ mod tests {
             ))
             .unwrap()
         };
-        for (features, rename) in [(r#"{"default":["craft/ui"]}"#, ""), (r#"{"gui":["c?/ui"]}"#, r#","rename":"c""#)] {
+        for (features, rename) in [
+            (r#"{"default":["craft/ui"]}"#, ""),
+            (r#"{"gui":["c?/ui"]}"#, r#","rename":"c""#),
+            (r#"{"default":["craft/cloud-ui"]}"#, ""),
+            (r#"{"gui":["c?/theme-editor"]}"#, r#","rename":"c""#),
+        ] {
             let g = from_metadata(&meta(features, rename)).unwrap();
             assert!(matches!(check(&g)[..], [Violation::UiBelowL6 { .. }]), "{features}");
         }
