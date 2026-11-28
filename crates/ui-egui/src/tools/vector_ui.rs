@@ -54,7 +54,7 @@ pub(crate) use shapes::{create_geometry, kind_of, tool_history_name};
 use crate::shape_paint_ui::PaintChange;
 #[cfg(test)]
 pub(crate) use host::remove_last;
-pub(crate) use host::{VectorTools, replace_draft};
+pub(crate) use host::{VectorTools, replace_draft, replace_draft_as_moved};
 #[cfg(test)]
 pub(crate) use path_ops::delete_key_deletes_work_path;
 #[cfg(test)]
@@ -220,6 +220,9 @@ mod ellipse_path_menus_tests;
 
 #[cfg(test)]
 mod curvature_delete_key_tests;
+
+#[cfg(test)]
+mod curvature_ctrl_drag_tests;
 
 #[cfg(test)]
 mod shape_properties_tests;
