@@ -382,3 +382,40 @@ fn the_targets_own_alpha_with_no_name_reads_the_alpha() {
     crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
     assert_eq!([rgb(&app, 50, 50), rgb(&app, 300, 50)], [[255, 255, 255], [0, 0, 0]], "the alpha, not the composite");
 }
+
+#[test]
+fn a_lower_layer_sharing_a_name_is_its_own_source_and_mask_option() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    run(&mut app, "file.new", json!({"width": 400, "height": 300, "background": "#808080", "name": "dupes"}));
+    run(&mut app, "layer.new.layer", json!({"name": "Copy"}));
+    fill(&mut app, [0, 0, 400, 300], "#ffffff");
+    run(&mut app, "layer.new.layer", json!({"name": "Copy"}));
+    fill(&mut app, [0, 0, 400, 300], "#000000");
+    run(&mut app, "layer.select", json!({"name": "Background"}));
+    app.sync_views();
+    let ctx = app.ctx().clone();
+    let doc = index_of(&app, "dupes");
+    // The walk runs bottom to top: Background, the lower Copy, the upper Copy.
+    let ids: Vec<u64> = app.session.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id.0).collect();
+    let (lower, upper) = (ids[1], ids[2]);
+    let layer = option_at(&mut app, "sourceLayer", Some(&["Merged", "Copy", "Copy", "Background"]), 2);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceLayer", json!(layer));
+    set(&mut app, &ctx, d, "sourceChannel", json!("RGB"));
+    assert_eq!(fields(&app, d)["source"]["layer"], json!(lower), "the lower layer by its id");
+    // The Mask group lists both too and sends the lower one's id.
+    let mask = option_at(&mut app, &format!("__maskLayer/{doc}"), Some(&["Merged", "Copy", "Copy", "Background"]), 2);
+    set(&mut app, &ctx, d, "__mask", json!(true));
+    set(&mut app, &ctx, d, "__maskSource", json!(doc.to_string()));
+    set(&mut app, &ctx, d, &format!("__maskLayer/{doc}"), json!(mask));
+    assert_eq!(fields(&app, d)["maskLayer"], json!(lower));
+    set(&mut app, &ctx, d, "__mask", json!(false));
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let through_dialog = [rgb(&app, 50, 50), rgb(&app, 300, 50)];
+    run(&mut app, "edit.undo", json!({}));
+    assert_eq!(through_dialog, [[255, 255, 255]; 2], "the lower Copy (white), not the upper (black)");
+    let source = |layer: Value| json!({"blending": "normal", "source": {"layer": layer, "channel": "RGB"}});
+    assert_eq!(applied(&mut app, source(json!(lower))), through_dialog);
+    assert_eq!(applied(&mut app, source(json!(upper))), [[0, 0, 0]; 2], "the upper Copy");
+}

@@ -776,7 +776,7 @@ fn apply_image_source_derive(fields: &mut DialogFields) {
         // name goes as an explicit selector in `source`, which the command reads before them.
         let layer = apply_image_layer_selector(fields.text("sourceLayer").unwrap_or("merged"));
         let channel = fields.text("sourceChannel").map(apply_image_channel_selector);
-        if layer.is_object() || channel.as_ref().is_some_and(Value::is_object) {
+        if !layer.is_string() || channel.as_ref().is_some_and(Value::is_object) {
             let mut source = json!({"layer": layer, "invert": invert});
             if let (Some(channel), Some(map)) = (channel, source.as_object_mut()) {
                 map.insert("channel".into(), channel);
@@ -837,6 +837,9 @@ pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocr
 /// with no name, and so that no plain name is mistaken for one, any name with this prefix. The rest of the id is the
 /// name, sent as `{"name": …}` ([`apply_image_layer_selector`]).
 const LAYER_NAMED: &str = "layer#";
+/// The option id prefix of a layer below another of the same name, which the engine would read as that upper layer by
+/// name. The rest of the id is the layer's id, sent as the number itself ([`apply_image_layer_selector`]).
+const LAYER_ID: &str = "layer@";
 /// The option id prefix of an alpha channel the engine would not read by its plain name: one named as a built-in
 /// channel ("Red", "RGB", "selection"…), a later one of a repeated name, one named as a channel value the source and
 /// mask paths read as no channel ([`NO_CHANNEL`]), or one with this prefix. The rest of the id is its index, sent as
@@ -846,13 +849,22 @@ const ALPHA_AT: &str = "alpha#";
 /// from a flat source or mask (the source then reads the composite, the mask is off).
 const NO_CHANNEL: [&str; 2] = ["", "none"];
 
-/// The option id of the layer `name`: the name itself, unless the engine would read it as something else.
+/// The option id of the layer `name`: the name itself, unless the engine would read it as something else or the
+/// dialog as one of its prefixed ids.
 fn apply_image_layer_option(name: &str) -> String {
-    if name.is_empty() || name == "merged" || name.starts_with(LAYER_NAMED) { format!("{LAYER_NAMED}{name}") } else { name.to_owned() }
+    if name.is_empty() || name == "merged" || name.starts_with(LAYER_NAMED) || name.starts_with(LAYER_ID) {
+        format!("{LAYER_NAMED}{name}")
+    } else {
+        name.to_owned()
+    }
 }
 
-/// The layer selector an Apply Image Layer option sends: `{"name": …}` for a [`LAYER_NAMED`] id, else the id.
+/// The layer selector an Apply Image Layer option sends: `{"name": …}` for a [`LAYER_NAMED`] id, the layer id as a
+/// number for a [`LAYER_ID`] id, else the id.
 fn apply_image_layer_selector(id: &str) -> Value {
+    if let Some(layer) = id.strip_prefix(LAYER_ID).and_then(|n| n.parse::<u64>().ok()) {
+        return json!(layer);
+    }
     id.strip_prefix(LAYER_NAMED).map_or_else(|| json!(id), |name| json!({"name": name}))
 }
 
@@ -884,9 +896,10 @@ fn apply_image_alpha_options(doc: &photocraft_doc::Document) -> Vec<(String, Lab
         .collect()
 }
 
-/// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom (the engine takes
-/// the topmost layer of a name), Merged first; a single-layer document lists only that layer. A layer keeps its own
-/// option beside Merged whatever its name ([`apply_image_layer_option`]).
+/// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom, Merged first; a
+/// single-layer document lists only that layer. A layer keeps its own option beside Merged whatever its name
+/// ([`apply_image_layer_option`]); the engine reads a name as the topmost layer of that name, so a layer below another
+/// of its name is offered by its id ([`LAYER_ID`]).
 fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, String) {
     let all = doc.walk();
     if let [(_, _, only)] = all.as_slice() {
@@ -896,10 +909,12 @@ fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, 
     let mut names: Vec<&str> = Vec::new();
     let mut layers = vec![("merged".to_string(), Label::from(tl!("Merged")))];
     for (_, _, l) in all.iter().rev() {
-        if l.surface().is_some() && !names.contains(&l.name.as_str()) {
-            names.push(&l.name);
-            layers.push((apply_image_layer_option(&l.name), Label::from(l.name.clone())));
+        if l.surface().is_none() {
+            continue;
         }
+        let id = if names.contains(&l.name.as_str()) { format!("{LAYER_ID}{}", l.id.0) } else { apply_image_layer_option(&l.name) };
+        names.push(&l.name);
+        layers.push((id, Label::from(l.name.clone())));
     }
     (layers, "merged".to_string())
 }
