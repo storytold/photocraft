@@ -26,6 +26,7 @@
 //! `w × h` hole mask. Deterministic for a seed, whatever the thread count.
 
 use crate::inpaint::Rng;
+use crate::peel_frontier::{Connectivity, PeelFrontier};
 use photocraft_raster::{Cancelled, Interrupt};
 
 /// Below this many grid cells a level runs single-threaded (thread hand-off costs more than it saves).
@@ -665,25 +666,22 @@ impl Solver<'_> {
     fn onion_peel(&mut self, nnf: &mut [(i32, i32)], has: &mut [bool], seed: u64) -> Result<(), Cancelled> {
         let (w, h, r, cha) = (self.w, self.h, self.r, self.cha);
         let mut known: Vec<bool> = self.hole.iter().map(|m| !*m).collect();
-        // The cells still unknown, and per layer the known centres found (lists, so a layer costs
-        // its own size rather than a scan of the grid).
-        let mut unknown: Vec<usize> = (0..w * h).filter(|&i| self.hole[i]).collect();
+        let hole = self.hole;
+        let is_hole = |i| hole.get(i) == Some(&true);
+        let holes = (0..hole.len()).filter(|&i| is_hole(i));
+        let mut frontier = PeelFrontier::new((w, h), Connectivity::Four, &known, holes, self.ctl)?;
         let mut centre = vec![false; w * h];
         let mut layer_cost = vec![f32::INFINITY; w * h];
         let mut layer_no = 0u64;
         loop {
             self.ctl.check()?;
-            let neighbour_known = |i: usize, known: &[bool]| {
-                let (x, y) = (i % w, i / w);
-                (x > 0 && known[i - 1]) || (x + 1 < w && known[i + 1]) || (y > 0 && known[i - w]) || (y + 1 < h && known[i + w])
-            };
-            let layer: Vec<usize> = unknown.iter().copied().filter(|&i| neighbour_known(i, &known)).collect();
+            let layer = frontier.cells();
             if layer.is_empty() {
                 return Ok(());
             }
             // Known centres whose patch reaches into the layer.
             let mut centres = Vec::new();
-            for &i in &layer {
+            for &i in layer {
                 let (x, y) = ((i % w) as i32, (i / w) as i32);
                 for cy in (y - r).max(0)..=(y + r).min(h as i32 - 1) {
                     for cx in (x - r).max(0)..=(x + r).min(w as i32 - 1) {
@@ -760,7 +758,7 @@ impl Solver<'_> {
                 v.max(1e-6)
             };
             let mut values = Vec::with_capacity(layer.len());
-            for &i in &layer {
+            for &i in layer {
                 let (x, y) = ((i % w) as i32, (i / w) as i32);
                 let mut v = vec![0.0f32; cha];
                 let mut wsum = 0.0f32;
@@ -799,7 +797,7 @@ impl Solver<'_> {
                 self.img[i * cha..(i + 1) * cha].copy_from_slice(&v);
                 known[i] = true;
             }
-            unknown.retain(|&i| !known[i]);
+            frontier.advance(&known, is_hole, self.ctl)?;
             layer_no += 1;
         }
     }
