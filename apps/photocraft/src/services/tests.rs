@@ -88,6 +88,37 @@ fn busy_native_clipboard_preserves_copied_shape() {
     }
 }
 
+/// Each reads' worker reports only its own open result: a new worker starts with the flag unset
+/// after an earlier one failed to open, and a retired worker that fails to open late does not mark
+/// the current one unreadable.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn each_clipboard_reader_reports_only_its_own_open_failure() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut os = OsClipboard::default();
+    let start = |os: &mut OsClipboard| -> Arc<AtomicBool> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        os.start_reads(move |unopened: Arc<AtomicBool>, _| {
+            tx.send(unopened).unwrap();
+            |request| Answer::failed(request, "no clipboard in this test".into())
+        });
+        assert!(os.reads.is_some(), "the worker started");
+        rx.recv().unwrap()
+    };
+    let first = start(&mut os);
+    // A copy takes the first worker out of use while it is still opening.
+    os.retired.extend(os.reads.take());
+    let second = start(&mut os);
+    first.store(true, Ordering::SeqCst);
+    assert!(!os.unopened(), "a retired worker's late failure is not the current worker's");
+    second.store(true, Ordering::SeqCst);
+    assert!(os.unopened(), "the current worker's failure is reported");
+    // The reads stop, and the next read starts a new worker.
+    os.reads = None;
+    start(&mut os);
+    assert!(!os.unopened(), "a new worker starts with no failure of its own");
+}
+
 #[test]
 fn xwayland_command_matches_how_photocraft_was_installed() {
     // Flatpak: WAYLAND_DISPLAY doesn't reach the sandbox's socket choice; flatpak's flags do.
