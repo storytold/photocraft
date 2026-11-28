@@ -207,9 +207,10 @@ fn validate_for(
     if env("PHOTOCRAFT_CONFIG_DIR").is_some_and(|v| !v.is_empty()) {
         return Err("nightly-v1 cannot be combined with PHOTOCRAFT_CONFIG_DIR".into());
     }
-    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty()) {
-        // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting its
-        // runtime socket namespace could point another profile at the stable app's socket.
+    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty() && v != "ai.storyteller.photocraft.nightly") {
+        // Native tar/app-bundle launches must not inherit the stable Flatpak instance (which
+        // could point another profile at the stable app's socket); only the dedicated
+        // ai.storyteller.photocraft.nightly Flatpak sandbox may run nightly-v1 inside Flatpak.
         return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
     }
     let chosen = canonical_future(root)?;
@@ -655,6 +656,8 @@ mod tests {
         fixture.env.remove("PHOTOCRAFT_CONFIG_DIR");
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.photocraft".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
+        fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.photocraft.nightly".into());
+        assert!(fixture.check(Platform::Linux, &fixture.home().join(".var/app/ai.storyteller.photocraft.nightly/data/profile")).is_ok());
         fixture.env.remove("FLATPAK_ID");
         fixture.env.remove("HOME");
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("HOME"));

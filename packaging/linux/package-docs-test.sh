@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="photocraft-package-docs-") as temporary
     fixture.mkdir()
     # Keep the real scripts, metadata, icons and document bytes. Only replace the binary
     # build and AppImage download/tool boundary; no real tool or runtime is downloaded.
-    for name in ("packaging", "assets/app-icon/hicolor", "docs/mcp.md", "docs/control-protocol.md", "Cargo.toml", "README.md", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "COPYRIGHT", "NOTICE", "ATTRIBUTION.md"):
+    for name in ("packaging", "assets/app-icon/hicolor", "assets/app-icon/photocraft-nightly.png", "docs/mcp.md", "docs/control-protocol.md", "Cargo.toml", "README.md", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "COPYRIGHT", "NOTICE", "ATTRIBUTION.md"):
         source, destination = root / name, fixture / name
         if not source.exists():
             continue
@@ -120,4 +120,38 @@ for index, arg in enumerate(args[:-1]):
         assert cli.read_text() == binary, f"changed CLI bytes in {suffix}"
         assert_docs(app / "share/doc/photocraft")
         print(f"PASS: Flatpak {suffix} build commands install the CLI and both protocol documents")
+
+    # Nightly mode (PHOTOCRAFT_BUILD_CHANNEL=nightly-v1) must namespace AppImage desktop/icon IDs
+    # to ai.storyteller.photocraft.nightly-v1 (matching LaunchIdentity::NightlyV1) and route launches
+    # through the --launch-profile nightly-v1 bootstrap while preserving protocol documents.
+    nightly_dist = temp / "dist-nightly"
+    arg_dump_binary = (
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$@\"\n"
+    )
+    for name in ("photocraft", "photocraft-cli"):
+        path = target / "release" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(arg_dump_binary if name == "photocraft" else binary)
+        path.chmod(0o755)
+    nightly_env = {
+        **env,
+        "DIST": str(nightly_dist),
+        "PHOTOCRAFT_BUILD_CHANNEL": "nightly-v1",
+        "PHOTOCRAFT_VERSION": "0.24.0-nightly.20260101.1.1.gaaaaaaaaaaaa",
+    }
+    run(["bash", "packaging/linux/package.sh", "--skip-build", "--formats", "tar appimage"], fixture, nightly_env)
+    nightly_appdir = target / "linux-package/PhotoCraft.AppDir"
+    assert (nightly_appdir / "ai.storyteller.photocraft.nightly-v1.desktop").is_file()
+    assert not (nightly_appdir / "ai.storyteller.photocraft.desktop").exists()
+    assert "DESK_ID=ai.storyteller.photocraft.nightly-v1\n" in (nightly_appdir / "AppRun").read_text()
+    assert "StartupWMClass=ai.storyteller.photocraft.nightly-v1\n" in (nightly_appdir / "ai.storyteller.photocraft.nightly-v1.desktop").read_text()
+    launch_out = subprocess.run(
+        [str(nightly_appdir / "AppRun"), "sample.psd"],
+        env={**nightly_env, "HOME": str(temp), "XDG_DATA_HOME": str(temp / "xdg-data"), "PHOTOCRAFT_NO_DESKTOP_INTEGRATION": "1"},
+        text=True, capture_output=True, check=True,
+    ).stdout.splitlines()
+    assert launch_out == ["--launch-profile", "nightly-v1", "--profile-root", str(temp / "xdg-data/photocraft-nightly"), "--", "sample.psd"], launch_out
+    assert_docs(nightly_appdir / "usr/share/doc/photocraft")
+    print("PASS: Nightly package.sh namespaces AppImage to ai.storyteller.photocraft.nightly-v1 and bootstraps nightly-v1 profile")
 PY
