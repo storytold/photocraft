@@ -8,9 +8,11 @@
 //!
 //! Selection measurements follow Photoshop's definitions: the selection (coverage ≥ 50 %) is
 //! split into 8-connected features, each recorded with a summary row first. Area is the pixel
-//! count, perimeter the length of the marching-squares contour through the pixel-centre grid
-//! (exact along straight edges, √2 per diagonal step), circularity 4π·area/perimeter², gray
-//! values the luminosity (0.30 R + 0.59 G + 0.11 B) of the composite in the document's value
+//! count, perimeter the length of the feature's outer marching-squares contour through the
+//! pixel-centre grid, without the edges of enclosed holes (exact along straight edges and around
+//! corners that turn the same way as their neighbours, as a rectangle's do; √2 per one-pixel
+//! diagonal step), circularity 4π·area/perimeter², gray values the luminosity
+//! (0.30 R + 0.59 G + 0.11 B) of the composite in the document's value
 //! range (0–255 at 8 bits, 0–32768 at 16 bits, 0–1 at 32 bits), integrated density area × mean.
 //! Lengths and areas are scaled by the measurement scale.
 //!
@@ -385,6 +387,34 @@ fn root(parent: &mut [u32], mut i: u32) -> u32 {
     i
 }
 
+/// Component of a pixel whose already labelled neighbours are `nbrs` (`u32::MAX` for none): the
+/// smallest of their roots, with the others joined to it, or a new component.
+fn join(parent: &mut Vec<u32>, nbrs: &[u32]) -> u32 {
+    let mut best = u32::MAX;
+    for &n in nbrs {
+        if n != u32::MAX {
+            let r = root(parent, n);
+            best = best.min(r);
+        }
+    }
+    if best == u32::MAX {
+        best = parent.len() as u32;
+        parent.push(best);
+    } else {
+        for &n in nbrs {
+            if n != u32::MAX {
+                let r = root(parent, n);
+                if r != best {
+                    let (a, b) = (r.min(best), r.max(best));
+                    parent[b as usize] = a;
+                    best = a;
+                }
+            }
+        }
+    }
+    best
+}
+
 /// Gray value range of a depth: what a "gray value" of 1.0 reads as.
 fn gray_range(depth: SampleType) -> f64 {
     match depth {
@@ -411,7 +441,6 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
             if !mask[i] {
                 continue;
             }
-            let mut best = u32::MAX;
             let mut nbrs = [u32::MAX; 4];
             if x > 0 {
                 nbrs[0] = label[i - 1];
@@ -425,48 +454,92 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
                     nbrs[3] = label[i - w + 1];
                 }
             }
-            for &n in &nbrs {
-                if n != u32::MAX {
-                    let r = root(&mut parent, n);
-                    best = best.min(r);
-                }
-            }
-            if best == u32::MAX {
-                best = parent.len() as u32;
-                parent.push(best);
-            } else {
-                for &n in &nbrs {
-                    if n != u32::MAX {
-                        let r = root(&mut parent, n);
-                        if r != best {
-                            let (a, b) = (r.min(best), r.max(best));
-                            parent[b as usize] = a;
-                            best = a;
-                        }
-                    }
-                }
-            }
-            label[i] = best;
+            label[i] = join(&mut parent, &nbrs);
         }
     }
-    // Compact roots → feature indices in order of first appearance.
+    // Unselected pixels split into 4-connected regions, the counterpart of 8-connected features;
+    // region 0 is what lies past the image edge and every pixel joined to it.
+    let mut region = vec![u32::MAX; w * h];
+    let mut region_parent: Vec<u32> = vec![0];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            if mask[i] {
+                continue;
+            }
+            let mut nbrs = [u32::MAX; 3];
+            if x == 0 || y == 0 || x + 1 == w || y + 1 == h {
+                nbrs[0] = 0;
+            }
+            if x > 0 {
+                nbrs[1] = region[i - 1];
+            }
+            if y > 0 {
+                nbrs[2] = region[i - w];
+            }
+            region[i] = join(&mut region_parent, &nbrs);
+        }
+    }
+    for r in region.iter_mut().filter(|r| **r != u32::MAX) {
+        *r = root(&mut region_parent, *r);
+    }
+    // Compact roots → feature indices in order of first appearance. A feature's surroundings are
+    // the region of the pixel above its first pixel: nothing of the feature lies in that row, so
+    // the pixel is not in one of the feature's holes.
     let mut index = vec![u32::MAX; parent.len()];
-    let mut n = 0u32;
-    for l in label.iter_mut() {
+    let mut surroundings: Vec<u32> = Vec::new();
+    for (i, l) in label.iter_mut().enumerate() {
         if *l == u32::MAX {
             continue;
         }
         let r = root(&mut parent, *l) as usize;
         if index[r] == u32::MAX {
-            index[r] = n;
-            n += 1;
+            index[r] = surroundings.len() as u32;
+            surroundings.push(if i < w { 0 } else { region[i - w] });
         }
         *l = index[r];
     }
-    let n = n as usize;
+    let n = surroundings.len();
     // Perimeter: marching squares over the pixel-centre grid (padded with unselected pixels),
     // per row band in parallel, each cell's length attributed to the feature of a pixel in it.
+    // A corner cell turns the contour by 90°. Where the corners at both ends of its straight runs
+    // turn the same way, as all four of a rectangle's do, it is a square pixel corner and counts
+    // the two half edges around it (1). Where a neighbouring corner turns back, it is a step of a
+    // slanted edge or curve and is cut diagonally (√½), so a one-pixel step adds up to √2 (#16495).
+    // Each feature's outline is measured as if its holes were filled: a pixel that is not in the
+    // feature's surroundings counts as selected, so the edges of holes add nothing and do not
+    // change the corners of the outer outline (#16523). A feature inside a hole has the hole as
+    // its surroundings and counts its own outline.
     let at = |x: isize, y: isize| -> u32 { if x < 0 || y < 0 || x >= w as isize || y >= h as isize { u32::MAX } else { label[y as usize * w + x as usize] } };
+    let region_at = |x: isize, y: isize| -> u32 { if x < 0 || y < 0 || x >= w as isize || y >= h as isize { 0 } else { region[y as usize * w + x as usize] } };
+    // Corners of cell (x, y) that are selected or in a hole of the feature whose surroundings are
+    // region `s`: bit 0 top left, 1 top right, 2 bottom right, 3 bottom left.
+    let cell = |x: isize, y: isize, s: u32| -> u8 {
+        [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)]
+            .iter()
+            .enumerate()
+            .fold(0, |m, (i, &(px, py))| if at(px, py) != u32::MAX || region_at(px, py) != s { m | 1 << i } else { m })
+    };
+    let straight = |m: u8| matches!(m, 0b0011 | 0b0110 | 0b1100 | 0b1001);
+    // The first cell that is not straight on the contour leaving cell (x, y) by (dx, dy). Straight
+    // cells lie inside the padded grid, so the walk ends there at the latest.
+    let run_end = |mut x: isize, mut y: isize, dx: isize, dy: isize, s: u32| -> u8 {
+        loop {
+            x += dx;
+            y += dy;
+            let m = cell(x, y, s);
+            if !straight(m) {
+                return m;
+            }
+        }
+    };
+    // Both runs of corner cell (x, y) end in a corner of the same kind: 1 or 3 selected pixels.
+    let square_corner = |x: isize, y: isize, m: u8, s: u32| -> bool {
+        let crossed = |a: u8, b: u8| (m >> a & 1) != (m >> b & 1);
+        [((0, 1), (0, -1)), ((1, 2), (1, 0)), ((3, 2), (0, 1)), ((0, 3), (-1, 0))]
+            .iter()
+            .all(|&((a, b), (dx, dy))| !crossed(a, b) || run_end(x, y, dx, dy, s).count_ones() == m.count_ones())
+    };
     const HALF_DIAG: f64 = std::f64::consts::FRAC_1_SQRT_2;
     let per: Vec<f64> = (-1..h as isize)
         .into_par_iter()
@@ -475,18 +548,21 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
             |mut acc, y| {
                 for x in -1..w as isize {
                     let c = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)];
-                    let inside = c.iter().filter(|v| **v != u32::MAX).count();
-                    let len = match inside {
+                    // A cell on an outline holds a pixel of its feature: a hole pixel is never
+                    // next to the surroundings, so the outline runs between them and feature pixels.
+                    let Some(&f) = c.iter().find(|v| **v != u32::MAX) else {
+                        continue;
+                    };
+                    let s = surroundings[f as usize];
+                    let m = cell(x, y, s);
+                    let len = match m.count_ones() {
+                        1 | 3 if square_corner(x, y, m, s) => 1.0,
                         1 | 3 => HALF_DIAG,
-                        2 if (c[0] != u32::MAX) == (c[2] != u32::MAX) => 2.0 * HALF_DIAG,
+                        2 if m == 0b0101 || m == 0b1010 => 2.0 * HALF_DIAG,
                         2 => 1.0,
                         _ => 0.0,
                     };
-                    if len > 0.0
-                        && let Some(f) = c.iter().find(|v| **v != u32::MAX)
-                    {
-                        acc[*f as usize] += len;
-                    }
+                    acc[f as usize] += len;
                 }
                 acc
             },
@@ -574,7 +650,7 @@ fn summary(feats: &[Feature], all_values_median: f64) -> Feature {
 }
 
 /// Largest area Record Measurements handles in one pass: the gray render alone is 16 bytes per
-/// pixel, and the label buffer and mask come on top (#933).
+/// pixel, and the feature and region label buffers and the mask come on top (#933).
 pub const MAX_MEASURE_PIXELS: u64 = 400_000_000;
 
 /// Selection mask (coverage ≥ 0.5) over `r` (`n` pixels), or every pixel when there is no selection.

@@ -126,8 +126,8 @@ fn features_area_perimeter_circularity() {
     assert_eq!(f.len(), 2);
     assert_eq!(f[0].area, 100.0);
     assert_eq!(f[0].bounds, Rect::new(102, 202, 112, 212));
-    // Straight edges exact, corners cut by √½: 4·9 + 4·√½.
-    assert!((f[0].perimeter - (36.0 + 4.0 * std::f64::consts::FRAC_1_SQRT_2)).abs() < 1e-9, "{}", f[0].perimeter);
+    // Straight edges and square corners exact: the pixel-edge outline.
+    assert!((f[0].perimeter - 40.0).abs() < 1e-9, "{}", f[0].perimeter);
     assert!(f[0].circularity() > 0.75 && f[0].circularity() < 0.9);
     assert_eq!(f[0].gray_min, 0.0);
     assert_eq!(f[0].gray_max, 255.0);
@@ -143,6 +143,69 @@ fn features_area_perimeter_circularity() {
     assert!(f[0].circularity() > 0.85, "{}", f[0].circularity());
     assert!((f[0].perimeter / (2.0 * std::f64::consts::PI * 40.0) - 1.0).abs() < 0.08, "{}", f[0].perimeter);
     assert!((f[0].gray_median - 0.5).abs() < 1e-4);
+}
+
+#[test]
+fn a_hole_adds_nothing_to_the_perimeter_and_an_island_in_it_counts_its_own() {
+    // #16523: a 6 × 6 ring around a 2 × 2 hole and a solid 8 × 4 rectangle both read 24 px and
+    // circularity 0.698132 in the reference application.
+    let (w, h) = (32usize, 24usize);
+    let rect = |x: usize, y: usize, x0: usize, y0: usize, rw: usize, rh: usize| (x0..x0 + rw).contains(&x) && (y0..y0 + rh).contains(&y);
+    let mask: Vec<bool> =
+        (0..w * h).map(|i| (i % w, i / w)).map(|(x, y)| (rect(x, y, 4, 4, 6, 6) && !rect(x, y, 6, 6, 2, 2)) || rect(x, y, 16, 4, 8, 4)).collect();
+    let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!(f.len(), 2);
+    for f in &f {
+        assert_eq!(f.area, 32.0);
+        assert!((f.perimeter - 24.0).abs() < 1e-9, "{}", f.perimeter);
+        assert!((f.circularity() - 0.698132).abs() < 1e-6, "{}", f.circularity());
+    }
+    // A 2 × 2 island in the middle of a 10 × 10 ring's 6 × 6 hole is a feature of its own, and
+    // its outline faces the hole; the ring still counts only its outer edge.
+    let (w, h) = (12usize, 12usize);
+    let mask: Vec<bool> =
+        (0..w * h).map(|i| (i % w, i / w)).map(|(x, y)| (rect(x, y, 1, 1, 10, 10) && !rect(x, y, 3, 3, 6, 6)) || rect(x, y, 5, 5, 2, 2)).collect();
+    let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!(f.len(), 2);
+    assert!((f[0].perimeter - 40.0).abs() < 1e-9, "{}", f[0].perimeter);
+    assert!((f[1].perimeter - 8.0).abs() < 1e-9, "{}", f[1].perimeter);
+    // A one-pixel hole whose diagonal neighbours are outside: filling it leaves the outer outline,
+    // and so the perimeter, as it was.
+    let rows = [".......", "...##..", "...#...", "...#.#.", "...##.#", ".....#."];
+    let (w, h) = (7usize, 6usize);
+    let mut mask: Vec<bool> = rows.iter().flat_map(|r| r.bytes().map(|b| b == b'#')).collect();
+    let holed = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    mask[4 * w + 5] = true;
+    let filled = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!((holed.len(), filled.len()), (1, 1));
+    assert!((holed[0].perimeter - filled[0].perimeter).abs() < 1e-9, "{} vs {}", holed[0].perimeter, filled[0].perimeter);
+}
+
+#[test]
+fn rectangle_perimeter_keeps_its_corners_and_a_staircase_its_diagonal() {
+    // #16495: a 24 × 16 selection at (16, 16) on 160 × 120 reads 80 px and circularity 0.753982
+    // in the reference application.
+    let (w, h) = (160usize, 120usize);
+    let mask: Vec<bool> = (0..w * h).map(|i| (16..40).contains(&(i % w)) && (16..32).contains(&(i / w))).collect();
+    let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!(f.len(), 1);
+    assert!((f[0].perimeter - 80.0).abs() < 1e-9, "{}", f[0].perimeter);
+    assert!((f[0].circularity() - 0.753982).abs() < 1e-6, "{}", f[0].circularity());
+    // A one-pixel-thick bar is a rectangle too: its pixel-edge outline.
+    let mask: Vec<bool> = (0..w * h).map(|i| (16..40).contains(&(i % w)) && i / w == 16).collect();
+    let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert!((f[0].perimeter - 50.0).abs() < 1e-9, "{}", f[0].perimeter);
+    // Right triangles whose hypotenuse steps one or two pixels at a time: the steps stay
+    // diagonal, so the perimeter stays near legs + hypotenuse, well short of the pixel-edge
+    // outline 4 × 40; only the right angle is square.
+    for step in [1, 2] {
+        let (w, h) = (44usize, 44usize);
+        let mask: Vec<bool> =
+            (0..w * h).map(|i| (2..42).contains(&(i % w)) && (2..42).contains(&(i / w)) && (i % w - 2) / step <= (i / w - 2) / step).collect();
+        let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+        let ideal = 80.0 + 40.0 * std::f64::consts::SQRT_2;
+        assert!((f[0].perimeter / ideal - 1.0).abs() < 0.1, "step {step}: {} vs {ideal}", f[0].perimeter);
+    }
 }
 
 #[test]
