@@ -328,6 +328,7 @@ static QUERIES: Mutex<Vec<Query>> = Mutex::new(Vec::new());
 /// `QUERIES` only dedupes questions.
 static QUERY_THREADS: AtomicUsize = AtomicUsize::new(0);
 static QUERY_HOOK: RwLock<Option<fn(&Path)>> = RwLock::new(None);
+static QUERY_WAIT_OVERRIDE: RwLock<Option<(PathBuf, Duration)>> = RwLock::new(None);
 
 static M: Manager = Manager {
     failed: AtomicUsize::new(0),
@@ -649,8 +650,14 @@ fn start_query(dir: &Path, prepare: bool) -> Option<(Arc<QueryDone>, Instant)> {
     if QUERY_THREADS.load(Ordering::Acquire) >= MAX_QUERIES {
         return None;
     }
+    let wait = QUERY_WAIT_OVERRIDE
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .filter(|(path, _)| path.as_path() == dir)
+        .map_or(QUERY_WAIT, |(_, wait)| *wait);
     let now = Instant::now();
-    let deadline = now.checked_add(QUERY_WAIT).unwrap_or(now);
+    let deadline = now.checked_add(wait).unwrap_or(now);
     let done = Arc::new(QueryDone::default());
     queries.push(Query { dir: dir.to_path_buf(), prepare, deadline, done: done.clone() });
     let (job_dir, job_done) = (dir.to_path_buf(), done.clone());
@@ -1153,6 +1160,13 @@ pub fn set_volume_space_for_tests(query: fn(&Path) -> Option<(u64, u64)>) {
 #[doc(hidden)]
 pub fn set_query_hook_for_tests(hook: Option<fn(&Path)>) {
     *QUERY_HOOK.write().unwrap_or_else(PoisonError::into_inner) = hook;
+}
+
+/// Override the wait of new queries for one scratch directory in a test. A query already
+/// in flight keeps its deadline when another caller joins it.
+#[doc(hidden)]
+pub fn set_query_wait_for_tests(override_wait: Option<(&Path, Duration)>) {
+    *QUERY_WAIT_OVERRIDE.write().unwrap_or_else(PoisonError::into_inner) = override_wait.map(|(dir, wait)| (dir.to_path_buf(), wait));
 }
 
 /// Query threads still alive, so a test can wait until a stalled query has fully settled.
