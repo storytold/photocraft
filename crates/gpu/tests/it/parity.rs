@@ -666,6 +666,10 @@ fn special_eight_fill_matches_cpu() {
             check(&mut g, &d, &format!("{mode:?} fill {fill}"));
             d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
             check(&mut g, &d, &format!("{mode:?} fill {fill} opaque"));
+            // Clipped to a pixel layer, Fill stays inside the blend too (#15696).
+            d.layers.last_mut().unwrap().clipped = true;
+            d.layers.insert(1, noise_layer("base", PixelFormat::RGBA8, Rect::from_xywh(8, 6, 40, 30), 9, 1.0));
+            check(&mut g, &d, &format!("{mode:?} fill {fill} clipped"));
         }
     }
 }
