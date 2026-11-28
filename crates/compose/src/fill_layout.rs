@@ -28,48 +28,96 @@ pub fn fill_gradient_layout(style: GradientStyle, angle: f32, scale: f32, frame:
 /// 87.14°).
 pub fn gradient_layout(style: GradientStyle, angle: f32, scale: f32, offset: (f32, f32), frame: Rect) -> (f32, f32, (f32, f32)) {
     let unchanged = (angle, scale, offset);
-    if !matches!(style, GradientStyle::Linear | GradientStyle::Reflected)
-        || !angle.is_finite()
-        || !scale.is_finite()
-        || !offset.0.is_finite()
-        || !offset.1.is_finite()
-    {
+    if !scale.is_finite() {
         return unchanged;
     }
-    let w = f64::from(frame.width().max(1));
-    let h = f64::from(frame.height().max(1));
-    let (cx, cy) = (f64::from(frame.x0) + w / 2.0 + f64::from(offset.0) * w, f64::from(frame.y0) + h / 2.0 + f64::from(offset.1) * h);
-    // Unscaled chord length along `a` (radians), as `effects::gradient_t`.
-    let chord_of = |a: f64| {
-        let (s, c) = a.sin_cos();
-        (w / c.abs().max(1e-6)).min(h / s.abs().max(1e-6)).max(1.0)
-    };
-    let a = f64::from(angle).to_radians();
-    let scale64 = f64::from(scale.max(1e-3));
-    let half = chord_of(a) * scale64 / 2.0;
-    let (s, c) = a.sin_cos();
-    let (dx, dy) = (c * half, -s * half);
-    // Truncate to the pixel grid (with a little slack for rounding error in exact cases).
-    let snap = |v: f64| (v + 1e-4).floor();
-    let end = (snap(cx + dx), snap(cy + dy));
+    let Some(g) = Grid::new(style, angle, offset, frame) else { return unchanged };
+    let half = g.chord_of(g.a) * f64::from(scale.max(1e-3)) / 2.0;
+    let (dx, dy) = (g.c * half, -g.s * half);
+    let end = (snap(g.cx + dx), snap(g.cy + dy));
     let (start, mid) = match style {
-        GradientStyle::Reflected => ((cx, cy), (cx, cy)),
+        GradientStyle::Reflected => ((g.cx, g.cy), (g.cx, g.cy)),
         _ => {
-            let s0 = (snap(cx - dx), snap(cy - dy));
+            let s0 = (snap(g.cx - dx), snap(g.cy - dy));
             (s0, ((s0.0 + end.0) / 2.0, (s0.1 + end.1) / 2.0))
         }
     };
-    let v = (end.0 - start.0, end.1 - start.1);
-    let len = v.0.hypot(v.1);
-    if len < 0.5 {
-        return unchanged;
+    g.express(style, start, end, mid, offset).unwrap_or(unchanged)
+}
+
+/// [`gradient_layout`] for a Gradient Overlay (#14907). A scaled Linear overlay snaps its end
+/// points at Scale 100 as [`gradient_layout`] does, then scales that whole-pixel half-vector
+/// about the snapped midpoint, truncating toward zero: on a 150 px tall layer at 90° Scale 50
+/// runs 74 px about row 150 (the reference application's column, within 0 levels at Classic
+/// Smoothness 100) where scaling before snapping runs 75 px about 149.5. Linear at Scale 100 and
+/// every Reflected (scaled Reflected is not measured) are [`gradient_layout`] bit for bit.
+pub fn overlay_gradient_layout(style: GradientStyle, angle: f32, scale: f32, offset: (f32, f32), frame: Rect) -> (f32, f32, (f32, f32)) {
+    let shared = gradient_layout(style, angle, scale, offset, frame);
+    if style != GradientStyle::Linear || scale == 1.0 || !scale.is_finite() {
+        return shared;
     }
-    let a2 = (-v.1).atan2(v.0);
-    // Reflected spans half the chord from the centre; Linear the whole chord.
-    let span = if style == GradientStyle::Reflected { 2.0 * len } else { len };
-    let scale2 = span / chord_of(a2);
-    let shift = (((mid.0 - cx) / w) as f32, ((mid.1 - cy) / h) as f32);
-    (a2.to_degrees() as f32, scale2 as f32, (offset.0 + shift.0, offset.1 + shift.1))
+    let Some(g) = Grid::new(style, angle, offset, frame) else { return shared };
+    let half = g.chord_of(g.a) / 2.0;
+    let (dx, dy) = (g.c * half, -g.s * half);
+    let (s0, e0) = ((snap(g.cx - dx), snap(g.cy - dy)), (snap(g.cx + dx), snap(g.cy + dy)));
+    let mid = ((s0.0 + e0.0) / 2.0, (s0.1 + e0.1) / 2.0);
+    let k = f64::from(scale.max(1e-3));
+    let half_v = (((e0.0 - mid.0) * k).trunc(), ((e0.1 - mid.1) * k).trunc());
+    let (start, end) = ((mid.0 - half_v.0, mid.1 - half_v.1), (mid.0 + half_v.0, mid.1 + half_v.1));
+    g.express(style, start, end, mid, offset).unwrap_or(shared)
+}
+
+/// Truncate to the pixel grid (with a little slack for rounding error in exact cases).
+fn snap(v: f64) -> f64 {
+    (v + 1e-4).floor()
+}
+
+/// A gradient's frame and direction, for laying its end points out on the pixel grid.
+struct Grid {
+    w: f64,
+    h: f64,
+    cx: f64,
+    cy: f64,
+    a: f64,
+    s: f64,
+    c: f64,
+}
+
+impl Grid {
+    /// `None` for styles without end points (Radial, Angle, Diamond) and for non-finite input.
+    fn new(style: GradientStyle, angle: f32, offset: (f32, f32), frame: Rect) -> Option<Grid> {
+        if !matches!(style, GradientStyle::Linear | GradientStyle::Reflected) || !angle.is_finite() || !offset.0.is_finite() || !offset.1.is_finite() {
+            return None;
+        }
+        let w = f64::from(frame.width().max(1));
+        let h = f64::from(frame.height().max(1));
+        let (cx, cy) = (f64::from(frame.x0) + w / 2.0 + f64::from(offset.0) * w, f64::from(frame.y0) + h / 2.0 + f64::from(offset.1) * h);
+        let a = f64::from(angle).to_radians();
+        let (s, c) = a.sin_cos();
+        Some(Grid { w, h, cx, cy, a, s, c })
+    }
+
+    /// Unscaled chord length along `a` (radians), as `effects::gradient_t`.
+    fn chord_of(&self, a: f64) -> f64 {
+        let (s, c) = a.sin_cos();
+        (self.w / c.abs().max(1e-6)).min(self.h / s.abs().max(1e-6)).max(1.0)
+    }
+
+    /// The `(angle, scale, centre offset)` that put a gradient between `start` and `end` with its
+    /// centre at `mid`; `None` when the end points (nearly) coincide.
+    fn express(&self, style: GradientStyle, start: (f64, f64), end: (f64, f64), mid: (f64, f64), offset: (f32, f32)) -> Option<(f32, f32, (f32, f32))> {
+        let v = (end.0 - start.0, end.1 - start.1);
+        let len = v.0.hypot(v.1);
+        if len < 0.5 || !len.is_finite() {
+            return None;
+        }
+        let a2 = (-v.1).atan2(v.0);
+        // Reflected spans half the chord from the centre; Linear the whole chord.
+        let span = if style == GradientStyle::Reflected { 2.0 * len } else { len };
+        let scale2 = span / self.chord_of(a2);
+        let shift = (((mid.0 - self.cx) / self.w) as f32, ((mid.1 - self.cy) / self.h) as f32);
+        Some((a2.to_degrees() as f32, scale2 as f32, (offset.0 + shift.0, offset.1 + shift.1)))
+    }
 }
 
 /// Gradient parameter `t` of a gradient fill at pixel centre `(x, y)` (see [`fill_gradient_layout`]).

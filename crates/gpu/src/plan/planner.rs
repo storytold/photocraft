@@ -52,6 +52,8 @@ struct EffectState<'a> {
     l: Slot,
     clip: Rect,
     sb: Rect,
+    /// The Gradient Overlay box (`photocraft_compose::gradient_overlay_frame_in`).
+    gb: Rect,
     anchor: (f64, f64),
     outline: bool,
     relative: bool,
@@ -820,6 +822,7 @@ impl<'a> Planner<'a> {
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));
+        let gb = photocraft_compose::gradient_overlay_frame_in(layer, sb);
         let clip = if bounds::transparent_outside(layer) { region } else { canvas };
         // A stroked shape's vector stroke goes above its clipped layers and interior effects
         // (compose::split_parts): the fill and the stroke unmasked, the masks applied after.
@@ -903,6 +906,7 @@ impl<'a> Planner<'a> {
             l: lay_src,
             clip,
             sb,
+            gb,
             anchor,
             outline,
             relative,
@@ -1051,7 +1055,17 @@ impl<'a> Planner<'a> {
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::One,
+                    &Paint::OverlayGradient(gradient),
+                    common.blend,
+                    common.opacity,
+                    F_GATE,
+                    clip,
+                    photocraft_compose::gradient_overlay_box(gradient, (sb, work.gb)),
+                );
             }
         }
         for &(_, e) in &rev {
@@ -1395,10 +1409,14 @@ impl<'a> Planner<'a> {
         match paint {
             Paint::None => {}
             Paint::Color(c) => p.color = [c[0], c[1], c[2], 1.0],
-            Paint::Gradient(g) => {
-                // effects::paint_fx: whole-pixel end points (fill_layout::gradient_layout).
-                let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, sb);
-                p.params[0] = [angle, scale, if g.reverse { 1.0 } else { 0.0 }, style_index(g.style)];
+            Paint::Gradient(g) | Paint::OverlayGradient(g) => {
+                // effects::paint_fx: whole-pixel end points (fill_layout::gradient_layout); an
+                // overlay is laid out and sampled the overlay way (style + 8 in the shader).
+                let overlay = matches!(paint, Paint::OverlayGradient(_));
+                let layout = if overlay { photocraft_compose::fill_layout::overlay_gradient_layout } else { photocraft_compose::fill_layout::gradient_layout };
+                let (angle, scale, offset) = layout(g.style, g.angle, g.scale, g.offset, sb);
+                let style = style_index(g.style) + if overlay { 8.0 } else { 0.0 };
+                p.params[0] = [angle, scale, if g.reverse { 1.0 } else { 0.0 }, style];
                 p.params[1] = [sb.x0 as f32, sb.y0 as f32, sb.width() as f32, sb.height() as f32];
                 p.params[2][0] = offset.0;
                 p.params[2][1] = offset.1;

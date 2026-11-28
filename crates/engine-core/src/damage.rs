@@ -586,7 +586,7 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                 // everywhere when it moves (#4053), so then the whole extents.
                 let frame_moved = around.spans_frame
                     || (photocraft_compose::effects::spans_frame(y)
-                        && photocraft_compose::effects_frame(x, a.bounds()) != photocraft_compose::effects_frame(y, b.bounds()));
+                        && photocraft_compose::effects_frames(x, a.bounds()) != photocraft_compose::effects_frames(y, b.bounds()));
                 let d = match tiles {
                     Some(t) if !frame_moved => t.inflate(around.reach).intersect(&whole).intersect(&b.bounds()),
                     _ => whole,
@@ -599,7 +599,7 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                     // hidden at its edge) lays effects spanning that frame out again over the
                     // whole group, beyond the change (#4053).
                     let spans = photocraft_compose::effects::spans_frame;
-                    if (spans(x) || spans(y)) && photocraft_compose::effects_frame(x, a.bounds()) != photocraft_compose::effects_frame(y, b.bounds()) {
+                    if (spans(x) || spans(y)) && photocraft_compose::effects_frames(x, a.bounds()) != photocraft_compose::effects_frames(y, b.bounds()) {
                         let (Some(bx), Some(by)) = (
                             photocraft_compose::change_bounds_in(xs, xk, px, depth, near(a.bounds())),
                             photocraft_compose::change_bounds_in(ys, yk, py, depth, near(b.bounds())),

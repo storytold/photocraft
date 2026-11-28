@@ -1,6 +1,6 @@
 use super::bevel::{BevelPaint, TextureCtx, bevel_geom, bevel_maps, satin_map};
 use super::distance::{INSIDE_EPS, Metric, dist_outside_by, local_coverage, stroke_inside_distance, stroke_outside_exact};
-use super::paint::{dissolves_in, glow_map, paint_color, paint_fx, paint_glow, paint_pattern, rgb, shadow_map};
+use super::paint::{dissolves_in, glow_map, paint_color, paint_fx, paint_glow, paint_gradient_overlay, paint_pattern, rgb, shadow_map};
 use super::{
     Bevel, BevelStyle, BlendMode, Buffer, Effect, FxMaps, FxPaint, GlobalLight, Layer, MAX_REACH, Map, PREPARED_PATTERN_BYTES, Pattern, Placement,
     PreparedPatterns, Rect, StrokePosition, psblend,
@@ -231,7 +231,9 @@ pub(super) fn blends_inside(layer: &Layer) -> bool {
 /// masked, clipped layers applied) plus its effects into `backdrop`.
 pub fn composite_with_effects(layer: &Layer, content: &Buffer, backdrop: &mut Buffer, maps: &FxMaps, layer_bounds: Rect, patterns: &[Pattern]) {
     let prepared = PreparedPatterns::new(patterns, PREPARED_PATTERN_BYTES);
-    composite_with_effects_prepared(layer, content, backdrop, maps, layer_bounds, &prepared, None);
+    // The same frames a document render uses ([`crate::effects_frames`]).
+    let frames = (layer_bounds, crate::gradient_overlay_frame_in(layer, layer_bounds));
+    composite_with_effects_prepared(layer, content, backdrop, maps, frames, &prepared, None);
 }
 
 pub(crate) fn composite_with_effects_prepared(
@@ -239,27 +241,29 @@ pub(crate) fn composite_with_effects_prepared(
     content: &Buffer,
     backdrop: &mut Buffer,
     maps: &FxMaps,
-    layer_bounds: Rect,
+    frames: (Rect, Rect),
     patterns: &PreparedPatterns<'_>,
     vstroke: Option<VectorStroke<'_>>,
 ) {
-    match composite_with_effects_prepared_with(layer, content, backdrop, (maps, vstroke), layer_bounds, patterns, &InfallibleBufferAlloc) {
+    match composite_with_effects_prepared_with(layer, content, backdrop, (maps, vstroke), frames, patterns, &InfallibleBufferAlloc) {
         Ok(()) => {}
         Err(never) => match never {},
     }
 }
 
+/// `frames` are the layer's effects frame and its Gradient Overlay box
+/// ([`crate::effects_frames`]).
 pub(crate) fn composite_with_effects_prepared_with<A: BufferAlloc>(
     layer: &Layer,
     content: &Buffer,
     backdrop: &mut Buffer,
     prepared: (&FxMaps, Option<VectorStroke<'_>>),
-    layer_bounds: Rect,
+    frames: (Rect, Rect),
     patterns: &PreparedPatterns<'_>,
     alloc: &A,
 ) -> Result<(), A::Error> {
     let (maps, vstroke) = prepared;
-    let pass = EffectPass::new(layer, maps, content.rect, layer_bounds, patterns, vstroke.as_ref());
+    let pass = EffectPass::new(layer, maps, content.rect, frames, patterns, vstroke.as_ref());
     let big = pass.big;
     let shape = pass.effect_shape(content);
     let rect = backdrop.rect;
@@ -372,6 +376,9 @@ struct EffectPass<'a> {
     /// Layer bounds (gradients aligned with the layer use the whole layer, independent of the
     /// render rect).
     sb: Rect,
+    /// The box a Gradient Overlay aligned with the layer spans: the pixels at least half opaque
+    /// of an 8-bit pixel layer, else `sb` ([`crate::gradient_overlay_frame_in`]).
+    gb: Rect,
     /// Linked patterns tile from the effects reference point (else the layer's top-left).
     anchor: (f64, f64),
     /// The enabled effects. Multiple instances: the first listed is on top, so paint in reverse.
@@ -383,11 +390,10 @@ impl<'a> EffectPass<'a> {
         layer: &'a Layer,
         maps: &'a FxMaps,
         big: Rect,
-        layer_bounds: Rect,
+        (sb, gb): (Rect, Rect),
         patterns: &'a PreparedPatterns<'a>,
         vstroke: Option<&'a VectorStroke<'a>>,
     ) -> Self {
-        let sb = layer_bounds;
         Self {
             layer,
             maps,
@@ -397,6 +403,7 @@ impl<'a> EffectPass<'a> {
             w: big.width() as usize,
             h: big.height() as usize,
             sb,
+            gb,
             anchor: layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0))),
             items: layer.effects.items.iter().filter(|e| e.enabled()).collect(),
         }
@@ -508,7 +515,7 @@ impl<'a> EffectPass<'a> {
         }
         for (_, e) in self.rev() {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                paint_fx(lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
+                paint_gradient_overlay(lay, &full, gradient, crate::gradient_overlay_box(gradient, (sb, self.gb)), big, common.blend, common.opacity)
             }
         }
         for (_, e) in self.rev() {
@@ -906,7 +913,7 @@ mod outside_stroke_allocation_tests {
         let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
         let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
         let maps = build_maps(&layer, shape.v.clone(), rect, &GlobalLight::default(), &texture);
-        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None);
+        let pass = EffectPass::new(&layer, &maps, rect, (rect, rect), &patterns, None);
         let strokes: Vec<_> = layer.effects.items.iter().filter_map(|effect| if let Effect::Stroke(stroke) = effect { Some(stroke) } else { None }).collect();
         assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
         let fields = pass.stroke_fields(true);
@@ -947,7 +954,7 @@ mod outside_stroke_allocation_tests {
         let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
         let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
         let maps = build_maps(&layer, shape.v.clone(), rect, &GlobalLight::default(), &texture);
-        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None);
+        let pass = EffectPass::new(&layer, &maps, rect, (rect, rect), &patterns, None);
         let strokes: Vec<_> = layer.effects.items.iter().filter_map(|effect| if let Effect::Stroke(stroke) = effect { Some(stroke) } else { None }).collect();
         assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
         let fields = pass.stroke_fields(true);

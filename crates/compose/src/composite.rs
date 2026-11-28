@@ -1,6 +1,6 @@
 use super::content::{channel_weights, empty_in, render_content_with, restore_channels, surface_to_buffer_with};
 use super::ctx::Ctx;
-use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
+use super::extents::{effects_frame, effects_frames, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps_with;
 use super::{BlendMode, Buffer, BufferAlloc, Fill, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
 
@@ -591,7 +591,7 @@ fn composite_layer_effects_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer]
     advanced::composite_clipped_with(clipped, &mut content, cx, alloc)?;
     let vstroke = parts.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
     let maps = effect_maps_with(layer, rect, cx, alloc)?;
-    effects::composite_with_effects_prepared_with(layer, &content, backdrop, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc)?;
+    effects::composite_with_effects_prepared_with(layer, &content, backdrop, (&maps, vstroke), effects_frames(layer, cx.canvas), cx.patterns, alloc)?;
     if let Some((_, mask)) = parts {
         recycle_mask(mask);
     }
@@ -702,7 +702,7 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
             p[3] = 1.0;
         }
         let maps = effect_maps_with(layer, rect, cx, alloc)?;
-        effects::composite_with_effects_prepared_with(layer, &content, &mut opaque, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc)?;
+        effects::composite_with_effects_prepared_with(layer, &content, &mut opaque, (&maps, vstroke), effects_frames(layer, cx.canvas), cx.patterns, alloc)?;
         if let Some((_, mask)) = parts {
             recycle_mask(mask);
         }
