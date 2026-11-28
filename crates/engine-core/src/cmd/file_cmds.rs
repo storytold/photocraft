@@ -48,7 +48,7 @@ use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
+pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, open_bytes_with_pdf, pdf_options, place_bytes, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open};
@@ -316,7 +316,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage),"page":int? (PDF: the page, from 1),"resolution":ppi? (PDF: 300 by default),"crop":"boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox"? (PDF),"mode":"rgb|gray|cmyk|lab"? (PDF),"depth":8|16? (PDF),"antiAlias":bool? (PDF),"name":str? (PDF: the document name's stem),"image":int? (PDF: open embedded image N instead of a page),"password":str? (PDF),"suppressWarnings":bool? (PDF)}"##,
             native,
             open_as
         ),
@@ -348,7 +348,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame),"page":int? (PDF: the page, from 1),"resolution":ppi? (PDF: 300 by default),"crop":"boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox"? (PDF),"mode":"rgb|gray|cmyk|lab"? (PDF),"depth":8|16? (PDF),"antiAlias":bool? (PDF),"image":int? (PDF: place embedded image N instead of a page),"name":str? (PDF),"password":str? (PDF),"suppressWarnings":bool? (PDF)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -357,7 +357,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame),"page":int? (PDF: refused unless null),"resolution":ppi? (PDF: refused unless null),"crop":"boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox"? (PDF: refused unless null),"mode":"rgb|gray|cmyk|lab"? (PDF: refused unless null),"depth":8|16? (PDF: refused unless null),"antiAlias":bool? (PDF: refused unless null),"image":int? (PDF: refused unless null),"name":str? (PDF: refused unless null),"password":str? (PDF: refused unless null),"suppressWarnings":bool? (PDF: refused unless null)} (a PDF places page 1 at 300 ppi; Import PDF options are refused, as the link keeps only the path: use file.placeEmbedded)"##,
             native_doc,
             |s, p| place(s, p, true)
         ),

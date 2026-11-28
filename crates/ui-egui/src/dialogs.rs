@@ -30,7 +30,7 @@ pub(crate) mod params {
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
         equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        paragraph_text_size, pdf_import_ui, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -66,6 +66,16 @@ pub(crate) mod params {
 
     /// Every family of parameter dialogs, first match wins; the generic filter family owns what is left.
     pub(crate) const PARAM_FAMILIES: &[ParamFamily] = &[
+        ParamFamily {
+            check: Some(pdf_import_ui::check_password),
+            cancel: Some(pdf_import_ui::cancel),
+            ..ParamFamily::new(pdf_import_ui::owns_password, pdf_import_ui::run_password)
+        },
+        ParamFamily {
+            check: Some(pdf_import_ui::check_import),
+            cancel: Some(pdf_import_ui::cancel),
+            ..ParamFamily::new(pdf_import_ui::owns_import, pdf_import_ui::run_import)
+        },
         ParamFamily { check: Some(fill_ui::check), ..ParamFamily::new(fill_ui::owns, fill_ui::run) },
         ParamFamily { check: Some(stroke_ui::check), ..ParamFamily::new(stroke_ui::owns, stroke_ui::run) },
         ParamFamily {
@@ -816,6 +826,7 @@ mod paths_export_default_tests;
 #[cfg(test)]
 mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
+pub mod pdf_import_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 #[cfg(test)]
