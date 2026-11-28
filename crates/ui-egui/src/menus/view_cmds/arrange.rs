@@ -42,18 +42,42 @@ pub(super) fn layout_checked(app: &PhotocraftApp, k: &str) -> Option<bool> {
     N_UP.contains(&k).then(|| app.ui.document_windows.arrangement == Some(arrangement))
 }
 
-/// A finite `[x, y]` screen position within a sane range (window systems reject wild values).
-fn screen_position(v: &Value) -> Option<[f32; 2]> {
+/// Where the app window stands on the desktop, in desktop points. The app's own rects (the document area's) are in
+/// the app window's points, while a document window that opens as an OS window opens at a desktop rect
+/// (`DocumentWindow::first_placed` takes the outer rect in desktop points, and `follow_os_window` reads one back once
+/// the user moved the window): this is the offset between the two.
+/// Zero where the app shows its document windows on the fallback layer inside its own window, and where the host has
+/// not reported the app window's rect yet (before its first pass): both keep today's placement.
+/// One fallback this gate does not read: the framework also shows the layer inside the app window while OS windows are
+/// available, when the app window itself is full screen or (on Wayland) maximized — `opens_over` in craft-libs
+/// `ui-contract/src/runtime/windows.rs`. `WindowHost::opens_windows()` answers for the viewport of the running pass,
+/// not for the app window, so a command run from the menu cannot decide that here; the offset is still added, and the
+/// epic's #16846 is where full-screen modes with floating document windows are worked.
+fn desktop_origin(app: &PhotocraftApp) -> egui::Pos2 {
+    let host = craft::ui::runtime::windows::WindowHost::of(app.ctx());
+    if !host.viewports_available() {
+        return egui::Pos2::ZERO;
+    }
+    host.facts(egui::ViewportId::ROOT).map_or(egui::Pos2::ZERO, |facts| facts.inner.min)
+}
+
+/// A finite `[x, y]` screen position within a sane range (window systems reject wild values). The point is one of the
+/// app window's own points, where a torn-off tab was released, so it takes the same offset as the document area.
+fn screen_position(v: &Value, app: &PhotocraftApp) -> Option<[f32; 2]> {
     const LIMIT: f64 = 1.0e6;
     let a = v.as_array().filter(|a| a.len() == 2)?;
     let n = |i: usize| a.get(i).and_then(Value::as_f64).filter(|x| x.is_finite() && x.abs() <= LIMIT).map(|x| x as f32);
-    Some([n(0)?, n(1)?])
+    let (x, y) = (n(0)?, n(1)?);
+    let origin = desktop_origin(app);
+    Some([x + origin.x, y + origin.y])
 }
 
 /// The area and sizes the framework's arrangements work in: the document area, not the app's whole content. New
 /// windows take half of it; a window that follows its document's size is resized by `DocumentWindow` afterwards.
 pub(super) fn space(app: &PhotocraftApp) -> ArrangeSpace<DocId> {
-    let area = app.last_canvas_rect;
+    // The framework places a new window on the desktop and cascades within this area, while the document area is a
+    // rect of the app window's own points: move it across by where the app window stands.
+    let area = app.last_canvas_rect.translate(desktop_origin(app).to_vec2());
     let step = craft::ui::style::StyleCx::with_root(app.ctx(), |cx| cx.tokens.size.window.cascade);
     ArrangeSpace::new(area, area.size() * 0.5, step, app.session.active().map(|st| st.doc.id))
 }
@@ -102,7 +126,7 @@ fn float_in_window(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> 
     };
     let position = match p.get("position") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(screen_position(v).ok_or("position must be [x, y] in points")?),
+        Some(v) => Some(screen_position(v, app).ok_or("position must be [x, y] in points")?),
     };
     let space = space(app);
     // A document alone in a floating window keeps the window where it is.
