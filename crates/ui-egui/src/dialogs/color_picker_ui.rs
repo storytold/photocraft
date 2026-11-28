@@ -476,6 +476,9 @@ pub(crate) mod live_preview;
 mod tests;
 
 #[cfg(test)]
+mod shortcut_tests;
+
+#[cfg(test)]
 mod screen_button_tests;
 
 #[cfg(test)]

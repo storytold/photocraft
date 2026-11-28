@@ -7,6 +7,8 @@
 
 /// Shell commands: id, label, menu path, default shortcut.
 pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
+    ("color.picker.foreground", "Color Picker (Foreground Color)", &["Tools"], None),
+    ("color.picker.background", "Color Picker (Background Color)", &["Tools"], None),
     ("layer.selectUnderCursor", "Select Layer Under Cursor", &[], None),
     ("ui.symmetryTransform", "Transform Symmetry", &[], None),
     // Right-click the options bar's tool icon (#2825); `tool.resetAll` asks first.
