@@ -391,8 +391,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             .flatten();
         let overlay = OverlayPrep::new(app, ctx, idx, output, live.as_ref());
         // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview), nor while the Crop
-        // tool hides everything outside its box (Show Cropped Area off).
-        let edge = border == PageBorder::Line && !crate::crop_ui::shows_beyond_canvas(app) && !crate::crop_ui::hides_canvas_edge(app);
+        // tool hides everything outside its box (Show Cropped Area off). Pattern Preview always outlines it, whatever the
+        // Canvas Border preference: among the copies the rule is the only mark of where the tile ends.
+        let edge = (border == PageBorder::Line || pattern) && !crate::crop_ui::shows_beyond_canvas(app) && !crate::crop_ui::hides_canvas_edge(app);
         let region = crate::crop_ui::shows_beyond_canvas(app).then(|| crate::crop_ui::frame(app)).flatten().map(|frame| {
             let r = frame.turned_bounds();
             PixelRect::new(r.x0.floor() as i32, r.y0.floor() as i32, r.x1.ceil() as i32, r.y1.ceil() as i32)
