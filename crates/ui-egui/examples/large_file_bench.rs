@@ -14,6 +14,7 @@
 //! to this binary) and kept for the next run; `--clean` removes them afterwards. Each row also
 //! records the peak resident memory of its opens. Needs about 30 GB of memory for the PSB.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

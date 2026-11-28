@@ -1,5 +1,6 @@
 use craft::behavior::PixelSize;
 use craft::ui::patterns::form_dialogs::DocumentOptions;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::{
     DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, file_open, jobs_ui, json, notices, open_prompt, plain_raster,
@@ -86,7 +87,6 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
-        let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
@@ -121,6 +121,12 @@ impl PhotocraftApp {
             let (doc, warnings) = import(name, bytes, &opts)?;
             (doc, warnings, false)
         };
+        // Decode under the source name; only a successfully opened template becomes untitled.
+        let opened_name = self.open_name(name);
+        if opened_name != name {
+            doc.name = opened_name.clone();
+        }
+        let name = &opened_name;
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -129,7 +135,7 @@ impl PhotocraftApp {
         let warnings = file_open::with_missing_fonts_of(&doc, warnings);
         // A developed raw has no embedded profile to ask about.
         let developed = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-        let question = self.session.color.open_question(&doc).filter(|_| !developed);
+        let question = self.session.color().open_question(&doc).filter(|_| !developed);
         let wants_raw = camera_raw_ui::wants_open_dialog(self, &warnings);
         open_prompt::arrive(
             self,

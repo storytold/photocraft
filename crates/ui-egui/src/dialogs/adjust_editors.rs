@@ -10,6 +10,7 @@
 //! The function reads no input and drains no queue: a second pass in one frame shows the value as the first left it and
 //! reports only its own events and asks.
 
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 use craft::behavior::{EditEvent, EditEvents, Mixed};
@@ -17,8 +18,8 @@ use craft::color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft::draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMapOutput};
 use craft::imaging::ui::adjust::{
     AdjustDialogCx, AdjustField, AdjustSliders, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast, BrightnessContrastEditor, ChannelMixer,
-    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsPanel, PhotoFilter,
-    PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
+    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsPanel,
+    PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
@@ -173,6 +174,8 @@ pub struct AdjustOut {
     pub ask: Option<AdjustAsk>,
     /// The pass's edit events of the value, in order, with their gesture ids and phases.
     pub edit: EditEvents<AdjustValue>,
+    /// The tone Color Balance shows after the pass, for a host that keeps it; `None` for the other kinds.
+    pub tone: Option<ColorBalanceTone>,
 }
 
 /// What the editor function reads, built once when the adjustment opens.
@@ -188,13 +191,14 @@ pub struct EditorSetup {
     pub gradients: Vec<GradientGroup>,
     /// The current foreground and background colours ([`swatches`]), for the host's colour requests.
     pub swatches: [[f32; 3]; 2],
-    /// The tone Color Balance shows first; `None` keeps the editor's default (Midtones).
+    /// The tone Color Balance shows, for a host that keeps it (it stores [`AdjustOut::tone`]); `None` leaves the
+    /// tone to the editor (Midtones at first).
     pub tone: Option<ColorBalanceTone>,
     /// The Smart Filter the dialog edits is not reachable from the active document: the editor shows no controls.
     pub stale: bool,
-    /// The clipping display the Levels editor reported on the pass before: the dialog's display changes when the editor's
-    /// report does (an Alt-held thumb), so a display set from outside (automation) stays until the editor next reports.
-    pub reported_clipping: std::cell::Cell<Option<craft::imaging::ui::adjust::LevelsClip>>,
+    /// The last clipping report from the Levels editor. This is shared across the per-pass setup clones so a
+    /// release report clears the overlay while an automation-set value remains until the editor reports a change.
+    pub reported_clipping: Arc<std::sync::Mutex<Option<LevelsClip>>>,
 }
 
 impl Default for EditorSetup {
@@ -207,14 +211,18 @@ impl Default for EditorSetup {
             swatches: [[0.0; 3], [1.0; 3]],
             tone: None,
             stale: false,
-            reported_clipping: Default::default(),
+            reported_clipping: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
 
 /// The edit events of one editor lifted onto the value.
 fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOut {
-    AdjustOut { ask: None, edit: events.map(wrap) }
+    AdjustOut { ask: None, edit: events.map(wrap), tone: None }
+}
+
+fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: bool) -> BrightnessContrast {
+    if reset && value.legacy != previous_legacy { BrightnessContrast::new(0.0, 0.0, value.legacy) } else { value }
 }
 
 /// Shows the editor of `kind` over `value` for one pass.
@@ -222,8 +230,11 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
     let context = cx.context;
     match (kind, value) {
         ("brightnessContrast", AdjustValue::BrightnessContrast { value }) => {
-            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(context).show(ui);
-            lifted(out.events, |value| AdjustValue::BrightnessContrast { value })
+            let legacy = value.legacy;
+            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(&mut *value)).context(context).show(ui);
+            let reset = context.is_dialog();
+            *value = reset_legacy_toggle(*value, legacy, reset);
+            lifted(out.events.map(|value| reset_legacy_toggle(value, legacy, reset)), |value| AdjustValue::BrightnessContrast { value })
         }
         ("levels", AdjustValue::Levels { levels }) => {
             let mut panel = LevelsPanel::new("Levels", Bind::bound(levels), setup.channels.clone())
@@ -238,7 +249,18 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 panel = panel.pickers_unavailable();
             }
             let out = panel.show(ui);
-            if setup.reported_clipping.replace(out.clipping) != out.clipping {
+            // The panel reports `Some` only while Alt-dragging an input end and `None` as
+            // soon as that gesture ends. Keep the previous report in shared setup state:
+            // setup is cloned for each pass, and a per-clone Cell loses the release edge.
+            let changed = setup.reported_clipping.lock().ok().map(|mut previous| {
+                if *previous == out.clipping {
+                    false
+                } else {
+                    *previous = out.clipping;
+                    true
+                }
+            });
+            if changed != Some(false) {
                 *cx.clipping = out.clipping;
             }
             lifted(out.edit, |levels| AdjustValue::Levels { levels })
@@ -269,7 +291,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 *curves = converted.clone();
                 edit.push(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: converted }, Arc::from("Curves Mode"), None));
             }
-            AdjustOut { ask: None, edit }
+            AdjustOut { ask: None, edit, tone: None }
         }
         ("exposure", AdjustValue::Exposure { values }) => {
             let fields = AdjustField::exposure(&Env::of(ui).words::<AdjustWords>());
@@ -287,7 +309,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             lifted(out.events, |values| AdjustValue::Posterize { values })
         }
         ("hueSaturation", AdjustValue::HueSaturation { value }) => {
-            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).context(context).show(ui);
+            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).adjusted(&values::hue_saturation_adjusted).context(context).show(ui);
             lifted(out.edit.events, |value| AdjustValue::HueSaturation { value })
         }
         ("colorBalance", AdjustValue::ColorBalance { value }) => {
@@ -296,16 +318,16 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 editor = editor.tone(tone);
             }
             let out = editor.show(ui);
-            lifted(out.edit.events, |value| AdjustValue::ColorBalance { value })
+            AdjustOut { tone: Some(out.tone), ..lifted(out.edit.events, |value| AdjustValue::ColorBalance { value }) }
         }
         ("blackWhite", AdjustValue::BlackWhite { value }) => {
             let out = BlackWhiteEditor::new("Black & White", Bind::bound(value)).context(context).show(ui);
             let ask = if out.auto { Some(AdjustAsk::Auto) } else { out.pick_color.map(AdjustAsk::PickColor) };
-            AdjustOut { ask, edit: out.edit.events.map(|value| AdjustValue::BlackWhite { value }) }
+            AdjustOut { ask, edit: out.edit.events.map(|value| AdjustValue::BlackWhite { value }), tone: None }
         }
         ("photoFilter", AdjustValue::PhotoFilter { value }) => {
             let out = PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).context(context).show(ui);
-            AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }) }
+            AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }), tone: None }
         }
         ("channelMixer", AdjustValue::ChannelMixer { value }) => {
             let out = ChannelMixerEditor::new("Channel Mixer", Bind::bound(value)).context(context).show(ui);
@@ -339,7 +361,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                     AdjustAsk::PickColor(request)
                 })
             };
-            AdjustOut { ask, edit }
+            AdjustOut { ask, edit, tone: None }
         }
         ("selectiveColor", AdjustValue::SelectiveColor { value }) => {
             let out = SelectiveColorEditor::new("Selective Color", Bind::bound(value)).context(context).show(ui);
@@ -434,7 +456,7 @@ pub fn gradient_presets(app: &PhotocraftApp) -> Vec<GradientGroup> {
         StopColor::Rgb(rgb) => *rgb,
     };
     app.session
-        .presets
+        .presets()
         .gradients
         .iter()
         .map(|group| {
@@ -481,6 +503,27 @@ mod tests {
         let mut map = from_params("gradientMap", &json!({}), &ValueCx::new(ColorMode::Rgb, json!({}))).unwrap();
         assert!(answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}1"), Srgba::rgb(0.0, 1.0, 0.0)));
         assert!(!answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}9"), Srgba::BLACK), "no such stop");
+    }
+
+    /// Toggling Use Legacy in the Brightness/Contrast dialog starts both sliders over at 0 in the
+    /// new mode; an edit that keeps the mode, and the Properties panel (no reset), keep the values.
+    #[test]
+    fn toggling_use_legacy_in_the_dialog_resets_brightness_and_contrast() {
+        for legacy in [false, true] {
+            let toggled = BrightnessContrast::new(40.0, -80.0, !legacy);
+            assert_eq!(reset_legacy_toggle(toggled, legacy, true), BrightnessContrast::new(0.0, 0.0, !legacy));
+            assert_eq!(reset_legacy_toggle(toggled, legacy, false), toggled, "the Properties panel keeps its values");
+            let kept = BrightnessContrast::new(40.0, -80.0, legacy);
+            assert_eq!(reset_legacy_toggle(kept, legacy, true), kept, "an edit in the same mode is kept");
+        }
+    }
+
+    #[test]
+    fn levels_clipping_report_survives_the_per_pass_setup_clone() {
+        let setup = EditorSetup::default();
+        let pass = setup.clone();
+        *setup.reported_clipping.lock().unwrap() = Some(LevelsClip::Shadows);
+        assert_eq!(*pass.reported_clipping.lock().unwrap(), Some(LevelsClip::Shadows));
     }
 }
 

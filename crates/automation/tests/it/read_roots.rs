@@ -1,5 +1,6 @@
 //! Real-document regressions for ordered read roots and independent write authority.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::path::{Path, PathBuf};
 
 use photocraft_automation::{AuthorizedWorkspace, Headless, files};
@@ -286,8 +287,8 @@ fn multiple_roots_do_not_grant_ambient_commands_or_nested_action_file_access() {
     let error = headless.command_run("file.saveACopy", json!({"path": target})).unwrap_err().to_string();
     assert!(error.contains("ambient filesystem paths"), "{error}");
     // A writable destination still cannot be reached through an ambient engine command.
-    headless.session.actions.list.push(Action::new("Write work", vec![ActionStep::new("file.saveACopy", json!({"path": target}))])).unwrap();
-    headless.session.actions.list.push(Action::new("Nested write", vec![ActionStep::new("actions.play", json!({"action": "Write work"}))])).unwrap();
+    headless.session.actions_mut().list.push(Action::new("Write work", vec![ActionStep::new("file.saveACopy", json!({"path": target}))])).unwrap();
+    headless.session.actions_mut().list.push(Action::new("Nested write", vec![ActionStep::new("actions.play", json!({"action": "Write work"}))])).unwrap();
     let played = headless.command_run("actions.play", json!({"action": "Nested write"})).unwrap();
     assert!(played["failed"].to_string().contains("ambient filesystem paths"), "{played}");
     assert_eq!(snapshot(&mut headless), before);

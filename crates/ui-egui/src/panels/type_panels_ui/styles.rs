@@ -64,8 +64,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool) {
         Some(TextStyleAction::ClearOverride) => {
             super::run(app, &format!("{prefix}.clearOverride"), tgt.clone());
         }
-        Some(TextStyleAction::Redefine) => {
-            super::run(app, &format!("{prefix}.redefine"), tgt.clone());
+        Some(TextStyleAction::Redefine(id)) => {
+            let mut p = tgt.clone();
+            p["id"] = json!(id);
+            super::run(app, &format!("{prefix}.redefine"), p);
         }
         Some(TextStyleAction::New { from_selection, .. }) => {
             let mut p = tgt.clone();

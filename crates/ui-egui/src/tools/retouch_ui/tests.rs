@@ -287,7 +287,7 @@ fn dab_tools_send_their_bar_values() {
             let mut app = app();
             stripes(&mut app, 4, "pixels");
             app.run("layer.new.layer", json!({})).unwrap();
-            *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
+            *app.ui.tool_options.sample_all.slot_mut(tool).unwrap() = all;
             drag(&mut app, tool);
             let a = active(&app).surface().unwrap().rgba(30, 30)[3];
             assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
@@ -301,7 +301,7 @@ fn dab_tools_send_their_bar_values() {
         for t in
             [Tool::MagicWand, Tool::QuickSelection, Tool::ObjectSelection, Tool::PaintBucket, Tool::MagicEraser, Tool::SpotHealing, Tool::Patch, Tool::Remove]
         {
-            *others.slot(t).unwrap() = true;
+            *others.slot_mut(t).unwrap() = true;
         }
         app.ui.tool_options.sample_all = others;
         assert!(!app.ui.tool_options.sample_all.get(tool));
@@ -759,7 +759,7 @@ fn subset_remove_uses_the_existing_layer_without_losing_the_saved_new_layer_opti
     assert_eq!(app.session.active().unwrap().doc.walk().len(), layers);
     assert!(app.ui.tool_options.remove_new_layer);
     app.run("channel.target", json!({"channel":"composite"})).unwrap();
-    assert_eq!(remove_params(&app.ui.tool_options, true)["newLayer"], json!(true));
+    assert_eq!(remove_params(&app.ui.tool_options, true, false)["newLayer"], json!(true));
 }
 
 #[test]
@@ -833,4 +833,39 @@ fn an_empty_clone_source_slot_refuses_to_paint() {
     app.run("cloneSource.select", json!({"index": 1})).unwrap();
     assert!(app.ui.clone_source.is_some(), "the old ⌥-click point is still remembered");
     assert!(crate::retouch_ui::clone_params(&app).is_none());
+}
+
+/// #13096: a Red Eye press outside the selection does nothing and says nothing, as in Photoshop:
+/// no status message, no error, no History state and no pixel change.
+#[test]
+fn a_red_eye_press_outside_the_selection_is_silent() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600, "mode": "rgb", "depth": 8})).unwrap();
+    app.run("edit.fill", json!({"color": "#c08a68"})).unwrap();
+    for cx in [200, 500] {
+        for (r, color) in [(40, "#ffffff"), (30, "#d22828")] {
+            app.run("select.rect", json!({"x": cx - r, "y": 200 - r, "width": 2 * r, "height": 2 * r, "ellipse": true})).unwrap();
+            app.run("edit.fill", json!({"color": color})).unwrap();
+        }
+    }
+    // The left half of eye B: x 450–499. A press at x 500.0 lands on pixel 499, so press at 500.5.
+    app.run("select.rect", json!({"x": 450, "y": 0, "width": 50, "height": 600})).unwrap();
+    app.ui.tool = Tool::RedEye;
+    app.ui.status.clear();
+    app.ui.status_error = false;
+    let snapshot = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        (st.history.past_len(), active(app).surface().unwrap().read_region(st.doc.bounds()))
+    };
+    let (states, pixels) = snapshot(&app);
+    gesture(&mut app, &[[500.5, 200.5]]);
+    assert_eq!(app.ui.status, "", "no status message");
+    assert!(!app.ui.status_error);
+    let (after_states, after_pixels) = snapshot(&app);
+    assert_eq!(after_states, states, "no History state");
+    assert!(after_pixels == pixels, "no pixel change");
+    // A press inside the selection still corrects the left half.
+    gesture(&mut app, &[[490.5, 200.5]]);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(snapshot(&app).0, states + 1);
 }

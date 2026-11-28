@@ -21,6 +21,14 @@ use super::sampling;
 use super::tools::{FamilyTool, ToolScope};
 use crate::PhotocraftApp;
 
+#[cfg(test)]
+#[path = "../eyedropper_cmyk_tests.rs"]
+mod cmyk_tests;
+
+#[cfg(test)]
+#[path = "other_precise_cursor_tests.rs"]
+mod other_precise_cursor_tests;
+
 /// The gesture's flags, kept in `CanvasTools::eyedropper`.
 #[derive(Debug, Default)]
 pub(crate) struct EyedropperState {
@@ -35,10 +43,13 @@ pub(crate) struct PcEyedropper<'a> {
     scope: &'a ToolScope<'a>,
     state: &'a mut EyedropperState,
     inner: EyedropperTool<'a>,
+    native: std::rc::Rc<std::cell::Cell<Option<[f32; 4]>>>,
     /// Runs as the Alt stand-in of a painting tool.
     stand_in: bool,
     /// Runs as a shape tool's Alt stand-in: a pick also sets the tool's Fill.
     shape_fill: bool,
+    /// The named Eyedropper uses a target for the Precise Other Cursors preference.
+    precise_target: bool,
 }
 
 /// The Eyedropper tool, for `Tool::Eyedropper`.
@@ -63,12 +74,28 @@ impl<'a> PcEyedropper<'a> {
             let precise = app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise;
             (app.ui.tool_options.eyedropper, Srgba::rgb(r, g, b), precise, shape_alt_sets_fill(app.ui.tool))
         });
-        // Preferences › Cursors › Other Cursors = Precise wants the plain crosshair, so no ring.
+        // The sampling ring is the colour preview while held, separate from the pointer.
         options.show_ring &= !precise;
+        let native = std::rc::Rc::new(std::cell::Cell::new(None));
+        let sampled_native = native.clone();
         let sample = move |at: [f64; 2], size: SampleSize, source: SampleSource| {
-            scope.with_app(|app| sampling::pick(app, at, size, source)).map(|c| Srgba::rgb(c[0], c[1], c[2]))
+            scope
+                .with_app(|app| {
+                    let picked = sampling::native_pick(app, at, size, source);
+                    sampled_native.set(picked.map(|(_, inks)| inks));
+                    picked.map(|(rgb, _)| rgb).or_else(|| sampling::pick(app, at, size, source))
+                })
+                .map(|c| Srgba::rgb(c[0], c[1], c[2]))
         };
-        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), stand_in, shape_fill: stand_in && shape_fill }
+        PcEyedropper {
+            scope,
+            state,
+            inner: EyedropperTool::new(options, sample).foreground(foreground),
+            native,
+            stand_in,
+            shape_fill: stand_in && shape_fill,
+            precise_target: precise && !stand_in,
+        }
     }
 
     /// Writes the newest pick to its swatch; as a shape tool's stand-in, also makes the tool's Fill
@@ -78,8 +105,13 @@ impl<'a> PcEyedropper<'a> {
         let key = if !self.stand_in && pick.background { "background" } else { "foreground" };
         let c = pick.color;
         let shape_fill = self.shape_fill;
+        let inks = self.native.get();
         self.scope.with_app(|app| {
-            if app.run("tools.setColors", json!({ key: [c.r, c.g, c.b, 1.0] })).is_ok() && shape_fill {
+            let mut params = json!({ key: [c.r, c.g, c.b, 1.0] });
+            if let Some(inks) = inks {
+                params[format!("{key}Cmyk")] = json!(inks);
+            }
+            if app.run("tools.setColors", params).is_ok() && shape_fill {
                 app.ui.tool_options.shape_fill = true;
                 app.ui.tool_options.shape_fill_gradient = None;
             }
@@ -158,8 +190,10 @@ impl CanvasTool for PcEyedropper<'_> {
         self.inner.paint(draw, cx);
     }
 
-    /// `EyedropperTool::cursor`: the pipette, the precise crosshair with Caps Lock or the preference.
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if self.precise_target && cx.precise() {
+            return super::cursor_policy::sample_target();
+        }
         self.inner.cursor(cx)
     }
 

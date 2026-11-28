@@ -36,10 +36,11 @@ use defaults::apply;
 use defaults::{default_style_params, default_styles, shown_scale};
 pub use defaults::{foreground_changed, open_color_picker};
 pub(crate) use defaults::{formatting_params, target, target_text};
-pub(crate) use editing::commit_before_selecting;
 pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left};
+pub(crate) use editing::{commit_before_selecting, focus_editor};
 #[cfg(test)]
 pub(crate) use editing::{step_char_metric, toggle_char_style, toggle_hyphenate};
+pub(crate) use fonts::families_key;
 #[cfg(test)]
 use fonts::preview_text;
 pub use fonts::{families, style_label, styles, warm_fonts};
@@ -54,7 +55,7 @@ pub(crate) use panel::toggle_opentype;
 pub use panel::{character_panel, type_properties};
 #[cfg(test)]
 pub(crate) use pointer::{PathClick, path_target};
-pub(crate) use pointer::{TypeState, box_shape, drain, tool};
+pub(crate) use pointer::{TypeSnapshot, TypeState, box_shape, create_layer, create_params, drain, tool};
 pub(crate) use values::doc_unit;
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
@@ -137,3 +138,6 @@ mod mask_escape_tests;
 
 #[cfg(test)]
 mod unchanged_edit_history_tests;
+
+#[cfg(test)]
+mod vertical_mask_alt_drag_tests;

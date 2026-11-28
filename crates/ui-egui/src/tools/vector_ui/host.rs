@@ -59,7 +59,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
     if super::shapes::is_shape_tool(tool) {
         let (sides, ratio) = match tool {
             Tool::Triangle => (3, 1.0),
-            Tool::Star => (5, 0.5),
+            Tool::Star => (o.star_points.clamp(3, 20), 0.5),
             _ => (o.polygon_sides, 1.0),
         };
         let mut options = ShapeDragOptions::new(super::kind_of(tool))
@@ -96,7 +96,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             // ⌘ makes the pointer Direct Selection: the draft is drawn and keeps its keys, but takes no presses.
             // A refused draft of another document waits for its explicit retry: no press adds to it (`cancel_stale`).
             let stale = pen.is_some_and(|p| p.commit_failed && p.owner.as_ref().is_some_and(|o| !o.valid(app)));
-            let sensing = !craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd && !stale;
+            let sensing = !craft::ui::runtime::pointer::mods(app.ctx()).cmd && !stale;
             let idle = pen.is_none_or(|p| p.draft.knots.is_empty());
             let carry = if curvature && idle { pen::carry_on(app) } else { None };
             state
@@ -146,16 +146,17 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     apply_pen(app, events);
     // A live shape layer takes the draft's anchors once a press is over (a release, or a key that changed the draft):
     // a drag's updates make no History steps of their own (#12909).
-    let pointer = craft::ui::runtime::pointer::frame(app.ctx());
+    let presses = craft::ui::runtime::pointer::press_state(app.ctx());
     let changed = app.ui.pen.as_ref().map(|p| &p.draft) != before.as_ref();
-    if pointer.buttons.is_empty() && (changed || pointer.release.is_some()) {
+    if presses.buttons.is_empty() && (changed || presses.release.is_some()) {
         pen::sync_live_layer_from_draft(app);
+        pen::sync_live_path_from_draft(app);
     }
     end_for_other_tool(app);
     for event in state.shapes.take_events() {
         match event {
             ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => {
-                let mods = craft::ui::runtime::pointer::frame(app.ctx()).mods;
+                let mods = craft::ui::runtime::pointer::mods(app.ctx());
                 super::shapes::finish_drag(app, state.shapes.kind(), &after, mods);
             }
             ShapeDragEvent::Click { at, kind, .. } => {
@@ -214,10 +215,25 @@ pub(crate) fn remove_last(app: &mut PhotocraftApp) -> bool {
         return false;
     }
     let Some(pen) = app.ui.pen.as_ref() else { return false };
+    // A live draft with no anchors of its own has nothing of its own for Undo to take: its path already holds what was
+    // drawn, so the draft simply goes and History takes the real step instead, as the tool's own EmptyDraft end does
+    // (#12890).
+    if (pen.live_layer || pen.live_path) && pen.draft.knots.is_empty() {
+        drop_draft(app);
+        return false;
+    }
     // A live shape layer's anchors are History steps (#12909): Undo takes back the last one the layer took. Anchors it
-    // refused are the draft's alone, and the Pen takes those back first, one by one.
-    if pen.live_layer && !pen::live_anchors_pending(app) {
-        return pen::undo_live_step(app);
+    // refused are the draft's alone, and the Pen takes those back first, one by one. A live Work Path is the same, one
+    // step per click (#12890).
+    let only_the_pick_up = pen.live_path && pen.kept > 0 && pen.draft.knots.len() <= pen.kept;
+    if (pen.live_layer || pen.live_path) && !pen::live_anchors_pending(app) {
+        let undone = pen::undo_live_step(app);
+        if only_the_pick_up {
+            // Past the anchors its clicks added, Undo takes the "Pick-up Path" step back too and the draft goes with
+            // it, the path staying as it was (#6593, #12890).
+            drop_draft(app);
+        }
+        return undone;
     }
     if pen.resumes.as_ref().is_some_and(|r| pen.draft.knots.len() <= r.was.knots.len()) {
         drop_draft(app);
@@ -364,9 +380,11 @@ fn set_draft(app: &mut PhotocraftApp, value: EditSubpath) {
             ds.segment = ds.segment.filter(|s| s[1] + 1 < n);
         }
     }
-    // In Shape mode the first anchor makes the shape layer at once (#12909).
+    // In Shape mode the first anchor makes the shape layer at once (#12909); in Path mode it makes the Work Path, which
+    // takes every further click as a History step of its own (#12890).
     if first {
         pen::start_live_shape(app);
+        pen::start_live_path(app);
     }
 }
 
@@ -414,8 +432,10 @@ fn end_for_other_tool(app: &mut PhotocraftApp) {
 fn submit(app: &mut PhotocraftApp) {
     let work_path = |app: &PhotocraftApp| app.session.active().and_then(|st| st.doc.work_path.clone());
     let curvature = app.ui.pen.as_ref().is_some_and(|p| p.curvature);
+    // A live Work Path (#12890) already holds the finished path: ↩ adds no step, so the change to compare with is none.
+    let live = app.ui.pen.as_ref().is_some_and(|p| p.live_path);
     let before = work_path(app);
-    if pen::pen_commit(app, false) && !curvature && work_path(app) != before {
+    if pen::pen_commit(app, false) && !curvature && (live || work_path(app) != before) {
         pen::deselect_finished_work_path(app);
     }
 }
@@ -460,4 +480,10 @@ fn resume(app: &mut PhotocraftApp, key: u64, knot: KnotRef) {
     pen.curvature = app.ui.tool == Tool::CurvaturePen;
     app.ui.pen_doc = app.session.active().map(|st| st.doc.id);
     app.ui.pen = Some(pen);
+    // On the Work Path that press is the step "Pick-up Path", and the path goes on being drawn live (#12890).
+    pen::pick_up_live_path(app);
 }
+
+#[cfg(test)]
+#[path = "star_alt_eyedropper_tests.rs"]
+mod star_alt_eyedropper_tests;

@@ -1,6 +1,6 @@
 use super::{
     PhotocraftApp, canvas, discard_ui, gpu_canvas, gpu_status, i18n, jobs_ui, last_brush, monitor_status, native_menu, notices, paint_mouse, panels, prefs_ui,
-    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
+    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds,
 };
 use craft::ui::contract::Bind;
 use craft::ui::runtime::env::WindowKey;
@@ -90,12 +90,11 @@ impl PhotocraftApp {
         transform_tool::end_if_left(self);
         prefs_ui::tick(self, ctx, std::time::Instant::now());
         updates_ui::tick(self);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::text::installed_fonts::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
-        // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
-        // maximize it into the work area once (#315).
-        work_area::fit_window(ctx);
         // The runtime's close path, which asks PhotoCraft when the window was asked to close.
         craft::ui::shell::embed::logic(ctx, || discard_ui::close_decision(self));
         // A component refused its input (a zoom field turning a Tab or Alt away, a dialog field):
@@ -127,8 +126,9 @@ impl PhotocraftApp {
         self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
-        // The main window's file drops reach `open_dropped` through the document area's drop
-        // target, and the runtime repaints while files hover.
+        // The main window's file drops reach `open_dropped` through the tab strip's drop target, or
+        // the document area's window-wide one (`canvas::window_drop`), and the runtime repaints
+        // while files hover.
         crate::file_open::log_drag_over(ctx, ctx.input(|i| i.raw.hovered_files.len()));
         self.place_next_dropped(ctx);
         #[cfg(not(target_arch = "wasm32"))]
@@ -154,8 +154,6 @@ impl PhotocraftApp {
         // A pass whose input carries an injected step acts for the automation client.
         self.automation_input = WindowHost::of(&ctx).injected_pass();
         self.hover_layer = None;
-        // The contextual task bar reports itself again if this frame draws it (#10890).
-        self.ui.task_bar_shown = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         let t0 = gpu_canvas::now_ms();
         self.perf.stage.ui_start(t0, frame.info().cpu_usage);
@@ -231,10 +229,12 @@ impl PhotocraftApp {
         AppShell::new(WindowKey::main())
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
-            .title_bar_if(menu_bar, |ui, _cx, app| panels::region_versions::show_title_bar(app, ui))
-            .options_bar(options_bar && !home, |ui, _cx, app| panels::region_versions::show_options_bar(app, ui))
-            .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
+            .title_bar_if(menu_bar, |app| Some(panels::region_versions::title_bar(app)), |ui, _cx, app| panels::title_bar(app, ui))
+            .options_bar(options_bar && !home, |app| Some(panels::region_versions::options_bar(app)), |ui, _cx, app| panels::options_bar(app, ui))
+            .status(status_bar && !home, |app| Some(panels::region_versions::status_bar(app)), |ui, _cx, app| panels::status_bar(app, ui))
             .body(|ui, cx, app| {
+                // The body runs every pass; the dock's columns and the document area replay while their versions hold.
+                canvas::document_area::each_pass(app, ui.ctx());
                 if home {
                     canvas::document_area(app, ui);
                 } else {

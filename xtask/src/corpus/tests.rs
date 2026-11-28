@@ -1,13 +1,20 @@
 use super::*;
 
 #[test]
+fn corpus_rejects_unknown_arguments_before_fetching() {
+    for args in [vec!["--psd-tool"], vec!["--all", "--psd-tool"], vec!["--psd-tool", "--all"]] {
+        assert_eq!(cmd(&args), Err("corpus: unknown argument `--psd-tool`".into()));
+    }
+}
+
+#[test]
 fn changed_atn_root_triggers_corpus_tests() {
-    assert!(is_critical("crates/engine/src/cmd/atn_cmds.rs"));
+    assert!(is_critical("crates/engine-core/src/cmd/atn_cmds.rs"));
 }
 
 #[test]
 fn changed_atn_modules_trigger_corpus_tests() {
-    for path in ["crates/engine/src/cmd/atn_cmds/steps_render.rs", "crates/engine/src/cmd/atn_cmds/tests.rs"] {
+    for path in ["crates/engine-core/src/cmd/atn_cmds/steps_render.rs", "crates/engine-core/src/cmd/atn_cmds/tests.rs"] {
         assert!(is_critical(path), "{path}");
     }
 }
@@ -15,10 +22,10 @@ fn changed_atn_modules_trigger_corpus_tests() {
 #[test]
 fn similarly_named_atn_siblings_do_not_trigger_corpus_tests() {
     for path in [
-        "crates/engine/src/cmd/atn_cmds_extra.rs",
-        "crates/engine/src/cmd/atn_cmds_old/tests.rs",
-        "crates/engine/src/cmd/atn_cmds.rs.bak",
-        "crates/engine/src/cmd/atn_cmds",
+        "crates/engine-core/src/cmd/atn_cmds_extra.rs",
+        "crates/engine-core/src/cmd/atn_cmds_old/tests.rs",
+        "crates/engine-core/src/cmd/atn_cmds.rs.bak",
+        "crates/engine-core/src/cmd/atn_cmds",
     ] {
         assert!(!is_critical(path), "{path}");
     }
@@ -40,7 +47,7 @@ fn existing_critical_sources_still_trigger_corpus_tests() {
 
 #[test]
 fn unrelated_sources_do_not_trigger_corpus_tests() {
-    for path in ["crates/engine/src/jobs.rs", "crates/engine/src/cmd/layer_cmds.rs", "docs/actions.md", "apps/photocraft-web/src/main.rs"] {
+    for path in ["crates/engine-core/src/jobs.rs", "crates/engine-core/src/cmd/layer_cmds.rs", "docs/actions.md", "apps/photocraft-web/src/main.rs"] {
         assert!(!is_critical(path), "{path}");
     }
 }
