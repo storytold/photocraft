@@ -47,7 +47,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 /// The measured case, as PNG and as TIFF: 0.24, 24 × 14.4 px centred on the canvas (188 to 212
-/// across; the box starts on a whole pixel, 143 for the measured 142.8, as every place does).
+/// across; the box keeps the measured 142.8 (#14114), and the pixels start on the whole pixel 143).
 #[test]
 fn a_300_ppi_file_placed_into_72_ppi_comes_in_at_its_physical_size() {
     for name in ["src.png", "src.tif"] {
@@ -56,7 +56,7 @@ fn a_300_ppi_file_placed_into_72_ppi_comes_in_at_its_physical_size() {
         assert!(close(scale, 24.0), "{name}: scale {scale}");
         assert!(close(x0, 188.0) && close(x1, 212.0), "{name}: across {x0}..{x1}");
         assert!(close(x1 - x0, 24.0) && close(y1 - y0, 14.4), "{name}: {}×{}", x1 - x0, y1 - y0);
-        assert!(close(y0, 143.0), "{name}: top {y0}");
+        assert!(close(y0, 142.8), "{name}: top {y0}");
         // The pixels are the resampled 24 × 14.4 (its last row partly covered), not the file's 100 × 60.
         let cache = placed(&s).cache.unwrap().content_bounds();
         assert_eq!((cache.x0, cache.y0, cache.x1, cache.y1), (188, 143, 212, 158), "{name}: rendered pixels");
@@ -77,7 +77,7 @@ fn the_smart_object_keeps_the_full_resolution_contents() {
     }
     let [a, b, c, d, e, f] = so.transform.m;
     assert!(close(a, 0.24) && close(d, 0.24) && close(b, 0.0) && close(c, 0.0), "scaled by 0.24: {:?}", so.transform.m);
-    assert!(close(e, 188.0) && close(f, 143.0), "at 188,143: {:?}", so.transform.m);
+    assert!(close(e, 188.0) && close(f, 142.8), "at 188,142.8: {:?}", so.transform.m);
 
     s.execute("layer.smartObjects.editContents", json!({})).unwrap();
     let contents = &s.active().unwrap().doc;
