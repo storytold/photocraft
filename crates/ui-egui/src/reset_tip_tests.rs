@@ -17,6 +17,8 @@ enum FirstUse {
     /// Its own starting brush (`fresh_brush`); the Pencil and the Eraser keep the previous
     /// opacity (and the Eraser its flow), which `Tip` leaves out.
     Fresh,
+    /// The tool tip with the previous brush's pressure toggle.
+    FreshTip,
     /// Its starting size; everything else from the previous brush.
     SizeOnly,
     /// The previous brush, at the first-use smoothing.
@@ -35,7 +37,7 @@ const ROWS: [(Tool, Option<FirstUse>); 16] = [
     (Tool::Brush, None),
     (Tool::BackgroundEraser, Some(FirstUse::Fresh)),
     (Tool::Healing, Some(FirstUse::Fresh)),
-    (Tool::HistoryBrush, Some(FirstUse::Current)),
+    (Tool::HistoryBrush, Some(FirstUse::FreshTip)),
     (Tool::PatternStamp, Some(FirstUse::Current)),
     (Tool::Remove, Some(FirstUse::SizeOnly)),
     (Tool::Pencil, Some(FirstUse::Fresh)),
@@ -157,6 +159,7 @@ fn each_tool_resets_and_first_uses_its_own_tip() {
         let first_smoothing = starting(&a, other(tool)).smoothing;
         let want = match rule {
             FirstUse::Fresh => starting(&a, tool),
+            FirstUse::FreshTip => Tip { pressure_size: previous.pressure_size, ..starting(&a, tool) },
             FirstUse::SizeOnly => Tip { size: starting(&a, tool).size, smoothing: first_smoothing, ..previous },
             FirstUse::Current => Tip { smoothing: first_smoothing, ..previous },
         };

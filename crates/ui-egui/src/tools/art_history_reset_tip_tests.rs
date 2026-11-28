@@ -104,13 +104,14 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     assert_eq!(tip(&mut app), ART_HISTORY_TIP, "picked after the reset");
 }
 
-/// The other tools' starting tips are checked by `reset_tip_tests`; the History Brush's first use
-/// still takes the current tip, as before.
 #[test]
-fn the_history_brush_first_use_keeps_the_current_tip() {
-    let mut a = app();
-    pick(&mut a, Tool::Pencil);
-    scramble(&mut a);
-    pick(&mut a, Tool::HistoryBrush);
-    assert_eq!(tip(&mut a)[0], 57.0, "History Brush, first use");
+fn history_and_art_history_brush_keep_separate_tips() {
+    let mut app = app();
+    pick(&mut app, Tool::HistoryBrush);
+    assert_eq!(tip(&mut app)[0], 21.0, "History Brush, first use");
+    scramble(&mut app);
+    pick(&mut app, Tool::ArtHistoryBrush);
+    assert_eq!(tip(&mut app), ART_HISTORY_TIP);
+    pick(&mut app, Tool::HistoryBrush);
+    assert_eq!(tip(&mut app)[0], 57.0, "History Brush, second use");
 }
