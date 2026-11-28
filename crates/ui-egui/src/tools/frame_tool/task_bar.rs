@@ -3,7 +3,7 @@
 
 use super::{Target, report, select, selected, visible};
 use crate::PhotocraftApp;
-use crate::state::Tool;
+use crate::state::{TaskBarContext, Tool};
 use craft::behavior::kurbo::Point;
 use craft::ui::buttons::Button;
 use craft::ui::canvas_controls::TaskBar;
@@ -27,6 +27,9 @@ pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, at: egui::Rect) {
     let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
     let anchor = [Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)];
 
+    if let Some(doc) = app.session.active().map(|d| d.doc.id.0) {
+        app.ui.enter_task_bar_context(TaskBarContext::Frame { doc, layer: id.0 });
+    }
     let mut import = false;
     let mut fit = false;
     let shown = TaskBar::new(tl!("Frame"), &anchor, Bind::bound(&mut app.ui.panels.task_bar)).show(ui, at, |ui, _| {
