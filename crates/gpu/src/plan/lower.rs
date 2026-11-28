@@ -1,5 +1,6 @@
 use super::types::Unsupported;
 use super::{Adjustment, BlendMode, Fill, Gradient, Layer, LayerContent, Pattern, StrokePosition, ToneSpace, Transfer, adjust, lut3d_len};
+use photocraft_color::SampleType;
 
 /// Paint source of an effect.
 pub(super) enum Paint<'a> {
@@ -27,6 +28,68 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
     let inv_scale = if s.is_finite() && s > 0.0 { 1.0 / s.max(photocraft_compose::pattern::MIN_PLACEMENT_SCALE) } else { 1.0 };
     let a = f64::from(angle).to_radians();
     Placement { origin, cs: (a.cos(), a.sin()), inv_scale }
+}
+
+/// The Advanced Blending option that keeps `layer` on the CPU compositor, if any. This is
+/// everything `compose::advanced_active` rejects except knockout (`Planner::knocked_out`), Blend
+/// Clipped Layers as Group off (`Planner::clipped_individually`) and Transparency Shapes Layer
+/// off, which the GPU runs itself: the special-eight blends take the content's own alpha as Fill
+/// (`F_SHAPELESS`) and the effects take the whole layer as their shape (`Planner::effects`). A
+/// layer drawn atop its clipping base is still refused for the last one (`clipped_on_cpu`), and
+/// Color Burn, Color Dodge, Vivid Light and Hard Mix with it off in a 16/32-bit document are
+/// refused too (`dividing_shapeless_on_cpu`).
+pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'static str> {
+    let a = &layer.advanced;
+    if a.is_default() {
+        return None;
+    }
+    if dividing_shapeless_on_cpu(layer, depth) {
+        return Some("Transparency Shapes Layer off with Color Burn, Color Dodge, Vivid Light or Hard Mix in a 16/32-bit document");
+    }
+    let fx = photocraft_compose::effects::has_effects(layer);
+    if a.blend_interior && fx {
+        Some("Blend Interior Effects as Group")
+    } else if photocraft_compose::advanced::hides_effects(layer) {
+        Some("Layer / Vector Mask Hides Effects")
+    } else {
+        None
+    }
+}
+
+/// Whether `layer` blends with the special eight taking its own alpha as Fill: Transparency
+/// Shapes Layer off on a non-adjustment layer in one of those modes (`F_SHAPELESS`).
+pub(super) fn shapeless_blend(layer: &Layer) -> bool {
+    !layer.advanced.transparency_shapes && photocraft_compose::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_))
+}
+
+/// Whether `mode`'s result below full Fill divides by a quantity that reaches 0 at full Fill ×
+/// alpha (Color Burn, Color Dodge, Vivid Light, Hard Mix), so a small error in a near-opaque alpha
+/// moves it far. The other special-eight modes are linear in Fill.
+pub(crate) fn fill_divides(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::ColorBurn | BlendMode::ColorDodge | BlendMode::VividLight | BlendMode::HardMix)
+}
+
+/// One of those modes (`fill_divides`) with Transparency Shapes Layer off in a 16/32-bit document.
+/// The GPU holds such content as half floats, which can't keep a near-opaque alpha (65534/65535,
+/// 1 − 2^-12), and the Fill formula amplifies the loss. Half-float accumulation refuses these modes
+/// at any depth (`Compositor::check_accumulation`).
+pub(super) fn dividing_shapeless_on_cpu(layer: &Layer, depth: SampleType) -> bool {
+    depth != SampleType::U8 && fill_divides(layer.blend) && shapeless_blend(layer)
+}
+
+/// The Transparency Shapes Layer off case that keeps a layer drawn atop its clipping base (Blend
+/// Clipped Layers as Group on) on the CPU compositor (`composite_atop_any`, whose behaviour for it
+/// is changing separately), if any. Clipped layers blended individually run on the GPU.
+pub(super) fn clipped_on_cpu(layer: &Layer) -> Option<&'static str> {
+    if layer.advanced.transparency_shapes {
+        None
+    } else if photocraft_compose::effects::has_effects(layer) {
+        Some("Transparency Shapes Layer off with layer effects on a clipped layer")
+    } else if shapeless_blend(layer) {
+        Some("Transparency Shapes Layer off with a Color Dodge, Hard Mix or similar blend mode on a clipped layer")
+    } else {
+        None
+    }
 }
 
 /// (inside width, outside width) of a stroke.

@@ -331,6 +331,15 @@ fn opaque_fill_layers_skip_what_they_cover() {
     translucent.layers[5].content = LayerContent::Fill(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 0.5)));
     assert!(!photocraft_compose::occludes_below(&translucent.layers[5], ColorMode::Rgb));
     assert!(photocraft_compose::occludes_below(&d.layers[5], ColorMode::Rgb));
+    // Clipped layers blended individually may knock out to what is beneath the fill, so the
+    // layers below stay planned; with nothing clipped to the fill they are skipped as before.
+    let start = |d: &Document| plan(d).unwrap().checkpoints.first().map(|c| c.layer_start);
+    let mut individually = d.clone();
+    individually.layers[5].advanced.blend_clipped = false;
+    assert_eq!(start(&individually), Some(0), "a visible clipped layer blending individually keeps the layers below");
+    let mut unclipped = individually.clone();
+    unclipped.layers.pop();
+    assert_eq!(start(&unclipped), Some(5), "nothing clipped to the fill: the layers below are skipped");
 }
 
 #[test]
@@ -384,8 +393,28 @@ fn blend_if_params_pack_every_range_exactly() {
     assert_eq!(&f[0..2], &[0.0, 255.0 * 256.0 + 255.0]);
 }
 
+/// `fill_divides` names exactly the special-eight modes whose result moves far when Fill × alpha
+/// is just below 1, where a half float rounds it to 1.
 #[test]
-fn advanced_blending_falls_back_to_the_cpu() {
+fn fill_divides_names_the_special_eight_modes_ill_conditioned_near_full_fill() {
+    use super::lower::fill_divides;
+    use photocraft_compose::psblend::{blend_rgb_fill, fill_is_special};
+    let near = 1.0 - 2f32.powi(-12);
+    for mode in BlendMode::LAYER_MODES.into_iter().filter(|m| fill_is_special(*m)) {
+        let mut worst = 0.0_f32;
+        for cb in [2f32.powi(-13), 0.25, 0.5, 0.75, 1.0 - 2f32.powi(-13)] {
+            for cs in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let full = blend_rgb_fill(mode, [cb; 3], [cs; 3], 1.0);
+                let below = blend_rgb_fill(mode, [cb; 3], [cs; 3], near);
+                worst = full.iter().zip(below).fold(worst, |w, (a, b)| w.max((a - b).abs()));
+            }
+        }
+        assert_eq!(worst > 0.1, fill_divides(mode), "{mode:?}: {worst}");
+    }
+}
+
+#[test]
+fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     use photocraft_doc::Knockout;
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut l = Layer::raster("ko", d.pixel_format());
@@ -396,23 +425,103 @@ fn advanced_blending_falls_back_to_the_cpu() {
     d.layers[1].advanced.blend_interior = true;
     d.layers[1].advanced.blend_clipped = false;
     assert!(plan(&d).is_ok());
-    d.layers[1].advanced.knockout = Knockout::Deep;
-    assert!(plan(&d).unwrap_err().0.contains("Advanced Blending"));
+    // Knockout, deep or shallow, runs on the GPU; with Transparency Shapes Layer off its shape is
+    // the layer's masks, and a special-eight blend takes the layer's own transparency as Fill.
+    for knockout in [Knockout::Deep, Knockout::Shallow] {
+        d.layers[1].advanced.knockout = knockout;
+        assert!(plan(&d).is_ok(), "{knockout:?}");
+        d.layers[1].advanced.transparency_shapes = false;
+        assert!(plan(&d).is_ok(), "{knockout:?} without Transparency Shapes Layer");
+        d.layers[1].blend = BlendMode::ColorDodge;
+        assert!(plan(&d).is_ok(), "{knockout:?} with a special-eight blend");
+        d.layers[1].blend = BlendMode::Normal;
+        d.layers[1].advanced.transparency_shapes = true;
+    }
+    // Transparency Shapes Layer off runs on the GPU for a layer that isn't clipped to a base: with
+    // a special-eight blend (the pass carries the shapeless flag) and with effects.
+    let mut t = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut shapeless = l.clone();
+    shapeless.advanced.transparency_shapes = false;
+    shapeless.blend = BlendMode::ColorDodge;
+    t.layers.push(shapeless);
+    let p = plan(&t).expect("a special-eight blend without Transparency Shapes Layer");
+    assert!(p.passes.iter().any(|p| p.flags & F_SHAPELESS != 0), "a pass takes the layer's alpha as Fill");
+    t.layers[1].blend = BlendMode::Multiply;
+    let p = plan(&t).expect("a Normal-like mode without Transparency Shapes Layer");
+    assert!(p.passes.iter().all(|p| p.flags & F_SHAPELESS == 0));
+    t.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    assert!(plan(&t).is_ok(), "effects without Transparency Shapes Layer");
+    // Color Burn, Color Dodge, Vivid Light and Hard Mix divide by a quantity that reaches 0 at full
+    // Fill × alpha, which 16/32-bit half-float uploads can't hold near 1: they stay on the CPU
+    // there, while 8 bits and the other special-eight modes plan.
+    t.layers[1].effects.items.clear();
+    let dividing = [BlendMode::ColorBurn, BlendMode::ColorDodge, BlendMode::VividLight, BlendMode::HardMix];
+    for mode in dividing {
+        t.layers[1].blend = mode;
+        assert!(plan(&t).is_ok(), "{mode:?} at 8 bits");
+    }
+    for depth in [SampleType::U16, SampleType::F32] {
+        let mut w = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, depth, Color::WHITE);
+        let mut s = Layer::raster("shapeless", w.pixel_format());
+        s.advanced.transparency_shapes = false;
+        w.layers.push(s);
+        for mode in dividing {
+            w.layers[1].blend = mode;
+            w.layers[1].advanced.transparency_shapes = false;
+            assert!(plan(&w).unwrap_err().0.contains(mode.label()), "{mode:?} without Transparency Shapes Layer at {depth:?}");
+            w.layers[1].advanced.transparency_shapes = true;
+            assert!(plan(&w).is_ok(), "{mode:?} with Transparency Shapes Layer at {depth:?}");
+        }
+        w.layers[1].advanced.transparency_shapes = false;
+        for mode in [BlendMode::LinearBurn, BlendMode::LinearDodge, BlendMode::LinearLight, BlendMode::Difference] {
+            w.layers[1].blend = mode;
+            assert!(plan(&w).is_ok(), "{mode:?} without Transparency Shapes Layer at {depth:?}");
+        }
+    }
+    // Clipped to a base, the same cases stay on the CPU.
+    t.layers[1] = l.clone();
+    let mut c = l.clone();
+    c.clipped = true;
+    c.advanced.transparency_shapes = false;
+    t.layers.push(c);
+    assert!(plan(&t).is_ok(), "a clipped Normal layer");
+    t.layers[2].blend = BlendMode::VividLight;
+    assert!(plan(&t).unwrap_err().0.contains("on a clipped layer"), "a clipped special-eight layer");
+    t.layers[2].blend = BlendMode::Normal;
+    t.layers[2].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    assert!(plan(&t).unwrap_err().0.contains("Transparency Shapes Layer off with layer effects"), "a clipped layer with effects");
     // Inside groups and clipping groups.
     d.layers[1].advanced.knockout = Knockout::None;
     let mut c = l.clone();
     c.clipped = true;
     d.layers.push(c.clone());
-    assert!(plan(&d).is_err(), "clipped layers blended individually");
+    assert!(plan(&d).is_ok(), "clipped layers blended individually");
     d.layers[1].advanced.blend_clipped = true;
     assert!(plan(&d).is_ok());
     d.layers[2].advanced.knockout = Knockout::Shallow;
-    assert!(plan(&d).is_err(), "clipped knockout");
+    assert!(plan(&d).is_ok(), "clipped knockout");
     d.layers.truncate(1);
     let mut inner = l;
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
-    assert!(plan(&d).is_err(), "knockout inside a group");
+    assert!(plan(&d).is_ok(), "knockout inside a group");
+}
+
+/// A knockout builds its deep target fresh and keeps nothing live across stack units, so the
+/// root stack still forms a checkpoint after the knockout layer and after every layer above it.
+#[test]
+fn root_checkpoints_form_after_a_knockout_layer() {
+    use photocraft_doc::Knockout;
+    let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    for (i, knockout) in [Knockout::None, Knockout::Deep, Knockout::Shallow, Knockout::None].into_iter().enumerate() {
+        let mut l = Layer::raster(format!("l{i}"), d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 0.5]);
+        l.advanced.knockout = knockout;
+        l.opacity = 0.6;
+        d.layers.push(l);
+    }
+    let plan = plan(&d).unwrap();
+    assert_eq!(plan.checkpoints.iter().map(|c| c.layer_end).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5]);
 }
 
 /// A chunk-sized texture per live slot: nesting isolated groups keeps every ancestor's slot

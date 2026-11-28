@@ -29,13 +29,15 @@ mod types;
 
 #[cfg(test)]
 use lower::check_gradient_stops;
+pub(crate) use lower::fill_divides;
 pub use lower::{adjustment_on_gpu, adjustment_program, mode_index, stroke_widths};
 use planner::Planner;
 #[cfg(test)]
 use planner::blend_if_params;
 pub use planner::{
-    F_ADD_DIFF, F_ATOP, F_BLEND_IF, F_CHANNELS, F_FIRST, F_GATE, F_HDR, F_KNOCKOUT, F_LAB, F_LAYER_SHAPE, F_NO_LAYER, F_OUTLINE, F_QUANT, F_REL, F_STROKE_OUT,
-    F_TEXT_GAMMA, F_VECTOR, INIT_ALPHA, INIT_COVER, INIT_INSIDE, INIT_OPAQUE, INIT_OUTLINE, INIT_RELATIVE, INIT_SCALE, INIT_VSTROKE, SHAPE_MAP,
+    F_ADD_DIFF, F_ATOP, F_BLEND_IF, F_CHANNELS, F_COVER, F_FIRST, F_GATE, F_HDR, F_KNOCKOUT, F_LAB, F_LAYER_SHAPE, F_MIX_C, F_NO_LAYER, F_OUTLINE, F_QUANT,
+    F_REL, F_SHAPELESS, F_STROKE_OUT, F_TEXT_GAMMA, F_VECTOR, INIT_ALPHA, INIT_COVER, INIT_INSIDE, INIT_OPAQUE, INIT_OUTLINE, INIT_RELATIVE, INIT_SCALE,
+    INIT_VSTROKE, SHAPE_MAP,
 };
 pub use types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
 
@@ -62,7 +64,21 @@ pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
     let root = p.clear();
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.
-    let start = doc.layers.iter().rposition(|l| photocraft_compose::occludes_below(l, doc.mode)).unwrap_or(0);
+    // Clipped layers blended individually can knock out to the backdrop beneath their base, so a
+    // fill with visible ones above it does not hide what is below.
+    let start = doc
+        .layers
+        .iter()
+        .enumerate()
+        .rposition(|(i, l)| {
+            // Only an occluding (unclipped) fill counts the clipped layers above it, so each run is
+            // scanned once.
+            photocraft_compose::occludes_below(l, doc.mode) && {
+                let clipped = doc.layers[i + 1..].iter().take_while(|c| c.clipped).count();
+                !photocraft_compose::advanced::clips_individually(l, &doc.layers[i + 1..i + 1 + clipped])
+            }
+        })
+        .unwrap_or(0);
     let root = p.stack_inner(doc.layers.get(start..).unwrap_or(&doc.layers), root, Some(start))?;
     let plan = p.finish(root);
     // Every slot becomes a chunk-sized texture before the first pass runs: a compact document

@@ -129,8 +129,12 @@ impl Kernel {
 pub enum Role {
     Content,
     Mask,
-    /// A stroked shape's stroke alone (its fill uses `Content`).
+    /// A stroked shape's fill alone; its full content uses `Content`.
+    Fill,
+    /// A stroked shape's stroke alone.
     Stroke,
+    /// A 32-bit base's pixels at full precision, read only by its `F_COVER` record.
+    Coverage,
 }
 
 /// A surface the pass needs on the GPU.

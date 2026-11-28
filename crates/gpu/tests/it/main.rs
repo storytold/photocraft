@@ -31,6 +31,7 @@ fn the_instance_is_made_once() {
     assert_eq!(INSTANCES_MADE.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+mod advanced_blending;
 mod bounded_readback;
 mod camera_raw;
 mod device_loss;
