@@ -247,6 +247,26 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
 /// input known to fail before its action starts still gets a name (reported with its error) but
 /// the next input reuses the number it would have taken.
 pub fn plan_counting(inputs: &[BatchInput], output: &str, format: &str, params: &Value, counts: &dyn Fn(&BatchInput) -> bool) -> Result<Option<Vec<String>>> {
+    naming(output, format, params)?.map(|naming| naming.plan(inputs, counts)).transpose()
+}
+
+/// A checked naming request, so a run can name an input again at another serial index: an input
+/// whose data does not open gives its number to the next input (#14875).
+pub struct Naming {
+    structured: Option<Vec<Value>>,
+    compat: (bool, bool, bool),
+    flat: bool,
+    start: u32,
+    template: String,
+    has_serial: bool,
+    date: Date,
+    calendar: Option<chrono::NaiveDate>,
+    output: String,
+    format: String,
+}
+
+/// The naming request in `params`, or `None` when it keeps the old filenames.
+pub fn naming(output: &str, format: &str, params: &Value) -> Result<Option<Naming>> {
     let structured = components(params)?;
     let compat = compatibility(params)?;
     let flat = match params.get("flatOutput") {
@@ -292,25 +312,66 @@ pub fn plan_counting(inputs: &[BatchInput], output: &str, format: &str, params: 
     } else {
         None
     };
-    let mut outputs = Vec::with_capacity(inputs.len());
-    let mut counted = Vec::with_capacity(inputs.len());
-    let mut index = 0usize;
-    for input in inputs {
+    Ok(Some(Naming {
+        structured: structured.map(<[Value]>::to_vec),
+        compat,
+        flat,
+        start,
+        template: template.to_string(),
+        has_serial,
+        date,
+        calendar,
+        output: output.to_string(),
+        format: format.to_string(),
+    }))
+}
+
+impl Naming {
+    pub fn plan(&self, inputs: &[BatchInput], counts: &dyn Fn(&BatchInput) -> bool) -> Result<Vec<String>> {
+        let mut outputs = Vec::with_capacity(inputs.len());
+        let mut counted = Vec::with_capacity(inputs.len());
+        let mut index = 0usize;
+        for input in inputs {
+            let counts_serial = counts(input);
+            outputs.push(self.name(input, index, counts_serial)?);
+            counted.push(counts_serial);
+            if counts_serial {
+                index += 1;
+            }
+        }
+        // Renaming within the source folder could replace a later input before it is read. Resolve
+        // existing paths so aliases such as `source/./001.png` cannot bypass the check. The default
+        // (no template) path keeps its existing in-place behavior. An input that takes no number
+        // fails before it is opened, so nothing is written to its name.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let sources = input_identities(inputs);
+            for output in outputs.iter().zip(&counted).filter_map(|(output, counts)| counts.then_some(output)) {
+                check_replaces_no_input(&sources, output)?;
+            }
+        }
+        Ok(outputs)
+    }
+
+    /// The output path of `input` when it takes the serial number and letter at `index`. An input
+    /// that takes no number (`counts_serial` false) is named only for its error entry.
+    pub fn name(&self, input: &BatchInput, index: usize, counts_serial: bool) -> Result<String> {
         let BatchInput { path, rel_dir } = input;
-        let counts_serial = counts(input);
-        let serial = match u32::try_from(index).ok().and_then(|index| start.checked_add(index)) {
-            _ if !has_serial => start,
+        let structured = self.structured.as_deref();
+        let serial = match u32::try_from(index).ok().and_then(|index| self.start.checked_add(index)) {
+            _ if !self.has_serial => self.start,
             Some(serial) => serial,
             // An input that takes no number is named only for its error entry: past the last
             // number, it keeps the last one rather than failing the batch.
             None if !counts_serial => u32::MAX,
             None => return Err(bad("startingSerial plus the input count exceeds 4294967295")),
         };
+        let format = self.format.as_str();
         let ext = if format == "same" { super::same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
-        let name = if let (Some(components), Some(calendar)) = (structured, calendar) {
+        let name = if let (Some(components), Some(calendar)) = (structured, self.calendar) {
             expand_components(components, &stem(path), serial, index, &ext, calendar)?
         } else {
-            expand(&parts, &stem(path), &ext, serial, date)
+            expand(&parse(&self.template)?, &stem(path), &ext, serial, self.date)
         };
         if name.is_empty() || name.ends_with(['.', ' ']) {
             return Err(bad("naming must produce a nonempty filename stem without a trailing dot or space"));
@@ -318,6 +379,7 @@ pub fn plan_counting(inputs: &[BatchInput], output: &str, format: &str, params: 
         if name.len() > 255 || name.chars().any(|c| c.is_control() || "/\\".contains(c)) {
             return Err(bad("naming must produce a filename of at most 255 bytes without path separators or reserved characters"));
         }
+        let compat = self.compat;
         let windows = structured.is_none() || cfg!(windows) || compat.1;
         if windows && (name.contains(['<', '>', ':', '"', '|', '?', '*']) || structured.is_some() && super::is_windows_device_name(&name))
             || compat.0 && name.contains(':')
@@ -325,29 +387,26 @@ pub fn plan_counting(inputs: &[BatchInput], output: &str, format: &str, params: 
             return Err(bad("naming is incompatible with the requested platform"));
         }
         // Preserve the recorded structured routing; ordinary native templates use main's flat output.
-        let subfolder = if structured.is_some() && !flat { rel_dir.as_str() } else { "" };
-        outputs.push(join(&join(output, subfolder), &name));
-        counted.push(counts_serial);
-        if counts_serial {
-            index += 1;
-        }
+        let subfolder = if structured.is_some() && !self.flat { rel_dir.as_str() } else { "" };
+        Ok(join(&join(&self.output, subfolder), &name))
     }
-    // Renaming within the source folder could replace a later input before it is read. Resolve
-    // existing paths so aliases such as `source/./001.png` cannot bypass the check. The default
-    // (no template) path keeps its existing in-place behavior. An input that takes no number
-    // fails before it is opened, so nothing is written to its name.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let sources: std::collections::HashSet<_> = inputs.iter().filter_map(|i| std::fs::canonicalize(&i.path).ok()).collect();
-        for output in outputs.iter().zip(&counted).filter_map(|(output, counts)| counts.then_some(output)) {
-            let identity = super::paths::destination_identity(std::path::Path::new(output))
-                .ok_or_else(|| bad(format!("naming output path cannot be resolved safely: {output}")))?;
-            if sources.contains(&identity) {
-                return Err(bad(format!("naming would replace an input file: {output}; choose a different destination or template")));
-            }
-        }
+}
+
+/// The resolved identities of the inputs that exist, for [`check_replaces_no_input`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn input_identities(inputs: &[BatchInput]) -> std::collections::HashSet<std::path::PathBuf> {
+    inputs.iter().filter_map(|i| std::fs::canonicalize(&i.path).ok()).collect()
+}
+
+/// A named output must not replace any input, its own included.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_replaces_no_input(sources: &std::collections::HashSet<std::path::PathBuf>, output: &str) -> Result<()> {
+    let identity = super::paths::destination_identity(std::path::Path::new(output))
+        .ok_or_else(|| bad(format!("naming output path cannot be resolved safely: {output}")))?;
+    if sources.contains(&identity) {
+        return Err(bad(format!("naming would replace an input file: {output}; choose a different destination or template")));
     }
-    Ok(Some(outputs))
+    Ok(())
 }
 
 #[cfg(test)]

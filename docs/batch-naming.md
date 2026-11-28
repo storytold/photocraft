@@ -19,7 +19,9 @@ For example, `{name}_{serial}` with starting serial 7 writes `photo_007` and
 `photo_007.png` and `photo_008.png`. The file bytes still use the selected output format.
 A serial after 999 becomes 1000;
 it does not wrap. Folder inputs use the existing filename order, and an explicit input array
-keeps its order. Failed inputs consume their position, so later filenames do not shift.
+keeps its order. An input whose data does not open (a corrupt or truncated file), or a folder
+input the opener refuses by its name, takes no serial number or letter: the next input takes it.
+An input that is missing or fails during its action keeps its position.
 Braces in an input filename are literal text, not additional tokens. Batch writes subfolder
 inputs flat into the output folder in input order. A later same-name result replaces an earlier
 one, as measured in Photoshop 2026. **Stop On Error** leaves later inputs unprocessed;
