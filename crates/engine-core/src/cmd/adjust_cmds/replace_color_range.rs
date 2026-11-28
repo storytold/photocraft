@@ -7,6 +7,7 @@ use photocraft_raster::Surface;
 use serde_json::Value;
 
 use super::{bad, num};
+use crate::color_cmds::ColorExt;
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "image.adjustments.replaceColor";
@@ -107,8 +108,12 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     if format.mode != st.doc.mode {
         return Err(bad(CMD, "pixel layout does not match the document profile"));
     }
-    let transform = craft_cms::cached(&crate::color_cmds::document_profile(&st.doc), Builtin::LabD50.profile(), TransformOptions::default())
-        .map_err(|e| bad(CMD, format!("Lab colour transform: {e}")))?;
+    // The layer's samples live in the space the session shows the document in, so an untagged
+    // document is read in its working space here too (#14224): Lab bounds that Replace Color works
+    // in, and the Gamut Warning marks, agree.
+    let source = s.color().document_profile(&st.doc);
+    let transform =
+        craft_cms::cached(&source, Builtin::LabD50.profile(), TransformOptions::default()).map_err(|e| bad(CMD, format!("Lab colour transform: {e}")))?;
     if transform.inputs() != format.mode.color_channels() || transform.outputs() != 3 || format.channels() != transform.inputs() + usize::from(format.alpha) {
         return Err(bad(CMD, "unsupported Lab colour-transform layout"));
     }

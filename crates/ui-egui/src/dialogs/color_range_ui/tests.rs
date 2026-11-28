@@ -130,6 +130,39 @@ fn preview_cache_refreshes_after_foreground_and_proof_changes() {
     assert_ne!(query_key(&app, &p), query_key(&app, &json!({"select": "outOfGamut", "invert": true})));
 }
 
+/// An untagged RGB strip whose colours straddle coated CMYK: read as sRGB some of them are inside
+/// it, read as ProPhoto the same numbers are far outside.
+fn untagged_strip_session() -> photocraft_engine::Session {
+    let colours = [[0.95f32, 0.05, 0.05], [0.8, 0.3, 0.3], [0.6, 0.1, 0.1], [0.3, 0.85, 0.3], [0.1, 0.4, 0.9], [0.45, 0.45, 0.95]];
+    let mut doc = Document::with_background("strip", Size::new(24, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    {
+        let bg = doc.layers[0].surface_mut().unwrap();
+        for (i, c) in colours.iter().enumerate() {
+            bg.fill_rect(GRect::new(i as i32 * 4, 0, i as i32 * 4 + 4, 4), &[c[0], c[1], c[2], 1.0]);
+        }
+    }
+    let mut s = photocraft_engine::Session::new();
+    s.add_document(doc, None);
+    s
+}
+
+/// #14224: both fast preview paths judge colour in the space the session shows the document in, so
+/// Color Settings' working space belongs in the key the cached picture is kept under - otherwise the
+/// dialog keeps showing the old Out of Gamut mask after the setting moves.
+#[test]
+fn preview_cache_refreshes_after_a_working_space_change() {
+    let mut app = PhotocraftApp::new(untagged_strip_session(), crate::Services::default());
+    app.run("view.proofSetup", json!({"profile": "coated-cmyk", "intent": "perceptual"})).unwrap();
+    let p = json!({"select": "outOfGamut"});
+    let doc = app.session.active().unwrap().doc.clone();
+    let before = proxy_mask(&app, &doc, 1, &p).unwrap();
+    let key_before = query_key(&app, &p);
+    app.run("edit.colorSettings", json!({"workingRgb": "prophoto-compat"})).unwrap();
+    let after = proxy_mask(&app, &doc, 1, &p).unwrap();
+    assert_ne!(before, after, "the preview marks the same pixels whatever the working space of an untagged document");
+    assert_ne!(key_before, query_key(&app, &p), "and the cache key holds onto the picture the setting has made stale");
+}
+
 #[test]
 fn eyedropper_hover_reuses_preview_textures_without_sampling() {
     let mut app = app_with_doc();

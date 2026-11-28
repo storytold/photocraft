@@ -238,9 +238,11 @@ fn resolve_source(s: &Session, p: &Value, cmd: &str, source: Option<crate::prese
 
 /// Choose the sampled pixel/composite profile and cache its conversion to the destination profile.
 fn color_transform(s: &Session, doc: &Document, which: SampleLayers, cmd: &str) -> Result<Option<Arc<Transform>>> {
-    let source = if which == SampleLayers::Current { crate::color_cmds::document_profile(doc) } else { crate::color_cmds::composite_profile(doc) };
+    // Both documents are read as the session reads them: an untagged one is taken in its working
+    // space (#14224), so a stamp cloned across documents keeps the look it has on its own canvas.
+    let source = if which == SampleLayers::Current { s.color().document_profile(doc) } else { s.color().composite_profile(doc) };
     let target = s.active().ok_or(EngineError::NoDocument)?;
-    let destination = crate::color_cmds::document_profile(&target.doc);
+    let destination = s.color().document_profile(&target.doc);
     let inputs = if which == SampleLayers::Current { doc.mode.color_channels() } else { 3 };
     if source.channels() != inputs || destination.channels() != target.doc.mode.color_channels() {
         return Err(bad(cmd, "cross-document cloning does not support this color model"));

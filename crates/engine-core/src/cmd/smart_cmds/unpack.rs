@@ -25,7 +25,10 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
     let mut src = decode_source(&name, &bytes)?;
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {
-        crate::color_cmds::convert_document(&mut src, &crate::color_cmds::document_profile(doc), intent, bpc)?;
+        // An untagged document is taken in its working space (#14224): the contents are re-encoded
+        // into that space so they keep their look once they are layers on this canvas.
+        let destination = s.color().document_profile(doc);
+        crate::color_cmds::convert_document(&mut src, &destination, intent, bpc)?;
         if src.pixel_format().mode != mode {
             return Err(other(format!("can't convert the smart object's contents to the document's {:?} mode", doc.mode)));
         }

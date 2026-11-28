@@ -170,10 +170,12 @@ fn parse_color(p: &Value) -> [f32; 3] {
     }
 }
 
-/// Composite RGB (the compositor's output profile for the document) → CIE Lab D50.
+/// Composite RGB (the profile the session shows the document's composite in) → CIE Lab D50.
 fn lab_transform(s: &Session) -> Result<std::sync::Arc<craft_cms::Transform>> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let src = crate::color_cmds::composite_profile(&d.doc);
+    // An untagged document's composite is the working space (#14224), so the hue rows and the
+    // sampled colours select what the canvas actually shows.
+    let src = s.color().composite_profile(&d.doc);
     craft_cms::cached(&src, craft_cms::Builtin::LabD50.profile(), craft_cms::TransformOptions::default())
         .map_err(|e| EngineError::Other(format!("colour management: {e}")))
 }
@@ -425,10 +427,11 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "outOfGamut" => {
             // Pixels the current proof setup (View › Proof Setup) can't reproduce, as the gamut
-            // warning shows them: judged on the composite.
+            // warning shows them: judged on the composite, in the space the canvas shows it in
+            // (#14224), so the selection marks the same pixels the warning marks.
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let pv = s.color().proof(d.doc.id);
-            let (m, _) = crate::color_cmds::gamut_mask(&d.doc, &pv.setup, pv.gamut_threshold)?;
+            let (m, _) = s.color().gamut_mask(&d.doc, &pv.setup, pv.gamut_threshold)?;
             (d.doc.bounds(), m.iter().map(|v| f32::from(*v) / 255.0).collect())
         }
         other => {

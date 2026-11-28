@@ -357,7 +357,9 @@ fn parse_dither(s: &str) -> Option<Dither> {
 /// grayscale output is a scalar sample replicated into the flattened RGB view.
 fn working_matte_color(s: &Session, doc: &Document, color: [f32; 4]) -> Result<[f32; 3]> {
     let destination = match crate::color_cmds::mode_space(doc.mode) {
-        ColorSpace::Rgb | ColorSpace::Gray => crate::color_cmds::document_profile(doc),
+        // An untagged RGB or Grayscale document is taken in Color Settings' working space (#14224),
+        // which is where the tool colour above already lives.
+        ColorSpace::Rgb | ColorSpace::Gray => s.color().document_profile(doc),
         // CMYK and Lab flatten through the compositor's sRGB view on the pinned main path.
         _ => crate::color_cmds::composite_profile(doc),
     };
