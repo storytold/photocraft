@@ -87,6 +87,13 @@ fn a_developed_raw_keeps_its_exif() {
     assert_eq!((r.document.size.width, r.document.size.height), (16, 48));
 }
 
+/// The tags of IFD0 of an EXIF block (a little-endian TIFF stream).
+fn ifd0_tags(b: &[u8]) -> Vec<u16> {
+    assert_eq!(&b[..2], b"II");
+    let at = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
+    (0..usize::from(u16::from_le_bytes([b[at], b[at + 1]]))).map(|k| u16::from_le_bytes([b[at + 2 + 12 * k], b[at + 3 + 12 * k]])).collect()
+}
+
 /// The tags of the Exif directory of an EXIF block (a little-endian TIFF stream).
 fn exif_ifd_tags(b: &[u8]) -> Vec<u16> {
     assert_eq!(&b[..2], b"II");
@@ -333,6 +340,114 @@ fn cr3_opens_its_upright_camera_jpeg_with_explicit_preview_warning() {
     assert_eq!(r.document.depth, SampleType::U8);
     assert!(r.warnings[0].contains("8-bit, not the raw sensor data"));
     assert!(r.warnings[0].contains("CR3"));
+}
+
+/// A little-endian TIFF stream whose first directory holds `entries`: a CR3 CMT box.
+fn cmt(entries: Vec<(u16, Val)>) -> Vec<u8> {
+    let mut t = TiffBuilder::default();
+    let ifd = t.ifd(entries);
+    t.chain = vec![ifd];
+    t.build()
+}
+
+/// A plain 32x20 camera JPEG.
+fn camera_jpeg() -> Vec<u8> {
+    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
+    photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap()
+}
+
+/// A CR3 keeps its camera data in CMT boxes (IFD0 in CMT1, the Exif directory in CMT2, GPS in
+/// CMT4), not in a TIFF stream: the preview it opens keeps it for File Info's Camera Data,
+/// upright (the preview is already turned) and with the Exif pixel dimensions of the image.
+#[test]
+fn a_cr3_preview_keeps_the_raws_camera_data() {
+    let ifd0 = [(271, Val::Ascii("Canon".into())), (272, Val::Ascii("Canon EOS Synthetic".into()))];
+    let exif = [
+        (33434, Val::Rational(vec![(1, 200)])),
+        (33437, Val::Rational(vec![(56, 10)])),
+        (34855, Val::Short(vec![800])),
+        (42036, Val::Ascii("RF24-105mm F4 L IS USM".into())),
+        (40962, Val::Long(vec![6720])),
+        (40963, Val::Long(vec![4480])),
+    ];
+    let raw = photocraft_raw::testgen::cr3_preview_with_exif(&camera_jpeg(), 6, &ifd0, &exif, &[(0, Val::Byte(vec![2, 3, 0, 0]))]);
+    let r = import("shot.cr3", &raw).unwrap();
+    assert!(r.warnings[0].contains("CR3"), "the preview: {:?}", r.warnings);
+    assert_eq!((r.document.size.width, r.document.size.height), (20, 32), "upright");
+    let exif = r.document.metadata.exif.as_deref().expect("the CR3's EXIF");
+    let camera = photocraft_algo::exif::read(exif);
+    assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("Canon"), Some("Canon EOS Synthetic")));
+    assert_eq!(camera.lens.as_deref(), Some("RF24-105mm F4 L IS USM"));
+    assert_eq!((camera.exposure_time, camera.f_number, camera.iso), (Some(1.0 / 200.0), Some(5.6), Some(800.0)));
+    assert_eq!(photocraft_codecs::exif_orientation(exif), 1, "no orientation to apply a second time");
+    let stated = craft_metadata::read_exif(exif);
+    assert_eq!((stated.width, stated.height), (Some(20), Some(32)), "the image's size, not the sensor's");
+    assert!(ifd0_tags(exif).contains(&34853), "the GPS directory");
+}
+
+/// A CMT2 in the other byte order than CMT1 is still read: its values are not read the wrong
+/// way round, nor dropped.
+#[test]
+fn a_cr3_exif_directory_in_the_other_byte_order_is_read() {
+    let mut t = TiffBuilder { big_endian: true, ..Default::default() };
+    let ifd = t.ifd(vec![(33434, Val::Rational(vec![(1, 200)]))]);
+    t.chain = vec![ifd];
+    let boxes = [(*b"CMT1", cmt(vec![(271, Val::Ascii("Canon".into()))])), (*b"CMT2", t.build())];
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&camera_jpeg(), &boxes)).unwrap();
+    let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
+    assert_eq!((camera.make.as_deref(), camera.exposure_time), (Some("Canon"), Some(1.0 / 200.0)));
+}
+
+/// A CR3 preview that carries an EXIF block of its own (here only an orientation) still gets the
+/// raw's camera data.
+#[test]
+fn a_cr3_preview_with_its_own_exif_takes_the_raws_camera_data() {
+    let plain = camera_jpeg();
+    let app1 = [b"Exif\0\0".as_slice(), &cmt(vec![(274, Val::Short(vec![1]))])].concat();
+    let jpeg = [&plain[..2], &[0xFF, 0xE1], &((app1.len() + 2) as u16).to_be_bytes(), &app1, &plain[2..]].concat();
+    let ifd0 = [(271, Val::Ascii("Canon".into())), (272, Val::Ascii("Canon EOS Synthetic".into()))];
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_preview_with_exif(&jpeg, 1, &ifd0, &[], &[])).unwrap();
+    let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
+    assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("Canon"), Some("Canon EOS Synthetic")));
+}
+
+/// A damaged CMT2 before a good one: the good one's exposure is read.
+#[test]
+fn a_damaged_cmt2_gives_way_to_a_later_one() {
+    let boxes = [
+        (*b"CMT1", cmt(vec![(271, Val::Ascii("Canon".into()))])),
+        (*b"CMT2", b"II*\0\xff\xff\0\0".to_vec()),
+        (*b"CMT2", cmt(vec![(33434, Val::Rational(vec![(1, 200)]))])),
+    ];
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&camera_jpeg(), &boxes)).unwrap();
+    let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
+    assert_eq!((camera.make.as_deref(), camera.exposure_time), (Some("Canon"), Some(1.0 / 200.0)));
+}
+
+/// A RAF's EXIF is in the camera's JPEG: the developed document keeps its camera data, without
+/// the JPEG's orientation (the developed image is already upright).
+#[test]
+fn a_developed_raf_keeps_the_camera_data_of_its_jpeg() {
+    use photocraft_raw::testgen::{RafSpec, mosaic_cfa};
+    let (w, h) = (24, 12);
+    let raf = RafSpec { orientation: 6, ..RafSpec::new(w, h, mosaic_cfa(&scene(w, h), w, &[0, 1, 1, 2], 2, 1024, 16000), vec![0, 1, 1, 2]) };
+    let r = import("DSCF0001.RAF", &raf.build()).unwrap();
+    assert!(r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "developed, not a preview: {:?}", r.warnings);
+    let exif = r.document.metadata.exif.as_deref().expect("the RAF's EXIF");
+    let camera = photocraft_algo::exif::read(exif);
+    assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("FUJIFILM"), Some("X-Synthetic")));
+    assert_eq!(photocraft_codecs::exif_orientation(exif), 1, "no orientation to apply a second time");
+}
+
+/// Cut short anywhere, a CR3 with camera data opens or fails, never panics.
+#[test]
+fn truncated_cr3s_with_camera_data_do_not_panic() {
+    let ifd0 = [(271, Val::Ascii("Canon".into()))];
+    let exif = [(33434, Val::Rational(vec![(1, 200)]))];
+    let b = photocraft_raw::testgen::cr3_preview_with_exif(&camera_jpeg(), 6, &ifd0, &exif, &[(0, Val::Byte(vec![2, 3, 0, 0]))]);
+    for n in 0..b.len() {
+        let _ = import("shot.cr3", &b[..n]);
+    }
 }
 
 #[test]

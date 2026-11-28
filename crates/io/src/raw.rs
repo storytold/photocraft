@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use craft_cms::{Builtin, Intent, Profile, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType};
 pub use photocraft_raw::Demosaic;
-use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawError, Reference, Sensor, WhiteBalance};
+use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawError, RawFormat, Reference, Sensor, WhiteBalance};
 pub use photocraft_raw::{EXTENSIONS, Tone, retone};
 
 use crate::flat::image_to_document;
@@ -319,12 +319,26 @@ fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
     photocraft_algo::camera_raw::white_balance_gains(temperature.clamp(-100.0, 100.0), tint.clamp(-100.0, 100.0)).map(f64::from)
 }
 
+/// The raw's own EXIF (camera, lens, exposure, date), for File Info's Camera Data, for the
+/// upright image of `size` opened from it: a TIFF-based raw's own directories, or what
+/// `craft-metadata` reads from a CR3's CMT boxes or a RAF's camera JPEG. That carries the
+/// camera's orientation and its sensor's or preview's size: they are set to upright and `size`.
+fn camera_exif(bytes: &[u8], size: (u32, u32)) -> Option<Vec<u8>> {
+    if let Some(exif) = codecs::raw_exif(bytes) {
+        return Some(exif);
+    }
+    if !matches!(photocraft_raw::identify(bytes), Some(RawFormat::Cr3 | RawFormat::Raf)) {
+        return None;
+    }
+    let exif = craft_metadata::embedded(bytes).exif?;
+    let upright = craft_metadata::edit::upright_exif(&exif);
+    Some(craft_metadata::edit::exif_with_pixel_size(&upright, size).into_owned())
+}
+
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.
 fn developed_document(name: &str, bytes: &[u8], format: &str, dev: photocraft_raw::Developed, summary: &str) -> Result<ImportResult, IoError> {
     let mut img = Image::from_u16(dev.width, dev.height, ChannelLayout::Rgb, &dev.rgb)?;
-    // The raw's own EXIF (camera, lens, exposure, date), for File Info's Camera Data. It carries
-    // no orientation: the developed image is already upright.
-    img.meta.exif = codecs::raw_exif(bytes);
+    img.meta.exif = camera_exif(bytes, (dev.width, dev.height));
     let mut r = image_to_document(name, &img)?;
     r.document.icc_profile = Some(Arc::new(craft_cms::Builtin::ProPhotoCompat.profile().to_bytes().to_vec()));
     let camera = camera_name(dev.info.make.as_deref(), dev.info.model.as_deref());
@@ -430,9 +444,14 @@ fn preview_image(raw: &[u8], jpeg: &[u8], limits: &photocraft_raw::Limits) -> Re
     Ok(img)
 }
 
-/// A preview opened in place of the raw, with `note` saying why first among the warnings.
-fn preview_document(name: &str, img: &Image, note: String) -> Result<ImportResult, IoError> {
-    let mut r = image_to_document(name, img)?;
+/// A preview opened in place of the raw, with `note` saying why first among the warnings. The
+/// raw's own camera data wins over the preview's EXIF, which may hold little more than the
+/// orientation the preview has already been turned by.
+fn preview_document(name: &str, raw: &[u8], mut img: Image, note: String) -> Result<ImportResult, IoError> {
+    if let Some(exif) = camera_exif(raw, img.dimensions()) {
+        img.meta.exif = Some(exif);
+    }
+    let mut r = image_to_document(name, &img)?;
     r.warnings.insert(0, note);
     Ok(r)
 }
@@ -494,7 +513,7 @@ fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: 
             let note = format!(
                 "{format}: {reason} is not supported yet; opened the camera's embedded {w}x{h} {kind} preview instead ({depth}, not the raw sensor data)"
             );
-            preview_document(name, &img, note)
+            preview_document(name, bytes, img, note)
         }
         // A damaged DNG can still carry a valid JPEG, but opening that thumbnail as if it were
         // the photograph hides a corrupt raw source. Keep preview fallback for other camera
@@ -506,7 +525,7 @@ fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: 
                 let note = format!(
                     "{format}: the raw sensor data is damaged ({reason}); opened the camera's embedded {w}x{h} JPEG preview instead (8-bit, not the raw sensor data)"
                 );
-                preview_document(name, &img, note)
+                preview_document(name, bytes, img, note)
             }
             _ => Err(IoError::Raw(RawError::Malformed(reason))),
         },
