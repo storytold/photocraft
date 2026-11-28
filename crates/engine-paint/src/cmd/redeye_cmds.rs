@@ -177,7 +177,7 @@ fn count_changed(orig: &[[f32; 4]], px: &[[f32; 4]]) -> u32 {
 }
 
 fn apply_click(surf: &mut Surface, sel: Option<&Surface>, lock: bool, click: (i32, i32), pupil: f32, darken: f32, clip: Rect) -> Result<(Rect, u32)> {
-    let area = read_rect(click.0, click.1, redeye::search_radius(pupil))?.intersect(&clip);
+    let area = read_rect(click.0, click.1, redeye::SEARCH_RADIUS)?.intersect(&clip);
     if area.is_empty() {
         return Ok((Rect::EMPTY, 0));
     }
@@ -493,3 +493,7 @@ mod redeye_color_mode_tests;
 #[cfg(test)]
 #[path = "redeye_outside_selection_tests.rs"]
 mod redeye_outside_selection_tests;
+
+#[cfg(test)]
+#[path = "redeye_neutral_result_tests.rs"]
+mod redeye_neutral_result_tests;
