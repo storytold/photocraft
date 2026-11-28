@@ -1,8 +1,8 @@
 use super::rendering::{refresh_or_fail, unapplied_filters};
-use super::source::{SourceImage, buffer_to_surface, cache_put, source_bytes, source_cache_key};
+use super::source::{SourceImage, cache_limit_bytes, cache_put, can_cache_translated, source_bytes, source_cache_key};
 use super::{
-    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
-    SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
+    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, PixelFormat, Rect, Result, Session, Size,
+    SmartContentsId, SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
 };
 use photocraft_algo::transform::Interp;
 
@@ -173,16 +173,139 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
     }
 }
 
-fn subtree_bounds(l: &Layer, canvas: Rect) -> Rect {
-    match &l.content {
-        LayerContent::Group(g) => g.children.iter().map(|c| subtree_bounds(c, canvas)).fold(Rect::EMPTY, |a, b| a.union(&b)),
-        LayerContent::Adjustment(_) | LayerContent::Fill(_) => canvas,
-        _ => l.surface().map_or(Rect::EMPTY, Surface::content_bounds),
+/// Union of the bounds that visible `layers` can paint onto `canvas` or beyond it, including
+/// each visible layer's bounded compositor effect reach. Hidden layers and layers clipped to a
+/// hidden base contribute nothing.
+fn conversion_region(layers: &[Layer], canvas: Rect) -> Rect {
+    photocraft_compose::visible_in_stack(layers).fold(Rect::EMPTY, |out, layer| out.union(&layer_conversion_bounds(layer, canvas)))
+}
+
+/// Conservative rendered bounds for one visible `layer` (and its visible descendants): unclipped
+/// pixel content plus the compositor's bounded effect region.
+fn layer_conversion_bounds(layer: &Layer, canvas: Rect) -> Rect {
+    let mut bounds = match &layer.content {
+        LayerContent::Group(group) => {
+            let own = if layer.frame.is_some() || group.artboard.is_some() || group.frame_stroke.is_some() {
+                photocraft_compose::layer_bounds(layer, canvas)
+            } else {
+                Rect::EMPTY
+            };
+            own.union(&conversion_region(&group.children, canvas))
+        }
+        LayerContent::Fill(_) => canvas.union(&layer.fill_cache.as_ref().map_or(Rect::EMPTY, |fc| fc.surface.content_bounds())),
+        LayerContent::Adjustment(_) => Rect::EMPTY,
+        _ => {
+            let mut own = layer.surface().map_or(Rect::EMPTY, Surface::content_bounds);
+            own = own.union(&photocraft_compose::layer_bounds(layer, canvas));
+            if !photocraft_compose::transparent_outside(layer) {
+                own = own.union(&canvas);
+            }
+            own
+        }
+    };
+    if photocraft_compose::effects::has_effects(layer) {
+        let margin = photocraft_compose::effects::margin(layer);
+        bounds = bounds.union(&photocraft_compose::whole_effect_region(layer, canvas, margin));
     }
+    bounds
 }
 
 fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
     f(l) || l.children().is_some_and(|c| c.iter().any(|c| any_layer(c, f)))
+}
+
+/// Preflight check for Smart Object conversion working memory and renderer limits.
+/// Returns the estimated peak working bytes across banded rendering (tiled output surface, one
+/// RGBA composite band, retained compositor effect maps, and transient effect-shape construction
+/// buffers) and post-render `SOURCE_CACHE` seeding (including a sub-tile translated copy up to
+/// `CACHE_BYTES`) to reserve before rendering begins.
+fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers: &[Layer]) -> Result<u64> {
+    let (width, height) = (region.width(), region.height());
+    let pixels = region.size().area();
+    if pixels > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px exceeds the renderer's {} pixel limit. Reduce the canvas or effect extents",
+            photocraft_compose::MAX_RENDER_PIXELS
+        )));
+    }
+    let band_rows = photocraft_compose::band_rows_for(width, 0);
+    let band_height = u64::from(u32::try_from(band_rows).unwrap_or(u32::MAX)).min(u64::from(height));
+    let band_pixels = u64::from(width).saturating_mul(band_height);
+    let band_bytes = band_pixels.saturating_mul(std::mem::size_of::<[f32; 4]>() as u64);
+    let surface_bytes = photocraft_raster::tile_storage_bytes(region, &fmt);
+    let effect_memory = photocraft_compose::estimated_effect_memory(layers, canvas, region, band_rows)
+        .ok_or_else(|| other("Smart Object conversion effect maps exceed the renderer's working-memory limit. Reduce the canvas or effects"))?;
+    let render_peak = surface_bytes.saturating_add(band_bytes).saturating_add(effect_memory.peak_bytes());
+    // After banded rendering releases the band buffer and render-local effect maps, seeding
+    // `SOURCE_CACHE` with a sub-tile origin shift holds both `cache` and its translated copy
+    // (each bounded by `cache_limit_bytes()`).
+    let cache_limit = cache_limit_bytes();
+    let origin_surface_bytes = photocraft_raster::tile_storage_bytes(Rect::from_xywh(0, 0, width, height), &fmt);
+    let cache_seed_peak = surface_bytes.min(cache_limit).saturating_add(origin_surface_bytes.min(cache_limit));
+    let total = render_peak.max(cache_seed_peak);
+    if total > crate::allocation::MAX_DENSE_BYTES {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px needs about {} MiB of working memory, exceeding the {} MiB working-memory limit. Convert fewer layers or reduce the canvas or effect extents",
+            total.div_ceil(1 << 20),
+            crate::allocation::MAX_DENSE_BYTES >> 20
+        )));
+    }
+    Ok(total)
+}
+
+/// Whole-pixel translation moving `bounds`'s top-left corner to the origin, rejecting `i32::MIN`
+/// coordinates whose negation cannot be represented in `i32`.
+fn origin_shift(bounds: Rect) -> Result<(i32, i32)> {
+    bounds.x0.checked_neg().zip(bounds.y0.checked_neg()).ok_or_else(|| other("Smart Object conversion bounds exceed the supported coordinate range"))
+}
+
+/// Scans `buf` for the tight bounding rectangle of pixels with alpha > 0.
+fn alpha_bounds(buf: &photocraft_compose::Buffer) -> Rect {
+    let w = buf.rect.width() as usize;
+    if w == 0 || buf.rect.is_empty() {
+        return Rect::EMPTY;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for (row_idx, row) in buf.px.chunks_exact(w).enumerate() {
+        let Some(first) = row.iter().position(|p| p[3] > 0.0) else { continue };
+        let last = row.iter().rposition(|p| p[3] > 0.0).unwrap_or(first);
+        let y = (i64::from(buf.rect.y0) + row_idx as i64) as i32;
+        x0 = x0.min((i64::from(buf.rect.x0) + first as i64) as i32);
+        x1 = x1.max((i64::from(buf.rect.x0) + last as i64 + 1) as i32);
+        y0 = y0.min(y);
+        y1 = y1.max((i64::from(y) + 1) as i32);
+    }
+    if x0 < x1 && y0 < y1 { Rect::new(x0, y0, x1, y1) } else { Rect::EMPTY }
+}
+
+/// Encodes `bounds` of `buf` directly into `cache` using `cmyk` when converting CMYK pixels.
+/// Fully transparent pixels write the surface's default pixel so CMYK/Lab interior tiles prune.
+fn write_band_to_cache(
+    cache: &mut Surface,
+    buf: &photocraft_compose::Buffer,
+    bounds: Rect,
+    cmyk: Option<&Arc<photocraft_color::convert::CmykSpace>>,
+) -> Result<()> {
+    let fmt = cache.format();
+    let bpp = fmt.bytes_per_pixel();
+    let mut default_encoded = vec![0u8; bpp];
+    photocraft_raster::encode_pixel(&fmt, &cache.default_pixel(), &mut default_encoded);
+    cache
+        .try_write_rows_with(bounds, |y, x0, row| {
+            photocraft_color::convert::with_cmyk_space(cmyk, || {
+                let mut samples = [0.0; 5];
+                for (offset, dst) in row.chunks_exact_mut(bpp).enumerate() {
+                    let p = buf.get(x0.saturating_add(offset as i32), y);
+                    if fmt.alpha && (p[3] <= 0.0 || p[3].is_nan()) {
+                        dst.copy_from_slice(&default_encoded);
+                    } else {
+                        photocraft_raster::from_rgba_into(&fmt, p, &mut samples);
+                        photocraft_raster::encode_pixel(&fmt, &samples, dst);
+                    }
+                }
+            });
+        })
+        .map_err(|e| other(e.to_string()))
 }
 
 /// Builds the smart-object layer replacing `l` in `doc`: the layer (with its mask, effects and
@@ -234,35 +357,46 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
         // Nested PSD placed layers find their embedded files here.
         sub.metadata.psd_global_blocks = doc.metadata.psd_global_blocks.clone();
     }
-    let has_fx = layers.iter().any(|l| any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty()));
-    let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b)).inflate(if has_fx { 256 } else { 0 });
-    sub.layers = layers.into();
-
-    let buf = photocraft_compose::render(&sub, region);
-    let w = region.width() as usize;
-    let mut b = Rect::EMPTY;
-    for (i, p) in buf.px.iter().enumerate() {
-        if p[3] > 0.0 {
-            let (x, y) = (region.x0 + (i % w) as i32, region.y0 + (i / w) as i32);
-            b = b.union(&Rect::new(x, y, x + 1, y + 1));
-        }
-    }
-    if b.is_empty() {
+    let region = conversion_region(&layers, canvas);
+    if region.is_empty() {
         return Err(other("the layer is empty, so there is nothing to convert"));
     }
     let fmt = doc.pixel_format();
-    let mut cache = buffer_to_surface(&buf, fmt);
-    cache = photocraft_algo::resample::crop_surface(&cache, b);
+    let work = check_conversion_budget(region, canvas, fmt, &layers)?;
+    #[cfg(target_arch = "wasm32")]
+    crate::memory_gate::ensure("convert to a Smart Object", work)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let _working = photocraft_raster::memory::try_reserve_operation(work).map_err(other)?;
+    sub.layers = layers.into();
+
+    let cmyk = photocraft_compose::cmyk_space(&sub);
+    let mut cache = Surface::new(fmt);
+    let mut b = Rect::EMPTY;
+    photocraft_compose::try_render_bands(&sub, region, 0, |band| -> Result<()> {
+        let band_bounds = alpha_bounds(&band);
+        if !band_bounds.is_empty() {
+            b = b.union(&band_bounds);
+            write_band_to_cache(&mut cache, &band, band_bounds, cmyk.as_ref())?;
+        }
+        Ok(())
+    })
+    .map_err(|err| match err {
+        photocraft_compose::RenderBandsError::Allocation(e) => other(format!("not enough memory to convert to a Smart Object: {e}")),
+        photocraft_compose::RenderBandsError::Sink(e) => e,
+    })?;
+    if b.is_empty() {
+        return Err(other("the layer is empty, so there is nothing to convert"));
+    }
     cache.prune();
 
-    sub.layers.iter_mut().for_each(|l| shift_layer(l, -b.x0, -b.y0));
+    let (dx, dy) = origin_shift(b)?;
+    sub.layers.iter_mut().for_each(|l| shift_layer(l, dx, dy));
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // The encoded native document is non-SVG; match the classified render/bounds path.
-    cache_put(
-        source_cache_key(&sub.name, &bytes, fmt, Some(false)),
-        SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() },
-    );
+    if can_cache_translated(&cache, b, dx, dy) {
+        cache_put(source_cache_key(&sub.name, &bytes, fmt, Some(false)), SourceImage { surface: Arc::new(cache.translated(dx, dy, b)), bounds: sub.bounds() });
+    }
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
     Ok(Layer::new(name, LayerContent::Smart(SmartObject::new(source, Affine::translate(b.x0 as f64, b.y0 as f64), Some(cache)))))
@@ -341,4 +475,156 @@ pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
         *active = Some(new_id);
         Ok(json!({"layer": new_id.0}))
     })
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn direct_band_writer_matches_conversion_and_prunes_transparent_pixels() {
+        use photocraft_color::{ColorMode, SampleType};
+
+        let region = Rect::new(-3, -2, 260, 4);
+        let bounds = Rect::new(-1, -1, 258, 3);
+        let mut buf = photocraft_compose::Buffer::filled(region, [0.0; 4]);
+        let opaque_x = region.x0 + 12;
+        let opaque_y = region.y0 + 1;
+        buf.px[region.width() as usize + 12] = [0.9, 0.3, 0.1, 1.0];
+        assert_eq!(alpha_bounds(&buf), Rect::new(opaque_x, opaque_y, opaque_x + 1, opaque_y + 1));
+
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
+            for sample in SampleType::ALL {
+                let format = PixelFormat::new(mode, sample, true);
+                let mut cache = Surface::new(format);
+                write_band_to_cache(&mut cache, &buf, bounds, None).unwrap();
+                cache.prune();
+                let surface = super::super::source::buffer_to_surface(&buf, format);
+                let expected = photocraft_algo::resample::crop_surface(&surface, bounds);
+                // Opaque pixel matches bit-for-bit across every colour mode and depth.
+                assert_eq!(cache.pixel(opaque_x, opaque_y), expected.pixel(opaque_x, opaque_y), "{mode:?} {sample:?}");
+                // Transparent interior pixels keep the default pixel so CMYK/Lab tiles stay sparse.
+                assert_eq!(cache.pixel(bounds.x0, bounds.y0), cache.default_pixel(), "{mode:?} {sample:?}");
+                assert_eq!(cache.tile_count(), 1, "only the tile containing the opaque pixel stays allocated: {mode:?} {sample:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn direct_band_writer_honors_document_cmyk_profile() {
+        let params =
+            craft_cms::synth::CmykParams { description: "Test Uncoated".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() };
+        let profile = craft_cms::synth::cmyk_profile(&params).unwrap().to_bytes();
+        let space = photocraft_color::convert::CmykSpace::for_profile(Some(&profile)).unwrap();
+        let rect = Rect::new(0, 0, 2, 2);
+        let buf = photocraft_compose::Buffer::filled(rect, [0.8, 0.35, 0.2, 1.0]);
+        let mut with_profile = Surface::new(PixelFormat::CMYKA8);
+        let mut with_default = Surface::new(PixelFormat::CMYKA8);
+        write_band_to_cache(&mut with_profile, &buf, rect, Some(&space)).unwrap();
+        write_band_to_cache(&mut with_default, &buf, rect, None).unwrap();
+        assert_ne!(with_profile.pixel(0, 0), with_default.pixel(0, 0), "custom CMYK ICC profile must affect conversion encoding");
+        let expected = photocraft_color::convert::with_cmyk_space(Some(&space), || {
+            let mut ref_surface = Surface::new(PixelFormat::CMYKA8);
+            ref_surface.fill_rect(rect, &photocraft_raster::from_rgba(&PixelFormat::CMYKA8, [0.8, 0.35, 0.2, 1.0]));
+            ref_surface.pixel(0, 0)
+        });
+        assert_eq!(with_profile.pixel(0, 0), expected);
+    }
+
+    #[test]
+    fn conversion_budget_scales_with_sample_depth_without_allocating_pixels() {
+        // 572M pixels fits within MAX_RENDER_PIXELS (1 Gi px), but at 32-bit float (16 B/px)
+        // tile storage (~8.57 GiB + band) exceeds the 8 GiB 64-bit dense working limit.
+        let (width, height) = if cfg!(target_pointer_width = "64") { (26_000, 22_000) } else { (14_000, 10_000) };
+        let region = Rect::new(0, 0, width, height);
+        assert!(check_conversion_budget(region, region, PixelFormat::RGBA8, &[]).is_ok(), "8-bit extent fits the budget");
+        assert!(check_conversion_budget(region, region, PixelFormat::RGBA16, &[]).is_ok(), "16-bit extent fits the budget");
+        assert!(check_conversion_budget(region, region, PixelFormat::RGBA32F, &[]).is_err(), "the same extent exceeds the budget at 32 bits");
+        assert!(check_conversion_budget(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), Rect::EMPTY, PixelFormat::RGBA32F, &[]).is_err());
+    }
+
+    #[test]
+    fn a_thin_region_can_exceed_the_budget_in_whole_tiles() {
+        let height = if cfg!(target_pointer_width = "64") { 4_200_000 } else { 1_100_000 };
+        let region = Rect::new(-1, 0, 1, height);
+        assert!(region.size().area() < photocraft_compose::MAX_RENDER_PIXELS);
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA8, &[]).is_err());
+    }
+
+    #[test]
+    fn a_full_canvas_shadow_fits_comfortably_within_the_32_bit_budget() {
+        use photocraft_color::Color;
+        use photocraft_doc::{Effect, Fill};
+
+        let canvas = Rect::new(0, 0, 6_000, 6_000);
+        let region = canvas.inflate(402);
+        let work = check_conversion_budget(region, canvas, PixelFormat::RGBA8, &[]).unwrap();
+        // Banded conversion holds one ~139 MiB RGBA band plus the ~182 MiB RGBA8 surface (~321 MiB total).
+        assert!(work < 512 << 20, "banded 36 MP RGB8 conversion should stay under 512 MiB without effects, got {work}");
+
+        let mut styled = Layer::new("Fill with shadow", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        styled.effects.enabled = true;
+        let mut shadow = Effect::default_drop_shadow();
+        if let Effect::DropShadow(d) = &mut shadow {
+            d.distance = 400.0;
+            d.size = 0.0;
+            d.spread = 0.0;
+            d.use_global_light = false;
+            d.angle = 180.0;
+        }
+        styled.effects.items.push(shadow);
+        let styled_work = check_conversion_budget(region, canvas, PixelFormat::RGBA8, std::slice::from_ref(&styled)).unwrap();
+        // Includes the ~706 MiB full-region RGBA effect-shape buffer plus ~353 MiB retained maps,
+        // while staying well inside the 2 GiB 32-bit working budget.
+        assert!(styled_work > 1 << 30 && styled_work < 2 << 30, "unexpected 36 MP styled work estimate: {styled_work}");
+    }
+
+    #[test]
+    fn conversion_budget_accounts_for_effect_shape_construction() {
+        use photocraft_color::Color;
+        use photocraft_doc::{Effect, Fill, FxCommon};
+
+        let (side, fmt) = if cfg!(target_pointer_width = "64") { (20_000, PixelFormat::RGBA8) } else { (7_500, PixelFormat::RGBA32F) };
+        let canvas = Rect::new(0, 0, side, side);
+        let mut shaped = Layer::new("Non-local styled fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        shaped.effects.enabled = true;
+        shaped.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Dissolve, 1.0), color: Color::BLACK });
+        assert!(
+            check_conversion_budget(canvas, canvas, fmt, std::slice::from_ref(&shaped)).is_err(),
+            "full-region RGBA effect-shape construction must push this extent over the working-memory limit"
+        );
+        shaped.advanced.transparency_shapes = false;
+        assert!(
+            check_conversion_budget(canvas, canvas, fmt, std::slice::from_ref(&shaped)).is_ok(),
+            "without transparency_shapes, no full-region RGBA shape buffer is allocated"
+        );
+    }
+
+    #[test]
+    fn origin_shift_rejects_i32_min_coordinates() {
+        assert_eq!(origin_shift(Rect::new(-12, 34, 10, 50)).unwrap(), (12, -34));
+        assert!(origin_shift(Rect::new(i32::MIN, 0, i32::MIN + 8, 8)).is_err());
+        assert!(origin_shift(Rect::new(0, i32::MIN, 8, i32::MIN + 8)).is_err());
+    }
+
+    #[test]
+    fn conversion_budget_accounts_for_sub_tile_source_cache_translation() {
+        let region = Rect::new(12, 16, 6_012, 6_016);
+        let fmt = PixelFormat::RGBA16;
+        let surface_bytes = photocraft_raster::tile_storage_bytes(region, &fmt);
+        let origin_bytes = photocraft_raster::tile_storage_bytes(Rect::from_xywh(0, 0, region.width(), region.height()), &fmt);
+        let band_rows = photocraft_compose::band_rows_for(region.width(), 0);
+        let band_bytes = u64::from(region.width()) * u64::from(band_rows as u32).min(u64::from(region.height())) * 16;
+        assert!(surface_bytes <= cache_limit_bytes() && origin_bytes > band_bytes, "fixture must sit below CACHE_BYTES and above one band");
+        let work = check_conversion_budget(region, region, fmt, &[]).unwrap();
+        assert_eq!(work, surface_bytes + origin_bytes, "preflight must cover cache + sub-tile translated SOURCE_CACHE copy");
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_large_rgb32_canvas_fits_the_desktop_memory_budget() {
+        let canvas = Rect::new(0, 0, 12_000, 12_000);
+        // Banded conversion needs ~2.16 GiB tiled surface + ~147 MiB RGBA band (~2.30 GiB), well below 8 GiB.
+        assert!(check_conversion_budget(canvas, canvas, PixelFormat::RGBA32F, &[]).unwrap() < 3 << 30);
+    }
 }

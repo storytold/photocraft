@@ -128,6 +128,33 @@ pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
     Some(img)
 }
 
+/// Maximum single-surface byte size [`cache_put`] retains in `SOURCE_CACHE`.
+pub(super) const fn cache_limit_bytes() -> u64 {
+    CACHE_BYTES as u64
+}
+
+/// Upper bound on the new tile bytes `surface.translated(dx, dy, content)` allocates.
+///
+/// Whole-tile shifts (`dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0`) clone `Arc<Tile>` pointers
+/// with zero new tile storage. Sub-tile shifts allocate target tiles covering
+/// `content.translate(dx, dy)`, at most four target tiles per allocated source tile.
+pub(super) fn translated_cache_extra_bytes(surface: &Surface, content: Rect, dx: i32, dy: i32) -> u64 {
+    if dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0 {
+        return 0;
+    }
+    let tile_bytes = (surface.tile_count() as u64).saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(surface.format().bytes_per_pixel() as u64);
+    let dense = photocraft_raster::tile_storage_bytes(content.translate(dx, dy), &surface.format());
+    dense.min(tile_bytes.saturating_mul(4)).saturating_add(surface.default_bytes().len() as u64)
+}
+
+/// Whether `surface` and its translated `SOURCE_CACHE` copy fit inside `CACHE_BYTES`, avoiding a
+/// sub-tile translated allocation that [`cache_put`] would immediately discard.
+pub(super) fn can_cache_translated(surface: &Surface, content: Rect, dx: i32, dy: i32) -> bool {
+    let limit = cache_limit_bytes();
+    let current = super::stack_cache::surface_bytes(surface) as u64;
+    current <= limit && translated_cache_extra_bytes(surface, content, dx, dy) <= limit
+}
+
 pub(super) fn cache_put(key: CacheKey, image: SourceImage) {
     cache_put_within(key, image, CACHE_BYTES);
 }
@@ -197,12 +224,17 @@ pub(crate) fn restore_unrendered<E>(
 }
 
 pub(super) fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surface {
+    let mut s = Surface::new(fmt);
     let n = fmt.channels();
+    let empty = s.default_pixel();
     let mut data = vec![0.0f32; buf.px.len() * n];
     for (p, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
-        photocraft_raster::from_rgba_into(&fmt, *p, out);
+        if fmt.alpha && (p[3] <= 0.0 || p[3].is_nan()) && empty.len() == n {
+            out.copy_from_slice(&empty);
+        } else {
+            photocraft_raster::from_rgba_into(&fmt, *p, out);
+        }
     }
-    let mut s = Surface::new(fmt);
     if !buf.rect.is_empty() {
         s.write_region(buf.rect, &data);
     }
@@ -213,7 +245,8 @@ pub(super) fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelForm
 /// A source's pixels in `fmt` from a flattened `buf` (the stack-mode combine, which has no
 /// document to composite).
 pub(super) fn source_surface_from_buffer(src: &Document, buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Result<Surface> {
-    let raster = |f| buffer_to_surface(buf, f);
+    let cmyk = photocraft_compose::cmyk_space(src);
+    let raster = |f| photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || buffer_to_surface(buf, f));
     convert_source(src, fmt, raster)
 }
 
@@ -460,5 +493,27 @@ mod tests {
         let bytes = super::super::stack_cache::surface_bytes(&img.surface);
         // 8-bit RGBA is 4 bytes a pixel (plus the default pixel), not the 16 of an f32 estimate.
         assert!((256 * 256 * 4..256 * 256 * 5).contains(&bytes), "{bytes}");
+    }
+
+    #[test]
+    fn translated_cache_budget_is_zero_for_whole_tile_shifts_and_bounded_for_sub_tile_shifts() {
+        let bounds = Rect::new(12, 16, 268, 272);
+        let mut surface = Surface::new(PixelFormat::RGBA8);
+        surface.fill_rect(bounds, &[0.2, 0.4, 0.6, 1.0]);
+
+        // Whole-tile shifts clone Arc<Tile> handles without allocating new tile storage.
+        assert_eq!(translated_cache_extra_bytes(&surface, bounds, -TILE_SIZE, 2 * TILE_SIZE), 0);
+        assert!(can_cache_translated(&surface, bounds, -TILE_SIZE, 2 * TILE_SIZE));
+        let whole_shifted = surface.translated(-TILE_SIZE, 2 * TILE_SIZE, bounds);
+        let orig_ptrs: Vec<*const photocraft_raster::Tile> = surface.tiles().map(|(_, t)| Arc::as_ptr(t)).collect();
+        let shifted_ptrs: Vec<*const photocraft_raster::Tile> = whole_shifted.tiles().map(|(_, t)| Arc::as_ptr(t)).collect();
+        assert_eq!(orig_ptrs, shifted_ptrs, "whole-tile shifts must share existing tile allocations");
+
+        // Sub-tile shifts allocate target tiles bounded by the shifted rect's dense tile storage.
+        let extra = translated_cache_extra_bytes(&surface, bounds, -12, -16);
+        let actual_shifted = surface.translated(-12, -16, bounds);
+        let actual_bytes = super::super::stack_cache::surface_bytes(&actual_shifted) as u64;
+        assert!(extra >= actual_bytes && actual_bytes > 0, "expected extra {extra} >= actual {actual_bytes}");
+        assert!(can_cache_translated(&surface, bounds, -12, -16));
     }
 }

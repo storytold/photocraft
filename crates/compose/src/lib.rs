@@ -70,11 +70,13 @@ use extents::mask_vals;
 pub use extents::{
     Ancestors, Placement, adjustment_reach, change_bounds, change_bounds_in, composite_bounds, effect_outline, effect_source_bounds, effects_frame,
     hard_shape_bounds, layer_bounds, layer_change_bounds, paint_bounds, relayout_damage, shape_bounds, siblings_of, soft_shape_frame, transparent_outside,
+    visible_in_stack,
 };
 #[cfg(test)]
 use extents::{mask_k, shapeless_stroke_bounds, trim_to_painted};
 pub use fx_cache::{
-    DEFAULT_FX_CACHE_BUDGET, discard_unreadable_pixel_caches, effect_cache_budget, effect_cache_bytes, purge_effect_cache, set_effect_cache_budget,
+    DEFAULT_FX_CACHE_BUDGET, EffectMemoryEstimate, discard_unreadable_pixel_caches, effect_cache_budget, effect_cache_bytes, estimated_effect_memory,
+    purge_effect_cache, set_effect_cache_budget, whole_effect_region,
 };
 #[cfg(test)]
 use fx_cache::{effect_maps, effect_region, fx_region_bytes};

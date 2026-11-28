@@ -1,4 +1,5 @@
 use super::content::empty_in;
+use super::extents::visible_in_stack;
 use super::fx_cache::{effect_maps_with, fx_over_budget, layer_identity};
 use super::{Buffer, BufferAlloc, Document, InfallibleBufferAlloc, Layer, LayerContent, Rect, adjust, advanced, effects, pattern};
 
@@ -230,15 +231,7 @@ where
 
 /// The visible layers of `layers` (groups included) with effects that can reach `rect`.
 pub(crate) fn effect_layers<'l>(layers: &'l [Layer], rect: Rect, depth: u32, out: &mut Vec<std::borrow::Cow<'l, Layer>>) {
-    let mut base_visible = true;
-    for l in layers {
-        if !l.clipped {
-            base_visible = l.visible;
-        }
-        // A clipping group is drawn only when its base is.
-        if !l.visible || !base_visible {
-            continue;
-        }
+    for l in visible_in_stack(layers) {
         if effects::has_effects(l) && !empty_in(l, rect) {
             // A mask that hides the effects is left out of the shape they are built from.
             out.push(advanced::effects_source(l));
