@@ -482,12 +482,21 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     Some(early.args)
 }
 
+/// The allocator on Windows: mimalloc instead of the system heap. The UI builds and frees many small values every
+/// frame, and the system heap's alloc and free took about 14 % of the UI thread (#15493). Linux keeps glibc, which
+/// `malloc_tuning` tunes to give closed documents' memory back (#8743); macOS keeps its system allocator.
+#[cfg(windows)]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> eframe::Result {
     let Some(arguments) = prepare_launch() else { return Ok(()) };
 
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
+    // The git commit of a dev build's checkout, for `--version` and About (build.rs, #5247).
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();

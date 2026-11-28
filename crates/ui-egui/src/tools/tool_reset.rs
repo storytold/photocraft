@@ -98,7 +98,7 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
 fn reset_all(app: &mut PhotocraftApp) {
     crate::frame_tool::clear(app);
     app.ui.frame_tool = Default::default();
-    app.ui.tool_options = ToolOptions::default();
+    *app.ui.tool_options = ToolOptions::default();
     app.ui.artboard_tool = Default::default();
     app.ui.selection_mode = 0;
     reset_session_brush(app);
@@ -162,7 +162,7 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     }
     // Sample All Layers is each tool's own (#5524): only `tool`'s goes back.
     let d = ToolOptions::default();
-    if let Some(all) = o.sample_all.slot(tool) {
+    if let Some(all) = o.sample_all.slot_mut(tool) {
         *all = d.sample_all.get(tool);
     }
 }
@@ -172,7 +172,7 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
 pub fn sample_all_key(tool: Tool) -> Option<String> {
     let base = crate::state::SampleAllLayers::default();
     let mut probe = base;
-    let slot = probe.slot(tool)?;
+    let slot = probe.slot_mut(tool)?;
     *slot = !*slot;
     let (Ok(Value::Object(b)), Ok(Value::Object(m))) = (serde_json::to_value(base), serde_json::to_value(probe)) else { return None };
     m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
@@ -234,7 +234,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Zoom => reset!(zoom_scrubby, zoom_in),
         Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
-        Tool::Healing => reset!(clone_aligned, clone_sample),
+        Tool::Healing => reset!(clone_aligned, clone_sample, healing_replace),
         Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color),
         Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color, cam_transform_on_drop),
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),
@@ -381,7 +381,7 @@ mod tests {
 
         let dialog = crate::menus::invoke(&mut app, &ctx, RESET_ALL, json!({})).unwrap()["dialog"].as_str().unwrap().to_string();
         assert_eq!(answer_dialog(&mut app, &ctx, "ui.dialog.confirm", &dialog)["ok"], true);
-        assert_eq!(app.ui.tool_options, ToolOptions::default());
+        assert_eq!(*app.ui.tool_options, ToolOptions::default());
         assert!(!app.dialog_open());
     }
 

@@ -48,6 +48,11 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
     let sample = if clone_stamp_indexed(app) { "current" } else { o.clone_sample.as_str() };
     let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
+    // The Healing Brush's Replace row (#12101): the stroke copies the source; the word rides the
+    // params in place of the brush's blend mode. The Clone Stamp never sends it.
+    if app.ui.tool == Tool::Healing && o.healing_replace {
+        p["mode"] = json!("replace");
+    }
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
@@ -802,3 +807,11 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "../smudge_bar_angle_tests.rs"]
+mod smudge_bar_angle_tests;
+
+#[cfg(test)]
+#[path = "../smudge_bar_pressure_size_tests.rs"]
+mod smudge_bar_pressure_size_tests;

@@ -210,7 +210,7 @@ pub(crate) fn act(app: &mut PhotocraftApp, action: &StartAction) -> bool {
         StartAction::OpenRecent(path) => {
             let path = path.to_string_lossy();
             if let Err(e) = open_recent_gate(app, &path).and_then(|()| app.open_path(&path)) {
-                app.open_failed(&crate::file_open::display_name(&path), &e);
+                app.open_failed(&path, &e);
             }
             true
         }

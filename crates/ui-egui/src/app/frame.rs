@@ -154,8 +154,6 @@ impl PhotocraftApp {
         // A pass whose input carries an injected step acts for the automation client.
         self.automation_input = WindowHost::of(&ctx).injected_pass();
         self.hover_layer = None;
-        // The contextual task bar reports itself again if this frame draws it (#10890).
-        self.ui.task_bar_shown = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         let t0 = gpu_canvas::now_ms();
         self.perf.stage.ui_start(t0, frame.info().cpu_usage);
@@ -231,10 +229,12 @@ impl PhotocraftApp {
         AppShell::new(WindowKey::main())
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
-            .title_bar_if(menu_bar, |ui, _cx, app| panels::region_versions::show_title_bar(app, ui))
-            .options_bar(options_bar && !home, |ui, _cx, app| panels::region_versions::show_options_bar(app, ui))
-            .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
+            .title_bar_if(menu_bar, |app| Some(panels::region_versions::title_bar(app)), |ui, _cx, app| panels::title_bar(app, ui))
+            .options_bar(options_bar && !home, |app| Some(panels::region_versions::options_bar(app)), |ui, _cx, app| panels::options_bar(app, ui))
+            .status(status_bar && !home, |app| Some(panels::region_versions::status_bar(app)), |ui, _cx, app| panels::status_bar(app, ui))
             .body(|ui, cx, app| {
+                // The body runs every pass; the dock's columns and the document area replay while their versions hold.
+                canvas::document_area::each_pass(app, ui.ctx());
                 if home {
                     canvas::document_area(app, ui);
                 } else {

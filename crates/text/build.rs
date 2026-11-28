@@ -44,7 +44,8 @@ fn main() {
 /// Deflate the bundled fonts into `OUT_DIR/fonts/` (`fonts::BUNDLED` includes them).
 fn deflate_bundled_fonts() {
     use std::io::Write as _;
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    // Read at run time: a compiled build script is shared by worktrees with the same unit hash.
+    let src = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default()).join("../../assets/fonts");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("fonts");
     let result = (|| -> std::io::Result<()> {
         std::fs::create_dir_all(&out)?;

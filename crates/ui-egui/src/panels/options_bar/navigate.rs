@@ -1,7 +1,7 @@
 //! The options bar's members of the Move, Eyedropper, Zoom, Rotate View and Hand tools.
 
 use craft::ui::canvas::{NavigateBar, NavigationOptions};
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::contract::{Bind, Entry, Show as _, bind_tracked};
 use craft::ui::display::Divider;
 use craft::ui::pickers::Select;
 
@@ -21,12 +21,12 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Auto-Select, its target, Show Transform Controls, then the align strip.
 fn move_members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let o = &mut app.ui.tool_options;
-    check(ui, tl!("Auto-Select:"), &mut o.move_auto_select);
+    let (auto_select, target, transform) = bind_tracked!(app.ui.tool_options => move_auto_select, move_target, move_show_transform);
+    check(ui, tl!("Auto-Select:"), auto_select);
     let targets = [Entry::new("group".to_owned(), tl!("Group").to_owned()), Entry::new("layer".to_owned(), tl!("Layer").to_owned())];
-    Select::new(tl!("Auto-Select:").to_owned(), Bind::bound(&mut o.move_target), &targets).show(ui);
+    Select::new(tl!("Auto-Select:").to_owned(), target, &targets).show(ui);
     Divider::vertical().show(ui);
-    check(ui, tl!("Show Transform Controls"), &mut o.move_show_transform);
+    check(ui, tl!("Show Transform Controls"), transform);
     Divider::vertical().show(ui);
     crate::align_bar::show(app, ui);
 }
@@ -60,7 +60,9 @@ fn view_members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Zoom Out is the bar's `out`; the tool keeps the direction as `zoom_in`.
             let mut out = !app.ui.tool_options.zoom_in;
             let shown = NavigateBar::zoom(Bind::bound(&mut view), target, &mut options, Bind::bound(&mut out)).show(ui);
-            app.ui.tool_options.zoom_in = !out;
+            if app.ui.tool_options.zoom_in == out {
+                app.ui.tool_options.zoom_in = !out;
+            }
             crate::chrome_ui::zoom_alert(app, shown.invalid_zoom);
             write_view(app, index, &view, !shown.view.is_empty());
         } else {

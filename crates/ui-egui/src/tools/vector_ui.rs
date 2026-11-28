@@ -305,7 +305,7 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
     } else {
         PenTarget::Path { name: "work".into(), append: false }
     };
-    let mut options = app.ui.tool_options.clone();
+    let mut options = (*app.ui.tool_options).clone();
     // Combining or resuming starts with the layer's displayed setting without replacing the user's
     // New Layer default merely because a different target was selected.
     if options.vector_mode == VectorMode::Shape

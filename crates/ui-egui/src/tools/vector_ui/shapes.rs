@@ -136,12 +136,15 @@ fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
     (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
 }
 
-/// Whether a drag of `kind` lands on whole pixels. The Triangle (#13370), Rectangle (#13346) and
-/// Polygon (#13326) drags keep their fractions with Align Edges off in Shape mode; the other Shape
-/// tools' drags (the framework's drag lands them on pixels), and a greyed checkbox, still snap.
+/// Whether a drag of `kind` lands on whole pixels. The Triangle (#13370), Rectangle (#13346),
+/// Polygon (#13326) and Star (#16869) drags keep their fractions with Align Edges off in Shape mode;
+/// the other Shape tools' drags (the framework's drag lands them on pixels), and a greyed checkbox,
+/// still snap.
 pub(super) fn snaps_to_pixels(app: &PhotocraftApp, kind: ShapeKind) -> bool {
     let o = &app.ui.tool_options;
-    !(matches!(kind, ShapeKind::Triangle | ShapeKind::Rectangle | ShapeKind::Polygon) && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
+    !(matches!(kind, ShapeKind::Triangle | ShapeKind::Rectangle | ShapeKind::Polygon | ShapeKind::Star)
+        && o.shape_mode == super::VectorMode::Shape
+        && !o.align_edges)
 }
 
 /// `geometry` as a drag commits it: boxes on whole pixels, a line aligned to pixel edges
@@ -469,7 +472,7 @@ fn path_on_screen(path: &photocraft_doc::vector::Path, view: &CanvasView) -> pho
 /// the commit. The accent outline over its halo is the framework tool's own paint.
 pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &CanvasView) {
     let Some((kind, geometry)) = super::host::shape_preview(app) else { return };
-    let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
+    let shift = craft::ui::runtime::pointer::mods(ui.ctx()).shift;
     let Some(mut shape) = preview_layer(app, kind, geometry, shift) else { return };
     // Align Edges fits the shape to document pixels, so it is applied here, in document space:
     // the preview then shows the committed layer's geometry at any zoom.
@@ -542,3 +545,7 @@ mod triangle_history_ui_tests {
         assert!(st.doc.layers.iter().any(|l| l.name == "Triangle 1"));
     }
 }
+
+#[cfg(test)]
+#[path = "star_align_edges_tests.rs"]
+mod star_align_edges_tests;

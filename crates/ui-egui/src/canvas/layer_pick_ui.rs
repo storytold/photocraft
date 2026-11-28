@@ -1,5 +1,5 @@
 //! The canvas layer context menu (#307): right-click with the Move tool, or ⌘/Ctrl+right-click
-//! with any tool, lists the layers with visible pixels under the pointer, topmost first, as
+//! with any tool (and a plain right-click with the Frame tool, #13885), lists the layers with visible pixels under the pointer, topmost first, as
 //! Photoshop does. Choosing one selects it.
 //!
 //! The hit test is `layer.pickAt` with `"list": true` (non-transparent pixels, text bounds,
@@ -25,7 +25,34 @@ pub fn row_id(layer: u64) -> String {
 
 /// Does a right-click with `tool` and `mods` open the layer menu (rather than the tool's own)?
 pub fn is_gesture(tool: Tool, mods: Mods) -> bool {
-    tool == Tool::Move || mods.cmd
+    tool == Tool::Move || tool == Tool::Frame || mods.cmd
+}
+
+/// The Frame tool's picker (#13885): a separator and Isolate Layers end it.
+pub const ISOLATE: &str = "select.isolateLayers";
+
+/// The Frame tool's rows (#13885): each layer inside a frame comes right after its frame, one
+/// level in, the frame listed even where only its image has pixels under the pointer. Returns the
+/// rows and each row's level.
+pub fn frame_rows(app: &PhotocraftApp, layers: Vec<(u64, String)>) -> (Vec<(u64, String)>, Vec<u8>) {
+    let Some(st) = app.session.active() else { return (layers, Vec::new()) };
+    let doc = &st.doc;
+    let (mut rows, mut depth) = (Vec::new(), Vec::new());
+    for (id, name) in layers {
+        let frame = photocraft_engine::frame_cmds::frame_of(doc, photocraft_doc::LayerId(id)).filter(|f| f.0 != id);
+        if let Some(frame) = frame {
+            if !rows.iter().any(|(r, _)| *r == frame.0) {
+                rows.push((frame.0, doc.layer(frame).map(|l| l.name.clone()).unwrap_or_default()));
+                depth.push(0);
+            }
+            rows.push((id, name));
+            depth.push(1);
+        } else if !rows.iter().any(|(r, _)| *r == id) {
+            rows.push((id, name));
+            depth.push(0);
+        }
+    }
+    (rows, depth)
 }
 
 /// The layers at document point (x, y), topmost first, including text between glyphs.
@@ -40,9 +67,25 @@ pub fn layers_at(app: &mut PhotocraftApp, x: f64, y: f64) -> Vec<(u64, String)> 
         .unwrap_or_default()
 }
 
-/// The menu's rows: one per layer, the active one checked.
-pub fn entries(layers: &[(u64, String)], active: Option<u64>) -> Vec<Entry<String>> {
-    layers.iter().map(|(id, name)| Entry::new(row_id(*id), name.clone()).checked(Some(*id) == active)).collect()
+/// How far one level of `depth` indents a row's label: the menu rows have no indent of their own.
+const INDENT: &str = "    ";
+
+/// The menu's rows: one per layer, the active one checked, each indented by its level in `depth`
+/// (none where `depth` is shorter); with `isolate`, a separator and Isolate Layers end it.
+pub fn entries(layers: &[(u64, String)], depth: &[u8], isolate: bool, active: Option<u64>) -> Vec<Entry<String>> {
+    let mut out: Vec<Entry<String>> = layers
+        .iter()
+        .enumerate()
+        .map(|(i, (id, name))| {
+            let level = usize::from(depth.get(i).copied().unwrap_or(0));
+            Entry::new(row_id(*id), format!("{}{name}", INDENT.repeat(level))).checked(Some(*id) == active)
+        })
+        .collect();
+    if isolate {
+        out.push(Entry::separator());
+        out.push(Entry::new(ISOLATE.to_string(), tl!("Isolate Layers")));
+    }
+    out
 }
 
 /// Choose a layer from the menu: select it (one `layer.select`) and close the menu.
@@ -52,6 +95,18 @@ pub fn choose(app: &mut PhotocraftApp, layer: u64) {
         app.ui.status = e;
     }
 }
+
+/// Isolate Layers from the Frame tool's picker: close the menu and isolate the selected layers.
+pub fn isolate(app: &mut PhotocraftApp) {
+    app.ui.canvas_tool_menu = None;
+    if let Err(e) = app.run(ISOLATE, json!({})) {
+        app.ui.status = e;
+    }
+}
+
+#[cfg(test)]
+#[path = "layer_pick_ui/frame_picker_tests.rs"]
+mod frame_picker_tests;
 
 #[cfg(test)]
 mod tests {
@@ -82,7 +137,7 @@ mod tests {
 
     fn layer_ids(app: &PhotocraftApp) -> Option<Vec<u64>> {
         match app.ui.canvas_tool_menu.as_ref().map(|m| &m.kind) {
-            Some(MenuKind::Layers { layers }) => Some(layers.iter().map(|l| l.0).collect()),
+            Some(MenuKind::Layers { layers, .. }) => Some(layers.iter().map(|l| l.0).collect()),
             _ => None,
         }
     }
@@ -133,7 +188,7 @@ mod tests {
                 if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
-                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::testing::document_area(app, ui));
             },
             a,
         );

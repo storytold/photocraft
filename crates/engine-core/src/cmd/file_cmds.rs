@@ -434,7 +434,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layers to Files…",
             &["File", "Export"],
             None,
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it)} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"iccProfile":bool? (Include ICC Profile: false, no profile in any file; true, the document's profile, or its mode's working profile when it has none, PSD included, and none in a CMYK document's PNG; unset, as before),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it)} → {files}"##,
             native_doc,
             layers_to_files
         ),
@@ -576,3 +576,7 @@ mod aces_exr_tests {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/layers_to_files_icc_tests.rs"]
+mod layers_to_files_icc_tests;

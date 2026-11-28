@@ -96,7 +96,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             // ⌘ makes the pointer Direct Selection: the draft is drawn and keeps its keys, but takes no presses.
             // A refused draft of another document waits for its explicit retry: no press adds to it (`cancel_stale`).
             let stale = pen.is_some_and(|p| p.commit_failed && p.owner.as_ref().is_some_and(|o| !o.valid(app)));
-            let sensing = !craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd && !stale;
+            let sensing = !craft::ui::runtime::pointer::mods(app.ctx()).cmd && !stale;
             let idle = pen.is_none_or(|p| p.draft.knots.is_empty());
             let carry = if curvature && idle { pen::carry_on(app) } else { None };
             state
@@ -146,9 +146,9 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     apply_pen(app, events);
     // A live shape layer takes the draft's anchors once a press is over (a release, or a key that changed the draft):
     // a drag's updates make no History steps of their own (#12909).
-    let pointer = craft::ui::runtime::pointer::frame(app.ctx());
+    let presses = craft::ui::runtime::pointer::press_state(app.ctx());
     let changed = app.ui.pen.as_ref().map(|p| &p.draft) != before.as_ref();
-    if pointer.buttons.is_empty() && (changed || pointer.release.is_some()) {
+    if presses.buttons.is_empty() && (changed || presses.release.is_some()) {
         pen::sync_live_layer_from_draft(app);
         pen::sync_live_path_from_draft(app);
     }
@@ -156,7 +156,7 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     for event in state.shapes.take_events() {
         match event {
             ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => {
-                let mods = craft::ui::runtime::pointer::frame(app.ctx()).mods;
+                let mods = craft::ui::runtime::pointer::mods(app.ctx());
                 super::shapes::finish_drag(app, state.shapes.kind(), &after, mods);
             }
             ShapeDragEvent::Click { at, kind, .. } => {
@@ -483,3 +483,7 @@ fn resume(app: &mut PhotocraftApp, key: u64, knot: KnotRef) {
     // On the Work Path that press is the step "Pick-up Path", and the path goes on being drawn live (#12890).
     pen::pick_up_live_path(app);
 }
+
+#[cfg(test)]
+#[path = "star_alt_eyedropper_tests.rs"]
+mod star_alt_eyedropper_tests;

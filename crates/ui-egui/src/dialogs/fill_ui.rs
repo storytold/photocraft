@@ -13,7 +13,7 @@ use photocraft_color::BlendMode;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::dialogs::blend_options::{blending_params, blending_rows, forced_preserve_transparency, remember_blending};
+use crate::dialogs::blend_options::{blending_params, blending_rows, forced_preserve_transparency, opening_fields, remember_blending};
 use crate::dialogs::params::{captured, open_param};
 
 /// The command of the dialog, which is also its dialog key.
@@ -90,7 +90,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let rows = rows(app, [r, g, b], first.clone(), preserve);
     let inks = crate::color_picker_ui::ink_value(craft::theme::Srgba::rgb(r, g, b), app.session.tools.picked_role_cmyk(0));
     let reset = defaults([r, g, b], first, app.session.tools.picked_role_cmyk(0), preserve);
-    let mut fields = DialogFields::new();
+    let mut fields = opening_fields(app.ctx(), COMMAND);
     let remembered: Option<DialogFields> = MemoryStage::peek_saved(app.ctx(), &SaveKey::named(REMEMBER_INKS));
     let remembered_inks = remembered.as_ref().and_then(|saved| saved.get(&crate::color_picker_ui::ink_field("color"))).cloned();
     fields.set(crate::color_picker_ui::ink_field("color"), remembered_inks.unwrap_or(inks));
@@ -168,6 +168,8 @@ pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamRes
     }
 }
 
+#[cfg(test)]
+mod opacity_alert_tests;
 #[cfg(test)]
 mod preserve_transparency_state_tests;
 #[cfg(test)]

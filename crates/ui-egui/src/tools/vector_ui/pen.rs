@@ -968,7 +968,7 @@ fn commit_path_named(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, freef
 /// the draft's `owner` captured when drawing began, then put the current ones back (the Paths
 /// panel selection stays as `f` left it).
 fn as_owner<R>(app: &mut PhotocraftApp, owner: &PenOwner, f: impl FnOnce(&mut PhotocraftApp) -> R) -> R {
-    let options = std::mem::replace(&mut app.ui.tool_options, owner.options.clone());
+    let options = std::mem::replace(&mut *app.ui.tool_options, owner.options.clone());
     let vector_mask = std::mem::replace(&mut app.ui.vector_mask_target, owner.vector_mask);
     app.ui.selected_path = match &owner.target {
         super::PenTarget::Path { name, append } => append.then(|| name.clone()),
@@ -991,7 +991,7 @@ fn as_owner<R>(app: &mut PhotocraftApp, owner: &PenOwner, f: impl FnOnce(&mut Ph
     }
     app.session.tools.foreground = foreground;
     app.session.tools.background = background;
-    app.ui.tool_options = options;
+    *app.ui.tool_options = options;
     app.ui.vector_mask_target = vector_mask;
     result
 }

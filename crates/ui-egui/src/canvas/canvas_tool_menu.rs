@@ -59,6 +59,12 @@ pub enum MenuKind {
     Layers {
         /// The layers listed.
         layers: Vec<(u64, String)>,
+        /// Each row's level: a frame's image one in, under its frame (the Frame tool, #13885); empty: none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depth: Vec<u8>,
+        /// A separator and Isolate Layers end the rows (the Frame tool, #13885).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        isolate: bool,
     },
     /// A painting tool's Shift+right-click mode list (`brush_mode_menu`).
     BrushMode { plain: bool },
@@ -147,7 +153,17 @@ pub fn transform_app_rows() -> [Entry<String>; 2] {
 /// Photoshop's pasteboard menu (right-click outside the image): the pasteboard colour, the choice
 /// Preferences › Interface also offers. The ids are this menu's own: [`choose`] turns them into
 /// `prefs.set` (`pasteboard.<CanvasColor name>`) or opens the Color Picker.
-pub const PASTEBOARD_MENU: &[Row] = &[
+pub const PASTEBOARD_MENU: &[Row] = PASTEBOARD_MOVE_MENU.split_at(2).1;
+
+/// The Window item the Move tool's pasteboard menu toggles the contextual task bar with (#16757).
+pub const PASTEBOARD_TASK_BAR: &str = "window.panel.contextualTaskBar";
+
+/// The Move tool's pasteboard menu, as measured (#16757): Hide Contextual Task Bar (Show… while the
+/// bar is off, [`row_label`]) and a separator above the colour rows. Other tools weren't measured and
+/// keep [`PASTEBOARD_MENU`].
+pub const PASTEBOARD_MOVE_MENU: &[Row] = &[
+    Some(("Hide Contextual Task Bar", PASTEBOARD_TASK_BAR)),
+    None,
     Some(("Default", "pasteboard.default")),
     Some(("Black", "pasteboard.black")),
     Some(("Dark Gray", "pasteboard.darkGray")),
@@ -675,6 +691,32 @@ pub const COUNT_MENU: &[Row] = &[
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
+/// The Patch tool's rows (#12122). Use Pattern stays greyed: the Patch tool has no pattern mode yet.
+pub const PATCH_USE_PATTERN: &str = "canvasMenu.patch.usePattern";
+pub const PATCH_SOURCE: &str = "canvasMenu.patch.source";
+pub const PATCH_DESTINATION: &str = "canvasMenu.patch.destination";
+
+/// Right-click with the Patch tool inside the active selection, in the reference application's
+/// order (#12122). Outside it the Patch tool opens the Lasso's selection menu.
+pub const PATCH_INSIDE_SELECTION_MENU: &[Row] = &[
+    Some(("Use Pattern to Patch Selection", PATCH_USE_PATTERN)),
+    None,
+    Some(("Use Patch as Source", PATCH_SOURCE)),
+    Some(("Use Patch as Destination", PATCH_DESTINATION)),
+    None,
+    Some(("Color Range…", "select.colorRange")),
+    Some(("Load Selection…", "select.loadSelection")),
+];
+
+/// The options bar's Patch mode a row sets: `source` or `destination`.
+fn patch_mode(command: &str) -> Option<&'static str> {
+    match command {
+        PATCH_SOURCE => Some("source"),
+        PATCH_DESTINATION => Some("destination"),
+        _ => None,
+    }
+}
+
 /// The selection menu as measured in the reference application with the Red Eye tool (#12577),
 /// the Object Selection tool (#12866) and the Horizontal Type tool away from text (#12042): no
 /// Distort or Perspective, and Delete and Fill Selection after the fills.
@@ -897,6 +939,9 @@ pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
     if menu.tool == Tool::AddAnchorPoint {
         return add_anchor_row_label(app, menu, label, command);
     }
+    if command == PASTEBOARD_TASK_BAR && !app.ui.panels.context_task_bar {
+        return "Show Contextual Task Bar";
+    }
     if command != "path.transform" || !matches!(menu.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         return label;
     }
@@ -982,9 +1027,16 @@ fn sampler_menu(menu: &CanvasToolMenu) -> bool {
     menu.tool == Tool::ColorSampler && menu.kind == MenuKind::Tool
 }
 
-/// Is `menu` the Content-Aware Move tool's menu opened inside the active selection (#12194)?
+/// Do `tool`'s menu rows depend on whether the right-click is inside the selection: Content-Aware
+/// Move (#12194) and Patch (#12122)?
+fn splits_at_selection(tool: Tool) -> bool {
+    matches!(tool, Tool::ContentAwareMove | Tool::Patch)
+}
+
+/// Is `menu` the Content-Aware Move (#12194) or Patch (#12122) tool's menu opened inside the
+/// active selection?
 pub fn inside_selection(menu: &CanvasToolMenu) -> bool {
-    menu.tool == Tool::ContentAwareMove && menu.kind == MenuKind::Tool && menu.has_selection && menu.inside_selection
+    splits_at_selection(menu.tool) && menu.kind == MenuKind::Tool && menu.has_selection && menu.inside_selection
 }
 
 /// Content-Aware Move's canvas context menu requires an open document and leaves Bitmap, Duotone
@@ -1018,8 +1070,9 @@ fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
 
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
 /// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's, the shape
-/// tools' (in Shape mode only: [`open`] checks it) and the Horizontal Type tool's layer or
-/// selection menu away from text (#12042).
+/// tools' (in Shape mode only: [`open`] checks it), the Horizontal Type tool's layer or
+/// selection menu away from text (#12042) and the Vertical Type Mask tool's selection or layer
+/// menu while it edits no mask (#12091).
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -1038,12 +1091,18 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // The layer menu (#11772).
             | Tool::Count
-            // The layer or selection menu away from text (#12042); Vertical Type and the Type
-            // Mask tools are not measured and stay on their no-menu path.
+            // The layer or selection menu away from text (#12042); Vertical Type and the
+            // Horizontal Type Mask tool are not measured and stay on their no-menu path.
             | Tool::Type
+            // The measured selection menu with an active selection, the layer menu without one
+            // (#12091). Only the Vertical Type Mask tool was measured; while its mask is edited
+            // the type edit menu of #12084 comes first.
+            | Tool::VerticalTypeMask
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
+            // The patch rows inside the selection, the selection menu outside it (#12122).
+            | Tool::Patch
             // The layer or selection menu, where measured (#12577).
             | Tool::RedEye
     ) || path_menu(tool)
@@ -1178,6 +1237,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     match &menu.kind {
         MenuKind::Crop { .. } | MenuKind::Layers { .. } | MenuKind::BrushMode { .. } => &[],
         MenuKind::Guide => GUIDE_MENU,
+        MenuKind::Pasteboard if menu.tool == Tool::Move => PASTEBOARD_MOVE_MENU,
         MenuKind::Pasteboard => PASTEBOARD_MENU,
         MenuKind::View => {
             if menu.tool == Tool::Hand {
@@ -1197,12 +1257,19 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
                 SAMPLER_MENU
             } else if menu.tool == Tool::Count {
                 COUNT_MENU
+            } else if menu.tool == Tool::VerticalTypeMask {
+                // #12091: the measured selection table when the document has an active selection -
+                // the rows the Type, Red Eye and Object Selection branch shows, no Distort or
+                // Perspective - and the generic layer menu of #12042 when it has none. Which rows
+                // are greyed was not measured, so this tool adds no rule: `entry_enabled` keeps the
+                // menu bar's.
+                if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection | Tool::Type) {
                 if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if menu.tool == Tool::Eyedropper {
                 EYEDROPPER_MENU
             } else if inside_selection(menu) {
-                CAM_INSIDE_SELECTION_MENU
+                if menu.tool == Tool::Patch { PATCH_INSIDE_SELECTION_MENU } else { CAM_INSIDE_SELECTION_MENU }
             } else {
                 selection_rows(menu.has_selection)
             }
@@ -1410,8 +1477,13 @@ fn choose_guide(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result
     crate::menus::invoke(app, ctx, command, json!({})).map(|_| ())
 }
 
-/// A pasteboard row: set the colour, or open the Color Picker on the custom one.
+/// A pasteboard row: set the colour, open the Color Picker on the custom one, or run the Window
+/// item that hides or shows the contextual task bar.
 fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    if command == PASTEBOARD_TASK_BAR {
+        let ctx = app.ctx().clone();
+        return crate::menus::invoke(app, &ctx, command, json!({})).map(|_| ());
+    }
     if command == PASTEBOARD_PICK {
         let rgb = prefs::parse_hex(&app.session.prefs().interface.canvas_custom_color).map_or([0.5; 3], |c| c.map(|v| f32::from(v) / 255.0));
         crate::color_picker_ui::open_for_target(app, "pasteboard", "Color Picker (Custom Canvas Color)", rgb)?;
@@ -1430,7 +1502,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
                 _ => GUIDE_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command),
             };
         }
-        MenuKind::Pasteboard => return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command),
+        MenuKind::Pasteboard => return rows(menu).iter().flatten().any(|(_, id)| *id == command),
         MenuKind::View if command == "view.fillScreen" => return app.session.active().is_some(),
         MenuKind::View => return crate::menus::is_enabled(app, command),
         MenuKind::TypeEdit { .. } => {
@@ -1460,8 +1532,12 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if sampler_menu(menu) {
         return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
     }
-    // Inside the Content-Aware Move selection menu (#12194), Load Selection… stays greyed until a
-    // selection channel (non-spot alpha channel) has been saved.
+    // The Patch mode rows set the options bar's mode; Use Pattern waits for a pattern patch (#12122).
+    if menu.tool == Tool::Patch && (patch_mode(command).is_some() || command == PATCH_USE_PATTERN) {
+        return inside_selection(menu) && patch_mode(command).is_some();
+    }
+    // Inside the Content-Aware Move (#12194) and Patch (#12122) selection menus, Load Selection…
+    // stays greyed until a selection channel (non-spot alpha channel) has been saved.
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
     }
@@ -1606,7 +1682,10 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if layers.is_empty() {
                 return false;
             }
-            menu.kind = MenuKind::Layers { layers };
+            // The Frame tool's picker nests frames' images and ends with Isolate Layers (#13885).
+            let frame = tool == Tool::Frame;
+            let (layers, depth) = if frame { crate::layer_pick_ui::frame_rows(app, layers) } else { (layers, Vec::new()) };
+            menu.kind = MenuKind::Layers { layers, depth, isolate: frame };
         }
         MenuKind::TypeEdit { .. } => {
             if !editing_text(app, tool) {
@@ -1676,7 +1755,7 @@ fn capture(app: &mut PhotocraftApp, menu: &mut CanvasToolMenu, doc: [f64; 2], po
         // measured configuration heads the menu with the entry (#12915).
         menu.point = point.filter(|(target, hit)| pen_point_allowed(app, *target, hit)).and_then(|(target, hit)| point_at(app, target, hit));
     }
-    menu.inside_selection = menu.tool == Tool::ContentAwareMove && selected_at(app, doc);
+    menu.inside_selection = splits_at_selection(menu.tool) && selected_at(app, doc);
     if menu.tool == Tool::ColorSampler {
         menu.sampler = crate::analysis::sampler_at(app, doc); // PLAN: assumed name `analysis::sampler_at` (tools-w53)
         menu.sampler_at = menu.sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
@@ -1700,8 +1779,10 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
             }
             return;
         }
-        Some(MenuKind::Layers { .. }) => {
-            if let Some(layer) = command.strip_prefix(crate::layer_pick_ui::ROW).and_then(|n| n.parse::<u64>().ok()) {
+        Some(MenuKind::Layers { isolate, .. }) => {
+            if *isolate && command == crate::layer_pick_ui::ISOLATE {
+                crate::layer_pick_ui::isolate(app);
+            } else if let Some(layer) = command.strip_prefix(crate::layer_pick_ui::ROW).and_then(|n| n.parse::<u64>().ok()) {
                 crate::layer_pick_ui::choose(app, layer);
             }
             return;
@@ -1730,6 +1811,11 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
                 app.run(&id, params).map(|_| ())
             }
             MenuKind::Tool if is_eyedropper(&menu) => choose_eyedropper(app, ctx, &menu, command),
+            // A Patch mode row sets the options bar's Source / Destination choice (#12122).
+            MenuKind::Tool if patch_mode(command).is_some() => {
+                app.ui.tool_options.patch_mode = patch_mode(command).unwrap_or("source").into();
+                Ok(())
+            }
             // Photoshop's Make Work Path… asks for the tolerance first.
             MenuKind::Tool if command == "select.toWorkPath" => {
                 pen_dialogs::open(app, command, "");
@@ -1862,8 +1948,8 @@ pub fn close_stale(app: &mut PhotocraftApp) {
 /// `layer_pick_ui::entries`, the brush-mode menu `brush_mode_menu::entries`.
 pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>> {
     match &menu.kind {
-        MenuKind::Layers { layers } => {
-            return crate::layer_pick_ui::entries(layers, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
+        MenuKind::Layers { layers, depth, isolate } => {
+            return crate::layer_pick_ui::entries(layers, depth, *isolate, app.session.active().and_then(|s| s.active_layer).map(|l| l.0));
         }
         MenuKind::BrushMode { plain } => return crate::brush_mode_menu::entries(app, menu.tool, *plain),
         _ => {}
@@ -1912,6 +1998,8 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
             "Duplicate Layers…" => tl!("Duplicate Layers…"),
             "Delete Layers" => tl!("Delete Layers"),
             "Rasterize Layers" => tl!("Rasterize Layers"),
+            "Hide Contextual Task Bar" => tl!("Hide Contextual Task Bar"),
+            "Show Contextual Task Bar" => tl!("Show Contextual Task Bar"),
             key => tl!(key),
         };
         out.push(Entry::new(command.to_string(), text.to_string()).enabled(entry_enabled(app, menu, command)).checked(mode_checked(app, menu, command)));
@@ -1995,6 +2083,13 @@ mod cam_menu_tests;
 pub(crate) mod tests;
 
 #[cfg(test)]
+mod patch_menu_tests;
+
+#[cfg(test)]
+#[path = "../task_bar_pasteboard_entry_tests.rs"]
+mod task_bar_pasteboard_entry_tests;
+
+#[cfg(test)]
 pub(crate) mod count_tests;
 
 #[cfg(test)]
@@ -2011,6 +2106,9 @@ mod type_layer_menu_tests;
 
 #[cfg(test)]
 mod type_off_text_tests;
+
+#[cfg(test)]
+mod vertical_mask_idle_menu_tests;
 
 #[cfg(test)]
 mod add_anchor_menu_tests;
