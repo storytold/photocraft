@@ -318,6 +318,12 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
                 let kind = if command == "layer.layerStyle.globalLight" { ParamKind::angle_in(min, max, default, 0) } else { ParamKind::angle(default) };
                 p = Param::new(p.key, p.label, kind);
             }
+            // Artboard from Layers' Width and Height take 4 to 32000 px; a value typed outside is
+            // clamped when the field is left (#14577).
+            if command == "layer.new.artboardFromLayers" && matches!(p.key.as_str(), "width" | "height") {
+                use photocraft_engine::artboard_cmds::{FROM_LAYERS_MAX, FROM_LAYERS_MIN};
+                p = Param::new(p.key, p.label, ParamKind::int(Some(FROM_LAYERS_MIN), Some(FROM_LAYERS_MAX), 0));
+            }
             if command == SCALE_EFFECTS && p.key == "scale" {
                 return scale_effects_row(p);
             }
@@ -373,6 +379,10 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     // Rotate Canvas: one row of its own, without the Interpolation row (#14462).
     if command == super::rotate_canvas_ui::COMMAND {
         list = super::rotate_canvas_ui::params();
+    }
+    // Auto-Align Layers: the Projection and Lens Correction groups and the text block (#14196).
+    if command == super::auto_align_ui::COMMAND {
+        list = super::auto_align_ui::params(app);
     }
     rows::custom_rows(app, command, &mut list);
     if command == color_settings_presets::COMMAND {
@@ -458,12 +468,13 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
         map.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
     }
     // The reference application's Artboard from Layers opens at the next Artboard N and the
-    // selected layers' size every time, never a remembered size; past the field's 30000 px
+    // selected layers' size every time, never a remembered size; past the field's 32000 px
     // range, 0 keeps the bounds.
     if command == "layer.new.artboardFromLayers"
         && let Some((name, [w, h])) = photocraft_engine::artboard_cmds::from_layers_defaults(&app.session)
     {
-        let fits = w <= 30_000 && h <= 30_000;
+        let max = photocraft_engine::artboard_cmds::FROM_LAYERS_MAX;
+        let fits = w <= max && h <= max;
         map.insert("name".into(), json!(name));
         map.insert("width".into(), json!(if fits { w } else { 0 }));
         map.insert("height".into(), json!(if fits { h } else { 0 }));
@@ -576,8 +587,8 @@ fn builder(
             .reset_to(reset.clone())
             .layout(ParamLayout::Stacked)
             .previews(preview)
-            // Alt keeps Rotate Canvas's Cancel a Cancel, as in the reference application (#14462).
-            .alt_resets(key != super::rotate_canvas_ui::COMMAND)
+            // Alt keeps Rotate Canvas's and Auto-Align's Cancel a Cancel, as in the reference application (#14462, #14196).
+            .alt_resets(key != super::rotate_canvas_ui::COMMAND && key != super::auto_align_ui::COMMAND)
             .alert_title(tl!("PhotoCraft"));
         if let Some(canvas) = canvas {
             dialog = dialog.canvas(canvas);
@@ -733,6 +744,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
+    }
+    if command == super::auto_align_ui::COMMAND {
+        super::auto_align_ui::command_params(&mut map, fields);
     }
     // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
     // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
@@ -1419,6 +1433,8 @@ pub struct FilterPreviewKey {
     pub scratch: u64,
 }
 
+#[cfg(test)]
+mod artboard_from_layers_size_range_tests;
 #[cfg(test)]
 mod global_light_angle_range_tests;
 #[cfg(test)]

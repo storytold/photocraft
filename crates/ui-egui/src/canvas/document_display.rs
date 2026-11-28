@@ -35,6 +35,11 @@ impl View {
             .aspect(f64::from(aspect))
     }
 
+    /// Takes `zoom` points per document unit, shown at `ppp` device pixels per point, and leaves the centre and rotation.
+    pub(crate) fn set_zoom(&mut self, zoom: f64, ppp: f32) {
+        self.zoom = (zoom * f64::from(ppp)) as f32;
+    }
+
     /// Takes the zoom, centre and rotation of `view`, shown at `ppp` device pixels per point.
     pub(crate) fn set_from(&mut self, view: &CanvasView, ppp: f32) {
         self.zoom = (view.zoom * f64::from(ppp)) as f32;
@@ -513,7 +518,7 @@ fn canvas_controls(
     crate::blur_pins::overlay(app, ui, rect);
     let doc = app.session.documents()[host.idx].doc.id;
     if let Some(shown) = crate::vector_ui::overlay::show_paths(app, ui, rect, doc) {
-        let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+        let mods = craft::ui::runtime::pointer::mods(ui.ctx());
         crate::direct_select::edits::apply(app, &shown.output, &shown.refs, app.ui.tool, mods);
     }
     crate::type_tool::canvas_controls(app, ui, rect);
@@ -573,7 +578,6 @@ fn canvas_controls(
         }
         crate::frame_tool::task_bar::show(ui, app, bar_area);
     }
-    crate::crop_ui::each_pass(app);
     crate::vector_ui::shapes::show_preview(app, ui, rect, &space.view);
     crate::tools::brush_feedback::show(ui, app, rect, pointer);
     if shown != space.view {

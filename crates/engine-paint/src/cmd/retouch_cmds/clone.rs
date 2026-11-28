@@ -4,7 +4,7 @@ use super::sampling::{SampleLayers, sample_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface, Value,
     alpha_index, apply_coverage, bad, coverage, damage_json, flag, has_pixel_layer, json, parse_blend, parse_brush, pattern_stamp, periodic, point,
-    reject_huge_stroke, run_stroke, to_rgba,
+    reject_huge_stroke, restore_coverage, run_stroke, to_rgba,
 };
 
 /// Where a clone stroke samples: `offset` / `source` params, else the active Clone Source slot,
@@ -212,6 +212,11 @@ pub(super) fn clone_result(dmg: Rect, off: (i32, i32), aligned: bool, p: &Value,
 pub(super) fn blend_param(p: &Value, cmd: &str) -> Result<BlendMode> {
     match p.get("mode").and_then(Value::as_str) {
         None => Ok(BlendMode::Normal),
+        // The Healing Brush's Replace row (#12101) is not a blend mode: the stroke copies the
+        // source, which `healing_brush` reads from the params itself. Here it only opens the live
+        // preview, whose texture the Replace stroke draws as it stands, through Normal. Every other
+        // command keeps refusing the word.
+        Some("replace") if cmd == "paint.healingBrush" => Ok(BlendMode::Normal),
         Some(m) => parse_blend(m).ok_or_else(|| bad(cmd, format!("unknown blend mode `{m}`"))),
     }
 }
@@ -512,10 +517,14 @@ impl LiveRetouch {
         // The Pattern Stamp's Behind goes beneath the pixels, as its commit lays it.
         let behind = matches!(self.paint, LivePaint::Pattern { behind: true, .. });
         let clone = matches!(self.paint, LivePaint::Clone { .. });
+        let history = matches!(self.paint, LivePaint::History(_));
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
         let damage = if clone {
             apply_clone_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode)
+        } else if history {
+            // As the commit paints it (`heal::history_brush`): the source state replaces the pixels.
+            restore_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode)
         } else {
             pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind)
         };

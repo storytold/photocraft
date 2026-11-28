@@ -102,15 +102,16 @@ pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
 
 /// Shape tools whose Alt Eyedropper also updates the tool's Fill.
 pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
-    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon)
+    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon | Tool::Star)
 }
 
-/// Whether an Alt or Shift+Alt press samples the foreground and Fill for the Triangle, Custom Shape,
-/// Rectangle, Ellipse and Polygon tools (#13364, #15856, #13333, #13224, #13317). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
-/// Control+Alt is excluded here, as in [`alt_samples`].
+/// Whether an Alt press samples the foreground and Fill for a shape tool. Sampling requires Shape
+/// mode, no active shape layer, and a sampleable pixel. The Star keeps Shift+Alt for drawing a
+/// constrained shape from the centre. Control+Alt is excluded, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
         && !mods.ctrl
+        && (!mods.shift || app.ui.tool != Tool::Star)
         && shape_alt_sets_fill(app.ui.tool)
         && app.ui.tool_options.shape_mode == craft::draw::ui::VectorMode::Shape
         && crate::vector_ui::active_shape_path(app).is_none()
@@ -122,9 +123,27 @@ pub(crate) fn alt_loads_mixer(tool: Tool, mods: craft::keymap::Mods) -> bool {
     mods.alt && !mods.ctrl && tool == Tool::MixerBrush
 }
 
-/// Whether the Mixer Brush's target layer has Lock All on, so its cursor shows the not-allowed mark.
-pub(crate) fn mixer_target_locked(app: &PhotocraftApp) -> bool {
-    app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(|layer| layer.locks.all)
+/// Whether the painting tool shows the not-allowed cursor for its current target.
+pub(super) fn paint_cursor_blocked(app: &PhotocraftApp) -> bool {
+    use photocraft_doc::LayerContent;
+
+    let tool = app.ui.tool;
+    if !matches!(tool, Tool::Brush | Tool::Eraser | Tool::PaintBucket | Tool::MixerBrush) {
+        return false;
+    }
+    let Some(state) = app.session.active() else { return false };
+    let Some(path) = state.active_layer.and_then(|id| state.doc.layers.index().path(id)) else { return false };
+    let Some(layer) = state.doc.layer_at(path) else { return false };
+    if tool == Tool::MixerBrush {
+        // #11957 checks the active layer's own Lock All for the Mixer Brush.
+        return layer.locks.all;
+    }
+    let blocked = match &layer.content {
+        LayerContent::Raster(_) => state.doc.locks_at(path).all,
+        LayerContent::Text(_) => matches!(tool, Tool::Brush | Tool::PaintBucket),
+        _ => false,
+    };
+    blocked && state.doc.shown_at(path) && crate::brush_refusal::pixels_target(&super::paint_target(app))
 }
 
 #[cfg(test)]
@@ -194,3 +213,7 @@ mod custom_shape_alt_eyedropper_tests;
 #[cfg(test)]
 #[path = "magic_eraser_cursor_tests.rs"]
 mod magic_eraser_cursor_tests;
+
+#[cfg(test)]
+#[path = "locked_layer_cursor_tests.rs"]
+mod locked_layer_cursor_tests;

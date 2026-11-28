@@ -92,6 +92,7 @@ mod layer_delete_last;
 mod layer_mask_depth;
 mod layer_props_several;
 mod layer_range_panel_order;
+mod layers_thumbnail_history_names;
 mod live_dab_matches_replay;
 mod live_line_transform;
 mod magnetic_lasso_composite;

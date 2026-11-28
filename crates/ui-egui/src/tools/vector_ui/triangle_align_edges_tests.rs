@@ -100,7 +100,7 @@ fn every_shape_tool_and_the_pen_show_one_align_edges_checkbox() {
     }
     let opts = ToolOptions { align_edges: false, ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.ui.tool_options = opts;
+    *app.ui.tool_options = opts;
     for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Line, Tool::Pen] {
         app.ui.tool = tool;
         app.ui.tool_options.align_edges = false;

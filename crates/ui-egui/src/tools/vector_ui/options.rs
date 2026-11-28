@@ -7,7 +7,7 @@ use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePan
 use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, bind_tracked, clicked};
 use craft::ui::display::{Divider, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
@@ -98,7 +98,7 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
     }
     if is_shape_tool(tool) {
         // Shape draws a shape layer, Path adds the outline to the work path (#9453).
-        VectorModeSelect::new(Bind::bound(&mut app.ui.tool_options.shape_mode), &SHAPE_TOOL_MODES).show(ui);
+        VectorModeSelect::new(bind_tracked!(app.ui.tool_options => shape_mode), &SHAPE_TOOL_MODES).show(ui);
         if draws_path(&app.ui.tool_options) {
             Divider::vertical().show(ui);
             make_buttons(app, ui);
@@ -172,7 +172,7 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     // Photoshop's Pen lists Shape, Path and a greyed Pixels; the other pens keep theirs.
     let offered: &[(VectorMode, bool)] = if tool == Tool::Pen { &PEN_MODES } else { &OTHER_PEN_MODES };
     let mode_before = app.ui.tool_options.vector_mode;
-    VectorModeSelect::new(Bind::bound(&mut app.ui.tool_options.vector_mode), offered).show(ui);
+    VectorModeSelect::new(bind_tracked!(app.ui.tool_options => vector_mode), offered).show(ui);
     // #12910 measured: in an Indexed Color document the Pen lists Shape and keeps the entry enabled,
     // but picking it leaves the tool in Path mode. Only a pick through this dropdown counts: a Shape
     // mode that arrived another way (a tool preset, `penMode`) is not measured and keeps today's
@@ -186,16 +186,16 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         // their popups; a pick sets the tool defaults the next Pen shape is painted with.
         crate::shape_options::pen_paint_swatches(app, ui);
         let ppi = document_ppi(app);
-        let o = &mut app.ui.tool_options;
+        let o = &app.ui.tool_options;
         let look = fw::ShapeAppearance::new(Paint::None, Paint::None, f64::from(o.stroke_width)).stroke_style((&o.shape_stroke).into());
         let out = StrokeCells::new(&look, ppi).corners(true).stroke_open(Bind::bound(&mut app.ui.shape_stroke_open)).show(ui);
         for event in &out.events {
             match event.value() {
-                Some(fw::ShapeChange::StrokeWidth(w)) => o.stroke_width = *w as f32,
+                Some(fw::ShapeChange::StrokeWidth(w)) => app.ui.tool_options.stroke_width = *w as f32,
                 Some(fw::ShapeChange::StrokeStyle { style, width, .. }) => {
-                    o.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from_style(style);
+                    app.ui.tool_options.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from_style(style);
                     if let Some(w) = width {
-                        o.stroke_width = *w as f32;
+                        app.ui.tool_options.stroke_width = *w as f32;
                     }
                 }
                 _ => {}
@@ -225,13 +225,13 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     super::alignment::pen_option(app, ui);
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
-    let o = &mut app.ui.tool_options;
     if tool == Tool::Pen {
         Divider::vertical().show(ui);
         // The gear's popover replaces the Rubber Band item (tools-03 D3).
         // PLAN: `PathOptionsOutput::pick_color` (key PATH_OPTIONS_COLOR_KEY) is answered by the owner of the colour picker dialog.
-        let _ = PathOptionsPopover::new(label(tl!("Set additional pen and path options")), Bind::bound(&mut o.path_options)).show(ui, &mut open.path_options);
-        Checkbox::new(Bind::bound(&mut o.pen_auto_add_delete)).label(label(tl!("Auto Add/Delete"))).show(ui);
+        let _ = PathOptionsPopover::new(label(tl!("Set additional pen and path options")), bind_tracked!(app.ui.tool_options => path_options))
+            .show(ui, &mut open.path_options);
+        Checkbox::new(bind_tracked!(app.ui.tool_options => pen_auto_add_delete)).label(label(tl!("Auto Add/Delete"))).show(ui);
     }
     let enter = crate::shortcuts::pretty("Enter");
     match tool {
@@ -240,13 +240,13 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             // In a `Field`: a bare control's label only names it, it is not drawn (#16338).
             let picked = Field::new(label(tl!("Curve Fit:")))
                 .show(ui, |ui, _| {
-                    let field = NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(o.curve_fit))));
+                    let field = NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(app.ui.tool_options.curve_fit))));
                     field.range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui).value().copied()
                 })
                 .inner
                 .flatten();
             if let Some(Some(v)) = picked {
-                o.curve_fit = v as f32;
+                app.ui.tool_options.curve_fit = v as f32;
             }
             let alt = crate::shortcuts::pretty("Alt");
             hint(ui, &crate::i18n::fmt(tl!("Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close"), &[("alt", &alt)]));
@@ -603,6 +603,10 @@ mod line_arrow_concavity_field_tests;
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
 mod pen_make_mask_tests;
+
+#[cfg(test)]
+#[path = "custom_shape_path_make_tests.rs"]
+mod custom_shape_path_make_tests;
 
 #[cfg(test)]
 #[path = "triangle_path_make_tests.rs"]
