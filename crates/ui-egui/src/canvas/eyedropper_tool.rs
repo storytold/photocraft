@@ -36,9 +36,8 @@ pub(crate) struct EyedropperState {
     sampler_added: bool,
 }
 
-/// The Eyedropper over PhotoCraft's sampling, options and colours. A pick applies only in the
-/// `press` or `drag` call that took it, so a second pass in a frame, which gets no new pointer
-/// input, picks nothing again.
+/// The Eyedropper over PhotoCraft's sampling, options and colours. A pick applies in the
+/// pointer call that took it, so a second pass in a frame with no new input picks nothing again.
 pub(crate) struct PcEyedropper<'a> {
     scope: &'a ToolScope<'a>,
     state: &'a mut EyedropperState,
@@ -178,6 +177,11 @@ impl CanvasTool for PcEyedropper<'_> {
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         self.state.sampler_added = false;
+        if self.shape_fill {
+            // The button can report a new position at release without a pointer move.
+            self.inner.drag(pointer, cx);
+            self.apply();
+        }
         self.inner.release(pointer, cx);
     }
 
