@@ -84,6 +84,43 @@ fn location_names_the_file_below_the_root_that_holds_it() {
 }
 
 #[test]
+fn linked_file_missing_looks_only_below_the_read_roots() {
+    let (inside, outside, workspace) = roots("link-missing");
+    std::fs::write(inside.join("there.png"), b"x").unwrap();
+    std::fs::write(outside.join("secret.png"), b"x").unwrap();
+    assert_eq!(workspace.linked_file_missing(&inside.join("there.png")), Some(false));
+    assert_eq!(workspace.linked_file_missing(&inside.join("gone.png")), Some(true));
+    assert_eq!(workspace.linked_file_missing(&inside.join("gone").join("art.png")), Some(true), "a folder that is gone too");
+    // Outside the root a file that is there and one that is not answer alike: neither is looked at.
+    assert_eq!(workspace.linked_file_missing(&outside.join("secret.png")), None);
+    assert_eq!(workspace.linked_file_missing(&outside.join("gone.png")), None);
+    assert_eq!(workspace.linked_file_missing(&inside.join("..").join("outside").join("secret.png")), None, "no climbing out of the root");
+    assert_eq!(workspace.linked_file_missing(&inside.join("..").join("outside").join("gone.png")), None);
+    assert_eq!(workspace.linked_file_missing(Path::new("there.png")), None, "a relative path names no file");
+    assert_eq!(workspace.linked_file_missing(Path::new("gone.png")), None);
+    // Any read root that holds the file answers for it.
+    let both = AuthorizedWorkspace::with_read_roots([outside.as_path(), inside.as_path()], None).unwrap();
+    assert_eq!(both.linked_file_missing(&inside.join("there.png")), Some(false));
+    assert_eq!(both.linked_file_missing(&outside.join("gone.png")), Some(true));
+    assert_eq!(AuthorizedWorkspace::default().linked_file_missing(&inside.join("gone.png")), None, "no read root, no look");
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_file_missing_does_not_follow_a_link_out_of_the_root() {
+    let (inside, outside, workspace) = roots("link-missing-symlink");
+    std::fs::write(outside.join("secret.png"), b"x").unwrap();
+    std::os::unix::fs::symlink(&outside, inside.join("escape")).unwrap();
+    std::os::unix::fs::symlink(outside.join("secret.png"), inside.join("there.png")).unwrap();
+    std::os::unix::fs::symlink(outside.join("gone.png"), inside.join("gone.png")).unwrap();
+    // What lies behind a link that leaves the root is not told, there or not.
+    assert_eq!(workspace.linked_file_missing(&inside.join("escape").join("secret.png")), None);
+    assert_eq!(workspace.linked_file_missing(&inside.join("escape").join("gone.png")), None);
+    assert_eq!(workspace.linked_file_missing(&inside.join("there.png")), None);
+    assert_eq!(workspace.linked_file_missing(&inside.join("gone.png")), None);
+}
+
+#[test]
 fn open_pcraft_loads_a_directory_below_the_read_root() {
     let (inside, _, workspace) = roots("pcraft-dir");
     let doc = photocraft_doc::Document::new("Native", photocraft_doc::Size::new(16, 12), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);

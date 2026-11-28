@@ -832,6 +832,8 @@ pub(crate) fn after_open(
     }
     // Script events bound to "Open Document".
     photocraft_engine::automate_cmds::document_opened(&mut app.session);
+    // Linked files that are not there: Cannot Locate Linked Assets lists them (#14122).
+    crate::missing_links_ui::ask(app, document, path);
     app.sync_views();
     Ok(())
 }

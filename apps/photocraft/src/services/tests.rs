@@ -742,3 +742,64 @@ fn tiff_options_reach_the_written_file() {
     assert_eq!(info.pages.iter().map(|p| (p.width, p.compression)).collect::<Vec<_>>(), [(200, 5), (100, 5), (50, 5)]);
     assert!(!photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha());
 }
+
+/// An agent's `app.open` through the desktop's own automation services and policy
+/// ([`automation`]): a request path relative to the read folder, for the zip and the directory
+/// form of a `.pcraft`. Its missing linked files below the read folder are listed in `warnings`
+/// (a relative link taken from where the folder holds the document), though the desktop policy
+/// refuses every smart-object file command; a link that leaves the folder is not reported.
+#[test]
+fn agent_opens_report_missing_links_below_the_read_folder_with_the_desktop_services() {
+    use photocraft_doc::{LayerContent, LayerId, SmartSource};
+    let root = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let (art, inside, outside) = (root.path().join("art.png"), root.path().join("in.png"), elsewhere.path().join("out.png"));
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 10, "height": 10, "background": "#ff0000"})).unwrap();
+    std::fs::write(&art, photocraft_io::export(&s.active().unwrap().doc, "art.png", &Default::default()).unwrap().bytes).unwrap();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    let layers: Vec<u64> = (0..3)
+        .map(|_| {
+            s.execute("file.placeLinked", json!({"path": art.to_string_lossy()})).unwrap();
+            s.active().unwrap().active_layer.unwrap().0
+        })
+        .collect();
+    let stored = ["art.png".to_string(), inside.to_string_lossy().into_owned(), outside.to_string_lossy().into_owned()];
+    s.edit("links", |d, _| {
+        for (id, path) in layers.iter().zip(&stored) {
+            if let LayerContent::Smart(sm) = &mut d.layer_mut(LayerId(*id)).unwrap().content {
+                sm.source = SmartSource::Linked { path: path.clone() };
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    let zip = root.path().join("doc.pcraft");
+    s.execute("file.saveACopy", json!({"path": zip.to_string_lossy()})).unwrap();
+    let doc = photocraft_format::load_from_bytes(&std::fs::read(&zip).unwrap()).unwrap();
+    photocraft_format::PcraftWriter::new().save_dir(&doc, &root.path().join("folder.pcraft"), &photocraft_format::SaveOptions::default()).unwrap();
+    std::fs::remove_file(&art).unwrap();
+    let expected = json!([&art, &inside].iter().map(|f| format!("Cannot locate linked asset: {}", f.display())).collect::<Vec<_>>());
+    for request in ["doc.pcraft", "folder.pcraft"] {
+        let workspace = photocraft_automation::AuthorizedWorkspace::new(Some(root.path()), None).unwrap();
+        let automation = automation(Some(workspace));
+        let services = Services {
+            import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            automation_read: automation.read,
+            automation_open_pcraft: automation.open_pcraft,
+            automation_locate: automation.locate,
+            automation_link_missing: automation.link_missing,
+            automation_command: automation.command,
+            automation_authorize: automation.authorize,
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.background_jobs = false;
+        let ctx = app.ctx().clone();
+        let (req, _rx) = photocraft_ui_egui::ControlRequest::new("app.open", json!({"path": request}));
+        let photocraft_ui_egui::control::Reply::Done(r) = photocraft_ui_egui::control::handle(&mut app, &ctx, &req) else { panic!("app.open answers at once") };
+        assert_eq!(r["result"]["warnings"], expected, "{request}: {r}");
+    }
+}

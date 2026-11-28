@@ -115,6 +115,30 @@ impl AuthorizedWorkspace {
         })
     }
 
+    /// Whether the file at the absolute `path` is absent, looked at only through the read roots:
+    /// `Some(true)` when a root that the path lies beneath reports it not found, `Some(false)`
+    /// when one holds it, and `None` when the path lies beneath no read root or the look fails
+    /// any other way (a link leading out of the root, a malformed name). Such a path is never
+    /// looked at with ambient authority, so the answer tells nothing about files outside the
+    /// roots. A document's linked files are checked with it after an automation open. It grants
+    /// no access.
+    pub fn linked_file_missing(&self, path: &Path) -> Option<bool> {
+        if !path.is_absolute() {
+            return None;
+        }
+        let raw = path.to_str()?;
+        let mut missing = None;
+        for root in &self.read {
+            let Ok(Some(relative)) = scoped_path(raw, root) else { continue };
+            match root.dir.metadata(&relative) {
+                Ok(_) => return Some(false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing = Some(true),
+                Err(_) => {}
+            }
+        }
+        missing
+    }
+
     fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
         if self.read.is_empty() {
             return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));

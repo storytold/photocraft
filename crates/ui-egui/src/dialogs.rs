@@ -479,6 +479,7 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::layers_panel_ui::take,
     crate::slice_ui::take,
     crate::crop_presets::take,
+    missing_links_ui::take,
     crate::panels::apply_data_set_ui::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
@@ -804,6 +805,7 @@ pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
 pub mod merge_channels_ui;
+pub mod missing_links_ui;
 pub mod new_doc_ui;
 pub mod new_group_ui;
 pub mod new_guide_ui;

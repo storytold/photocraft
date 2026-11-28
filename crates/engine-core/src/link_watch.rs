@@ -21,6 +21,7 @@
 //! ends catches up.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 
 use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
@@ -71,9 +72,13 @@ pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
 /// that is not followed ([`crate::doc_path`]).
-fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBuf>, Vec<u64>)> {
-    let document = st.path.as_deref().map(std::path::Path::new);
-    linked_files(&st.doc)
+fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<PathBuf>, Vec<u64>)> {
+    resolved_files_of(&st.doc, st.path.as_deref().map(Path::new))
+}
+
+/// [`resolved_files`] for `doc` read from the file `document`.
+fn resolved_files_of(doc: &Document, document: Option<&Path>) -> Vec<(String, Option<PathBuf>, Vec<u64>)> {
+    linked_files(doc)
         .into_iter()
         .map(|(p, ids)| {
             let file = crate::doc_path::resolve_in(&p, document).ok();
@@ -81,6 +86,99 @@ fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBu
         })
         .collect()
 }
+
+/// A missing linked file, by the absolute path its links resolve to, with the stored paths that
+/// name it (sorted).
+pub type MissingFile = (PathBuf, Vec<String>);
+
+/// Whether `file` can't be looked at where it should be. Any failure counts, as the watcher's own
+/// look does ([`stamp`], the Layers panel's Missing filter): a file whose folder can't be entered or
+/// whose share doesn't answer is not located either, and Relink… is the way out of all of them.
+fn not_there(file: &Path) -> bool {
+    !cfg!(target_arch = "wasm32") && std::fs::metadata(file).is_err()
+}
+
+/// Groups the followed paths among `resolved` whose file is `absent` by that file: each file once,
+/// in path order, however many layers or spellings name it.
+fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>, absent: impl Fn(&Path) -> bool) -> Vec<MissingFile> {
+    let mut by_file: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for (stored, file, _) in resolved {
+        // Absent, not merely unstamped: a file dated before 1970 has no stamp but is there.
+        if let Some(file) = file.filter(|f| absent(f)) {
+            by_file.entry(file).or_default().push(stored);
+        }
+    }
+    by_file.into_iter().collect()
+}
+
+/// The linked files of `doc`, read from the file `document` (relative links are taken from its
+/// folder), that are not there right now. Looked at on the spot, for a document that has just opened
+/// (the watcher's first look is still to come). A path that is not followed ([`crate::doc_path`]) is
+/// not listed, as in [`LinkWatchExt::missing_links`]; the web app has no files to look at and lists none.
+pub fn missing_files(doc: &Document, document: Option<&Path>) -> Vec<MissingFile> {
+    missing_among(resolved_files_of(doc, document), not_there)
+}
+
+/// [`missing_files`] looked at on a worker thread, for a caller that must not be held up (the
+/// interface after an open): a file on a share that doesn't answer can take the look a long time.
+/// The answer arrives on the returned channel, and `done` runs right after it is sent (to wake a
+/// caller that polls). A document with no followed link is answered at once. A channel that closes
+/// without an answer is a look that could not be started.
+pub fn missing_files_look(doc: &Document, document: Option<&Path>, done: impl FnOnce() + Send + 'static) -> std::sync::mpsc::Receiver<Vec<MissingFile>> {
+    let resolved = resolved_files_of(doc, document);
+    let (tx, rx) = std::sync::mpsc::channel();
+    if cfg!(target_arch = "wasm32") || resolved.iter().all(|(_, file, _)| file.is_none()) {
+        let _ = tx.send(Vec::new());
+        return rx;
+    }
+    let look = move || {
+        let _ = tx.send(missing_among(resolved, not_there));
+        done();
+    };
+    // A thread that can't be started drops the sender with the closure.
+    let _ = std::thread::Builder::new().name("link-check".into()).spawn(look);
+    rx
+}
+
+/// [`missing_files_look`] waited for at most `wait`: `None` when the look takes longer.
+pub fn missing_files_within(doc: &Document, document: Option<&Path>, wait: std::time::Duration) -> Option<Vec<MissingFile>> {
+    missing_files_look(doc, document, || {}).recv_timeout(wait).ok()
+}
+
+/// Decides whether an untrusted caller may touch a path: the session's [`Session::authorize`] gate.
+pub type PathGate = fn(&str, &Value) -> Result<()>;
+
+/// One warning per missing file, naming its absolute path.
+fn missing_warnings(missing: Vec<MissingFile>) -> Vec<String> {
+    missing.into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+}
+
+/// The warnings an open without a dialog (automation, the CLI) reports for [`missing_files`]: one
+/// per file, naming its absolute path. With `gate` (an automation open), a file it refuses is not
+/// looked at, so the warnings can't tell whether a file outside what the caller may read exists.
+pub fn missing_file_warnings(doc: &Document, document: Option<&Path>, gate: Option<PathGate>) -> Vec<String> {
+    let mut resolved = resolved_files_of(doc, document);
+    if let Some(gate) = gate {
+        for (_, file, _) in &mut resolved {
+            if file.as_ref().is_some_and(|f| gate(MISSING_LINK_CHECK, &json!({"path": f.to_string_lossy()})).is_err()) {
+                *file = None;
+            }
+        }
+    }
+    missing_warnings(missing_among(resolved, not_there))
+}
+
+/// [`missing_file_warnings`] for a caller that reaches files its own way (an automation client,
+/// through its read folders) and not the process's: `absent` answers whether a file is not there,
+/// or `None` for one it may not look at, which is then not reported. No file is looked at any
+/// other way, so the warnings tell nothing about a file outside what the caller may read.
+pub fn missing_file_warnings_through(doc: &Document, document: Option<&Path>, absent: &dyn Fn(&Path) -> Option<bool>) -> Vec<String> {
+    missing_warnings(missing_among(resolved_files_of(doc, document), |f| absent(f) == Some(true)))
+}
+
+/// The command a missing-link look is authorized as: it reads no more of a file than Update
+/// Modified Content would.
+const MISSING_LINK_CHECK: &str = "layer.smartObjects.updateModifiedContent";
 
 /// Watching the active document's linked smart object files (the link fields are core session data).
 pub trait LinkWatchExt {
