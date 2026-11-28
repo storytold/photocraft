@@ -246,7 +246,7 @@ type Build = fn(&mut Session, LayerId, LayerId) -> Vec<LayerId>;
 /// Auto-Blend stays unavailable and changes neither the document nor the history.
 #[test]
 fn other_group_selections_keep_todays_refusal() {
-    let builds: [(&str, Build); 11] = [
+    let builds: [(&str, Build); 12] = [
         ("a group alone", |s, _, right| vec![group_of(s, right, "G")]),
         ("an empty group and a pixel layer", |s, left, _| {
             let r = s.execute("layer.new.group", json!({"name": "Empty"})).unwrap();
@@ -293,6 +293,11 @@ fn other_group_selections_keep_todays_refusal() {
         ("a hidden group and a pixel layer", |s, left, right| {
             let g = group_of(s, right, "G");
             s.execute("layer.hideLayers", json!({"layer": g.0})).unwrap();
+            vec![left, g]
+        }),
+        ("a group holding a hidden layer and a pixel layer", |s, left, right| {
+            let g = group_of(s, right, "G");
+            s.execute("layer.hideLayers", json!({"layer": right.0})).unwrap();
             vec![left, g]
         }),
         ("a masked group and a pixel layer", |s, left, right| {
