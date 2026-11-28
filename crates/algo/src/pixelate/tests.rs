@@ -250,7 +250,7 @@ fn cell_filters_tiled_storage_matches_scalar_with_soft_selection() {
                     FilterParams::Pointillize { cell_size: 3.75, seed: 37, background: [1.0; 4] },
                     FilterParams::Pointillize { cell_size: 10.0, seed: 37, background: [0.1, 0.8, 0.4, 0.25] },
                 ] {
-                    for extent in [None, Some(bounds)] {
+                    let reference = |extent| {
                         assert!(matches!(params.halo(), crate::Halo::Radius(_)));
                         let halo = match params.halo() {
                             crate::Halo::Radius(r) => r,
@@ -268,11 +268,17 @@ fn cell_filters_tiled_storage_matches_scalar_with_soft_selection() {
                         crate::mix_selection(&mut expected_data, bounds, &selection, &image, ctx.alpha);
                         let mut expected = surface.clone();
                         expected.write_region(bounds, &expected_data);
+                        expected.read_region(bounds)
+                    };
+                    let unclamped = reference(None);
+                    // The Crystallize reference samples only inside bounds, where the edge policies agree.
+                    let clamped = if matches!(params, FilterParams::Crystallize { .. }) { None } else { Some(reference(Some(bounds))) };
+                    for (extent, want) in [(None, unclamped.as_slice()), (Some(bounds), clamped.as_deref().unwrap_or(&unclamped))] {
                         // Tile 7 has dense edge tiles, sparse inner ones and a partial last one; 17 makes 1-pixel-wide and
                         // 2-row tiles. Tile 1 sent every edge pixel through the dense fallback (#15652).
                         for tile in [7, 17, 256] {
                             let got = apply_tiled(&surface, &params, bounds, bounds, Some(&selection), tile, extent);
-                            assert_bits(&got.read_region(bounds), &expected.read_region(bounds));
+                            assert_bits(&got.read_region(bounds), want);
                         }
                     }
                 }
