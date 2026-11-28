@@ -285,6 +285,34 @@ fn deleting_an_earlier_count_group_keeps_the_active_group() {
 }
 
 #[test]
+fn record_selection_preserves_small_calibrated_areas() {
+    let mut s = session(160, 120, 8);
+    s.execute("select.rect", json!({"x": 16, "y": 16, "width": 1, "height": 1})).unwrap();
+    s.execute("select.rect", json!({"x": 40, "y": 40, "width": 4, "height": 4, "mode": "add"})).unwrap();
+
+    let r = s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    let rows = r["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for (row, area) in rows.iter().zip([17.0, 1.0, 16.0]) {
+        assert_eq!(row["values"]["area"], area);
+    }
+
+    s.execute("image.analysis.setMeasurementScale", json!({"pixelLength": 125, "logicalLength": 0.5, "units": "mm"})).unwrap();
+    let r = s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    let rows = r["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["values"]["count"], 2);
+    for (row, expected) in rows.iter().zip([0.000272, 0.000016, 0.000256]) {
+        let area = row["values"]["area"].as_f64().unwrap();
+        assert!((area - expected).abs() < 5e-7, "expected {expected} mm², got {area}");
+    }
+    for (row, size) in rows[1..].iter().zip([0.004, 0.016]) {
+        assert_eq!(row["values"]["width"], size);
+        assert_eq!(row["values"]["height"], size);
+    }
+}
+
+#[test]
 fn log_delete_and_csv_export() {
     let mut s = session(10, 10, 8);
     assert!(!s.is_enabled("measurementLog.delete"));
