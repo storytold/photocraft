@@ -5,13 +5,207 @@ use photocraft_geom::Rect;
 use crate::image::{Edge, Image};
 use crate::{Ctx, Preserve, UndefinedAreas};
 
+/// The largest radius Minimum / Maximum runs at (the dialog's limit), so params that bypass the
+/// engine's clamp cannot stall a tile.
+const MAX_RADIUS: f32 = 500.0;
+
 /// Minimum or Maximum with the dialog's Preserve option: a square (`min_max`) or a disc
-/// (`min_max_round`).
-pub(crate) fn min_max_preserve(src: &Image, out: Rect, radius: f32, max: bool, preserve: Preserve) -> Vec<f32> {
+/// (`min_max_round`). A fractional radius blends from the exact result at the radius toward the
+/// one with the next larger structuring element ([`square_step`], [`disc_step`], [`blend`]), so
+/// the result changes continuously with the radius and every integer radius stays exact.
+pub(crate) fn min_max_preserve(src: &Image, out: Rect, radius: f32, max: bool, preserve: Preserve, alpha: bool) -> Vec<f32> {
+    let r = if radius.is_finite() { radius.clamp(0.0, MAX_RADIUS) } else { 0.0 };
+    let n = src.ch.max(1);
     match preserve {
-        Preserve::Squareness => min_max(src, out, radius, max),
-        Preserve::Roundness => min_max_round(src, out, radius, max),
+        Preserve::Squareness => {
+            let (k, f) = square_step(r);
+            if f <= 0.0 {
+                return min_max(src, out, k as f32, max);
+            }
+            // The next square is this one grown by a 3×3 square, so one more small pass gives it.
+            let grown_rect = out.inflate(1);
+            let grown = min_max(src, grown_rect, k as f32, max);
+            let (gw, gh) = (grown_rect.width() as usize, grown_rect.height() as usize);
+            let mut lo = Vec::with_capacity(grown.len());
+            for row in grown.chunks_exact(gw.max(1) * n).skip(1).take(gh.saturating_sub(2)) {
+                lo.extend_from_slice(row.get(n..row.len().saturating_sub(n)).unwrap_or_default());
+            }
+            let hi = extreme_3x3(&grown, gw, gh, n, max);
+            blend_results(&mut lo, &hi, f, n, alpha);
+            lo
+        }
+        Preserve::Roundness => {
+            let mut lo = min_max_round(src, out, r, max);
+            let step = disc_step(r);
+            if step.f <= 0.0 {
+                return lo;
+            }
+            let mut hi = lo.clone();
+            fold_shell(src, out, &step.shell, max, &mut hi);
+            blend_results(&mut lo, &hi, step.f, n, alpha);
+            lo
+        }
     }
+}
+
+/// Squareness at `radius`: the square of half-width `k`, and how far (`f` in `[0, 1)`) the
+/// result moves toward the square of half-width `k + 1`.
+pub(crate) fn square_step(radius: f32) -> (u32, f32) {
+    let r = if radius.is_finite() { radius.clamp(0.0, MAX_RADIUS) } else { 0.0 };
+    let k = r.floor();
+    (k as u32, r - k)
+}
+
+/// Roundness at a radius: the hard disc `dx² + dy² ≤ n_lo` the radius selects, the next larger
+/// disc `dx² + dy² ≤ n_hi`, the offsets that disc adds (`shell`: every point with
+/// `dx² + dy² = n_hi`), and how far (`f`, linear in the radius from `√n_lo` to `√n_hi`) the
+/// result moves toward it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DiscStep {
+    pub n_lo: u64,
+    pub n_hi: u64,
+    pub shell: Vec<(i32, i32)>,
+    pub f: f32,
+}
+
+/// The [`DiscStep`] for `radius`, from integer lattice arithmetic (the radius is clamped to
+/// `0 ..= 500`, NaN taken as 0).
+pub(crate) fn disc_step(radius: f32) -> DiscStep {
+    let r = if radius.is_finite() { radius.clamp(0.0, MAX_RADIUS) } else { 0.0 };
+    let r2 = f64::from(r) * f64::from(r);
+    let ri = r.floor() as u64;
+    // Each row's next point out, and the centre of the first row the disc doesn't reach.
+    let (mut n_lo, mut n_hi) = (0, (ri + 1) * (ri + 1));
+    for dy in 0..=ri {
+        let h = half_width(r2, dy);
+        n_lo = n_lo.max(dy * dy + h * h);
+        n_hi = n_hi.min(dy * dy + (h + 1) * (h + 1));
+    }
+    let mut shell = Vec::new();
+    for dy in -(ri as i64 + 1)..=ri as i64 + 1 {
+        let Some(rest) = n_hi.checked_sub(dy.unsigned_abs().pow(2)) else { continue };
+        let h = rest.isqrt();
+        if h * h == rest {
+            shell.push((h as i32, dy as i32));
+            if h > 0 {
+                shell.push((-(h as i32), dy as i32));
+            }
+        }
+    }
+    let (lo, hi) = ((n_lo as f64).sqrt(), (n_hi as f64).sqrt());
+    let f = if hi > lo { (f64::from(r) - lo) / (hi - lo) } else { 0.0 };
+    let f = if f.is_nan() { 0.0 } else { f.clamp(0.0, 1.0) as f32 };
+    DiscStep { n_lo, n_hi, shell, f }
+}
+
+/// The largest `h` with `h² + dy² ≤ r2`. `r2` is a squared f32, exact in f64, and for an integer
+/// `h`, `h² ≤ rest` exactly when `h² ≤ floor(rest)`, so the test is exact.
+fn half_width(r2: f64, dy: u64) -> u64 {
+    let rest = r2 - (dy * dy) as f64;
+    if rest >= 0.0 { (rest.floor() as u64).isqrt() } else { 0 }
+}
+
+/// The half-widths of a disc of `radius` (Preserve: Roundness), one per row `dy` in
+/// `-floor(radius) ..= floor(radius)` (empty for a radius under 1): the largest `h` with
+/// `h² + dy² ≤ radius²`, tested exactly. Shared with the GPU's layer operators.
+pub(crate) fn disc_half_widths(radius: f32) -> Vec<u32> {
+    let r = radius.max(0.0);
+    let ri = if r.is_finite() { r.floor().min(100_000.0) as i64 } else { 0 };
+    if ri == 0 {
+        return Vec::new();
+    }
+    let r2 = f64::from(r) * f64::from(r);
+    (-ri..=ri).map(|dy| half_width(r2, dy.unsigned_abs()) as u32).collect()
+}
+
+/// Folds the source at each `shell` offset into `res` (the result over `out`), one shifted source
+/// row at a time. Samples outside the source are 0, as in [`Image::get`].
+fn fold_shell(src: &Image, out: Rect, shell: &[(i32, i32)], max: bool, res: &mut [f32]) {
+    let n = src.ch;
+    let stride = out.width() as usize * n;
+    if stride == 0 {
+        return;
+    }
+    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+    for &(dx, dy) in shell {
+        let (sx0, sx1) = (out.x0.saturating_add(dx), out.x1.saturating_add(dx));
+        let (x0, x1) = (sx0.max(src.rect.x0), sx1.min(src.rect.x1));
+        for (y, dst) in (out.y0..out.y1).zip(res.chunks_exact_mut(stride)) {
+            let sy = y.saturating_add(dy);
+            let (lead, inside) = if x0 < x1 && sy >= src.rect.y0 && sy < src.rect.y1 {
+                ((x0 - sx0) as usize * n, src.row(Rect::new(x0, sy, x1, sy + 1)))
+            } else {
+                (stride, &[][..])
+            };
+            let (head, rest) = dst.split_at_mut(lead.min(stride));
+            let (mid, tail) = rest.split_at_mut(inside.len().min(rest.len()));
+            for d in head.iter_mut().chain(tail) {
+                *d = pick(*d, 0.0);
+            }
+            for (d, v) in mid.iter_mut().zip(inside) {
+                *d = pick(*d, *v);
+            }
+        }
+    }
+}
+
+/// The 3×3 extreme of a `w`×`h` image of `n` channels, over its inner `(w - 2)`×`(h - 2)` pixels.
+fn extreme_3x3(v: &[f32], w: usize, h: usize, n: usize, max: bool) -> Vec<f32> {
+    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+    let (ow, oh) = (w.saturating_sub(2), h.saturating_sub(2));
+    let at = |x: usize, y: usize, c: usize| v.get((y * w + x) * n + c).copied().unwrap_or(0.0);
+    let mut rows = Vec::with_capacity(ow * h * n);
+    for y in 0..h {
+        for x in 0..ow {
+            for c in 0..n {
+                rows.push(pick(pick(at(x, y, c), at(x + 1, y, c)), at(x + 2, y, c)));
+            }
+        }
+    }
+    let row = |x: usize, y: usize, c: usize| rows.get((y * ow + x) * n + c).copied().unwrap_or(0.0);
+    let mut res = Vec::with_capacity(ow * oh * n);
+    for y in 0..oh {
+        for x in 0..ow {
+            for c in 0..n {
+                res.push(pick(pick(row(x, y, c), row(x, y + 1, c)), row(x, y + 2, c)));
+            }
+        }
+    }
+    res
+}
+
+/// Moves each sample of `lo` toward `hi` by `f`. With alpha the colour blends premultiplied, so a
+/// colour hidden under zero alpha doesn't show in the half-transparent result.
+fn blend_results(lo: &mut [f32], hi: &[f32], f: f32, n: usize, alpha: bool) {
+    let alpha = alpha && n >= 2;
+    let cc = if alpha { n - 1 } else { n };
+    for (l, h) in lo.chunks_exact_mut(n.max(1)).zip(hi.chunks_exact(n.max(1))) {
+        let (a_lo, a_hi) = (l.get(cc).copied().unwrap_or(1.0), h.get(cc).copied().unwrap_or(1.0));
+        // The premultiplied blend is a straight blend with the weight shifted toward the more
+        // opaque end.
+        let (wl, wh) = (a_lo * (1.0 - f), a_hi * f);
+        let t = if alpha && wl >= 0.0 && wh >= 0.0 && (wl + wh) > 0.0 && (wl + wh).is_finite() { wh / (wl + wh) } else { f };
+        for (a, b) in l.iter_mut().zip(h).take(cc) {
+            *a = blend(*a, *b, t);
+        }
+        if let (true, Some(a)) = (alpha, l.get_mut(cc)) {
+            *a = blend(a_lo, a_hi, f);
+        }
+    }
+}
+
+/// `lo` moved toward `hi` by `f` in `[0, 1]`, never past either. An infinite end (HDR) snaps over
+/// at `f = 0.5` rather than giving NaN.
+pub(crate) fn blend(lo: f32, hi: f32, f: f32) -> f32 {
+    if lo == hi {
+        return lo;
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return if f >= 0.5 { hi } else { lo };
+    }
+    let d = hi - lo;
+    let v = if d.is_finite() { lo + f * d } else { lo * (1.0 - f) + hi * f };
+    v.max(lo.min(hi)).min(lo.max(hi))
 }
 
 /// Minimum or Maximum over a disc (Preserve: Roundness): every offset with
@@ -20,8 +214,8 @@ pub(crate) fn min_max_preserve(src: &Image, out: Rect, radius: f32, max: bool, p
 /// (constant work per pixel whatever the window), so the cost is O(radius) per pixel.
 pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> Vec<f32> {
     let n = src.ch;
-    let r = radius.max(0.0);
-    let ri = r.floor() as i32;
+    let half_widths = disc_half_widths(radius);
+    let ri = (half_widths.len() / 2) as i32;
     if ri == 0 {
         return src.crop(out);
     }
@@ -29,9 +223,8 @@ pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> V
     let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
     let mut res = vec![if max { f32::MIN } else { f32::MAX }; w * out.height() as usize * n];
     let (mut row, mut ext) = (Vec::new(), Vec::new());
-    for dy in -ri..=ri {
-        // Half-width of the disc on this row (the epsilon keeps exact squares, e.g. r 5, dy 3 → 4).
-        let hw = ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as i32;
+    for (dy, hw) in (-ri..=ri).zip(half_widths) {
+        let hw = hw as i32;
         for y in out.y0..out.y1 {
             let o = (y - out.y0) as usize * w * n;
             for c in 0..n {
@@ -204,6 +397,212 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn noise(rect: Rect, ch: usize) -> Image {
+        let mut img = Image::new(rect, ch);
+        let mut s = 0x2545_f491u32;
+        for v in img.data.iter_mut() {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            *v = (s % 1000) as f32 / 999.0;
+        }
+        img
+    }
+
+    /// Every offset with `dx² + dy² ≤ n` scanned directly, the reference for the disc.
+    fn disc_direct(src: &Image, out: Rect, n: i64, max: bool) -> Vec<f32> {
+        let r = (n as f64).sqrt() as i32 + 1;
+        let mut res = Vec::new();
+        for y in out.y0..out.y1 {
+            for x in out.x0..out.x1 {
+                for c in 0..src.ch {
+                    let mut m = if max { f32::MIN } else { f32::MAX };
+                    for dy in -r..=r {
+                        for dx in -r..=r {
+                            if i64::from(dx * dx + dy * dy) <= n {
+                                let v = src.get(x + dx, y + dy, c);
+                                m = if max { m.max(v) } else { m.min(v) };
+                            }
+                        }
+                    }
+                    res.push(m);
+                }
+            }
+        }
+        res
+    }
+
+    /// The sums of two squares just inside and just outside `r` (`n_lo ≤ r² < n_hi`), found by
+    /// scanning the lattice.
+    fn lattice_step(r: f32) -> (u64, u64) {
+        let r2 = f64::from(r) * f64::from(r);
+        let m = r as i64 + 2;
+        let (mut lo, mut hi) = (0, u64::MAX);
+        for dy in -m..=m {
+            for dx in -m..=m {
+                let s = (dx * dx + dy * dy) as u64;
+                if s as f64 <= r2 {
+                    lo = lo.max(s);
+                } else {
+                    hi = hi.min(s);
+                }
+            }
+        }
+        (lo, hi)
+    }
+
+    #[test]
+    fn integer_radii_match_the_direct_square_and_disc_exactly() {
+        let img = noise(Rect::new(-12, -9, 37, 30), 4);
+        for out in [Rect::new(0, 0, 25, 21), Rect::new(-14, -3, 3, 40)] {
+            for r in [1, 2, 3, 7, 20] {
+                for max in [false, true] {
+                    let square = min_max_preserve(&img, out, r as f32, max, Preserve::Squareness, true);
+                    assert_eq!(square, min_max_direct(&img, out, r, max), "square r {r} max {max} out {out:?}");
+                    let disc = min_max_preserve(&img, out, r as f32, max, Preserve::Roundness, true);
+                    assert_eq!(disc, disc_direct(&img, out, i64::from(r * r), max), "disc r {r} max {max} out {out:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_radii_blend_the_direct_windows() {
+        let img = noise(Rect::new(-12, -9, 37, 30), 3);
+        for out in [Rect::new(0, 0, 25, 21), Rect::new(-14, -3, 3, 40)] {
+            for r in [0.2f32, 0.5, 1.5, 2.2, 2.9, 4.0, 7.3, 12.5] {
+                for max in [false, true] {
+                    let mix = |lo: Vec<f32>, hi: Vec<f32>, f: f32| lo.iter().zip(&hi).map(|(a, b)| blend(*a, *b, f)).collect::<Vec<_>>();
+                    let k = r.floor() as i32;
+                    let want = mix(min_max_direct(&img, out, k, max), min_max_direct(&img, out, k + 1, max), r - k as f32);
+                    assert_eq!(min_max_preserve(&img, out, r, max, Preserve::Squareness, false), want, "square r {r} max {max} out {out:?}");
+                    let (n_lo, n_hi) = lattice_step(r);
+                    let f = ((f64::from(r) - (n_lo as f64).sqrt()) / ((n_hi as f64).sqrt() - (n_lo as f64).sqrt())) as f32;
+                    let want = mix(disc_direct(&img, out, n_lo as i64, max), disc_direct(&img, out, n_hi as i64, max), f);
+                    assert_eq!(min_max_preserve(&img, out, r, max, Preserve::Roundness, false), want, "disc r {r} max {max} out {out:?}");
+                }
+            }
+        }
+    }
+
+    /// The exact disc test keeps the old `floor(sqrt(r² − dy²) + 1e-4)` half-widths at every
+    /// integer radius: that epsilon only ever rescued exact squares.
+    #[test]
+    fn exact_disc_half_widths_keep_every_integer_radius() {
+        for r in 1..=500 {
+            let r = r as f32;
+            let ri = r as i32;
+            let old: Vec<u32> = (-ri..=ri).map(|dy| ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as u32).collect();
+            assert_eq!(disc_half_widths(r), old, "r {r}");
+        }
+        assert!(disc_half_widths(0.9).is_empty());
+        assert!(disc_half_widths(f32::NAN).is_empty());
+        assert!(disc_half_widths(f32::INFINITY).is_empty());
+    }
+
+    #[test]
+    fn disc_step_matches_a_lattice_enumeration() {
+        let radii = (2..=300).map(|i| i as f32 * 0.1).chain([0.0, 1.0, 2.0f32.sqrt(), 5.0, 8.0f32.sqrt(), 499.5, 500.0]);
+        for r in radii {
+            let step = disc_step(r);
+            let (n_lo, n_hi) = lattice_step(r);
+            assert_eq!((step.n_lo, step.n_hi), (n_lo, n_hi), "r {r}");
+            let m = r as i32 + 2;
+            let mut want: Vec<(i32, i32)> =
+                (-m..=m).flat_map(|dy| (-m..=m).map(move |dx| (dx, dy))).filter(|(dx, dy)| (dx * dx + dy * dy) as u64 == n_hi).collect();
+            let mut shell = step.shell.clone();
+            want.sort();
+            shell.sort();
+            assert_eq!(shell, want, "r {r}");
+            let f = (f64::from(r) - (n_lo as f64).sqrt()) / ((n_hi as f64).sqrt() - (n_lo as f64).sqrt());
+            assert!((0.0..1.0).contains(&step.f) && (f64::from(step.f) - f).abs() < 1e-6, "r {r}: f {} want {f}", step.f);
+        }
+        assert_eq!(disc_step(0.5), DiscStep { n_lo: 0, n_hi: 1, shell: vec![(0, -1), (1, 0), (-1, 0), (0, 1)], f: 0.5 });
+        for r in [f32::NAN, f32::NEG_INFINITY, -1.0] {
+            assert_eq!(disc_step(r).f, 0.0, "r {r}");
+        }
+    }
+
+    /// Radii whose next ring has several lattice representations (25 = 5² + 0² = 4² + 3², …):
+    /// for every f32 just below and above the threshold the step matches the lattice, its weight
+    /// only grows within a step, and a sample whose extreme sits on the ring moves one way only.
+    #[test]
+    fn roundness_is_monotone_around_multi_representation_radii() {
+        let out = Rect::new(0, 0, 1, 1);
+        for n in [25i32, 50, 65, 85, 125, 169, 325] {
+            let centre = (n as f32).sqrt().to_bits();
+            let mut prev_step: Option<(f32, DiscStep)> = None;
+            for bits in centre - 3000..=centre + 3000 {
+                let r = f32::from_bits(bits);
+                let step = disc_step(r);
+                assert_eq!((step.n_lo, step.n_hi), lattice_step(r), "n {n} r {r}");
+                assert!((0.0..=1.0).contains(&step.f), "n {n} r {r}: f {}", step.f);
+                if let Some((pr, p)) = &prev_step
+                    && p.n_lo == step.n_lo
+                {
+                    assert!(step.f >= p.f, "n {n}: f {} at r {pr}, {} at r {r}", p.f, step.f);
+                }
+                prev_step = Some((r, step));
+            }
+            // The ring point with the smallest |dx|, the last one a lopsided rule would admit,
+            // holds the extreme.
+            let (dx, dy) = (0..=n.isqrt()).find_map(|dx| (n - dx * dx).checked_isqrt().filter(|dy| dy * dy == n - dx * dx).map(|dy| (dx, dy))).unwrap();
+            for max in [false, true] {
+                let mut img = Image::new(Rect::new(-20, -20, 21, 21), 1);
+                img.data.fill(if max { 0.0 } else { 1.0 });
+                img.data[((dy + 20) * 41 + dx + 20) as usize] = if max { 1.0 } else { 0.0 };
+                let mut prev: Option<(f32, f32)> = None;
+                for bits in centre - 3000..=centre + 3000 {
+                    let r = f32::from_bits(bits);
+                    let v = min_max_preserve(&img, out, r, max, Preserve::Roundness, false)[0];
+                    if let Some((pr, pv)) = prev {
+                        assert!(if max { v >= pv } else { v <= pv }, "n {n} max {max}: r {pr} gives {pv}, r {r} gives {v}");
+                    }
+                    prev = Some((r, v));
+                }
+                assert_eq!(prev.map(|p| p.1), Some(if max { 1.0 } else { 0.0 }), "n {n} max {max}");
+            }
+        }
+    }
+
+    #[test]
+    fn blend_stays_between_its_ends_and_handles_non_finite() {
+        assert_eq!(blend(f32::INFINITY, 3.0, 0.3), f32::INFINITY);
+        assert_eq!(blend(f32::INFINITY, 3.0, 0.7), 3.0);
+        assert_eq!(blend(f32::NEG_INFINITY, f32::INFINITY, 0.2), f32::NEG_INFINITY);
+        assert_eq!(blend(f32::INFINITY, f32::INFINITY, 0.5), f32::INFINITY);
+        assert_eq!(blend(-3e38, 3e38, 0.5), 0.0);
+        assert_eq!(blend(-3e38, 3e38, 1.0), 3e38);
+        let (lo, hi) = (0.1f32, 0.7f32);
+        for i in 0..=1000 {
+            let v = blend(lo, hi, i as f32 / 1000.0);
+            assert!(v.is_finite() && (lo..=hi).contains(&v), "{i}: {v}");
+        }
+        assert_eq!(blend(lo, hi, 1.0), hi);
+        assert!(blend(-0.0, 0.0, 0.5) == 0.0);
+    }
+
+    #[test]
+    fn min_max_survives_non_finite_and_out_of_range_radii() {
+        let img = noise(Rect::new(0, 0, 4, 3), 1);
+        let out = img.rect;
+        for preserve in [Preserve::Squareness, Preserve::Roundness] {
+            for max in [false, true] {
+                for r in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+                    assert_eq!(min_max_preserve(&img, out, r, max, preserve, false), img.crop(out), "{preserve:?} r {r}");
+                }
+                let at_limit = min_max_preserve(&img, out, 500.0, max, preserve, false);
+                for r in [600.0, 1e4] {
+                    assert_eq!(min_max_preserve(&img, out, r, max, preserve, false), at_limit, "{preserve:?} r {r}");
+                }
+            }
+        }
+        // An empty output and a one-channel image with alpha requested.
+        assert!(min_max_preserve(&img, Rect::new(2, 2, 2, 2), 1.5, true, Preserve::Squareness, true).is_empty());
+        assert!(min_max_preserve(&img, Rect::new(2, 2, 2, 2), 1.5, true, Preserve::Roundness, true).is_empty());
+        assert_eq!(min_max_preserve(&img, out, 0.5, true, Preserve::Roundness, true).len(), 12);
     }
 }
 
