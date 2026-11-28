@@ -56,6 +56,11 @@ fn opened(id: DialogId) -> Value {
 /// Opens the hosted parameter form of command `id`. `fixed` holds values the command needs that no row edits.
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
+    open_form_label(app, id, title, params, fields, fixed)
+}
+
+/// [`open_form`] with its title already built (File Info's document name, #13824).
+fn open_form_label(app: &mut PhotocraftApp, id: &str, title: Label, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let key = id.to_owned();
     let image_processor = id == image_processor_ui::COMMAND;
     let calculations = id == crate::dialogs::calculations_ui::COMMAND;
@@ -514,7 +519,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
 }
 
 /// File › File Info…: the document's metadata in Photoshop's order and labels, then its read-only Camera Data.
-fn file_info_form(app: &mut PhotocraftApp) -> Option<(Vec<Param>, DialogFields)> {
+pub(super) fn file_info_form(app: &mut PhotocraftApp) -> Option<(Vec<Param>, DialogFields)> {
     let info = app.session.execute("file.fileInfo", json!({})).ok()?;
     let text = |key: &str| info[key].as_str().unwrap_or_default().to_owned();
     let keywords = info["keywords"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default();
@@ -1120,7 +1125,13 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
         _ if is_form(id) => {
             let (rows, fields) = params_for(app, id)?;
-            Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))
+            if id == "file.fileInfo" {
+                let doc = app.session.active()?.doc.id;
+                let title = Label::from(crate::dialogs::file_info_title(app));
+                Some(Ok(opened(open_form_label(app, id, title, rows, fields, json!({"document": doc.0})))))
+            } else {
+                Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))
+            }
         }
         _ => None,
     }

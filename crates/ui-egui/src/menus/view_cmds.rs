@@ -214,3 +214,7 @@ mod fit_image_sticky_tests;
 #[cfg(test)]
 #[path = "view_cmds/save_a_copy_name_tests.rs"]
 mod save_a_copy_name_tests;
+
+#[cfg(test)]
+#[path = "view_cmds/file_info_title_labels_tests.rs"]
+mod file_info_title_labels_tests;
