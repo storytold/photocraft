@@ -118,12 +118,14 @@ fn blend_layers(s: &Session) -> (Vec<LayerId>, Option<LayerId>) {
 /// The group whose pixels join the blend and the layer it lends, or `None` when no selected group
 /// does. The measured case of #14206: the selection holds exactly one group, that group sits at the
 /// top level of the stack, it holds exactly one pixel layer, and it is a plain group - shown, with
-/// no mask of its own, and not an artboard or a frame.
+/// no mask of its own, and not an artboard or a frame; its pixel layer is shown too.
 ///
 /// The refusals keep today's behaviour for the shapes the issue did not measure. A group holding
 /// several layers or none that is a pixel layer, a group inside another group and a second selected
-/// group lend nothing. A hidden group is not drawn, so blending its pixels would leave its part of
-/// the overlap uncovered. A masked group multiplies Auto-Blend's mask, which lands on the layer
+/// group lend nothing. A hidden group shows no pixels, and neither does a group whose only pixel
+/// layer is hidden, so blending either one's pixels would leave its part of the overlap uncovered.
+/// A masked group multiplies
+/// Auto-Blend's mask, which lands on the layer
 /// inside it, with its own, so the two sides would no longer cover the seam once. An artboard clips
 /// its children to its rect and a frame draws over them, so a mask inside either one gives a result
 /// the reference application was never measured against. Group opacity, Fill and a non-Pass-Through
@@ -143,7 +145,7 @@ fn blend_donor(doc: &Document, selected: &[LayerId]) -> Option<(LayerId, LayerId
         return None;
     }
     let [child] = group.children.as_slice() else { return None };
-    if !matches!(child.content, LayerContent::Raster(_)) {
+    if !child.visible || !matches!(child.content, LayerContent::Raster(_)) {
         return None;
     }
     Some((*g, child.id))
