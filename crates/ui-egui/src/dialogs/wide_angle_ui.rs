@@ -156,7 +156,7 @@ impl WideAngleSource for PcWideAngleSource {
     /// corrected picture. The mesh stays in the geometry for the overlays.
     fn preview_job(&self, session: &WideAngleSession) -> Job<PreviewDone, String> {
         let (state, session) = (self.state(), session.clone());
-        Job::new(move |_progress, _cancel| state.run(&session))
+        Job::new(move |_progress, _cancel| state.run(&session).map(|(done, _)| done))
     }
 }
 
@@ -175,8 +175,8 @@ struct PreviewState {
 
 impl PreviewState {
     /// The job's body: reuses the last solve when it was for `session`, warps the proxy, writes the
-    /// corrected picture and keeps the mesh for the overlays.
-    fn run(&self, session: &WideAngle) -> Result<PreviewDone, String> {
+    /// corrected picture, keeps the mesh for the overlays and returns the native preview.
+    fn run(&self, session: &WideAngle) -> Result<(PreviewDone, Surface), String> {
         let t0 = crate::gpu_canvas::now_ms();
         let reuse = self.solved.lock().ok().and_then(|g| g.as_ref().filter(|s| s.session == *session).map(|s| s.mesh.clone()));
         let (out, mesh) = preview_surface(&self.proxy, &proxy_params(session, self.frame, self.scale), self.pf, &self.target, reuse)?;
@@ -185,7 +185,8 @@ impl PreviewState {
             *slot = Some(Solved { session: session.clone(), mesh });
         }
         self.ready.store(true, Ordering::Release);
-        Ok(PreviewDone::new(Duration::from_secs_f64(((crate::gpu_canvas::now_ms() - t0) / 1000.0).max(0.0))))
+        let done = PreviewDone::new(Duration::from_secs_f64(((crate::gpu_canvas::now_ms() - t0) / 1000.0).max(0.0)));
+        Ok((done, out))
     }
 }
 
@@ -391,9 +392,7 @@ mod tests {
                 let session = session_of(&app);
                 let before = source.proxy.as_ref().clone();
                 let pf = source.geometry.proxy_rect;
-                let (preview, _) =
-                    preview_surface(&before, &proxy_params(&session, source.geometry.frame, source.geometry.scale), pf, &source.target, None).unwrap();
-                source.state().run(&session).unwrap();
+                let (_, preview) = source.state().run(&session).unwrap();
                 crate::distort_ui::component_tests::protected(&before, &preview, pf);
                 assert_ne!(preview.read_region(pf), before.read_region(pf));
                 app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
