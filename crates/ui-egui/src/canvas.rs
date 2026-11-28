@@ -247,6 +247,9 @@ mod doc_window_dialog_tests;
 mod document_window_title_tests;
 
 #[cfg(test)]
+mod arrange_window_origin_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
