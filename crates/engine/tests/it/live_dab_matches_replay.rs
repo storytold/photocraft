@@ -4,20 +4,27 @@ use photocraft_paint::StrokePoint;
 use serde_json::json;
 
 fn setup(depth: u32, mode: &str) -> Session {
+    const WIDTH: u32 = 200;
+    const HEIGHT: u32 = 120;
+
     let mut s = Session::new();
-    s.execute("file.new", json!({"width":200,"height":120,"depth":depth,"mode":mode})).unwrap();
+    s.execute("file.new", json!({"width":WIDTH,"height":HEIGHT,"depth":depth,"mode":mode})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.edit("texture", |doc, active| {
         let bounds = doc.bounds();
+        assert_eq!((bounds.width(), bounds.height()), (WIDTH, HEIGHT));
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
         let fmt = surf.format();
-        let mut px = Vec::new();
-        for y in 0..120 {
-            for x in 0..200 {
-                px.extend(photocraft_raster::from_rgba(
+        let channels = fmt.channels();
+        let row_samples = WIDTH as usize * channels;
+        let mut px = vec![0.0; HEIGHT as usize * row_samples];
+        for (y, row) in px.chunks_exact_mut(row_samples).enumerate() {
+            for (x, pixel) in row.chunks_exact_mut(channels).enumerate() {
+                photocraft_raster::from_rgba_into(
                     &fmt,
-                    [((x * 7 + y * 3) % 31) as f32 / 31.0, x as f32 / 200.0, y as f32 / 120.0, 0.4 + ((x + y) % 7) as f32 / 12.0],
-                ));
+                    [((x * 7 + y * 3) % 31) as f32 / 31.0, x as f32 / WIDTH as f32, y as f32 / HEIGHT as f32, 0.4 + ((x + y) % 7) as f32 / 12.0],
+                    pixel,
+                );
             }
         }
         surf.write_region(bounds, &px);
