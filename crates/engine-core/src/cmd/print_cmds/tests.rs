@@ -511,6 +511,40 @@ fn a_vanished_remembered_printer_falls_back_to_the_default() {
 }
 
 #[test]
+fn print_one_copy_keeps_saved_settings_while_the_spooler_is_busy() {
+    // In a child, so a print that waits for the lock fails when `in_child`'s bound ends.
+    if !in_child("cmd::print_cmds::tests::print_one_copy_keeps_saved_settings_while_the_spooler_is_busy", &[("PHOTOCRAFT_NO_PRINT", "1")]) {
+        return;
+    }
+    for cached in [false, true] {
+        let mut s = session("rgb", 8);
+        *s.printer_source_mut() = Some(test_printers());
+        s.file_menu.last_print = Some(json!({"printer": "Saved printer", "printerSettings": "0011", "paper": "a5"}));
+        if cached {
+            s.execute("file.printers", json!({})).unwrap();
+        }
+        let (held_tx, held) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        // The holder keeps the lock until `release` is sent, after the print returns.
+        let holder = std::thread::spawn(move || {
+            with_spooler(|| {
+                held_tx.send(()).unwrap();
+                let _ = released.recv();
+            });
+        });
+        held.recv().unwrap();
+        let result = s.start("file.printOneCopy", json!({"dryRun": true}));
+        let _ = release.send(());
+        holder.join().unwrap();
+        result.unwrap();
+        let remembered = last_print(&s).unwrap();
+        assert_eq!(remembered["printer"], "Saved printer");
+        assert_eq!(remembered["printerSettings"], "0011");
+        assert_eq!(remembered["copies"], 1);
+    }
+}
+
+#[test]
 fn print_one_copy_repeats_the_last_settings() {
     let mut s = session("rgb", 8);
     let first = s.execute("file.print", json!({"dryRun": true, "copies": 3, "paper": "a5", "scale": 50})).unwrap();
@@ -1258,6 +1292,34 @@ mod cups {
             (r["printers"][1]["default"].as_bool(), r["printers"][1]["class"].as_bool(), r["printers"][0]["class"].as_bool()),
             (Some(true), Some(true), Some(false))
         );
+    }
+
+    /// A printer remembered on a named server that no longer lists it gives way to the server's
+    /// default even while another print holds the local spooler lock.
+    #[test]
+    fn print_one_copy_checks_a_named_server_while_the_spooler_is_busy() {
+        if !in_child("cmd::print_cmds::tests::cups::print_one_copy_checks_a_named_server_while_the_spooler_is_busy", &[]) {
+            return;
+        }
+        let (server, _rx) = fake_cups(&["Office"], &[], Some("Office"));
+        let mut s = session("rgb", 8);
+        s.file_menu.last_print = Some(json!({"printServer": server, "printer": "Gone"}));
+        let (held_tx, held) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        // The holder keeps the lock until `release` is sent, after the print returns. A print
+        // that waits for the lock never returns, and `in_child` fails the test when its bound ends.
+        let holder = std::thread::spawn(move || {
+            with_spooler(|| {
+                held_tx.send(()).unwrap();
+                let _ = released.recv();
+            });
+        });
+        held.recv().unwrap();
+        let r = s.execute("file.printOneCopy", json!({}));
+        let _ = release.send(());
+        holder.join().unwrap();
+        let r = r.unwrap();
+        assert_eq!((r["backend"].as_str(), r["spooler"].as_str()), (Some("ipp"), Some("job 42 on Office")));
     }
 
     #[test]
