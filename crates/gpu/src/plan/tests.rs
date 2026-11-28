@@ -331,6 +331,15 @@ fn opaque_fill_layers_skip_what_they_cover() {
     translucent.layers[5].content = LayerContent::Fill(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 0.5)));
     assert!(!photocraft_compose::occludes_below(&translucent.layers[5], ColorMode::Rgb));
     assert!(photocraft_compose::occludes_below(&d.layers[5], ColorMode::Rgb));
+    // Clipped layers blended individually may knock out to what is beneath the fill, so the
+    // layers below stay planned; with nothing clipped to the fill they are skipped as before.
+    let start = |d: &Document| plan(d).unwrap().checkpoints.first().map(|c| c.layer_start);
+    let mut individually = d.clone();
+    individually.layers[5].advanced.blend_clipped = false;
+    assert_eq!(start(&individually), Some(0), "a visible clipped layer blending individually keeps the layers below");
+    let mut unclipped = individually.clone();
+    unclipped.layers.pop();
+    assert_eq!(start(&unclipped), Some(5), "nothing clipped to the fill: the layers below are skipped");
 }
 
 #[test]
@@ -385,7 +394,7 @@ fn blend_if_params_pack_every_range_exactly() {
 }
 
 #[test]
-fn advanced_blending_falls_back_to_the_cpu() {
+fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     use photocraft_doc::Knockout;
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut l = Layer::raster("ko", d.pixel_format());
@@ -396,23 +405,50 @@ fn advanced_blending_falls_back_to_the_cpu() {
     d.layers[1].advanced.blend_interior = true;
     d.layers[1].advanced.blend_clipped = false;
     assert!(plan(&d).is_ok());
-    d.layers[1].advanced.knockout = Knockout::Deep;
-    assert!(plan(&d).unwrap_err().0.contains("Advanced Blending"));
+    // Knockout, deep or shallow, runs on the GPU; with Transparency Shapes Layer off its shape is
+    // the layer's masks, unless a special-eight blend takes the layer's own transparency as Fill.
+    for knockout in [Knockout::Deep, Knockout::Shallow] {
+        d.layers[1].advanced.knockout = knockout;
+        assert!(plan(&d).is_ok(), "{knockout:?}");
+        d.layers[1].advanced.transparency_shapes = false;
+        assert!(plan(&d).is_ok(), "{knockout:?} without Transparency Shapes Layer");
+        d.layers[1].blend = BlendMode::ColorDodge;
+        assert!(plan(&d).unwrap_err().0.contains("Advanced Blending"), "{knockout:?} with a special-eight blend");
+        d.layers[1].blend = BlendMode::Normal;
+        d.layers[1].advanced.transparency_shapes = true;
+    }
     // Inside groups and clipping groups.
     d.layers[1].advanced.knockout = Knockout::None;
     let mut c = l.clone();
     c.clipped = true;
     d.layers.push(c.clone());
-    assert!(plan(&d).is_err(), "clipped layers blended individually");
+    assert!(plan(&d).is_ok(), "clipped layers blended individually");
     d.layers[1].advanced.blend_clipped = true;
     assert!(plan(&d).is_ok());
     d.layers[2].advanced.knockout = Knockout::Shallow;
-    assert!(plan(&d).is_err(), "clipped knockout");
+    assert!(plan(&d).is_ok(), "clipped knockout");
     d.layers.truncate(1);
     let mut inner = l;
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
-    assert!(plan(&d).is_err(), "knockout inside a group");
+    assert!(plan(&d).is_ok(), "knockout inside a group");
+}
+
+/// A knockout builds its deep target fresh and keeps nothing live across stack units, so the
+/// root stack still forms a checkpoint after the knockout layer and after every layer above it.
+#[test]
+fn root_checkpoints_form_after_a_knockout_layer() {
+    use photocraft_doc::Knockout;
+    let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    for (i, knockout) in [Knockout::None, Knockout::Deep, Knockout::Shallow, Knockout::None].into_iter().enumerate() {
+        let mut l = Layer::raster(format!("l{i}"), d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 0.5]);
+        l.advanced.knockout = knockout;
+        l.opacity = 0.6;
+        d.layers.push(l);
+    }
+    let plan = plan(&d).unwrap();
+    assert_eq!(plan.checkpoints.iter().map(|c| c.layer_end).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5]);
 }
 
 /// A chunk-sized texture per live slot: nesting isolated groups keeps every ancestor's slot

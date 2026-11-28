@@ -1,0 +1,638 @@
+//! Advanced Blending on the GPU: shallow and deep knockouts (top level, isolated and pass-through
+//! groups, clipping groups) and Blend Clipped Layers as Group off (below the knockout tests) must
+//! match the CPU compositor within the parity tolerance, and the document must render on the GPU
+//! (a refusal fails the check).
+
+use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent, LayerMask};
+use photocraft_geom::{Rect, Size};
+use photocraft_raster::Surface;
+
+use crate::parity::{Gpu, base_doc, check, check_with, diff_rect, gpu, half_float_compositor, mask, noise_layer};
+
+const KNOCKOUTS: [Knockout; 2] = [Knockout::Shallow, Knockout::Deep];
+
+/// A 48 × 40 RGB document; with `background`, its bottom layer is a Background (opaque noise
+/// with transparency and position locked).
+fn doc(depth: SampleType, background: bool) -> Document {
+    let mut d = Document::new("knockout", Size::new(48, 40), ColorMode::Rgb, depth);
+    if background {
+        let mut bg = noise_layer("Background", d.pixel_format(), d.bounds(), 1, 1.0);
+        bg.locks.transparency = true;
+        bg.locks.position = true;
+        d.layers.push(bg);
+    }
+    d
+}
+
+fn underlay(d: &Document, seed: u32) -> Layer {
+    noise_layer("under", d.pixel_format(), d.bounds(), seed, 0.4)
+}
+
+fn ko_layer(d: &Document, seed: u32, knockout: Knockout) -> Layer {
+    let mut l = noise_layer("knockout", d.pixel_format(), Rect::new(6, 5, 42, 35), seed, 0.3);
+    l.advanced.knockout = knockout;
+    l
+}
+
+fn group(name: &str, pass_through: bool, children: Vec<Layer>) -> Layer {
+    let mut g = Layer::group(name, children);
+    g.blend = if pass_through { BlendMode::PassThrough } else { BlendMode::Normal };
+    g
+}
+
+/// `check` that also names the case.
+fn run(g: &mut Gpu, d: &Document, what: &str, knockout: Knockout) {
+    check(g, d, &format!("{what}, {knockout:?}"));
+}
+
+/// A clipping group on `base` with Blend Clipped Layers as Group off: a Normal clipped layer at
+/// opacity 0.7 and a Multiply one above it.
+fn clipped_pair(d: &Document, mut base: Layer, base_opacity: f32) -> Vec<Layer> {
+    base.advanced.blend_clipped = false;
+    base.opacity = base_opacity;
+    let mut c1 = noise_layer("clipped 1", d.pixel_format(), Rect::new(8, 8, 44, 34), 7, 0.5);
+    c1.clipped = true;
+    c1.opacity = 0.7;
+    let mut c2 = noise_layer("clipped 2", d.pixel_format(), Rect::new(2, 10, 38, 30), 8, 0.4);
+    c2.clipped = true;
+    c2.blend = BlendMode::Multiply;
+    vec![base, c1, c2]
+}
+
+fn clip_base(d: &Document) -> Layer {
+    noise_layer("base", d.pixel_format(), Rect::new(4, 4, 40, 34), 6, 0.5)
+}
+
+#[test]
+fn top_level_knockout_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for background in [false, true] {
+        for knockout in KNOCKOUTS {
+            for (opacity, fill) in [(1.0, 1.0), (0.5, 1.0), (1.0, 0.5), (0.5, 0.5)] {
+                let mut d = doc(SampleType::U8, background);
+                d.layers.push(underlay(&d, 2));
+                let mut l = ko_layer(&d, 3, knockout);
+                l.opacity = opacity;
+                l.fill_opacity = fill;
+                d.layers.push(l);
+                d.layers.push(noise_layer("above", d.pixel_format(), Rect::new(10, 8, 30, 28), 4, 0.5));
+                run(&mut g, &d, &format!("background {background}, opacity {opacity}, fill {fill}"), knockout);
+            }
+        }
+    }
+}
+
+/// Outside the shape of a partial-opacity knockout the drawn pixel is untouched, so 32-bit values
+/// above 1 survive as on the CPU.
+#[test]
+fn partial_opacity_knockout_keeps_hdr_pixels_outside_its_shape() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        let mut d = doc(SampleType::F32, false);
+        let mut bottom = Layer::raster("hdr", d.pixel_format());
+        let patterns = [[2.0, 1.5, 0.25, 1.0], [1.25, 3.0, 0.5, 1.0], [0.4, 0.6, 0.8, 1.0]];
+        let px: Vec<f32> = (0..48 * 40).flat_map(|i| patterns[i % patterns.len()]).collect();
+        bottom.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 48, 40), &px);
+        d.layers.push(bottom);
+        let mut l = ko_layer(&d, 3, knockout);
+        l.opacity = 0.5;
+        d.layers.push(l);
+        let cpu = photocraft_compose::render(&d, d.bounds());
+        assert!(cpu.px[0][..3].iter().any(|&v| v > 1.0), "the CPU keeps a value above 1 outside the shape ({knockout:?})");
+        run(&mut g, &d, "HDR outside a partial-opacity knockout", knockout);
+    }
+}
+
+#[test]
+fn knockout_in_every_depth() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for knockout in KNOCKOUTS {
+            let mut d = doc(depth, true);
+            d.layers.push(underlay(&d, 2));
+            let mut l = ko_layer(&d, 3, knockout);
+            l.opacity = 0.5;
+            d.layers.push(l);
+            run(&mut g, &d, &format!("{depth:?}"), knockout);
+        }
+    }
+}
+
+#[test]
+fn knockout_in_groups_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for background in [false, true] {
+        for knockout in KNOCKOUTS {
+            for opacity in [1.0, 0.5] {
+                // Isolated, pass-through, and each nested in the other.
+                for (name, outer_pass, inner_pass) in [
+                    ("isolated", false, None),
+                    ("pass-through", true, None),
+                    ("pass-through in isolated", false, Some(true)),
+                    ("isolated in pass-through", true, Some(false)),
+                ] {
+                    let mut d = doc(SampleType::U8, background);
+                    d.layers.push(underlay(&d, 2));
+                    let mut l = ko_layer(&d, 3, knockout);
+                    l.opacity = opacity;
+                    let mut children = vec![noise_layer("inner", d.pixel_format(), Rect::new(0, 0, 36, 30), 5, 0.4), l];
+                    if let Some(pass) = inner_pass {
+                        children = vec![group("inner group", pass, children)];
+                    }
+                    d.layers.push(group("group", outer_pass, children));
+                    run(&mut g, &d, &format!("{name}, background {background}, opacity {opacity}"), knockout);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn knockout_in_a_partial_rectangle_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut l = ko_layer(&d, 3, knockout);
+        l.opacity = 0.6;
+        d.layers.push(group("group", true, vec![noise_layer("inner", d.pixel_format(), d.bounds(), 5, 0.4), l]));
+        diff_rect(&mut g, &d, Rect::new(10, 8, 40, 30), &format!("partial rectangle, {knockout:?}")).unwrap_or_else(|e| panic!("{e}"));
+    }
+}
+
+#[test]
+fn clipped_knockout_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for opacity in [1.0, 0.5] {
+            let build = |base_group: Option<bool>| {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let base = noise_layer("base", d.pixel_format(), Rect::new(4, 4, 40, 34), 6, 0.5);
+                let mut c = ko_layer(&d, 7, knockout);
+                c.clipped = true;
+                c.opacity = opacity;
+                let mut c2 = noise_layer("second clipped", d.pixel_format(), Rect::new(8, 8, 38, 30), 8, 0.4);
+                c2.clipped = true;
+                c2.blend = BlendMode::Multiply;
+                match base_group {
+                    None => d.layers.extend([base, c, c2]),
+                    Some(pass) => {
+                        let inner = group("clip base", pass, vec![base]);
+                        d.layers.extend([inner, c, c2]);
+                    }
+                }
+                d
+            };
+            run(&mut g, &build(None), &format!("clipped to a pixel layer, opacity {opacity}"), knockout);
+            // A group as the clipping base, pass-through (its isolated rendering carries the clip)
+            // and isolated.
+            for pass in [true, false] {
+                run(&mut g, &build(Some(pass)), &format!("clipped to a group (pass-through {pass}), opacity {opacity}"), knockout);
+            }
+        }
+    }
+}
+
+#[test]
+fn clipped_knockout_inside_a_group_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for pass in [false, true] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let base = noise_layer("base", d.pixel_format(), Rect::new(4, 4, 40, 34), 6, 0.5);
+            let mut c = ko_layer(&d, 7, knockout);
+            c.clipped = true;
+            c.opacity = 0.7;
+            d.layers.push(group("group", pass, vec![base, c]));
+            run(&mut g, &d, &format!("clipped inside a group (pass-through {pass})"), knockout);
+        }
+    }
+}
+
+#[test]
+fn knockout_with_masks_and_transparency_shapes_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for (masked, shapes, opacity) in
+            [(true, true, 1.0), (true, true, 0.5), (false, false, 1.0), (false, false, 0.5), (true, false, 1.0), (true, false, 0.5)]
+        {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut l = ko_layer(&d, 3, knockout);
+            if masked {
+                l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+            }
+            l.advanced.transparency_shapes = shapes;
+            l.opacity = opacity;
+            l.fill_opacity = 0.8;
+            d.layers.push(l);
+            run(&mut g, &d, &format!("mask {masked}, transparency shapes {shapes}, opacity {opacity}"), knockout);
+        }
+    }
+}
+
+#[test]
+fn knockout_adjustment_layer_uses_its_masks_as_the_shape() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for opacity in [1.0, 0.5] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut adj = Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert));
+            adj.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.2));
+            adj.advanced.knockout = knockout;
+            adj.opacity = opacity;
+            d.layers.push(adj);
+            run(&mut g, &d, &format!("adjustment, opacity {opacity}"), knockout);
+        }
+    }
+}
+
+/// A Background under an opaque fill layer is left out of the plan, but a deep knockout above
+/// the fill still reveals it.
+#[test]
+fn deep_knockout_reaches_a_background_hidden_by_occlusion() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(Layer::new("cover", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.7, 0.4, 1.0)))));
+        let mut l = ko_layer(&d, 3, knockout);
+        l.opacity = 0.6;
+        d.layers.push(l);
+        run(&mut g, &d, "background under an opaque fill", knockout);
+        // And inside a pass-through group, which lets the knockout through to it.
+        let mut d2 = doc(SampleType::U8, true);
+        d2.layers.push(Layer::new("cover", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.7, 0.4, 1.0)))));
+        let l = ko_layer(&d2, 3, knockout);
+        d2.layers.push(group("group", true, vec![noise_layer("inner", d2.pixel_format(), d2.bounds(), 5, 0.4), l]));
+        run(&mut g, &d2, "background under an opaque fill, pass-through group", knockout);
+    }
+}
+
+#[test]
+fn knockout_with_blend_if_and_channel_restrictions_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for opacity in [1.0, 0.5] {
+            let mut blend_if = doc(SampleType::U8, true);
+            blend_if.layers.push(underlay(&blend_if, 2));
+            let mut l = ko_layer(&blend_if, 3, knockout);
+            l.opacity = opacity;
+            l.blend_if.set(0, [BlendRange { black: [60, 120], white: [255, 255] }, BlendRange::FULL]);
+            blend_if.layers.push(l);
+            run(&mut g, &blend_if, &format!("Blend If, opacity {opacity}"), knockout);
+
+            let mut channels = doc(SampleType::U8, true);
+            channels.layers.push(underlay(&channels, 2));
+            let mut l = ko_layer(&channels, 3, knockout);
+            l.opacity = opacity;
+            l.excluded_channels = 0b010;
+            channels.layers.push(l);
+            run(&mut g, &channels, &format!("channel restrictions, opacity {opacity}"), knockout);
+        }
+    }
+}
+
+#[test]
+fn knockout_layer_with_a_drop_shadow_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for opacity in [1.0, 0.5] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut l = ko_layer(&d, 3, knockout);
+            l.opacity = opacity;
+            let Effect::DropShadow(mut shadow) = Effect::default_drop_shadow() else { unreachable!() };
+            shadow.distance = 4.0;
+            shadow.size = 3.0;
+            l.effects.items.push(Effect::DropShadow(shadow));
+            d.layers.push(l);
+            run(&mut g, &d, &format!("drop shadow, opacity {opacity}"), knockout);
+        }
+    }
+}
+
+/// The resident cache keeps a stroked shape's fill apart from its full content: a knockout shape
+/// (the full content) and the split fill under a visible clipped layer live in one plan.
+#[test]
+fn knockout_on_a_stroked_shape_with_a_clipped_layer_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
+    for knockout in KNOCKOUTS {
+        for fill in [0.0, 0.5] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let path = Path::new(vec![Subpath::polygon(&[(8.3, 6.6), (40.2, 9.1), (36.7, 33.4), (11.9, 30.2)])]);
+            let stroke = ShapeStroke { width: 4.0, paint: Fill::Solid(Color::rgb(0.9, 0.9, 0.1)), ..ShapeStroke::default() };
+            let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))), stroke: Some(stroke), ..ShapeLayer::default() };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            let mut l = Layer::new("shape", LayerContent::Shape(sh));
+            l.advanced.knockout = knockout;
+            l.fill_opacity = fill;
+            let mut c = noise_layer("clip", d.pixel_format(), Rect::new(4, 4, 44, 36), 42, 0.5);
+            c.clipped = true;
+            d.layers.extend([l, c]);
+            run(&mut g, &d, &format!("stroked shape, fill opacity {fill}, clipped layer"), knockout);
+        }
+    }
+}
+
+/// The options that stay on the CPU still make the GPU refuse the document.
+#[test]
+fn the_remaining_advanced_blending_options_are_refused() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(48, 40);
+    let mut l = ko_layer(&d, 3, Knockout::Deep);
+    l.advanced.transparency_shapes = false;
+    l.blend = BlendMode::ColorDodge;
+    d.layers.push(l);
+    let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+        .expect_err("the GPU must refuse a special-eight blend without transparency shapes");
+    assert!(e.to_string().contains("Transparency Shapes Layer off with a Color Dodge"), "{e}");
+}
+
+#[test]
+fn clipped_layers_blended_individually_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (opacity, fill) in [(1.0, 1.0), (0.6, 1.0), (0.6, 0.5)] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut base = clip_base(&d);
+        base.fill_opacity = fill;
+        let layers = clipped_pair(&d, base, opacity);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("pixel base, opacity {opacity}, fill {fill}"));
+    }
+    // A clipped layer in Screen mode, and a hidden clipped layer next to a visible one.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut layers = clipped_pair(&d, clip_base(&d), 0.8);
+    layers[2].blend = BlendMode::Screen;
+    let mut hidden = noise_layer("hidden", d.pixel_format(), d.bounds(), 11, 0.9);
+    hidden.clipped = true;
+    hidden.visible = false;
+    layers.insert(2, hidden);
+    d.layers.extend(layers);
+    check(&mut g, &d, "screen clipped layer and a hidden one");
+}
+
+#[test]
+fn clipped_layers_blended_individually_on_groups_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for pass in [false, true] {
+        for opacity in [1.0, 0.6] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let inner = noise_layer("inner", d.pixel_format(), Rect::new(0, 0, 40, 34), 5, 0.4);
+            let layers = clipped_pair(&d, group("base group", pass, vec![inner]), opacity);
+            d.layers.extend(layers);
+            check(&mut g, &d, &format!("group base (pass-through {pass}), opacity {opacity}"));
+        }
+    }
+}
+
+#[test]
+fn individually_clipped_knockouts_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for base_knockout in [Knockout::None, Knockout::Shallow, Knockout::Deep] {
+            for opacity in [1.0, 0.6] {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let mut base = clip_base(&d);
+                base.advanced.knockout = base_knockout;
+                let mut layers = clipped_pair(&d, base, opacity);
+                layers[1].advanced.knockout = knockout;
+                d.layers.extend(layers);
+                run(&mut g, &d, &format!("base knockout {base_knockout:?}, opacity {opacity}"), knockout);
+            }
+        }
+    }
+}
+
+/// An opaque fill base is not skipped over: a clipped shallow knockout reveals the layers
+/// beneath it.
+#[test]
+fn individually_clipped_shallow_knockout_reaches_beneath_an_opaque_fill() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut fill = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.5, 0.8, 1.0))));
+    fill.advanced.blend_clipped = false;
+    let mut c = ko_layer(&d, 3, Knockout::Shallow);
+    c.clipped = true;
+    d.layers.extend([fill, c]);
+    check(&mut g, &d, "shallow knockout under an opaque fill base");
+}
+
+/// Where the base covers a pixel fully an individually blended clipped layer keeps its 32-bit
+/// values above 1; where the base is partly transparent, however slightly, the clamped mix
+/// applies, as on the CPU. Half-float accumulation tells the two apart as well.
+#[test]
+fn individually_clipped_hdr_values_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    // The base's alpha at every third pixel, and its mask there (sample depth, value, density).
+    let cases = [(1.0, None), (0.4, None), (0.9999, None), (1.0, Some((SampleType::U8, 254.0 / 255.0, 0.01))), (1.0, Some((SampleType::F32, 0.9999, 1.0)))];
+    for (base_alpha, masked) in cases {
+        for opacity in [1.0, 0.7] {
+            let what = format!("HDR clipped layer, base alpha {base_alpha}, mask {masked:?}, opacity {opacity}");
+            let mut d = doc(SampleType::F32, true);
+            d.layers.push(underlay(&d, 2));
+            let mut base = Layer::raster("base", d.pixel_format());
+            let rect = Rect::new(4, 4, 40, 34);
+            let px: Vec<f32> = (0..rect.width() * rect.height()).flat_map(|i| [0.3, 0.5, 0.2, if i % 3 == 0 { base_alpha } else { 1.0 }]).collect();
+            base.surface_mut().unwrap().write_region(rect, &px);
+            if let Some((sample, value, density)) = masked {
+                let mut m = LayerMask::reveal_all();
+                m.surface = Surface::with_default(PixelFormat { sample, ..PixelFormat::GRAY8 }, &[1.0]);
+                let values: Vec<f32> = (0..rect.width() * rect.height()).map(|i| if i % 3 == 0 { value } else { 1.0 }).collect();
+                m.surface.write_region(rect, &values);
+                m.density = density;
+                base.mask = Some(m);
+            }
+            base.opacity = opacity;
+            base.advanced.blend_clipped = false;
+            let mut c = Layer::raster("hdr clip", d.pixel_format());
+            let crect = Rect::new(8, 8, 38, 30);
+            let cpx: Vec<f32> = (0..crect.width() * crect.height()).flat_map(|_| [2.0, 0.4, 0.6, 1.0]).collect();
+            c.surface_mut().unwrap().write_region(crect, &cpx);
+            c.clipped = true;
+            d.layers.extend([base, c]);
+            // Where the base covers fully (opaque pixels at opacity 1) the CPU keeps the clipped
+            // value; below full coverage it mixes, which clamps.
+            let partial = base_alpha < 1.0 || masked.is_some();
+            let full = |x: i32, y: i32| opacity >= 1.0 && !(partial && ((y - rect.y0) * rect.width() as i32 + x - rect.x0) % 3 == 0);
+            let classify = |px: &[[f32; 4]], backend: &str| {
+                for y in crect.y0..crect.y1 {
+                    for x in crect.x0..crect.x1 {
+                        let red = px[(y * d.bounds().width() as i32 + x) as usize][0];
+                        assert_eq!(red > 1.0, full(x, y), "{what}, {backend} at ({x},{y}): red {red}");
+                    }
+                }
+            };
+            classify(&photocraft_compose::render(&d, d.bounds()).px, "CPU");
+            check(&mut g, &d, &what);
+            classify(&check_with(&g, &mut half, &d, 3.0 / 255.0, &what), "half-float GPU");
+        }
+    }
+}
+
+/// A 32-bit base that takes several passes (a group) keeps Blend Clipped Layers as Group off on
+/// the CPU; at 8 bits it renders on the GPU.
+#[test]
+fn individually_clipped_multi_pass_bases_stay_on_the_cpu_at_32_bits() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::F32] {
+        let mut d = doc(depth, true);
+        d.layers.push(underlay(&d, 2));
+        let inner = noise_layer("inner", d.pixel_format(), Rect::new(0, 0, 40, 34), 5, 0.4);
+        let layers = clipped_pair(&d, group("base group", false, vec![inner]), 1.0);
+        d.layers.extend(layers);
+        if depth == SampleType::F32 {
+            let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+                .expect_err("the GPU must refuse a multi-pass 32-bit base");
+            assert!(e.to_string().contains("Blend Clipped Layers as Group off"), "{e}");
+            assert!(g.comp.supports(&d).is_err());
+        } else {
+            check(&mut g, &d, "group base at 8 bits");
+        }
+    }
+}
+
+/// The base's coverage is its alpha × opacity: where that reaches 1 (a 32-bit alpha above 1) the
+/// clipped values above 1 survive, whatever the opacity.
+#[test]
+fn individually_clipped_layers_keep_hdr_where_alpha_times_opacity_reaches_one() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    let mut d = doc(SampleType::F32, true);
+    d.layers.push(underlay(&d, 2));
+    let mut base = Layer::raster("base", d.pixel_format());
+    base.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 40, 34), &[0.3, 0.5, 0.2, 2.0]);
+    base.opacity = 0.5;
+    base.advanced.blend_clipped = false;
+    let mut c = Layer::raster("hdr clip", d.pixel_format());
+    let crect = Rect::new(8, 8, 38, 30);
+    c.surface_mut().unwrap().fill_rect(crect, &[2.0, 0.4, 0.6, 1.0]);
+    c.clipped = true;
+    d.layers.extend([base, c]);
+    let what = "HDR clipped layer, base alpha 2 at opacity 0.5";
+    let kept = |px: &[[f32; 4]], backend: &str| {
+        for y in crect.y0..crect.y1 {
+            for x in crect.x0..crect.x1 {
+                let red = px[(y * d.bounds().width() as i32 + x) as usize][0];
+                assert!(red > 1.0, "{what}, {backend} at ({x},{y}): red {red}");
+            }
+        }
+    };
+    kept(&photocraft_compose::render(&d, d.bounds()).px, "CPU");
+    check(&mut g, &d, what);
+    kept(&photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).expect(what), "GPU");
+    kept(&check_with(&g, &mut half, &d, 3.0 / 255.0, what), "half-float GPU");
+}
+
+/// A half-float accumulator rounds a coverage just below 1 to 1: the record also keeps the
+/// uncovered part, so the mix still weighs it, which shows over a 32-bit backdrop far above 1.
+#[test]
+fn individually_clipped_near_full_coverage_keeps_its_weight_on_half_floats() {
+    let Some(mut g) = gpu() else { return };
+    let mut half = half_float_compositor(&g);
+    let mut d = doc(SampleType::F32, false);
+    let rect = Rect::new(4, 4, 40, 34);
+    let mut base = Layer::raster("base", d.pixel_format());
+    base.surface_mut().unwrap().fill_rect(rect, &[2000.0, 2000.0, 2000.0, 1.0]);
+    let mut m = LayerMask::reveal_all();
+    m.surface = Surface::with_default(PixelFormat { sample: SampleType::F32, ..PixelFormat::GRAY8 }, &[1.0]);
+    let values: Vec<f32> = (0..rect.width() * rect.height()).map(|i| if i % 3 == 0 { 1.0 - 2f32.powi(-13) } else { 1.0 }).collect();
+    m.surface.write_region(rect, &values);
+    base.mask = Some(m);
+    base.advanced.blend_clipped = false;
+    let mut c = Layer::raster("black clip", d.pixel_format());
+    c.surface_mut().unwrap().fill_rect(rect, &[0.0, 0.0, 0.0, 1.0]);
+    c.clipped = true;
+    d.layers.extend([base, c]);
+    let what = "near-full clip base coverage over HDR";
+    let cpu = photocraft_compose::render(&d, d.bounds());
+    assert!(cpu.px.iter().any(|p| p[0] > 0.2), "{what}: the uncovered part of the base must show");
+    check(&mut g, &d, what);
+    check_with(&g, &mut half, &d, 3.0 / 255.0, what);
+}
+
+/// A 16-bit, vector or feathered mask uploads as half floats, which can't tell near-full coverage
+/// from full: a 32-bit base wearing one keeps Blend Clipped Layers as Group off on the CPU; at 8
+/// bits it renders on the GPU.
+#[test]
+fn individually_clipped_32_bit_bases_with_half_float_masks_stay_on_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (sample, feather) in [(SampleType::U16, 0.0), (SampleType::U8, 2.0)] {
+        for depth in [SampleType::U8, SampleType::F32] {
+            let what = format!("{depth:?} document, {sample:?} mask, feather {feather}");
+            let mut d = doc(depth, true);
+            d.layers.push(underlay(&d, 2));
+            let mut m = LayerMask::reveal_all();
+            m.surface = Surface::with_default(PixelFormat { sample, ..PixelFormat::GRAY8 }, &[0.4]);
+            m.surface.write_region(Rect::new(8, 8, 30, 30), &[0.7; 22 * 22]);
+            m.feather = feather;
+            let mut base = clip_base(&d);
+            base.mask = Some(m);
+            let layers = clipped_pair(&d, base, 1.0);
+            d.layers.extend(layers);
+            if depth == SampleType::F32 {
+                let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+                    .expect_err("the GPU must refuse a 32-bit base with a half-float mask");
+                assert!(e.to_string().contains("Blend Clipped Layers as Group off"), "{what}: {e}");
+                assert!(g.comp.supports(&d).is_err(), "{what}");
+            } else {
+                check(&mut g, &d, &what);
+            }
+        }
+    }
+}
+
+#[test]
+fn individually_clipped_layers_with_masks_restrictions_and_blend_if_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for opacity in [1.0, 0.6] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut base = clip_base(&d);
+        base.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+        let layers = clipped_pair(&d, base, opacity);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("masked base, opacity {opacity}"));
+
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut layers = clipped_pair(&d, clip_base(&d), opacity);
+        layers[1].excluded_channels = 0b010;
+        layers[2].blend_if.set(0, [BlendRange { black: [60, 120], white: [255, 255] }, BlendRange::FULL]);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("clipped channel restrictions and Blend If, opacity {opacity}"));
+    }
+}
+
+#[test]
+fn individually_clipped_layers_in_groups_and_depths_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for pass in [false, true] {
+        for knockout in KNOCKOUTS {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut layers = clipped_pair(&d, clip_base(&d), 0.7);
+            layers[1].advanced.knockout = knockout;
+            d.layers.push(group("group", pass, layers));
+            run(&mut g, &d, &format!("inside a group (pass-through {pass})"), knockout);
+        }
+    }
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = doc(depth, true);
+        d.layers.push(underlay(&d, 2));
+        let layers = clipped_pair(&d, clip_base(&d), 0.6);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("{depth:?}"));
+    }
+}

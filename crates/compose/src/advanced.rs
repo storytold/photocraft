@@ -42,7 +42,7 @@ use crate::{Buffer, BufferAlloc, Ctx, effects, mask_vals};
 /// knockout-shallow-nested), while pass-through groups let it reach the Background
 /// (knockout-deep-nested-pt renders like knockout-deep-normal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Scope {
+pub struct Scope {
     /// The document's top-level stack: a shallow knockout there reaches the Background.
     pub root: bool,
     /// Inside an isolated group: deep knockouts stop at its (transparent) bottom.
@@ -50,11 +50,13 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
+    /// The document's top-level stack.
     pub const ROOT: Scope = Scope { root: true, isolated: false };
     /// An isolated group's own stack (it starts from a transparent buffer).
     pub const ISOLATED: Scope = Scope { root: false, isolated: true };
 
     /// The stack of a pass-through group inside this one.
+    #[must_use]
     pub fn pass_through(self) -> Scope {
         Scope { root: false, isolated: self.isolated }
     }
@@ -72,7 +74,10 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 }
 
 /// Whether any Advanced Blending option changes how `layer` (with its clipping group `clipped`)
-/// composites. The GPU compositor sends such documents to this CPU path.
+/// composites. This is the full set the CPU path implements. The GPU compositor runs knockout
+/// and clipped layers blended individually itself and sends the rest (Blend Interior Effects as
+/// Group with effects, Transparency Shapes Layer off with effects or a special-eight blend, and
+/// masks hiding effects) to the CPU path; its own gate is `plan::lower::advanced_on_cpu`.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
     let a = &layer.advanced;
     if a.is_default() {
@@ -130,7 +135,7 @@ pub(crate) fn knockout_target_with<'b, A: BufferAlloc>(
 
 /// Whether `layers` holds a visible unclipped shallow knockout (its stack then keeps a copy of
 /// its starting backdrop).
-pub(crate) fn needs_floor(layers: &[Layer]) -> bool {
+pub fn needs_floor(layers: &[Layer]) -> bool {
     layers.iter().any(|l| l.visible && !l.clipped && l.advanced.knockout == Knockout::Shallow)
 }
 
@@ -222,7 +227,7 @@ pub(crate) fn composite_clipped_with<A: BufferAlloc>(clipped: &[Layer], base: &m
 
 /// Whether `layer`'s clipped layers blend one by one (Blend Clipped Layers as Group off).
 /// Adjustment layers keep the grouped path (they have no pixels of their own to clip to).
-pub(crate) fn clips_individually(layer: &Layer, clipped: &[Layer]) -> bool {
+pub fn clips_individually(layer: &Layer, clipped: &[Layer]) -> bool {
     !layer.advanced.blend_clipped && !matches!(layer.content, LayerContent::Adjustment(_)) && clipped.iter().any(|c| c.visible)
 }
 
@@ -271,7 +276,7 @@ pub(crate) fn composite_clipped_individually_with<A: BufferAlloc>(
 
 /// Whether a mask of `layer` hides its effects instead of shaping them (Layer / Vector Mask
 /// Hides Effects on an enabled mask of a layer with effects).
-pub(crate) fn hides_effects(layer: &Layer) -> bool {
+pub fn hides_effects(layer: &Layer) -> bool {
     let a = &layer.advanced;
     effects::has_effects(layer)
         && ((a.layer_mask_hides_effects && layer.mask.as_ref().is_some_and(|m| m.enabled))

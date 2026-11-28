@@ -15,10 +15,21 @@ placed inside a group, clipping unit or adjustment program.
 
 Blend If runs on the GPU (#4395) within this rule: like channel restrictions, it reads only the
 backdrop from before its own unit (retained across the unit, released at its end), so nothing
-else is live at the boundary. Advanced Blending (on main since b0680fd) returns `Unsupported`
-from the GPU planner and uses the CPU path: it must keep falling back to the CPU, or keep the
-checkpoint boundary rule — a later GPU implementation of advanced blending preserves the
-boundary invariant either way.
+else is live at the boundary. Advanced Blending knockout (shallow and deep, also of clipped
+layers) and Blend Clipped Layers as Group off run on the GPU within the same rule: a shallow
+knockout's floor (the starting backdrop of a non-root stack) lives only inside that stack, the
+floor of individually clipped layers (the backdrop beneath the base) lives only inside that
+clipping group's planning, and a deep knockout builds its target (a cleared slot with the
+Background composited onto it, even when occlusion left the Background out of the plan) fresh at
+each use, so only the root stack's accumulated backdrop is live between units. The other options
+still return `Unsupported` from the GPU planner and use the CPU path: Blend Interior Effects as
+Group with effects, Transparency Shapes Layer off with effects or a special-eight blend mode, and
+Layer / Vector Mask Hides Effects. So does Blend Clipped Layers as Group off in a 32-bit float
+document when the base takes more than one pass (a group, or a pattern fill without cached
+pixels), since its coverage would go through an accumulator slot, which may be half float, or
+wears a 16-bit, vector or feathered mask, which uploads as half floats. A one-pass 32-bit base
+has its coverage read from a full-precision copy of its pixels (16 bytes a pixel on the GPU). A
+later GPU implementation of any of them preserves the boundary invariant.
 
 ## Invalidation
 

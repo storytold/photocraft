@@ -154,7 +154,7 @@ const MANAGED_BAND_ROWS: i32 = 16;
 /// Whether `fmt` pixels reach `kind` texels through a per-pixel colour transform (CMYK, Lab).
 pub(crate) fn colour_managed(fmt: &PixelFormat, kind: TexKind) -> bool {
     use photocraft_color::ColorMode;
-    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
+    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F | TexKind::Rgba32F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
 }
 
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
@@ -207,6 +207,11 @@ fn convert_rows(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, rect
                 let v = rgba();
                 for x in v {
                     out.extend(f32_to_f16(x).to_le_bytes());
+                }
+            }
+            TexKind::Rgba32F => {
+                for x in rgba() {
+                    out.extend(x.to_le_bytes());
                 }
             }
             TexKind::R8Direct => out.push((px[0].clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
