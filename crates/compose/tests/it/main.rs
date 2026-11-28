@@ -3,6 +3,7 @@
 mod artboard;
 mod brightness_contrast_extreme_brightness;
 mod buffer_reuse;
+mod hdr_pass_through;
 mod interrupt_surface;
 mod scratch_retry;
 mod shape_split_cache;

@@ -120,6 +120,7 @@ fn gpu() -> Option<Gpu> {
         }
     };
     eprintln!("GPU parity backend: {:?} ({}, {:?})", info.backend, info.name, info.device_type);
+    eprintln!("GPU parity identity: vendor={:04x} device={:04x}", info.vendor, info.device);
     // Exact parity needs 32-bit float targets. Adapters without them (e.g. GL software
     // rasterizers) use the CPU compositor in the app, so there is nothing to compare there.
     if Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
@@ -255,6 +256,7 @@ fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<phot
     diff_rect_full(g, doc, rect, what).map(|pass| pass.whole_stats)
 }
 
+/// Require CPU/GPU agreement for the whole canvas and the paged rendering paths in `diff_rect`.
 fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
 }
@@ -3440,6 +3442,33 @@ fn layer_pages_that_just_miss_borrow_the_effect_map_share() {
     assert_eq!(comp.fit_layers(need, true), own, "an exact budget stays exact");
     comp.set_memory_budget(budget);
     assert_eq!(comp.resident_budget(), need, "the next memory budget lends again");
+}
+
+/// No-op and active F32 clips preserve HDR RGB at full and partial group opacity.
+/// Independent literals check the CPU oracle before whole-canvas and paged GPU comparisons.
+#[test]
+fn hdr_pass_through_clips_preserve_hdr_rgb() {
+    let Some(mut g) = gpu() else { return };
+    for group_opacity in [1.0, 0.5] {
+        for (clip_opacity, expected) in [(0.0, [2.0, -0.25, 0.5]), (0.5, [1.125, -0.125, 0.625])] {
+            let mut d = Document::new("HDR pass-through clip", Size::new(2, 2), ColorMode::Rgb, SampleType::F32);
+            let mut child = Layer::raster("HDR", PixelFormat::RGBA32F);
+            child.surface_mut().unwrap().fill_rect(d.bounds(), &[2.0, -0.25, 0.5, 1.0]);
+            let mut group = Layer::group("group", vec![child]);
+            group.blend = BlendMode::PassThrough;
+            group.opacity = group_opacity;
+            let mut clip = Layer::raster("clip", PixelFormat::RGBA32F);
+            clip.clipped = true;
+            clip.opacity = clip_opacity;
+            clip.surface_mut().unwrap().fill_rect(d.bounds(), &[0.25, 0.0, 0.75, 1.0]);
+            d.layers = vec![group, clip].into();
+            let literal = [expected[0], expected[1], expected[2], group_opacity];
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            assert_eq!(cpu.px.len(), 4, "the literal oracle covers the full 2x2 canvas");
+            assert!(cpu.px.iter().all(|p| p.iter().zip(literal).all(|(got, want)| (got - want).abs() < 1e-6)), "{literal:?}: {:?}", cpu.px);
+            check(&mut g, &d, &format!("F32 group opacity {group_opacity}, clip opacity {clip_opacity}"));
+        }
+    }
 }
 
 // A pass-through group holding an adjustment renders isolated when layers clip to it, on the GPU
