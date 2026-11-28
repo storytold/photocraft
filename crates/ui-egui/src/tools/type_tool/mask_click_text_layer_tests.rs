@@ -58,8 +58,17 @@ fn layers(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
 
+/// The test runs on a thread with an 8 MiB stack: its three apps, each run through two full app
+/// frames, overflow the test thread's 2 MiB in an unoptimized Windows build.
 #[test]
 fn a_type_mask_click_on_text_edits_that_layer_as_the_type_tool_does() {
+    let run = std::thread::Builder::new().stack_size(8 << 20).spawn(type_mask_clicks_edit_like_the_type_tool).expect("a test thread");
+    if let Err(panic) = run.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+fn type_mask_clicks_edit_like_the_type_tool() {
     let escape = key(egui::Key::Escape, Modifiers::NONE);
     let mut states = Vec::new();
     for tool in [Tool::Type, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
