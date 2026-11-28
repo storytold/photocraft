@@ -757,8 +757,8 @@ impl<'a> BitmapStrips<'a> {
                         let (rx, ry) = (x * c + y * s, -x * s + y * c);
                         let u = (rx / cell).rem_euclid(1.0) * 2.0 - 1.0;
                         let vv = (ry / cell).rem_euclid(1.0) * 2.0 - 1.0;
-                        // Ink (black) covers where the spot function exceeds the gray level.
-                        *v = if cdf(spot(shape, u, vv)) >= *v { 0.0 } else { 1.0 };
+                        // Pure white takes no ink, even where the sampled CDF reaches 1. Keep both comparisons eager.
+                        *v = if (cdf(spot(shape, u, vv)) >= *v) & (*v < 1.0) { 0.0 } else { 1.0 };
                     }
                 });
             }
