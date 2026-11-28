@@ -578,7 +578,16 @@ impl Ex<'_> {
             LayerContent::Adjustment(a) => self.adjustment_blocks(l, a, &mut raw, &mut regenerated),
             LayerContent::Fill(f) => fill_rule(&mut raw, &mut regenerated, f),
             LayerContent::Shape(sh) => {
-                if let Some(f) = &sh.fill {
+                // A shape whose fill lives in `vscg` (every shape Photoshop CS6 and later
+                // writes) keeps it there: `shape_blocks` rewrites that block when the fill
+                // changes. A second fill block next to it (`SoCo`/`GdFl`/`PtFl`) is something
+                // Photoshop never writes (none of the corpus shapes has one) and made an
+                // unedited re-save differ from the file it came from (#1281). One that an
+                // earlier save left there is dropped: it would go stale once the fill changes.
+                let in_vscg = raw.iter().any(|(k, d)| k == b"vscg" && crate::vector_map::fill_from_vscg(d).is_some());
+                if in_vscg {
+                    raw.retain(|(k, _)| !matches!(k, b"SoCo" | b"GdFl" | b"PtFl"));
+                } else if let Some(f) = &sh.fill {
                     fill_rule(&mut raw, &mut regenerated, f);
                 }
                 let (w, h) = (self.canvas.width(), self.canvas.height());
