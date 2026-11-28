@@ -408,6 +408,121 @@ pub(crate) fn brightness_contrast_empty_refusal(s: &Session, p: &Value) -> Resul
     Ok(())
 }
 
+/// Image › Adjustments › Black & White's id.
+pub(crate) const BLACK_WHITE_ID: &str = "image.adjustments.blackWhite";
+/// The reference application's alert for Black & White where it is greyed.
+pub(crate) const BLACK_WHITE_UNAVAILABLE: &str = "The command \"Black & White\" is not currently available.";
+/// The reference application's alert for Black & White on an empty pixel layer.
+pub(crate) const BLACK_WHITE_EMPTY: &str = "Could not complete the Black & White command because the active layer is empty.";
+
+/// Black & White's precondition with no params: the Channels panel's target, as
+/// [`black_white_enabled_with`] checks it, else [`has_adjustable`].
+pub(crate) fn black_white_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, BLACK_WHITE_ID, Value::Null);
+    black_white_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Black & White's precondition for a call with `p`, its target filled in from the Channels panel
+/// (#14401): RGB documents only, and not on a hidden pixel layer (the active one or the one
+/// `"layer"` names), as in the reference application; otherwise [`has_adjustable`]'s. An alpha
+/// channel or Quick Mask target and the modes not measured (Bitmap, Duotone, Multichannel) keep
+/// [`has_adjustable`]; `None` for a layer mask or a filter mask, which keep their own checks.
+pub(crate) fn black_white_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use photocraft_color::ColorMode;
+    greyed_on_pixels(s, p, &[ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed], &[ColorMode::Rgb], BLACK_WHITE_UNAVAILABLE)
+}
+
+/// Black & White with `p` (its target filled in) stops on an empty pixel layer before it edits
+/// anything (#14401); its other refusals are the precondition's, checked before `run`. Only RGB
+/// was measured: the other modes are greyed or keep today's behaviour.
+pub(crate) fn black_white_empty_refusal(s: &Session, p: &Value) -> Result<()> {
+    if s.active().is_some_and(|d| d.doc.mode != photocraft_color::ColorMode::Rgb) {
+        return Ok(());
+    }
+    empty_layer_refusal(s, p, BLACK_WHITE_EMPTY)
+}
+
+/// Image › Adjustments › Color Balance's id.
+pub(crate) const COLOR_BALANCE_ID: &str = "image.adjustments.colorBalance";
+/// The reference application's alert for Color Balance where it is greyed.
+pub(crate) const COLOR_BALANCE_UNAVAILABLE: &str = "The command \"Color Balance\" is not currently available.";
+/// The reference application's alert for Color Balance on an empty pixel layer.
+pub(crate) const COLOR_BALANCE_EMPTY: &str = "Could not complete the Color Balance command because the active layer is empty.";
+
+/// Color Balance's precondition (#14416): not in a Grayscale or Multichannel document, nor on a
+/// hidden pixel layer in an RGB, CMYK, Lab or Indexed document, as in the reference application;
+/// otherwise [`has_adjustable`]'s, as for a hidden layer in the modes not measured (Duotone).
+/// Bitmap is refused by the shared Bitmap gate and a targeted layer mask by `mask_target_enabled`.
+pub(crate) fn color_balance_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, COLOR_BALANCE_ID, Value::Null);
+    color_balance_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// [`color_balance_enabled`] for a call with `p`, its target filled in from the Channels panel:
+/// the target and the `"layer"` it names are the call's own. `None` for a layer mask or a filter
+/// mask, which `mask_target_enabled` checks.
+pub(crate) fn color_balance_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use photocraft_color::ColorMode;
+    greyed_on_pixels(
+        s,
+        p,
+        &[ColorMode::Grayscale, ColorMode::Multichannel],
+        &[ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed],
+        COLOR_BALANCE_UNAVAILABLE,
+    )
+}
+
+/// Color Balance with `p` (its target filled in) stops on an empty pixel layer (#14416).
+pub(crate) fn color_balance_empty_refusal(s: &Session, p: &Value) -> Result<()> {
+    empty_layer_refusal(s, p, COLOR_BALANCE_EMPTY)
+}
+
+/// An adjustment's precondition for a call with `p` (its target filled in), which the reference
+/// application greys with `unavailable` on the layer's pixels in a document of one of `greyed`,
+/// or on a hidden pixel layer (the active one or the one `"layer"` names) in one of `measured`.
+/// An alpha channel or Quick Mask target and any other mode keep [`has_adjustable`]'s; `None` for
+/// a layer mask or a filter mask, which keep their own checks.
+fn greyed_on_pixels(
+    s: &Session,
+    p: &Value,
+    greyed: &[photocraft_color::ColorMode],
+    measured: &[photocraft_color::ColorMode],
+    unavailable: &str,
+) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask | Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => {
+            let d = s.active()?;
+            if greyed.contains(&d.doc.mode) {
+                return Some(Err(unavailable.into()));
+            }
+            if !measured.contains(&d.doc.mode) {
+                return Some(has_adjustable(s));
+            }
+            let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
+            let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
+            Some(if hidden { Err(unavailable.into()) } else { has_adjustable(s) })
+        }
+    }
+}
+
+/// An adjustment with `p` (its target filled in) stops with `empty` on an empty pixel layer
+/// before it edits anything.
+fn empty_layer_refusal(s: &Session, p: &Value, empty: &str) -> Result<()> {
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(());
+    }
+    let id = crate::commands::layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
+        return Err(EngineError::Other(empty.into()));
+    }
+    Ok(())
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.

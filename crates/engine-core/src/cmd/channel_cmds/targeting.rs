@@ -140,12 +140,17 @@ fn edits_mask(id: &str) -> bool {
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
 /// layer needs a mask. None when another precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
-    // Brightness/Contrast refuses a hidden pixel layer, judged on the call's own params so that a
-    // channel target or a `"layer"` they name counts, not only the active layer (#14359).
-    if id == crate::adjust_cmds::BRIGHTNESS_CONTRAST_ID
-        && let Some(r) = crate::adjust_cmds::brightness_contrast_enabled_with(s, p)
-    {
-        return Some(r);
+    // Brightness/Contrast, Black & White and Color Balance refuse a hidden pixel layer, judged on
+    // the call's own params so that a channel target or a `"layer"` they name counts, not only the
+    // active layer (#14359, #14401, #14416).
+    let own = match id {
+        crate::adjust_cmds::BRIGHTNESS_CONTRAST_ID => crate::adjust_cmds::brightness_contrast_enabled_with(s, p),
+        crate::adjust_cmds::BLACK_WHITE_ID => crate::adjust_cmds::black_white_enabled_with(s, p),
+        crate::adjust_cmds::COLOR_BALANCE_ID => crate::adjust_cmds::color_balance_enabled_with(s, p),
+        _ => None,
+    };
+    if own.is_some() {
+        return own;
     }
     match target_of(p) {
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
@@ -153,6 +158,8 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(addressed_layer(s, p).and_then(crate::smart_cmds::filter_mask_paintable))
         }
+        // The reference application greys Color Balance on a targeted layer mask (#14416).
+        Target::Mask if id == crate::adjust_cmds::COLOR_BALANCE_ID => Some(Err(crate::adjust_cmds::COLOR_BALANCE_UNAVAILABLE.into())),
         Target::Mask if edits_mask(id) => {
             Some(addressed_layer(s, p).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the target layer has no layer mask".into()) }))
         }
