@@ -22,6 +22,7 @@ use craft::ui::sections::{DialogRole, FooterButton};
 use craft::ui::text::NumberField;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
+use photocraft_engine::installed_profiles::InstalledProfile;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -284,14 +285,18 @@ fn document_derived(command: &str, key: &str) -> bool {
 /// The rows of `command`'s dialog for the parameter notation `spec`: the framework's parse of it,
 /// then the app's rows (documents, angle dials, units, the rows only the open document can fill).
 pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<Param> {
+    params_with(app, command, spec, &photocraft_engine::installed_profiles::installed())
+}
+
+/// `params` with the installed profiles given, so tests can pass their own.
+fn params_with(app: &mut PhotocraftApp, command: &str, spec: &str, installed: &[InstalledProfile]) -> Vec<Param> {
     let documents = document_keys(spec);
     let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
     let allowed = (command == "edit.assignProfile").then(|| {
         let mut listed = Map::new();
-        assign_profile_defaults(app, &mut listed);
+        assign_profile_defaults(app, &mut listed, installed);
         listed.get("__profiles").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
     });
-    let installed = photocraft_engine::installed_profiles::installed();
     let mut list: Vec<Param> = Param::parse_list(&documents_as_text(spec))
         .into_iter()
         // Optional parameters the generic dialog can't express keep their defaults.
@@ -338,7 +343,7 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
             }
             if let ParamKind::Choice { options, .. } = &mut p.kind {
                 // The profile menus also list the profiles installed in the system, by description.
-                options.extend(rows::installed_choices(command, &p.key, &installed).into_iter().map(|(path, description)| (path, Label::from(description))));
+                options.extend(rows::installed_choices(command, &p.key, installed).into_iter().map(|(path, description)| (path, Label::from(description))));
                 // Assign Profile: only what the document's colour mode can take (#4951).
                 if p.key == "profile"
                     && let Some(allowed) = &allowed
@@ -925,7 +930,7 @@ pub(crate) fn refresh_match_color_sources(session: &photocraft_engine::Session, 
 /// Assign Profile offers only the profiles the document's colour mode can take (#4951): the
 /// command refuses one of another colour space. `__profiles` lists them for the `profile` menu,
 /// and a remembered choice that doesn't fit this document falls back to the working space.
-fn assign_profile_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+fn assign_profile_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>, installed: &[InstalledProfile]) {
     let Some(st) = app.session.active() else { return };
     let Some(spec) = photocraft_engine::commands::find("edit.assignProfile") else { return };
     let space = photocraft_engine::color_cmds::mode_space(st.doc.mode);
@@ -938,7 +943,7 @@ fn assign_profile_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>)
             _ => Vec::new(),
         })
         .collect();
-    let installed: Vec<_> = photocraft_engine::installed_profiles::installed().into_iter().filter(|i| i.is_destination()).collect();
+    let installed: Vec<_> = installed.iter().filter(|i| i.is_destination()).collect();
     let allowed: Vec<String> =
         builtin.iter().filter(|name| fits(name)).cloned().chain(installed.iter().filter(|i| i.color_space == space).map(|i| i.path.clone())).collect();
     // A path nobody lists (typed by an agent) is left alone: the command decides about it.

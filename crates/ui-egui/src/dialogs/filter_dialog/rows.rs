@@ -1,7 +1,7 @@
 //! The filter dialogs' rows that need the app: what the schema parser cannot build from a spec string.
 //!
 //! [`custom_rows`] turns the parsed rows of one command into the rows the dialog shows: Indexed Color's matte and
-//! colour count, Lens Blur's depth sources, the installed profiles, Color Lookup's LUT picker, Match Color's
+//! colour count, Lens Blur's depth sources, Color Lookup's LUT picker, Match Color's
 //! source document and layer, Replace Color's droppers and Result, Radial Blur's centre and the Blur Gallery's
 //! blur row.
 //!
@@ -72,7 +72,6 @@ pub(crate) fn custom_rows(app: &mut PhotocraftApp, command: &str, params: &mut V
         }
         _ => {}
     }
-    installed_profiles(command, params);
 }
 
 /// The row `key` of `params`, mutably.
@@ -262,22 +261,6 @@ fn installed_filter(cmd: &str, key: &str) -> Option<fn(&InstalledProfile) -> boo
 pub(super) fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProfile]) -> Vec<(String, String)> {
     let Some(fits) = installed_filter(cmd, key) else { return Vec::new() };
     installed.iter().filter(|i| i.is_destination() && fits(i)).map(|i| (i.path.clone(), i.description.clone())).collect()
-}
-
-/// Like Photoshop, the profile menus also list the profiles installed in the system (printer and paper
-/// profiles, press conditions), by description. Assign Profile's restriction to what the document's colour
-/// mode can take (#4951) is dialogs-w24's `assign_profile_defaults`.
-fn installed_profiles(command: &str, params: &mut [Param]) {
-    if !params.iter().any(|p| installed_filter(command, &p.key).is_some()) {
-        return;
-    }
-    let installed = photocraft_engine::installed_profiles::installed();
-    for p in params.iter_mut() {
-        let choices = installed_choices(command, &p.key, &installed);
-        if let ParamKind::Choice { options, .. } = &mut p.kind {
-            options.extend(choices.into_iter().map(|(path, description)| (path, Label::from(description))));
-        }
-    }
 }
 
 // --- Color Lookup ----------------------------------------------------------------------------------------------

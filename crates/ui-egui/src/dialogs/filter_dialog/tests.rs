@@ -1521,6 +1521,58 @@ fn assign_profile_offers_only_profiles_of_the_documents_colour_mode() {
     assert!(cmyk.iter().any(|o| o == "coated-cmyk") && !cmyk.iter().any(|o| o == "srgb"), "a CMYK document gets CMYK profiles");
 }
 
+/// #16142: every profile menu lists each fitting installed profile once, and Assign Profile
+/// lists only those of the document's colour space.
+#[test]
+fn installed_profiles_are_listed_once_in_each_profile_menu() {
+    use craft::cms::{ColorSpace, ProfileClass};
+    /// Builds a synthetic installed profile for `path`, `class` and `color_space`.
+    fn profile(path: &str, class: ProfileClass, color_space: ColorSpace) -> photocraft_engine::installed_profiles::InstalledProfile {
+        photocraft_engine::installed_profiles::InstalledProfile { path: path.into(), description: path.to_uppercase(), class, color_space }
+    }
+    /// Counts how many times each of the three probe paths appears in `key`'s menu of `command`.
+    fn counts(
+        app: &mut PhotocraftApp,
+        command: &str,
+        key: &str,
+        installed: &[photocraft_engine::installed_profiles::InstalledProfile],
+        probes: [&str; 3],
+    ) -> [usize; 3] {
+        let spec = photocraft_engine::commands::find(command).unwrap();
+        let row = params_with(app, command, spec.params, installed).into_iter().find(|p| p.key == key).expect("a profile row");
+        let ParamKind::Choice { options, .. } = row.kind else { panic!("{command}.{key} is a choice menu") };
+        probes.map(|probe| options.iter().filter(|(id, _)| id == probe).count())
+    }
+    let probes = ["/tmp/probe-rgb.icc", "/tmp/probe-cmyk.icc", "/tmp/probe-gray.icc"];
+    let installed = [
+        profile(probes[0], ProfileClass::Display, ColorSpace::Rgb),
+        profile(probes[1], ProfileClass::Output, ColorSpace::Cmyk),
+        profile(probes[2], ProfileClass::Output, ColorSpace::Gray),
+    ];
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let menus = [
+        ("edit.convertToProfile", "profile"),
+        ("view.proofSetup", "profile"),
+        ("edit.assignProfile", "profile"),
+        ("edit.colorSettings", "workingRgb"),
+        ("edit.colorSettings", "workingCmyk"),
+        ("edit.colorSettings", "workingGray"),
+    ];
+    let got: Vec<(&str, &str, [usize; 3])> = menus.into_iter().map(|(cmd, key)| (cmd, key, counts(&mut app, cmd, key, &installed, probes))).collect();
+    assert_eq!(
+        got,
+        vec![
+            ("edit.convertToProfile", "profile", [1, 1, 1]),
+            ("view.proofSetup", "profile", [1, 1, 1]),
+            ("edit.assignProfile", "profile", [1, 0, 0]),
+            ("edit.colorSettings", "workingRgb", [1, 0, 0]),
+            ("edit.colorSettings", "workingCmyk", [0, 1, 0]),
+            ("edit.colorSettings", "workingGray", [0, 0, 1]),
+        ]
+    );
+}
+
 /// #9087: Artboard from Layers opens at the selected layers' size and the next Artboard N, as
 /// in the reference application, never at a size remembered from other layers.
 #[test]
