@@ -365,6 +365,40 @@ fn properties_white_point_eyedropper_edits_the_layer() {
     }
 }
 
+/// #10091: double-clicking a Properties eyedropper of a Curves or Levels layer opens the Color Picker on its target
+/// colour and leaves the eyedropper armed; OK stores the target, and the next click on the image maps the pixel to it.
+#[test]
+fn properties_eyedropper_double_click_sets_the_target_color() {
+    for kind in ["curves", "levels"] {
+        let mut h = app_harness(kind, "rgb", 16);
+        let at = h.get_by_label("Set White Point").rect().center();
+        h.hover_at(at);
+        h.run_steps(1);
+        for pressed in [true, false, true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(3);
+        let picker = crate::color_picker_ui::top(h.state()).unwrap_or_else(|| panic!("{kind}: the target picker opens"));
+        assert!(matches!(
+            crate::color_picker_ui::target(h.state(), picker),
+            Some(crate::color_picker_ui::PickTarget::ToneTarget(craft::imaging::ui::adjust::TonePicker::White))
+        ));
+        assert_eq!(crate::layer_picker::armed(h.state()).map(|(_, p)| p), Some(craft::imaging::ui::adjust::TonePicker::White), "{kind}: stays armed");
+        show_in_picker(&mut h, picker, "#e0d0c0");
+        let ctx = h.ctx.clone();
+        crate::dialogs::confirm(h.state_mut(), &ctx, picker).expect("OK is enabled");
+        h.run_steps(3);
+        assert_eq!(h.state().session.prefs().target_colors.highlights, "#e0d0c0");
+        let view = crate::canvas::testing::view(h.state()).expect("the canvas has a view");
+        let at = view.to_screen(craft::behavior::kurbo::Point::new(10.0, 10.0));
+        click(&mut h, at);
+        let px: Vec<f32> = serde_json::from_value(h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()).unwrap();
+        let want = [224.0f32, 208.0, 192.0].map(|v| v / 255.0);
+        assert!(px.iter().zip(want).all(|(a, b)| (a - b).abs() < 1.5 / 255.0), "{kind}: {px:?}");
+    }
+}
+
 fn photo_filter_color(a: &Adjustment) -> [f32; 3] {
     match a {
         Adjustment::PhotoFilter { color, .. } => *color,

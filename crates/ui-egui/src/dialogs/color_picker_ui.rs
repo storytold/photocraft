@@ -10,6 +10,7 @@
 
 use craft::cms::convert::CmykConverter;
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult, PickedColor};
+use craft::imaging::ui::adjust::TonePicker;
 use craft::theme::{ModelValues, Srgba};
 use craft::ui::dialog::{DialogId, DialogResult};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog};
@@ -49,6 +50,9 @@ pub(crate) enum PickTarget {
     Pasteboard,
     /// A colour row `key` of `window`, which the app holds itself; the answer waits in [`answer_for_window`].
     Window { window: PickWindow, key: String },
+    /// The target colour of a Levels or Curves Set Black / Gray / White Point eyedropper (#10091): the
+    /// `targetColors` preference.
+    ToneTarget(TonePicker),
 }
 
 /// The windows the app holds itself (no parent dialog) that open a Color Picker for a colour of theirs. Each one's
@@ -83,6 +87,7 @@ impl PickTarget {
             PickTarget::ArtboardBackground => "artboardBackground".into(),
             PickTarget::NoteColor => "noteColor".into(),
             PickTarget::Pasteboard => "pasteboard".into(),
+            PickTarget::ToneTarget(picker) => format!("eyedropperTarget.{}", crate::layer_picker::point_name(*picker)),
         }
     }
 }
@@ -98,6 +103,7 @@ enum Identity<'a> {
     Shape(bool, Option<u64>),
     SolidFill(u64, u64),
     NewSolidFill(u64),
+    ToneTarget(TonePicker),
 }
 
 impl PickTarget {
@@ -115,6 +121,7 @@ impl PickTarget {
             PickTarget::Shape(t) => Identity::Shape(t.which == crate::shape_fill_ui::Paint::Stroke, t.layer.map(|l| l.0)),
             PickTarget::SolidFill { document, layer } => Identity::SolidFill(document.0, layer.0),
             PickTarget::NewSolidFill { document } => Identity::NewSolidFill(document.0),
+            PickTarget::ToneTarget(picker) => Identity::ToneTarget(*picker),
         }
     }
 }
@@ -229,6 +236,14 @@ pub(crate) fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str
         other => return Err(format!("unknown colour target: {other}")),
     };
     Ok(open_for(app, label, Srgba::from_rgb_array(rgb), None, which))
+}
+
+/// Opens the picker on `rgb` titled `label` for an eyedropper's target colour, over `parent` (the Levels or Curves
+/// dialog) when it has one; OK stores the colour in the `targetColors` preference.
+pub(crate) fn open_for_tone_target(app: &mut PhotocraftApp, picker: TonePicker, label: &str, rgb: [f32; 3], parent: Option<DialogId>) -> DialogId {
+    let target = PickTarget::ToneTarget(picker);
+    let dialog = ColorPickerDialog::new(target.key(), label.to_owned(), Srgba::from_rgb_array(rgb));
+    launch(app, dialog, parent, target)
 }
 
 /// `request` with its title in the app's form, "Color Picker (Vine Color)"; a request with no title keeps the dialog's own.
@@ -448,6 +463,8 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         }
         // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
         PickTarget::Pasteboard => app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}})),
+        // A Levels or Curves eyedropper's target colour (#10091).
+        PickTarget::ToneTarget(picker) => crate::layer_picker::confirm_target(app, *picker, &color),
     }
 }
 

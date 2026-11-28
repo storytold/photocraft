@@ -346,7 +346,7 @@ fn adjustments() -> Vec<CommandSpec> {
         "Adjustment Properties",
         [],
         None,
-        r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only)"##,
+        r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1,"target":"#rrggbb"?} or {"point",…,"color":[r,g,b] 0..1} (target = the picker's target colour; default the targetColors preference shadows/midtones/highlights, black/128 gray/white unless set by double-clicking the picker; black/white map the sample to the target, gray keeps the sample's luma and gives it the target's cast, neutral only with a neutral target) = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only)"##,
         has_layer,
         |s, p| {
             let id = layer_param(s, p)?;

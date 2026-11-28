@@ -81,6 +81,8 @@ pub(crate) struct OpenAdjust {
     pub(crate) picker_base: Option<Value>,
     /// The picker and parameters its last sample produced: the sample is the latest edit while the parameters still match.
     picked: Option<(TonePicker, Value)>,
+    /// The armed picker as the last pass left it, to tell a double-click on an eyedropper button ([`follow_picker`]).
+    shown_picker: Option<TonePicker>,
     /// What the editor reads: histograms, channels, swatches. Rebuilt only when the target changes.
     pub(crate) setup: Arc<Mutex<EditorSetup>>,
     /// The recorded parameters the value was seeded from, for seeding again when an unresolved target resolves.
@@ -166,7 +168,7 @@ pub(crate) fn picker_applies(app: &PhotocraftApp, open: &OpenAdjust, picker: Ton
 }
 
 /// The Curves eyedropper of the engine for a tone picker.
-fn eyedropper_of(picker: TonePicker) -> Option<(photocraft_engine::adjust_params::CurvesEyedropper, &'static str)> {
+pub(crate) fn eyedropper_of(picker: TonePicker) -> Option<(photocraft_engine::adjust_params::CurvesEyedropper, &'static str)> {
     use photocraft_engine::adjust_params::CurvesEyedropper;
     match picker {
         TonePicker::Black => Some((CurvesEyedropper::Black, "black")),
@@ -272,7 +274,8 @@ pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
             .and_then(|a| a.ok_or_else(|| photocraft_engine::EngineError::Other("missing eyedropper adjustment".into())))
     } else {
         let Some(sample) = crate::canvas::composite_color(app, at[0], at[1]) else { return true };
-        photocraft_engine::adjust_params::adjustment_eyedropper(&kind, &base, eyedropper, sample, mode)
+        let target = eyedropper.target_in(&app.session);
+        photocraft_engine::adjust_params::adjustment_eyedropper_to(&kind, &base, eyedropper, sample, target, mode)
     };
     let adjustment = match adjustment {
         Ok(adjustment) => adjustment,
@@ -663,6 +666,7 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
         unresolved: seeded.unresolved,
         picker_base: None,
         picked: None,
+        shown_picker: None,
         setup,
         recorded,
         normalized,
@@ -813,6 +817,20 @@ fn answer_asks(app: &mut PhotocraftApp, id: DialogId) {
     }
 }
 
+/// A double-click on a Set Black / Gray / White Point button (Levels, Curves; #10091) keeps that picker armed and
+/// opens the Color Picker on its target colour over the dialog.
+fn follow_picker(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) {
+    let Some(now) = hosted(app, id).map(HostedAdjustDialog::picker) else { return };
+    let Some(open) = app.adjust_open.as_mut().filter(|open| open.id == id) else { return };
+    let before = std::mem::replace(&mut open.shown_picker, now);
+    let Some(picker) = crate::layer_picker::double_clicked(ctx, before, now) else { return };
+    open.shown_picker = Some(picker);
+    if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id) {
+        dialog.set_picker(Some(picker));
+    }
+    crate::layer_picker::open_target_picker(app, picker, Some(id));
+}
+
 /// Follows the target while the dialog is open: seeds the value again once an unresolved target resolves, and rebuilds
 /// what the editor reads (histograms, channels) when the layer or isolated plane changed (automation retargets it).
 fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
@@ -925,6 +943,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && hosted(app, id).is_some()
     {
         answer_asks(app, id);
+        follow_picker(app, ctx, id);
         follow_target(app, id);
         answer_held(app, ctx, id);
     }
@@ -944,5 +963,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+#[cfg(test)]
+mod target_tests;
 #[cfg(test)]
 mod tests;

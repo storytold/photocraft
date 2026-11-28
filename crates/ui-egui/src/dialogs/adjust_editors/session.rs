@@ -217,7 +217,14 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         run(ui, &mut value, &mut cx)
     };
     if picker != armed {
-        crate::layer_picker::arm(app, id, picker);
+        // A double-click on an eyedropper button keeps it armed and opens its target colour's picker (#10091).
+        match crate::layer_picker::double_clicked(ui.ctx(), armed, picker) {
+            Some(double) => {
+                crate::layer_picker::arm(app, id, Some(double));
+                crate::layer_picker::open_target_picker(app, double, None);
+            }
+            None => crate::layer_picker::arm(app, id, picker),
+        }
     }
     if out.tone.is_some() {
         record.tone = out.tone;
