@@ -7,7 +7,7 @@
 //! rendered. If the next launch finds a marker that no running process holds, the previous start
 //! died inside the driver, and this one retries with the next safer backend:
 //!
-//! - Windows: Vulkan → DX12 → CPU
+//! - Windows: Vulkan → DX12 → GL → CPU
 //! - Linux and other Unix: Vulkan → GL → CPU
 //! - macOS: Metal → CPU
 //!
@@ -39,6 +39,8 @@ pub const INTEL: u32 = 0x8086;
 pub const QUALCOMM: u32 = 0x5143;
 /// Qualcomm's vendor id as DXGI (DX12) reports it: "QCOM".
 pub const QUALCOMM_DXGI: u32 = 0x4D4F_4351;
+/// PCI vendor id of VMware (SVGA3D GL adapter: black window on Windows, #5191, #1788).
+pub const VMWARE: u32 = 0x15ad;
 /// Largest marker read (a marker is a few hundred bytes).
 const MARKER_MAX: u64 = 64 << 10;
 
@@ -130,8 +132,9 @@ pub fn sanitize(pref: GpuBackend, os: Os) -> GpuBackend {
 pub fn next_safer(tried: GpuBackend, os: Os) -> GpuBackend {
     use GpuBackend::*;
     match (os, tried) {
-        (Os::Windows, Auto | Vulkan | Gl | Metal) => Dx12,
-        (Os::Windows, Dx12 | Cpu) => Cpu,
+        (Os::Windows, Auto | Vulkan | Metal) => Dx12,
+        (Os::Windows, Dx12) => Gl,
+        (Os::Windows, Gl | Cpu) => Cpu,
         (Os::Mac, _) => Cpu,
         (Os::Other, Auto | Vulkan | Dx12 | Metal) => Gl,
         (Os::Other, Gl | Cpu) => Cpu,
@@ -276,10 +279,11 @@ pub struct Candidate {
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
 /// Intel and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
 /// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
-/// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
-/// old GPUs) drew a black window (#5191, #1788).
+/// Windows, the VMware SVGA3D GL adapter (vendor 0x15ad) is demoted past WARP: it drew a black
+/// window (#5191, #1788). Physical GL adapters (Intel HD, etc.) keep their normal rank.
 fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
-    let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
+    let gl_vm_fallback = os == Os::Windows && a.backend == wgpu::Backend::Gl && backend != GpuBackend::Gl && a.vendor == VMWARE;
+    let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || gl_vm_fallback);
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
         wgpu::DeviceType::IntegratedGpu => 1,
@@ -294,6 +298,7 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
     };
     let be = match a.backend {
         wgpu::Backend::Dx12 if os == Os::Windows && dx12_first_on_windows(a.vendor).is_some() => 0,
+        wgpu::Backend::Gl if backend == GpuBackend::Gl => 0,
         wgpu::Backend::Vulkan | wgpu::Backend::Metal => 1,
         wgpu::Backend::Dx12 => 2,
         wgpu::Backend::Gl => 3,
