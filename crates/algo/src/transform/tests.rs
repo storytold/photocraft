@@ -366,3 +366,110 @@ fn homography_is_identity() {
     assert!(!Homography([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
     assert!(!Homography([1.0, 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
 }
+
+/// A horizontal and vertical ramp, `w` × `h` at the origin.
+fn ramp_surface(fmt: PixelFormat, w: i32, h: i32) -> Surface {
+    let mut s = Surface::new(fmt);
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = (x as f32 / (w - 1) as f32, y as f32 / (h - 1) as f32);
+            s.fill_rect(Rect::new(x, y, x + 1, y + 1), &[u, v, 1.0 - u, 1.0]);
+        }
+    }
+    s
+}
+
+#[test]
+fn the_bicubic_variants_parse_for_free_transform_only() {
+    for (id, all) in [
+        ("bicubicSmoother", Interp::BicubicSmoother),
+        ("bicubicSharper", Interp::BicubicSharper),
+        ("bicubicAutomatic", Interp::BicubicAutomatic),
+        ("bicubic", Interp::Bicubic),
+        ("nearestNeighbor", Interp::Nearest),
+        ("bilinear", Interp::Bilinear),
+        ("lanczos", Interp::Bicubic),
+    ] {
+        assert_eq!(Interp::parse_all(id), all, "{id}");
+        let folded = if matches!(all, Interp::BicubicSmoother | Interp::BicubicSharper | Interp::BicubicAutomatic) { Interp::Bicubic } else { all };
+        assert_eq!(Interp::parse(id), folded, "{id}");
+    }
+}
+
+#[test]
+fn a_scale_with_a_bicubic_variant_is_drawn_by_image_size_passes() {
+    let src = ramp_surface(PixelFormat::RGBA8, 40, 30);
+    let r = Rect::new(0, 0, 40, 30);
+    // Scale 1.6 × 0.7 and move by (3.3, -2.1).
+    let h = Homography([1.6, 0.0, 3.3, 0.0, 0.7, -2.1, 0.0, 0.0, 1.0]);
+    for (interp, filter) in [
+        (Interp::BicubicSmoother, crate::scale_axes::Filter::Smoother),
+        (Interp::BicubicSharper, crate::scale_axes::Filter::Sharper),
+        (Interp::BicubicAutomatic, crate::scale_axes::Filter::Automatic),
+    ] {
+        let out = warp_surface(&src, r, &h, interp).unwrap();
+        let passes = crate::scale_axes::scale(&src, r, [1.6, 0.7, 3.3, -2.1], filter, &Interrupt::NONE).unwrap();
+        let b = passes.content_bounds();
+        assert_eq!(out.content_bounds(), b, "{interp:?}");
+        assert_eq!(out.read_region(b), passes.read_region(b), "{interp:?}");
+    }
+    let bicubic = warp_surface(&src, r, &h, Interp::Bicubic).unwrap();
+    let smoother = warp_surface(&src, r, &h, Interp::BicubicSmoother).unwrap();
+    assert_ne!(bicubic.read_region(bicubic.content_bounds()), smoother.read_region(bicubic.content_bounds()));
+}
+
+#[test]
+fn a_rotation_draws_automatic_as_bicubic_and_the_others_with_their_kernels() {
+    let r = Rect::new(0, 0, 36, 28);
+    let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    for (k, label) in [(1.0, "rotated"), (0.6, "rotated and reduced"), (1.7, "rotated and enlarged")] {
+        let h = Homography([k * c, -k * s, 20.0, k * s, k * c, 5.0, 0.0, 0.0, 1.0]);
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let src = ramp_surface(fmt, 36, 28);
+            let bicubic = warp_surface(&src, r, &h, Interp::Bicubic).unwrap();
+            let b = bicubic.content_bounds();
+            let auto = warp_surface(&src, r, &h, Interp::BicubicAutomatic).unwrap();
+            assert_eq!(auto.read_region(b), bicubic.read_region(b), "{label} {fmt:?}");
+            for interp in [Interp::BicubicSmoother, Interp::BicubicSharper] {
+                let out = warp_surface(&src, r, &h, interp).unwrap();
+                let (p, q) = (out.read_region(b), bicubic.read_region(b));
+                assert_ne!(p, q, "{label} {fmt:?} {interp:?}");
+                // The same picture, filtered a little differently.
+                let worst = p.iter().zip(&q).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(worst < 0.25, "{label} {fmt:?} {interp:?}: {worst}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scale_written_with_another_homogeneous_factor_takes_the_same_path() {
+    let src = ramp_surface(PixelFormat::RGBA8, 30, 20);
+    let r = Rect::new(0, 0, 30, 20);
+    let h = Homography([1.5, 0.0, 2.0, 0.0, 1.5, 1.0, 0.0, 0.0, 1.0]);
+    let twice = Homography(h.0.map(|v| 2.0 * v));
+    let (a, b) = (warp_surface(&src, r, &h, Interp::BicubicAutomatic).unwrap(), warp_surface(&src, r, &twice, Interp::BicubicAutomatic).unwrap());
+    assert_eq!(a.content_bounds(), b.content_bounds());
+    assert_eq!(a.read_region(a.content_bounds()), b.read_region(b.content_bounds()));
+}
+
+#[test]
+fn a_cancelled_scale_with_a_bicubic_variant_reports_the_cancel() {
+    let src = ramp_surface(PixelFormat::RGBA8, 40, 30);
+    let r = Rect::new(0, 0, 40, 30);
+    let h = Homography([1.7, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 1.0]);
+    let always = || true;
+    for interp in [Interp::BicubicSmoother, Interp::BicubicSharper, Interp::BicubicAutomatic] {
+        assert!(warp_surface_with(&src, r, &h, interp, &Interrupt::cancel_only(&always)).unwrap().is_none(), "{interp:?}");
+    }
+}
+
+#[test]
+fn a_scale_with_any_projective_term_takes_the_general_path() {
+    // A projective term of 7.5e-10 after normalising: dropping it would move pixels far from the origin.
+    let src = ramp_surface(PixelFormat::RGBA8, 30, 20);
+    let r = Rect::new(0, 0, 30, 20);
+    let h = Homography([3.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.5e-9, 0.0, 2.0]);
+    let (auto, bicubic) = (warp_surface(&src, r, &h, Interp::BicubicAutomatic).unwrap(), warp_surface(&src, r, &h, Interp::Bicubic).unwrap());
+    assert_eq!(auto.read_region(bicubic.content_bounds()), bicubic.read_region(bicubic.content_bounds()), "Automatic is Bicubic off the fast path");
+}
