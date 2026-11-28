@@ -323,6 +323,7 @@ impl Layouter {
             wraps: is_box || area.is_some(),
             box_rect,
             path_range: crate::warp::path_range_length(&t.shape).map(|n| n.min(f32::MAX as f64) as f32),
+            on_path: matches!(t.shape, TextShape::Path { .. }),
             area,
         };
         let mut flow = Flow::default();
@@ -384,6 +385,8 @@ struct Env<'a> {
     /// Available explicit path span in text-space pixels, capped by the curve's capacity.
     /// `None` keeps legacy alignment around the start anchor (an alignment span of zero).
     path_range: Option<f32>,
+    /// Type on a path, with or without an explicit span.
+    on_path: bool,
     area: Option<crate::area::AreaShape>,
 }
 

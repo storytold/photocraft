@@ -358,6 +358,42 @@ fn horizontal_scale_breaks_paragraph_lines_at_the_scaled_width() {
     }
 }
 
+/// Photoshop centres and right-aligns point text by its width without the tracking after the last
+/// character: a right-aligned character doesn't move with its tracking, and a centred pair moves
+/// by half the tracking between them only (100/1000 em of 20 px = 2 px).
+#[test]
+fn point_alignment_leaves_the_last_tracking_out() {
+    let mut e = TextEngine::new();
+    let first_x = |e: &mut TextEngine, text: &str, tracking: f32, align: TextAlign| {
+        let t = styled(text, CharStyle { size_pt: 20.0, tracking, ..Default::default() });
+        e.layout(&with_para(t, ParagraphStyle { align, ..Default::default() }), 72.0).glyphs.first().map_or(f32::NAN, |g| g.x)
+    };
+    let (plain, tracked) = (first_x(&mut e, "W", 0.0, TextAlign::Right), first_x(&mut e, "W", 100.0, TextAlign::Right));
+    assert!((tracked - plain).abs() < 0.01, "right-aligned: {tracked} vs {plain}");
+    let (plain, tracked) = (first_x(&mut e, "WW", 0.0, TextAlign::Center), first_x(&mut e, "WW", 100.0, TextAlign::Center));
+    assert!((tracked - (plain - 1.0)).abs() < 0.01, "centred: {tracked} vs {plain}");
+    let (plain, tracked) = (first_x(&mut e, "WW", 0.0, TextAlign::Left), first_x(&mut e, "WW", 100.0, TextAlign::Left));
+    assert!((tracked - plain).abs() < 0.01, "left-aligned: {tracked} vs {plain}");
+}
+
+/// Type on a path keeps its trailing tracking in the width it aligns by, also on a legacy path
+/// without an explicit end (aligned around its start anchor like point text).
+#[test]
+fn path_alignment_keeps_the_last_tracking() {
+    use photocraft_doc::vector::Subpath;
+    let mut e = TextEngine::new();
+    let first_x = |e: &mut TextEngine, tracking: f32| {
+        let mut t = with_para(
+            styled("W", CharStyle { size_pt: 20.0, tracking, ..Default::default() }),
+            ParagraphStyle { align: TextAlign::Right, ..Default::default() },
+        );
+        t.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (400.0, 0.0)]), start: 200.0, end: None, flip: false };
+        e.layout(&t, 72.0).glyphs.first().map_or(f32::NAN, |g| g.x)
+    };
+    let (plain, tracked) = (first_x(&mut e, 0.0), first_x(&mut e, 100.0));
+    assert!((tracked - (plain - 2.0)).abs() < 0.01, "right-aligned on a path: {tracked} vs {plain}");
+}
+
 #[test]
 fn alignment_point_and_box() {
     let mut e = TextEngine::new();
