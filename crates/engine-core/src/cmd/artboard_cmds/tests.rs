@@ -224,7 +224,7 @@ fn disabled_without_artboards() {
 
 /// Runs `cmd` and asserts it fails with a bad-params error that leaves the document, its
 /// revision, its active layer and its history exactly as they were (#931).
-fn assert_rejected(s: &mut Session, cmd: &str, p: Value) -> String {
+pub(super) fn assert_rejected(s: &mut Session, cmd: &str, p: Value) -> String {
     let d = s.active().unwrap();
     let (before, rev, active, past) = (d.doc.clone(), d.revision, d.active_layer, d.history.past_len());
     let err = s.execute(cmd, p.clone()).expect_err(&format!("{cmd} {p} should fail"));

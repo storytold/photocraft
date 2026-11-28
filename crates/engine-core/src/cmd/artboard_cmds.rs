@@ -701,8 +701,9 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
 /// the reference application writes it into the board's file: a plain group (no longer an
 /// artboard) holding its layers over a new pixel layer "Background for <board>" filled with the
 /// board's background where the two boards overlap, in source coordinates and bottom to top. A
-/// group whose layers reach past its own board (effects, pixels outside the board, adjustments)
-/// gets a hard mask to its board, which the artboard clipped them to.
+/// group whose layers reach past the overlap (effects, pixels outside the board, adjustments)
+/// gets a hard mask to it: the artboard clipped them to its board, and Include Artboard Name grows
+/// the page past the rest of the overlap's edges.
 ///
 /// The artboard painted its background beneath the group and then composited the group (its
 /// blend mode, opacity, effects and masks) over it. A board with any of those keeps them on a
@@ -744,10 +745,10 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
         }
         // With the background in place: its pixels widen what the group's layers can reach.
         let reach = photocraft_compose::change_bounds(&group, doc.bounds());
-        if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
+        if reach.is_none_or(|r| !overlap.contains_rect(&r)) {
             let mut mask = photocraft_doc::LayerMask::reveal_all();
             mask.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
-            mask.surface.fill_rect(ab.rect, &[1.0]);
+            mask.surface.fill_rect(overlap, &[1.0]);
             group.mask = Some(mask);
         }
         out.push(group);
@@ -853,7 +854,8 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     }
 }
 
-/// Artboards to Files' Include Artboard Name and its Name Options (#13637).
+/// Artboards to Files' and Artboards to PDF's Include Artboard Name and its Name Options (#13637,
+/// #13654).
 struct NameBorder {
     /// `{"font", "fontStyle", "size", "color"}` for [`crate::type_cmds::apply_char_props`].
     style: Value,
@@ -883,14 +885,24 @@ fn name_border_param(p: &Value, cmd: &str) -> Result<Option<NameBorder>> {
     let font = p.get("font").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Arial");
     let font_style = p.get("fontStyle").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Regular");
     let white = [1.0, 1.0, 1.0, 1.0];
+    // `#rrggbb(aa)` or [r, g, b(, a)] numbers under `key`; anything else is `None`, so it fails the export.
+    let colour = |key: &str| -> Result<Option<[f32; 4]>> {
+        Ok(match p.get(key) {
+            Some(Value::String(c)) => parse_hex(c),
+            Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(Value::is_number) => Some(color_param(cmd, p, key, white)?),
+            _ => None,
+        })
+    };
     let extension = match p.get("extension") {
         None | Some(Value::Null) => white,
         Some(Value::String(c)) if c.eq_ignore_ascii_case("white") => white,
         Some(Value::String(c)) if c.eq_ignore_ascii_case("black") => [0.0, 0.0, 0.0, 1.0],
         // The dialog's Other...: the colour picked in its swatch.
-        Some(Value::String(c)) if c.eq_ignore_ascii_case("other") => color_param(cmd, p, "extensionColor", white)?,
-        Some(Value::String(c)) => parse_hex(c).ok_or_else(|| bad(cmd, "`extension` must be \"white\", \"black\", \"#rrggbb\" or [r, g, b]"))?,
-        Some(_) => color_param(cmd, p, "extension", white)?,
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("other") => match p.get("extensionColor") {
+            None | Some(Value::Null) => white,
+            Some(_) => colour("extensionColor")?.ok_or_else(|| bad(cmd, "`extensionColor` must be \"#rrggbb\" or [r, g, b]"))?,
+        },
+        Some(_) => colour("extension")?.ok_or_else(|| bad(cmd, "`extension` must be \"white\", \"black\", \"#rrggbb\" or [r, g, b]"))?,
     };
     let text = color_param(cmd, p, "textColor", [0.0, 0.0, 0.0, 1.0])?.map(|c| c.clamp(0.0, 1.0));
     let style = json!({"font": font, "fontStyle": font_style, "size": size.min(NAME_SIZE_MAX_PT), "color": text});
@@ -1334,6 +1346,8 @@ fn soft_mask(px: &[[f32; 4]]) -> Result<Option<Vec<u8>>> {
 /// mask, so a viewer shows its own background where the board has no pixels.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
+    // Include Artboard Name (#13654): the options and border of Artboards to Files' (#13637).
+    let border = name_border_param(p, cmd)?;
     let per_artboard = match p.get("mode") {
         None | Some(Value::Null) => false,
         Some(Value::String(m)) if m == "multiPage" => false,
@@ -1381,6 +1395,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         // shows the board, so its visibility is read from the source.
         let visible = doc.layer(id).is_some_and(|l| l.visible);
         let masked = !background && visible && drop_white_fill(&mut one);
+        if let Some(o) = &border {
+            add_name_border(&mut one, o, cmd)?;
+        }
         let (jpeg, mask) = jpeg_page_masked(&one, quality, zip, masked, cmd)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg, mask));
         names.push(one.name);
@@ -1502,7 +1519,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round),"encoding":"jpeg|zip"="jpeg" (zip: lossless Flate pages, quality ignored)} → {path (multi-page), pages, files} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round),"encoding":"jpeg|zip"="jpeg" (zip: lossless Flate pages, quality ignored),"includeName":bool=false (Include Artboard Name: the page grows by a border of (w + h) / 20 px on each side, the name in the top one, drawn into the page image),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension),"extensionColor":"#rrggbb"|[r,g,b]=white (the colour "other" takes),"textColor":"#rrggbb"|[r,g,b]=black} → {path (multi-page), pages, files} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1557,6 +1574,9 @@ mod overlapping_areas_tests;
 #[path = "artboard_cmds/pdf_document_per_artboard_tests.rs"]
 mod pdf_document_per_artboard_tests;
 
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_include_name_tests.rs"]
+mod pdf_include_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
 mod pdf_overlapping_areas_tests;
