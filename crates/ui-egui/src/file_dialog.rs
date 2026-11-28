@@ -241,6 +241,34 @@ impl PhotocraftApp {
         self.pick_save_in(suggested, true, None, then)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pick_export_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        let doc = self.session.active();
+        let document_dir = doc.and_then(|st| {
+            self.save_dirs
+                .get(&st.doc.id)
+                .filter(|dir| folder_exists(dir))
+                .cloned()
+                .or_else(|| st.path.as_deref().and_then(|p| Path::new(p).parent()).map(Path::to_path_buf))
+        });
+        let doc = doc.map(|st| st.doc.id);
+        let mut request = PickRequest::folder("export");
+        if let Some(dir) = export_start_dir(Some(&self.session.prefs().export.last_folder), document_dir, folder_exists) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, move |app, picked| {
+            let path = path_strings(&picked).into_iter().next().ok_or(UNEXPECTED)?;
+            let exported = then(app, path.clone())?;
+            if let Some(doc) = doc
+                && app.session.documents().iter().any(|st| st.doc.id == doc)
+            {
+                app.save_dirs.insert(doc, PathBuf::from(&path));
+            }
+            app.session.prefs.edit(|prefs| prefs.export.last_folder = path);
+            Ok(exported)
+        })
+    }
+
     fn pick_save_in(
         &mut self,
         suggested: &str,

@@ -90,6 +90,21 @@ mod planted_link {
     }
 
     #[test]
+    fn quick_export_uses_one_folder_and_names_each_file_after_its_layer() {
+        let out = tempfile::tempdir().unwrap();
+        let (mut app, ids, _, written, files) = app();
+        app.services.write_new = app.services.write.take();
+        app.session.restore_layer_selection(Some(ids[0]), &ids, None).unwrap();
+        quick_export_selected_layers_png(&mut app).unwrap();
+        assert_eq!(files.requests().last().unwrap().kind, craft::host::PickKind::Folder);
+        files.answer(Picked::Paths(vec![out.path().to_path_buf()])).unwrap();
+        app.poll_file_dialog();
+        let written = written.borrow();
+        let actual: Vec<_> = written.iter().map(|p| std::path::Path::new(p).file_name().unwrap().to_str().unwrap()).collect();
+        assert_eq!(actual, ["a_b_c__.png", "Dup-1.png", "Dup.png"]);
+    }
+
+    #[test]
     fn a_planted_link_is_replaced_not_followed() {
         let guard = tempfile::tempdir().unwrap();
         let dir = guard.path().to_path_buf();

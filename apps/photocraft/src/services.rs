@@ -101,8 +101,8 @@ fn recovery_dir() -> Option<PathBuf> {
 }
 
 /// Write `bytes` crash-safely (temp file beside the target, fsync, rename, directory fsync; see
-/// [`photocraft_format::atomic`]). Every document write (Save, Save As, Export, Save for Web) and
-/// the preferences go through here, so a failed or interrupted save never destroys the old file.
+/// [`photocraft_format::atomic`]). Save, Save As, overwriting exports and preferences use this so
+/// a failed or interrupted write never destroys the old file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
@@ -602,6 +602,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>, wa
         file_panels: Some(file_panels),
         settings: Some(settings_store()),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
+        write_new: Some(Box::new(|path, bytes| photocraft_format::write_noreplace(Path::new(path), bytes).map_err(|e| format!("{path}: {e}")))),
         file_stamp: Some(Box::new(|path: &str| {
             // Follows a symlink, as Save writes through it to the file it points at.
             let meta = std::fs::metadata(path).ok()?;

@@ -70,9 +70,11 @@ fn answer(app: &mut PhotocraftApp, files: &ScriptedFiles, path: &std::path::Path
 fn quick_export_skips_the_same_layers() {
     let (mut app, l, written, files) = app();
     *app.session.active_mut().unwrap().selection_mut() = vec![l.empty, l.red, l.adjustment, l.blue, l.gone];
+    app.services.write_new = app.services.write.take();
+    let out = tempfile::tempdir().unwrap();
     quick_export_selected_layers_png(&mut app).unwrap();
-    answer(&mut app, &files, std::path::Path::new("quick.png"));
-    assert_eq!(*written.borrow(), ["quick.png", "quick-2-Blue.png"]);
+    answer(&mut app, &files, out.path());
+    assert_eq!(*written.borrow(), [out.path().join("Red.png").to_string_lossy(), out.path().join("Blue.png").to_string_lossy()]);
 }
 
 #[test]

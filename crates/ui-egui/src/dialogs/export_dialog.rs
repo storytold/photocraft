@@ -379,8 +379,7 @@ pub fn quick_export_layer_png(app: &mut PhotocraftApp, layer: LayerId) -> Result
     pick_and_export(app, f)
 }
 
-/// Export each selected layer separately, with one destination prompt for the batch.
-/// The chosen path names the first file; subsequent files have numbered sibling names.
+/// Export each selected layer or group to its own PNG, named after the source.
 pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let layers = st.selected_layers();
@@ -393,26 +392,54 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     // Capture all sources before showing the dialog: changing selection or document while it
     // is open cannot change which layers get exported.
     let docs = exportable_layers(&st.doc, layers)?;
-    let suggested = format!("{}.png", export_name(&st.doc.name));
-    app.pick_export(&suggested, move |app, path| {
-        if !path.to_ascii_lowercase().ends_with(".png") {
-            return Err("Quick Export as PNG writes .png files".into());
-        }
-        let paths = batch_paths(&path, &docs);
-        let mut exported = Vec::new();
-        for (doc, path) in docs.iter().zip(paths) {
-            crate::app::ensure_memory_to_save(doc, &path)?;
-            let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-            let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
-            let write = app.services.write.as_mut().ok_or("no writer configured")?;
-            write(&path, &bytes)?;
-            crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
-            exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));
-        }
-        app.ui.status = format!("Exported {} PNG files", exported.len());
-        app.ui.status_error = false;
-        Ok(json!({"files": exported}))
+    if let [only] = docs.as_slice() {
+        let suggested = generated_export_name(&layer_file_stem(&only.name), "png", None);
+        return app.pick_export(&suggested, move |app, path| {
+            if !path.to_ascii_lowercase().ends_with(".png") {
+                return Err("Quick Export as PNG writes .png files".into());
+            }
+            write_quick_pngs(app, &docs, [path], false)
+        });
+    }
+    let names = layer_file_names(&docs, "png");
+    #[cfg(target_arch = "wasm32")]
+    return write_quick_pngs(app, &docs, names, false);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.pick_export_folder(move |app, dir| {
+        let dir = std::path::Path::new(&dir);
+        // When a file already exists, a numbered alternative must also leave every other
+        // selected layer's name available. Resolve each path just before writing it so names
+        // the file system treats as aliases also get distinct destinations.
+        let reserved: std::collections::HashSet<_> = names.iter().flat_map(|name| [name.to_uppercase(), name.to_lowercase()]).collect();
+        let paths = names.iter().map(|name| {
+            let stem = name.strip_suffix(".png").unwrap_or(name);
+            unused_export_path(dir, stem, "png", |candidate| reserved.contains(&candidate.to_uppercase()) || reserved.contains(&candidate.to_lowercase()))
+                .to_string_lossy()
+                .into_owned()
+        });
+        write_quick_pngs(app, &docs, paths, true)
     })
+}
+
+fn write_quick_pngs(app: &mut PhotocraftApp, docs: &[Document], paths: impl IntoIterator<Item = String>, new_files_only: bool) -> Result<Value, String> {
+    let mut exported = Vec::new();
+    for (doc, path) in docs.iter().zip(paths) {
+        crate::app::ensure_memory_to_save(doc, &path)?;
+        let export = app.services.export.as_ref().ok_or("no exporter configured")?;
+        let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
+        // A file may have appeared at a generated path while the encoder was running.
+        let write = if new_files_only {
+            app.services.write_new.as_mut().ok_or("no exclusive export writer configured")?
+        } else {
+            app.services.write.as_mut().ok_or("no writer configured")?
+        };
+        write(&path, &bytes)?;
+        crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
+        exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));
+    }
+    app.ui.status = format!("Exported {} PNG files", exported.len());
+    app.ui.status_error = false;
+    Ok(json!({"files": exported}))
 }
 
 /// The first 80 characters of `name`, each control character and each character a file name
@@ -435,6 +462,22 @@ fn layer_export_name(name: &str) -> String {
     if name.chars().all(|c| c.is_whitespace() || c == '.') { "layer".into() } else { name }
 }
 
+/// Leave room within a 255-byte filename component for the atomic writer's temporary suffix.
+const MAX_GENERATED_EXPORT_NAME_BYTES: usize = 200;
+
+fn generated_export_name(stem: &str, ext: &str, number: Option<u64>) -> String {
+    let suffix = number.map_or_else(String::new, |number| format!("-{number}"));
+    let limit = MAX_GENERATED_EXPORT_NAME_BYTES.saturating_sub(ext.len()).saturating_sub(1 + suffix.len());
+    let name_at = |limit| {
+        let stem = stem.get(..stem.floor_char_boundary(limit)).unwrap_or_default();
+        let stem = if stem.chars().all(|c| c.is_whitespace() || c == '.') { "layer" } else { stem };
+        photocraft_engine::file_cmds::portable_device_name(format!("{stem}{suffix}.{ext}"))
+    };
+    let name = name_at(limit);
+    // Truncation can expose a Windows device name. Its escape adds one byte.
+    if name.len() > MAX_GENERATED_EXPORT_NAME_BYTES { name_at(limit.saturating_sub(1)) } else { name }
+}
+
 /// The files a multi-layer export writes: the chosen path, then numbered siblings named after
 /// each layer, in the chosen path's format.
 fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
@@ -448,25 +491,34 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
             if i == 0 {
                 return path.to_string();
             }
-            let name = export_name(&doc.name);
-            let candidate = parent.join(format!("{stem}-{}-{name}.{ext}", i + 1));
+            let numbered = format!("{stem}-{}-{}", i + 1, export_name(&doc.name));
             // The first file's overwrite is handled by the Save dialog; never overwrite sibling
             // files silently on desktop. Downloads on the web are named by the browser.
             #[cfg(not(target_arch = "wasm32"))]
-            let candidate = {
-                let mut candidate = candidate;
-                let mut suffix = 1u64;
-                // A name any entry occupies is taken, a symlink (even a dangling one) included: the writer
-                // follows links, so one planted here would redirect the export.
-                while candidate.symlink_metadata().is_ok() {
-                    candidate = parent.join(format!("{stem}-{}-{name}-{suffix}.{ext}", i + 1));
-                    suffix = suffix.saturating_add(1);
-                }
-                candidate
-            };
+            let candidate = unused_export_path(parent, &numbered, ext, |_| false);
+            #[cfg(target_arch = "wasm32")]
+            let candidate = parent.join(format!("{numbered}.{ext}"));
             candidate.to_string_lossy().into_owned()
         })
         .collect()
+}
+
+/// Keep existing entries, including links (even dangling ones), when choosing an output path.
+#[cfg(not(target_arch = "wasm32"))]
+fn unused_export_path(dir: &std::path::Path, stem: &str, ext: &str, reserved: impl Fn(&str) -> bool) -> std::path::PathBuf {
+    let candidate = dir.join(generated_export_name(stem, ext, None));
+    if candidate.symlink_metadata().is_err() {
+        return candidate;
+    }
+    let mut suffix = 1u64;
+    loop {
+        let name = generated_export_name(stem, ext, Some(suffix));
+        let candidate = dir.join(&name);
+        if !reserved(&name) && candidate.symlink_metadata().is_err() {
+            return candidate;
+        }
+        suffix = suffix.saturating_add(1);
+    }
 }
 
 /// The document a dialog exports: the whole image, or one layer (`__layer`).
@@ -1230,7 +1282,7 @@ fn write_layer_file(
 /// can't hold becomes `_` (`a/b:c*?` → `a_b_c__`), spaces are kept.
 fn layer_file_stem(name: &str) -> String {
     let stem: String = name.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
-    if stem.chars().all(|c| c.is_whitespace() || c == '.') { "layer".into() } else { stem }
+    if stem.chars().all(|c| c.is_whitespace() || c == '.') { "layer".into() } else { photocraft_engine::file_cmds::portable_device_name(stem) }
 }
 
 /// The names several layers' files get, for `docs` in document order (bottom to top). Equal
@@ -1248,10 +1300,10 @@ fn layer_file_names(docs: &[Document], ext: &str) -> Vec<String> {
     let mut names = vec![String::new(); docs.len()];
     for (i, doc) in docs.iter().enumerate().rev() {
         let stem = layer_file_stem(&doc.name);
-        let mut name = format!("{stem}.{ext}");
+        let mut name = generated_export_name(&stem, ext, None);
         let mut n = 1u64;
         while taken(&used, &name) {
-            name = format!("{stem}-{n}.{ext}");
+            name = generated_export_name(&stem, ext, Some(n));
             n = n.saturating_add(1);
         }
         used.insert(name.to_uppercase());

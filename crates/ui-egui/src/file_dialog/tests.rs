@@ -910,6 +910,8 @@ fn convert_to_linked_asks_where_to_write_the_contents() {
 #[test]
 fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     let (mut app, files, written) = app();
+    app.services.write_new = app.services.write.take();
+    let out = tempfile::tempdir().unwrap();
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
     app.run("paint.bucket", json!({"x": 0, "y": 0, "color": "#ff0000"})).unwrap();
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
@@ -932,12 +934,13 @@ fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     assert_eq!(files.requests().len(), 1, "one destination for the entire selection");
     // Selection changes while choosing a destination must not change the captured sources.
     app.run("layer.select", json!({"layer": selected[0].0})).unwrap();
-    answer(&files, chose("selected.png"));
+    assert_eq!(files.requests()[0].kind, craft::host::PickKind::Folder);
+    answer(&files, Picked::Paths(vec![out.path().to_path_buf()]));
     app.poll_file_dialog();
     assert_eq!(written.borrow().len(), selected.len());
     assert_eq!(sources.borrow().len(), selected.len());
-    assert_eq!(written.borrow()[0], "selected.png");
-    assert_eq!(written.borrow()[1], "selected-2-Same_name.png");
+    assert_eq!(written.borrow()[0], out.path().join("Same_name-1.png").to_string_lossy());
+    assert_eq!(written.borrow()[1], out.path().join("Same_name.png").to_string_lossy());
     assert_eq!(selected.len(), 2, "Select All Layers leaves the locked Background out");
     assert_eq!(app.session.active().unwrap().doc, before);
     assert!(!app.ui.status_error, "{}", app.ui.status);
