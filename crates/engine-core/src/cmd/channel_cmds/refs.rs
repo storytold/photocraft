@@ -285,6 +285,18 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
     if st.doc.size != target.doc.size {
         return Err(bad(cmd, format!("source document \"{}\" is {}×{}; it must match the target size", st.doc.name, st.doc.size.width, st.doc.size.height)));
     }
+    // Apply Image reads only a source of the target's bit depth (#14480); its dialog lists no other.
+    if cmd == "image.applyImage" && st.doc.depth != target.doc.depth {
+        return Err(bad(
+            cmd,
+            format!(
+                "source document \"{}\" is {} bit; it must match the target's bit depth ({} bit)",
+                st.doc.name,
+                st.doc.depth.bits(),
+                target.doc.depth.bits()
+            ),
+        ));
+    }
     let r = if p.get("channel") == Some(&serde_json::json!({"targeted": true})) {
         // Resolve on replay, before the calculation creates a channel. A string selector would
         // collide with an existing alpha named "targeted".

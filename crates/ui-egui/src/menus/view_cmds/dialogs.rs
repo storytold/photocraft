@@ -91,6 +91,7 @@ fn derive(id: &str, fields: &mut DialogFields) {
         artboard_name_options::derive(fields);
     }
     if id == "image.applyImage" {
+        apply_image_source_derive(fields);
         apply_image_mask_derive(fields);
     }
 }
@@ -647,25 +648,25 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             ]
         }
         "image.applyImage" => {
-            // Source layer: Merged, then the pixel layers top to bottom (the engine takes
-            // the topmost layer of a name), shown by their own names.
-            let mut layers = vec!["merged".to_string()];
-            for (_, _, l) in d.walk().into_iter().rev() {
-                if l.surface().is_some() && !layers.contains(&l.name) {
-                    layers.push(l.name.clone());
-                }
-            }
+            // The target's own Layer and Channel rows; another source document has its own pair (#14480).
+            let (layers, layer) = apply_image_layers(d);
+            let on_target = |row: Param| row.visible_when(SOURCE_IS_TARGET, true);
+            let mut rows = apply_image_source_rows(app);
             // Scale and Offset only affect Add and Subtract.
-            let mut rows = vec![
-                choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),
-                choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0]),
+            rows.extend([
+                on_target(choice("sourceLayer", tl!("Layer"), layers, &layer)),
+                on_target(choice("sourceChannel", tl!("Channel"), apply_image_target_channels(d, &load, chans.len()), &chans[0])),
+            ]);
+            rows.extend(apply_image_other_source_rows(app));
+            rows.extend([
                 Param::new("sourceInvert", tl!("Invert"), ParamKind::bool(false)),
+                Param::read_only_text("__target", tl!("Target"), d.name.clone()),
                 choice("blending", tl!("Blending"), blend_modes(), "multiply"),
                 Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
                 Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-            ];
+            ]);
             rows.extend(apply_image_mask_rows(app));
             rows
         }
@@ -700,6 +701,106 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
     };
     Some((rows, DialogFields::new()))
 }
+
+/// Apply Image's Source (#14480): the index of one of [`apply_image_documents`], the target by default.
+const SOURCE_DOCUMENT: &str = "__sourceDocument";
+/// Shows the target's own Layer and Channel rows (`sourceLayer`, `sourceChannel`): the target is the chosen Source.
+const SOURCE_IS_TARGET: &str = "__sourceIsTarget";
+
+/// The Layer row of source document `index` when it is not the target.
+fn source_layer_key(index: usize) -> String {
+    format!("__sourceLayer/{index}")
+}
+
+/// The Channel row of source document `index` when it is not the target.
+fn source_channel_key(index: usize) -> String {
+    format!("__sourceChannel/{index}")
+}
+
+/// Shows the Layer and Channel rows of source document `index`.
+fn source_shown_key(index: usize) -> String {
+    format!("__sourceShown/{index}")
+}
+
+/// Apply Image's Source row (#14480): the documents of [`apply_image_documents`], the target first chosen at every
+/// opening (the row is not remembered).
+fn apply_image_source_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let names: Vec<(String, Label)> = apply_image_documents(app).iter().map(|(i, d)| (i.to_string(), Label::from(d.name.clone()))).collect();
+    let target = app.session.active_index().map(|i| i.to_string()).unwrap_or_default();
+    vec![choice(SOURCE_DOCUMENT, tl!("Source"), names, &target).not_remembered()]
+}
+
+/// The target's own Channel options: `load` (the Load Selection list: its first `chans` entries the composite, the
+/// colours and the alphas, then transparency, mask and selection) with the alpha channels as
+/// [`apply_image_alpha_options`], so an alpha named as a built-in channel keeps its own option.
+fn apply_image_target_channels(doc: &photocraft_doc::Document, load: &[String], chans: usize) -> Vec<(String, Label)> {
+    let builtins = chans.saturating_sub(doc.channels.len());
+    let mut list = channels(load.get(..builtins).unwrap_or_default());
+    list.extend(apply_image_alpha_options(doc));
+    list.extend(channels(load.get(chans..).unwrap_or_default()));
+    list
+}
+
+/// The Layer and Channel rows of each source document other than the target (#14480): its Layer list (as the
+/// target's) and its channels (the composite, the colour channels of a colour document, the alpha channels).
+fn apply_image_other_source_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let target = app.session.active_index();
+    let mut rows = Vec::new();
+    for (i, doc) in apply_image_documents(app).into_iter().filter(|(i, _)| Some(*i) != target) {
+        let (layers, layer) = apply_image_layers(doc);
+        let mode = doc.pixel_format().mode;
+        let mut names = vec![photocraft_engine::channel_cmds::composite_name(mode).to_string()];
+        if mode.color_channels() > 1 {
+            names.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
+        }
+        let composite = names.first().cloned().unwrap_or_default();
+        let mut list = channels(&names);
+        list.extend(apply_image_alpha_options(doc));
+        rows.push(choice(&source_layer_key(i), tl!("Layer"), layers, &layer).visible_when(source_shown_key(i), true));
+        rows.push(choice(&source_channel_key(i), tl!("Channel"), list, &composite).visible_when(source_shown_key(i), true));
+    }
+    rows
+}
+
+/// Brings the Source group's shell keys and the source parameter up to date: the target as Source shows its own
+/// Layer and Channel rows, which send the flat `sourceLayer` / `sourceChannel` / `sourceInvert` as before; another
+/// document shows its own pair and sends `source: {document, layer, channel, invert}`, which the command reads before
+/// the flat keys.
+fn apply_image_source_derive(fields: &mut DialogFields) {
+    let chosen = fields.text(SOURCE_DOCUMENT).and_then(|s| s.parse::<usize>().ok());
+    let others: Vec<usize> = fields.iter().filter_map(|(k, _)| k.strip_prefix("__sourceLayer/").and_then(|i| i.parse().ok())).collect();
+    for &i in &others {
+        fields.set(source_shown_key(i), chosen == Some(i));
+    }
+    fields.remove("source");
+    let other = chosen.filter(|i| others.contains(i));
+    fields.set(SOURCE_IS_TARGET, other.is_none());
+    let invert = fields.bool("sourceInvert") == Some(true);
+    let Some(i) = other else {
+        // The target's flat keys carry plain names; an alpha or layer the engine would read as something else by its
+        // name goes as an explicit selector in `source`, which the command reads before them.
+        let layer = apply_image_layer_selector(fields.text("sourceLayer").unwrap_or("merged"));
+        let channel = fields.text("sourceChannel").map(apply_image_channel_selector);
+        if !layer.is_string() || channel.as_ref().is_some_and(Value::is_object) {
+            let mut source = json!({"layer": layer, "invert": invert});
+            if let (Some(channel), Some(map)) = (channel, source.as_object_mut()) {
+                map.insert("channel".into(), channel);
+            }
+            fields.set("source", FieldValue::Json(source));
+        }
+        return;
+    };
+    let (Some(layer), Some(channel)) =
+        (fields.text(&source_layer_key(i)).map(apply_image_layer_selector), fields.text(&source_channel_key(i)).map(apply_image_channel_selector))
+    else {
+        return;
+    };
+    fields.set("source", FieldValue::Json(json!({"document": i, "layer": layer, "channel": channel, "invert": invert})));
+}
+
+#[cfg(test)]
+#[path = "../../dialogs/apply_image_source_document_tests.rs"]
+mod apply_image_source_document_tests;
 
 /// Apply Image's Mask... checkbox (#14489): off by default; ticked, it shows the mask group below it.
 const MASK_ON: &str = "__mask";
@@ -741,6 +842,9 @@ pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocr
 /// with no name, and so that no plain name is mistaken for one, any name with this prefix. The rest of the id is the
 /// name, sent as `{"name": …}` ([`apply_image_layer_selector`]).
 const LAYER_NAMED: &str = "layer#";
+/// The option id prefix of a layer below another of the same name, which the engine would read as that upper layer by
+/// name. The rest of the id is the layer's id, sent as the number itself ([`apply_image_layer_selector`]).
+const LAYER_ID: &str = "layer@";
 /// The option id prefix of an alpha channel the engine would not read by its plain name: one named as a built-in
 /// channel ("Red", "RGB", "selection"…), a later one of a repeated name, one named as a channel value the source and
 /// mask paths read as no channel ([`NO_CHANNEL`]), or one with this prefix. The rest of the id is its index, sent as
@@ -750,13 +854,22 @@ const ALPHA_AT: &str = "alpha#";
 /// from a flat source or mask (the source then reads the composite, the mask is off).
 const NO_CHANNEL: [&str; 2] = ["", "none"];
 
-/// The option id of the layer `name`: the name itself, unless the engine would read it as something else.
+/// The option id of the layer `name`: the name itself, unless the engine would read it as something else or the
+/// dialog as one of its prefixed ids.
 fn apply_image_layer_option(name: &str) -> String {
-    if name.is_empty() || name == "merged" || name.starts_with(LAYER_NAMED) { format!("{LAYER_NAMED}{name}") } else { name.to_owned() }
+    if name.is_empty() || name == "merged" || name.starts_with(LAYER_NAMED) || name.starts_with(LAYER_ID) {
+        format!("{LAYER_NAMED}{name}")
+    } else {
+        name.to_owned()
+    }
 }
 
-/// The layer selector an Apply Image Layer option sends: `{"name": …}` for a [`LAYER_NAMED`] id, else the id.
+/// The layer selector an Apply Image Layer option sends: `{"name": …}` for a [`LAYER_NAMED`] id, the layer id as a
+/// number for a [`LAYER_ID`] id, else the id.
 fn apply_image_layer_selector(id: &str) -> Value {
+    if let Some(layer) = id.strip_prefix(LAYER_ID).and_then(|n| n.parse::<u64>().ok()) {
+        return json!(layer);
+    }
     id.strip_prefix(LAYER_NAMED).map_or_else(|| json!(id), |name| json!({"name": name}))
 }
 
@@ -788,9 +901,10 @@ fn apply_image_alpha_options(doc: &photocraft_doc::Document) -> Vec<(String, Lab
         .collect()
 }
 
-/// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom (the engine takes
-/// the topmost layer of a name), Merged first; a single-layer document lists only that layer. A layer keeps its own
-/// option beside Merged whatever its name ([`apply_image_layer_option`]).
+/// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom, Merged first; a
+/// single-layer document lists only that layer. A layer keeps its own option beside Merged whatever its name
+/// ([`apply_image_layer_option`]); the engine reads a name as the topmost layer of that name, so a layer below another
+/// of its name is offered by its id ([`LAYER_ID`]).
 fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, String) {
     let all = doc.walk();
     if let [(_, _, only)] = all.as_slice() {
@@ -800,10 +914,12 @@ fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, 
     let mut names: Vec<&str> = Vec::new();
     let mut layers = vec![("merged".to_string(), Label::from(tl!("Merged")))];
     for (_, _, l) in all.iter().rev() {
-        if l.surface().is_some() && !names.contains(&l.name.as_str()) {
-            names.push(&l.name);
-            layers.push((apply_image_layer_option(&l.name), Label::from(l.name.clone())));
+        if l.surface().is_none() {
+            continue;
         }
+        let id = if names.contains(&l.name.as_str()) { format!("{LAYER_ID}{}", l.id.0) } else { apply_image_layer_option(&l.name) };
+        names.push(&l.name);
+        layers.push((id, Label::from(l.name.clone())));
     }
     (layers, "merged".to_string())
 }
