@@ -1120,3 +1120,6 @@ mod clone_stamp_indexed_bar_tests;
 
 #[cfg(test)]
 mod place_visible_centre_tests;
+
+#[cfg(test)]
+mod screen_mode_tab_standard_tests;

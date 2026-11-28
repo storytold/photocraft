@@ -35,6 +35,8 @@ fn open_box(app: &PhotocraftApp) -> Option<&FreeTransform> {
     if !app.ui.panels.context_task_bar
         || app.ui.tool == Tool::Crop
         || app.dialog_open()
+        // Tab in Standard Screen Mode takes the task bar down with the chrome (#16841).
+        || crate::view_cmds::chrome_hiding(app)
         || preview.doc.id != active.doc.id
         || crate::transform_tool::committing(app).is_some()
     {

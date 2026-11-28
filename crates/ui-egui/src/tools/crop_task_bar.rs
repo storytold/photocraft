@@ -23,9 +23,10 @@ use crate::PhotocraftApp;
 use crate::crop_ui;
 use crate::state::Tool;
 
-/// The bar shows: the Crop tool with a frame, the Window toggle on, no dialog over the canvas.
+/// The bar shows: the Crop tool with a frame, the Window toggle on, no dialog over the canvas, and the
+/// editor's chrome not hidden by Tab in Standard Screen Mode (#16841).
 fn wanted(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Crop && app.ui.panels.context_task_bar && !app.dialog_open() && app.session.active().is_some()
+    app.ui.tool == Tool::Crop && app.ui.panels.context_task_bar && !app.dialog_open() && app.session.active().is_some() && !crate::view_cmds::chrome_hiding(app)
 }
 
 /// Whether the bar can show now: [`wanted`] and a crop frame. `ui.inspect` checks it, so a bar
